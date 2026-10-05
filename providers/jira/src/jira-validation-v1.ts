@@ -63,3 +63,19 @@ export function jiraDay(value: unknown, code: 'invalid_output' | 'invalid_reques
   if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value) jiraFailure(code);
   return value;
 }
+
+/** Fixed server-only policy for shared Atlassian consent and custody. */
+export const JIRA_PERSON_PROVIDER_V1 = Object.freeze({
+  nango_provider_id: 'jira',
+  id: 'jira' as const,
+  display_name: 'Jira',
+  scope_id_pattern: JIRA_CLOUD_ID,
+  oauth_scopes: 'offline_access read:jira-work read:jira-user',
+  credential_origin: 'https://api.atlassian.com',
+  credential_paths: (cloudId: string) => ['/oauth/token/accessible-resources', `/ex/jira/${cloudId}/rest/api/3/`],
+  failure: jiraFailure,
+  string: jiraString,
+  record: jiraRecord,
+  array: jiraArray,
+  copyBinding: copyJiraBindingV1,
+});

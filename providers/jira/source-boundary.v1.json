@@ -23,7 +23,8 @@
     "@echo-brain/organization-api",
     "@echo-brain/organization-authority-kernel",
     "@echo-brain/organization-processing",
-    "@echo-brain/provider-jira-client"
+    "@echo-brain/provider-jira-client",
+    "@echo-brain/provider-runtime"
   ],
   "allowed_external_packages": [
     "better-sqlite3"
@@ -44,7 +45,8 @@
         "@echo-brain/organization-api",
         "@echo-brain/organization-authority-kernel",
         "@echo-brain/organization-processing",
-        "@echo-brain/provider-jira-client"
+        "@echo-brain/provider-jira-client",
+        "@echo-brain/provider-runtime"
       ],
       "allowed_external_packages": [
         "better-sqlite3"

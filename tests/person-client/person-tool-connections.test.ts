@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { PersonToolVerbContextV1 } from "@echo-brain/organization-api";
-import { createConfluencePersonToolProviderV1 } from "../../src/person/confluence-tool-provider.js";
+import { createJiraPersonToolProviderV1 } from "@echo-brain/provider-jira-client/person/jira-tool-provider";
+import { createConfluencePersonToolProviderV1 } from "@echo-brain/provider-confluence-client/person/confluence-tool-provider";
+
+const providers = [
+  { id: "jira", name: "Jira", create: createJiraPersonToolProviderV1 },
+  { id: "confluence", name: "Confluence", create: createConfluencePersonToolProviderV1 },
+];
 
 const ATTEMPT = "11111111-1111-4111-8111-111111111111";
 const CONNECT = {
@@ -41,7 +47,7 @@ function context(input: {
               return request.validate_response(queue.shift());
             },
             async getJson() {
-              throw new Error("Confluence tool does not use GET");
+              throw new Error("Connection lifecycle does not use GET");
             },
           },
         });
@@ -62,21 +68,21 @@ function context(input: {
   return { value, requests, prints, opened, sleeps };
 }
 
-describe("Person Confluence tool provider", () => {
+describe.each(providers)("Person $name tool provider", ({ id, create }) => {
   it("opens consent, polls through pending, and never prints the opaque connect link", async () => {
     const fixture = context({
       responses: [CONNECT, PENDING, { ...PENDING, status: "complete" }],
     });
-    const provider = createConfluencePersonToolProviderV1();
+    const provider = create();
 
     await provider.verbs.connect!.run(fixture.value);
 
     expect(fixture.opened).toEqual([CONNECT.connect_link]);
     expect(fixture.sleeps).toEqual([2_000, 2_000]);
     expect(fixture.requests.map((request) => request.path)).toEqual([
-      "/v1/person/tools/confluence/connect",
-      "/v1/person/tools/confluence/status",
-      "/v1/person/tools/confluence/status",
+      `/v1/person/tools/${id}/connect`,
+      `/v1/person/tools/${id}/status`,
+      `/v1/person/tools/${id}/status`,
     ]);
     expect(JSON.stringify(fixture.prints)).not.toContain(CONNECT.connect_link);
     expect(fixture.prints).toContainEqual(
@@ -85,14 +91,14 @@ describe("Person Confluence tool provider", () => {
   });
 
   it("cancels if the browser cannot open and supports no-wait, status, cancel, and disconnect", async () => {
-    const provider = createConfluencePersonToolProviderV1();
+    const provider = create();
     const noBrowser = context({ responses: [CONNECT, { ...PENDING, status: "cancelled" }], browser: false });
     await expect(provider.verbs.connect!.run(noBrowser.value)).rejects.toMatchObject({
       reason: "browser_unavailable",
     });
     expect(noBrowser.requests.map((request) => request.path)).toEqual([
-      "/v1/person/tools/confluence/connect",
-      "/v1/person/tools/confluence/cancel",
+      `/v1/person/tools/${id}/connect`,
+      `/v1/person/tools/${id}/cancel`,
     ]);
 
     const noWait = context({ responses: [CONNECT], values: { "no-wait": true } });
@@ -102,17 +108,17 @@ describe("Person Confluence tool provider", () => {
     const status = context({ responses: [PENDING], values: { "attempt-id": ATTEMPT } });
     await provider.verbs.status!.run(status.value);
     expect(status.requests[0]).toMatchObject({
-      path: "/v1/person/tools/confluence/status",
+      path: `/v1/person/tools/${id}/status`,
       body: { schema_version: 1, attempt: ATTEMPT },
     });
 
     const cancel = context({ responses: [{ ...PENDING, status: "cancelled" }], values: { "attempt-id": ATTEMPT } });
     await provider.verbs.cancel!.run(cancel.value);
-    expect(cancel.requests[0]!.path).toBe("/v1/person/tools/confluence/cancel");
+    expect(cancel.requests[0]!.path).toBe(`/v1/person/tools/${id}/cancel`);
 
     const disconnect = context({ responses: [{ schema_version: 1, connected: false }] });
     await provider.verbs.disconnect!.run(disconnect.value);
-    expect(disconnect.requests[0]!.path).toBe("/v1/person/tools/confluence/disconnect");
+    expect(disconnect.requests[0]!.path).toBe(`/v1/person/tools/${id}/disconnect`);
   });
 
   it("rejects a valid-looking status response for a different attempt", async () => {
@@ -120,7 +126,7 @@ describe("Person Confluence tool provider", () => {
       responses: [{ ...PENDING, attempt: "22222222-2222-4222-8222-222222222222" }],
       values: { "attempt-id": ATTEMPT },
     });
-    const provider = createConfluencePersonToolProviderV1();
+    const provider = create();
 
     await expect(provider.verbs.status!.run(fixture.value)).rejects.toThrow(
       "did not match",

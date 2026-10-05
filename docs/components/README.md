@@ -69,8 +69,30 @@ The shared implementation packages are `packages/organization-processing` and
 | `providers/granola` | Granola source, custody, admission and setup proofs |
 | `providers/jira` | Person-bound Jira Nango connection store and HTTP application, gated live reader and context source; [authentication and support boundary](../../providers/jira/README.md) |
 | `providers/jira/client` | Jira connection wire contracts and shared Person tool commands; no server dependencies |
+| `providers/shared` | Reusable Nango personal connection lifecycle, local ownership state, HTTP routes, and bounded JSON transport; product grants and readers remain separate |
 | `providers/confluence` | Person-bound Confluence connection, project-space mapping, live page discovery and section reader; no retained page content |
 | `providers/confluence/client` | Confluence connection and project-space wire contracts and Person tool commands; no server dependencies |
 | `providers/synthetic-demo` | Fixed synthetic source and its evaluation/setup proofs |
 | `providers/slack/client` | Client contracts and Person commands |
 | `providers/slack/server` | Server identity, approval, historical codec/projector, connection/setup, fixed-channel context pointer source and assets |
+
+### Reusing personal tool connections
+
+For Jira and Confluence, Nango owns browser consent, credential storage, and
+refresh. ECHO stores only the connection reference and the person, membership,
+account, and consent attempt that may use it. The shared server package
+`@echo-brain/provider-runtime` implements that lifecycle, revocation checks,
+connection HTTP routes, and bounded authenticated JSON requests. The shared
+client contracts and consent commands live in `packages/organization-api`.
+
+A new personal OAuth2 bearer connector supplies its Nango provider ID and scopes,
+credential destinations, account verification, live discovery/read adapter,
+payload parsing, and any project mapping. It registers a fixed local storage
+namespace and composes the existing client lifecycle with its routes and label.
+It does not copy the consent state machine or implement token refresh. The
+Atlassian resource/account verifier is a family helper; other providers supply
+their own verifier through the same lifecycle port.
+
+Shared code cannot import a concrete provider. Concrete providers can depend on
+the shared library but cannot depend on each other; architecture checks enforce
+this direction. Provider-specific grants, settings, and evidence remain separate.

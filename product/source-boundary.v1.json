@@ -30,6 +30,9 @@
       "providers/slack",
       "providers/synthetic-demo"
     ],
+    "shared_provider_roots": [
+      "providers/shared"
+    ],
     "bootstrap_entrypoints": [
       "services/organization-authority/src/clean-live-main.ts",
       "services/organization-authority/src/clean-founder-main.ts",

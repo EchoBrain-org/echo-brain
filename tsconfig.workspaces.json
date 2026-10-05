@@ -19,6 +19,7 @@
     { "path": "./providers/slack/server" },
     { "path": "./providers/slack/client" },
     { "path": "./providers/granola" },
+    { "path": "./providers/shared" },
     { "path": "./providers/jira" },
     { "path": "./providers/jira/client" },
     { "path": "./providers/confluence" },

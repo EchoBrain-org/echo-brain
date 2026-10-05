@@ -10,20 +10,23 @@ const within = (path, root) => path === root || path.startsWith(`${root}/`);
 export function checkProviderOwnership(tree, architecture, resolveRelative, errors) {
   if (!architecture || architecture.ownership_version !== 1 ||
       !Array.isArray(architecture.provider_roots) ||
+      (architecture.shared_provider_roots !== undefined && !Array.isArray(architecture.shared_provider_roots)) ||
       !Array.isArray(architecture.bootstrap_entrypoints)) {
     errors.push('provider architecture requires versioned ownership and bootstrap declarations');
     return null;
   }
-  const accepted = new Set(['ownership_version', 'provider_roots', 'bootstrap_entrypoints', 'source_assemblies']);
+  const accepted = new Set(['ownership_version', 'provider_roots', 'shared_provider_roots', 'bootstrap_entrypoints', 'source_assemblies']);
   for (const key of Object.keys(architecture)) if (!accepted.has(key)) {
     errors.push(`provider architecture field is unsupported or retired: ${key}`);
   }
   const providerRoots = architecture.provider_roots;
+  const sharedProviderRoots = architecture.shared_provider_roots ?? [];
+  const allProviderRoots = [...providerRoots, ...sharedProviderRoots];
   const bootstrap = new Set(architecture.bootstrap_entrypoints);
-  if (providerRoots.length !== new Set(providerRoots).size || bootstrap.size !== architecture.bootstrap_entrypoints.length) {
+  if (allProviderRoots.length !== new Set(allProviderRoots).size || bootstrap.size !== architecture.bootstrap_entrypoints.length) {
     errors.push('provider ownership declarations must be unique');
   }
-  for (const root of providerRoots) if (typeof root !== 'string' || !/^providers\/[a-z][a-z0-9-]*$/.test(root)) {
+  for (const root of allProviderRoots) if (typeof root !== 'string' || !/^providers\/[a-z][a-z0-9-]*$/.test(root)) {
     errors.push(`provider must have one repository-root folder: ${root}`);
   }
   const registry = JSON.parse(textFile(tree, 'tools/workspace-source-boundaries.v1.json'));
@@ -31,7 +34,7 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
   const graph = providerModuleGraph(tree, resolveRelative, errors);
   const assemblies = sourceAssemblyOwners(tree, architecture.source_assemblies, providerRoots, manifests, errors, graph.resolve);
   const workspace = path => manifests.find(manifest => within(path, manifest.source_root) || manifest.runtime_assets?.includes(path) || path === manifest.package_json);
-  const provider = path => providerRoots.find(root => within(path, root));
+  const provider = path => allProviderRoots.find(root => within(path, root));
   const production = [...tree.keys()].filter(path => {
     if (!MODULE.test(path)) return false;
     if (assemblies.has(path)) return true;
@@ -41,7 +44,7 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
     if (manifests.some(manifest => path === `${manifest.boundary_root}/vitest.config.ts`)) return false;
     return ['packages', 'services', 'src', 'providers'].some(root => within(path, root));
   });
-  for (const root of providerRoots) if (!production.some(path => within(path, root))) {
+  for (const root of allProviderRoots) if (!production.some(path => within(path, root))) {
     errors.push(`provider root has no implementation: ${root}`);
   }
   for (const path of bootstrap) if (!tree.has(path) || !production.includes(path) || provider(path)) {
@@ -52,7 +55,7 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
     if (!manifest) return assemblies.get(path) ?? null;
     if (bootstrap.has(path)) return { kind: 'bootstrap', manifest };
     const root = provider(path);
-    if (root) return { kind: 'provider', provider: root, manifest };
+    if (root) return { kind: sharedProviderRoots.includes(root) ? 'shared-provider' : 'provider', provider: root, manifest };
     if (within(path, 'providers')) return null;
     return { kind: 'neutral', manifest };
   };
@@ -72,8 +75,11 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
       if (within(from.manifest.boundary_root, 'packages') && (within(target, 'services') || within(target, 'src/product'))) {
         errors.push(`neutral library imports a composing application: ${path} -> ${target}`);
       }
-      if (from.kind === 'provider' && (to.kind === 'bootstrap' || within(target, 'services'))) {
+      if ((from.kind === 'provider' || from.kind === 'shared-provider') && (to.kind === 'bootstrap' || within(target, 'services'))) {
         errors.push(`provider imports the composing service: ${path} -> ${target}`);
+      }
+      if (from.kind === 'shared-provider' && (to.kind === 'provider' || within(target, 'src/product'))) {
+        errors.push(`shared provider library imports a concrete provider or application: ${path} -> ${target}`);
       }
       if (from.kind === 'provider' && to.kind === 'provider' && from.provider !== to.provider) {
         errors.push(`cross-provider dependency: ${path} -> ${target}`);
@@ -96,6 +102,7 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
   for (const cycle of cycles) errors.push(`workspace dependency cycle: ${cycle.join(' -> ')}`);
   return {
     provider_roots: [...providerRoots].sort(),
+    shared_provider_roots: [...sharedProviderRoots].sort(),
     production_modules: production.length,
     module_edges: edges.length,
     workspace_edges: [...workspaceEdges.values()].reduce((count, targets) => count + targets.size, 0),

@@ -1,26 +1,24 @@
 import { PERSON_CONFLUENCE_PROJECT_READ_PATH_V1, PERSON_CONFLUENCE_PROJECT_SET_PATH_V1, PERSON_CONFLUENCE_PROJECT_LIST_PATH_V1, PERSON_CONFLUENCE_SPACES_LIST_PATH_V1, validateConfluenceProjectReadV1, validateConfluenceProjectSetV1, validateConfluenceProjectMappingV1, validateConfluenceProjectMappingsV1, validateConfluenceSpaceListV1, validateConfluenceSpacesPageV1, type ConfluenceSpaceListV1, type ConfluenceSpacesPageV1, type ConfluenceProjectSetV1, type ConfluenceProjectMappingV1, type ConfluenceProjectMappingsV1 } from '../organization-api/confluence-project-mapping-v1.js';
-import type { PersonToolHostV1 } from "@echo-brain/organization-api";
+import { PersonToolConnectionClientV1, type PersonToolHostV1 } from "@echo-brain/organization-api";
 import {
-  PERSON_CONFLUENCE_CANCEL_PATH_V1,
   PERSON_CONFLUENCE_CONNECT_PATH_V1,
-  PERSON_CONFLUENCE_DISCONNECT_PATH_V1,
   PERSON_CONFLUENCE_STATUS_PATH_V1,
-  validatePersonConfluenceAttemptStatusV1,
-  validatePersonConfluenceAttemptV1,
-  validatePersonConfluenceCommandV1,
-  validatePersonConfluenceConnectV1,
-  validatePersonConfluenceStateV1,
-  type PersonConfluenceAttemptStatusV1,
-  type PersonConfluenceConnectV1,
-  type PersonConfluenceConnectionStateV1,
+  PERSON_CONFLUENCE_CANCEL_PATH_V1,
+  PERSON_CONFLUENCE_DISCONNECT_PATH_V1,
 } from "../organization-api/confluence-person-connection-v1.js";
 
 const CONFLUENCE_TOOL_TIMEOUT_MS = 75_000;
 const CONFLUENCE_TOOL_MAXIMUM_RESPONSE_BYTES = 8_192;
 
-/** Uses the host session for every request, preserving its current-account checks. */
-export class ConfluencePersonClientV1 {
-  constructor(private readonly host: PersonToolHostV1) {}
+export class ConfluencePersonClientV1 extends PersonToolConnectionClientV1 {
+  constructor(host: PersonToolHostV1) {
+    super(host, "Confluence", {
+      connect: PERSON_CONFLUENCE_CONNECT_PATH_V1,
+      status: PERSON_CONFLUENCE_STATUS_PATH_V1,
+      cancel: PERSON_CONFLUENCE_CANCEL_PATH_V1,
+      disconnect: PERSON_CONFLUENCE_DISCONNECT_PATH_V1,
+    });
+  }
 
   projectRead(project_id: string): Promise<ConfluenceProjectMappingV1> {
     return this.projectRequest(PERSON_CONFLUENCE_PROJECT_READ_PATH_V1, validateConfluenceProjectReadV1({ schema_version: 1, project_id }), validateConfluenceProjectReadV1);
@@ -42,62 +40,4 @@ export class ConfluencePersonClientV1 {
     }, maximum_response_bytes: CONFLUENCE_TOOL_MAXIMUM_RESPONSE_BYTES, timeout_ms: CONFLUENCE_TOOL_TIMEOUT_MS }));
   }
 
-  connect(): Promise<PersonConfluenceConnectV1> {
-    return this.host.withToolSession(async (session) => {
-      const body = validatePersonConfluenceCommandV1({ schema_version: 1 });
-      return session.transport.json({
-        path: PERSON_CONFLUENCE_CONNECT_PATH_V1,
-        body,
-        validate_request: validatePersonConfluenceCommandV1,
-        validate_response: validatePersonConfluenceConnectV1,
-        maximum_response_bytes: CONFLUENCE_TOOL_MAXIMUM_RESPONSE_BYTES,
-        timeout_ms: CONFLUENCE_TOOL_TIMEOUT_MS,
-      });
-    });
-  }
-
-  status(attempt: string): Promise<PersonConfluenceAttemptStatusV1> {
-    return this.attempt(PERSON_CONFLUENCE_STATUS_PATH_V1, attempt);
-  }
-
-  cancel(attempt: string): Promise<PersonConfluenceAttemptStatusV1> {
-    return this.attempt(PERSON_CONFLUENCE_CANCEL_PATH_V1, attempt);
-  }
-
-  disconnect(): Promise<PersonConfluenceConnectionStateV1> {
-    return this.host.withToolSession(async (session) => {
-      const body = validatePersonConfluenceCommandV1({ schema_version: 1 });
-      return session.transport.json({
-        path: PERSON_CONFLUENCE_DISCONNECT_PATH_V1,
-        body,
-        validate_request: validatePersonConfluenceCommandV1,
-        validate_response: (value) => validatePersonConfluenceStateV1(value, false),
-        maximum_response_bytes: CONFLUENCE_TOOL_MAXIMUM_RESPONSE_BYTES,
-        timeout_ms: CONFLUENCE_TOOL_TIMEOUT_MS,
-      });
-    });
-  }
-
-  private attempt(
-    path: string,
-    attempt: string,
-  ): Promise<PersonConfluenceAttemptStatusV1> {
-    return this.host.withToolSession(async (session) => {
-      const body = validatePersonConfluenceAttemptV1({ schema_version: 1, attempt });
-      return session.transport.json({
-        path,
-        body,
-        validate_request: validatePersonConfluenceAttemptV1,
-        validate_response: (value) => {
-          const response = validatePersonConfluenceAttemptStatusV1(value);
-          if (response.attempt !== attempt) {
-            throw new Error("Confluence attempt response did not match the requested attempt");
-          }
-          return response;
-        },
-        maximum_response_bytes: CONFLUENCE_TOOL_MAXIMUM_RESPONSE_BYTES,
-        timeout_ms: CONFLUENCE_TOOL_TIMEOUT_MS,
-      });
-    });
-  }
 }

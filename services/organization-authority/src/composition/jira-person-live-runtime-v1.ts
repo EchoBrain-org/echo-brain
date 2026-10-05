@@ -2,7 +2,7 @@ import { JiraProjectMappingStoreV1 } from '@echo-brain/provider-jira/jira-projec
 import type { PersonTicketProjectAuthorizationV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
 import { createJiraPersonConnectionHttpApplicationV1 } from '@echo-brain/provider-jira/jira-person-connection-http-application-v1';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
-import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import { JiraConnectionStoreV1 } from '@echo-brain/provider-jira/jira-connection-store-v1';
 import { createJiraNangoV1, type JiraNangoV1 } from '@echo-brain/provider-jira/jira-nango-v1';
 import { createJiraPersonConnectionV1, type JiraPersonConnectionV1 } from '@echo-brain/provider-jira/jira-person-connection-v1';
@@ -57,22 +57,7 @@ export function openJiraPersonLiveRuntimeV1(options: {
       nango: options.seams?.nango ?? createJiraNangoV1({ integration_id: options.configuration.integration_id, authorization: options.configuration.nango_authorization, fetch: transport }),
       cloud_id: options.configuration.cloud_id,
       fetch: transport,
-      authenticate(access_token) {
-        const authorization = options.sessions.authenticateAccess({ access_token });
-        // checked_at changes on every lookup. Pin the actual session and membership state instead.
-        return Object.freeze({
-          organization_id: authorization.organization_id,
-          principal_id: authorization.principal_id,
-          membership_id: authorization.membership_id,
-          authorization_sha256: canonicalSha256({
-            identity_binding_id: authorization.identity_binding_id,
-            session_family_id: authorization.session_family_id,
-            access_credential_sha256: authorization.access_credential_sha256,
-            person_state_sha256: authorization.person_state_sha256,
-            session_state_sha256: authorization.session_state_sha256,
-          }),
-        });
-      },
+      authenticate: personToolAuthenticationV1(options.sessions),
     });
     return Object.freeze({
       application, connection_http: createJiraPersonConnectionHttpApplicationV1(application),

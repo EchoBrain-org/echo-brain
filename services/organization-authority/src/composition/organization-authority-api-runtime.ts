@@ -210,7 +210,7 @@ export async function startOrganizationAuthorityApiRuntime(
     );
     sessions.expireOidcLoginAttempts({ limit: 1000 });
     const projectRepository = new SqliteProjectContextRepositoryV1(database);
-    ticketLive = dependencies.ticket_live_runtime_factory?.(sessions, (access_token, project_id) => {
+    const authorizeLiveProject = (access_token: string, project_id: string) => {
       const person = sessions.authenticateAccess({ access_token });
       const id = validateProjectIdV1(project_id);
       return projectRepository.withReadTransaction(transaction => {
@@ -219,17 +219,9 @@ export async function startOrganizationAuthorityApiRuntime(
         if (grant === undefined) throw new AuthorityOperationError('unauthorized', 'Project access is unavailable');
         return Object.freeze({ role: grant.role, authorization_sha256: canonicalSha256(grant) });
       });
-    });
-    pageLive = dependencies.page_live_runtime_factory?.(sessions, (access_token, project_id) => {
-      const person = sessions.authenticateAccess({ access_token });
-      const id = validateProjectIdV1(project_id);
-      return projectRepository.withReadTransaction(transaction => {
-        const snapshot = transaction.captureAuthorization(person, { operation: 'project_read_v2', project_id: id });
-        const grant = snapshot.grants.find(value => value.project_id === id);
-        if (grant === undefined) throw new AuthorityOperationError('unauthorized', 'Project access is unavailable');
-        return Object.freeze({ role: grant.role, authorization_sha256: canonicalSha256(grant) });
-      });
-    });
+    };
+    ticketLive = dependencies.ticket_live_runtime_factory?.(sessions, authorizeLiveProject);
+    pageLive = dependencies.page_live_runtime_factory?.(sessions, authorizeLiveProject);
     slackLive = dependencies.slack_live_runtime_factory?.(sessions);
     personHttp = dependencies.person_http_runtime_factory?.(sessions);
     externalIdentity = dependencies.external_identity_runtime_bundle?.open({

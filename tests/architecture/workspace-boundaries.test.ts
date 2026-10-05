@@ -456,11 +456,17 @@ describe("workspace source boundaries", () => {
         "@echo-brain/organization-authority-kernel",
         "@echo-brain/organization-processing"
       ],
+      "@echo-brain/provider-runtime": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-authority-kernel"
+      ],
       "@echo-brain/provider-confluence": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-api",
         "@echo-brain/organization-authority-kernel",
-        "@echo-brain/provider-confluence-client"
+        "@echo-brain/provider-confluence-client",
+        "@echo-brain/provider-runtime"
       ],
       "@echo-brain/provider-confluence-client": [
         "@echo-brain/federation-protocol",
@@ -471,7 +477,8 @@ describe("workspace source boundaries", () => {
         "@echo-brain/organization-api",
         "@echo-brain/organization-authority-kernel",
         "@echo-brain/organization-processing",
-        "@echo-brain/provider-jira-client"
+        "@echo-brain/provider-jira-client",
+        "@echo-brain/provider-runtime"
       ],
       "@echo-brain/provider-jira-client": [
         "@echo-brain/federation-protocol",

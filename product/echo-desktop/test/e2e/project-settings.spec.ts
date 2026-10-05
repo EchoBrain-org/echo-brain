@@ -113,6 +113,20 @@ test('a native account sheet dismisses the project menu without restoring it aft
   expect(settingCalls()).toHaveLength(0);
 });
 
+for (const tool of ['jira', 'confluence']) {
+  test(`Capture preserves the open ${tool} project setting`, async () => {
+    run = await launch();
+    const { page } = run;
+    await page.getByTestId('project-row').first().click();
+    await page.getByTestId('project-settings').click();
+    await page.getByTestId(`project-${tool}`).click();
+    await expect(page.getByTestId(`project-${tool}-current`)).toBeVisible();
+    await emit(run.app, 'echo-test:capture');
+    await expect(page.getByTestId('compose')).toHaveCount(0);
+    await expect(page.getByTestId(`project-${tool}-current`)).toBeVisible();
+  });
+}
+
 for (const role of ['member', 'lead'] as const) {
   test(`a bottom-edge ${role} menu leaves its opener available to close it`, async () => {
     run = await launch(role === 'lead' ? 'many-projects-lead' : 'many-projects');

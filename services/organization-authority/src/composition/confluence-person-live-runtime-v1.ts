@@ -2,7 +2,7 @@ import { ConfluenceProjectMappingStoreV1 } from '@echo-brain/provider-confluence
 import type { PersonPageProjectAuthorizationV1 } from '../application/ports/person-page-live-runtime-v1.js';
 import { createConfluencePersonConnectionHttpApplicationV1 } from '@echo-brain/provider-confluence/confluence-person-connection-http-application-v1';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
-import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import { ConfluenceConnectionStoreV1 } from '@echo-brain/provider-confluence/confluence-connection-store-v1';
 import { createConfluenceNangoV1, type ConfluenceNangoV1 } from '@echo-brain/provider-confluence/confluence-nango-v1';
 import { createConfluencePersonConnectionV1, type ConfluencePersonConnectionV1 } from '@echo-brain/provider-confluence/confluence-person-connection-v1';
@@ -68,22 +68,7 @@ export function openConfluencePersonLiveRuntimeV1(options: {
       nango: options.seams?.nango ?? createConfluenceNangoV1({ integration_id: options.configuration.integration_id, authorization: options.configuration.nango_authorization, fetch: transport }),
       cloud_id: options.configuration.cloud_id,
       fetch: transport,
-      authenticate(access_token) {
-        const authorization = options.sessions.authenticateAccess({ access_token });
-        // checked_at changes on every lookup. Pin the actual session and membership state instead.
-        return Object.freeze({
-          organization_id: authorization.organization_id,
-          principal_id: authorization.principal_id,
-          membership_id: authorization.membership_id,
-          authorization_sha256: canonicalSha256({
-            identity_binding_id: authorization.identity_binding_id,
-            session_family_id: authorization.session_family_id,
-            access_credential_sha256: authorization.access_credential_sha256,
-            person_state_sha256: authorization.person_state_sha256,
-            session_state_sha256: authorization.session_state_sha256,
-          }),
-        });
-      },
+      authenticate: personToolAuthenticationV1(options.sessions),
     });
     return Object.freeze({
       application, connection_http: createConfluencePersonConnectionHttpApplicationV1(application),

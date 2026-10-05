@@ -23,6 +23,7 @@
     "providers/slack/server",
     "providers/slack/client",
     "providers/granola",
+    "providers/shared",
     "providers/jira",
     "providers/jira/client",
     "providers/confluence",

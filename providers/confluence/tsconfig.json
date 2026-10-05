@@ -13,6 +13,7 @@
     { "path": "../../packages/federation-protocol" },
     { "path": "../../packages/organization-api" },
     { "path": "../../packages/organization-authority-kernel" },
-    { "path": "./client" }
+    { "path": "./client" },
+    { "path": "../shared" }
   ]
 }

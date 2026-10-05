@@ -2813,7 +2813,7 @@ export function openCompose(): void {
 export function openCapture(): void {
   const current = state.compose;
   // New project stays in front, as Capture would open under it. Files dropped on it go into its project.
-  if (state.sheet?.kind === 'new-project' || state.projectSettings?.jira !== undefined) return;
+  if (state.sheet?.kind === 'new-project' || state.projectSettings?.jira !== undefined || state.projectSettings?.confluence !== undefined) return;
   set({ toast: null });
   setCompose(current ? { ...current, hidden: false } : fresh(null));
 }

@@ -27,6 +27,7 @@
         "providers/slack/server",
         "providers/slack/client",
         "providers/granola",
+        "providers/shared",
         "providers/jira",
         "providers/jira/client",
         "providers/confluence",
@@ -121,6 +122,10 @@
     },
     "node_modules/@echo-brain/provider-openrouter": {
       "resolved": "providers/openrouter",
+      "link": true
+    },
+    "node_modules/@echo-brain/provider-runtime": {
+      "resolved": "providers/shared",
       "link": true
     },
     "node_modules/@echo-brain/provider-slack-client": {
@@ -4689,6 +4694,7 @@
         "@echo-brain/organization-api": "0.0.0-dev.0",
         "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
         "@echo-brain/provider-confluence-client": "0.0.0-dev.0",
+        "@echo-brain/provider-runtime": "0.0.0-dev.0",
         "better-sqlite3": "12.10.0"
       }
     },
@@ -4729,6 +4735,7 @@
         "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
         "@echo-brain/organization-processing": "0.0.0-dev.0",
         "@echo-brain/provider-jira-client": "0.0.0-dev.0",
+        "@echo-brain/provider-runtime": "0.0.0-dev.0",
         "better-sqlite3": "12.10.0"
       },
       "engines": {
@@ -4786,6 +4793,17 @@
       "engines": {
         "node": "22.22.1",
         "npm": "10.9.4"
+      }
+    },
+    "providers/shared": {
+      "name": "@echo-brain/provider-runtime",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-api": "0.0.0-dev.0",
+        "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+        "better-sqlite3": "12.10.0"
       }
     },
     "providers/slack/client": {
