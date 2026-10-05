@@ -1,3 +1,5 @@
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { chooseFromTray, emit, launch, type Launched } from './launch.js';
 
@@ -199,4 +201,90 @@ test('switching away conceals a project settings draft and returning preserves i
   await emit(app, 'echo-test:resume');
   await expect(page.getByTestId('project-rename-input')).toHaveValue('Private draft name');
   expect(settingCalls()).toHaveLength(0);
+});
+
+
+test('a lead maps a Jira project, asks in that scope, and removes the mapping', async () => {
+  run = await launch('ask-ticket');
+  const { page } = run;
+  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('project-settings').click();
+  await page.getByTestId('project-jira').click();
+  await expect(page.getByTestId('project-jira-current')).toHaveText('No Jira project mapped');
+  await page.getByTestId('project-jira-input').fill('echo');
+  await page.getByTestId('project-jira-save').click();
+  await expect(page.getByTestId('project-jira-current')).toHaveText('Mapped to ECHO');
+  const save = run.calls().find(call => call.path === '/v1/person/tools/jira/project/set');
+  expect(save?.body).toMatchObject({ schema_version: 1, project_id: APOLLO, expected_revision: null, jira_project: 'ECHO' });
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.getByTestId('ask-field').fill('What is the status of Apollo?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
+  expect(run.calls().filter(call => call.path === '/v4/person/ask').at(-1)?.body).toMatchObject({ project_id: APOLLO });
+  await expect(page.getByTestId('source-row')).toHaveText(/^1\s*ECHO-7 · Jira launch$/);
+  await page.getByTestId('back').click();
+  await page.getByTestId('project-settings').click();
+  await page.getByTestId('project-jira').click();
+  await expect(page.getByTestId('project-jira-current')).toHaveText('Mapped to ECHO');
+  await page.getByTestId('project-jira-remove').click();
+  await expect(page.getByTestId('project-jira-current')).toHaveText('No Jira project mapped');
+  const removed = run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set').at(-1)!;
+  expect(removed.body?.jira_project).toBeNull(); expect(removed.body?.expected_revision).toMatch(/^[0-9a-f-]{36}$/);
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.getByTestId('ask-field').fill('What is the status of Apollo?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('answer')).toContainText('No accessible Jira ticket was found.');
+  await expect(page.getByTestId('source-row')).toHaveCount(0);
+});
+
+test('a project member can read the Jira setting but cannot edit it', async () => {
+  run = await launch();
+  const { page } = run;
+  await page.getByRole('button', { name: 'Actions for Beacon' }).click();
+  await page.getByTestId('project-jira').click();
+  await expect(page.getByTestId('project-jira-current')).toHaveText('No Jira project mapped');
+  await expect(page.getByRole('dialog')).toContainText('A project lead can change this setting.');
+  await expect(page.getByTestId('project-jira-save')).toHaveCount(0);
+  await expect(page.getByTestId('project-jira-input')).toHaveCount(0);
+  expect(run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set')).toHaveLength(0);
+});
+
+for (const mode of ['jira-project-conflict', 'jira-project-reply-lost']) {
+  test(`${mode}: reloads the current setting after a failed save without silently resubmitting`, async () => {
+    run = await launch(mode);
+    const { page } = run;
+    await page.getByTestId('project-row').first().click();
+    await page.getByTestId('project-settings').click();
+    await page.getByTestId('project-jira').click();
+    await page.getByTestId('project-jira-input').fill('ECHO');
+    await page.getByTestId('project-jira-save').click();
+    await expect(page.getByTestId('project-jira-error')).toBeVisible();
+    await expect(page.getByTestId('project-jira-save')).toBeDisabled();
+    await page.getByRole('button', { name: 'Reload setting' }).click();
+    await expect(page.getByTestId('project-jira-current')).toHaveText(mode === 'jira-project-reply-lost' ? 'Mapped to ECHO' : 'No Jira project mapped');
+    expect(run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set')).toHaveLength(1);
+  });
+}
+
+
+test('a Jira mapping save stays visible until its reply and Escape closes the settled sheet', async () => {
+  run = await launch('jira-project-slow');
+  const { page } = run;
+  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('project-settings').click();
+  await page.getByTestId('project-jira').click();
+  await page.getByTestId('project-jira-input').fill('ECHO');
+  await page.getByTestId('project-jira-save').click();
+  await expect.poll(() => run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set').length).toBe(1);
+  // Disabling the focused Save button may return focus to the document.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Done', exact: true })).toBeDisabled();
+  await expect(page.getByTestId('project-settings')).toBeDisabled();
+  writeFileSync(join(run.home, 'release-jira-setting'), 'ready');
+  await expect(page.getByTestId('project-jira-current')).toHaveText('Mapped to ECHO');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
 });

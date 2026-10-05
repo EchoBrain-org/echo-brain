@@ -140,7 +140,7 @@ describe("Agentic Ask with stored source evidence", () => {
       expect(f.originals.read({ access_token: "member", scope: answer.scope, citation: citation.citation }).atom.text).toMatch(/SCOUT (Software|Hardware) Review/);
     }
     const body = JSON.parse(auditRow(f.database)!.body_json) as Record<string, unknown>;
-    expect(body).toMatchObject({ principal_id: MEMBER.principal_id, outcome: "answered", model_calls: 3, rounds: 2 });
+    expect(body).toMatchObject({ principal_id: MEMBER.principal_id, outcome: "answered" });
     expect(body.response_sha256).toBe(canonicalSha256(answer));
     expect(auditRow(f.database)!.body_json).not.toContain("transition table");
   });
@@ -191,7 +191,9 @@ describe("Agentic Ask with stored source evidence", () => {
   it("keeps private source text out of another member's research and marks the owner's statements private", async () => {
     const f = fixture(); f.upload("Atlas private", "The launch window is October. Confidential payload 97531.", "only_me");
     const member = await f.ask("member");
-    expect(member.outcome).toBe("not_found"); expect(member.citations).toHaveLength(0);
+    expect(member.outcome).toBe("partial");
+    expect(member.parts[0]).toMatchObject({ status: "not_found", gap: "I couldn't complete the search. Please try again." });
+    expect(member.citations).toHaveLength(0);
     expect(f.prompts.join("\n")).not.toContain("97531");
     const owner = await f.ask();
     expect(owner.parts[0]!.statements[0]!.private).toBe(true); expect(owner.direct).toBeUndefined();

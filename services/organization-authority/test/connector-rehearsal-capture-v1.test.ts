@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import Database from 'better-sqlite3';
 import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,22 +8,13 @@ import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel
 import { createGranolaPostCutoffCursor, createGranolaMeetingSourceAdapter } from '../../../providers/granola/src/source/meeting-source-adapter.js';
 import { granolaAdmittedMeetingSourceCursorPolicyV1 } from '../../../providers/granola/src/granola-admitted-meeting-source-cursor-policy-v1.js';
 import type { GranolaApiClient, GranolaListParams, GranolaNoteDetail } from '../../../providers/granola/src/source/granola-api-client.js';
-import { createJiraPersonConnectionV1 } from '@echo-brain/provider-jira/jira-person-connection-v1';
-import { JiraConnectionStoreV1 } from '@echo-brain/provider-jira/jira-connection-store-v1';
-import type { JiraNangoV1 } from '@echo-brain/provider-jira/jira-nango-v1';
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 import { openConnectorRehearsalCaptureV1 } from '../src/composition/connector-rehearsal-capture-v1.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
 
-const CLOUD = '00000000-0000-4000-8000-000000000007';
-const SITE = 'https://fixture.atlassian.net';
 const OWNER_TOKEN = 'owner-token';
-
-function response(value: unknown): Response {
-  return new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
-}
 
 class GranolaFixture implements GranolaApiClient {
   readonly list = vi.fn(async (_params: GranolaListParams) => ({
@@ -76,45 +66,14 @@ function fixture() {
     client: granolaClient, now: () => '2026-10-03T00:00:00.000Z',
   });
 
-  const jiraDatabase = new Database(':memory:');
-  const connectionRows = new Map<string, { readonly tags: Readonly<Record<string, string>>; readonly access_token: string; readonly updated_at: string }>();
-  let pendingReference = '';
-  const nango: JiraNangoV1 = {
-    connect: vi.fn(async _tags => { pendingReference = 'jira-ref'; return { link: 'https://connect.nango.dev/private' }; }),
-    find: vi.fn(async tags => [...connectionRows].find(([, row]) => canonicalSha256(row.tags) === canonicalSha256(tags))?.[0]),
-    connection: vi.fn(async reference => {
-      const row = connectionRows.get(reference); if (row === undefined) throw new Error('private reference'); return row;
-    }),
-    disconnect: vi.fn(async reference => { connectionRows.delete(reference); }),
-  };
-  const jiraFetch = vi.fn(async (input: RequestInfo | URL) => {
-    const path = new URL(String(input)).pathname;
-    if (path === '/oauth/token/accessible-resources') return response([{ id: CLOUD, url: SITE, scopes: ['read:jira-work', 'read:jira-user'] }]);
-    if (path === `/ex/jira/${CLOUD}/rest/api/3/myself`) return response({ accountId: 'fixture-account', active: true, accountType: 'atlassian' });
-    if (path === `/ex/jira/${CLOUD}/rest/api/3/project/ECHO`) return response({ id: '10000', key: 'ECHO', self: `${SITE}/rest/api/3/project/10000` });
-    if (path === `/ex/jira/${CLOUD}/rest/api/3/search/jql`) return response({ isLast: true, issues: [{ id: '10001' }] });
-    if (path === `/ex/jira/${CLOUD}/rest/api/3/issue/10001`) return response({ id: '10001', key: 'ECHO-1', self: `${SITE}/rest/api/3/issue/10001`, fields: { summary: 'Private ticket', project: { id: '10000', key: 'ECHO', self: `${SITE}/rest/api/3/project/10000` }, description: null, created: '2026-10-01T00:00:00.000Z', updated: '2026-10-02T00:00:00.000Z', status: { name: 'Open' }, assignee: null, duedate: null, labels: [], priority: null } });
-    throw new Error(`unexpected ${path}`);
-  });
-  const jira = createJiraPersonConnectionV1({
-    store: new JiraConnectionStoreV1(jiraDatabase), nango, cloud_id: CLOUD, fetch: jiraFetch,
-    authenticate: token => ({ ...authenticateAccess({ access_token: token }), authorization_sha256: canonicalSha256('auth') }),
-  });
-  const connectJira = async () => {
-    const begun = await jira.connect({ access_token: OWNER_TOKEN });
-    const tags = vi.mocked(nango.connect).mock.calls.at(-1)![0];
-    connectionRows.set(pendingReference, { tags, access_token: 'private-oauth', updated_at: cutoff });
-    await jira.status({ access_token: OWNER_TOKEN, attempt: begun.attempt });
-  };
   const exclusive = { run_exclusive: async <T>(operation: (signal: AbortSignal) => Promise<T>) => operation(new AbortController().signal) };
   const open = (includeGranola = true, initialOwner = { organization_id: initialized.organization_id, principal_id: initialized.owner_principal_id, membership_id: initialized.owner_membership_id }) => openConnectorRehearsalCaptureV1({
     state_directory: initialized.state_directory,
     initial_owner: initialOwner,
     authenticate_access: { authenticateAccess }, exclusive,
     ...(includeGranola ? { granola: { source: granola, source_cursor_policy: granolaAdmittedMeetingSourceCursorPolicyV1, processor_adapter_id: 'fixture-processor' } } : {}),
-    jira: { connection: jira, project: 'ECHO', source_instance_id: `jira-cloud:${CLOUD}:project:ECHO` },
   });
-  return { initialized, cursor, authorization: (value?: PersonAccessAuthorization) => { if (value !== undefined) authorization = value; return authorization; }, granolaClient, jiraFetch, connectJira, open, jiraDatabase };
+  return { initialized, cursor, authorization: (value?: PersonAccessAuthorization) => { if (value !== undefined) authorization = value; return authorization; }, granolaClient, open };
 }
 
 describe('connector rehearsal capture V1', () => {
@@ -134,7 +93,7 @@ describe('connector rehearsal capture V1', () => {
       f.authorization({ ...f.authorization(), membership_type: 'employee' });
       await expect(rehearsal.capture({ tool: 'granola', access_token: OWNER_TOKEN, limit: 1 })).rejects.toThrow('Context capture rehearsal failed');
       expect(f.granolaClient.list).toHaveBeenCalledTimes(1);
-    } finally { rehearsal.close(); f.jiraDatabase.close(); }
+    } finally { rehearsal.close(); }
   });
 
 
@@ -150,19 +109,21 @@ describe('connector rehearsal capture V1', () => {
     try {
       await expect(rehearsal.capture({ tool: 'granola', access_token: OWNER_TOKEN, limit: 1 })).rejects.toThrow('Context capture rehearsal failed');
       expect(f.granolaClient.list).not.toHaveBeenCalled();
-    } finally { rehearsal.close(); f.jiraDatabase.close(); }
+    } finally { rehearsal.close(); }
   });
 
-  it('uses the real Jira connection handoff through request-only capture and revokes before provider reads', async () => {
-    const f = fixture(); await f.connectJira(); const rehearsal = f.open(false);
+  it.each(['jira', 'slack'])('refuses %s capture before any source work', async tool => {
+    const f = fixture(); const rehearsal = f.open();
     try {
-      const receipt = await rehearsal.capture({ tool: 'jira', access_token: OWNER_TOKEN, limit: 1 });
-      expect(receipt).toMatchObject({ counts: { captured: 1, request_only: 1 }, captures: [{ source_type: 'ticket', admission: 'request_only' }] });
-      expect(f.jiraFetch).toHaveBeenCalledWith(expect.stringContaining('/search/jql'), expect.anything());
-      f.authorization({ ...f.authorization(), membership_type: 'employee' });
-      const before = f.jiraFetch.mock.calls.length;
-      await expect(rehearsal.capture({ tool: 'jira', access_token: OWNER_TOKEN, limit: 1 })).rejects.toThrow('Context capture rehearsal failed');
-      expect(f.jiraFetch).toHaveBeenCalledTimes(before);
-    } finally { rehearsal.close(); f.jiraDatabase.close(); }
+      await expect(rehearsal.capture({ tool: tool as 'granola', access_token: OWNER_TOKEN, limit: 1 }))
+        .rejects.toThrow('Context capture rehearsal failed');
+      expect(f.granolaClient.list).not.toHaveBeenCalled();
+      const db = openAuthorityDatabase(join(f.initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
+      try {
+        for (const table of ['authority_sources_v1', 'authority_source_revisions_v1', 'authority_source_contents_v1', 'authority_source_representations_v1']) {
+          expect(db.prepare(`SELECT 1 FROM ${table}`).all()).toHaveLength(0);
+        }
+      } finally { db.close(); }
+    } finally { rehearsal.close(); }
   });
 });

@@ -4,7 +4,6 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReaderV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { openOrganizationControlDatabase } from '@echo-brain/organization-control-plane/persistence/open-organization-control-database';
-import { SLACK_CONTEXT_CAPTURE_ADAPTER_ID, SLACK_CONTEXT_CAPTURE_ADAPTER_VERSION, createSlackContextSourceV1 } from '@echo-brain/provider-slack-server/context/slack-context-source-v1';
 import { createSlackContextTransportV1 } from '@echo-brain/provider-slack-server/context/slack-context-transport-v1';
 import { createSlackChannelLiveEvidenceReaderV1 } from '@echo-brain/provider-slack-server/context/slack-channel-live-evidence-reader-v1';
 import { readSlackContextCurrentIdentityV1 } from '@echo-brain/provider-slack-server/context/slack-context-current-identity-v1';
@@ -15,7 +14,7 @@ import type { SlackConnectionHealthV1 } from '@echo-brain/provider-slack-server/
 import { slackPrivateAppBotScopesV1, type SlackPublicChannelContextCapabilityV1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
 import { assertSlackPublicChannelContextConnectionV1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-public-channel-context-capability-v1';
 import { join } from 'node:path';
-import { isActiveInitialOwnerV1, type ConnectorRehearsalAuthenticatorV1, type ConnectorRehearsalInitialOwnerV1, type ConnectorRehearsalSlackV1 } from './connector-rehearsal-capture-v1.js';
+import { isActiveInitialOwnerV1, type ConnectorRehearsalAuthenticatorV1, type ConnectorRehearsalInitialOwnerV1 } from './connector-rehearsal-capture-v1.js';
 import { verifyOrganizationAuthorityApiLineage } from './organization-authority-api-runtime.js';
 
 /** The same composed objects used by setup, person linking and approval delivery. */
@@ -56,8 +55,8 @@ async function abortableToken(token: Promise<string>, signal: AbortSignal): Prom
   } finally { signal.removeEventListener('abort', abort); }
 }
 
-/** Manually requested fixed-channel pointer capture or transient read. No schedules or retained bodies. */
-export function openSlackContextCaptureRuntimeV1(options: OpenSlackContextCaptureRuntimeInputV1): ConnectorRehearsalSlackV1 & {
+/** Manually requested fixed-channel live reads. No schedules or retained tool data. */
+export function openSlackContextCaptureRuntimeV1(options: OpenSlackContextCaptureRuntimeInputV1): {
   create_reader(input: { readonly access_token: string; readonly signal: AbortSignal }): Promise<{
     readonly reader: PersonLiveEvidenceReaderV1<PersonSlackMessageCitationV1>; require_current(): void;
   }>;
@@ -104,7 +103,7 @@ export function openSlackContextCaptureRuntimeV1(options: OpenSlackContextCaptur
       };
       requireCurrent();
       // The optional scope upgrade deliberately keeps the old approval state hash.
-      // Bypass that state's five-minute token cache for every explicit capture.
+      // Bypass that state's five-minute token cache for every explicit read.
       // Nango's refresh has its own bounded HTTP timeout but no caller signal.
       // Stop waiting on cancellation; the final fence prevents later Slack I/O.
       const token = await abortableToken(slack.bot_token_source.botToken(current.stored, { force_refresh: true }), signal);
@@ -137,16 +136,6 @@ export function openSlackContextCaptureRuntimeV1(options: OpenSlackContextCaptur
       return Object.freeze({ transport, current, require_current: requireCurrent });
   }
   return Object.freeze({
-    async create_source(input: { readonly access_token: string; readonly signal: AbortSignal }) {
-      const { transport, current, require_current } = await prepare(input);
-      const source = createSlackContextSourceV1({
-        transport, team_id: current.stored.connection.provider_tenant_id, channel_id,
-        expected_bot_user_id: current.stored.connection.provider_bot_user_id,
-        identity: { kind: 'source', adapter_id: SLACK_CONTEXT_CAPTURE_ADAPTER_ID, instance_id: source_instance_id, version: SLACK_CONTEXT_CAPTURE_ADAPTER_VERSION },
-        representation: 'pointer', public_channel_only: true,
-      });
-      return Object.freeze({ source, source_instance_id, require_current });
-    },
     async create_reader(input: { readonly access_token: string; readonly signal: AbortSignal }) {
       const { transport, current, require_current } = await prepare(input);
       const reader = createSlackChannelLiveEvidenceReaderV1({ transport,

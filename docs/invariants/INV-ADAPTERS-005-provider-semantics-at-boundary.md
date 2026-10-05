@@ -35,19 +35,22 @@ Jira, or a future external-capability provider. The shared runtime must receive
 only their ports, identity/configuration commitments, generic presentation
 references, and approved-record policy projectors.
 
-The gated Jira live runtime (`jira-person-live-runtime-v1.ts`) and the opt-in
+The Jira live runtime (`jira-person-live-runtime-v1.ts`) and the opt-in
 [context capture integration](../product/2026-10-01-connector-context-integration-v1.md)
 add the selecting modules `provider-context-intakes-v1.ts`,
 `connector-rehearsal-capture-v1.ts`, `slack-context-capture-runtime-v1.ts`, and
-the staging connector rehearsal runtime. Classification, API parsing and cursor
-grammar stay in providers; Authority fixes organization, disposition and
-custody policy independently of returned data, and provider credentials or
-opaque author references grant no retention or identity. These modules register
-no production source or scheduler, preserve ordinary processing and its cursor
-ownership, keep the production Jira release gate and the staging Jira Ask
-selection closed, and keep rehearsal sidecars out of canonical Authority
-storage. They do not widen ordinary production behavior, canonical connection
-contracts, signed bytes or SQL baselines.
+the staging connector rehearsal runtime. Jira constructs a reader from the
+asker's current connection and permissions: global scope has no additional
+project allowlist, project scope requires its saved mapping, and Mine excludes
+Jira. Its provider data is request-only and is never admitted into canonical
+Authority storage. Classification, API parsing and cursor grammar stay in
+providers; Authority fixes organization, disposition and custody policy
+independently of returned data, and provider credentials or opaque author
+references grant no retention or identity. Context-capture modules register no
+production source or scheduler, preserve ordinary processing and its cursor
+ownership, and keep rehearsal sidecars out of canonical Authority storage.
+They do not widen ordinary production behavior, canonical connection contracts,
+signed bytes or SQL baselines.
 
 This invariant is about external-capability providers. The current local
 platform still deliberately selects SQLite, file-backed keys, Node crypto and
@@ -158,9 +161,9 @@ and provider qualification remain necessary.
 
 The V1 setup and service CLIs deliberately select the fixed
 Granola/OpenRouter/Slack product profile. The service CLI also parses the Jira
-live selection (`--jira-cloud-id`, `--jira-nango-integration`) and refuses it
-while `JIRA_PERSON_LIVE_RELEASE_APPROVED_V1` is false. Setup status, planning
-and finalization require Slack and are not provider-swappable. Provider
+live selection (`--jira-cloud-id`, `--jira-nango-integration`) and requires the
+accepted Jira code gate, one configured cloud site, and Nango Cloud. Setup
+status, planning and finalization require Slack and are not provider-swappable. Provider
 neutrality covers the shared runtime and contracts, not this stopped-state
 bootstrap workflow. A non-Slack setup profile needs an explicit versioned bootstrap design and its own
 qualification; changing only the runtime bundle is insufficient. Historical

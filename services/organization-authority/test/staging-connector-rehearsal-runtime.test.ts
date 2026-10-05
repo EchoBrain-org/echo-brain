@@ -60,7 +60,6 @@ vi.mock('../src/composition/slack-context-capture-runtime-v1.js', async () => {
     permalink: 'https://fixture.slack.com/archives/C01234567/p1790966400123456', text_sha256: `sha256:${createHash('sha256').update(text).digest('hex')}` };
   const item = { citation, handle: 'exact-one', label: 'fixture message', visibility: 'team' };
   return { SlackContextCapturePreparationErrorV1, openSlackContextCaptureRuntimeV1: () => ({
-    async create_source() { throw new Error('not linked'); },
     async create_reader() {
       return { require_current() { if (state.grantRevoked) throw new AuthorityOperationError('stale_access_state', 'private grant details'); }, reader: {
         validateCitation: () => ({ citation, tool_id: 'slack', external_scope_id: 'TFIXTURE', coordinates: { object_id: citation.message_ts, container_id: citation.channel_id } }),
@@ -172,7 +171,7 @@ it('returns a finite refusal for an already-aborted read without starting provid
   } finally { await fixture.opened.close(); }
 });
 
-it('refuses a Slack live-evidence factory under the capture-only V2 profile before opening state', async () => {
+it('refuses a Slack live-evidence factory under the staging diagnostic profile before opening state', async () => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
   const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
   const factory = vi.fn(() => ({ application: { async source() { return undefined; } }, close() {} }));
@@ -182,6 +181,21 @@ it('refuses a Slack live-evidence factory under the capture-only V2 profile befo
   expect(result).toBeInstanceOf(Error);
   expect((result as Error).message).toBe('Staging connector rehearsal selection is invalid');
   expect(factory).not.toHaveBeenCalled();
+  expect(state.apps).toEqual([]);
+  expect(existsSync(join(root, 'staging-connector-rehearsal-v1'))).toBe(false);
+});
+
+it.each([
+  { cloud_id: '00000000-0000-4000-8000-000000000002' },
+  { integration_id: 'other-jira' },
+])('refuses Jira Ask configuration outside the fixed staging profile (%j)', async mismatch => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
+  const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
+  const base = config(stateDirectory) as Parameters<typeof openStagingConnectorRehearsalService>[0];
+  await expect(openStagingConnectorRehearsalService({ ...base, jira_person_live: {
+    enabled: true, cloud_id: selection().profile.jira.cloud_id, integration_id: 'jira',
+    nango_authorization: () => 'not-a-live-secret', ...mismatch,
+  } }, selection())).rejects.toThrow('Staging connector rehearsal selection is invalid');
   expect(state.apps).toEqual([]);
   expect(existsSync(join(root, 'staging-connector-rehearsal-v1'))).toBe(false);
 });
@@ -196,7 +210,7 @@ it('binds a staging-only owner surface to a lineage/profile sidecar and returns 
   await expect(capture.accept(request('staging-connector-rehearsal', 'other', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'status' }))).rejects.toThrow('unavailable');
   const status = await capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'status' })) as { body: { qualified: boolean; granola_available: boolean } };
   expect(status.body).toMatchObject({ qualified: false, granola_available: false });
-  const captured = await capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'jira', limit: 1 })) as { body: { receipt: { captures: unknown[] }; qualified: boolean } };
+  const captured = await capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'granola', limit: 1 })) as { body: { receipt: { captures: unknown[] }; qualified: boolean } };
   expect(captured.body).toMatchObject({ qualified: false, receipt: { captures: [] } });
   expect(state.captures).toBe(1);
   const marker = JSON.parse(readFileSync(join(root, 'staging-connector-rehearsal-v1', 'binding.json'), 'utf8')) as Record<string, unknown>;
@@ -213,7 +227,7 @@ it('withholds a capture receipt if the owner loses eligibility during provider w
   const capture = state.apps.find(app => app.routes.some(route => route.path === STAGING_CONNECTOR_REHEARSAL_PATH_V1))!;
   const profile_sha256 = (await import('@echo-brain/federation-protocol')).canonicalSha256(selected.profile);
   state.demoteDuringCapture = true;
-  await expect(capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'jira', limit: 1 }))).rejects.toThrow('unavailable');
+  await expect(capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'granola', limit: 1 }))).rejects.toThrow('unavailable');
   await opened.close();
 });
 

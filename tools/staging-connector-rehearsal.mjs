@@ -122,7 +122,7 @@ export async function runStagingConnectorRehearsal(input, options = {}) {
 }
 
 function usage() {
-  return "usage: node tools/staging-connector-rehearsal.mjs <status|capture|verify-read> --release-id <clean-v1-release> --profile <absolute-local-profile-json> [--tool <granola|jira|slack> [--limit <1..5>]]; verify-read accepts jira|slack with no limit";
+  return "usage: node tools/staging-connector-rehearsal.mjs <status|capture|verify-read> --release-id <clean-v1-release> --profile <absolute-local-profile-json> [--tool <granola|jira|slack> [--limit <1..5>]]; capture accepts granola only; verify-read accepts jira|slack with no limit";
 }
 
 function parseCli(argv) {
@@ -135,7 +135,7 @@ function parseCli(argv) {
     if (argv[5] !== "--tool" || !["jira", "slack"].includes(argv[6])) fail(usage());
     return Object.freeze({ ...base, tool: argv[6] });
   }
-  if (argv[5] !== "--tool" || argv[7] !== "--limit" || !["granola", "jira", "slack"].includes(argv[6]) || !/^[1-5]$/.test(argv[8])) fail(usage());
+  if (argv[5] !== "--tool" || argv[7] !== "--limit" || argv[6] !== "granola" || !/^[1-5]$/.test(argv[8])) fail(usage());
   return Object.freeze({ ...base, tool: argv[6], limit: Number(argv[8]) });
 }
 

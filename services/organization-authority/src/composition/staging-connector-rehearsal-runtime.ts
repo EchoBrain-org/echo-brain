@@ -1,3 +1,4 @@
+import type { PersonTicketProjectAuthorizationV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
@@ -189,7 +190,8 @@ function requireSelection(config: OrganizationAuthorityServiceConfig, selection:
   const authority = new URL(config.authority_url);
   if (config.authority_url !== STAGING_AUTHORITY_ORIGIN_V1 || selection.authority_host !== authority.host ||
       selection.authority_host !== 'authority-staging.echobrain.org' || (config.slack_nango.base_url !== undefined && config.slack_nango.base_url !== 'https://api.nango.dev') ||
-      config.jira_person_live !== undefined ||
+      (config.jira_person_live !== undefined && (config.jira_person_live.enabled !== true ||
+        config.jira_person_live.cloud_id !== profile.jira.cloud_id || config.jira_person_live.integration_id !== profile.jira.integration_key)) ||
       config.staging_synthetic_meetings_directory !== undefined || config.staging_synthetic_owner_email !== undefined ||
       dependencies.api?.ticket_live_runtime_factory !== undefined || dependencies.api?.slack_live_runtime_factory !== undefined ||
       dependencies.person_http_runtime_factory_with_slack !== undefined ||
@@ -200,8 +202,8 @@ function requireSelection(config: OrganizationAuthorityServiceConfig, selection:
 }
 
 /**
- * Staging-only, owner-bound capture surface. It composes existing provider
- * clients but does not select normal Jira evidence or the Jira Ask path.
+ * Staging-only, owner-bound capture and live-read surface. Explicit Jira Ask
+ * reuses the profile-bound connection, with its own Person/project scope.
  */
 export async function openStagingConnectorRehearsalService(
   config: OrganizationAuthorityServiceConfig,
@@ -209,6 +211,7 @@ export async function openStagingConnectorRehearsalService(
   dependencies: StagingConnectorRehearsalRuntimeDependenciesV1 = {},
 ): Promise<OpenedOrganizationAuthorityRuntime> {
   const selected = requireSelection(config, selection, dependencies);
+  const { jira_person_live: jiraAsk, ...serviceConfig } = config;
   const manifest = readOrganizationAuthoritySetupManifest(config.state_directory);
   const lineage = verifyAuthorityStateLineage(config.state_directory).root;
   const owner: OwnerV1 = Object.freeze({
@@ -365,14 +368,22 @@ export async function openStagingConnectorRehearsalService(
         } catch (_error) { unavailable(); } finally { captureInFlight = false; }
       },
     });
-    const personFactory: NonNullable<OrganizationAuthorityServiceDependencies['person_http_runtime_factory_with_slack']> = (sessions, slackPorts) => {
+    const openJira = (sessions: Parameters<NonNullable<OrganizationAuthorityServiceDependencies['person_http_runtime_factory_with_slack']>>[0], authorize_project?: PersonTicketProjectAuthorizationV1) => {
       authenticate = input => sessions.authenticateAccess(input);
+      // The rehearsal's owner/project restrictions apply to its diagnostics.
+      // Live Ask authenticates each Person and uses their own Jira connection.
       jira = openJiraPersonLiveRuntimeV1({
+        ...(authorize_project === undefined ? {} : { authorize_project }),
         state_directory: config.state_directory,
-        sessions: { authenticateAccess: input => requireOwner(input.access_token) },
-        configuration: { enabled: true, cloud_id: selected.profile.jira.cloud_id, integration_id: selected.profile.jira.integration_key, nango_authorization: () => config.slack_nango.secret_key },
+        sessions: jiraAsk === undefined ? { authenticateAccess: input => requireOwner(input.access_token) } : sessions,
+        configuration: { enabled: true, cloud_id: selected.profile.jira.cloud_id,
+          integration_id: selected.profile.jira.integration_key, nango_authorization: () => config.slack_nango.secret_key },
         seams: { ...dependencies.jira, database: sidecar.database },
       });
+      return jira;
+    };
+    const personFactory: NonNullable<OrganizationAuthorityServiceDependencies['person_http_runtime_factory_with_slack']> = (sessions, slackPorts) => {
+      if (jira === undefined) openJira(sessions);
       slack = openSlackContextCaptureRuntimeV1({
         state_directory: config.state_directory, initial_owner: owner,
         channel_id: selected.profile.slack.channel_id, source_instance_id: 'staging-slack-context-v2',
@@ -386,17 +397,17 @@ export async function openStagingConnectorRehearsalService(
         authenticate_access: sessions,
         exclusive: { run_exclusive: operation => runtime === undefined ? Promise.reject(new Error('Staging connector rehearsal is starting')) : runtime.runExclusive(operation) },
         ...(granola === undefined ? {} : { granola }),
-        slack,
-        jira: { connection: jira.application, project: selected.profile.jira.project, source_instance_id: 'staging-jira-context-v1', representation: 'pointer', retention: 'retained_pointer' },
       });
       const ownerJira: ProviderHttpApplicationV1 = Object.freeze({
-        routes: jira.connection_http.routes,
+        routes: jira!.connection_http.routes,
         accept: (request: ProviderHttpRequestV1) => { requireOwner(bearer(request)); return jira!.connection_http.accept(request); },
       });
-      return Object.freeze({ applications: Object.freeze([ownerJira, capturesApplication]), close() { captures?.close(); slack?.close(); jira?.close(); } });
+      return Object.freeze({ applications: Object.freeze([...(jiraAsk === undefined ? [ownerJira] : []), capturesApplication]),
+        close() { captures?.close(); slack?.close(); if (jiraAsk === undefined) jira?.close(); } });
     };
-    runtime = await openOrganizationAuthorityService({ ...config, slack_public_channel_context: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 }, {
+    runtime = await openOrganizationAuthorityService({ ...serviceConfig, slack_public_channel_context: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 }, {
       ...dependencies,
+      api: { ...dependencies.api, ...(jiraAsk === undefined ? {} : { ticket_live_runtime_factory: openJira }) },
       person_http_runtime_factory_with_slack: personFactory,
       processing_adapter_overrides: granola === undefined ? dependencies.processing_adapter_overrides : {
         ...dependencies.processing_adapter_overrides,

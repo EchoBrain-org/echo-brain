@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { JiraProjectMappingStoreV1 } from '../src/jira-project-mapping-store-v1.js';
 import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,11 +13,14 @@ import type { PersonLiveEvidenceReleaseV1 } from '@echo-brain/organization-autho
 import type { JiraNangoV1 } from '../src/jira-nango-v1.js';
 
 const cloud = '00000000-0000-4000-8000-000000000007';
+const echoProject = 'prj_00000000-0000-4000-8000-000000000010';
 const site = 'https://echo-fixture.atlassian.net';
 const person = { organization_id: 'org_00000000-0000-4000-8000-000000000001', principal_id: 'person-fixture', membership_id: 'mem_00000000-0000-4000-8000-000000000001' };
-function fixture(project?: string) {
+function fixture(previousKeys: readonly string[] = []) {
   let now = Date.UTC(2026, 9, 1, 0, 0, 0);
   const database = new Database(':memory:'); const store = new JiraConnectionStoreV1(database, () => now);
+  const mappings = new JiraProjectMappingStoreV1(database);
+  let projectRole: 'lead' | 'member' | null = 'lead'; let projectTenure = 1;
   let active = true; let account = 'synthetic-account'; let resourceCloud = cloud; let resourceSite = site; let scopes = ['read:jira-work', 'read:jira-user']; let moved = false;
   let pendingTags: Readonly<Record<string, string>> = {}; let refresh = 0; let connectionIndex = 0; let denied = false; let hook: ((url: string, init: RequestInit) => Promise<void> | void) | undefined;
   const connections = new Map<string, { readonly tags: Readonly<Record<string, string>> }>();
@@ -39,12 +44,14 @@ function fixture(project?: string) {
     let body: unknown;
     if (parsed.pathname === '/oauth/token/accessible-resources') body = [{ id: resourceCloud, url: resourceSite, scopes }];
     else if (parsed.pathname.endsWith('/myself')) body = { accountId: account, active: true, accountType: 'atlassian' };
-    else if (parsed.pathname.endsWith('/project/ECHO') || parsed.pathname.endsWith('/project/10000')) body = { id: '10000', key: 'ECHO', self: `${site}/rest/api/3/project/10000` };
+    else if (parsed.pathname.endsWith('/project/ECHO') || parsed.pathname.endsWith('/project/10000') || previousKeys.some(key => parsed.pathname.endsWith(`/project/${key}`))) body = { id: '10000', key: 'ECHO', self: `${site}/rest/api/3/project/10000`, ...(parsed.searchParams.get('expand') === 'projectKeys' ? { projectKeys: [...previousKeys, 'ECHO'] } : {}) };
+    else if (parsed.pathname.endsWith('/project/OTHER') || parsed.pathname.endsWith('/project/99999')) body = { id: '99999', key: 'OTHER', self: `${site}/rest/api/3/project/99999` };
     else if (parsed.pathname.endsWith('/search/jql')) body = { issues: [{ id: '10001' }], isLast: true };
-    else if (parsed.pathname.endsWith('/issue/10001')) {
+    else if (parsed.pathname.endsWith('/issue/10001') || parsed.pathname.endsWith('/issue/bulkfetch')) {
       if (denied) return new Response('', { status: 403 });
       const issueProject = moved ? { id: '99999', key: 'OTHER', self: `${site}/rest/api/3/project/99999` } : { id: '10000', key: 'ECHO', self: `${site}/rest/api/3/project/10000` };
       body = { id: '10001', key: moved ? 'OTHER-1' : 'ECHO-1', self: `${site}/rest/api/3/issue/10001`, fields: { summary: 'Synthetic launch', project: issueProject, assignee: null, duedate: null, created: '2026-10-01T00:00:00.000+0000', status: { name: 'Open' }, description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Synthetic Friday' }] }] } } };
+      if (parsed.pathname.endsWith('/issue/bulkfetch')) body = { issues: [body], issueErrors: [] };
     } else throw new Error('Unexpected fake Jira request');
     return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
   });
@@ -52,7 +59,10 @@ function fixture(project?: string) {
     if (!active) throw new AuthorityOperationError('unauthorized', 'Fixture membership revoked');
     return { ...person, ...(token === 'synthetic-person-two' ? { principal_id: 'person-two', membership_id: 'mem_00000000-0000-4000-8000-000000000002' } : {}), authorization_sha256: canonicalSha256({ session: token }) };
   });
-  const service = createJiraPersonConnectionV1({ store, nango, cloud_id: cloud, fetch: transport as typeof fetch, authenticate, ...(project === undefined ? {} : { project }) });
+  const service = createJiraPersonConnectionV1({ project_mappings: mappings, authorize_project: (_token, project_id) => {
+    if (project_id !== echoProject || projectRole === null) throw new AuthorityOperationError('unauthorized', 'Fixture project access revoked');
+    return { role: projectRole, authorization_sha256: canonicalSha256({ projectRole, projectTenure }) };
+  }, store, nango, cloud_id: cloud, fetch: transport as typeof fetch, authenticate });
   const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1) => canonicalSha256(release)) };
   const token = 'synthetic-echo-access';
   async function connected() {
@@ -60,7 +70,8 @@ function fixture(project?: string) {
     expect(await service.status({ access_token: token, attempt: begun.attempt })).toMatchObject({ status: 'complete' });
     return begun;
   }
-  return { database, store, service, nango, transport, authenticate, audit, token, connected, finishAuthorization,
+  return { database, mappings, store, service,
+    setProjectRole: (role: typeof projectRole) => { projectRole = role; projectTenure += 1; }, nango, transport, authenticate, audit, token, connected, finishAuthorization,
     moveIssue: () => { moved = true; },
     seedConnection: (reference: string, tags: Readonly<Record<string, string>>) => { connections.set(reference, { tags }); },
     setActive: (value: boolean) => { active = value; }, setNow: (value: number) => { now = value; }, setAccount: (value: string) => { account = value; }, setCloud: (value: string) => { resourceCloud = value; }, setSite: (value: string) => { resourceSite = value; }, setScopes: (value: string[]) => { scopes = value; }, setDenied: () => { denied = true; }, setHook: (value: typeof hook) => { hook = value; } };
@@ -70,36 +81,43 @@ describe('Nango-backed personal Jira connection', () => {
   it('reports only the current local binding without provider work, mutation or reconnect', async () => {
     const f = fixture(); try {
       expect(f.service.captureStatus({ access_token: f.token })).toEqual({ connected: false });
+      expect(f.service.tool({ access_token: f.token })).toEqual({ tool_id: 'jira', display_name: 'Jira', availability: 'enabled', personal_status: 'unlinked', external_scope_id: null, external_subject_id: null, organization_setup: null });
       expect(f.nango.connect).not.toHaveBeenCalled(); expect(f.transport).not.toHaveBeenCalled();
       await f.connected(); const before = f.store.current(person);
       vi.mocked(f.nango.connect).mockClear(); vi.mocked(f.nango.connection).mockClear();
       vi.mocked(f.nango.find).mockClear(); vi.mocked(f.nango.disconnect).mockClear(); f.transport.mockClear();
       expect(f.service.captureStatus({ access_token: f.token })).toEqual({ connected: true });
+      expect(f.service.tool({ access_token: f.token })).toMatchObject({ personal_status: 'linked', external_scope_id: cloud, external_subject_id: 'synthetic-account' });
       expect(f.service.captureStatus({ access_token: 'synthetic-person-two' })).toEqual({ connected: false });
+      expect(f.service.tool({ access_token: 'synthetic-person-two' })).toMatchObject({ personal_status: 'unlinked', external_scope_id: null, external_subject_id: null });
       expect(f.store.current(person)).toEqual(before);
       f.store.revoke(person);
       expect(f.service.captureStatus({ access_token: f.token })).toEqual({ connected: false });
+      expect(f.service.tool({ access_token: f.token })).toMatchObject({ personal_status: 'revoked', external_scope_id: null, external_subject_id: null });
       f.setActive(false);
       expect(() => f.service.captureStatus({ access_token: f.token })).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+      expect(() => f.service.tool({ access_token: f.token })).toThrow(expect.objectContaining({ code: 'unauthorized' }));
       for (const operation of Object.values(f.nango)) expect(operation).not.toHaveBeenCalled();
       expect(f.transport).not.toHaveBeenCalled();
     } finally { f.database.close(); }
   });
 
-  it('passes the trusted configured project into the authenticated source search', async () => {
-    const f = fixture('ECHO'); try {
+  it('passes the saved project mapping into the authenticated source search', async () => {
+    const f = fixture(); try {
       await f.connected();
-      const source = await f.service.source({ access_token: f.token, audit: f.audit });
+      await f.service.projectSet({ access_token: f.token, request: { schema_version: 1, project_id: echoProject, expected_revision: null, request_id: randomUUID(), jira_project: 'ECHO' } });
+      const source = await f.service.source({ access_token: f.token, project_id: echoProject, audit: f.audit });
       await source!.search({ query: 'launch' });
       const search = f.transport.mock.calls.find(([url]) => new URL(String(url)).pathname.endsWith('/search/jql'))!;
       expect(JSON.parse(search[1]!.body as string).jql).toBe('project = 10000 AND (text ~ "\\\"launch\\\"") ORDER BY created DESC, id DESC');
     } finally { f.database.close(); }
   });
 
-  it.each(['open', 'revalidate'] as const)('refuses %s after a source ticket moves outside the configured project', async operation => {
-    const f = fixture('ECHO'); try {
+  it.each(['open', 'revalidate'] as const)('refuses %s after a source ticket moves outside the mapped project', async operation => {
+    const f = fixture(); try {
       await f.connected();
-      const source = (await f.service.source({ access_token: f.token, audit: f.audit }))!;
+      await f.service.projectSet({ access_token: f.token, request: { schema_version: 1, project_id: echoProject, expected_revision: null, request_id: randomUUID(), jira_project: 'ECHO' } });
+      const source = (await f.service.source({ access_token: f.token, project_id: echoProject, audit: f.audit }))!;
       const page = await source.search({ query: 'launch' }); f.moveIssue();
       await expect(operation === 'open' ? source.open({ item: page.items[0]!.id }) : source.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
       expect(f.audit.record).toHaveBeenCalledTimes(1);
@@ -124,8 +142,10 @@ describe('Nango-backed personal Jira connection', () => {
     const f = fixture(); try {
       await f.connected(); const before = f.store.current(person)!;
       const source = await f.service.source({ access_token: f.token, audit: f.audit });
-      const result = await source!.search({ query: 'launch' }); await source!.revalidate({});
-      expect(result.items[0]).toMatchObject({ kind: 'ticket', text: 'ECHO-1: Synthetic launch\n\nSynthetic Friday' });
+      const result = await source!.search({ query: 'launch' });
+      expect(result.items[0]).not.toHaveProperty('text');
+      const opened = await source!.open({ item: result.items[0]!.id }); await source!.revalidate({});
+      expect(opened.items[0]).toMatchObject({ kind: 'ticket', text: 'ECHO-1: Synthetic launch\n\nSynthetic Friday' });
       expect(f.store.current(person)).toEqual(before);
       expect(new JiraConnectionStoreV1(f.database).current(person)).toEqual(before);
       expect(f.transport.mock.calls.every(([, init]) => init!.redirect === 'error' && new Headers(init!.headers).get('authorization')?.startsWith('Bearer synthetic-access-'))).toBe(true);
@@ -134,7 +154,7 @@ describe('Nango-backed personal Jira connection', () => {
       expect(f.database.prepare('SELECT body_json FROM jira_person_attempt_v1').all()).toEqual([expect.objectContaining({
         body_json: expect.stringContaining('\"status\":\"complete\"'),
       })]);
-      expect(f.audit.record).toHaveBeenCalledTimes(1);
+      expect(f.audit.record).toHaveBeenCalledTimes(2);
     } finally { f.database.close(); }
   });
 
@@ -415,5 +435,144 @@ describe('Nango-backed personal Jira connection', () => {
       await expect(source!.search({ query: 'launch', signal: abort.signal })).rejects.toThrow();
       expect(f.transport).toHaveBeenCalledTimes(calls); expect(f.audit.record).not.toHaveBeenCalled();
     } finally { f.database.close(); }
+  });
+});
+
+
+describe('ECHO project to Jira project setting', () => {
+  const read = (f: ReturnType<typeof fixture>, token = f.token) => f.service.projectRead({ access_token: token, request: { schema_version: 1, project_id: echoProject } });
+  const command = (revision: string | null = null, target: string | null = 'ECHO') => ({ schema_version: 1, project_id: echoProject, expected_revision: revision, request_id: randomUUID(), jira_project: target });
+  it('maps by stable Jira ID, bounds Ask, and shares configuration without sharing a lead’s account', async () => {
+    const f = fixture(); try {
+      expect(read(f)).toMatchObject({ revision: null, mapping: null });
+      expect(await f.service.source({ access_token: f.token, project_id: echoProject, audit: f.audit })).toBeUndefined();
+      expect(f.transport).not.toHaveBeenCalled();
+      await f.connected();
+      const saved = await f.service.projectSet({ access_token: f.token, request: command() });
+      expect(saved).toMatchObject({ project_id: echoProject, mapping: { cloud_id: cloud, project_id: '10000', project_key: 'ECHO' } });
+      const source = await f.service.source({ access_token: f.token, project_id: echoProject, audit: f.audit });
+      await source!.list({});
+      expect(JSON.parse(f.transport.mock.calls.find(([url]) => String(url).endsWith('/search/jql'))![1]!.body as string).jql).toBe('project = 10000 ORDER BY created DESC, id DESC');
+      const other = 'synthetic-person-two';
+      f.setProjectRole('member');
+      expect(read(f, other)).toEqual(saved);
+      f.transport.mockClear(); vi.mocked(f.nango.connection).mockClear();
+      expect(await f.service.source({ access_token: other, project_id: echoProject, audit: f.audit })).toBeUndefined();
+      expect(f.nango.connection).not.toHaveBeenCalled(); expect(f.transport).not.toHaveBeenCalled();
+      const begun = await f.service.connect({ access_token: other }); f.finishAuthorization();
+      await f.service.status({ access_token: other, attempt: begun.attempt });
+      const ownReference = f.store.current({ ...person, principal_id: 'person-two', membership_id: 'mem_00000000-0000-4000-8000-000000000002' })!.reference;
+      vi.mocked(f.nango.connection).mockClear();
+      const otherSource = await f.service.source({ access_token: other, project_id: echoProject, audit: f.audit });
+      await otherSource!.search({ query: 'launch' });
+      expect(vi.mocked(f.nango.connection).mock.calls.every(([reference]) => reference === ownReference)).toBe(true);
+      f.moveIssue();
+      await expect(otherSource!.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
+    } finally { f.database.close(); }
+  });
+  it('requires project membership and a lead grant before provider work, and rejects arbitrary coordinates', async () => {
+    const f = fixture(); try {
+      f.setProjectRole('member');
+      await expect(f.service.projectSet({ access_token: f.token, request: command() })).rejects.toMatchObject({ code: 'unauthorized' });
+      f.setProjectRole(null);
+      expect(() => read(f)).toThrow(AuthorityOperationError);
+      await expect(f.service.source({ access_token: f.token, project_id: echoProject, audit: f.audit })).rejects.toMatchObject({ code: 'unauthorized' });
+      f.setProjectRole('lead');
+      await expect(f.service.projectSet({ access_token: f.token, request: { ...command(), cloud_id: cloud } })).rejects.toMatchObject({ code: 'invalid_request' });
+      await expect(f.service.projectSet({ access_token: f.token, request: command(null, 'ECHO OR project=OTHER') })).rejects.toMatchObject({ code: 'invalid_request' });
+      await expect(f.service.projectSet({ access_token: f.token, request: command() })).rejects.toMatchObject({ code: 'unauthorized' });
+      expect(f.transport).not.toHaveBeenCalled(); expect(f.nango.connection).not.toHaveBeenCalled();
+    } finally { f.database.close(); }
+  });
+  it('allows a lead to map any Jira project their own account can read', async () => {
+    const f = fixture(); try {
+      await f.connected();
+      const saved = await f.service.projectSet({ access_token: f.token, request: command(null, 'OTHER') });
+      expect(saved.mapping).toEqual({ cloud_id: cloud, project_id: '99999', project_key: 'OTHER' });
+      expect(read(f)).toEqual(saved);
+      f.moveIssue();
+      const scoped = await f.service.source({ access_token: f.token, project_id: echoProject, audit: f.audit });
+      await expect(scoped!.list({})).resolves.toMatchObject({ items: [{ label: 'OTHER-1: Synthetic launch' }] });
+      const global = await f.service.source({ access_token: f.token, audit: f.audit });
+      await global!.list({});
+      const queries = f.transport.mock.calls.filter(([url]) => String(url).endsWith('/search/jql')).map(([, init]) => JSON.parse(String(init?.body)).jql);
+      expect(queries).toEqual(['project = 99999 ORDER BY created DESC, id DESC', 'created >= "1970-01-01" ORDER BY created DESC, id DESC']);
+    } finally { f.database.close(); }
+  });
+  it.each(['KAN', 'ECHO', '10000'])('maps a renamed project through %s to its stable ID', async selection => {
+    const f = fixture(['KAN']); try {
+      await f.connected();
+      const saved = await f.service.projectSet({ access_token: f.token, request: command(null, selection) });
+      expect(saved.mapping).toEqual({ cloud_id: cloud, project_id: '10000', project_key: 'ECHO' });
+      const source = await f.service.source({ access_token: f.token, project_id: echoProject, audit: f.audit });
+      await expect(source!.list({})).resolves.toMatchObject({ items: [{ label: 'ECHO-1: Synthetic launch' }] });
+      const changed = await f.service.projectSet({ access_token: f.token, request: command(saved.revision, 'OTHER') });
+      expect(read(f).mapping).toEqual(changed.mapping);
+      expect(changed.mapping?.project_id).toBe('99999');
+    } finally { f.database.close(); }
+  });
+  it('uses compare-and-set, replays only the latest exact command, and removes without Jira access', async () => {
+    const f = fixture(); try {
+      await f.connected(); const request = command();
+      const saved = await f.service.projectSet({ access_token: f.token, request });
+      f.transport.mockClear();
+      expect(await f.service.projectSet({ access_token: f.token, request })).toEqual(saved);
+      expect(f.transport).not.toHaveBeenCalled();
+      await expect(f.service.projectSet({ access_token: f.token, request: command() })).rejects.toMatchObject({ code: 'conflict' });
+      await f.service.disconnect({ access_token: f.token });
+      const removed = await f.service.projectSet({ access_token: f.token, request: command(saved.revision, null) });
+      expect(removed.mapping).toBeNull(); expect(removed.revision).not.toBe(saved.revision);
+      await expect(f.service.projectSet({ access_token: f.token, request })).rejects.toMatchObject({ code: 'conflict' });
+      expect(await f.service.source({ access_token: f.token, project_id: echoProject, audit: f.audit })).toBeUndefined();
+    } finally { f.database.close(); }
+  });
+  it.each(['lead', 'connection', 'mapping'])('does not commit after %s changes during Jira verification', async change => {
+    const f = fixture(); try {
+      await f.connected();
+      f.setHook(async url => {
+        if (!new URL(url).pathname.endsWith('/project/ECHO')) return;
+        f.setHook(undefined);
+        if (change === 'lead') f.setProjectRole('member');
+        if (change === 'connection') f.store.revoke(person);
+        if (change === 'mapping') f.mappings.set(person.organization_id, echoProject, null, canonicalSha256('other-command'), null);
+      });
+      await expect(f.service.projectSet({ access_token: f.token, request: command() })).rejects.toBeInstanceOf(AuthorityOperationError);
+      expect(read(f).mapping).toBeNull();
+    } finally { f.database.close(); }
+  });
+  it.each(['membership', 'mapping'])('discards in-flight evidence and final output after project %s changes', async change => {
+    const f = fixture(); try {
+      await f.connected();
+      const saved = await f.service.projectSet({ access_token: f.token, request: command() });
+      const source = await f.service.source({ access_token: f.token, project_id: echoProject, audit: f.audit });
+      f.setHook(url => {
+        if (!url.endsWith('/search/jql')) return;
+        f.setHook(undefined);
+        if (change === 'membership') f.setProjectRole(null);
+        else f.mappings.set(person.organization_id, echoProject, saved.revision, canonicalSha256('changed'), saved.mapping);
+      });
+      await expect(source!.search({ query: 'launch' })).rejects.toBeInstanceOf(AuthorityOperationError);
+      expect(f.audit.record).not.toHaveBeenCalled();
+      expect(() => source!.assertCurrent()).toThrow(AuthorityOperationError);
+    } finally { f.database.close(); }
+  });
+  it('persists only configuration, isolates organizations and changes revisions on remove/re-add', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'echo-jira-mapping-'));
+    const path = join(directory, 'mapping.sqlite');
+    let db = new Database(path);
+    try {
+      let store = new JiraProjectMappingStoreV1(db);
+      const mapping = { cloud_id: cloud, project_id: '10000', project_key: 'ECHO' };
+      const first = store.set(person.organization_id, echoProject, null, canonicalSha256('first'), mapping);
+      db.close(); db = new Database(path); store = new JiraProjectMappingStoreV1(db);
+      expect(store.read(person.organization_id, echoProject)).toEqual(first);
+      expect(store.read('another-organization', echoProject).mapping).toBeNull();
+      const removed = store.set(person.organization_id, echoProject, first.revision, canonicalSha256('removed'), null);
+      const again = store.set(person.organization_id, echoProject, removed.revision, canonicalSha256('again'), mapping);
+      expect(again.revision).not.toBe(first.revision);
+      expect(db.prepare('SELECT COUNT(*) AS n FROM jira_project_mapping_v1').get()).toEqual({ n: 1 });
+      const row = db.prepare('SELECT body_json FROM jira_project_mapping_v1').get() as { body_json: string };
+      expect(Object.keys(JSON.parse(row.body_json)).sort()).toEqual(['mapping', 'project_id', 'revision', 'schema_version']);
+    } finally { db.close(); rmSync(directory, { recursive: true, force: true }); }
   });
 });

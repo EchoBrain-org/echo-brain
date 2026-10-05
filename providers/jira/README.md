@@ -61,16 +61,30 @@ Source: [site access and API routing](https://developer.atlassian.com/cloud/jira
 
 Jira checks Browse Projects, issue security and app access policy under the
 current user. Search results may lag, so every selected ticket is fetched by
-its immutable numeric issue id before release. List resolves a project by id
+its immutable numeric issue id before release. Search and list release only
+summaries (title, status, owner and due date); open fetches a selected ticket's
+body through its request-owned handle. List resolves a project by id
 or key through Jira, and verifies the returned tickets belong to that project.
 Revalidation fetches every previously released issue, including inventory and
-earlier text revisions, by id; a 401/403/404 or binding drift stops the request.
+earlier text revisions, by id in batches of at most 50 through Jira's
+[bulk issue read](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-bulkfetch-post).
+Each batch must return every requested ID exactly once under the same person's
+current permissions; omitted, duplicated, unexpected or moved issues stop release.
+This avoids one credential lookup per ticket at every model and release fence.
+Credentials remain fresh before each Jira request; a 401/403/404 or binding drift
+stops the request, and Nango HTTP 429 remains `rate_limited` without automatic retry.
 It checks current visibility, not equality with the latest ticket text.
 ECHO membership, identity and exact grant authorization still belong to the
 shared authoritative authorization port. Display visibility is `only_me` and
 does not describe Jira's full audience or authorize sharing.
 
 ## Transport choice and Nango
+
+Ask uses the shared search/list/open contract and request-owned evidence handles.
+It does not choose Jira endpoints, author JQL, recognize Jira key formats or
+prescribe a provider-specific research order. This adapter owns query translation,
+payload decoding and permission-read batching. Exact identifiers pass through
+the shared planner unchanged, just as they do for other evidence sources.
 
 Choose direct HTTPS calls to `https://api.atlassian.com`, with a trusted,
 person/grant-bound authenticated-fetch port. Composition must select the
@@ -106,8 +120,14 @@ token refresh to the same immutable ECHO grant.
 request in `createAuditedPersonLiveEvidenceSourceV1`, because the reader alone
 is not a Layer 3 release endpoint.
 
-Search treats query text as a literal phrase (or an exact issue key), never
-caller-authored JQL. Open accepts only a handle minted by that reader. List
+Search matches all supplied literal keywords independently (or an exact issue
+key, case-insensitively), never caller-authored JQL. It accepts at most 32
+distinct keywords and preserves identifier punctuation through the Ask protocol. The
+provider compiles each keyword to an escaped literal text clause and joins
+them with `AND`; it does not require the words to form one adjacent phrase.
+Ask can select `source: "tickets"` for a targeted search, or omit the source to
+search all available evidence. Every selection keeps the current Person and
+project boundary. Open accepts only a handle minted by that reader. List
 accepts a Jira project key/id, or no project for the caller's visible inventory.
 Dates are inclusive UTC **creation** days, applied after exact reads; JQL date
 literals use the Jira account's timezone. A filtered page can be empty with an
@@ -115,8 +135,8 @@ advancing continuation. This is a live walk, not a pinned Jira snapshot.
 Repeated issue ids or continuation tokens within a walk fail closed. There is
 no search continuation in the shared contract.
 
-To stay inside the shared 64 KiB result bound, full-text pages contain at most
-5 tickets and inventory pages at most 20, also respecting the requested limit
+To stay inside the shared 64 KiB result bound, search pages contain at most
+5 ticket summaries and list pages at most 20, also respecting the requested limit
 (1-50). Labels are NFC and at most 256 UTF-8 bytes; text is NFC and at most
 3,072 bytes, cut at code-point boundaries before hashing. `truncated` reports
 provider continuation or shortened text/labels. Inventory omits text and uses
@@ -128,7 +148,11 @@ or project coordinates, and are never followed.
 Text is the issue key, summary and supported ADF description. Formatting marks
 are not rendered; supported blocks include paragraphs, headings, lists,
 quotes, code, tables and panels, plus text, breaks, mentions, emoji and status.
-Unsupported nodes (including media/cards), malformed fields and control bytes
+Checklist `taskList` and `taskItem` nodes preserve TODO as `[ ]` and DONE as
+`[x]`, including nested lists; an unknown or missing completion state is refused.
+URL-backed inline link cards contribute their URL as plain text; their target
+and metadata are never fetched. Unsupported nodes (including media and
+data-backed cards), malformed fields and control bytes
 fail closed. Comments, attachments, custom fields, email addresses and user ids
 are not released. Null description, assignee and due date are supported.
 Optional metadata is limited to assignee display name, status and due date.
@@ -180,7 +204,8 @@ organization, grant or site selector in model arguments or connection commands.
    after the terminal audit. The desk rechecks its local snapshot after Jira I/O.
 4. V5 citations open the adapter-verified Jira permalink directly. The desktop
    validates and displays V5 tickets, with a safe direct-link opener. Its
-   default Ask and `person ask` without `--tickets` retain strict V4 behavior.
+   global and project Ask use V5; `person ask` without `--tickets` retains
+   strict V4 behavior.
 5. `echo-brain person tools disconnect --tool jira` calls
    `POST /v1/person/tools/jira/disconnect`. Local revocation is committed before
    remote deletion; a failed deletion cannot restore read access. Missing
@@ -205,8 +230,13 @@ shared tool-command fragment. It uses the existing authenticated Person host;
 Nango, SQLite and Authority dependencies stay in the server provider. The selecting
 Authority composition mounts provider-owned connection routes through the generic
 HTTP application port. No Jira command or route dispatcher remains in shared core.
+When selected, it also contributes Jira to `person tools` and the desktop Tools
+screen alongside Slack. The entry reports only the signed-in Person's local
+connection status; listing tools makes no Jira or Nango request. Each Person can
+connect their own account, including on staging.
 
-The provider-owned SQLite file stores compact binding/attempt data only. It retains only the latest attempt per Person tenure, including terminal status,
+The provider-owned SQLite file stores compact binding/attempt data and the latest
+project mapping setting. It retains only the latest attempt per Person tenure, including terminal status,
 so polling and cancellation survive an Authority restart. It keeps no credential,
 consent URL, ticket body or provider cursor. Cancellation and expiry prevent a
 late consent from creating an ECHO grant; remote connections created after cleanup
@@ -214,23 +244,28 @@ can still require operator cleanup. This slice adds no remote orphan sweeper. Re
 neutral coordinates, digests, grant/session/tenure and request commitments; no
 body, label, permalink, Nango reference or cursor is retained there.
 
-Only global Ask enables Jira. Mine excludes it. ECHO project scopes have no mapping
-in this slice and never fall back to global Jira; explicit ticket inventory in an
-unsupported scope is refused. There is no Jira addition to Person list/mine,
-connector catalog, settings UI or persistent ticket-open API, and no sync or
-index. Context capture exists only as the opt-in rehearsal intake.
+Global Ask enables Jira under the asker's connection. Project Ask additionally
+requires a saved mapping set by a current ECHO project lead. The desktop project's
+**Jira project** setting verifies the key live and saves only the cloud ID, stable
+Jira project ID and key. Members can read the setting; leads can change or remove
+it. Each asker uses their own OAuth connection and Jira permissions. Global Ask
+has no additional project allowlist; project Ask applies the saved mapping before
+discovery and checks it again on open and revalidation. Mine and unmapped projects exclude Jira and
+never fall back to global Jira; explicit ticket inventory in an unsupported scope
+is refused. There is no persistent ticket-open API, sync or index. Jira capture
+is disabled, including in the staging rehearsal. See
+[project settings](../../docs/features/project-settings-v1.md#jira-project-mapping)
+for the setting's CLI and revision checks.
 
 ## Remaining human inputs and live qualification
 
-[ADR-0026](../../docs/decisions/ADR-0026-jira-person-live-evidence-nango.md) awaits
-founder acceptance of Nango custody and the new Person release path. Acceptance
-must extend INV-PERMISSIONS-015 and review the startup gate before enablement.
-The new selecting module owns `JIRA_PERSON_LIVE_RELEASE_APPROVED_V1=false`;
-startup refuses Jira flags while that gate is closed. Fixtures supply the optional
-configuration directly and use synthetic transport. Modern Slack Nango wiring is
-preserved and exercised with Jira in the same Authority composition proof.
+[ADR-0026](../../docs/decisions/ADR-0026-jira-person-live-evidence-nango.md) accepts
+Nango custody and the person-bound live release path, now covered by
+INV-PERMISSIONS-015. `JIRA_PERSON_LIVE_RELEASE_APPROVED_V1=true` opens the code gate;
+runtime selection remains explicit. Modern Slack Nango wiring is preserved and
+exercised with Jira in the same Authority composition proof.
 
-After acceptance, configure the Nango Cloud Jira integration and distributable
+Configure the Nango Cloud Jira integration and distributable
 Atlassian OAuth application, callback, classic read scopes, allowed origin and one
 server cloud ID. Supply the existing runtime Nango key through the reviewed custody
 mechanism, with Connect-session write, connection list/read-credentials/delete
@@ -238,8 +273,15 @@ permissions. The narrow optional startup inputs are `--jira-cloud-id` and
 `--jira-nango-integration` alongside modern Nango configuration; there are no
 retired Slack credential/configuration fields in this path.
 
+For the fixed staging connector profile, `ECHO_STAGING_JIRA_ASK_V1=true` selects
+its cloud ID and integration. The EC2 Compose overlay supplies this flag only when
+the connector profile is selected. Live Ask allows each Person's own connection;
+the rehearsal's owner and fixed-project restrictions apply only to its diagnostic
+reads. Existing connections in the sidecar survive restart; do not reconnect or
+reset working state.
+
 Live qualification must exercise actual consent, tag discovery, refreshed token
 reads, fresh-consent reconnect, disconnect/reconnect, denied/changed issue visibility,
 account/site mismatch and abort behavior. Synthetic fixtures prove implementation
-behavior only. Real credentials, account connections, AWS and deployment remain
-outside this task. Project mappings and polished connection UI remain deferred.
+behavior only. Follow the operator playbook for deployment and account consent.
+Project mappings and the desktop connection UI use the same Person-bound path.

@@ -328,6 +328,53 @@ evidence ids that leak into sentence text.
 
 There is no authority field.
 
+### Implementation findings, 2026-10-04 (non-normative)
+
+These are observations from the current implementation and its qualification
+work. They do not change this RFC's draft status or create an accepted design
+decision.
+
+- A provider route rejected a constrained planner schema that combined a
+  finite string enum with a redundant string-length constraint. The compatible
+  schema keeps the finite enum without the redundant bound. This is a
+  route-specific compatibility observation, not a claim that either JSON
+  Schema feature is generally invalid. Friendli's structured-output reference
+  likewise documents a supported-keyword subset and says unexpected keywords
+  can be ignored, rejected or have undefined behaviour
+  ([FriendliAI Structured Outputs](https://friendli.ai/docs/guides/structured-outputs)).
+- Schema-valid JSON is only a transport property. It can still select an
+  unsuitable action or propose `finish` before the research state supports it.
+  The controller therefore derives the request's capabilities from actual
+  bound readers, and admits completion only when its recorded observations
+  satisfy the completion contract. It rejects a premature finish. This follows
+  the distinction between constraint compliance and output quality measured by
+  [JSONSchemaBench](https://arxiv.org/abs/2501.10868).
+- A successful completed search or list observation establishes that the
+  controller performed that bounded retrieval attempt after the relevant
+  hypothesis was created. It does not prove semantic absence. In particular,
+  neither one nor two searches is evidence that a fact does not exist; a
+  failed, partial or unavailable reader is never absence evidence.
+- Inventory progress persists across research turns. A missing-fact finish
+  cannot discard unread pages, and metadata-only discovery must be followed
+  by a relevant full read before concluding absence. Complete empty inventories
+  for every advertised source can end an evidence-free search; filtered,
+  unavailable and unfinished inventories cannot. After evidence is readable,
+  repeated queries that add no evidence do not indefinitely extend research.
+- Planner notes and hypotheses are private research state. The writer's
+  contract is the original question plus released, cited evidence and the
+  runtime's availability result; it must not inherit speculative planner
+  needs as user-visible missing facts. This keeps a research hypothesis from
+  becoming an unasked-for answer requirement.
+- Qualification exercises provider routes and nine synthetic cases, including
+  two additional questions introduced after the first diagnosis. Cases used
+  to diagnose failures become regression cases rather than untouched holdouts. It records evidence coverage, terminal classification, repair and
+  tool-use traces as well as final answer quality. It is still running; this
+  note makes no aggregate pass claim. This test shape follows Anthropic's
+  guidance to use realistic multi-call tasks, avoid over-specifying valid
+  strategies, inspect transcripts and retain held-out tests
+  ([Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents),
+  [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)).
+
 ### Model and provider
 
 - The model stays DeepSeek V3.2 through OpenRouter until the test set exists.

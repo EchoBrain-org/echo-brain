@@ -1192,6 +1192,22 @@ describe("Organization Authority runtime private approval lane", () => {
     } finally { await runtime.close(); record.close(); }
   });
 
+  it("restarts after Slack DM discovery fails before an approval marker is sent", async () => {
+    const seam = await approvalSeamFixture("slack");
+    const unavailableDm = vi.spyOn(seam.fixture.poster, "openDirectMessage").mockRejectedValue(new Error("Synthetic DM discovery outage"));
+    let runtime = await seam.open();
+    try {
+      await waitFor(() => seam.fixture.errors.length > 0, "DM discovery failure");
+      expect(seam.fixture.poster.markers).toEqual([]);
+      expect(seam.fixture.poster.published).toEqual([]);
+      await runtime.close();
+      unavailableDm.mockRestore();
+      runtime = await seam.open();
+      await waitFor(seam.presented, "private approval after restart");
+      expect(seam.presentationCount()).toBe(1);
+    } finally { unavailableDm.mockRestore(); await runtime.close(); }
+  });
+
   it.each(["slack", "fixture"] as const)("rejects %s startup when persisted presentation ownership is missing", async (provider) => {
     const seam = await approvalSeamFixture(provider);
     const runtime = await seam.open();

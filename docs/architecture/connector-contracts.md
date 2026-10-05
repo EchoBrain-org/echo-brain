@@ -7,15 +7,13 @@ tools, Ask responses, source admission and Slack onboarding continue through
 their current interfaces.
 
 The [connector/context integration](../product/2026-10-01-connector-context-integration-v1.md)
-also provides opt-in typed source capture: Granola reuses its configured adapter,
-Jira is request-only unless an explicit Authority binding retains pointers, and
-Slack has a fixed public-channel pointer source. Only the staging V2 selection
-retains Jira and Slack pointers. This intake capability has no production source
-registration or Ask wiring. Shared capture types live in
-`organization-processing/core`; Authority owns the fixed disposition and current
-retention fence. The capture contract accepts only the note, message, ticket
-and meeting payloads these providers emit. The payload kind is the source type,
-and every capture is a source observation, never an approved fact.
+provides retained Granola capture and live Jira/Slack read verification in the
+staging rehearsal. Jira and Slack capture requests are refused, and their
+pointers, metadata and bodies are not admitted to Layer 1. Existing provider
+capture contracts remain dormant library code; they have no active rehearsal
+or production registration. Shared capture types remain in
+`organization-processing/core`. A retained meeting capture is a source
+observation, never an approved fact.
 
 ## Shared connection commands
 
@@ -155,9 +153,10 @@ and ticket fixtures; they do not call either service.
 
 Ticket evidence reaches Ask through Evidence Desk V2 and `PersonAnswerResponseV5`
 at `POST /v4/person/ask`, with the durable live-read audit. The Authority mounts
-that route only when a Jira ticket-live runtime is selected; the production CLI
-keeps Jira behind `JIRA_PERSON_LIVE_RELEASE_APPROVED_V1=false` while
-[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is proposed.
+that route only when a Jira ticket-live runtime is selected.
+[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is accepted;
+the CLI requires explicit Jira configuration. The staging switch instead reuses
+the fixed profile's existing owner grant and bounded project, without tool capture.
 Jira is the only live reader. The Slack reader port, `PersonSlackReaderV1`, has
 no implementation, and read status is not exposed to clients.
 

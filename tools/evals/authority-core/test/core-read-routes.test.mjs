@@ -8,14 +8,18 @@ const answerSchema = Object.freeze({ properties: Object.freeze({ sentences: Obje
 const step = (port, prompt) => port.generate({ schema: stepSchema, user_prompt: JSON.stringify(prompt) });
 const answer = (port, evidence) => port.generate({ schema: answerSchema, user_prompt: JSON.stringify({ question: "What did the team decide?", evidence }) });
 
-test("deterministic agent searches the question once, then finishes on a fully shown result", async () => {
+test("deterministic agent searches, then completes a bounded inventory before reporting absence", async () => {
   const port = createCoreDeterministicStructuredGenerationPort();
   const first = await step(port, { question: "What decision governs the active checkpoint?", step: 1, last_results: [] });
   assert.deepEqual(first.actions, [{ tool: "search", args: { query: "what decision governs the active checkpoint" } }]);
   const found = await step(port, { question: "What decision governs the active checkpoint?", step: 2, last_results: [{ tool: "search", results: [{ id: "E1", full: true }] }] });
   assert.deepEqual(found.actions, [{ tool: "finish", args: {} }]);
   assert.deepEqual(found.parts[0].needs[0], { need: "the answer", status: "found", evidence: ["E1"] });
-  const missing = await step(port, { question: "What decision governs the active checkpoint?", step: 2, last_results: [{ tool: "search", results: [] }] });
+  const absentSearch = await step(port, { question: "What decision governs the active checkpoint?", step: 2, last_results: [{ tool: "search", results: [] }] });
+  assert.deepEqual(absentSearch.actions, [{ tool: "list", args: { source: "meetings" } }]);
+  assert.equal(absentSearch.parts[0].needs[0].status, "open");
+  const missing = await step(port, { question: "What decision governs the active checkpoint?", step: 3, last_results: [{ tool: "list", items: [], more: false }] });
+  assert.deepEqual(missing.actions, [{ tool: "finish", args: {} }]);
   assert.equal(missing.parts[0].needs[0].status, "not_found");
 });
 

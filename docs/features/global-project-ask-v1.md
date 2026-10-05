@@ -145,10 +145,12 @@ it. The CLI accepts
 `person ask --question <text> [--project <project-id> | --mine]`; the two
 flags are exclusive. The client does not silently downgrade a project or mine
 request to global Ask. With Jira live evidence configured
-([ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md), proposed;
-production-disabled), `person ask --tickets` calls `POST /v4/person/ask`, which
-returns V5 answers; a connected Jira account contributes ticket citations only
-in global scope.
+([ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md)),
+`person ask --tickets` calls `POST /v4/person/ask`, which returns V5 answers.
+A connected Jira account contributes ticket citations in global scope or in a
+project with a lead-configured [Jira mapping](project-settings-v1.md#jira-project-mapping).
+Project reads stay inside that mapped Jira project using the asker's own
+connection. Mine and unmapped projects exclude Jira.
 
 Cited original evidence is read through `POST /v2/person/ask/source` or
 `person ask-source`, using the answer's project scope (global for a global or

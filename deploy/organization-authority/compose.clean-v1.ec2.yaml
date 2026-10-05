@@ -2,6 +2,9 @@ services:
   authority:
     image: "${ECHO_CLEAN_AUTHORITY_IMAGE:?set ECHO_CLEAN_AUTHORITY_IMAGE to the immutable ECR digest}"
     build: !reset null
+    environment:
+      # Select Jira Ask only with the fixed staging connector profile.
+      ECHO_STAGING_JIRA_ASK_V1: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:+true}"
     ports: !override
       - name: tunnel-origin
         target: 80

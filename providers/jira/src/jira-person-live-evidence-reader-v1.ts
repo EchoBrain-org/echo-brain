@@ -4,12 +4,13 @@ import { validatePersonTicketCitationV1, type PersonTicketCitationV1 } from '@ec
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
-import { parseJiraIssueV1, parseJiraProject, verifyJiraConnectionV1, type ParsedJiraIssueV1 } from './jira-payload-v1.js';
+import { jiraProjectMatches, parseJiraIssueV1, parseJiraProject, verifyJiraConnectionV1, type ParsedJiraIssueV1 } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_ID, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
 const INVENTORY_FIELDS = 'summary,project,created,status,assignee,duedate';
 const TEXT_FIELDS = `${INVENTORY_FIELDS},description`;
 const REQUEST_MAX_HANDLES = 512;
+const REVALIDATION_BATCH_SIZE = 50;
 
 interface ListCursor {
   readonly selection: string;
@@ -24,11 +25,16 @@ function limit(value: number): number {
   return value;
 }
 
-/** A literal phrase, not caller-authored JQL or Lucene operators. */
+/** Shared keyword semantics, or an exact key. Never caller-authored JQL or Lucene operators. */
 function searchJql(query: string, projectId?: string): string {
   if (typeof query !== 'string' || query.trim() === '' || Buffer.byteLength(query, 'utf8') > 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(query)) jiraFailure('invalid_request');
-  const phrase = query.replace(/[+\-&|!(){}\[\]^"~*?:\\/]/g, '\\$&');
-  const expression = JIRA_TICKET_KEY.test(query) ? `key = ${JSON.stringify(query)}` : `text ~ ${JSON.stringify(`"${phrase}"`)}`;
+  const terms = [...new Map(query.trim().split(/\s+/u).map(term => [term.toLowerCase(), term])).values()];
+  if (terms.length > 32) jiraFailure('invalid_request');
+  const ticketKey = query.trim().toUpperCase();
+  const expression = JIRA_TICKET_KEY.test(ticketKey) ? `key = ${JSON.stringify(ticketKey)}` : terms.map(term => {
+    const literal = term.replace(/[+\-&|!(){}\[\]^"~*?:\\/]/g, '\\$&');
+    return `text ~ ${JSON.stringify(`"${literal}"`)}`;
+  }).join(' AND ');
   return `${projectId === undefined ? expression : `project = ${projectId} AND (${expression})`} ORDER BY created DESC, id DESC`;
 }
 
@@ -75,9 +81,9 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     const { origin } = await verifyJiraConnectionV1(transport, { signal, expected_origin: pinnedOrigin });
     pinnedOrigin = origin;
     if (fixedProject !== undefined) {
-      const current = parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${fixedProject}`, signal }), origin, apiPrefix);
+      const current = parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${fixedProject}`, query: { expand: 'projectKeys' }, signal }), origin, apiPrefix);
       signal?.throwIfAborted();
-      if (current.id !== fixedProject && current.key !== fixedProject) jiraFailure('invalid_output');
+      if (!jiraProjectMatches(current, fixedProject)) jiraFailure('invalid_output');
       if (pinnedProject !== undefined && current.id !== pinnedProject.id) jiraFailure('stale_access_state');
       pinnedProject = current;
     }
@@ -92,6 +98,27 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     // Exact reads fence stale search pages, moved tickets and retained handles.
     if (pinnedProject !== undefined && parsed.project_id !== pinnedProject.id) jiraFailure('unauthorized');
     return parsed;
+  }
+
+  async function revalidateIssues(ids: readonly string[], origin: string, signal?: AbortSignal): Promise<void> {
+    for (let offset = 0; offset < ids.length; offset += REVALIDATION_BATCH_SIZE) {
+      const batch = ids.slice(offset, offset + REVALIDATION_BATCH_SIZE);
+      const page = jiraRecord(await transport.request({ path: `${pathPrefix}/issue/bulkfetch`, method: 'POST',
+        body: { issueIdsOrKeys: batch, fields: INVENTORY_FIELDS.split(',') }, signal }));
+      signal?.throwIfAborted();
+      // Bulk fetch applies current issue permissions. Missing issues must not
+      // be treated as a successful partial check; issueErrors are retriable failures.
+      if (jiraArray(page.issueErrors === undefined ? [] : page.issueErrors, batch.length).length > 0) jiraFailure('unavailable');
+      const expected = new Set(batch);
+      const returned = new Set<string>();
+      for (const raw of jiraArray(page.issues, batch.length)) {
+        const parsed = parseJiraIssueV1(raw, { cloudid, origin, inventory: true });
+        if (!expected.has(parsed.id) || returned.has(parsed.id)) jiraFailure('invalid_output');
+        if (pinnedProject !== undefined && parsed.project_id !== pinnedProject.id) jiraFailure('unauthorized');
+        returned.add(parsed.id);
+      }
+      if (returned.size !== expected.size) jiraFailure('not_found');
+    }
   }
 
   function remember(items: readonly ParsedJiraIssueV1[]): readonly PersonLiveEvidenceValueV1<PersonTicketCitationV1>[] {
@@ -146,7 +173,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       const jql = searchJql(input.query, pinnedProject?.id);
       return safe(async () => {
         const origin = await verifyConnection(input.signal);
-        const page = await searchPage({ jql, maximum, origin, inventory: false, projectId: pinnedProject?.id, signal: input.signal });
+        const page = await searchPage({ jql, maximum, origin, inventory: true, projectId: pinnedProject?.id, signal: input.signal });
         await verifyConnection(input.signal);
         return Object.freeze({ items: remember(page.selected), truncated: page.token !== undefined || page.selected.some(item => item.truncated) });
       }, input.signal);
@@ -165,7 +192,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       const maximum = Math.min(limit(input.limit), 20);
       if (input.container !== undefined && (typeof input.container !== 'string' || !(JIRA_ID.test(input.container) || JIRA_PROJECT_KEY.test(input.container)))) jiraFailure('invalid_request');
-      if (pinnedProject !== undefined && input.container !== undefined && input.container !== fixedProject && input.container !== pinnedProject.id && input.container !== pinnedProject.key) jiraFailure('unauthorized');
+      if (pinnedProject !== undefined && input.container !== undefined && input.container !== fixedProject && !jiraProjectMatches(pinnedProject, input.container)) jiraFailure('unauthorized');
       if (input.since !== undefined) jiraDay(input.since, 'invalid_request');
       if (input.until !== undefined) jiraDay(input.until, 'invalid_request');
       if (input.since !== undefined && input.until !== undefined && input.since > input.until) jiraFailure('invalid_request');
@@ -174,9 +201,9 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       if (input.cursor !== undefined && (cursor === undefined || cursor.selection !== selection)) jiraFailure('invalid_request');
       return safe(async () => {
         const origin = await verifyConnection(input.signal);
-        const project = pinnedProject ?? (input.container === undefined ? undefined : parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${input.container}`, signal: input.signal }), origin, apiPrefix));
+        const project = pinnedProject ?? (input.container === undefined ? undefined : parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${input.container}`, query: { expand: 'projectKeys' }, signal: input.signal }), origin, apiPrefix));
         input.signal?.throwIfAborted();
-        if (project !== undefined && input.container !== undefined && project.id !== input.container && project.key !== input.container) jiraFailure('invalid_output');
+        if (project !== undefined && input.container !== undefined && !jiraProjectMatches(project, input.container)) jiraFailure('invalid_output');
         if (cursor !== undefined && cursor.projectId !== project?.id) jiraFailure('stale_access_state');
         const jql = `${project === undefined ? 'created >= "1970-01-01"' : `project = ${project.id}`} ORDER BY created DESC, id DESC`;
         const page = await searchPage({ jql, maximum, origin, inventory: true, cursor, projectId: project?.id, signal: input.signal });
@@ -205,7 +232,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
           ids.add(id);
         }
         // Historical citations remain valid evidence bytes only while this exact person can still see the ticket.
-        for (const id of ids) await issue(id, origin, true, input.signal);
+        await revalidateIssues([...ids], origin, input.signal);
         await verifyConnection(input.signal);
       }, input.signal);
     },

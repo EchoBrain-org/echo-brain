@@ -285,18 +285,9 @@ button.marker:hover { background: rgba(240, 236, 230, 0.18); }
 .plain-button.danger { color: var(--danger); }
 
 /* Connected tools: the organization's tools and your link to each. */
-.sheet.tools { width: 460px; height: auto; gap: 12px; padding: 18px 20px 18px; }
-.sheet.tools:focus { outline: none; }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; }
 .sheet-head h2 { margin: 0; font-size: 18px; }
-.sheet.tools p { margin: 0; font-size: 13.5px; }
-.sheet.tools p.context { font-size: 12.5px; color: var(--faint); }
-.sheet.tools p.error { color: var(--danger); }
 .sheet .choices.start { justify-content: flex-start; align-items: center; margin-top: 0; }
-.tool-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
-.tool-row { display: flex; flex-direction: column; gap: 2px; padding: 10px 0; border-bottom: 1px solid var(--line); }
-.tool-row .name { font-size: 14.5px; font-weight: 500; }
-.tool-row .state { font-size: 12.5px; color: var(--muted); }
 .plain-button:disabled { opacity: 0.5; cursor: default; }
 .cover { width: 520px; max-width: calc(100% - 48px); height: 400px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; letter-spacing: 1.8px; color: var(--muted); }
 .unresolved { display: flex; flex-direction: column; gap: 8px; }
@@ -331,6 +322,7 @@ button.toast:hover { background: #211f1f; }
 .members-button .face { margin-left: -6px; border: 2px solid var(--ink); box-sizing: content-box; }
 .project-settings { position: relative; }
 .project-settings .menu { top: 30px; }
+.jira-project-field { display: flex; flex-direction: column; gap: 6px; }
 .archived-projects { display: flex; flex-direction: column; margin-top: 16px; }
 .archived-heading { align-self: flex-start; display: flex; align-items: center; gap: 4px; padding: 8px 12px 4px; border: 0; border-radius: 6px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.8px; color: var(--faint); background: transparent; }
 .archived-heading:hover { color: var(--text); background: var(--hover); }
@@ -413,3 +405,23 @@ button.toast:hover { background: #211f1f; }
 .org-foot { flex-shrink: 0; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--faint); }
 .side-row.current { font-weight: 600; background: rgba(240, 236, 230, 0.10); }
 .organization-rows { flex-shrink: 0; padding-bottom: 8px; }
+.organization-rows:has(+ .tools-rows) { padding-bottom: 2px; }
+.tools-rows { flex-shrink: 0; padding-bottom: 8px; }
+
+/* Tools: every tool the organization lists, grouped by your connection. */
+.column.tools-page { height: 100%; max-height: 460px; gap: 10px; padding: 8px 4px 4px; }
+.tools-intro { flex-shrink: 0; font-size: 12.5px; color: var(--faint); }
+.tools-list { flex-grow: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.tools-list .side-header { padding: 14px 6px 4px; }
+.tools-list .choices.start { display: flex; align-items: center; gap: 10px; }
+.tool-row { height: 60px; flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 0 6px; border-bottom: 1px solid var(--line); }
+.tool-row .lines { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.tool-row .name { font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-row .state { font-size: 12.5px; color: var(--faint); }
+.tool-row.revoked .state { color: var(--accent-text); }
+.tool-row.unavailable .name { color: var(--faint); }
+.tool-row .primary-button.small { align-self: center; }
+.tool-mark { width: 36px; height: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 9px; font-size: 15px; font-weight: 700; background: var(--line-strong); }
+.tool-mark.off { opacity: 0.45; }
+.sheet.tool-connect:focus { outline: none; }
+.sheet.confirm p.context { font-size: 12.5px; color: var(--faint); }

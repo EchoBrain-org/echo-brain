@@ -1,5 +1,7 @@
 /** Closed staging-only protocol. Receipts never contain provider credentials or source text. */
 export const STAGING_CONNECTOR_REHEARSAL_PATH_V1 = '/v1/staging/connector-rehearsal';
+// Historical profile identifier: preserve its digest and sidecar binding. It no longer
+// authorizes Jira or Slack capture; tools support verify-read only.
 export const STAGING_CONNECTOR_REHEARSAL_POLICY_V2 = 'initial-owner-granola-retained-jira-pointer-slack-pointer-v2';
 
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
@@ -22,7 +24,7 @@ interface BindingV2 {
 }
 export type StagingConnectorRehearsalRequestV2 = BindingV2 & (
   | { readonly action: 'status' }
-  | { readonly action: 'capture'; readonly tool: 'granola' | 'jira' | 'slack'; readonly limit: number }
+  | { readonly action: 'capture'; readonly tool: 'granola'; readonly limit: number }
   | { readonly action: 'verify-read'; readonly tool: 'jira' | 'slack' }
 );
 export const STAGING_CONNECTOR_READ_PHASES_V1 = ['local_authorization', 'connection', 'provider_verification', 'inventory', 'open', 'final_fence'] as const;
@@ -37,7 +39,7 @@ export interface StagingConnectorCaptureReceiptV2 {
   readonly kind: 'echo-context-capture-rehearsal-receipt-v1';
   readonly source_identity_sha256: `sha256:${string}`;
   readonly captures: readonly {
-    readonly source_type: 'meeting' | 'note' | 'ticket' | 'message';
+    readonly source_type: 'meeting' | 'note';
     readonly admission: 'admitted' | 'duplicate';
     readonly source_id_sha256: `sha256:${string}`;
     readonly revision_id_sha256: `sha256:${string}`;
@@ -51,7 +53,7 @@ export type StagingConnectorRehearsalResponseV2 = BindingV2 & {
   readonly qualified: false;
 } & (
   | { readonly action: 'status'; readonly processing: 'active' | 'idle_until_finalize'; readonly granola_available: boolean }
-  | { readonly action: 'capture'; readonly tool: 'granola' | 'jira' | 'slack'; readonly receipt: StagingConnectorCaptureReceiptV2 }
+  | { readonly action: 'capture'; readonly tool: 'granola'; readonly receipt: StagingConnectorCaptureReceiptV2 }
   | { readonly action: 'verify-read'; readonly tool: 'jira' | 'slack'; readonly result: StagingConnectorReadResultV1 }
 );
 
@@ -102,7 +104,7 @@ export function validateStagingConnectorRehearsalRequestV2(value: unknown): Stag
   if (request.action === 'status') keys(request, ['schema_version', 'release_id', 'profile_sha256', 'action']);
   else if (request.action === 'capture') {
     keys(request, ['schema_version', 'release_id', 'profile_sha256', 'action', 'tool', 'limit']);
-    if (!['granola', 'jira', 'slack'].includes(request.tool as string) || !Number.isSafeInteger(request.limit) ||
+    if (request.tool !== 'granola' || !Number.isSafeInteger(request.limit) ||
         (request.limit as number) < 1 || (request.limit as number) > 5) invalid();
   } else if (request.action === 'verify-read') {
     keys(request, ['schema_version', 'release_id', 'profile_sha256', 'action', 'tool']);
@@ -111,13 +113,13 @@ export function validateStagingConnectorRehearsalRequestV2(value: unknown): Stag
   return Object.freeze({ ...request }) as unknown as StagingConnectorRehearsalRequestV2;
 }
 
-function captureReceipt(value: unknown, tool: 'granola' | 'jira' | 'slack'): StagingConnectorCaptureReceiptV2 {
+function captureReceipt(value: unknown): StagingConnectorCaptureReceiptV2 {
   const receipt = record(value);
   keys(receipt, ['schema_version', 'kind', 'source_identity_sha256', 'captures', 'counts']);
   if (receipt.schema_version !== 1 || receipt.kind !== 'echo-context-capture-rehearsal-receipt-v1' ||
       !Array.isArray(receipt.captures) || receipt.captures.length > 5) invalid();
   stringMatches(receipt.source_identity_sha256, DIGEST);
-  const expectedSourceTypes = tool === 'granola' ? ['meeting', 'note'] : tool === 'jira' ? ['ticket'] : ['message'];
+  const expectedSourceTypes = ['meeting', 'note'];
   const captures = receipt.captures.map(value => {
     const capture = record(value);
     keys(capture, ['source_type', 'admission', 'source_id_sha256', 'revision_id_sha256', 'content_sha256']);
@@ -164,7 +166,7 @@ export function validateStagingConnectorRehearsalResponseV2(value: unknown): Sta
     } else invalid();
     return Object.freeze({ ...response, result: Object.freeze({ ...result }) }) as unknown as StagingConnectorRehearsalResponseV2;
   }
-  if (response.action !== 'capture' || !['granola', 'jira', 'slack'].includes(response.tool as string)) invalid();
+  if (response.action !== 'capture' || response.tool !== 'granola') invalid();
   keys(response, [...common, 'tool', 'receipt']);
-  return Object.freeze({ ...response, receipt: captureReceipt(response.receipt, response.tool as 'granola' | 'jira' | 'slack') }) as unknown as StagingConnectorRehearsalResponseV2;
+  return Object.freeze({ ...response, receipt: captureReceipt(response.receipt) }) as unknown as StagingConnectorRehearsalResponseV2;
 }

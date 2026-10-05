@@ -1644,6 +1644,23 @@ describe("core observation Explorer round trip", () => {
     });
   });
 
+  it.each(["ticket", "slack"])("preserves the %s source on real transported live lookups", async (source) => {
+    const lines: string[] = [];
+    const transport = createStagingJourneyTelemetryTransportV1({ release_sha: "a".repeat(40), build_number: 42 }, { write: line => { lines.push(line); } });
+    try {
+      await observeCoreRuntimeV1("evidence_list", async () => {
+        annotateCoreRuntimeV1({ evidence_source: source as "ticket" | "slack", result: "empty", counts: { included_count: 0 } });
+      }, transport.core_runtime);
+      const events = lines.map(line => JSON.parse(line)).filter(item => item.kind === "echo-authority-journey-stage-v1");
+      const rows = events.map(item => row({ ...item, diagnostic_json: JSON.stringify(item.diagnostic) }));
+      const client = new Client([{ queryId: "q" }, { status: "Complete", results: rows }]);
+      expect(await handler(client)({ operation: "detail", journey_id: events[0].journey_id })).toMatchObject({
+        history_complete: true, status: "complete",
+        stages: expect.arrayContaining([expect.objectContaining({ event: "succeeded", diagnostic: expect.objectContaining({ evidence_source: source, result: "empty", counts: expect.objectContaining({ included_count: 0 }) }) })]),
+      });
+    } finally { transport.close(); }
+  });
+
   it.each(JOURNEY_TERMINAL_OUTCOMES_V1.ask_response)("lists an Ask journey that ends %s as complete", async (outcome) => {
     const list = new Client(listReplies([indexRow(id, now)], [event({ outcome })]));
     await expect(handler(list)({ operation: "list" })).resolves.toMatchObject({

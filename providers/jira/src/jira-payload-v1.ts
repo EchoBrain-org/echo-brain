@@ -61,11 +61,17 @@ function jiraSelf(value: unknown, origin: string, apiPrefix: string, type: 'issu
   if (!candidates.includes(self)) jiraFailure('invalid_output');
 }
 
-export function parseJiraProject(value: unknown, origin: string, apiPrefix: string): { readonly id: string; readonly key: string } {
+export function parseJiraProject(value: unknown, origin: string, apiPrefix: string): { readonly id: string; readonly key: string; readonly keys: readonly string[] } {
   const p = jiraRecord(value);
   const id = jiraString(p.id, 20, JIRA_ID); const key = jiraString(p.key, 64, JIRA_PROJECT_KEY);
   jiraSelf(p.self, origin, apiPrefix, 'project', id, key);
-  return { id, key };
+  const keys = p.projectKeys === undefined ? [] : jiraArray(p.projectKeys, 256).map(value => jiraString(value, 64, JIRA_PROJECT_KEY));
+  return { id, key, keys: Object.freeze(keys) };
+}
+
+/** Historical keys are provider-verified aliases; project IDs still define the read boundary. */
+export function jiraProjectMatches(project: ReturnType<typeof parseJiraProject>, selection: string): boolean {
+  return project.id === selection || project.key === selection || project.keys.includes(selection);
 }
 
 /** Plain text extraction for the supported ADF subset; never hydrate cards, links or media. */
@@ -74,7 +80,7 @@ function jiraDescription(value: unknown): string {
   const doc = jiraRecord(value);
   if (doc.type !== 'doc' || doc.version !== 1) jiraFailure('invalid_output');
   let nodes = 0; let bytes = 0;
-  const blocks = new Set(['doc', 'paragraph', 'heading', 'blockquote', 'bulletList', 'orderedList', 'listItem', 'codeBlock', 'table', 'tableRow', 'tableCell', 'tableHeader', 'panel']);
+  const blocks = new Set(['doc', 'paragraph', 'heading', 'blockquote', 'bulletList', 'orderedList', 'listItem', 'taskList', 'codeBlock', 'table', 'tableRow', 'tableCell', 'tableHeader', 'panel']);
   function walk(value: unknown, depth: number): string {
     if (++nodes > 4096 || depth > 32) jiraFailure('invalid_output');
     const node = jiraRecord(value); const type = jiraString(node.type, 64);
@@ -87,9 +93,25 @@ function jiraDescription(value: unknown): string {
     }
     if (type === 'hardBreak') return '\n';
     if (type === 'rule') return '\n';
+    if (type === 'inlineCard') {
+      const attrs = jiraRecord(node.attrs);
+      // Preserve the provider's URL as text; never fetch card metadata or its target.
+      if (attrs.data !== undefined || node.content !== undefined) jiraFailure('invalid_output');
+      const text = jiraString(attrs.url, 8192);
+      bytes += Buffer.byteLength(text, 'utf8');
+      if (bytes > 256 * 1024) jiraFailure('invalid_output');
+      return text;
+    }
     if (type === 'mention' || type === 'emoji' || type === 'status') {
       const attrs = jiraRecord(node.attrs);
       return jiraString(attrs.text ?? (type === 'emoji' ? attrs.shortName : undefined), 512);
+    }
+    if (type === 'taskItem') {
+      const state = jiraRecord(node.attrs).state;
+      // Checklist completion is evidence, distinct from the issue's workflow status.
+      if (state !== 'TODO' && state !== 'DONE') jiraFailure('invalid_output');
+      const text = jiraArray(node.content ?? [], 4096).map(child => walk(child, depth + 1)).join('');
+      return `[${state === 'DONE' ? 'x' : ' '}] ${text}\n`;
     }
     if (!blocks.has(type)) jiraFailure('invalid_output');
     const content = jiraArray(type === 'doc' ? node.content : node.content ?? [], 4096);

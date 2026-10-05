@@ -3,14 +3,25 @@ import type { EvidenceDeskKindV1, EvidenceDeskPortV1 } from '@echo-brain/organiz
 import type { EvidenceDeskPortV2, EvidenceDeskResultV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-v1.js';
 
 const LOCAL_KINDS: readonly EvidenceDeskKindV1[] = ['decision', 'action', 'rationale', 'note', 'document_passage'];
 
 /** A request-owned dispatcher. Server composition selects live sources; models select only read tools. */
-export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?: PersonLiveEvidenceSourceV1, slack?: PersonLiveEvidenceSourceV1<PersonSlackMessageCitationV1>): EvidenceDeskPortV2 {
-  if ((ticket !== undefined || slack !== undefined) && base.scope.kind !== 'global') throw new AuthorityOperationError('unauthorized', 'Live source is unsupported in this scope');
+export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?: PersonLiveEvidenceSourceV1, slack?: PersonLiveEvidenceSourceV1<PersonSlackMessageCitationV1>, ticketProjectId?: string): EvidenceDeskPortV2 {
+  // A V1 desk may already own the request's Slack reader. Preserve that
+  // explicit capability only in the V2 scope where Slack is supported.
+  const inheritedSlack = slack === undefined ? base.live_sources?.filter(source => source.source === 'slack') ?? [] : [];
+  if (((slack !== undefined || inheritedSlack.length !== 0) && base.scope.kind !== 'global') || (ticket !== undefined && base.scope.kind !== 'global' && !(base.scope.kind === 'project' && base.scope.project_id === ticketProjectId))) throw new AuthorityOperationError('unauthorized', 'Live source is unsupported in this scope');
   type Source = EvidenceDeskPortV1 | PersonLiveEvidenceSourceV1;
   const issued = new Map<string, Source>();
+  const lookup = (phase: 'evidence_search' | 'evidence_list' | 'evidence_open', source: Source, operation: () => Promise<EvidenceDeskResultV2>) =>
+    observePersonLiveEvidenceV1(phase, source === ticket ? 'ticket' : 'slack', async () => {
+      const result = await operation();
+      annotateCoreRuntimeV1({ counts: { included_count: result.items.length }, result: result.items.length === 0 ? 'empty' : 'returned' });
+      return result;
+    });
   const remember = (result: EvidenceDeskResultV2, source: Source) => {
     for (const item of result.items) {
       const previous = issued.get(item.id);
@@ -22,6 +33,12 @@ export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?
   const refused = (): never => { throw new AuthorityOperationError('unauthorized', 'Live source is unavailable in this scope'); };
   return Object.freeze<EvidenceDeskPortV2>({
     scope: base.scope,
+    ticket_available: ticket !== undefined,
+    live_sources: Object.freeze([
+      ...(ticket === undefined ? [] : [Object.freeze({ source: 'ticket' as const, tool_id: ticket.tool_id })]),
+      ...(slack === undefined ? [] : [Object.freeze({ source: 'slack' as const, tool_id: slack.tool_id })]),
+      ...inheritedSlack,
+    ]),
     async search(input) {
       input.signal?.throwIfAborted();
       const maximum = input.limit ?? 8;
@@ -40,8 +57,8 @@ export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?
       for (const [source, kind] of [[ticket, 'ticket'], [slack, 'slack_message']] as const) {
         if (source === undefined || (requestedKinds !== undefined && !requestedKinds.includes(kind))) continue;
         const result = input.query === undefined
-          ? await source.list({ limit: Math.min(maximum, 20), signal: input.signal })
-          : await source.search({ query: input.query, limit: Math.min(maximum, 5), signal: input.signal });
+          ? await lookup('evidence_list', source, () => source.list({ limit: Math.min(maximum, 20), signal: input.signal }))
+          : await lookup('evidence_search', source, () => source.search({ query: input.query!, limit: Math.min(maximum, 5), signal: input.signal }));
         input.signal?.throwIfAborted();
         pages.push({ source, result });
       }
@@ -73,7 +90,7 @@ export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?
       input.signal?.throwIfAborted();
       const source = issued.get(input.item);
       if (source === undefined) throw new AuthorityOperationError('not_found', 'Evidence item is not available in this request');
-      const result = source === base ? await base.open(input) : await source.open({ item: input.item, signal: input.signal });
+      const result = source === base ? await base.open(input) : await lookup('evidence_open', source, () => source.open({ item: input.item, signal: input.signal }));
       input.signal?.throwIfAborted();
       return remember(result, source);
     },
@@ -89,7 +106,7 @@ export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?
       const source = input.source === 'ticket' ? ticket : slack;
       const kind = input.source === 'ticket' ? 'ticket' : 'slack_message';
       if (source === undefined || (input.source === 'ticket' && input.channel !== undefined) || input.kinds?.some(value => value !== kind)) refused();
-      const result = await source!.list({ ...(input.channel === undefined ? {} : { container: input.channel }), limit: Math.min(input.limit ?? 20, 20), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal });
+      const result = await lookup('evidence_list', source!, () => source!.list({ ...(input.channel === undefined ? {} : { container: input.channel }), limit: Math.min(input.limit ?? 20, 20), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal }));
       input.signal?.throwIfAborted();
       return remember(result, source!);
     },

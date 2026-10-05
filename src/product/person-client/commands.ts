@@ -204,7 +204,7 @@ Provide exactly one identity option. --open-browser opens the handoff automatica
 Shows installed_version, client_build source_sha/source_kind, sign-in state, membership type, and Authority origin.
 Client provenance does not identify the Authority build serving requests. Status is local and makes no network request.
 `,
-  tools: `usage: echo-brain person tools [<setup|connect|disconnect|status|cancel> --tool <tool> [options]]
+  tools: `usage: echo-brain person tools [<setup|connect|disconnect|status|cancel|project> --tool <tool> [options]]
 
 Without a verb, lists your organization's tools and your link to each; owners also see each tool's organization setup.
 setup (owners only) and connect open the tool's page in your browser and wait. A token is read only from standard input.
@@ -218,7 +218,7 @@ Removes the local session. A revoked session is also removed locally.
 
 Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved; Slack and shared transcripts are not read. Answers include typed citations; each opens with person open --ref when it carries a ref.
 
---tickets selects the ticket-capable Ask response. A connected Jira account contributes only in global scope; project mappings are unsupported and mine excludes Jira. Ticket citations open their permalink directly in Jira.
+--tickets selects the ticket-capable Ask response. Global scope reads tickets visible to your connected Jira account; project scope requires a saved Jira project mapping. Mine excludes tickets. Ticket citations open their permalink directly in Jira.
 `,
   list: `usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]
 
@@ -406,7 +406,7 @@ Shows each employee's name, canonical email, membership state, and invitation st
 `,
 };
 
-const TOOL_VERBS: readonly PersonToolVerbNameV1[] = ['setup', 'connect', 'disconnect', 'status', 'cancel'];
+const TOOL_VERBS: readonly PersonToolVerbNameV1[] = ['setup', 'connect', 'disconnect', 'status', 'cancel', 'project'];
 
 function toolVerb(value: string | undefined): PersonToolVerbNameV1 | undefined {
   return TOOL_VERBS.find((verb) => verb === value);

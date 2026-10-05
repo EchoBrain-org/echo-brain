@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV2, type AgenticAskAuditEntryV1 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
-import { captureCoreRuntimeContentV1, observeCoreRuntimeV1 } from '../../src/shared/core-runtime-observation-v1.js';
+import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 
 const checked = { checked_at: '2026-10-01T00:00:00.000Z' };
 const body = 'ECHO-1: Launch is Tuesday.';
@@ -38,6 +38,7 @@ function fixture(options: {
   };
   const desk: EvidenceDeskPortV2 = {
     scope: { kind: 'global' },
+    live_sources: [{ source: 'ticket', tool_id: 'issue-fixture' }],
     search: vi.fn(async () => { throw new Error('unexpected search'); }),
     list: vi.fn(async () => release([metadata, uncitedMetadata])),
     open: vi.fn(async input => {
@@ -68,6 +69,109 @@ function fixture(options: {
 }
 
 describe('Agentic Ask V2 ticket release', () => {
+  it('advertises a connected source and its provider in one catalog used by the tool schemas', async () => {
+    const f = fixture();
+    await f.run();
+    for (const input of f.inputs) {
+      const catalog = JSON.parse(input.user_prompt).source_catalog;
+      expect(catalog).toEqual(expect.arrayContaining([
+        expect.objectContaining({ source: 'tickets', tool_id: 'issue-fixture' }),
+      ]));
+      expect(input.system_prompt).not.toContain('Documents (source "document") are PRDs, MRDs');
+      expect(input.system_prompt).not.toContain('Look for Slack context when the question asks about current status');
+      if (input.system_prompt.startsWith('You write')) continue;
+      const actions = (input.schema as { properties: { actions: { items: { anyOf: { properties: { tool: { enum: string[] }; args: { properties: { source?: { enum: string[] } } } } }[] } } } }).properties.actions.items.anyOf;
+      for (const name of ['search', 'list']) {
+        const action = actions.find((value: { properties: { tool: { enum: string[] } } }) => value.properties.tool.enum[0] === name);
+        expect(action?.properties.args.properties.source?.enum).toEqual(catalog.map((value: { source: string }) => value.source));
+      }
+    }
+  });
+
+  it('leaves unavailable and out-of-scope sources out of both the catalog and tool selectors', async () => {
+    const inputs: StructuredGenerationInput[] = [];
+    const empty = { items: [], truncated: false, receipt_digests: [] };
+    const desk: EvidenceDeskPortV2 = {
+      scope: { kind: 'project', project_id: 'prj_00000000-0000-4000-8000-000000000001' },
+      ticket_available: false, live_sources: [],
+      search: async () => empty, list: async () => empty, open: async () => empty, revalidate: async () => checked,
+    };
+    await createAgenticAskV2({ desk,
+      model: { generate: async input => { inputs.push(input); return { parts: [{ question: 'What exists?', needs: [], notes: '' }], actions: [{ tool: 'finish', args: {} }] }; } },
+      audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 },
+    }).answer({ question: 'What exists?' });
+    expect(JSON.parse(inputs[0]!.user_prompt).source_catalog.map((value: { source: string }) => value.source)).toEqual(['meetings', 'documents']);
+    expect(JSON.stringify(inputs[0]!.schema)).not.toContain('tickets');
+    expect(JSON.stringify(inputs[0]!.schema)).not.toContain('slack');
+  });
+
+  it('uses the same research tools for a non-Jira ticket source without prescribing a provider or lookup order', async () => {
+    const identifier = 'team/repo#42';
+    const text = `${identifier}: Launch is Tuesday.`;
+    const ticket: EvidenceDeskItemV2 = {
+      id: 'opaque-request-handle', kind: 'ticket', label: identifier, text, visibility: 'only_me',
+      citation: { kind: 'ticket', tool_id: 'issue-fixture', external_scope_id: 'workspace-fixture', ticket_id: 'opaque-42', permalink: 'https://issues.example.test/team/repo/42', text_sha256: sha256Digest(text) },
+      receipt_sha256: canonicalSha256('other-provider-release'),
+    };
+    const desk: EvidenceDeskPortV2 = {
+      scope: { kind: 'project', project_id: 'prj_00000000-0000-4000-8000-000000000001' }, ticket_available: true,
+      live_sources: [{ source: 'ticket', tool_id: 'issue-fixture' }],
+      search: vi.fn(async () => ({ items: [ticket], truncated: false, receipt_digests: [ticket.receipt_sha256] })),
+      list: vi.fn(async () => { throw new Error('model did not choose list'); }),
+      open: vi.fn(async () => { throw new Error('search already returned full text'); }),
+      revalidate: vi.fn(async () => checked),
+    };
+    const inputs: StructuredGenerationInput[] = [];
+    const script = [
+      { parts: need('open', []), actions: [{ tool: 'search', args: { source: 'tickets', query: identifier } }] },
+      { parts: need('found', ['E1']), actions: [{ tool: 'finish', args: {} }] },
+      replies[3],
+    ];
+    const ask = createAgenticAskV2({ desk, model: { generate: async input => { inputs.push(input); return script[inputs.length - 1]; } },
+      audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 } });
+    const result = await ask.answer({ question: `When is launch according to ${identifier}?` });
+    expect(validatePersonAnswerResponseV5(result)).toMatchObject({ outcome: 'answered', citations: [{ citation: ticket.citation }] });
+    expect(desk.search).toHaveBeenCalledWith(expect.objectContaining({ query: identifier, kinds: ['ticket'] }));
+    expect(desk.list).not.toHaveBeenCalled();
+    expect(desk.open).not.toHaveBeenCalled();
+    expect(desk.revalidate).toHaveBeenCalledTimes(inputs.length + 2);
+    for (const input of inputs) {
+      expect(input.system_prompt).not.toMatch(/Jira|JQL|Atlassian|ECHO-123|list tickets first/iu);
+      expect(JSON.parse(input.user_prompt).scope).not.toMatch(/Jira/iu);
+      for (const hidden of ['opaque-request-handle', 'workspace-fixture', 'opaque-42', 'issues.example.test']) expect(input.user_prompt).not.toContain(hidden);
+    }
+  });
+
+  it('distinguishes retrieved ticket inventory, answer context and final citations', async () => {
+    const f = fixture();
+    const events: CoreRuntimeObservationV1[] = [];
+    await observeCoreRuntimeV1('ask_request', () => f.run(), { observer: event => { events.push(event); } });
+    expect(events.find(event => event.root && event.event === 'succeeded')).toMatchObject({
+      counts: { ticket_retrieved_items: 2, ticket_context_items: 1, ticket_citations: 1 },
+    });
+    expect(JSON.stringify(events)).not.toContain(body);
+    expect(JSON.stringify(events)).not.toContain('request-private-ticket');
+  });
+
+  it('does not claim citations were returned when the final live fence refuses publication', async () => {
+    const refusal = new Error('connection disconnected');
+    const f = fixture({ fence: async number => { if (number === 6) throw refusal; return checked; } });
+    const events: CoreRuntimeObservationV1[] = [];
+    await expect(observeCoreRuntimeV1('ask_request', () => f.run(), { observer: event => { events.push(event); } })).rejects.toBe(refusal);
+    expect(events.find(event => event.root && event.event === 'failed')).toMatchObject({
+      counts: { ticket_retrieved_items: 2, ticket_context_items: 1, ticket_citations: 0 },
+    });
+  });
+
+  it('counts no answer context when the provider fence prevents the answer call', async () => {
+    const refusal = new Error('connection disconnected before answer');
+    const f = fixture({ fence: async number => { if (number === 4) throw refusal; return checked; } });
+    const events: CoreRuntimeObservationV1[] = [];
+    await expect(observeCoreRuntimeV1('ask_request', () => f.run(), { observer: event => { events.push(event); } })).rejects.toBe(refusal);
+    expect(f.generate).toHaveBeenCalledTimes(3);
+    expect(events.find(event => event.root && event.event === 'failed')).toMatchObject({ counts: { ticket_retrieved_items: 2, ticket_context_items: 0, ticket_citations: 0 } });
+  });
+
   it('lists ticket metadata, opens its request-owned item, and returns a strict V5 citation', async () => {
     const f = fixture();
     const answer = await f.run();
@@ -83,7 +187,8 @@ describe('Agentic Ask V2 ticket release', () => {
       expect(input.user_prompt).not.toContain('atlassian.net');
       expect(input.user_prompt).not.toContain('10001');
       expect(input.system_prompt).toContain('"source": "tickets"');
-      expect(input.system_prompt).toContain('project and mine exclude them');
+      expect(input.system_prompt).toContain('project scope only when a lead has saved a tool project mapping');
+      expect(input.system_prompt).toContain('Mine excludes tickets');
     }
     expect(f.auditEntries[0]).toMatchObject({ outcome: 'answered', model_calls: 4, citation_count: 1, receipt_digests: [metadata.receipt_sha256, uncitedMetadata.receipt_sha256, opened.receipt_sha256], response_sha256: canonicalSha256(answer) });
     expect(JSON.stringify(f.auditEntries)).not.toContain(body);
@@ -143,7 +248,8 @@ describe('Agentic Ask V2 ticket release', () => {
     const released = deferred<typeof checked>();
     const controller = new AbortController();
     const f = fixture({ fence: async number => { if (number === 6) { entered.resolve(); return released.promise; } return checked; } });
-    const pending = f.run(controller.signal);
+    const events: CoreRuntimeObservationV1[] = [];
+    const pending = observeCoreRuntimeV1('ask_request', () => f.run(controller.signal), { observer: event => { events.push(event); } });
     await entered.promise;
     const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     controller.abort();
@@ -152,5 +258,6 @@ describe('Agentic Ask V2 ticket release', () => {
     await Promise.resolve();
     expect(f.append).toHaveBeenCalledTimes(1);
     expect(f.generate).toHaveBeenCalledTimes(4);
+    expect(events.find(event => event.root && event.event === 'failed')).toMatchObject({ result: 'cancelled', counts: { ticket_retrieved_items: 2, ticket_context_items: 1, ticket_citations: 0 } });
   });
 });

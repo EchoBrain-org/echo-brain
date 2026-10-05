@@ -682,14 +682,6 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
         pendingV2.assigned_owner_slack_identity_link.provider_subject_id !== target.slack_target.current_slack_identity_link.provider_subject_id
       )
     ) return { kind: "state_drift" };
-    const prepared = this.options.authority.prepareApprovalPost({
-      candidate_id: outbox.candidate_id,
-      frozen_card_sha256: frozen.frozen_card_sha256,
-      approved_snapshot: frozen.approved_snapshot,
-    });
-    outbox = prepared.outbox;
-    if (outbox.state === "superseded") return { kind: "state_drift" };
-
     const commitment = candidateCommitment(outbox, frozen);
     let assignment = this.options.assignments.readCurrent(commitment);
     if (assignment === undefined) {
@@ -717,6 +709,18 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
     if (!assignmentMatchesCurrentTarget(assignment, target)) {
       return { kind: "state_drift" };
     }
+
+    // DM discovery cannot post an approval. Persist its ownership proof before
+    // entering posting so a discovery failure cannot strand an unowned intent
+    // that the startup guard must refuse. The frozen payload still precedes
+    // every marker call, including uncertain responses and restart recovery.
+    const prepared = this.options.authority.prepareApprovalPost({
+      candidate_id: outbox.candidate_id,
+      frozen_card_sha256: frozen.frozen_card_sha256,
+      approved_snapshot: frozen.approved_snapshot,
+    });
+    outbox = prepared.outbox;
+    if (outbox.state === "superseded") return { kind: "state_drift" };
 
     if (outbox.post_started_at === null) return { kind: "state_drift" };
     if (outbox.presentation_external_id === null) {

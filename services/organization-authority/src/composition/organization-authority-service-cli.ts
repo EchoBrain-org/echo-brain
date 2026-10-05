@@ -208,9 +208,18 @@ export async function runOrganizationAuthorityServiceCli(
     const connectorRehearsal = readStagingConnectorRehearsalSelection({
       state_directory: stateDirectory, authority_url: manifest.authority_url, environment: process.env,
     });
-    if (connectorRehearsal !== undefined && (jiraRequested || stagingSyntheticMeetingsDirectory !== undefined)) {
-      throw new Error('Staging connector rehearsal cannot select another Jira or synthetic source profile');
+    const stagingJiraAsk = process.env.ECHO_STAGING_JIRA_ASK_V1;
+    if (stagingJiraAsk !== undefined && !['', 'false', 'true'].includes(stagingJiraAsk)) {
+      throw new Error('Staging Jira Ask selection is invalid');
     }
+    if (stagingJiraAsk === 'true' && (connectorRehearsal === undefined || !JIRA_PERSON_LIVE_RELEASE_APPROVED_V1)) {
+      throw new Error('Staging Jira Ask requires the fixed staging connector profile');
+    }
+    if (connectorRehearsal !== undefined && stagingSyntheticMeetingsDirectory !== undefined) {
+      throw new Error('Staging connector rehearsal cannot select another synthetic source profile');
+    }
+    const jiraCloudId = parsed['--jira-cloud-id'] ?? (stagingJiraAsk === 'true' ? connectorRehearsal?.profile.jira.cloud_id : undefined);
+    const jiraIntegration = parsed['--jira-nango-integration'] ?? (stagingJiraAsk === 'true' ? connectorRehearsal?.profile.jira.integration_key : undefined);
     stagingJourneyTelemetry =
       manifest.authority_url ===
       STAGING_AUTHORITY_ORIGIN_V1
@@ -272,12 +281,12 @@ export async function runOrganizationAuthorityServiceCli(
         ? { agentic_ask_v1_small_scope_shortcut: true }
         : {}),
       slack_nango: slackNango,
-      ...(jiraRequested ? { jira_person_live: {
+      ...(jiraCloudId === undefined ? {} : { jira_person_live: {
         enabled: true as const,
-        cloud_id: parsed['--jira-cloud-id']!,
-        integration_id: parsed['--jira-nango-integration']!,
+        cloud_id: jiraCloudId,
+        integration_id: jiraIntegration!,
         nango_authorization: () => slackNango.secret_key,
-      } } : {}),
+      } }),
       granola_credential_file: manifest.granola_credential_file,
       granola_owner_email_file: manifest.granola_owner_email_file,
       // The manifest retains its serialized compatibility field.

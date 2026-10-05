@@ -12,6 +12,8 @@ import { STAGING_CONNECTOR_REHEARSAL_POLICY_V2 } from '../src/composition/stagin
 import { readOrganizationAuthoritySetupManifest } from '../src/composition/organization-authority-setup-cli.js';
 import { readPersonOidcConfiguration } from '../src/composition/organization-authority-person-administration-cli.js';
 import { PERSON_ANSWER_PATH_V4 } from '@echo-brain/organization-api';
+import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
+import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
 import { FIXTURE_CLOUD, FIXTURE_EMAIL, configuration, connectSlackAndLinkOwner, port, prepare, privateFile, providerSeams, signInOwner } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
 import { SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
@@ -28,7 +30,7 @@ function selection() {
   } };
 }
 
-it('serves owner-bound Jira connection and retained Granola, Jira and Slack pointer capture through staging HTTP across restart', async () => {
+it('retains Granola, refuses tool capture, and reuses the owner Jira grant for live Ask across restart', async () => {
   const root = join(realpathSync(tmpdir()), `echo-staging-connector-${randomUUID()}`); roots.push(root);
   prepare(root);
   const config = configuration(root);
@@ -78,14 +80,27 @@ it('serves owner-bound Jira connection and retained Granola, Jira and Slack poin
     throw new Error(`unexpected remote endpoint ${url.origin}`);
   });
   const selected = selection();
+  let jiraAskEnabled = false;
+  const generate = vi.fn(async (input: StructuredGenerationInput) => {
+    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: { id: string }[] }[]; opened?: { id: string }[]; evidence?: { id: string }[] };
+    if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [{ text: 'The ticket says ship on Friday.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+    const opened = prompt.opened?.[0]?.id;
+    if (opened !== undefined) return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'found', evidence: [opened] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
+    const hit = prompt.last_results?.[0]?.results?.[0]?.id;
+    return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'open', evidence: [] }], notes: '' }],
+      actions: [hit === undefined ? { tool: 'search', args: { query: 'ship', source: 'tickets' } } : { tool: 'open', args: { id: hit } }] };
+  });
   const profile_sha256 = canonicalSha256(selected.profile);
   privateFile(join(root, 'private', 'staging-connector-rehearsal.json'), JSON.stringify(selected.profile));
   const open = async () => openStagingConnectorRehearsalService({
     state_directory: manifest.state_directory, authority_url: STAGING_AUTHORITY_ORIGIN_V1, host: '127.0.0.1', port: await port(), worker_interval_ms: 60_000,
     oidc: oidc.configuration, client_authentication: { method: 'none' }, pkce_key_file: manifest.pkce_key_file,
     slack_nango: { secret_key: readPrivateAuthorityCredential(`file:${config.nango.secret_key_file}`), integration_key: 'slack' },
+    ...(jiraAskEnabled ? { jira_person_live: { enabled: true as const, cloud_id: FIXTURE_CLOUD, integration_id: 'jira', nango_authorization: () => 'synthetic-nango-key-0000000000000000' } } : {}),
     granola_credential_file: manifest.granola_credential_file, granola_owner_email_file: manifest.granola_owner_email_file, openrouter_credential_file: manifest.llm_credential_file,
-  }, selected, { api: { oidc_provider: seams.oidc_provider }, slack: seams.slack, jira: seams.jira_person_live_seams });
+  }, selected, { api: { oidc_provider: seams.oidc_provider,
+    ...(jiraAskEnabled ? { answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } } } : {}),
+  }, slack: seams.slack, jira: seams.jira_person_live_seams });
   let runtime = await open();
   let owner = '';
   let jiraAttempt = '';
@@ -107,7 +122,7 @@ it('serves owner-bound Jira connection and retained Granola, Jira and Slack poin
     expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
     const before = seams.jiraFetch.mock.calls.length;
     expect((await post('/v1/staging/connector-rehearsal', { schema_version: 1, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'jira', limit: 1 })).status).toBe(400);
-    expect((await post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: 'clean-v1-wrong-binding', profile_sha256, action: 'capture', tool: 'jira', limit: 1 })).status).toBe(503);
+    expect((await post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: 'clean-v1-wrong-binding', profile_sha256, action: 'capture', tool: 'granola', limit: 1 })).status).toBe(503);
     expect(seams.jiraFetch).toHaveBeenCalledTimes(before);
     expect((await post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'jira', limit: 1 }, '')).status).toBe(401);
     await connectSlackAndLinkOwner(post, seams, SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1);
@@ -142,7 +157,10 @@ it('serves owner-bound Jira connection and retained Granola, Jira and Slack poin
     expect(slackReads.slice(readStart).filter(path => path === '/api/conversations.history')).toHaveLength(3);
     const jiraReads = seams.jiraFetch.mock.calls.slice(jiraStart);
     expect(jiraReads).toHaveLength(25);
-    expect(jiraReads.filter(([input]) => String(input).includes('/issue/10001'))).toHaveLength(3);
+    expect(jiraReads.filter(([input]) => String(input).includes('/issue/10001'))).toHaveLength(2);
+    const rechecks = jiraReads.filter(([input]) => String(input).includes('/issue/bulkfetch'));
+    expect(rechecks).toHaveLength(1);
+    expect(JSON.parse(String(rechecks[0]![1]?.body)).issueIdsOrKeys).toEqual(['10001']);
     const searches = jiraReads.filter(([input]) => String(input).includes('/search/jql'));
     expect(searches).toHaveLength(1);
     expect(JSON.parse(String(searches[0]![1]?.body))).toMatchObject({ jql: 'project = 10000 ORDER BY created DESC, id DESC', maxResults: 1 });
@@ -160,25 +178,79 @@ it('serves owner-bound Jira connection and retained Granola, Jira and Slack poin
     granolaVisible = true;
     expect(await capture('granola')).toMatchObject({ status: 200, body: { kind: 'echo-staging-connector-rehearsal-receipt-v2', qualified: false, tool: 'granola', receipt: { counts: { captured: 1, admitted: 1, request_only: 0 } } } });
     expect(await capture('granola')).toMatchObject({ status: 200, body: { receipt: { counts: { captured: 1, admitted: 0, duplicate: 1 } } } });
-    expect(await capture('jira')).toMatchObject({ status: 200, body: { tool: 'jira', receipt: { counts: { admitted: 1, duplicate: 0, request_only: 0 } } } });
-    expect(await capture('jira')).toMatchObject({ status: 200, body: { tool: 'jira', receipt: { counts: { admitted: 0, duplicate: 1, request_only: 0 } } } });
-    expect(await capture('slack')).toMatchObject({ status: 200, body: { tool: 'slack', receipt: { counts: { captured: 1, admitted: 1, request_only: 0 } } } });
-    expect(await capture('slack')).toMatchObject({ status: 200, body: { tool: 'slack', receipt: { counts: { captured: 1, admitted: 0, duplicate: 1 } } } });
+    const jiraBeforeRejected = seams.jiraFetch.mock.calls.length;
+    const slackBeforeRejected = slackReads.length;
+    const custodyBeforeRejected = custodyCounts();
+    for (const tool of ['jira', 'slack'] as const) expect((await capture(tool)).status).toBe(400);
+    expect(seams.jiraFetch).toHaveBeenCalledTimes(jiraBeforeRejected);
+    expect(slackReads).toHaveLength(slackBeforeRejected);
+    expect(custodyCounts()).toEqual(custodyBeforeRejected);
     const retained = new Database(join(manifest.state_directory, 'authority.sqlite'), { readonly: true });
     try {
       expect((retained.prepare('SELECT cursor AS source_cursor FROM authority_live_source_progress_v2 WHERE singleton=1').get() as { source_cursor: string }).source_cursor).toBe(cursorBefore);
-      const content = (adapter: string) => (retained.prepare('SELECT contents.content_json FROM authority_source_contents_v1 AS contents JOIN authority_sources_v1 AS source ON source.organization_id=contents.organization_id AND source.source_id=contents.source_id WHERE source.adapter_id=?').get(adapter) as { content_json: string }).content_json;
-      expect(JSON.parse(content('jira-context-capture'))).toMatchObject({ representation: { kind: 'pointer' } });
-      expect(content('jira-context-capture')).not.toContain('The ticket body stays with Jira.');
-      expect(JSON.parse(content('slack-context-capture'))).toMatchObject({ payload: { kind: 'message' }, representation: { kind: 'pointer' } });
-      expect(content('slack-context-capture')).not.toContain('Slack body must not be retained.');
+      const sources = retained.prepare('SELECT adapter_id FROM authority_sources_v1').all();
+      expect(sources).toEqual([{ adapter_id: 'granola-context-capture' }]);
     } finally { retained.close(); }
     expect((await post(PERSON_ANSWER_PATH_V4, { question: 'fixture' })).status).toBe(503);
+    granolaVisible = false;
+    await runtime.close();
+    jiraAskEnabled = true;
+    runtime = await open();
+    // Enabling Ask reuses the existing consent in the same profile-bound sidecar.
+    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: jiraAttempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
+    const custodyBeforeAsk = custodyCounts();
+    const tools = async (token = owner) => {
+      const response = await fetch(`http://127.0.0.1:${runtime.address.port}/v4/person/tools`, { headers: { authorization: `Bearer ${token}` } });
+      expect(response.status).toBe(200);
+      return validateOrganizationPersonToolsV4(await response.json()).tools;
+    };
+    const catalog = await tools();
+    expect(catalog.map(tool => tool.tool_id).sort()).toEqual(['jira', 'slack']);
+    expect(catalog).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', availability: 'enabled', personal_status: 'linked', external_scope_id: FIXTURE_CLOUD })]));
+    // Each Person can connect Jira, without seeing or using the owner's grant.
+    const invited = await post('/v1/person/employees', { name: 'Fixture Employee', email: 'employee@example.test' });
+    expect(invited.status).toBe(201);
+    const redeem = seams.oidc_provider.redeemAuthorizationCode;
+    vi.spyOn(seams.oidc_provider, 'redeemAuthorizationCode').mockImplementation(async () => {
+      const result = await redeem();
+      return { ...result, token: { ...result.token, subject: 'fixture-employee', claims: { email: 'employee@example.test', email_verified: true } } };
+    });
+    expect((await post('/v2/session/oidc/begin', { kind: 'identity_bootstrap', login_grant: invited.body.login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } })).status).toBe(201);
+    const page = await (await fetch(`http://127.0.0.1:${runtime.address.port}/v2/session/oidc/callback?state=${encodeURIComponent(seams.oidcState())}&code=employee`)).text();
+    const employee = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
+    const employeeCatalog = await tools(employee);
+    expect(employeeCatalog.map(tool => tool.tool_id).sort()).toEqual(['jira', 'slack']);
+    expect(employeeCatalog).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', availability: 'enabled', personal_status: 'unlinked', external_scope_id: null, external_subject_id: null })]));
+    const employeeConnect = await post('/v1/person/tools/jira/connect', { schema_version: 1 }, employee);
+    expect(employeeConnect.status).toBe(201);
+    seams.finishJira();
+    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: employeeConnect.body.attempt }, employee)).toMatchObject({ status: 200, body: { status: 'complete' } });
+    const globalReadStart = seams.jiraFetch.mock.calls.length;
+    const connections = vi.mocked(seams.jira_person_live_seams.nango.connection);
+    const ownerConnectionStart = connections.mock.calls.length;
+    const answerResponse = await post(PERSON_ANSWER_PATH_V4, { schema_version: 3, question: 'When should the ticket ship?' });
+    expect(answerResponse.status).toBe(200);
+    const answer = validatePersonAnswerResponseV5(answerResponse.body);
+    expect(answer.citations).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'ticket', citation: expect.objectContaining({ ticket_id: '10001' }) })]));
+    const globalSearches = seams.jiraFetch.mock.calls.slice(globalReadStart).filter(([url]) => String(url).endsWith('/search/jql'));
+    expect(globalSearches).toHaveLength(1);
+    expect(JSON.parse(String(globalSearches[0]![1]?.body)).jql).not.toContain('project =');
+    expect(generate).toHaveBeenCalledTimes(4);
+    const ownerReferences = new Set(connections.mock.calls.slice(ownerConnectionStart).map(([reference]) => reference));
+    expect(ownerReferences.size).toBe(1);
+    const employeeConnectionStart = connections.mock.calls.length;
+    const employeeAnswer = await post(PERSON_ANSWER_PATH_V4, { schema_version: 3, question: 'When should the ticket ship?' }, employee);
+    expect(employeeAnswer.status).toBe(200);
+    expect(validatePersonAnswerResponseV5(employeeAnswer.body).citations).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'ticket' })]));
+    const employeeReferences = new Set(connections.mock.calls.slice(employeeConnectionStart).map(([reference]) => reference));
+    expect(employeeReferences.size).toBe(1);
+    expect([...employeeReferences].some(reference => ownerReferences.has(reference))).toBe(false);
+    expect(custodyCounts()).toEqual(custodyBeforeAsk);
     const control = new Database(join(manifest.state_directory, 'integrations.sqlite'));
     try { control.prepare("UPDATE organization_external_human_link_current SET current_status='revoked'").run(); } finally { control.close(); }
     const readsBeforeRevoked = slackReads.length;
     expect(await verifyRead('slack')).toMatchObject({ status: 200, body: { result: { status: 'refused' } } });
-    expect((await capture('slack')).status).toBe(503);
+    expect((await capture('slack')).status).toBe(400);
     expect(slackReads).toHaveLength(readsBeforeRevoked);
   } finally { await runtime.close(); }
 });

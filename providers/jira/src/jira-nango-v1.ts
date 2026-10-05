@@ -1,4 +1,5 @@
 import { jiraFailure, jiraRecord, jiraString, jiraArray } from './jira-validation-v1.js';
+import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 
 /** Only selecting server composition supplies this port. Never pass its key to a Person or model. */
 export interface JiraNangoV1 {
@@ -19,9 +20,13 @@ export function createJiraNangoV1(options: { readonly integration_id: string; re
       const url = `https://api.nango.dev${path}`;
       response = await options.fetch(url, { method, redirect: 'error', signal: combined, headers: { Authorization: `Bearer ${options.authorization()}`, Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       if (response.redirected || (response.url !== '' && response.url !== url)) jiraFailure('unavailable');
+      if (response.status === 429) jiraFailure('rate_limited');
       if (method === 'DELETE' && response.status === 404) return undefined;
-      if (!response.ok) jiraFailure('unavailable');
-      if (method === 'DELETE') return undefined;
+      // Nango reports a previously deleted connection as 400 unknown_connection.
+      // Reconnect retries cleanup, so only that exact response is also success.
+      const missingDeletion = method === 'DELETE' && response.status === 400;
+      if (!response.ok && !missingDeletion) jiraFailure('unavailable');
+      if (method === 'DELETE' && !missingDeletion) return undefined;
       if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/json')) jiraFailure('unavailable');
       const reader = response.body?.getReader();
       if (reader === undefined) jiraFailure('unavailable');
@@ -30,9 +35,18 @@ export function createJiraNangoV1(options: { readonly integration_id: string; re
       combined.addEventListener('abort', abort, { once: true });
       try {
         for (;;) { combined.throwIfAborted(); const part = await reader.read(); combined.throwIfAborted(); if (part.done) break; bytes += part.value.byteLength; if (bytes > 128 * 1024) jiraFailure('unavailable'); chunks.push(part.value); }
-        return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+        const result: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+        if (missingDeletion) {
+          if (jiraRecord(jiraRecord(result).error).code !== 'unknown_connection') jiraFailure('unavailable');
+          return undefined;
+        }
+        return result;
       } finally { combined.removeEventListener('abort', abort); await reader.cancel().catch(() => {}); reader.releaseLock(); }
-    } catch { signal?.throwIfAborted(); jiraFailure('unavailable'); }
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (error instanceof AuthorityOperationError && error.code === 'rate_limited') jiraFailure('rate_limited');
+      jiraFailure('unavailable');
+    }
     finally { if (response?.body !== null && response?.body !== undefined && !response.body.locked) await response.body.cancel().catch(() => {}); }
   }
   const path = (reference: string) => `/connections/${encodeURIComponent(jiraString(reference, 512))}?provider_config_key=${encodeURIComponent(integration)}`;

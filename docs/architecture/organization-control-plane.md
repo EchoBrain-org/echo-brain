@@ -86,8 +86,8 @@ organization Slack connection is active
 ```
 
 Onboarding is an owner-attributed ceremony run from the owner's Person client
-(`person tools setup --tool slack`; the desktop app's Connected tools page
-shows status only for now), not a host credential ceremony. The owner
+(`person tools setup --tool slack`; the desktop app's Tools page connects
+only each person's own tools), not a host credential ceremony. The owner
 generates a Slack app configuration token from Slack's own "Your App
 Configuration Tokens" page and pastes it once; ECHO creates its private Slack
 app for that organization through Slack's Manifest API, then opens a Nango

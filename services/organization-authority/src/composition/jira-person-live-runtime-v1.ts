@@ -1,3 +1,5 @@
+import { JiraProjectMappingStoreV1 } from '@echo-brain/provider-jira/jira-project-mapping-store-v1';
+import type { PersonTicketProjectAuthorizationV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
 import { createJiraPersonConnectionHttpApplicationV1 } from '@echo-brain/provider-jira/jira-person-connection-http-application-v1';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
@@ -7,16 +9,15 @@ import { createJiraPersonConnectionV1, type JiraPersonConnectionV1 } from '@echo
 import Database from 'better-sqlite3';
 import { join } from 'node:path';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
+import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
 
-/** Remains false while ADR-0026 is proposed. Recording acceptance requires a reviewed change. */
-export const JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 = false;
+/** ADR-0026 permits person-bound live reads; runtime selection remains explicit. */
+export const JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 = true;
 
-/** Explicit selecting configuration, absent until ADR-0026 is accepted and enabled by an operator. */
+/** Explicit selecting configuration, absent until enabled by an operator. */
 export interface JiraPersonLiveConfigurationV1 {
   readonly enabled: true;
   readonly cloud_id: string;
-  /** Optional fixed project selected by trusted runtime composition. */
-  readonly project?: string;
   readonly integration_id: string;
   readonly nango_authorization: () => string;
 }
@@ -28,6 +29,7 @@ export interface JiraPersonLiveRuntimeSeamsV1 {
 export interface OpenedJiraPersonLiveRuntimeV1 {
   readonly application: JiraPersonConnectionV1;
   readonly connection_http: ProviderHttpApplicationV1;
+  tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]>;
   close(): void;
 }
 
@@ -37,6 +39,7 @@ export function openJiraPersonLiveRuntimeV1(options: {
   readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
   readonly configuration: JiraPersonLiveConfigurationV1;
   readonly seams?: JiraPersonLiveRuntimeSeamsV1;
+  readonly authorize_project?: PersonTicketProjectAuthorizationV1;
 }): OpenedJiraPersonLiveRuntimeV1 {
   if (options.configuration.enabled !== true) throw new Error('Jira live evidence is not enabled');
   const owned = options.seams?.database === undefined;
@@ -49,9 +52,10 @@ export function openJiraPersonLiveRuntimeV1(options: {
     const transport = options.seams?.fetch ?? fetch;
     const application = createJiraPersonConnectionV1({
       store: new JiraConnectionStoreV1(database),
+      project_mappings: new JiraProjectMappingStoreV1(database),
+      ...(options.authorize_project === undefined ? {} : { authorize_project: options.authorize_project }),
       nango: options.seams?.nango ?? createJiraNangoV1({ integration_id: options.configuration.integration_id, authorization: options.configuration.nango_authorization, fetch: transport }),
       cloud_id: options.configuration.cloud_id,
-      ...(options.configuration.project === undefined ? {} : { project: options.configuration.project }),
       fetch: transport,
       authenticate(access_token) {
         const authorization = options.sessions.authenticateAccess({ access_token });
@@ -70,6 +74,12 @@ export function openJiraPersonLiveRuntimeV1(options: {
         });
       },
     });
-    return Object.freeze({ application, connection_http: createJiraPersonConnectionHttpApplicationV1(application), close() { if (owned) database.close(); } });
+    return Object.freeze({
+      application, connection_http: createJiraPersonConnectionHttpApplicationV1(application),
+      async tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]> {
+        return Object.freeze([application.tool({ access_token })]);
+      },
+      close() { if (owned) database.close(); },
+    });
   } catch (error) { if (owned) database.close(); throw error; }
 }

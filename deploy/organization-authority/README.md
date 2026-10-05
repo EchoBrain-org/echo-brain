@@ -130,8 +130,12 @@ The profile contains no Nango secret or Slack token. The Authority continues to
 read the existing `nango-secret-key`; the profile's Jira integration key is an
 ordinary Nango integration identifier, and `channel_id` names one public Slack
 channel. Granola keeps its existing organization-owned credential. Jira and
-Slack captures retain pointers and selected metadata only. With this profile
-selected, the owner's `person tools setup --tool slack` also asks for
+Slack are read live through `verify-read`; only Granola can be captured.
+Jira and Slack capture requests are rejected before provider I/O and retain no
+new pointers, metadata or bodies. The historical V2 policy string stays unchanged
+so existing profile digests and sidecar bindings survive an ordinary release
+update without a reset. Existing retained rows are not purged by this change.
+With this profile selected, the owner's `person tools setup --tool slack` also asks for
 `channels:read` and `channels:history` on the same app. Jira's person connection
 sidecar is owned by the Authority runtime beside its retained state directory.
 
@@ -182,7 +186,7 @@ with one fresh rehearsal, in this order:
    `person tools connect --tool jira`.
 7. Save the exact profile object as the runner's local profile before the
    [staging connector runner](../../services/organization-authority/README.md#staging-connector-rehearsal)
-   captures.
+   Granola captures and live Jira/Slack read checks.
 
 Check that directory before spending an AWS session on it:
 
@@ -252,7 +256,7 @@ V3 or shared-channel rehearsal state directory, database, or approval binding.
 An owner sets Slack up from their own machine with
 `"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack`,
 pasting a Slack app configuration token at its hidden prompt; the ECHO desktop
-app's Connected tools page shows status only for now. Add `--reconnect` to
+app's Tools page connects only each person's own tools, not the organization's. Add `--reconnect` to
 resume an unfinished install, or reconnect after Slack was uninstalled, after
 Nango lost the connection, or after an install landed in another workspace,
 without a new setup token.

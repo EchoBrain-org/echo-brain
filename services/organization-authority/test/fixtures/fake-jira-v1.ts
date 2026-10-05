@@ -27,18 +27,30 @@ export function fakeJiraNangoV1() {
 }
 
 /** Fake Jira Cloud for one ECHO issue. Every call must carry the Nango bearer and refuse redirects. */
-export function fakeJiraCloudFetchV1() {
+export function fakeJiraCloudFetchV1(options: { readonly matches_jql?: (jql: string) => boolean } = {}) {
   const site = FIXTURE_JIRA_SITE_V1;
   const project = { id: '10000', key: 'ECHO', self: `${site}/rest/api/3/project/10000` };
+  const issue = { id: '10001', key: 'ECHO-1', self: `${site}/rest/api/3/issue/10001`, fields: {
+    summary: 'Ship on Friday', project, description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'The ticket body stays with Jira.' }] }] },
+    created: '2026-10-01T12:00:00.000Z', updated: '2026-10-02T03:04:05.000-0700', status: { name: 'Open' }, assignee: { displayName: 'Fixture Owner', accountId: 'fixture-jira-account' }, duedate: null, labels: ['fixture'], priority: { name: 'High' },
+  } };
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     expect(init?.redirect).toBe('error');
     expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${ACCESS_TOKEN}`);
     if (url.pathname === '/oauth/token/accessible-resources') return Response.json([{ id: FIXTURE_JIRA_CLOUD_V1, url: site, scopes: ['read:jira-work', 'read:jira-user'] }]);
     if (url.pathname.endsWith('/myself')) return Response.json({ accountId: 'fixture-jira-account', active: true, accountType: 'atlassian' });
-    if (url.pathname.endsWith('/project/ECHO')) return Response.json(project);
-    if (url.pathname.endsWith('/search/jql')) return Response.json({ isLast: true, issues: [{ id: '10001' }] });
-    if (url.pathname.endsWith('/issue/10001')) return Response.json({ id: '10001', key: 'ECHO-1', self: `${site}/rest/api/3/issue/10001`, fields: { summary: 'Ship on Friday', project, description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'The ticket body stays with Jira.' }] }] }, created: '2026-10-01T12:00:00.000Z', updated: '2026-10-02T03:04:05.000-0700', status: { name: 'Open' }, assignee: { displayName: 'Fixture Owner', accountId: 'fixture-jira-account' }, duedate: null, labels: ['fixture'], priority: { name: 'High' } } });
+    if (url.pathname.endsWith('/project/ECHO') || url.pathname.endsWith('/project/10000')) return Response.json(project);
+    if (url.pathname.endsWith('/search/jql')) {
+      const { jql } = JSON.parse(String(init?.body)) as { jql: string };
+      return Response.json({ isLast: true, issues: options.matches_jql?.(jql) === false ? [] : [{ id: '10001' }] });
+    }
+    if (url.pathname.endsWith('/issue/10001')) return Response.json(issue);
+    if (url.pathname.endsWith('/issue/bulkfetch')) {
+      expect(init?.method).toBe('POST');
+      const { issueIdsOrKeys } = JSON.parse(String(init?.body)) as { issueIdsOrKeys: string[] };
+      return Response.json({ issues: issueIdsOrKeys.includes(issue.id) ? [issue] : [], issueErrors: [] });
+    }
     throw new Error(`unexpected Jira endpoint ${url.pathname}`);
   });
 }
