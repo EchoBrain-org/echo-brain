@@ -184,6 +184,18 @@ connection. The mapping filters discovery before tickets are read and remains
 checked on open and revalidation. The rehearsal's fixed project applies only to
 its diagnostic reads. Mine and unmapped projects exclude Jira.
 
+The same EC2 overlay selects `ECHO_STAGING_CONFLUENCE_ASK_V1=true` when the
+fixed connector profile is present. Confluence uses only that profile's
+Atlassian Cloud ID, with a separately configured Nango Cloud integration named
+`confluence`. It uses each Person's own Confluence grant and no Jira project or
+Slack channel restriction. Global Ask follows the person's Confluence access;
+project Ask filters discovery through the project's Confluence space mapping.
+Conflicting explicit Confluence flags refuse startup. Without the staging switch
+or both explicit Confluence flags, the Confluence source remains unconfigured.
+Configure the `confluence` integration and its documented OAuth scopes before
+staging the release, then connect Confluence through Tools with browser consent.
+No existing Jira connection or fixed profile needs to be rewritten.
+
 ## Initial-owner setup internals
 
 For deployed staging, use the resumable wrapper in the

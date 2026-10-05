@@ -176,6 +176,7 @@ afterEach(() => {
   delete process.env.ECHO_BUILD_NUMBER;
   delete process.env.ECHO_SOURCE_SHA;
   delete process.env.ECHO_STAGING_JIRA_ASK_V1;
+  delete process.env.ECHO_STAGING_CONFLUENCE_ASK_V1;
   delete process.env.ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE;
   delete process.env.ECHO_CLEAN_RELEASE_ID;
   delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
@@ -304,7 +305,7 @@ describe("admitted runtime CLI events", () => {
     expect(runtimeState.worker_error).toBeUndefined();
   });
 
-  it("keeps Confluence disabled unless its complete explicit Cloud profile selection is present", async () => {
+  it("selects Confluence with a complete explicit Cloud profile selection", async () => {
     const errors: string[] = [];
     const running = start({ stderr: value => errors.push(value) }, "/private/state", [
       "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack",
@@ -317,6 +318,41 @@ describe("admitted runtime CLI events", () => {
       expect(runtimeState.jira_person_live).toBeUndefined();
     } finally { process.emit("SIGTERM"); await running; }
     expect(await running, errors.join("")).toBe(0);
+  });
+
+  it.each([undefined, "", "false", "true"])("selects the independent Confluence grant on the staging Atlassian site only with its switch (%s)", async flag => {
+    const directory = stagingProfileDirectory();
+    if (flag !== undefined) process.env.ECHO_STAGING_CONFLUENCE_ASK_V1 = flag;
+    const errors: string[] = [];
+    const running = start({ stderr: value => errors.push(value) }, directory);
+    try {
+      await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+      if (flag === "true") expect(runtimeState.confluence_person_live).toMatchObject({
+        enabled: true, cloud_id: "11111111-1111-4111-8111-111111111111", integration_id: "confluence",
+      });
+      else expect(runtimeState.confluence_person_live).toBeUndefined();
+      expect(runtimeState.jira_person_live).toBeUndefined();
+    } finally { process.emit("SIGTERM"); await running; }
+    expect(await running, errors.join("")).toBe(0);
+  });
+
+  it.each(["true", "invalid"])("refuses a staging Confluence switch without its fixed profile (%s)", async flag => {
+    process.env.ECHO_STAGING_CONFLUENCE_ASK_V1 = flag;
+    expect(await start({ stderr: () => undefined })).toBe(1);
+    expect(runtimeState.worker_error).toBeUndefined();
+  });
+
+  it.each([
+    ["--nango-base-url", "https://nango.example"],
+    ["--confluence-cloud-id", "22222222-2222-4222-8222-222222222222", "--confluence-nango-integration", "confluence"],
+    ["--confluence-cloud-id", "11111111-1111-4111-8111-111111111111", "--confluence-nango-integration", "jira"],
+  ])("refuses a staging Confluence selection that conflicts with the reviewed site or integration (%s)", async (...flags) => {
+    const directory = stagingProfileDirectory();
+    process.env.ECHO_STAGING_CONFLUENCE_ASK_V1 = "true";
+    expect(await start({ stderr: () => undefined }, directory, [
+      "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack", ...flags,
+    ])).toBe(1);
+    expect(runtimeState.worker_error).toBeUndefined();
   });
 
   it("serves agentic Ask without a flag and passes the shortcut only when it is switched on", async () => {

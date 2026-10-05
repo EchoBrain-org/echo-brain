@@ -139,8 +139,17 @@ With this profile selected, the owner's `person tools setup --tool slack` also a
 `channels:read` and `channels:history` on the same app. Jira's person connection
 sidecar is owned by the Authority runtime beside its retained state directory.
 
-When a reviewed runtime profile selects Confluence, it supplies both the
-nonsecret Cloud ID and Nango integration ID as Authority service arguments. The
+The committed EC2 runtime profile selects Confluence when the fixed staging
+connector profile is present. `ECHO_STAGING_CONFLUENCE_ASK_V1` reuses only its
+validated Atlassian Cloud ID and selects the independent Nango Cloud integration
+named `confluence`; it inherits no Jira project restriction or grant. Configure
+that integration with the [Confluence OAuth scopes](../../providers/confluence/README.md)
+before staging, then connect each Person through Tools. This selection changes
+through the normal reviewed runtime-profile release, without editing the fixed
+connector profile or host environment. Generic/local deployments remain
+unconfigured unless both nonsecret Cloud ID and Nango integration ID are
+supplied as Authority service arguments. Conflicting explicit flags refuse
+startup when the staging switch is enabled. The
 per-person Confluence connection and ECHO-project mapping database stores only
 provider references and mapping configuration, never page text. It is bound to
 the Authority lineage and that exact Cloud/integration selection. An ordinary

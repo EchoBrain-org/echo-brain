@@ -223,15 +223,26 @@ export async function runOrganizationAuthorityServiceCli(
     if (stagingJiraAsk === 'true' && (connectorRehearsal === undefined || !JIRA_PERSON_LIVE_RELEASE_APPROVED_V1)) {
       throw new Error('Staging Jira Ask requires the fixed staging connector profile');
     }
+    const stagingConfluenceAsk = process.env.ECHO_STAGING_CONFLUENCE_ASK_V1;
+    if (stagingConfluenceAsk !== undefined && !['', 'false', 'true'].includes(stagingConfluenceAsk)) {
+      throw new Error('Staging Confluence Ask selection is invalid');
+    }
+    if (stagingConfluenceAsk === 'true' && (connectorRehearsal === undefined ||
+        !CONFLUENCE_PERSON_LIVE_RELEASE_APPROVED_V1 ||
+        (parsed['--nango-base-url'] !== undefined && parsed['--nango-base-url'] !== 'https://api.nango.dev') ||
+        (parsed['--confluence-cloud-id'] !== undefined && parsed['--confluence-cloud-id'] !== connectorRehearsal.profile.jira.cloud_id) ||
+        (parsed['--confluence-nango-integration'] !== undefined && parsed['--confluence-nango-integration'] !== 'confluence'))) {
+      throw new Error('Staging Confluence Ask requires the fixed staging cloud site and the confluence Nango Cloud integration');
+    }
     if (connectorRehearsal !== undefined && stagingSyntheticMeetingsDirectory !== undefined) {
       throw new Error('Staging connector rehearsal cannot select another synthetic source profile');
     }
     const jiraCloudId = parsed['--jira-cloud-id'] ?? (stagingJiraAsk === 'true' ? connectorRehearsal?.profile.jira.cloud_id : undefined);
     const jiraIntegration = parsed['--jira-nango-integration'] ?? (stagingJiraAsk === 'true' ? connectorRehearsal?.profile.jira.integration_key : undefined);
-    // Confluence remains off unless both explicit profile-owned flags select one Cloud site.
-    // It deliberately does not inherit the Jira rehearsal profile or add a user allowlist.
-    const confluenceCloudId = parsed['--confluence-cloud-id'];
-    const confluenceIntegration = parsed['--confluence-nango-integration'];
+    // Staging shares only the validated Atlassian site, never Jira's project or grant.
+    // Other deployments select Confluence with both explicit profile-owned flags.
+    const confluenceCloudId = parsed['--confluence-cloud-id'] ?? (stagingConfluenceAsk === 'true' ? connectorRehearsal?.profile.jira.cloud_id : undefined);
+    const confluenceIntegration = parsed['--confluence-nango-integration'] ?? (stagingConfluenceAsk === 'true' ? 'confluence' : undefined);
     stagingJourneyTelemetry =
       manifest.authority_url ===
       STAGING_AUTHORITY_ORIGIN_V1
