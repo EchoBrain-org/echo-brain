@@ -44,20 +44,20 @@ export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?
       // A separately bound Slack source owns its kind exclusively. Existing
       // callers without that source retain the V1 desk's Slack behavior.
       const kinds = requestedKinds?.filter((kind): kind is EvidenceDeskKindV1 => kind !== 'ticket' && (slack === undefined || kind !== 'slack_message')) ?? (slack === undefined ? undefined : LOCAL_KINDS);
-      const pages: { readonly source: Source; readonly result: EvidenceDeskResultV2 }[] = [];
+      const page = (source: Source, operation: () => Promise<EvidenceDeskResultV2>) =>
+        Promise.resolve().then(operation).then(result => ({ source, result }));
+      const lookups: Promise<{ readonly source: Source; readonly result: EvidenceDeskResultV2 }>[] = [];
       if (kinds?.length !== 0) {
-        const result = await base.search({ ...request, ...(kinds === undefined ? {} : { kinds }) });
-        input.signal?.throwIfAborted();
-        pages.push({ source: base, result });
+        lookups.push(page(base, () => base.search({ ...request, ...(kinds === undefined ? {} : { kinds }) })));
       }
       for (const [source, kind] of [[ticket, 'ticket'], [slack, 'slack_message']] as const) {
         if (source === undefined || (requestedKinds !== undefined && !requestedKinds.includes(kind))) continue;
-        const result = input.query === undefined
-          ? await lookup('evidence_list', source, () => source.list({ limit: Math.min(maximum, 20), signal: input.signal }))
-          : await lookup('evidence_search', source, () => source.search({ query: input.query!, limit: Math.min(maximum, 5), signal: input.signal }));
-        input.signal?.throwIfAborted();
-        pages.push({ source, result });
+        lookups.push(page(source, () => input.query === undefined
+          ? lookup('evidence_list', source, () => source.list({ limit: Math.min(maximum, 20), signal: input.signal }))
+          : lookup('evidence_search', source, () => source.search({ query: input.query!, limit: Math.min(maximum, 5), signal: input.signal }))));
       }
+      const pages = await Promise.all(lookups);
+      input.signal?.throwIfAborted();
       if (pages.length === 1 && pages[0]!.source === base) return remember(pages[0]!.result, base);
       // Take one item from each nonempty source before taking any second
       // item. A full ticket page cannot hide the matching local/Slack items.
