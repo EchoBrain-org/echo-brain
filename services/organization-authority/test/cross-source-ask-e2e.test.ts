@@ -104,7 +104,9 @@ it('registers two page connectors through one lifecycle, catalog, HTTP and versi
     }
     // Page-only registration cannot expose page citations through the older ticket response.
     const ask = (version: number) => fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers, body: JSON.stringify({ schema_version: 3, question: 'What changed?' }) });
-    expect((await ask(4)).status).toBe(503);
+    const legacy = await ask(4);
+    expect(legacy.status).toBe(200);
+    expect(await legacy.json()).toMatchObject({ schema_version: 5, citations: [] });
     expect(calls.every(call => call.source.mock.calls.length === 0)).toBe(true);
     const answer = await ask(5);
     expect(answer.status).toBe(200);
@@ -112,6 +114,24 @@ it('registers two page connectors through one lifecycle, catalog, HTTP and versi
     for (const call of calls) expect(call.source).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ access_token: token }));
   } finally { await runtime.close(); }
   for (const call of calls) expect(call.close).toHaveBeenCalledTimes(1);
+});
+
+it.each([{ version: 4, schema: 5, mine: false }, { version: 4, schema: 5, mine: true }, { version: 5, schema: 6, mine: false }, { version: 5, schema: 6, mine: true }])('serves V$version Ask with no live connectors (mine=$mine)', async ({ version, schema, mine }) => {
+  const f = await fixture();
+  const generate = vi.fn(async () => ({ parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }));
+  const runtime = await startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc,
+    answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } },
+  });
+  try {
+    const origin = `http://127.0.0.1:${runtime.address.port}`;
+    const token = await f.login(origin);
+    const response = await fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ schema_version: 3, question: 'What changed?', ...(mine ? { mine: true } : {}) }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ schema_version: schema, scope: { kind: mine ? 'mine' : 'global' }, citations: [] });
+    expect(generate).toHaveBeenCalled();
+  } finally { await runtime.close(); }
 });
 
 it('closes already opened connectors if a later registered connector fails to start', async () => {

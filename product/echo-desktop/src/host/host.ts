@@ -592,7 +592,8 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       const { expect, question, scope } = params as Params<'ask.run'>;
       const text = askText(question);
       if (text === '') return code('invalid_request');
-      return forAccount(method, expect, ['ask', option('question', text), '--live', ...askScopeArgs(scope)],
+      // Mine reads only retained context and must also work on older Authorities.
+      return forAccount(method, expect, ['ask', option('question', text), ...(scope.kind === 'mine' ? [] : ['--live']), ...askScopeArgs(scope)],
         stdout => answerView(lastJson(stdout), scope), undefined, abortSignal);
     }
     case 'ask.cancel':

@@ -63,7 +63,7 @@ const OPEN_ATOMS_BYTES = 32 * 1024;
 const ATOM_PART_BYTES = 3 * 1024;
 
 /** The modes where Ari has added notes, uploads and approved meetings of their own; `mine-empty` has none yet. */
-const MINE_MODES = new Set(['mine', 'owner-mine', 'mine-empty', 'mine-fails-once', 'mine-meetings-held', 'mine-unauthorized']);
+const MINE_MODES = new Set(['mine', 'owner-mine', 'mine-empty', 'mine-fails-once', 'mine-meetings-held', 'mine-unauthorized', 'mine-live-missing', 'mine-live-unavailable']);
 const PRICING_REVIEW = `sha256:${'7'.repeat(64)}`;
 const BEACON_KICKOFF = `sha256:${'8'.repeat(64)}`;
 const PRICING_MEMO = `doc_${'9'.repeat(64)}`;
@@ -984,6 +984,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       });
     }
     if (method === 'POST' && (path === '/v3/person/ask' || path === '/v4/person/ask' || path === '/v5/person/ask')) {
+      // Older accepted servers and unconfigured live connectors must not
+      // prevent Mine from reading the ordinary retained-context Ask route.
+      if (path !== '/v3/person/ask') {
+        if (mode === 'mine-live-missing') return failure('not_found', 404);
+        if (mode === 'mine-live-unavailable') return failure('unavailable', 503);
+      }
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
         request = (await contract()).validatePersonAnswerRequestV3(body);

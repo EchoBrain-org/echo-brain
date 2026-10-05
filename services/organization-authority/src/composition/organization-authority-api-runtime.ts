@@ -347,12 +347,10 @@ export async function startOrganizationAuthorityApiRuntime(
         person_answer_v3: createPersonAnswerV3Route({ ...answerOptions,
           ...(dependencies.ask_journey_telemetry === undefined ? {} : { ask_journey_telemetry: dependencies.ask_journey_telemetry }),
         }),
-        ...(liveSources.some(source => source.minimum_response_version <= 5) ? {
-          person_answer_v4: createPersonAnswerV4Route({ ...answerOptions, live_sources: liveSources }),
-        } : {}),
-        ...(liveSources.length > 0 ? {
-          person_answer_v5: createPersonAnswerV5Route({ ...answerOptions, live_sources: liveSources }),
-        } : {}),
+        // A response version is available with the model even when no external
+        // source is configured. The request catalog still contains local context.
+        person_answer_v4: createPersonAnswerV4Route({ ...answerOptions, live_sources: liveSources }),
+        person_answer_v5: createPersonAnswerV5Route({ ...answerOptions, live_sources: liveSources }),
       }),
       person_documents: createPersonDocumentApplicationV1({
         authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
