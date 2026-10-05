@@ -63,6 +63,7 @@ import {
   PERSON_ANSWER_PATH_V3,
   PERSON_ANSWER_PATH_V4,
   PERSON_ANSWER_PATH_V5,
+  PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
@@ -1095,7 +1096,12 @@ export function createOrganizationAuthorityHttpServer(
       }
       if (method === "POST" && url.search === "") {
         const personRead = personReadPosts.get(url.pathname);
-        if (personRead !== undefined) { await personRead(request, response); return; }
+        if (personRead !== undefined) {
+          // Distinguish a provider's not-found from an older server with no V5
+          // route. Set this before body validation or application execution.
+          if (url.pathname === PERSON_ANSWER_PATH_V5) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '5');
+          await personRead(request, response); return;
+        }
       }
       fail(response, 404, "not_found");
     } catch (error) {

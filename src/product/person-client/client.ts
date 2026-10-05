@@ -676,7 +676,7 @@ export class PersonClient {
     return this.withReadSession(async (authority, token) => {
       try { return await authority.askV5(token, question, scope, signal); }
       catch (error) {
-        if (!(error instanceof PersonAuthorityClientError) || error.status !== 404) throw error;
+        if (!(error instanceof PersonAuthorityClientError) || error.status !== 404 || error.code !== 'not_found' || error.routeMatched) throw error;
         return authority.askV4(token, question, scope, signal);
       }
     });

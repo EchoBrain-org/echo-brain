@@ -6,6 +6,7 @@ import {
   PERSON_ANSWER_PATH_V3,
   PERSON_ANSWER_PATH_V4,
   PERSON_ANSWER_PATH_V5,
+  PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
@@ -163,16 +164,19 @@ export type PersonOpenV1 = PersonOpenResponseV1;
 export class PersonAuthorityClientError extends Error {
   /** The request never left this machine: no connection was made. */
   readonly unsent: boolean;
+  /** A matched live Ask route must never be mistaken for an older server. */
+  readonly routeMatched: boolean;
 
   constructor(
     public readonly code: string,
     public readonly status: number | null,
     message: string,
-    options: { readonly unsent?: boolean } = {},
+    options: { readonly unsent?: boolean; readonly routeMatched?: boolean } = {},
   ) {
     super(message);
     this.name = "PersonAuthorityClientError";
     this.unsent = options.unsent === true;
+    this.routeMatched = options.routeMatched === true;
   }
 }
 
@@ -717,6 +721,7 @@ export class PersonAuthorityClient {
         code,
         response.status,
         "Person Authority rejected the request",
+        { routeMatched: response.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5) },
       );
     }
     if (expectedStatus !== undefined && response.status !== expectedStatus) {

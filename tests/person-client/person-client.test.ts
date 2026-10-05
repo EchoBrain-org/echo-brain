@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
-import type { OrganizationPersonSessionV2, PersonSourceEvidenceCitationV1 } from "@echo-brain/organization-api";
+import { PERSON_ANSWER_ROUTE_HEADER_V5, type OrganizationPersonSessionV2, type PersonSourceEvidenceCitationV1 } from "@echo-brain/organization-api";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -876,6 +876,28 @@ describe("Person client", () => {
       });
       await client.installSession('https://authority.example', ROTATED_SESSION);
       await expect(client.askWithLiveSources('What is current?')).rejects.toMatchObject({ code: 'unauthorized', status: 401 });
+      expect(paths).toEqual(['/v1/authority-descriptor', '/v5/person/ask']);
+    });
+  });
+
+  it.each([
+    { name: 'a matched-route provider 404', marker: '5', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
+    { name: 'an unknown route marker', marker: 'future', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
+    { name: 'a malformed unmarked 404', marker: undefined, body: { unsupported: true }, code: 'invalid_response' },
+    { name: 'an unmarked 404 with another error code', marker: undefined, body: { error: { code: 'unavailable', message: 'request failed' } }, code: 'unavailable' },
+  ])('does not replay live Ask without pages after $name', async ({ marker, body, code }) => {
+    await withHome(async home => {
+      const paths: string[] = [];
+      const client = fixtureClient(home, async input => {
+        const path = new URL(String(input)).pathname; paths.push(path);
+        if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
+        expect(path).toBe('/v5/person/ask');
+        const response = json(body, 404);
+        if (marker !== undefined) response.headers.set(PERSON_ANSWER_ROUTE_HEADER_V5, marker);
+        return response;
+      });
+      await client.installSession('https://authority.example', ROTATED_SESSION);
+      await expect(client.askWithLiveSources('What is current?')).rejects.toMatchObject({ code, status: 404 });
       expect(paths).toEqual(['/v1/authority-descriptor', '/v5/person/ask']);
     });
   });
