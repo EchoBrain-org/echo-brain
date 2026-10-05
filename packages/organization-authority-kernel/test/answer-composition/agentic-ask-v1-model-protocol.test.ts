@@ -3,6 +3,7 @@ import {
   AgenticAskOutputErrorV1,
   answerSchema,
   cleanId,
+  createStepSchema,
   normalizeQuery,
   parseAnswer,
   parseStep,
@@ -42,6 +43,46 @@ function generator(seed: number) {
 }
 
 describe("agentic Ask model protocol parity", () => {
+  it("uses portable closed strings for request-scoped action choices", () => {
+    const schema = createStepSchema(["meetings", "tickets"], ["E3", "E17"]);
+    const variants = ((schema.properties as Schema).actions as Schema).items as Schema;
+    const enumSchemas: Schema[] = [];
+    const visit = (value: unknown) => {
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+      } else if (value !== null && typeof value === "object") {
+        const schemaValue = value as Schema;
+        if (schemaValue.enum !== undefined) enumSchemas.push(schemaValue);
+        Object.values(schemaValue).forEach(visit);
+      }
+    };
+    visit(schema);
+    const byTool = Object.fromEntries((variants.anyOf as Schema[]).map(variant => {
+      const properties = variant.properties as Schema;
+      const tool = (properties.tool as Schema).enum![0] as string;
+      return [tool, properties.args as Schema];
+    }));
+    const closed = (value: Schema, expected: readonly string[]) => {
+      expect(value).toEqual({ type: "string", enum: expected });
+    };
+
+    expect(Object.keys(byTool).sort()).toEqual(["finish", "list", "open", "search"]);
+    expect(enumSchemas).toHaveLength(8);
+    for (const enumSchema of enumSchemas) expect(Object.keys(enumSchema).sort()).toEqual(["enum", "type"]);
+    closed(((byTool.search.properties as Schema).source as Schema), ["meetings", "tickets"]);
+    closed(((byTool.list.properties as Schema).source as Schema), ["meetings", "tickets"]);
+    closed(((byTool.open.properties as Schema).id as Schema), ["E3", "E17"]);
+    expect(((byTool.search.properties as Schema).query as Schema)).toEqual({ type: "string", minLength: 1, maxLength: 240 });
+    expect(JSON.stringify(schema)).not.toContain("E99");
+  });
+
+  it("can withhold finish without widening the discovery action set", () => {
+    const schema = createStepSchema(["meetings"], [], false);
+    const variants = ((schema.properties as Schema).actions as Schema).items as Schema;
+    const tools = (variants.anyOf as Schema[]).map(variant => ((variant.properties as Schema).tool as Schema).enum![0]);
+    expect(tools).toEqual(["search", "list"]);
+  });
+
   it("binds each action's argument schema to the selected tool", () => {
     const argumentsByTool: Record<string, readonly string[]> = {
       search: ["query", "source"], open: ["id"],

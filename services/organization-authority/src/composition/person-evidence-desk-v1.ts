@@ -428,6 +428,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   };
   return Object.freeze({
     scope: publicScope(options.scope),
+    ...(options.slack === undefined ? {} : { live_sources: Object.freeze([Object.freeze({ source: 'slack' as const })]) }),
     search: (input: EvidenceDeskSearchInputV1) => observedDeskCall("evidence_search", () => search(input)),
     open: (input: EvidenceDeskOpenInputV1) => observedDeskCall("evidence_open", () => open(input)),
     list: (input: EvidenceDeskListInputV1) => observedDeskCall("evidence_list", () => list(input)),

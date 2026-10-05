@@ -1,3 +1,4 @@
+import { askResearchCompletionProblemsV1, type AskResearchObservationV1 } from './agentic-ask-research-state-v1.js';
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
   PersonAnswerResponseV5,
@@ -203,9 +204,9 @@ type Entry = {
 };
 type ToolResult = Readonly<Record<string, unknown>>;
 /** Code-owned plan state. A need leaves the plan only by being marked found or not_found. */
-type NeedState = { readonly need: string; status: NeedStatus; evidence: readonly string[]; readonly searches_before: number; readonly lists_before: number };
+type NeedState = { readonly need: string; status: NeedStatus; evidence: readonly string[]; readonly observations_before: number };
 type PartState = { readonly question: string; notes: string; readonly needs: NeedState[] };
-type ListState = { items: EvidenceDeskItemV2[]; cursor: string | undefined; fetched: boolean; shown: number; truncated: boolean; note?: string };
+type ListState = { args: StepArgs; items: EvidenceDeskItemV2[]; cursor: string | undefined; fetched: boolean; shown: number; truncated: boolean; available: boolean; note?: string };
 
 function object(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -348,6 +349,9 @@ const SEARCH_KINDS: Readonly<Record<EvidenceDeskSourceV2, readonly EvidenceDeskK
   meeting: ['decision', 'action', 'rationale'], document: ['note', 'document_passage'],
   slack: ['slack_message'], ticket: ['ticket'],
 });
+const SOURCE_SELECTOR: Readonly<Record<EvidenceDeskSourceV2, StepSource>> = Object.freeze({
+  meeting: 'meetings', document: 'documents', slack: 'slack', ticket: 'tickets',
+});
 function readSource(value: string | undefined): EvidenceDeskSourceV2 | undefined {
   const key = value?.trim().toLowerCase();
   return key !== undefined && Object.hasOwn(LIST_SOURCES, key) ? LIST_SOURCES[key] : undefined;
@@ -432,8 +436,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
   const sourceCatalog: readonly { readonly source: StepSource; readonly description: string; readonly tool_id?: string }[] = Object.freeze([
     { source: 'meetings', description: 'Approved meeting records and admitted transcripts.' },
     { source: 'documents', description: 'Uploaded document passages and notes.' },
-    ...(options.desk.scope.kind !== 'global' ? [] : [{ source: 'slack' as const, description: 'Live discussion messages.', tool_id: options.desk.live_sources?.find(source => source.source === 'slack')?.tool_id ?? 'slack' }]),
-    ...(!tickets || options.desk.ticket_available === false || options.desk.scope.kind === 'mine' ? [] : [{ source: 'tickets' as const, description: 'Live work items: discover summaries with search or list, then open selected items for their bodies and current state.', ...(options.desk.live_sources?.find(source => source.source === 'ticket') === undefined ? {} : { tool_id: options.desk.live_sources.find(source => source.source === 'ticket')!.tool_id }) }]),
+    ...((options.desk.live_sources ?? []).filter(source => source.source === 'slack').map(source => ({ source: 'slack' as const, description: 'Live discussion messages.', ...(source.tool_id === undefined ? {} : { tool_id: source.tool_id }) }))),
+    ...(!tickets || options.desk.ticket_available === false || options.desk.scope.kind === 'mine' ? [] : (options.desk.live_sources ?? []).filter(source => source.source === 'ticket').map(source => ({ source: 'tickets' as const, description: 'Live work items: discover summaries with search or list, then open selected items for their bodies and current state.', tool_id: source.tool_id }))),
   ]);
   /** Who is asking and today's date: context for "my", "this week" and "overdue". */
   const context = () => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: today() });
@@ -505,10 +509,14 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
       let selectedTicketCount = 0; let ticketContextCount = 0; let ticketCitationCount = 0;
       const byShort = new Map<string, string>();
       const searchesRun: { readonly query: string; readonly source?: EvidenceDeskSourceV2 }[] = [];
-      let listsRun = 0;
+      const researchObservations: AskResearchObservationV1[] = [];
+      /** Sources whose complete, unfiltered inventory was observed empty. */
+      const exhaustivelyEmptySources = new Set<EvidenceDeskSourceV2>();
+      let retrievalProgress = 0;
+      let evidenceNovelty = 0;
       const lists = new Map<string, ListState>();
       let touch = 0;
-      const scope = scopeText(options.desk.scope, tickets) + (tickets && options.desk.ticket_available === false ? "; Live tickets are unavailable in this scope for this asker. Do not call ticket tools; answer from available sources and report any missing ticket context." : "");
+      const scope = scopeText(options.desk.scope, tickets) + (tickets && !sourceCatalog.some(source => source.source === 'tickets') ? "; Live tickets are unavailable in this scope for this asker. Do not call ticket tools; answer from available sources and report any missing ticket context." : "");
 
       const remaining = () => deadline - now();
       const assertLive = () => {
@@ -528,13 +536,14 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         const existing = entries.get(item.id);
         touch += 1;
         if (existing !== undefined) {
-          if (item.text !== undefined && existing.item.text === undefined) existing.item = item;
+          if (item.text !== undefined && existing.item.text === undefined) { existing.item = item; evidenceNovelty += 1; }
           if (fullIfShort && existing.item.text !== undefined && existing.item.text.length <= AGENTIC_ASK_PREVIEW_CHARS_V1) existing.full = true;
           existing.touched = touch;
           return existing;
         }
         const short = `E${entries.size + 1}`;
         const entry: Entry = { short, item, full: fullIfShort && item.text !== undefined && item.text.length <= AGENTIC_ASK_PREVIEW_CHARS_V1, opened: false, touched: touch };
+        evidenceNovelty += 1;
         entries.set(item.id, entry); byShort.set(short, item.id);
         return entry;
       };
@@ -564,6 +573,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         searchesRun.push({ query, ...(source === undefined ? {} : { source }) });
         const result = await raceAbort(activeSignal, desk.search({ query, ...(source === undefined ? {} : { kinds: SEARCH_KINDS[source] }), limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal: activeSignal }));
         observe(result);
+        researchObservations.push({ operation: 'search', fingerprint: JSON.stringify({ query: query.toLowerCase(), source: source ?? null }), complete: !result.truncated && result.notice === undefined });
+        retrievalProgress += 1;
         const found = result.items.map(item => register(item, true));
         for (const entry of found) entry.query = query;
         searchHits += found.length;
@@ -598,6 +609,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         for (const item of anchor === undefined ? others : [anchor, ...others]) {
           if (admitted.length > AGENTIC_ASK_OPEN_EXTRA_ITEMS_V1 || (admitted.length > 0 && used + bytes(item.text) > AGENTIC_ASK_OPEN_BYTES_V1)) break;
           const opened = register(item, false);
+          if (!opened.full || !opened.opened) { retrievalProgress += 1; evidenceNovelty += 1; }
           opened.full = true; opened.opened = true; used += bytes(item.text);
           admitted.push(opened);
         }
@@ -609,8 +621,16 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         const { notes, status, owner, ...request } = normalized;
         const key = JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
         let state = lists.get(key);
-        if (state === undefined) { state = { items: [], cursor: undefined, fetched: false, shown: 0, truncated: false }; lists.set(key, state); }
-        listsRun += 1;
+        if (state === undefined) {
+          const stateArgs: StepArgs = Object.freeze({
+            source: SOURCE_SELECTOR[request.source], ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }),
+            ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }),
+            ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), ...(request.until === undefined ? {} : { until: request.until }),
+          });
+          state = { args: stateArgs, items: [], cursor: undefined, fetched: false, shown: 0, truncated: false, available: true };
+          lists.set(key, state);
+        }
+        const before = { cursor: state.cursor, shown: state.shown, fetched: state.fetched };
         if (state.shown >= state.items.length && (!state.fetched || state.cursor !== undefined)) {
           const deskInput: EvidenceDeskListInputV2 = { ...request, limit: AGENTIC_ASK_LIST_FETCH_V1, ...(state.cursor === undefined ? {} : { cursor: state.cursor }), signal: activeSignal };
           let result: EvidenceDeskResultV2;
@@ -621,6 +641,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
             return { tool: "list", args, error: refusal };
           }
           observe(result);
+          state.available = state.available && result.notice === undefined;
+          if (!state.fetched || result.next_cursor !== state.cursor) retrievalProgress += 1;
           state.fetched = true; state.cursor = result.next_cursor; state.truncated = result.truncated;
           // A status filter applies only where an item records a status; approved actions usually record owner and
           // due date but not completion, so an item without a status is kept (never silently dropped as "not open").
@@ -636,7 +658,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         }
         const page = state.items.slice(state.shown, state.shown + AGENTIC_ASK_LIST_PAGE_V1).map(item => register(item, true));
         state.shown += page.length;
+        if (page.length > 0) retrievalProgress += 1;
         const more = state.shown < state.items.length || state.cursor !== undefined;
+        const unfiltered = request.kinds === undefined && status === undefined && owner === undefined &&
+          request.channel === undefined && request.since === undefined && request.until === undefined;
+        if (unfiltered && state.available && !more && !state.truncated && state.items.length === 0) exhaustivelyEmptySources.add(request.source);
+        if (!before.fetched || before.shown !== state.shown || before.cursor !== state.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: state.available && !more && !state.truncated });
         const allNotes = [...notes, ...(state.note === undefined ? [] : [state.note]), ...(page.length === 0 ? ["nothing more to list"] : []), ...(!more && state.truncated ? ["more items exist than list can show; use search"] : [])];
         return { tool: "list", source: request.source, ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), items: page.map(entry => listing(entry, entry.item.text !== undefined)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }) };
       };
@@ -649,18 +676,19 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
       // ---- plan (parts and needs) -------------------------------------------
       let plan: PartState[] = [];
       const newNeed = (need: string, status: NeedStatus, evidence: readonly string[]): NeedState =>
-        ({ need, status, evidence, searches_before: searchesRun.length, lists_before: listsRun });
+        ({ need, status, evidence, observations_before: researchObservations.length });
       const newPart = (part: StepPart): PartState => ({
         question: part.question, notes: part.notes,
         // A part without needs still needs its own answer.
         needs: part.needs.length > 0 ? part.needs.map(need => newNeed(need.need, need.status, need.evidence)) : [newNeed(part.question, "open", [])],
       });
-      const merge = (parts: readonly StepPart[]) => {
-        if (parts.length === 0) return;
-        if (plan.length === 0) { plan = parts.map(newPart); return; }
+      const proposedPlan = (parts: readonly StepPart[]): PartState[] => {
+        const next = plan.map(part => ({ ...part, needs: part.needs.map(need => ({ ...need })) }));
+        if (parts.length === 0) return next;
+        if (next.length === 0) return parts.map(newPart);
         for (const [index, part] of parts.entries()) {
-          const existing = plan[index];
-          if (existing === undefined) { plan.push(newPart(part)); continue; }
+          const existing = next[index];
+          if (existing === undefined) { next.push(newPart(part)); continue; }
           if (part.notes.length > 0) existing.notes = part.notes;
           for (const need of part.needs) {
             const match = existing.needs.find(value => needKey(value.need) === needKey(need.need));
@@ -668,10 +696,16 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
             else if (existing.needs.length < AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) existing.needs.push(newNeed(need.need, need.status, need.evidence));
           }
         }
+        return next;
       };
       const planView = () => plan.map((part, index) => ({
         part: index + 1, question: part.question, notes: part.notes,
         needs: part.needs.map(need => ({ need: need.need, status: need.status, evidence: need.evidence })),
+      }));
+      /** Listed inventories continue across planner turns without exposing cursors or desk identities. */
+      const inventoryView = () => [...lists.values()].filter(state => state.fetched).map(state => Object.freeze({
+        args: state.args, shown_count: state.shown, more: state.shown < state.items.length || state.cursor !== undefined,
+        available: state.available, truncated: state.truncated,
       }));
 
       // ---- scratchpad ------------------------------------------------------
@@ -763,7 +797,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
       /** At most one extra call: temporary failures retry unchanged; invalid output gets repair guidance. */
       const withRepair = async <T>(role: AgenticAskModelRoleV1, system: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, parse: (value: unknown) => T): Promise<T> => {
         let reason: string | null;
-        try { return parse(await call(role, system, user, schema, timeout)); }
+        let rejected: unknown;
+        try { rejected = await call(role, system, user, schema, timeout); return parse(rejected); }
         catch (error) {
           if (isAbort(error, input.signal) || deadlineExpired || !(error instanceof AgenticAskOutputErrorV1)) throw error;
           if (error instanceof AgenticAskGenerationFailureV1 && error.recovery === "fallback") throw error;
@@ -771,7 +806,13 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         }
         const minimum = role === "step" ? AGENTIC_ASK_MIN_STEP_MS_V1 : AGENTIC_ASK_MIN_ANSWER_MS_V1;
         if (timeout() < minimum || calls >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) throw new AgenticAskGenerationFailureV1("no time left to repair", "fallback");
-        return parse(await call(role, reason === null ? system : repairPrompt(system, reason), user, schema, timeout, true));
+        // A repair observes the rejected proposal and concrete validation
+        // failure. These are ephemeral model inputs, never audit content.
+        const repairUser = reason === null ? user : {
+          ...object(user), validation_error: reason,
+          ...(rejected === undefined ? {} : { rejected_response: cleanLine(JSON.stringify(rejected), 4_000) }),
+        };
+        return parse(await call(role, reason === null ? system : repairPrompt(system, reason), repairUser, schema, timeout, true));
       };
       const audit = async (outcome: AgenticAskAuditEntryV1["outcome"], citations: number, result?: PersonAnswerResponseV4 | PersonAnswerResponseV5) => {
         const aggregate = (field: keyof StructuredGenerationUsageV1): number | null => {
@@ -812,23 +853,28 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
 
         // ---- research loop --------------------------------------------------
         let results: ToolResult[] = [];
-        let finishRejected = false;
         let idleSteps = 0;
         const stepTimeout = () => Math.min(AGENTIC_ASK_STEP_TIMEOUT_MS_V1, remaining() - AGENTIC_ASK_ANSWER_RESERVE_MS_V1 - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
         while (steps < AGENTIC_ASK_MAX_STEPS_V1) {
           assertLive();
           // Leave room for the answer call and its possible repair.
           if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || calls + 2 >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) break;
-          const header = { question: input.question, ...context(), scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), last_results: results, searches_done: [...searchesRun] };
+          const header = { question: input.question, ...context(), scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
           const pad = scratchpad(stepBudget - bytes(JSON.stringify(header)));
           const user = { ...header, opened: pad.opened, seen: pad.seen };
           const openIds = [...entries.values()].map(entry => entry.short);
-          const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds);
+          const finishAvailable = researchObservations.length > 0 || [...entries.values()].some(entry => entry.full);
+          const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable);
           let step: Step;
           try {
             step = await withRepair("step", stepPrompt, user, stepSchema, stepTimeout, value => {
               const parsed = parseStep(value);
+              if (parsed.actions.length === 0) throw new AgenticAskOutputErrorV1('actions must contain a read action or a valid finish');
               for (const action of parsed.actions) {
+                if ((action.tool === 'search' || action.tool === 'list') && action.args.source !== undefined) {
+                  const source = readSource(action.args.source);
+                  if (!sourceCatalog.some(value => readSource(value.source) === source)) throw new AgenticAskOutputErrorV1(`source is unavailable; choose from ${sourceCatalog.map(value => value.source).join(', ')}`);
+                }
                 if (action.tool !== 'open') continue;
                 const id = action.args.id ?? '';
                 // Keep the existing normalization of a discovered title, but
@@ -837,6 +883,19 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
                 throw new AgenticAskOutputErrorV1(openIds.length === 0
                   ? 'open is unavailable: no items have been discovered. Use search or list first.'
                   : `open requires a discovered id from your scratchpad, such as ${openIds.slice(0, 12).join(', ')}`);
+              }
+              if (parsed.actions.every(action => action.tool === 'finish')) {
+                const completionPlan = proposedPlan(parsed.parts);
+                const problems = [...askResearchCompletionProblemsV1(completionPlan, researchObservations, citable)];
+                if (completionPlan.some(part => part.needs.some(need => need.status === 'not_found'))) {
+                  if (entries.size > 0 && [...entries.values()].every(entry => entry.item.text === undefined)) {
+                    problems.unshift('discovered items have metadata only; open potentially relevant discovered items before concluding that it is absent');
+                  }
+                  const unread = inventoryView().filter(inventory => inventory.more);
+                  if (unread.length > 0) problems.unshift(`listed inventory still has unread pages; repeat list with ${unread.slice(0, 3).map(inventory => JSON.stringify(inventory.args)).join(' or ')}`);
+                }
+                if (!finishAvailable) problems.unshift('no source has been read; use search or list first');
+                if (problems.length > 0) throw new AgenticAskOutputErrorV1(`finish was not accepted: ${problems.slice(0, 8).join('; ')}. Search, list or open more, or correct the need status and evidence.`);
               }
               return parsed;
             });
@@ -847,36 +906,29 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
             fallbacks += 1; break;
           }
           steps += 1;
-          merge(step.parts);
-          // A planner can batch finish with reads. Complete those reads and let
-          // the next step observe them before evaluating a finish-only step.
+          plan = proposedPlan(step.parts);
+          // Batched reads must be observed in another step before completion.
           const reads = step.actions.filter(action => action.tool !== "finish");
           if (reads.length === 0) {
-            const problems: string[] = [];
-            for (const [index, part] of plan.entries()) {
-              for (const need of part.needs) {
-                const label = `part ${index + 1} need "${need.need}"`;
-                if (need.status === "open") problems.push(`${label} is still open`);
-                else if (need.status === "found" && !need.evidence.some(citable)) problems.push(`${label} is found but cites no item whose full text you have read`);
-                else if (need.status === "not_found" && searchesRun.length - need.searches_before < 2 && listsRun - need.lists_before < 1) problems.push(`${label} is not_found after fewer than two searches or a list`);
-              }
-            }
-            if (plan.length === 0) problems.push("no parts were written");
-            if (problems.length === 0 || finishRejected || steps >= AGENTIC_ASK_MAX_STEPS_V1) {
-              researchIncomplete = problems.length > 0;
-              break;
-            }
-            finishRejected = true;
-            results = [{ tool: "finish", error: `finish was not accepted: ${problems.slice(0, 8).join("; ")}. Search, list or open more, or fix the need status and evidence.` }];
-            continue;
+            researchIncomplete = false;
+            break;
           }
-          const before = { entries: entries.size, opened: [...entries.values()].filter(entry => entry.opened).length };
+          const hadCitableEvidence = [...entries.values()].some(entry => entry.full);
+          const before = hadCitableEvidence ? evidenceNovelty : retrievalProgress;
           results = [];
           for (const action of reads) {
             assertLive();
             results.push(await run(action));
           }
-          const progressed = entries.size > before.entries || [...entries.values()].filter(entry => entry.opened).length > before.opened;
+          const catalogIsExhaustivelyEmpty = entries.size === 0 && sourceCatalog.length > 0 && sourceCatalog.every(source => {
+            const normalized = readSource(source.source);
+            return normalized !== undefined && exhaustivelyEmptySources.has(normalized);
+          });
+          if (catalogIsExhaustivelyEmpty) {
+            researchIncomplete = false;
+            break;
+          }
+          const progressed = (hadCitableEvidence ? evidenceNovelty : retrievalProgress) > before;
           idleSteps = progressed ? 0 : idleSteps + 1;
           if (idleSteps >= 2) break;
         }
@@ -911,7 +963,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           selectedTicketCount = evidence.filter(entry => entry.item.citation.kind === "ticket").length;
           const user = {
             question: input.question, ...context(), scope, source_catalog: sourceCatalog,
-            research_plan: plan.map((part, index) => ({ part: index + 1, question: part.question, notes: part.notes, needs: part.needs.map(need => ({ need: need.need, status: need.status, suggested_evidence: need.evidence.filter(short => allowed.has(short)) })) })),
+            // Working hypotheses are not user requirements or evidence. The
+            // writer assesses the original question against released text.
             evidence: evidence.map(entry => ({ ...describe(entry), text: entry.item.text })),
           };
           try { answer = await withRepair("answer", answerPrompt, user, answerSchema, answerTimeout, parseAnswer); }
@@ -941,7 +994,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           .filter(value => value.shorts.length > 0)
           .map(value => ({ text: value.sentence.text, citation_indexes: use(value.shorts), private: isPrivate(value.shorts) }));
         const notFound = answer?.not_found ?? [];
-        const gapText = notFound.length === 0 ? undefined : cleanLine(`Not found: ${notFound.join("; ")}.`, 600);
+        const incomplete = researchIncomplete || (answer === null && evidence.length > 0);
+        const gapText = incomplete && (statements.length === 0 || notFound.length > 0)
+          ? cleanLine(`${INCOMPLETE_SEARCH_GAP}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`, 600)
+          : notFound.length === 0 ? undefined : cleanLine(`Not found: ${notFound.join("; ")}.`, 600);
         type Draft = { status: PersonAnswerPartV4["status"]; statements: typeof statements; gap?: string; records?: { text: string; citation_indexes: number[]; private: boolean }[] };
         let draft: Draft;
         if (statements.length > 0) {
@@ -957,7 +1013,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
             : { status: "not_found", statements: [], gap: gapText ?? (researchIncomplete || (answer === null && evidence.length > 0) ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP) };
         }
         const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
-        const outcome = !anyEvidence ? "not_found" as const : draft.status === "answered" ? "answered" as const : "partial" as const;
+        const outcome = !anyEvidence ? (incomplete ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
         const result = Object.freeze({
           schema_version: tickets ? 5 : 4, kind: tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk.scope, outcome,
           parts: Object.freeze([Object.freeze({

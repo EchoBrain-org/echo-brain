@@ -311,6 +311,14 @@ function fakeSlack(input: { search?: readonly PersonSlackMessageV1[] | Error; th
 }
 
 describe('Person evidence desk: live Slack (RFC-0003)', () => {
+  it('advertises Slack only when this request owns a live Slack reader', async () => {
+    const value = await fixture();
+    try {
+      expect(value.makeDesk()).not.toHaveProperty('live_sources');
+      expect(value.makeDesk(fakeSlack().slack)).toHaveProperty('live_sources', [{ source: 'slack' }]);
+    } finally { value.close(); }
+  });
+
   it('searches Slack beside Echo, labels and scopes each message, and audits digests only', async () => {
     const value = await fixture();
     try {

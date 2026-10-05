@@ -115,6 +115,7 @@ describe('Agentic Ask V2 ticket release', () => {
     };
     const desk: EvidenceDeskPortV2 = {
       scope: { kind: 'project', project_id: 'prj_00000000-0000-4000-8000-000000000001' }, ticket_available: true,
+      live_sources: [{ source: 'ticket', tool_id: 'issue-fixture' }],
       search: vi.fn(async () => ({ items: [ticket], truncated: false, receipt_digests: [ticket.receipt_sha256] })),
       list: vi.fn(async () => { throw new Error('model did not choose list'); }),
       open: vi.fn(async () => { throw new Error('search already returned full text'); }),

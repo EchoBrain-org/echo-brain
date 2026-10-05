@@ -190,7 +190,9 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'unavailable' }) })]));
     telemetry.length = 0;
     const jiraCalls = jiraFetch.mock.calls.length;
-    expect((await post('/v4/person/ask', { schema_version: 3, question: 'What are my tickets?', mine: true })).body.outcome).toBe('not_found');
+    expect((await post('/v4/person/ask', { schema_version: 3, question: 'What are my tickets?', mine: true })).body).toMatchObject({
+      outcome: 'partial', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't complete the search. Please try again." })],
+    });
     expect(jiraFetch).toHaveBeenCalledTimes(jiraCalls);
     expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'out_of_scope' }) })]));
     const connectedFetch = jiraFetch.getMockImplementation()!;
@@ -200,7 +202,9 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
         ? Response.json(status === 200 ? { isLast: true, issues: [] } : { error: 'private-provider-error' }, { status })
         : connectedFetch(input, init));
       const result = await post('/v4/person/ask', { schema_version: 3, question: 'Find a Jira ticket' });
-      if (status === 200) expect(result).toMatchObject({ status: 200, body: { outcome: 'not_found' } });
+      if (status === 200) expect(result).toMatchObject({ status: 200, body: {
+        outcome: 'partial', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't complete the search. Please try again." })],
+      } });
       else expect(result.status).toBe(429);
       expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: status === 200 ? 'succeeded' : 'failed', diagnostic: expect.objectContaining({ phase: 'evidence_search', evidence_source: 'ticket', result: status === 200 ? 'empty' : 'rate_limited', ...(status === 200 ? { counts: expect.objectContaining({ included_count: 0 }) } : {}) }) })]));
       expect(telemetry.join('')).not.toContain('private-provider-error');
@@ -220,7 +224,9 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect((await post('/v1/person/tools/jira/disconnect', { schema_version: 1 })).status).toBe(200);
     expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'revoked', external_subject_id: null })]));
     telemetry.length = 0;
-    expect((await post('/v4/person/ask', { schema_version: 3, question: 'What is in Jira?' })).body.outcome).toBe('not_found');
+    expect((await post('/v4/person/ask', { schema_version: 3, question: 'What is in Jira?' })).body).toMatchObject({
+      outcome: 'partial', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't complete the search. Please try again." })],
+    });
     expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'unlinked' }) })]));
     expect(events().filter(event => event.diagnostic?.phase === 'evidence_search' && event.diagnostic.evidence_source === 'ticket')).toEqual([]);
   } finally { await runtime.close(); transport.close(); audit.close(); }
