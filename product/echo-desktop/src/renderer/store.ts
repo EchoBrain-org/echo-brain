@@ -2654,12 +2654,12 @@ export function matchesShown(current: State = state): boolean {
 
 /**
  * Another app is in front and the page is covered: a project, Mine, People &
- * invites, an answer or an original. The bar's text is covered with it.
+ * invites, Tools, an answer or an original. The bar's text is covered with it.
  */
 export function pageCovered(current: State = state): boolean {
   const { route } = current;
   return current.concealed && (current.ask !== null || route.page === 'project' || route.page === 'mine' || current.reader !== null ||
-    (route.page === 'organization' && current.organization !== null));
+    (route.page === 'organization' && current.organization !== null) || (route.page === 'tools' && current.tools !== null));
 }
 
 /** What the chip names while its page is on screen: the project, or Mine. */

@@ -203,9 +203,12 @@ alternatives, not active runtime dependencies. This is an allowed selecting
 composition profile, not evidence that every active provider has completed
 qualification.
 
-Two further selections stay off in production. The Jira live runtime
-(`jira-person-live-runtime-v1.ts`) is composed only when its release gate
-`JIRA_PERSON_LIVE_RELEASE_APPROVED_V1` is open; it is closed. The opt-in
+The Jira live runtime (`jira-person-live-runtime-v1.ts`) is a selected,
+request-bound Person read capability. Global Ask reads tickets visible through
+the asker's own Jira connection; project Ask additionally requires the saved
+ECHO-to-Jira project mapping, and Mine excludes Jira. Jira data is read live for
+the request and does not enter source admission or canonical meeting
+processing. The opt-in
 [context capture](../product/2026-10-01-connector-context-integration-v1.md)
 modules are composed only by the local rehearsal runner and the versioned
 staging selections.

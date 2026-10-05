@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { chooseFromAccountMenu, launch, type Launched } from './launch.js';
+import { chooseFromAccountMenu, emit, launch, type Launched } from './launch.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
@@ -26,6 +26,23 @@ test('Tools lists every tool by your connection, from the sidebar or the Account
   await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Connected tools…');
   await expect(page.getByTestId('tools')).toBeVisible();
   expect(run.calls().filter(call => call.path === '/v4/person/tools')).toHaveLength(2);
+});
+
+test('Tools is covered while ECHO is concealed and returns on resume', async () => {
+  run = await launch();
+  const { page, app } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await expect(page.getByTestId('tools')).toContainText('Ari · https://authority.example');
+  await expect(page.getByTestId('tool-row')).toHaveCount(3);
+
+  await emit(app, 'echo-test:conceal');
+  await expect(page.getByTestId('concealed')).toBeVisible();
+  await expect(page.getByTestId('tools')).toHaveCount(0);
+  await expect(page.getByTestId('tool-row')).toHaveCount(0);
+
+  await emit(app, 'echo-test:resume');
+  await expect(page.getByTestId('tools')).toContainText('Ari · https://authority.example');
+  await expect(page.getByTestId('tool-row')).toHaveCount(3);
 });
 
 test('Connect waits on the browser, reads the attempt until it completes, and lists the tool as connected', async () => {
