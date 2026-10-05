@@ -69,6 +69,8 @@ The shared implementation packages are `packages/organization-processing` and
 | `providers/granola` | Granola source, custody, admission and setup proofs |
 | `providers/jira` | Person-bound Jira Nango connection store and HTTP application, gated live reader and context source; [authentication and support boundary](../../providers/jira/README.md) |
 | `providers/jira/client` | Jira connection wire contracts and shared Person tool commands; no server dependencies |
+| `providers/confluence` | Person-bound Confluence connection, project-space mapping, live page discovery and section reader; no retained page content |
+| `providers/confluence/client` | Confluence connection and project-space wire contracts and Person tool commands; no server dependencies |
 | `providers/synthetic-demo` | Fixed synthetic source and its evaluation/setup proofs |
 | `providers/slack/client` | Client contracts and Person commands |
 | `providers/slack/server` | Server identity, approval, historical codec/projector, connection/setup, fixed-channel context pointer source and assets |

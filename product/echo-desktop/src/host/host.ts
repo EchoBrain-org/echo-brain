@@ -13,7 +13,7 @@ import { askText, searchQuery } from '../shared/query.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
   abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, invitationView, isRecordRef, listView,
-  membersView, noteMatchesView, noteTitle, openView, projectMatchesView, projectJiraMappingView, projectPageView, projectSettingsView, projectView,
+  membersView, noteMatchesView, noteTitle, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectSettingsView, projectView,
   NotReadable, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
@@ -85,7 +85,7 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'projects.rename': 45_000, 'projects.archive': 45_000,
   'projects.leave': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
   'employees.reissue': 45_000, 'employees.revoke': 45_000,
-  'projects.jiraRead': 45_000, 'projects.jiraSet': 90_000,
+  'projects.jiraRead': 45_000, 'projects.jiraSet': 90_000, 'projects.confluenceRead': 45_000, 'projects.confluenceSet': 90_000, 'projects.confluenceSpaces': 45_000,
   'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
 };
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
@@ -440,6 +440,23 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
         option('mapping-request', request_id), option('mapping-revision', expected_revision ?? 'none'), ...(jira_project === null ? ['--clear'] : [option('jira-project', jira_project)])],
         stdout => projectJiraMappingView(lastJson(stdout), project_id), request_id);
     }
+    case 'projects.confluenceRead': {
+      const { expect, project_id } = params as Params<'projects.confluenceRead'>;
+      if (typeof project_id !== 'string' || !PROJECT_ID.test(project_id)) return code('invalid_request');
+      return forAccount(method, expect, ['tools', 'project', '--tool=confluence', option('echo-project', project_id)], stdout => projectConfluenceMappingView(lastJson(stdout), project_id));
+    }
+    case 'projects.confluenceSet': {
+      const { expect, project_id, request_id, expected_revision, space_ids } = params as Params<'projects.confluenceSet'>;
+      if (typeof project_id !== 'string' || !PROJECT_ID.test(project_id) || typeof request_id !== 'string' || !REQUEST_ID.test(request_id) ||
+          (expected_revision !== null && (typeof expected_revision !== 'string' || !REQUEST_ID.test(expected_revision))) ||
+          (space_ids !== null && (!Array.isArray(space_ids) || space_ids.length < 1 || space_ids.length > 20 || !space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)) || new Set(space_ids).size !== space_ids.length))) return code('invalid_request', true);
+      return forAccount(method, expect, ['tools', 'project', '--tool=confluence', option('echo-project', project_id), option('mapping-request', request_id), option('mapping-revision', expected_revision ?? 'none'), ...(space_ids === null ? ['--clear'] : [option('space-ids', space_ids.join(','))])], stdout => projectConfluenceMappingView(lastJson(stdout), project_id), request_id);
+    }
+    case 'projects.confluenceSpaces': {
+      const { expect, cursor } = params as Params<'projects.confluenceSpaces'>;
+      if (cursor !== undefined && (typeof cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(cursor))) return code('invalid_request');
+      return forAccount(method, expect, ['tools', 'project', '--tool=confluence', '--spaces', ...(cursor === undefined ? [] : [option('space-cursor', cursor)])], stdout => confluenceSpacesView(lastJson(stdout)));
+    }
     case 'projects.read': {
       const { expect, project_id } = params as Params<'projects.read'>;
       if (typeof project_id !== 'string' || !PROJECT_ID.test(project_id)) return code('invalid_request');
@@ -575,7 +592,7 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       const { expect, question, scope } = params as Params<'ask.run'>;
       const text = askText(question);
       if (text === '') return code('invalid_request');
-      return forAccount(method, expect, ['ask', option('question', text), ...(scope.kind !== 'mine' ? ['--tickets'] : []), ...askScopeArgs(scope)],
+      return forAccount(method, expect, ['ask', option('question', text), '--live', ...askScopeArgs(scope)],
         stdout => answerView(lastJson(stdout), scope), undefined, abortSignal);
     }
     case 'ask.cancel':

@@ -32,7 +32,8 @@
     "@echo-brain/provider-slack-server",
     "@echo-brain/provider-granola",
     "@echo-brain/provider-synthetic-demo",
-    "@echo-brain/provider-jira"
+    "@echo-brain/provider-jira",
+    "@echo-brain/provider-confluence"
   ],
   "allowed_external_packages": [
     "better-sqlite3",
@@ -572,7 +573,8 @@
         "@echo-brain/provider-granola",
         "@echo-brain/provider-jira",
         "@echo-brain/provider-synthetic-demo",
-        "@echo-brain/provider-openrouter"
+        "@echo-brain/provider-openrouter",
+        "@echo-brain/provider-confluence"
       ],
       "allowed_external_packages": [
         "better-sqlite3"

@@ -4,8 +4,8 @@ import { chooseFromAccountMenu, emit, launch, type Launched } from './launch.js'
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
 
-const toolCalls = () => run.calls().filter(call => call.path.startsWith('/v1/person/tools/jira/') || call.path.includes('/slack/disconnect'))
-  .map(call => call.path.replace('/v1/person/tools/jira/', 'jira ').replace('/v2/person/external-identities/slack/', 'slack '));
+const toolCalls = () => run.calls().filter(call => call.path.startsWith('/v1/person/tools/jira/') || call.path.startsWith('/v1/person/tools/confluence/') || call.path.includes('/slack/disconnect'))
+  .map(call => call.path.replace('/v1/person/tools/jira/', 'jira ').replace('/v1/person/tools/confluence/', 'confluence ').replace('/v2/person/external-identities/slack/', 'slack '));
 
 test('Tools lists every tool by your connection, from the sidebar or the Account menu', async () => {
   run = await launch();
@@ -15,7 +15,7 @@ test('Tools lists every tool by your connection, from the sidebar or the Account
   await expect(page.getByTestId('sidebar-tools')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('tools')).toContainText('Ari · https://authority.example');
   await expect(page.getByRole('region', { name: 'Connected' }).getByTestId('tool-row')).toHaveText(['SSlackConnectedManage']);
-  await expect(page.getByRole('region', { name: 'Available' }).getByTestId('tool-row')).toHaveText(['JJiraNot connectedConnect']);
+  await expect(page.getByRole('region', { name: 'Available' }).getByTestId('tool-row')).toHaveText(['JJiraNot connectedConnect', 'CConfluenceNot connectedConnect']);
   await expect(page.getByRole('region', { name: 'Not turned on' }).getByTestId('tool-row'))
     .toHaveText(['GGranolaNot turned on for your organization.']);
   // The external workspace and account ids never reach the page.
@@ -33,7 +33,7 @@ test('Tools is covered while ECHO is concealed and returns on resume', async () 
   const { page, app } = run;
   await page.getByTestId('sidebar-tools').click();
   await expect(page.getByTestId('tools')).toContainText('Ari · https://authority.example');
-  await expect(page.getByTestId('tool-row')).toHaveCount(3);
+  await expect(page.getByTestId('tool-row')).toHaveCount(4);
 
   await emit(app, 'echo-test:conceal');
   await expect(page.getByTestId('concealed')).toBeVisible();
@@ -42,7 +42,7 @@ test('Tools is covered while ECHO is concealed and returns on resume', async () 
 
   await emit(app, 'echo-test:resume');
   await expect(page.getByTestId('tools')).toContainText('Ari · https://authority.example');
-  await expect(page.getByTestId('tool-row')).toHaveCount(3);
+  await expect(page.getByTestId('tool-row')).toHaveCount(4);
 });
 
 test('Connect waits on the browser, reads the attempt until it completes, and lists the tool as connected', async () => {
@@ -55,8 +55,19 @@ test('Connect waits on the browser, reads the attempt until it completes, and li
   await expect(page.getByTestId('toast')).toHaveText('Jira connected', { timeout: 15_000 });
   await expect(page.getByTestId('tool-connect-sheet')).toHaveCount(0);
   await expect(page.getByRole('region', { name: 'Connected' }).getByTestId('tool-row')).toHaveText(['SSlackConnectedManage', 'JJiraConnectedManage']);
-  await expect(page.getByRole('region', { name: 'Available' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Available' }).getByTestId('tool-row')).toHaveText(['CConfluenceNot connectedConnect']);
   expect(toolCalls()).toEqual(['jira connect', 'jira status', 'jira status']);
+});
+
+test('Confluence uses the same browser connection lifecycle as Jira', async () => {
+  run = await launch();
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="confluence"]').getByTestId('tool-connect').click();
+  await expect(page.getByTestId('tool-connect-sheet')).toContainText('Finish connecting Confluence in your browser');
+  await expect(page.getByTestId('toast')).toHaveText('Confluence connected', { timeout: 15_000 });
+  await expect(page.locator('[data-tool="confluence"]')).toContainText('Confluence');
+  expect(toolCalls()).toEqual(['confluence connect', 'confluence status', 'confluence status']);
 });
 
 test('a connection the tool refuses says why in the app’s words, and Try again starts over', async () => {
@@ -89,7 +100,7 @@ test('Cancel, or Escape, cancels a waiting connection so a late approval binds n
   await expect(page.getByTestId('tool-connect-sheet')).toHaveCount(0);
   await expect.poll(toolCalls).toContain('jira cancel');
   // The page stays, and the tool is still to connect.
-  await expect(page.getByRole('region', { name: 'Available' }).getByTestId('tool-row')).toHaveText(['JJiraNot connectedConnect']);
+  await expect(page.getByRole('region', { name: 'Available' }).getByTestId('tool-row')).toHaveText(['JJiraNot connectedConnect', 'CConfluenceNot connectedConnect']);
 });
 
 test('a stopped connection needs attention and reconnects; Manage disconnects only your own', async () => {
@@ -109,7 +120,7 @@ test('a stopped connection needs attention and reconnects; Manage disconnects on
   await page.getByTestId('tool-disconnect').click();
   await expect(page.getByTestId('toast')).toHaveText('Slack disconnected');
   await expect(page.getByTestId('tool-manage-sheet')).toHaveCount(0);
-  await expect(page.getByRole('region', { name: 'Available' }).getByTestId('tool-row')).toHaveText(['SSlackNot connectedConnect']);
+  await expect(page.getByRole('region', { name: 'Available' }).getByTestId('tool-row')).toHaveText(['SSlackNot connectedConnect', 'CConfluenceNot connectedConnect']);
   await expect(page.getByRole('region', { name: 'Connected' })).toHaveCount(0);
   expect(toolCalls()).toEqual(['slack disconnect']);
 });

@@ -57,5 +57,7 @@ export * from './person-meeting-transcript-v1.js';
 export * from './person-list-v1.js';
 export * from './person-connector-access-v1.js';
 export * from './person-ticket-citation-v1.js';
+export * from './person-page-citation-v1.js';
 
 export * from './person-answer-v5.js';
+export * from './person-answer-v6.js';

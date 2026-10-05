@@ -10,7 +10,7 @@ import { createPersonEvidenceDeskV1 } from './person-evidence-desk-v1.js';
 import { createPersonLiveEvidenceDeskV2 } from './person-live-evidence-desk-v2.js';
 import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-v1.js';
 
-export interface CreatePersonAnswerV4RouteOptions extends Omit<CreatePersonAnswerV3RouteOptions, 'ask_journey_telemetry' | 'slack_for'> {
+export interface CreatePersonAnswerV4RouteOptions extends Omit<CreatePersonAnswerV3RouteOptions, 'ask_journey_telemetry'> {
   readonly ticket_for?: (input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }) => Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined>;
   /** Explicit server-selected Slack scope; it never implies a Person-wide user-token grant. */
   readonly slack_live_for?: (input: { readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonSlackMessageCitationV1>; readonly signal?: AbortSignal }) => Promise<PersonLiveEvidenceSourceV1<PersonSlackMessageCitationV1> | undefined>;

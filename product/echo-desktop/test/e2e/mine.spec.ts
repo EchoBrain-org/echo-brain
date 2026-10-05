@@ -216,7 +216,7 @@ test('Mine\'s bar only asks what you added, and a cited original is read under a
   await field.press('Enter');
   await expect(page.getByTestId('answer')).toBeVisible();
   await expect(page.locator('.asked')).toHaveText('Mine');
-  const asks = run.calls().filter(call => call.path === '/v3/person/ask');
+  const asks = run.calls().filter(call => call.path === '/v5/person/ask');
   expect(asks.map(call => call.body)).toEqual([{ schema_version: 3, question: 'pricing', mine: true }]);
   await page.getByTestId('citation').nth(1).click();
   await expect(page.getByTestId('evidence-text')).toHaveText('We agreed to ship.');

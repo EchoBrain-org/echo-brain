@@ -24,7 +24,8 @@
     "@echo-brain/organization-protocol",
     "@echo-brain/organization-api",
     "@echo-brain/provider-slack-client",
-    "@echo-brain/provider-jira-client"
+    "@echo-brain/provider-jira-client",
+    "@echo-brain/provider-confluence-client"
   ],
   "scripts": {
     "build": "tsc -b",
@@ -35,7 +36,8 @@
     "@echo-brain/organization-api": "0.0.0-dev.0",
     "@echo-brain/organization-protocol": "0.0.0-dev.0",
     "@echo-brain/provider-slack-client": "0.0.0-dev.0",
-    "@echo-brain/provider-jira-client": "0.0.0-dev.0"
+    "@echo-brain/provider-jira-client": "0.0.0-dev.0",
+    "@echo-brain/provider-confluence-client": "0.0.0-dev.0"
   },
   "engines": {
     "node": "22.22.1",

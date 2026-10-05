@@ -213,6 +213,25 @@ processing. The opt-in
 modules are composed only by the local rehearsal runner and the versioned
 staging selections.
 
+Confluence follows the same personal live-read boundary through its own
+provider and selecting runtime. Global Ask discovers pages visible to the
+connected person on the selected Confluence site, without an ECHO space or
+page allowlist. Project Ask narrows discovery to the saved ECHO-project to
+Confluence-space mapping and still checks the asker's permissions. A mapping
+does not grant access, and an unmapped project does not fall back to global
+Confluence discovery. Mine excludes external pages.
+
+Live pages have their own provider-neutral citation contract. They are not
+retained uploads, meeting records, or tickets. Discovery releases page metadata;
+opening releases bounded sections with stable page and section coordinates,
+the provider version, and a digest of the text actually read. Continuations
+remain bound to the request, and current provider permissions are rechecked
+before evidence reaches a model or an answer. Page bodies remain in request
+memory and never enter source admission, capture, indexing, or change history.
+The new answer response version keeps historical citation codecs strict.
+Confluence query syntax, pagination, body formats, and site validation remain
+inside the provider; the planner uses shared source capabilities.
+
 The source-processing model remains separate from the permission-aware
 read/model path. It receives one admitted source revision through the processor
 port and has no Person session, retrieval-generation handle, broad corpus

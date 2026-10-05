@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { StructuredGenerationInput, StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
@@ -9,6 +9,9 @@ import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persiste
 import { SqlitePersonAgenticAskAuditV1 } from "../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { createPersonAnswerV3Route } from "../src/composition/person-answer-v3-route.js";
+import { createPersonAnswerV5Route } from "../src/composition/person-answer-v5-route.js";
+import type { PersonPageCitationV1, PersonTicketCitationV1 } from "@echo-brain/organization-api";
+import type { PersonLiveEvidenceItemV1, PersonLiveEvidenceSourceV1 } from "@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1";
 import { PersonRecordSearchIndexLagV1 } from "../src/composition/person-record-search-route.js";
 import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
 
@@ -256,5 +259,69 @@ describe("Agentic Ask with stored source evidence", () => {
     await expect(f.route.ask({ access_token: "owner", request: { schema_version: 3, question: "Summarize this project", project_id: PROJECT_ALPHA }, signal: controller.signal })).rejects.toThrow();
     expect(f.roles).toEqual(["step"]);
     expect(JSON.parse(auditRow(f.database)!.body_json)).toMatchObject({ outcome: "cancelled", model_calls: 1 });
+  });
+});
+
+
+describe("Agentic Ask V5 combined request-local sources", () => {
+  const live = <C extends PersonTicketCitationV1 | PersonPageCitationV1>(tool_id: string, item: PersonLiveEvidenceItemV1<C>): PersonLiveEvidenceSourceV1<C> => {
+    const result = Object.freeze({ items: Object.freeze([item]), truncated: false, receipt_digests: Object.freeze([item.receipt_sha256]) });
+    return Object.freeze({ tool_id, search: vi.fn(async () => result), list: vi.fn(async () => result), open: vi.fn(async () => result), revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}) });
+  };
+
+  it("combines stored evidence, a work item and a live page in one V6 answer without provider-specific planner paths", async () => {
+    const f = fixture();
+    f.upload("Launch meeting notes", "The meeting approved an EVT launch review.");
+    const ticketText = "ECHO-7 reports EVT is scheduled for Tuesday.";
+    const pageText = "The launch plan says the EVT gate begins Tuesday after the meeting approval.";
+    const ticket: PersonLiveEvidenceItemV1<PersonTicketCitationV1> = Object.freeze({
+      id: "ticket-private", kind: "ticket", label: "ECHO-7 EVT", text: ticketText, visibility: "only_me", receipt_sha256: canonicalSha256("ticket-receipt"),
+      citation: { kind: "ticket" as const, tool_id: "work", external_scope_id: "workspace", ticket_id: "ECHO-7", permalink: "https://work.example.test/ECHO-7", text_sha256: canonicalSha256(ticketText) },
+    });
+    const page: PersonLiveEvidenceItemV1<PersonPageCitationV1> = Object.freeze({
+      id: "page-private", kind: "page", label: "Launch plan", text: pageText, visibility: "team", receipt_sha256: canonicalSha256("page-receipt"),
+      citation: { kind: "page" as const, tool_id: "knowledge", external_scope_id: "site-one", page_id: "launch-plan", section_id: "s1", version: "4", permalink: "https://knowledge.example.test/wiki/pages/viewpage.action?pageId=1", text_sha256: canonicalSha256(pageText) },
+    });
+    const ticketSource = live("work", ticket);
+    const pageSource = live("knowledge", page);
+    const model: StructuredGenerationPort = { async generate(input) {
+      const prompt = JSON.parse(input.user_prompt) as Prompt;
+      if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) {
+        const ids = prompt.evidence!.map(item => item.id);
+        return { sentences: [{ text: "The meeting, work item and plan all place EVT on Tuesday.", evidence: ids }], not_found: [] };
+      }
+      const listed = prompt.last_results?.find(result => result.tool === "search")?.items ?? [];
+      return listed.length === 0
+        ? { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "open", evidence: [] }] }], actions: [{ tool: "search", args: { query: "EVT Tuesday" } }] }
+        : { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "found", evidence: listed.map(item => item.id) }] }], actions: [{ tool: "finish", args: {} }] };
+    } };
+    const route = createPersonAnswerV5Route({
+      authority_id: "oau_fixture", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
+      sessions: { authenticateAccess: () => authorization(OWNER) } as never,
+      originals: f.originals, records: { initializeDesk() { throw new PersonRecordSearchIndexLagV1(); } } as never,
+      model, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 1_000 },
+      audit: { forRequest: () => ({ append: () => undefined }), forLiveRequest: () => ({ record: async () => canonicalSha256("live-audit") }) } as never,
+      ticket_for: async () => ticketSource, page_for: async () => pageSource,
+    });
+    const answer = await route.ask({ access_token: "owner", request: { schema_version: 3, question: "When does EVT start?" } });
+    expect(answer).toMatchObject({ schema_version: 6, outcome: "answered" });
+    expect(answer.citations.map(value => value.kind).sort()).toEqual(["document_passage", "page", "ticket"]);
+    expect(ticketSource.search).toHaveBeenCalledTimes(1);
+    expect(pageSource.search).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not silently omit a denied page source or broaden to another page scope", async () => {
+    const f = fixture();
+    const denied = vi.fn(async () => { throw new AuthorityOperationError("unauthorized", "provider denied"); });
+    const route = createPersonAnswerV5Route({
+      authority_id: "oau_fixture", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
+      sessions: { authenticateAccess: () => authorization(OWNER) } as never,
+      originals: f.originals, records: { initializeDesk() { throw new PersonRecordSearchIndexLagV1(); } } as never,
+      model: { generate: async () => { throw new Error("model must not run"); } }, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 1_000 },
+      audit: { forRequest: () => ({ append: () => undefined }), forLiveRequest: () => ({ record: async () => canonicalSha256("live-audit") }) } as never,
+      page_for: denied,
+    });
+    await expect(route.ask({ access_token: "owner", request: { schema_version: 3, question: "When does EVT start?" } })).rejects.toMatchObject({ code: "unauthorized" });
+    expect(denied).toHaveBeenCalledTimes(1);
   });
 });

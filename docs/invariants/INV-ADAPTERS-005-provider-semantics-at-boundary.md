@@ -52,6 +52,15 @@ ownership, and keep rehearsal sidecars out of canonical Authority storage.
 They do not widen ordinary production behavior, canonical connection contracts,
 signed bytes or SQL baselines.
 
+Confluence uses a separate person-bound live reader and connection, with the
+same global permission ceiling and project mapping rule. Its page citations
+identify external page sections rather than claiming an ECHO-retained source
+revision. The shared evidence desk may select the generic live-page capability;
+it must not generate Confluence CQL, interpret page bodies, or choose provider
+hosts. Connection state and project settings do not authorize retaining page
+content. Adding live-page support requires an explicit new answer response
+version; existing ticket, Slack, and retained-document codecs remain strict.
+
 This invariant is about external-capability providers. The current local
 platform still deliberately selects SQLite, file-backed keys, Node crypto and
 clock implementations, and the OIDC protocol in Authority composition. An

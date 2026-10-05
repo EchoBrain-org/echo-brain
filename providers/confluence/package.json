@@ -1,0 +1,50 @@
+{
+  "name": "@echo-brain/provider-confluence",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./confluence-person-connection-v1": {
+      "types": "./dist/confluence-person-connection-v1.d.ts",
+      "import": "./dist/confluence-person-connection-v1.js"
+    },
+    "./confluence-person-live-evidence-reader-v1": {
+      "types": "./dist/confluence-person-live-evidence-reader-v1.d.ts",
+      "import": "./dist/confluence-person-live-evidence-reader-v1.js"
+    },
+    "./confluence-connection-store-v1": {
+      "types": "./dist/confluence-connection-store-v1.d.ts",
+      "import": "./dist/confluence-connection-store-v1.js"
+    },
+    "./confluence-nango-v1": {
+      "types": "./dist/confluence-nango-v1.d.ts",
+      "import": "./dist/confluence-nango-v1.js"
+    },
+    "./confluence-project-mapping-store-v1": {
+      "types": "./dist/confluence-project-mapping-store-v1.d.ts",
+      "import": "./dist/confluence-project-mapping-store-v1.js"
+    },
+    "./confluence-person-connection-http-application-v1": {
+      "types": "./dist/confluence-person-connection-http-application-v1.d.ts",
+      "import": "./dist/confluence-person-connection-http-application-v1.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@echo-brain/federation-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+    "@echo-brain/organization-api": "0.0.0-dev.0",
+    "better-sqlite3": "12.10.0",
+    "@echo-brain/provider-confluence-client": "0.0.0-dev.0"
+  }
+}

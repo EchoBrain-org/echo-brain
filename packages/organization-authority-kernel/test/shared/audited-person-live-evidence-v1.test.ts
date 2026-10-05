@@ -23,7 +23,7 @@ const slackCitation = (value: unknown): PersonSlackMessageCitationV1 => {
   if ((value as { readonly kind?: unknown } | null)?.kind !== 'slack_message') throw new Error('Slack citation kind is invalid');
   return value as PersonSlackMessageCitationV1;
 };
-const page = <C extends PersonLiveEvidenceCitationV1>(items: readonly PersonLiveEvidenceValueV1<C>[], next_cursor?: string): PersonLiveEvidencePageV1<C> => ({ items, truncated: false, ...(next_cursor === undefined ? {} : { next_cursor }) });
+const page = <C extends PersonLiveEvidenceCitationV1>(items: readonly PersonLiveEvidenceValueV1<C>[], next_cursor?: string, notice?: string): PersonLiveEvidencePageV1<C> => ({ items, truncated: false, ...(next_cursor === undefined ? {} : { next_cursor }), ...(notice === undefined ? {} : { notice }) });
 
 function fixture<C extends PersonLiveEvidenceCitationV1>(tool_id: string, initial: PersonLiveEvidencePageV1<C>) {
   let selected = initial;
@@ -155,6 +155,17 @@ describe('shared audited live evidence source V1', () => {
     expect(f.reader.revalidate).toHaveBeenLastCalledWith({ citations: [inventoryCitation, ticket().citation, ticket('The ticket was edited').citation] });
     vi.mocked(f.reader.revalidate).mockRejectedValueOnce(new AuthorityOperationError('unauthorized', 'Ticket is now hidden'));
     await expect(source.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
+  it('releases a bounded adapter notice with evidence without retaining it in the audit', async () => {
+    const f = fixture('tickets', page([ticket()], undefined, 'Some live content could not be represented as text.'));
+    const result = await f.make().search({ query: 'ship' });
+    expect(result.notice).toBe('Some live content could not be represented as text.');
+    expect(JSON.stringify(f.releases)).not.toContain('could not be represented');
+    for (const notice of ['', ' leading', 'trailing ', 'line\nbreak', 'x'.repeat(1025)]) {
+      f.select(page([ticket()], undefined, notice));
+      await expect(f.make().search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' });
+    }
   });
 
   it('commits empty releases without exposing the query or provider cursor and scopes continuations to their list', async () => {

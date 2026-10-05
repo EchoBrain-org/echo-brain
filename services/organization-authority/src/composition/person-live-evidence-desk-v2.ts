@@ -1,4 +1,4 @@
-import type { PersonSlackMessageCitationV1 } from '@echo-brain/organization-api';
+import type { PersonPageCitationV1, PersonSlackMessageCitationV1 } from '@echo-brain/organization-api';
 import type { EvidenceDeskKindV1, EvidenceDeskPortV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
 import type { EvidenceDeskPortV2, EvidenceDeskResultV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
@@ -9,12 +9,14 @@ import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-
 const LOCAL_KINDS: readonly EvidenceDeskKindV1[] = ['decision', 'action', 'rationale', 'note', 'document_passage'];
 
 /** A request-owned dispatcher. Server composition selects live sources; models select only read tools. */
-export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?: PersonLiveEvidenceSourceV1, slack?: PersonLiveEvidenceSourceV1<PersonSlackMessageCitationV1>, ticketProjectId?: string): EvidenceDeskPortV2 {
-  if ((slack !== undefined && base.scope.kind !== 'global') || (ticket !== undefined && base.scope.kind !== 'global' && !(base.scope.kind === 'project' && base.scope.project_id === ticketProjectId))) throw new AuthorityOperationError('unauthorized', 'Live source is unsupported in this scope');
+export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?: PersonLiveEvidenceSourceV1, slack?: PersonLiveEvidenceSourceV1<PersonSlackMessageCitationV1>, ticketProjectId?: string, page?: PersonLiveEvidenceSourceV1<PersonPageCitationV1>, pageProjectId?: string): EvidenceDeskPortV2 {
+  if ((slack !== undefined && base.scope.kind !== 'global') ||
+      (ticket !== undefined && base.scope.kind !== 'global' && !(base.scope.kind === 'project' && base.scope.project_id === ticketProjectId)) ||
+      (page !== undefined && base.scope.kind !== 'global' && !(base.scope.kind === 'project' && base.scope.project_id === pageProjectId))) throw new AuthorityOperationError('unauthorized', 'Live source is unsupported in this scope');
   type Source = EvidenceDeskPortV1 | PersonLiveEvidenceSourceV1;
   const issued = new Map<string, Source>();
   const lookup = (phase: 'evidence_search' | 'evidence_list' | 'evidence_open', source: Source, operation: () => Promise<EvidenceDeskResultV2>) =>
-    observePersonLiveEvidenceV1(phase, source === ticket ? 'ticket' : 'slack', async () => {
+    observePersonLiveEvidenceV1(phase, source === ticket ? 'ticket' : source === page ? 'page' : 'slack', async () => {
       const result = await operation();
       annotateCoreRuntimeV1({ counts: { included_count: result.items.length }, result: result.items.length === 0 ? 'empty' : 'returned' });
       return result;
@@ -32,25 +34,25 @@ export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?
     scope: base.scope,
     ticket_available: ticket !== undefined,
     live_sources: Object.freeze([
-      ...(ticket === undefined ? [] : [Object.freeze({ source: 'ticket' as const, tool_id: ticket.tool_id })]),
-      ...(slack === undefined ? [] : [Object.freeze({ source: 'slack' as const, tool_id: slack.tool_id })]),
+      ...(ticket === undefined ? [] : [Object.freeze({ source: 'ticket' as const, selector: 'tickets' as const, description: 'Live work items: discover summaries, then open selected items for their current body and state.', metadata_only_list: true, tool_id: ticket.tool_id })]),
+      ...(page === undefined ? [] : [Object.freeze({ source: 'page' as const, selector: 'pages' as const, description: 'Live knowledge pages: discover pages, then open selected pages and continuation handles for their current text.', metadata_only_list: true, tool_id: page.tool_id })]),
+      ...(slack === undefined ? [] : [Object.freeze({ source: 'slack' as const, selector: 'slack' as const, description: 'Live discussion messages.', metadata_only_list: false, tool_id: slack.tool_id })]),
     ]),
     async search(input) {
       input.signal?.throwIfAborted();
       const maximum = input.limit ?? 8;
       if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 50) throw new AuthorityOperationError('invalid_request', 'Evidence search limit is invalid');
       const { kinds: requestedKinds, ...request } = input;
-      if (requestedKinds?.includes('ticket') && ticket === undefined) refused();
-      // A separately bound Slack source owns its kind exclusively. Existing
-      // callers without that source retain the V1 desk's Slack behavior.
-      const kinds = requestedKinds?.filter((kind): kind is EvidenceDeskKindV1 => kind !== 'ticket' && (slack === undefined || kind !== 'slack_message')) ?? (slack === undefined ? undefined : LOCAL_KINDS);
+      if ((requestedKinds?.includes('ticket') && ticket === undefined) || (requestedKinds?.includes('page') && page === undefined)) refused();
+      // A separately bound live source owns its kind exclusively.
+      const kinds = requestedKinds?.filter((kind): kind is EvidenceDeskKindV1 => kind !== 'ticket' && kind !== 'page' && (slack === undefined || kind !== 'slack_message')) ?? (slack === undefined ? undefined : LOCAL_KINDS);
       const pages: { readonly source: Source; readonly result: EvidenceDeskResultV2 }[] = [];
       if (kinds?.length !== 0) {
         const result = await base.search({ ...request, ...(kinds === undefined ? {} : { kinds }) });
         input.signal?.throwIfAborted();
         pages.push({ source: base, result });
       }
-      for (const [source, kind] of [[ticket, 'ticket'], [slack, 'slack_message']] as const) {
+      for (const [source, kind] of [[ticket, 'ticket'], [page, 'page'], [slack, 'slack_message']] as const) {
         if (source === undefined || (requestedKinds !== undefined && !requestedKinds.includes(kind))) continue;
         const result = input.query === undefined
           ? await lookup('evidence_list', source, () => source.list({ limit: Math.min(maximum, 20), signal: input.signal }))
@@ -92,16 +94,16 @@ export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?
     },
     async list(input) {
       input.signal?.throwIfAborted();
-      if (input.source !== 'ticket' && (input.source !== 'slack' || slack === undefined)) {
+      if (input.source !== 'ticket' && input.source !== 'page' && (input.source !== 'slack' || slack === undefined)) {
         const { kinds, ...request } = input;
-        if (kinds?.includes('ticket')) refused();
-        const result = await base.list({ ...request, source: input.source, ...(kinds === undefined ? {} : { kinds: kinds.filter(kind => kind !== 'ticket') }) });
+        if (kinds?.some(kind => kind === 'ticket' || kind === 'page')) refused();
+        const result = await base.list({ ...request, source: input.source, ...(kinds === undefined ? {} : { kinds: kinds.filter(kind => kind !== 'ticket' && kind !== 'page') }) });
         input.signal?.throwIfAborted();
         return remember(result, base);
       }
-      const source = input.source === 'ticket' ? ticket : slack;
-      const kind = input.source === 'ticket' ? 'ticket' : 'slack_message';
-      if (source === undefined || (input.source === 'ticket' && input.channel !== undefined) || input.kinds?.some(value => value !== kind)) refused();
+      const source = input.source === 'ticket' ? ticket : input.source === 'page' ? page : slack;
+      const kind = input.source === 'ticket' ? 'ticket' : input.source === 'page' ? 'page' : 'slack_message';
+      if (source === undefined || ((input.source === 'ticket' || input.source === 'page') && input.channel !== undefined) || input.kinds?.some(value => value !== kind)) refused();
       const result = await lookup('evidence_list', source!, () => source!.list({ ...(input.channel === undefined ? {} : { container: input.channel }), limit: Math.min(input.limit ?? 20, 20), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal }));
       input.signal?.throwIfAborted();
       return remember(result, source!);
@@ -110,8 +112,8 @@ export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?
       input.signal?.throwIfAborted();
       const checked = await base.revalidate(input);
       input.signal?.throwIfAborted();
-      if (ticket === undefined && slack === undefined) return checked;
-      for (const source of [ticket, slack]) {
+      if (ticket === undefined && slack === undefined && page === undefined) return checked;
+      for (const source of [ticket, page, slack]) {
         if (source === undefined) continue;
         await source.revalidate(input);
         input.signal?.throwIfAborted();
@@ -121,7 +123,7 @@ export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?
       input.signal?.throwIfAborted();
       // A prior source's ECHO grant may change while a later provider or the
       // base fence awaits. Finish with all local grants in one synchronous turn.
-      for (const source of [ticket, slack]) source?.assertCurrent();
+      for (const source of [ticket, page, slack]) source?.assertCurrent();
       input.signal?.throwIfAborted();
       return final;
     },

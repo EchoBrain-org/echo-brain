@@ -13,7 +13,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, slackPermalink, ticketPermalink, HOST_METHODS, MAIN_METHODS, MAX_PARAMS_BYTES, STATUS_METHODS, WRITE_METHODS, type AccountCommand, type AppStatus,
+  externalUrl, pagePermalink, slackPermalink, ticketPermalink, HOST_METHODS, MAIN_METHODS, MAX_PARAMS_BYTES, STATUS_METHODS, WRITE_METHODS, type AccountCommand, type AppStatus,
   type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods, type Result,
 } from '../shared/protocol.js';
 
@@ -311,6 +311,12 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
     }
     case 'source.openTicket': {
       const url = ticketPermalink((params as MainMethods['source.openTicket']['params']).permalink);
+      if (url === null) return refused();
+      try { await shell.openExternal(url); } catch { return refused('unavailable'); }
+      return { ok: true, value: null };
+    }
+    case 'source.openPage': {
+      const url = pagePermalink((params as MainMethods['source.openPage']['params']).permalink);
       if (url === null) return refused();
       try { await shell.openExternal(url); } catch { return refused('unavailable'); }
       return { ok: true, value: null };

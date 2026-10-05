@@ -139,6 +139,16 @@ With this profile selected, the owner's `person tools setup --tool slack` also a
 `channels:read` and `channels:history` on the same app. Jira's person connection
 sidecar is owned by the Authority runtime beside its retained state directory.
 
+When a reviewed runtime profile selects Confluence, it supplies both the
+nonsecret Cloud ID and Nango integration ID as Authority service arguments. The
+per-person Confluence connection and ECHO-project mapping database stores only
+provider references and mapping configuration, never page text. It is bound to
+the Authority lineage and that exact Cloud/integration selection. An ordinary
+restart on the same host retains it. Offline backup recovery deliberately
+refuses the database because an archived person-bound grant cannot be
+requalified: after that recovery, revoke or disconnect the old provider grant
+and reconnect through the restored owner's current session.
+
 The same fixed profile also admits the owner's explicitly invoked `verify-read`
 diagnostic through the [runner](../../services/organization-authority/README.md#staging-connector-rehearsal).
 It verifies one request-local Jira issue text or Slack message read and emits

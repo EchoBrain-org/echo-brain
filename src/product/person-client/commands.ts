@@ -47,6 +47,7 @@ export interface PersonClientCliDependencies {
 
 const OPTIONS = {
   tickets: { type: "boolean" },
+  live: { type: "boolean" },
   "document-id": { type: "string" },
   audience: { type: "string" },
   "expected-membership-id": { type: "string" },
@@ -129,7 +130,7 @@ const RULES: Readonly<
   "session-refresh": {},
   logout: {},
   ask: {
-    accepts: ["question", "project", "mine", "tickets"],
+    accepts: ["question", "project", "mine", "tickets", "live"],
     requires: ["question"],
   },
   list: { accepts: ["project", "mine", "cursor"] },
@@ -214,11 +215,11 @@ Run \`echo-brain person tools <verb> --help\` for each tool's options.
 
 Removes the local session. A revoked session is also removed locally.
 `,
-  ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--tickets]
+  ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--tickets | --live]
 
 Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved; Slack and shared transcripts are not read. Answers include typed citations; each opens with person open --ref when it carries a ref.
 
---tickets selects the ticket-capable Ask response. Global scope reads tickets visible to your connected Jira account; project scope requires a saved Jira project mapping. Mine excludes tickets. Ticket citations open their permalink directly in Jira.
+--live selects the newest Ask route, using every configured request-local live source, including Jira tickets and Confluence pages. Global scope reads what your connected accounts can access; each project uses its saved provider mappings. Mine excludes live tools. --tickets retains the prior ticket-capable response for compatibility.
 `,
   list: `usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]
 
@@ -1151,9 +1152,10 @@ export async function runPersonClientCli(
         break;
       case "ask":
         validatePersonQueryText(values.question);
+        if (values.tickets === true && values.live === true) throw new Error('Choose --tickets or --live');
         print(stdout, {
           ok: true,
-          result: await (values.tickets === true ? client.askWithTickets.bind(client) : client.ask.bind(client))(
+          result: await (values.live === true ? client.askWithLiveSources.bind(client) : values.tickets === true ? client.askWithTickets.bind(client) : client.ask.bind(client))(
             requiredText(values, "question"),
             values.project !== undefined
               ? validateProjectIdV1(requiredText(values, "project"))

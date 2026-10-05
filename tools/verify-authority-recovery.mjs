@@ -294,14 +294,16 @@ function inspectPrivateDirectory(path, expectedOwner) {
 }
 
 /**
- * A backup copy has no safe way to prove that an external Jira grant remains
- * current. Offline recovery therefore never qualifies a connector rehearsal
- * sidecar for reuse; the operator revokes it and prepares a fresh rehearsal.
+ * A backup copy cannot prove that a person-bound external grant remains current.
+ * These provider-owned stores are outside Authority's primary lineage contract.
+ * Offline recovery must not silently qualify them; the operator revokes and
+ * reconnects the affected provider after restoring the Authority state.
  */
-function refuseStagingConnectorRehearsalRecovery(cleanData, privateDirectory) {
+function refuseLiveProviderGrantRecovery(cleanData, privateDirectory) {
   for (const path of [
     join(privateDirectory, "staging-connector-rehearsal.json"),
     join(cleanData, "staging-connector-rehearsal-v1"),
+    join(cleanData, "state", "confluence-person-connections.sqlite"),
   ]) {
     try {
       lstatSync(path);
@@ -557,7 +559,7 @@ export async function verifyAuthorityRecovery({
     privateDirectory,
     expectedPrivateOwner,
   );
-  refuseStagingConnectorRehearsalRecovery(cleanData, privateDirectory);
+  refuseLiveProviderGrantRecovery(cleanData, privateDirectory);
 
   let lineage;
   try {

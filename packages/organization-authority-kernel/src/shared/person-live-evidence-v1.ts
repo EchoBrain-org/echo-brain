@@ -1,7 +1,7 @@
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
-import type { PersonConnectorAccessV1, PersonEvidenceAttributesV1, PersonSlackMessageCitationV1, PersonTicketCitationV1 } from '@echo-brain/organization-api';
+import type { PersonConnectorAccessV1, PersonEvidenceAttributesV1, PersonPageCitationV1, PersonSlackMessageCitationV1, PersonTicketCitationV1 } from '@echo-brain/organization-api';
 
-export type PersonLiveEvidenceCitationV1 = PersonSlackMessageCitationV1 | PersonTicketCitationV1;
+export type PersonLiveEvidenceCitationV1 = PersonSlackMessageCitationV1 | PersonTicketCitationV1 | PersonPageCitationV1;
 
 /** Trusted construction input. Neither an OAuth claim nor a model argument can supply this binding. */
 export interface PersonConnectorReadBindingV1 {
@@ -38,10 +38,12 @@ export interface PersonLiveEvidencePageV1<C extends PersonLiveEvidenceCitationV1
   readonly truncated: boolean;
   /** Provider-owned list continuation, kept inside the request. */
   readonly next_cursor?: string;
+  /** Bounded adapter-authored availability or representation notice, never a raw provider error. */
+  readonly notice?: string;
 }
 
 export interface PersonLiveEvidenceListInputV1 {
-  /** A channel name or ticket project understood by the provider, never a connection id or fetch URL. */
+  /** A provider-scoped collection selector, never a connection id or fetch URL. */
   readonly container?: string;
   readonly since?: string;
   readonly until?: string;
@@ -98,6 +100,8 @@ export interface PersonLiveEvidenceResultV1<C extends PersonLiveEvidenceCitation
   readonly receipt_digests: readonly Sha256Digest[];
   /** Request-owned continuation; provider cursors never leave the adapter. */
   readonly next_cursor?: string;
+  /** A bounded reader notice released with the request result but never written to the audit. */
+  readonly notice?: string;
 }
 
 /** Internal source seam for the V2 evidence desk dispatcher; the V1 desk and Ask V4 schemas still accept only their existing kinds. */

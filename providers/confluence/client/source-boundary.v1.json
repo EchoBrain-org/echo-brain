@@ -1,0 +1,63 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/provider-confluence-client",
+  "workspace": true,
+  "boundary_root": "providers/confluence/client",
+  "source_root": "providers/confluence/client/src",
+  "package_json": "providers/confluence/client/package.json",
+  "entry_points": [
+    "providers/confluence/client/src/organization-api/confluence-person-connection-v1.ts",
+    "providers/confluence/client/src/organization-api/confluence-project-mapping-v1.ts",
+    "providers/confluence/client/src/person/confluence-tool-provider.ts"
+  ],
+  "owned_source_paths": [
+    "providers/confluence/client/src/**"
+  ],
+  "allowed_internal_paths": [
+    "providers/confluence/client/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-api"
+  ],
+  "allowed_external_packages": [],
+  "allowed_node_builtins": [],
+  "runtime_assets": [],
+  "layer_rules": [
+    {
+      "name": "provider-confluence-client-implementation",
+      "from": "providers/confluence/client/src/**",
+      "allowed_imports": [
+        "providers/confluence/client/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    }
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Person Confluence connection contract",
+        "path": "providers/confluence/client/src/organization-api/confluence-person-connection-v1.ts",
+        "export": "validatePersonConfluenceConnectV1"
+      },
+      {
+        "name": "Person Confluence tool provider",
+        "path": "providers/confluence/client/src/person/confluence-tool-provider.ts",
+        "export": "createConfluencePersonToolProviderV1"
+      },
+      {
+        "name": "Confluence project mappings",
+        "path": "providers/confluence/client/src/organization-api/confluence-project-mapping-v1.ts",
+        "export": "validateConfluenceProjectMappingV1"
+      }
+    ],
+    "compatibility_entrypoints": [],
+    "retired_source_paths": []
+  }
+}

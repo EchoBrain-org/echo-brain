@@ -25,6 +25,7 @@ const runtimeState = vi.hoisted(() => ({
   open_gate: undefined as Promise<void> | undefined,
   slack_nango: undefined as object | undefined,
   jira_person_live: undefined as object | undefined,
+  confluence_person_live: undefined as object | undefined,
   openrouter_credential_file: undefined as string | undefined,
   staging_synthetic_meetings_directory: undefined as string | undefined,
   staging_synthetic_owner_email: undefined as string | undefined,
@@ -78,6 +79,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly agentic_ask_v1_small_scope_shortcut?: true;
     readonly slack_nango: object;
     readonly jira_person_live?: object;
+    readonly confluence_person_live?: object;
     readonly openrouter_credential_file: string;
     readonly staging_synthetic_meetings_directory?: string;
     readonly staging_synthetic_owner_email?: string;
@@ -100,6 +102,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
       config.agentic_ask_v1_small_scope_shortcut;
     runtimeState.slack_nango = config.slack_nango;
     runtimeState.jira_person_live = config.jira_person_live;
+    runtimeState.confluence_person_live = config.confluence_person_live;
     runtimeState.openrouter_credential_file = config.openrouter_credential_file;
     runtimeState.staging_synthetic_meetings_directory =
       config.staging_synthetic_meetings_directory;
@@ -183,6 +186,7 @@ afterEach(() => {
   runtimeState.open_gate = undefined;
   runtimeState.slack_nango = undefined;
   runtimeState.jira_person_live = undefined;
+  runtimeState.confluence_person_live = undefined;
   runtimeState.openrouter_credential_file = undefined;
   runtimeState.staging_synthetic_meetings_directory = undefined;
   runtimeState.staging_synthetic_owner_email = undefined;
@@ -289,6 +293,28 @@ describe("admitted runtime CLI events", () => {
       await vi.waitFor(() => expect(runtimeState.jira_person_live).toMatchObject({
         enabled: true, cloud_id: "11111111-1111-4111-8111-111111111111", integration_id: "jira",
       }));
+    } finally { process.emit("SIGTERM"); await running; }
+    expect(await running, errors.join("")).toBe(0);
+  });
+
+  it.each(["--confluence-cloud-id", "--confluence-nango-integration"])("refuses an incomplete explicit Confluence selection (%s)", async flag => {
+    expect(await start({ stderr: () => undefined }, "/private/state", [
+      "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack", flag, "fixture",
+    ])).toBe(1);
+    expect(runtimeState.worker_error).toBeUndefined();
+  });
+
+  it("keeps Confluence disabled unless its complete explicit Cloud profile selection is present", async () => {
+    const errors: string[] = [];
+    const running = start({ stderr: value => errors.push(value) }, "/private/state", [
+      "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack",
+      "--confluence-cloud-id", "11111111-1111-4111-8111-111111111111", "--confluence-nango-integration", "confluence",
+    ]);
+    try {
+      await vi.waitFor(() => expect(runtimeState.confluence_person_live).toMatchObject({
+        enabled: true, cloud_id: "11111111-1111-4111-8111-111111111111", integration_id: "confluence",
+      }));
+      expect(runtimeState.jira_person_live).toBeUndefined();
     } finally { process.emit("SIGTERM"); await running; }
     expect(await running, errors.join("")).toBe(0);
   });

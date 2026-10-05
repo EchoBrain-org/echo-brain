@@ -138,7 +138,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
   };
 
   const release = async (operation: PersonLiveEvidenceReleaseV1['operation'], page: PersonLiveEvidencePageV1<C>, maximum: number, selection?: string, signal?: AbortSignal): Promise<PersonLiveEvidenceResultV1<C>> => {
-    closedRecord(page, ['items', 'truncated'], ['next_cursor']);
+    closedRecord(page, ['items', 'truncated'], ['next_cursor', 'notice']);
     if (!Array.isArray(page.items) || page.items.length > maximum || typeof page.truncated !== 'boolean') invalidOutput();
     if (Object.getOwnPropertySymbols(page.items).length !== 0 || Object.getOwnPropertyNames(page.items).length !== page.items.length + 1) invalidOutput();
     for (let index = 0; index < page.items.length; index += 1) {
@@ -146,6 +146,10 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable) invalidOutput();
     }
     if (page.next_cursor !== undefined && (operation !== 'list' || typeof page.next_cursor !== 'string' || page.next_cursor.length === 0 || page.next_cursor.length > 4096)) invalidOutput();
+    if (page.notice !== undefined) {
+      boundedString(page.notice, 1024);
+      if (page.notice.trim() !== page.notice) invalidOutput();
+    }
     const prepared = page.items.map(prepare);
     const ids = prepared.map(value => `live_${canonicalSha256({ request_id: requestId, binding, kind: value.citation.kind, coordinates: value.coordinates }).slice(7)}`);
     if (new Set(ids).size !== ids.length) invalidOutput();
@@ -161,6 +165,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
         ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at }), receipt_sha256: receipt,
       }))),
       truncated, receipt_digests: Object.freeze([receipt]), ...(nextCursor === undefined ? {} : { next_cursor: nextCursor }),
+      ...(page.notice === undefined ? {} : { notice: page.notice }),
     });
     if (canonicalJsonBytes(withReceipt(`sha256:${'0'.repeat(64)}`)).byteLength > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1) invalidOutput();
     current(signal);

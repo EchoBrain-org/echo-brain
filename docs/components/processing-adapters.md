@@ -52,6 +52,13 @@ processing ports and external capabilities:
 - approval surfaces; and
 - shared provider clients such as Slack.
 
+Personal live-context adapters are a separate read capability. Confluence
+discovers and opens pages as the authenticated person, while Jira reads tickets.
+They share bounded request-local evidence and audit contracts, but each provider
+owns its OAuth verification, query syntax, permission checks, pagination, and
+body parsing. Project mappings narrow discovery; global reads add no ECHO
+container allowlist. Neither capability grants custody of provider content.
+
 Selecting composition bundles own external capabilities; provider-neutral
 runtime receives only their ports and canonical contracts. Scope and ownership
 are defined by [INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md).

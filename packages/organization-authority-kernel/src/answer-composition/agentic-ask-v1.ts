@@ -2,6 +2,7 @@ import { askResearchCompletionProblemsV1, type AskResearchObservationV1 } from '
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
   PersonAnswerResponseV5,
+  PersonAnswerResponseV6,
   PersonAnswerPartV4,
   PersonAnswerResponseV4,
 } from "@echo-brain/organization-api";
@@ -344,13 +345,14 @@ const LIST_SOURCES: Readonly<Record<string, EvidenceDeskSourceV2>> = Object.free
   document: "document", documents: "document", doc: "document", docs: "document", file: "document", files: "document",
   slack: "slack", messages: "slack", message: "slack",
   ticket: "ticket", tickets: "ticket",
+  page: "page", pages: "page", knowledge: "page", wiki: "page",
 });
 const SEARCH_KINDS: Readonly<Record<EvidenceDeskSourceV2, readonly EvidenceDeskKindV2[]>> = Object.freeze({
   meeting: ['decision', 'action', 'rationale'], document: ['note', 'document_passage'],
-  slack: ['slack_message'], ticket: ['ticket'],
+  slack: ['slack_message'], ticket: ['ticket'], page: ['page'],
 });
 const SOURCE_SELECTOR: Readonly<Record<EvidenceDeskSourceV2, StepSource>> = Object.freeze({
-  meeting: 'meetings', document: 'documents', slack: 'slack', ticket: 'tickets',
+  meeting: 'meetings', document: 'documents', slack: 'slack', ticket: 'tickets', page: 'pages',
 });
 function readSource(value: string | undefined): EvidenceDeskSourceV2 | undefined {
   const key = value?.trim().toLowerCase();
@@ -378,9 +380,9 @@ function listDate(value: string, today: string): string | null {
   return isoDay(base);
 }
 type ListArgs = { readonly source: EvidenceDeskSourceV2; readonly kinds?: readonly EvidenceDeskKindV2[]; readonly status?: "open" | "done"; readonly owner?: string; readonly channel?: string; readonly since?: string; readonly until?: string; readonly notes: readonly string[] };
-function normalizeListArgs(raw: StepArgs, today: string, tickets: boolean): ListArgs | { readonly error: string } {
+function normalizeListArgs(raw: StepArgs, today: string, tickets: boolean, pages: boolean): ListArgs | { readonly error: string } {
   const source = readSource(raw.source);
-  if (source === undefined || (!tickets && source === "ticket")) return { error: tickets ? "source must be \"meetings\", \"documents\", \"slack\" or \"tickets\"" : "source must be \"meetings\", \"documents\" or \"slack\"" };
+  if (source === undefined || (!tickets && source === "ticket") || (!pages && source === "page")) return { error: pages ? "source must be \"meetings\", \"documents\", \"slack\", \"tickets\" or \"pages\"" : tickets ? "source must be \"meetings\", \"documents\", \"slack\" or \"tickets\"" : "source must be \"meetings\", \"documents\" or \"slack\"" };
   const notes: string[] = [];
   let kinds: EvidenceDeskKindV2[] | undefined;
   if (raw.kind !== undefined) {
@@ -424,20 +426,34 @@ function normalizeListArgs(raw: StepArgs, today: string, tickets: boolean): List
 
 export interface CreateAgenticAskV2Options extends Omit<CreateAgenticAskV1Options, 'desk'> { readonly desk: EvidenceDeskPortV2 }
 export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
-  return createAgenticAskCore(options, false) as { answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4> };
+  return createAgenticAskCore(options as CreateAgenticAskV2Options, 4) as { answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4> };
 }
 export function createAgenticAskV2(options: CreateAgenticAskV2Options) {
-  return createAgenticAskCore(options, true) as { answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV5> };
+  return createAgenticAskCore(options, 5) as { answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV5> };
 }
-function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boolean) {
+/** V3 core keeps V5 strict and emits V6 only when a live page source is selected. */
+export function createAgenticAskV3(options: CreateAgenticAskV2Options) {
+  return createAgenticAskCore(options, 6) as unknown as { answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV6> };
+}
+function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersion: 4 | 5 | 6) {
+  const tickets = responseVersion >= 5;
   const now = options.now_ms ?? (() => performance.now());
   const today = options.today ?? (() => isoDay(new Date()));
   const askedBy = askerName(options.asker);
-  const sourceCatalog: readonly { readonly source: StepSource; readonly description: string; readonly tool_id?: string }[] = Object.freeze([
+  const liveCatalog = (options.desk.live_sources ?? []).flatMap(source => {
+    if (source.source === 'ticket' && (!tickets || options.desk.ticket_available === false || options.desk.scope.kind === 'mine')) return [];
+    if (source.source === 'page' && (responseVersion !== 6 || options.desk.scope.kind === 'mine')) return [];
+    const fallback = source.source === 'ticket'
+      ? { selector: 'tickets' as const, description: 'Live work items: discover summaries with search or list, then open selected items for their bodies and current state.', metadata_only_list: true }
+      : source.source === 'page'
+        ? { selector: 'pages' as const, description: 'Live knowledge pages: discover pages, then open selected pages and continuation handles for their current text.', metadata_only_list: true }
+        : { selector: 'slack' as const, description: 'Live discussion messages.', metadata_only_list: false };
+    return [Object.freeze({ source: source.selector ?? fallback.selector, description: source.description ?? fallback.description, metadata_only_list: source.metadata_only_list ?? fallback.metadata_only_list, ...(source.tool_id === undefined ? {} : { tool_id: source.tool_id }) })];
+  });
+  const sourceCatalog: readonly { readonly source: StepSource; readonly description: string; readonly metadata_only_list?: boolean; readonly tool_id?: string }[] = Object.freeze([
     { source: 'meetings', description: 'Approved meeting records and admitted transcripts.' },
     { source: 'documents', description: 'Uploaded document passages and notes.' },
-    ...((options.desk.live_sources ?? []).filter(source => source.source === 'slack').map(source => ({ source: 'slack' as const, description: 'Live discussion messages.', ...(source.tool_id === undefined ? {} : { tool_id: source.tool_id }) }))),
-    ...(!tickets || options.desk.ticket_available === false || options.desk.scope.kind === 'mine' ? [] : (options.desk.live_sources ?? []).filter(source => source.source === 'ticket').map(source => ({ source: 'tickets' as const, description: 'Live work items: discover summaries with search or list, then open selected items for their bodies and current state.', tool_id: source.tool_id }))),
+    ...liveCatalog,
   ]);
   /** Who is asking and today's date: context for "my", "this week" and "overdue". */
   const context = () => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: today() });
@@ -452,7 +468,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
   const stepBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, stepPrompt, OUTPUT_TOKENS.step);
   const answerBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, answerPrompt, OUTPUT_TOKENS.answer);
   return Object.freeze({
-    async answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4 | PersonAnswerResponseV5> {
+    async answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6> {
       if (questionText(input.question) === null) throw new AgenticAskOutputErrorV1("question is invalid");
       const startedAt = now();
       const deadline = startedAt + AGENTIC_ASK_DEADLINE_MS_V1;
@@ -567,7 +583,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         const query = normalizeQuery(args.query);
         if (query === null) return { tool: "search", args, error: "query must be 1 to 32 keywords" };
         const source = readSource(args.source);
-        if (args.source !== undefined && (source === undefined || (!tickets && source === 'ticket'))) return { tool: 'search', args, error: tickets ? 'source must be meetings, documents, slack or tickets; omit it to search all available sources' : 'source must be meetings, documents or slack; omit it to search all available sources' };
+        if (args.source !== undefined && (source === undefined || (!tickets && source === 'ticket') || (responseVersion !== 6 && source === 'page'))) return { tool: 'search', args, error: responseVersion === 6 ? 'source must be meetings, documents, slack, tickets or pages; omit it to search all available sources' : tickets ? 'source must be meetings, documents, slack or tickets; omit it to search all available sources' : 'source must be meetings, documents or slack; omit it to search all available sources' };
         if (source === 'ticket' && options.desk.ticket_available === false) return { tool: 'search', args, error: 'Live tickets are unavailable in this scope for this asker' };
         if (searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase())) return { tool: "search", query, ...(source === undefined ? {} : { source }), note: "already searched; results are in your scratchpad" };
         searchesRun.push({ query, ...(source === undefined ? {} : { source }) });
@@ -613,10 +629,17 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           opened.full = true; opened.opened = true; used += bytes(item.text);
           admitted.push(opened);
         }
-        return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(result.truncated ? { truncated: true } : {}), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
+        // Open can also release new request-owned metadata: for example, an
+        // adapter may return a continuation handle beside the bounded text it
+        // opened. Keep it in the same generic scratchpad as list/search
+        // inventory, but never present it as opened evidence.
+        const metadata = result.items
+          .filter(item => item.text === undefined && item.id !== entry.item.id)
+          .map(item => register(item, false));
+        return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => listing(value, false)) }), ...(result.truncated ? { truncated: true } : {}), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
       };
       const list = async (args: StepArgs): Promise<ToolResult> => {
-        const normalized = normalizeListArgs(args, today(), tickets);
+        const normalized = normalizeListArgs(args, today(), tickets, responseVersion === 6);
         if ("error" in normalized) return { tool: "list", args, error: normalized.error };
         const { notes, status, owner, ...request } = normalized;
         const key = JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
@@ -814,7 +837,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         };
         return parse(await call(role, reason === null ? system : repairPrompt(system, reason), repairUser, schema, timeout, true));
       };
-      const audit = async (outcome: AgenticAskAuditEntryV1["outcome"], citations: number, result?: PersonAnswerResponseV4 | PersonAnswerResponseV5) => {
+      const audit = async (outcome: AgenticAskAuditEntryV1["outcome"], citations: number, result?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6) => {
         const aggregate = (field: keyof StructuredGenerationUsageV1): number | null => {
           const values = generations.map(entry => entry.usage?.[field]);
           return values.length === 0 || values.some(value => typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) ? null : values.reduce<number>((total, value) => total + value!, 0);
@@ -1015,7 +1038,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
         const outcome = !anyEvidence ? (incomplete ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
         const result = Object.freeze({
-          schema_version: tickets ? 5 : 4, kind: tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk.scope, outcome,
+          schema_version: responseVersion, kind: responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk.scope, outcome,
           parts: Object.freeze([Object.freeze({
             question, status: draft.status,
             statements: Object.freeze(draft.statements.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))),
@@ -1025,7 +1048,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           citations: Object.freeze(anyEvidence ? used.map(entry => Object.freeze({ citation: entry.item.citation, kind: entry.item.kind, label: entry.item.label, visibility: entry.item.visibility, ...(entry.item.ref === undefined ? {} : { ref: entry.item.ref }) })) : []),
           ...(notice.size === 0 ? {} : { notice: [...notice].join(" ") }),
         });
-        const validated = tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
+        const validated = responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
         // A failed answer call still ends in a response (records or not found); its span keeps the failure.
         const answerUsage = usageOf("answer", answerModelMs);
         report(answerUsage === null ? { stage: "answer", event: "skipped", elapsed_ms: 0 } : { stage: "answer", event: "succeeded", elapsed_ms: answerModelMs, generation_usage: answerUsage, retrieval: { citation_count: validated.citations.length } });

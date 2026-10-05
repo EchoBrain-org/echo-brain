@@ -18,6 +18,10 @@ describe("core runtime observations", () => {
     }, { observer: event => { events.push(event); } });
     expect(normalizeCoreRuntimeDetailV1(events[0]!)).not.toHaveProperty("evidence_source");
     expect(normalizeCoreRuntimeDetailV1(events[1]!)).toMatchObject({ evidence_source: "ticket", result: "verified" });
+    await observeCoreRuntimeV1("evidence_connection", async () => {
+      annotateCoreRuntimeV1({ evidence_source: "page", result: "verified" });
+    }, { observer: event => { events.push(event); } });
+    expect(normalizeCoreRuntimeDetailV1(events.at(-1)!)).toMatchObject({ evidence_source: "page", result: "verified" });
     expect(() => normalizeCoreRuntimeDetailV1({ ...events[1]!, evidence_source: "private-provider-url" as "ticket" })).toThrow("invalid core runtime observation");
   });
 

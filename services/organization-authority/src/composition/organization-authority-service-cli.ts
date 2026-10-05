@@ -13,6 +13,7 @@ import { OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 } from "@echo-brain/provider-ope
 import { OPENROUTER_DECISION_PROCESSOR_MODEL_V1, OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-config-v1";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 } from './jira-person-live-runtime-v1.js';
+import { CONFLUENCE_PERSON_LIVE_RELEASE_APPROVED_V1 } from './confluence-person-live-runtime-v1.js';
 import { readStagingConnectorRehearsalSelection } from './staging-connector-rehearsal-selection.js';
 import { openStagingConnectorRehearsalService } from './staging-connector-rehearsal-runtime.js';
 
@@ -22,6 +23,7 @@ const USAGE =
   "--nango-secret-key-file <absolute-path> --nango-integration <key> [--nango-base-url <https-origin>] " +
   "[--client-secret-file <absolute-path>] [--worker-interval-ms <positive-integer>] " +
   "[--jira-cloud-id <cloud-id> --jira-nango-integration <key>] " +
+  "[--confluence-cloud-id <cloud-id> --confluence-nango-integration <key>] " +
   "[--staging-synthetic-meetings-dir <absolute-path>]";
 const STAGING_CANARY_USAGE =
   "usage: echo-organization-authority-serve staging-private-dm-canary " +
@@ -65,6 +67,8 @@ function flags(
     "--nango-base-url",
     "--jira-cloud-id",
     "--jira-nango-integration",
+    "--confluence-cloud-id",
+    "--confluence-nango-integration",
     "--worker-interval-ms",
     "--staging-synthetic-meetings-dir",
   ]);
@@ -170,6 +174,10 @@ export async function runOrganizationAuthorityServiceCli(
     if (jiraRequested && (!JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 || parsed['--jira-cloud-id'] === undefined || parsed['--jira-nango-integration'] === undefined || (parsed['--nango-base-url'] !== undefined && parsed['--nango-base-url'] !== 'https://api.nango.dev'))) {
       throw new Error('Jira live selection requires accepted ADR-0026, one configured cloud site and Nango Cloud');
     }
+    const confluenceRequested = [parsed['--confluence-cloud-id'], parsed['--confluence-nango-integration']].some(value => value !== undefined);
+    if (confluenceRequested && (!CONFLUENCE_PERSON_LIVE_RELEASE_APPROVED_V1 || parsed['--confluence-cloud-id'] === undefined || parsed['--confluence-nango-integration'] === undefined || (parsed['--nango-base-url'] !== undefined && parsed['--nango-base-url'] !== 'https://api.nango.dev'))) {
+      throw new Error('Confluence live selection requires its accepted release gate, one configured cloud site and Nango Cloud');
+    }
     // Read once into memory; the startup-failure event below never carries it.
     const slackNango = {
       ...(parsed["--nango-base-url"] === undefined ? {} : { base_url: parsed["--nango-base-url"] }),
@@ -220,6 +228,10 @@ export async function runOrganizationAuthorityServiceCli(
     }
     const jiraCloudId = parsed['--jira-cloud-id'] ?? (stagingJiraAsk === 'true' ? connectorRehearsal?.profile.jira.cloud_id : undefined);
     const jiraIntegration = parsed['--jira-nango-integration'] ?? (stagingJiraAsk === 'true' ? connectorRehearsal?.profile.jira.integration_key : undefined);
+    // Confluence remains off unless both explicit profile-owned flags select one Cloud site.
+    // It deliberately does not inherit the Jira rehearsal profile or add a user allowlist.
+    const confluenceCloudId = parsed['--confluence-cloud-id'];
+    const confluenceIntegration = parsed['--confluence-nango-integration'];
     stagingJourneyTelemetry =
       manifest.authority_url ===
       STAGING_AUTHORITY_ORIGIN_V1
@@ -285,6 +297,12 @@ export async function runOrganizationAuthorityServiceCli(
         enabled: true as const,
         cloud_id: jiraCloudId,
         integration_id: jiraIntegration!,
+        nango_authorization: () => slackNango.secret_key,
+      } }),
+      ...(confluenceCloudId === undefined ? {} : { confluence_person_live: {
+        enabled: true as const,
+        cloud_id: confluenceCloudId,
+        integration_id: confluenceIntegration!,
         nango_authorization: () => slackNango.secret_key,
       } }),
       granola_credential_file: manifest.granola_credential_file,

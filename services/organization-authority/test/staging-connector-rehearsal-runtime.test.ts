@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   apps: [] as readonly { readonly routes: readonly { readonly route_id: string; readonly path: string }[]; accept(input: unknown): Promise<unknown> }[],
+  config: undefined as unknown,
   captures: 0,
   jira: 0,
   demoteDuringCapture: false,
@@ -82,7 +83,8 @@ vi.mock('../src/composition/slack-context-capture-runtime-v1.js', async () => {
   }) };
 });
 vi.mock('../src/composition/organization-authority-composition-root.js', () => ({
-  async openOrganizationAuthorityService(_config: unknown, dependencies: { person_http_runtime_factory_with_slack: (sessions: unknown, slack: unknown) => { applications: typeof state.apps } }) {
+  async openOrganizationAuthorityService(config: unknown, dependencies: { person_http_runtime_factory_with_slack: (sessions: unknown, slack: unknown) => { applications: typeof state.apps } }) {
+    state.config = config;
     state.apps = dependencies.person_http_runtime_factory_with_slack({
       authenticateAccess({ access_token }: { access_token: string }) {
         return access_token === 'owner' && !state.ownerRevoked && !(state.demoteDuringCapture && state.captures > 0)
@@ -98,7 +100,7 @@ import { openStagingConnectorRehearsalService } from '../src/composition/staging
 import { STAGING_CONNECTOR_REHEARSAL_PATH_V1, STAGING_CONNECTOR_REHEARSAL_POLICY_V2 } from '../src/composition/staging-connector-rehearsal-protocol.js';
 
 const roots: string[] = [];
-afterEach(() => { vi.restoreAllMocks(); state.apps = []; state.captures = 0; state.jira = 0; state.demoteDuringCapture = false;
+afterEach(() => { vi.restoreAllMocks(); state.apps = []; state.config = undefined; state.captures = 0; state.jira = 0; state.demoteDuringCapture = false;
   state.reads = []; state.readMode = 'normal'; state.grantRevoked = false; state.ownerRevoked = false;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -183,6 +185,17 @@ it('refuses a Slack live-evidence factory under the staging diagnostic profile b
   expect(factory).not.toHaveBeenCalled();
   expect(state.apps).toEqual([]);
   expect(existsSync(join(root, 'staging-connector-rehearsal-v1'))).toBe(false);
+});
+
+it('forwards separately selected Confluence live Ask configuration alongside the fixed Jira and Slack rehearsal', async () => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
+  const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
+  const confluence = { enabled: true as const, cloud_id: '11111111-1111-4111-8111-111111111111', integration_id: 'confluence', nango_authorization: () => 'not-a-live-secret' };
+  const base = config(stateDirectory) as Parameters<typeof openStagingConnectorRehearsalService>[0];
+  const opened = await openStagingConnectorRehearsalService({ ...base, confluence_person_live: confluence }, selection());
+  try {
+    expect(state.config).toMatchObject({ confluence_person_live: { enabled: true, cloud_id: confluence.cloud_id, integration_id: confluence.integration_id } });
+  } finally { await opened.close(); }
 });
 
 it.each([

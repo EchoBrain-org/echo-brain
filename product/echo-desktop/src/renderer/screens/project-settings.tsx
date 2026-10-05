@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ProjectSummary } from '../../shared/protocol.js';
 import { message } from '../messages.js';
 import {
-  beginProjectJira, setProjectJira, saveProjectJira, projectJiraValid,
+  beginProjectJira, setProjectJira, saveProjectJira, projectJiraValid, beginProjectConfluence, toggleProjectConfluenceSpace, moreProjectConfluenceSpaces, saveProjectConfluence,
   askProjectSetting, beginProjectRename, cancelProjectSettingsAction, closeProjectSettings, confirmProjectSetting, dismissProjectSetting,
   keepProjectSetting, projectRenameValid, projectSettingsBlocked, retryProjectSetting, setProjectRename, toggleProjectSettings, type State, type ProjectSettingsState,
 } from '../store.js';
@@ -76,6 +76,7 @@ function ProjectMenu({ settings, anchor }: { settings: ProjectSettingsState; anc
   return createPortal(
     <div ref={menu} class="menu project-actions-menu" style={position} role="menu" data-testid="project-settings-menu">
       <button type="button" role="menuitem" class="menu-item" data-testid="project-jira" onClick={() => void beginProjectJira()}>Jira project</button>
+      <button type="button" role="menuitem" class="menu-item" data-testid="project-confluence" onClick={() => void beginProjectConfluence()}>Confluence spaces</button>
       {settings.project.role === 'lead' && <button type="button" role="menuitem" class="menu-item" data-testid="project-rename" onClick={beginProjectRename}>Rename project</button>}
       {settings.project.role === 'lead' && <button type="button" role="menuitem" class="menu-item" data-testid="project-archive"
         onClick={() => askProjectSetting(settings.project.status === 'archived' ? 'unarchive' : 'archive')}>
@@ -126,6 +127,24 @@ function JiraProject({ state }: { state: State }) {
       </div>
     </div>
   );
+}
+
+function ConfluenceSpaces({ state }: { state: State }) {
+  const settings = state.projectSettings!; const confluence = settings.confluence!; const box = useRef<HTMLDivElement>(null); const done = useRef<HTMLButtonElement>(null);
+  const lead = settings.project.role === 'lead'; const busy = confluence.status === 'loading' || confluence.status === 'saving';
+  useEffect(() => { done.current?.focus(); }, [confluence.status]);
+  return <div class="overlay" onClick={cancelProjectSettingsAction}><div class="sheet confirm project-setting-sheet" role="dialog" aria-labelledby="confluence-spaces-title" ref={box} onClick={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); cancelProjectSettingsAction(); } else trapTab(event, box.current); }}>
+    <h2 id="confluence-spaces-title">Confluence spaces</h2><p>Questions in {settings.project.name} read these spaces live, using each person’s connected Confluence account.</p>
+    {confluence.status === 'loading' && <p role="status">Loading accessible spaces…</p>}
+    {confluence.value && <><p data-testid="project-confluence-current">{confluence.value.mapping ? `${confluence.value.mapping.space_ids.length} space${confluence.value.mapping.space_ids.length === 1 ? '' : 's'} mapped` : 'No Confluence spaces mapped'}</p>
+      {lead ? <div data-testid="project-confluence-spaces">{confluence.spaces.map(space => <label key={space.id}><input type="checkbox" checked={confluence.selected.includes(space.id)} disabled={confluence.status !== 'ready'} onChange={() => toggleProjectConfluenceSpace(space.id)} /> {space.name} ({space.key})</label>)}</div> : <p>A project lead can change this setting.</p>}
+      {lead && <p>Connect your Confluence account in Tools before saving.</p>}
+      {confluence.next !== null && <button type="button" class="plain-button" data-testid="project-confluence-more" disabled={confluence.loadingMore || confluence.status !== 'ready'} onClick={() => void moreProjectConfluenceSpaces()}>{confluence.loadingMore ? 'Loading…' : 'Load more spaces'}</button>}
+    </>}
+    {confluence.failure && <p class="error" data-testid="project-confluence-error">{confluence.failure.code === 'conflict' ? 'This setting changed. Reload it before editing.' : confluence.writeFailed ? 'The change could not be confirmed. Reload the setting before editing again.' : message(confluence.failure)}</p>}
+    {confluence.pickerFailure && <p class="error" data-testid="project-confluence-picker-error">Could not load accessible spaces. {message(confluence.pickerFailure)}</p>}
+    <div class="choices"><button ref={done} type="button" class="plain-button" disabled={busy} onClick={cancelProjectSettingsAction}>Done</button>{(confluence.status === 'failed' || confluence.pickerFailure) && <button type="button" class="plain-button" onClick={() => void beginProjectConfluence()}>Reload setting</button>}{lead && confluence.value?.mapping && <button type="button" class="plain-button" data-testid="project-confluence-remove" disabled={confluence.status !== 'ready'} onClick={() => void saveProjectConfluence(true)}>Remove mapping</button>}{lead && confluence.value && <button type="button" class="plain-button" data-testid="project-confluence-save" disabled={confluence.status !== 'ready' || confluence.pickerFailure !== undefined || confluence.selected.length === 0} onClick={() => void saveProjectConfluence()}>Save</button>}</div>
+  </div></div>;
 }
 
 function Rename({ state }: { state: State }) {
@@ -207,6 +226,7 @@ export function ProjectSettings({ state }: { state: State }) {
   const settings = state.projectSettings;
   if (!settings) return null;
   if (settings.jira) return state.sheet ? null : <JiraProject state={state} />;
+  if (settings.confluence) return state.sheet ? null : <ConfluenceSpaces state={state} />;
   if (settings.write) return <Write state={state} />;
   if (settings.rename !== null) return <Rename state={state} />;
   if (settings.confirm) return <Confirm state={state} />;

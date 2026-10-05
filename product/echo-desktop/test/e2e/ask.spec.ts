@@ -9,7 +9,7 @@ test.afterEach(async () => { await run?.close(); });
 const RECORD = `sha256:${'5'.repeat(64)}`;
 const recordReads = () => run.calls().filter(call => call.method === 'GET' && call.path === '/v1/person/records');
 const evidenceReads = () => run.calls().filter(call => call.path === '/v2/person/ask/source');
-const questions = () => run.calls().filter(call => call.path === '/v4/person/ask').map(call => call.body?.question);
+const questions = () => run.calls().filter(call => call.path === '/v5/person/ask').map(call => call.body?.question);
 
 async function askFromHome(page: Page, question: string): Promise<void> {
   await expect(page.getByTestId('project-row')).toHaveCount(2);
@@ -38,8 +38,8 @@ test('global Ask reads Jira live and opens its ticket citation', async () => {
   const opened = () => app.evaluate(() => (globalThis as { openedTickets?: string[] }).openedTickets);
   await askFromHome(page, question);
   await expect(page.getByTestId('answer')).toBeVisible();
-  expect(run.calls().filter(call => /^\/v[34]\/person\/ask$/.test(call.path)).map(call => ({ path: call.path, body: call.body })))
-    .toEqual([{ path: '/v4/person/ask', body: { schema_version: 3, question } }]);
+  expect(run.calls().filter(call => /^\/v5\/person\/ask$/.test(call.path)).map(call => ({ path: call.path, body: call.body })))
+    .toEqual([{ path: '/v5/person/ask', body: { schema_version: 3, question } }]);
   await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
   await expect(page.getByTestId('private-mark')).toHaveCount(1);
   await expect(page.getByTestId('source-row')).toHaveText(/^1\s*ECHO-7 · Jira launch$/);
@@ -77,7 +77,7 @@ test('follow-ups stack in a thread, newest at the bottom: earlier answers collap
   await expect(earlier.nth(4)).toHaveAttribute('aria-expanded', 'true');
   await expect(earlier.nth(4)).toContainText('We agreed to ship Apollo with annual plans first.');
   // Every follow-up asked the project, as the chip said.
-  const asks = run.calls().filter(call => call.path === '/v4/person/ask');
+  const asks = run.calls().filter(call => call.path === '/v5/person/ask');
   expect(asks.map(call => call.body?.project_id)).toEqual(Array(7).fill('prj_11111111-1111-4111-8111-111111111111'));
 
   // Back leaves the thread; the next question starts a new one.
@@ -159,7 +159,7 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
 test('a project question that finds nothing says so and offers, never makes, one tap to ask across everything', async () => {
   run = await launch('ask-project-empty');
   const { page } = run;
-  const asks = () => run.calls().filter(call => /^\/v[34]\/person\/ask$/.test(call.path)).map(call => ({ question: call.body?.question, project: call.body?.project_id }));
+  const asks = () => run.calls().filter(call => /^\/v5\/person\/ask$/.test(call.path)).map(call => ({ question: call.body?.question, project: call.body?.project_id }));
   await page.getByTestId('project-row').nth(0).click();
   await page.getByTestId('ask-field').fill('What did we agree on pricing?');
   await page.getByTestId('ask-field').press('Enter');

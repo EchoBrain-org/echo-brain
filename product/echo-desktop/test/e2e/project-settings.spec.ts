@@ -220,7 +220,7 @@ test('a lead maps a Jira project, asks in that scope, and removes the mapping', 
   await page.getByTestId('ask-field').fill('What is the status of Apollo?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
-  expect(run.calls().filter(call => call.path === '/v4/person/ask').at(-1)?.body).toMatchObject({ project_id: APOLLO });
+  expect(run.calls().filter(call => call.path === '/v5/person/ask').at(-1)?.body).toMatchObject({ project_id: APOLLO });
   await expect(page.getByTestId('source-row')).toHaveText(/^1\s*ECHO-7 · Jira launch$/);
   await page.getByTestId('back').click();
   await page.getByTestId('project-settings').click();
@@ -237,6 +237,51 @@ test('a lead maps a Jira project, asks in that scope, and removes the mapping', 
   await expect(page.getByTestId('source-row')).toHaveCount(0);
 });
 
+test('a lead maps accessible Confluence spaces, loads another page, asks with a page citation, and removes the mapping', async () => {
+  run = await launch('ask-confluence');
+  const { page, app } = run;
+  const permalink = 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345';
+  await app.evaluate(({ shell }) => {
+    (globalThis as { openedPages?: string[] }).openedPages = [];
+    shell.openExternal = async url => { (globalThis as { openedPages?: string[] }).openedPages!.push(url); };
+  });
+  const opened = () => app.evaluate(() => (globalThis as { openedPages?: string[] }).openedPages);
+  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('project-settings').click();
+  await page.getByTestId('project-confluence').click();
+  await expect(page.getByTestId('project-confluence-current')).toHaveText('No Confluence spaces mapped');
+  await expect(page.getByTestId('project-confluence-spaces')).toContainText('ECHO product (ECHO)');
+  await expect(page.getByTestId('project-confluence-spaces')).not.toContainText('100');
+  await page.getByTestId('project-confluence-more').click();
+  await expect(page.getByTestId('project-confluence-spaces')).toContainText('Engineering (ENG)');
+  await page.getByLabel(/ECHO product/).check();
+  await page.getByLabel(/Engineering/).check();
+  await page.getByTestId('project-confluence-save').click();
+  await expect(page.getByTestId('project-confluence-current')).toHaveText('2 spaces mapped');
+  const save = run.calls().find(call => call.path === '/v1/person/tools/confluence/project/set');
+  expect(save?.body).toMatchObject({ schema_version: 1, project_id: APOLLO, expected_revision: null, space_ids: ['100', '300'] });
+  expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/spaces/list').map(call => call.body)).toEqual([{ schema_version: 1 }, { schema_version: 1, cursor: 'next-spaces' }]);
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.getByTestId('ask-field').fill('Are we ready for EVT?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('statement-text')).toHaveText('The Confluence EVT readiness page is current.');
+  expect(run.calls().filter(call => call.path === '/v5/person/ask').at(-1)?.body).toMatchObject({ project_id: APOLLO });
+  await page.getByTestId('citation').click();
+  const pane = page.getByTestId('source-pane');
+  await expect(pane).toContainText('Confluence page');
+  await expect(pane.getByTestId('open-page-source')).toHaveAttribute('title', permalink);
+  await pane.getByTestId('open-page-source').click();
+  await expect.poll(opened).toEqual([permalink]);
+  await page.getByTestId('back').click();
+  await page.getByTestId('project-settings').click();
+  await page.getByTestId('project-confluence').click();
+  await expect(page.getByTestId('project-confluence-current')).toHaveText('2 spaces mapped');
+  await page.getByTestId('project-confluence-remove').click();
+  await expect(page.getByTestId('project-confluence-current')).toHaveText('No Confluence spaces mapped');
+  const removed = run.calls().filter(call => call.path === '/v1/person/tools/confluence/project/set').at(-1)!;
+  expect(removed.body?.space_ids).toBeNull();
+});
+
 test('a project member can read the Jira setting but cannot edit it', async () => {
   run = await launch();
   const { page } = run;
@@ -248,6 +293,49 @@ test('a project member can read the Jira setting but cannot edit it', async () =
   await expect(page.getByTestId('project-jira-input')).toHaveCount(0);
   expect(run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set')).toHaveLength(0);
 });
+
+test('a member reads the saved Confluence mapping without loading a personal space picker', async () => {
+  run = await launch('confluence-member-read');
+  const { page } = run;
+  await page.getByRole('button', { name: 'Actions for Beacon' }).click();
+  await page.getByTestId('project-confluence').click();
+  await expect(page.getByTestId('project-confluence-current')).toHaveText('1 space mapped');
+  await expect(page.getByRole('dialog')).toContainText('A project lead can change this setting.');
+  await expect(page.getByTestId('project-confluence-spaces')).toHaveCount(0);
+  expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/project/read')).toHaveLength(1);
+  expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/spaces/list')).toHaveLength(0);
+});
+
+test('a lead keeps a saved Confluence mapping and can remove it when the personal picker is unavailable', async () => {
+  run = await launch('confluence-spaces-unavailable');
+  const { page } = run;
+  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('project-settings').click();
+  await page.getByTestId('project-confluence').click();
+  await expect(page.getByTestId('project-confluence-current')).toHaveText('1 space mapped');
+  await expect(page.getByTestId('project-confluence-picker-error')).toContainText('ECHO is unavailable right now. Try again.');
+  await expect(page.getByTestId('project-confluence-save')).toBeDisabled();
+  await page.getByTestId('project-confluence-remove').click();
+  await expect(page.getByTestId('project-confluence-current')).toHaveText('No Confluence spaces mapped');
+  expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/project/set').at(-1)?.body).toMatchObject({ project_id: APOLLO, space_ids: null });
+});
+
+for (const mode of ['confluence-project-conflict', 'confluence-project-reply-lost']) {
+  test(`${mode}: reloads the saved mapping after an unconfirmed change without resubmitting`, async () => {
+    run = await launch(mode);
+    const { page } = run;
+    await page.getByTestId('project-row').first().click();
+    await page.getByTestId('project-settings').click();
+    await page.getByTestId('project-confluence').click();
+    await page.getByLabel(/ECHO product/).check();
+    await page.getByTestId('project-confluence-save').click();
+    await expect(page.getByTestId('project-confluence-error')).toContainText(mode === 'confluence-project-conflict' ? 'This setting changed.' : 'The change could not be confirmed.');
+    await expect(page.getByTestId('project-confluence-save')).toBeDisabled();
+    await page.getByRole('button', { name: 'Reload setting' }).click();
+    await expect(page.getByTestId('project-confluence-current')).toHaveText(mode === 'confluence-project-reply-lost' ? '1 space mapped' : 'No Confluence spaces mapped');
+    expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/project/set')).toHaveLength(1);
+  });
+}
 
 for (const mode of ['jira-project-conflict', 'jira-project-reply-lost']) {
   test(`${mode}: reloads the current setting after a failed save without silently resubmitting`, async () => {

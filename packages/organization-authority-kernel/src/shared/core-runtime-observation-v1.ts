@@ -38,7 +38,7 @@ export interface CoreRuntimeDetailV1 {
   readonly linked_journey_ids: readonly string[];
   readonly counts: CoreRuntimeCountsV1;
   readonly result: (typeof CORE_RUNTIME_RESULTS_V1)[number] | null;
-  readonly evidence_source?: "ticket" | "slack";
+  readonly evidence_source?: "ticket" | "slack" | "page";
   readonly generation: string | null;
   readonly source_revision: string | null;
   readonly cursor: string | null;
@@ -171,7 +171,7 @@ export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1, vocabul
       !CORE_RUNTIME_PHASES_V1.includes(input.phase) || !CORE_RUNTIME_PHASES_V1.includes(input.purpose) || typeof input.root !== "boolean" ||
       !Array.isArray(input.linked_journey_ids) || input.linked_journey_ids.length > 1000 || input.linked_journey_ids.some((id) => !uuid.test(id)) ||
       (input.result !== null && !CORE_RUNTIME_RESULTS_V1.includes(input.result)) ||
-      (input.evidence_source !== undefined && input.evidence_source !== "ticket" && input.evidence_source !== "slack") ||
+      (input.evidence_source !== undefined && input.evidence_source !== "ticket" && input.evidence_source !== "slack" && input.evidence_source !== "page") ||
       (input.generation !== null && !/^sha256:[0-9a-f]{64}$/.test(input.generation))) throw new TypeError("invalid core runtime observation");
   const counts: CoreRuntimeCountsV1 = {};
   for (const key of CORE_RUNTIME_COUNT_KEYS_V1) {

@@ -62,7 +62,8 @@ function closedString(values: readonly string[]): StructuredGenerationJsonSchema
   return { type: "string", enum: [...values] };
 }
 
-export type StepSource = 'meetings' | 'documents' | 'slack' | 'tickets';
+/** Provider-neutral selectors advertised by the request's source catalog. */
+export type StepSource = 'meetings' | 'documents' | 'slack' | 'tickets' | 'pages';
 
 /** The planner sees exactly the source selectors advertised by its request's desk. */
 export function createStepSchema(sources: readonly StepSource[], openIds?: readonly string[], finishAvailable = true): StructuredGenerationJsonSchema { return Object.freeze({

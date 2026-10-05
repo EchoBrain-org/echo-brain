@@ -1644,20 +1644,30 @@ describe("core observation Explorer round trip", () => {
     });
   });
 
-  it.each(["ticket", "slack"])("preserves the %s source on real transported live lookups", async (source) => {
+  it.each((["ticket", "slack", "page"] as const).flatMap(source =>
+    (["evidence_connection", "evidence_list", "evidence_open"] as const).map(phase => ({ source, phase })),
+  ))("preserves the $source source on real transported $phase observations", async ({ source, phase }) => {
     const lines: string[] = [];
     const transport = createStagingJourneyTelemetryTransportV1({ release_sha: "a".repeat(40), build_number: 42 }, { write: line => { lines.push(line); } });
     try {
-      await observeCoreRuntimeV1("evidence_list", async () => {
-        annotateCoreRuntimeV1({ evidence_source: source as "ticket" | "slack", result: "empty", counts: { included_count: 0 } });
+      await observeCoreRuntimeV1(phase, async () => {
+        annotateCoreRuntimeV1({ evidence_source: source, result: "empty", counts: { included_count: 0 } });
       }, transport.core_runtime);
       const events = lines.map(line => JSON.parse(line)).filter(item => item.kind === "echo-authority-journey-stage-v1");
-      const rows = events.map(item => row({ ...item, diagnostic_json: JSON.stringify(item.diagnostic) }));
+      const rows = events.map(item => row({ ...item, diagnostic_json: JSON.stringify({
+        ...item.diagnostic,
+        page_title: "private page title",
+        page_text: "private page body",
+        query: "private search query",
+      }) }));
       const client = new Client([{ queryId: "q" }, { status: "Complete", results: rows }]);
-      expect(await handler(client)({ operation: "detail", journey_id: events[0].journey_id })).toMatchObject({
+      const result = await handler(client)({ operation: "detail", journey_id: events[0].journey_id });
+      expect(result).toMatchObject({
         history_complete: true, status: "complete",
-        stages: expect.arrayContaining([expect.objectContaining({ event: "succeeded", diagnostic: expect.objectContaining({ evidence_source: source, result: "empty", counts: expect.objectContaining({ included_count: 0 }) }) })]),
+        stages: expect.arrayContaining([expect.objectContaining({ event: "succeeded", diagnostic: expect.objectContaining({ phase, evidence_source: source, result: "empty", counts: expect.objectContaining({ included_count: 0 }) }) })]),
       });
+      expect(JSON.stringify(result)).not.toContain("private page");
+      expect(JSON.stringify(result)).not.toContain("private search query");
     } finally { transport.close(); }
   });
 

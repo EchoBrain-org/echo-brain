@@ -48,7 +48,9 @@ import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-
 import { createPersonMeetingTranscriptReadRouteV1, createPersonSourceEvidenceRouteV1 } from "./person-source-evidence-route.js";
 import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
 import { createPersonAnswerV4Route } from './person-answer-v4-route.js';
+import { createPersonAnswerV5Route } from './person-answer-v5-route.js';
 import type { PersonTicketLiveRuntimeFactoryV1, OpenedPersonTicketLiveRuntimeV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
+import type { PersonPageLiveRuntimeFactoryV1, OpenedPersonPageLiveRuntimeV1 } from '../application/ports/person-page-live-runtime-v1.js';
 import type { PersonSlackLiveRuntimeFactoryV1, OpenedPersonSlackLiveRuntimeV1 } from '../application/ports/person-slack-live-runtime-v1.js';
 import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
@@ -88,6 +90,8 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   };
   /** Absent by default. The selecting root owns provider construction and release approval. */
   readonly ticket_live_runtime_factory?: PersonTicketLiveRuntimeFactoryV1;
+  /** Explicitly selected Confluence page scope. The selecting root owns provider construction. */
+  readonly page_live_runtime_factory?: PersonPageLiveRuntimeFactoryV1;
   /** Explicitly selected read scope. Organization bot possession alone never selects this capability. */
   readonly slack_live_runtime_factory?: PersonSlackLiveRuntimeFactoryV1;
   /** Server-only agentic Ask experiment: open the whole readable scope first when it is small. */
@@ -174,6 +178,7 @@ export async function startOrganizationAuthorityApiRuntime(
     | OpenedPersonExternalIdentityRuntimeV1
     | undefined;
   let ticketLive: OpenedPersonTicketLiveRuntimeV1 | undefined;
+  let pageLive: OpenedPersonPageLiveRuntimeV1 | undefined;
   let slackLive: OpenedPersonSlackLiveRuntimeV1 | undefined;
   let personHttp: ReturnType<NonNullable<OrganizationAuthorityApiRuntimeDependencies['person_http_runtime_factory']>> | undefined;
   try {
@@ -206,6 +211,16 @@ export async function startOrganizationAuthorityApiRuntime(
     sessions.expireOidcLoginAttempts({ limit: 1000 });
     const projectRepository = new SqliteProjectContextRepositoryV1(database);
     ticketLive = dependencies.ticket_live_runtime_factory?.(sessions, (access_token, project_id) => {
+      const person = sessions.authenticateAccess({ access_token });
+      const id = validateProjectIdV1(project_id);
+      return projectRepository.withReadTransaction(transaction => {
+        const snapshot = transaction.captureAuthorization(person, { operation: 'project_read_v2', project_id: id });
+        const grant = snapshot.grants.find(value => value.project_id === id);
+        if (grant === undefined) throw new AuthorityOperationError('unauthorized', 'Project access is unavailable');
+        return Object.freeze({ role: grant.role, authorization_sha256: canonicalSha256(grant) });
+      });
+    });
+    pageLive = dependencies.page_live_runtime_factory?.(sessions, (access_token, project_id) => {
       const person = sessions.authenticateAccess({ access_token });
       const id = validateProjectIdV1(project_id);
       return projectRepository.withReadTransaction(transaction => {
@@ -286,6 +301,7 @@ export async function startOrganizationAuthorityApiRuntime(
     const personTools = async (token: string) => [
       ...await (externalIdentity?.tools(token) ?? Promise.resolve([])),
       ...await (ticketLive?.tools?.(token) ?? Promise.resolve([])),
+      ...await (pageLive?.tools?.(token) ?? Promise.resolve([])),
     ];
     documentWorker = startPersonDocumentProcessingV1(documents,new SqlitePersonTextSourceInboxV1(database),{
       on_failure: dependencies.person_source_failure ?? (event => console.error(JSON.stringify(event))),
@@ -314,6 +330,7 @@ export async function startOrganizationAuthorityApiRuntime(
       person_record_search: recordSearch,
       person_tool_connections: [
         ...(ticketLive === undefined ? [] : [ticketLive.connection_http]),
+        ...(pageLive === undefined ? [] : [pageLive.connection_http]),
         ...(personHttp?.applications ?? []),
       ],
       person_meeting_transcript: createPersonMeetingTranscriptReadRouteV1({ originals }),
@@ -361,6 +378,22 @@ export async function startOrganizationAuthorityApiRuntime(
                 generation: dependencies.answer_composition_generation.generation,
                 audit: new SqlitePersonAgenticAskAuditV1(database),
                 ...(ticketLive === undefined ? {} : { ticket_for: (input: Parameters<OpenedPersonTicketLiveRuntimeV1['application']['source']>[0]) => ticketLive!.application.source(input) }),
+                ...(slackLive === undefined ? {} : { slack_live_for: (input: Parameters<OpenedPersonSlackLiveRuntimeV1['application']['source']>[0]) => slackLive!.application.source(input) }),
+                ...(dependencies.agentic_ask_v1_small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+              }),
+            }),
+            ...(ticketLive === undefined && slackLive === undefined && pageLive === undefined ? {} : {
+              person_answer_v5: createPersonAnswerV5Route({
+                authority_id: metadata.authority_id,
+                organization_id: metadata.organization_id,
+                state_lineage_id: lineage.root.state_lineage_id,
+                sessions, originals, records: recordSearch,
+                memberships: { membership: (id) => repository.read((transaction) => transaction.membership(id)) },
+                model: dependencies.answer_composition_generation.structured_output,
+                generation: dependencies.answer_composition_generation.generation,
+                audit: new SqlitePersonAgenticAskAuditV1(database),
+                ...(ticketLive === undefined ? {} : { ticket_for: (input: Parameters<OpenedPersonTicketLiveRuntimeV1['application']['source']>[0]) => ticketLive!.application.source(input) }),
+                ...(pageLive === undefined ? {} : { page_for: (input: Parameters<OpenedPersonPageLiveRuntimeV1['application']['source']>[0]) => pageLive!.application.source(input) }),
                 ...(slackLive === undefined ? {} : { slack_live_for: (input: Parameters<OpenedPersonSlackLiveRuntimeV1['application']['source']>[0]) => slackLive!.application.source(input) }),
                 ...(dependencies.agentic_ask_v1_small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
               }),
@@ -420,6 +453,7 @@ export async function startOrganizationAuthorityApiRuntime(
         stopAcceptingRequests();
         await Promise.all([serverClosed, documentWorker?.close()]);
         ticketLive?.close();
+        pageLive?.close();
         slackLive?.close();
         personHttp?.close();
         externalIdentity?.close();
@@ -430,6 +464,7 @@ export async function startOrganizationAuthorityApiRuntime(
   } catch (error) {
     await documentWorker?.close();
     ticketLive?.close();
+    pageLive?.close();
     slackLive?.close();
     personHttp?.close();
     externalIdentity?.close();

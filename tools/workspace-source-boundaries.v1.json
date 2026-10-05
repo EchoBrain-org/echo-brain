@@ -26,6 +26,8 @@
     "providers/slack/client/source-boundary.v1.json",
     "providers/granola/source-boundary.v1.json",
     "providers/jira/source-boundary.v1.json",
-    "providers/jira/client/source-boundary.v1.json"
+    "providers/jira/client/source-boundary.v1.json",
+    "providers/confluence/source-boundary.v1.json",
+    "providers/confluence/client/source-boundary.v1.json"
   ]
 }

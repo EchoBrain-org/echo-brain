@@ -31,7 +31,9 @@ import { runStagingSyntheticPrivateDmCanaryV1 } from "@echo-brain/provider-slack
 import type { PrivateSlackApprovalCardPosterV1 } from "@echo-brain/provider-slack-server/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { openJiraPersonLiveRuntimeV1, type JiraPersonLiveConfigurationV1, type JiraPersonLiveRuntimeSeamsV1 } from './jira-person-live-runtime-v1.js';
+import { openConfluencePersonLiveRuntimeV1, type ConfluencePersonLiveConfigurationV1, type ConfluencePersonLiveRuntimeSeamsV1 } from './confluence-person-live-runtime-v1.js';
 import type { PersonTicketLiveRuntimeFactoryV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
+import type { PersonPageLiveRuntimeFactoryV1 } from '../application/ports/person-page-live-runtime-v1.js';
 import type { OrganizationAuthorityApiRuntimeDependencies } from './organization-authority-api-runtime.js';
 import type { SlackContextCaptureRuntimePortsV1 } from './slack-context-capture-runtime-v1.js';
 
@@ -55,6 +57,8 @@ export interface OrganizationAuthorityServiceConfig
   readonly openrouter_credential_file: string;
   /** Jira remains absent unless this explicit selection is supplied after release approval. */
   readonly jira_person_live?: JiraPersonLiveConfigurationV1;
+  /** Explicit Confluence Cloud selection. It is absent unless an operator enables live page reads. */
+  readonly confluence_person_live?: ConfluencePersonLiveConfigurationV1;
   /** Opt-in V2 profile capability; absent in the approval-only profile. */
   readonly slack_public_channel_context?: SlackPublicChannelContextCapabilityV1;
   /** Nango holds the organization's Slack connection. The key stays in process memory only. */
@@ -89,6 +93,8 @@ export interface OrganizationAuthorityServiceDependencies
   readonly api?: Omit<OrganizationAuthorityApiRuntimeDependencies, "person_http_runtime_factory">;
   readonly processing_adapter_overrides?: OrganizationAuthorityServiceAdapterOverrides;
   readonly jira_person_live_seams?: JiraPersonLiveRuntimeSeamsV1;
+  /** Provider-only test seams; production reads every page through the asker's Nango grant. */
+  readonly confluence_person_live_seams?: ConfluencePersonLiveRuntimeSeamsV1;
   /** Selected bootstrap receives the exact Slack ports shared with approvals and setup. */
   readonly person_http_runtime_factory_with_slack?: (
     sessions: Parameters<PersonHttpRuntimeFactory>[0], slack: SlackContextCaptureRuntimePortsV1,
@@ -153,6 +159,7 @@ export async function openOrganizationAuthorityService(
     openrouter_credential_file,
     slack_nango,
     jira_person_live,
+    confluence_person_live,
     slack_public_channel_context,
     on_private_approval_slack_rejection,
     ...sharedConfig
@@ -200,6 +207,7 @@ export async function openOrganizationAuthorityService(
       person_http_runtime_factory: ((sessions) => dependencies.person_http_runtime_factory_with_slack!(sessions, slack)) satisfies PersonHttpRuntimeFactory,
     }),
     ...(jira_person_live === undefined ? {} : { ticket_live_runtime_factory: ((sessions, authorize_project) => openJiraPersonLiveRuntimeV1({ authorize_project, state_directory: sharedConfig.state_directory, sessions, configuration: jira_person_live, ...(dependencies.jira_person_live_seams === undefined ? {} : { seams: dependencies.jira_person_live_seams }) })) satisfies PersonTicketLiveRuntimeFactoryV1 }),
+    ...(confluence_person_live === undefined ? {} : { page_live_runtime_factory: ((sessions, authorize_project) => openConfluencePersonLiveRuntimeV1({ authorize_project, state_directory: sharedConfig.state_directory, sessions, configuration: confluence_person_live, ...(dependencies.confluence_person_live_seams === undefined ? {} : { seams: dependencies.confluence_person_live_seams }) })) satisfies PersonPageLiveRuntimeFactoryV1 }),
     record_approver: composeRecordApproverProjectorsV1([
       projectPrivateSlackBlockApprovalApproverV1,
       projectPrivateSlackBlockApprovalApproverV2,

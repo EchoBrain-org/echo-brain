@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import type {
   AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
-  Extraction, Failure, FileHandle, ItemRef, ListItem, ListScope, Match, Member, ProjectChange, ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef,
+  Extraction, Failure, FileHandle, ItemRef, ListItem, ListScope, Match, Member, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef,
   RecordSection, Result, SourceEvidence, ToolAttempt,
 } from '../shared/protocol.js';
 import { MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
@@ -344,8 +344,23 @@ export interface ProjectJiraSetting {
   writeFailed?: boolean;
 }
 
+export interface ProjectConfluenceSetting {
+  seq: number;
+  status: 'loading' | 'ready' | 'saving' | 'failed';
+  value?: ProjectConfluenceMapping;
+  spaces: readonly ConfluenceSpace[];
+  next: string | null;
+  selected: readonly string[];
+  loadingMore?: boolean;
+  failure?: Failure;
+  writeFailed?: boolean;
+  /** The lead-only space catalog failed; the shared project mapping is still readable. */
+  pickerFailure?: Failure;
+}
+
 export interface ProjectSettingsState {
   jira?: ProjectJiraSetting;
+  confluence?: ProjectConfluenceSetting;
   project: ProjectSummary;
   menu: boolean;
   menuOrigin: 'header' | 'sidebar';
@@ -1280,7 +1295,7 @@ function changed(done: ChangeState): void {
 /** A project settings operation is unsettled until its exact receipt arrives. */
 export function projectSettingsBlocked(current: State = state): boolean {
   const status = current.projectSettings?.write?.status;
-  return status === 'sending' || status === 'unknown' || current.projectSettings?.jira?.status === 'saving';
+  return status === 'sending' || status === 'unknown' || current.projectSettings?.jira?.status === 'saving' || current.projectSettings?.confluence?.status === 'saving';
 }
 
 export function toggleProjectSettings(target?: ProjectSummary, menuOrigin: 'header' | 'sidebar' = 'header'): void {
@@ -1289,7 +1304,7 @@ export function toggleProjectSettings(target?: ProjectSummary, menuOrigin: 'head
       (menuOrigin === 'header' && (state.ask || state.reader)) || projectSettingsBlocked()) return;
   const shown = state.projectSettings;
   set({ projectSettings: shown?.project.project_id === project.project_id ? {
-    ...shown, jira: undefined, menu: shown.menuOrigin !== menuOrigin || !shown.menu, menuOrigin, rename: null, confirm: null,
+    ...shown, jira: undefined, confluence: undefined, menu: shown.menuOrigin !== menuOrigin || !shown.menu, menuOrigin, rename: null, confirm: null,
   } : {
     project, menu: true, menuOrigin, rename: null, confirm: null, write: null,
   } });
@@ -1298,6 +1313,51 @@ export function toggleProjectSettings(target?: ProjectSummary, menuOrigin: 'head
 export function closeProjectSettings(): void {
   const settings = state.projectSettings;
   if (settings && !projectSettingsBlocked()) set({ projectSettings: null });
+}
+
+/** Reads every member's saved mapping first. Only leads need their personal space picker. */
+export async function beginProjectConfluence(): Promise<void> {
+  const settings = state.projectSettings; const account = expect();
+  if (!settings || !account || projectSettingsBlocked()) return;
+  const opening = ++seq;
+  set({ projectSettings: { ...settings, menu: false, rename: null, confirm: null, confluence: { seq: opening, status: 'loading', spaces: [], next: null, selected: [] } } });
+  const mapping = await rpc('projects.confluenceRead', { expect: account, project_id: settings.project.project_id });
+  if (expect()?.authority !== account.authority || expect()?.membership_id !== account.membership_id || state.projectSettings?.confluence?.seq !== opening) return;
+  const current = state.projectSettings; if (!current) return;
+  if (!mapping.ok) { set({ projectSettings: { ...current, confluence: { seq: opening, status: 'failed', spaces: [], next: null, selected: [], failure: mapping.failure } } }); accountLost(mapping.failure); return; }
+  const loaded: ProjectConfluenceSetting = { seq: opening, status: 'ready', value: mapping.value, spaces: [], next: null, selected: mapping.value.mapping?.space_ids ?? [] };
+  set({ projectSettings: { ...current, confluence: loaded } });
+  if (current.project.role !== 'lead') return;
+  const spaces = await rpc('projects.confluenceSpaces', { expect: account });
+  if (expect()?.authority !== account.authority || expect()?.membership_id !== account.membership_id || state.projectSettings?.confluence?.seq !== opening) return;
+  const shown = state.projectSettings; const setting = shown?.confluence; if (!shown || !setting) return;
+  if (!spaces.ok) { set({ projectSettings: { ...shown, confluence: { ...setting, pickerFailure: spaces.failure } } }); accountLost(spaces.failure); return; }
+  set({ projectSettings: { ...shown, confluence: { ...setting, spaces: spaces.value.items, next: spaces.value.next_cursor } } });
+}
+export function toggleProjectConfluenceSpace(id: string): void {
+  const settings = state.projectSettings; const setting = settings?.confluence;
+  if (!settings || !setting || setting.status !== 'ready' || settings.project.role !== 'lead' || !setting.spaces.some(space => space.id === id)) return;
+  const selected = setting.selected.includes(id) ? setting.selected.filter(value => value !== id) : [...setting.selected, id];
+  if (selected.length > 20) return; set({ projectSettings: { ...settings, confluence: { ...setting, selected } } });
+}
+export async function moreProjectConfluenceSpaces(): Promise<void> {
+  const settings = state.projectSettings; const setting = settings?.confluence; const account = expect();
+  if (!settings || !setting || !account || setting.status !== 'ready' || setting.next === null || setting.loadingMore) return;
+  set({ projectSettings: { ...settings, confluence: { ...setting, loadingMore: true } } });
+  const result = await rpc('projects.confluenceSpaces', { expect: account, cursor: setting.next });
+  if (expect()?.authority !== account.authority || expect()?.membership_id !== account.membership_id || state.projectSettings?.confluence?.seq !== setting.seq) return;
+  const current = state.projectSettings?.confluence; if (!current) return;
+  set({ projectSettings: { ...state.projectSettings!, confluence: result.ok ? { ...current, spaces: [...current.spaces, ...result.value.items.filter(space => !current.spaces.some(old => old.id === space.id))], next: result.value.next_cursor, loadingMore: false } : { ...current, loadingMore: false, failure: result.failure } } });
+  if (!result.ok) accountLost(result.failure);
+}
+export async function saveProjectConfluence(remove = false): Promise<void> {
+  const settings = state.projectSettings; const setting = settings?.confluence; const account = expect();
+  if (!settings || !setting?.value || !account || settings.project.role !== 'lead' || setting.status !== 'ready' || (!remove && setting.pickerFailure !== undefined) || (remove ? setting.value.mapping === null : setting.selected.length === 0)) return;
+  set({ projectSettings: { ...settings, confluence: { ...setting, status: 'saving' } } }); unresolvedChanged();
+  const result = await rpc('projects.confluenceSet', { expect: account, project_id: settings.project.project_id, request_id: crypto.randomUUID(), expected_revision: setting.value.revision, space_ids: remove ? null : setting.selected });
+  if (expect()?.authority !== account.authority || expect()?.membership_id !== account.membership_id || state.projectSettings?.confluence?.seq !== setting.seq) return;
+  const current = state.projectSettings; if (!current) return;
+  set({ projectSettings: { ...current, confluence: result.ok ? { ...setting, status: 'ready', value: result.value, selected: result.value.mapping?.space_ids ?? [] } : { ...setting, status: 'failed', failure: result.failure, writeFailed: true } } }); unresolvedChanged(); if (!result.ok) accountLost(result.failure);
 }
 
 /** Every load/save is scoped to this account, project and opening of the sheet. */
@@ -1353,7 +1413,7 @@ export function setProjectRename(name: string): void {
 
 export function cancelProjectSettingsAction(): void {
   const settings = state.projectSettings;
-  if (settings && !projectSettingsBlocked()) set({ projectSettings: { ...settings, rename: null, confirm: null, menu: false, jira: undefined } });
+  if (settings && !projectSettingsBlocked()) set({ projectSettings: { ...settings, rename: null, confirm: null, menu: false, jira: undefined, confluence: undefined } });
 }
 
 export function askProjectSetting(action: 'archive' | 'unarchive' | 'leave'): void {
@@ -2496,7 +2556,7 @@ export function chooseSource(group: number, focus: string | null = null): void {
   if (!sources || !source) return;
   set({ sources: { ...sources, open: group, focus, evidence: null } });
   if (source.kind === 'original') { void readEvidence(sources.gen, group); return; }
-  if (source.kind === 'slack' || source.kind === 'ticket') return;
+  if (source.kind === 'slack' || source.kind === 'ticket' || source.kind === 'page') return;
   const read = sources.records[source.record.record_sha256];
   if (!read || (!read.loading && 'failure' in read)) void readRecord(sources.gen, source.record, false);
 }
@@ -2511,6 +2571,12 @@ export async function openSlackSource(index: number): Promise<boolean> {
 export async function openTicketSource(index: number): Promise<boolean> {
   const source = answerSources()[index];
   return !state.concealed && source?.kind === 'ticket' && (await rpc('source.openTicket', { permalink: source.permalink })).ok;
+}
+
+/** Pages open at their provider permalink, under the person's current provider access. */
+export async function openPageSource(index: number): Promise<boolean> {
+  const source = answerSources()[index];
+  return !state.concealed && source?.kind === 'page' && (await rpc('source.openPage', { permalink: source.permalink })).ok;
 }
 
 /** × on the pane: it closes, and forgets the passages it read. */
