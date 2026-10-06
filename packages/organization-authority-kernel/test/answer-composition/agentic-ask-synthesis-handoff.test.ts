@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { createAgenticAskV3 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from '../../src/shared/evidence-desk-v2.js';
+import { AuthorityOperationError } from '../../src/domain/errors.js';
 
 const body = 'The gate decision is pending. A recorded Go decision is required.';
 const item: EvidenceDeskItemV2 = {
@@ -16,17 +17,18 @@ const step = (tool: string, args: Record<string, string>, found = false) => ({
   actions: [{ tool, args }],
 });
 
-async function run(options: { truncated?: boolean; notice?: string; idle?: boolean; inventory?: boolean } = {}) {
+async function run(options: { truncated?: boolean; notice?: string; idle?: boolean; inventory?: boolean; refusedOpen?: boolean } = {}) {
   let searches = 0;
   const result = () => ({ items: searches++ === 0 ? [item] : [], truncated: options.truncated ?? false, receipt_digests: [], ...(options.notice === undefined ? {} : { notice: options.notice }) });
   const desk: EvidenceDeskPortV2 = {
     scope: { kind: 'global' }, live_sources: [{ source: 'page', tool_id: 'confluence' }],
     search: async () => result(), list: async () => ({ ...result(), next_cursor: 'unread-page' }),
-    open: async () => { throw new Error('unexpected open'); }, revalidate: async () => ({ checked_at: '2026-10-06T00:00:00.000Z' }),
+    open: async () => { throw new AuthorityOperationError('not_found', 'private refusal details'); }, revalidate: async () => ({ checked_at: '2026-10-06T00:00:00.000Z' }),
   };
   const replies = options.idle
     ? [step('search', { query: 'pilot' }), step('search', { query: 'gate results' }), step('search', { query: 'pilot tests' })]
     : [options.inventory ? step('list', { source: 'pages' }) : step('search', { source: 'pages', query: 'pilot' }), step('finish', {}, true)];
+  if (options.refusedOpen) replies.splice(1, 0, step('open', { id: 'E1' }));
   let writer: Record<string, unknown> = {};
   const audit: unknown[] = [];
   const answer = await createAgenticAskV3({ desk,
@@ -42,6 +44,11 @@ async function run(options: { truncated?: boolean; notice?: string; idle?: boole
 }
 
 describe('synthesis receives observed research coverage', () => {
+  it('preserves a failed read as unavailable rather than an empty search', async () => {
+    const { writer } = await run({ refusedOpen: true });
+    expect(writer.research).toMatchObject({ reads: [{ tool: 'search', unavailable: false }, { tool: 'open', unavailable: true }] });
+    expect(JSON.stringify(writer)).not.toContain('private refusal details');
+  });
   it('carries citation provenance and page version into the writer', async () => {
     const { writer } = await run();
     expect(writer.evidence).toEqual([expect.objectContaining({ provenance: { kind: 'page', version: '3' } })]);

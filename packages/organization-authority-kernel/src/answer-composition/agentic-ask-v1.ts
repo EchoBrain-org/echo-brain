@@ -547,10 +547,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       const searchesRun: { readonly query: string; readonly source?: EvidenceDeskSourceV2 }[] = [];
       const researchObservations: AskResearchObservationV1[] = [];
       // Observed read coverage, never the planner's hypotheses or raw tool arguments.
-      const readCoverage: { tool: 'search' | 'open' | 'list'; source: string; returned_items: number; truncated: boolean; notice: boolean }[] = [];
-      const cover = (tool: 'search' | 'open' | 'list', source: string | undefined, result: EvidenceDeskResultV2) => {
+      const readCoverage: { tool: 'search' | 'open' | 'list'; source: string; returned_items: number; truncated: boolean; notice: boolean; unavailable: boolean }[] = [];
+      const cover = (tool: 'search' | 'open' | 'list', source: string | undefined, result?: EvidenceDeskResultV2) => {
         readCoverage.push({ tool, source: source === undefined ? 'available_sources' : sourcesById.get(source)?.selector ?? source,
-          returned_items: result.items.length, truncated: result.truncated, notice: result.notice !== undefined });
+          returned_items: result?.items.length ?? 0, truncated: result?.truncated ?? false, notice: result?.notice !== undefined, unavailable: result === undefined });
       };
       /** Sources whose complete, unfiltered inventory was observed empty. */
       const exhaustivelyEmptySources = new Set<EvidenceDeskSourceV2>();
@@ -642,6 +642,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         catch (error) {
           const refusal = toolRefusal(error);
           if (refusal === null) throw error;
+          cover('open', evidenceDeskSourceV2(entry.item));
           return { tool: "open", id: entry.short, error: refusal };
         }
         const apply = () => {
@@ -691,6 +692,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           catch (error) {
             const refusal = toolRefusal(error);
             if (refusal === null) throw error;
+            cover('list', request.source);
             return { tool: "list", args, error: refusal };
           }
         }
@@ -990,12 +992,14 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         if (options.small_scope_shortcut === true) {
           const inventory = await raceAbort(activeSignal, desk.search({ limit: AGENTIC_ASK_SHORTCUT_ITEMS_V1, inventory_mode: "items", signal: activeSignal }));
           observe(inventory);
+          cover('search', undefined, inventory);
           if (!inventory.truncated && inventory.items.length <= AGENTIC_ASK_SHORTCUT_ITEMS_V1) {
             let used = 0;
             for (const listed of inventory.items) {
               assertLive();
               const opened = await raceAbort(activeSignal, desk.open({ item: listed.id, signal: activeSignal }));
               observe(opened);
+              cover('open', evidenceDeskSourceV2(listed), opened);
               const exact = opened.items.find(item => item.id === listed.id && item.text !== undefined);
               if (exact === undefined || used + bytes(exact.text) > stepBudget / 2) continue;
               const entry = register(exact); entry.opened = true; used += bytes(exact.text);
@@ -1099,7 +1103,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
             // Filters and planner need text are intentionally excluded. This describes
             // inventories actually read, not whether an arbitrary fact exists.
             inventories: inventoryView().map(({ args, ...inventory }) => ({ source: args.source, ...inventory })),
-            notices: [...notice], omitted_evidence_items: 0,
+            notices: [...notice], omitted_evidence_items: [...entries.values()].filter(entry => entry.item.text !== undefined).length,
           },
         };
         const writerBudget = Math.max(0, answerBudget - bytes(JSON.stringify({ ...answerContext, evidence: [] })));
