@@ -34,13 +34,23 @@ export function disposeProviderResponseV1(response: Response | undefined): void 
 }
 
 /** Providers retain HTTP status/media-type policy and map these errors themselves. */
-export async function readBoundedJsonResponseV1(response: Response, options: {
+export interface BoundedResponseOptionsV1 {
   readonly maxBytes: number;
   readonly signal: AbortSignal;
   readonly emptyBody?: 'undefined';
   /** Keep providers' established header policy; streamed bytes are always bounded. */
   readonly contentLength?: 'decimal' | 'canonical' | 'ignore';
-}): Promise<unknown> {
+}
+
+export async function readBoundedJsonResponseV1(response: Response, options: BoundedResponseOptionsV1): Promise<unknown> {
+  const text = await readBoundedTextResponseV1(response, options);
+  if (text === undefined) return undefined;
+  try { return JSON.parse(text) as unknown; }
+  catch { throw new BoundedJsonResponseErrorV1('invalid_json'); }
+}
+
+/** JSON and MCP event streams share the same byte limit, deadline and cleanup. */
+export async function readBoundedTextResponseV1(response: Response, options: BoundedResponseOptionsV1): Promise<string | undefined> {
   options.signal.throwIfAborted();
   const declared = response.headers.get('content-length');
   if (options.contentLength !== 'ignore' && declared !== null) {
@@ -72,7 +82,7 @@ export async function readBoundedJsonResponseV1(response: Response, options: {
     const bytes = new Uint8Array(total);
     let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-    try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown; }
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
     catch { throw new BoundedJsonResponseErrorV1('invalid_json'); }
   } finally {
     try { void reader.cancel().catch(() => {}); } catch { /* best effort */ }

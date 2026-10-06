@@ -16,7 +16,7 @@ import {
   type BuildReadableSearchGenerationV1Input,
   type ReadableSearchAtomV1,
 } from '@echo-brain/organization-retrieval/readable-search-engine-v1';
-import { applyAuthorityBaselineV10 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { applyAuthorityBaselineV11 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -105,7 +105,7 @@ function emptyOriginals(): PersonOriginalContextEvidenceDeskPortV1 {
 
 async function fixture(options: { readonly active?: boolean; readonly corrupt?: boolean; readonly forged_pointer?: boolean; readonly atom_text?: string; readonly atom_envelope_sha256?: Sha256Digest } = {}) {
   const authority = openAuthorityDatabase(':memory:');
-  applyAuthorityBaselineV10(authority);
+  applyAuthorityBaselineV11(authority);
   authority.prepare("INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES(1,?,?, 'Clean','{}','2026-09-27T00:00:00.000Z','2026-09-27T00:00:00.000Z')").run(COORDINATES.authority_id, COORDINATES.organization_id);
   const record = recordDatabase();
   const appended = await new OrganizationRecordAppenderV4(record, COORDINATES).append(appendInput({ authority: protocolAuthority(), policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, ...(options.atom_text === undefined ? {} : { decision_text: options.atom_text }) }));
@@ -320,7 +320,7 @@ describe('Person evidence desk over a Slack-approved record with a confirmed own
   const codecs = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3]);
   async function slackFixture(withCodecs: boolean) {
     const authority = openAuthorityDatabase(':memory:');
-    applyAuthorityBaselineV10(authority);
+    applyAuthorityBaselineV11(authority);
     authority.prepare("INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES(1,?,?, 'Clean','{}','2026-09-27T00:00:00.000Z','2026-09-27T00:00:00.000Z')").run(COORDINATES.authority_id, COORDINATES.organization_id);
     const record = recordDatabase();
     const signer = protocolAuthority();

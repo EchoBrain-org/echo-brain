@@ -16,7 +16,7 @@ const OPEN_VERSION = 3;
 const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const NUMBER = /^(0|[1-9][0-9]{0,7})$/;
 const IDS = {
-  note: /^ctx_[0-9a-f]{64}$/,
+  note: /^(?:ctx|cap)_[0-9a-f]{64}$/,
   document: /^doc_[0-9a-f]{64}$/,
   meeting: /^sha256:[0-9a-f]{64}$/,
 } as const;
@@ -32,7 +32,7 @@ export type PersonListPositionsV1 = Readonly<Record<PersonListSourceV1, PersonLi
 export type PersonOpenPositionV1 =
   | Readonly<{ kind: "document"; from_ordinal: number }>
   | Readonly<{ kind: "meeting"; atom_order: number; part: number }>
-  | Readonly<{ kind: "transcript"; offset: number }>;
+  | Readonly<{ kind: "transcript" | "imported_meeting"; offset: number }>;
 
 export interface PersonListCursorBindingV1 {
   readonly scope: PersonAnswerScopeV3;
@@ -113,7 +113,7 @@ function openPosition(ref: PersonOpenRefV1, fields: readonly string[]): PersonOp
   const kind = ref.slice(0, ref.indexOf(":"));
   if (kind === "document" && fields.length === 1) return Object.freeze({ kind, from_ordinal: number(fields[0]!, 1, 65_535) });
   if (kind === "meeting" && fields.length === 2) return Object.freeze({ kind, atom_order: number(fields[0]!, 0, 65_535), part: number(fields[1]!, 1, 65_535) });
-  if (kind === "transcript" && fields.length === 1) return Object.freeze({ kind, offset: number(fields[0]!, 1, 10_000_000) });
+  if ((kind === "transcript" || kind === "imported_meeting") && fields.length === 1) return Object.freeze({ kind, offset: number(fields[0]!, 1, 10_000_000) });
   // A note is one page; any other shape is another ref's cursor.
   return invalid();
 }
@@ -122,6 +122,7 @@ function openFields(position: PersonOpenPositionV1): string[] {
   switch (position.kind) {
     case "document": return [String(position.from_ordinal)];
     case "meeting": return [String(position.atom_order), String(position.part)];
+    case "imported_meeting":
     case "transcript": return [String(position.offset)];
   }
 }

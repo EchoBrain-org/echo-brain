@@ -128,7 +128,22 @@ or requires its credentials. Generic source admission and approval remain, as
 does staging-only synthetic meeting infrastructure. Personal Granola OAuth and
 selected-folder intake are specified by the
 [Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md)
-and are not implemented by the cleanup phase.
+and implemented through [ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md).
+The shared personal connection lifecycle, bounded JSON/MCP transport, Authority
+source processing, native review and original-context readers own the workflow.
+Granola supplies verified account/workspace, folder enumeration and meeting
+normalization. Imported notes are labeled unapproved; transcript release still
+requires an explicit approval choice. This is separate from the dormant general
+capture routes.
+
+Granola network cost is explicit: home uses 3 MCP calls; folder browse uses 4;
+a transient preview uses 3; an explicit background import uses 4. A full watch
+baseline or unchanged scan of N meetings uses `7 + ceil(N/10) + N` MCP calls
+(account, folder membership before/after, batched notes and individual transcripts).
+Each MCP call also uses one existing Nango connection lookup with current tag
+verification. A changed scan stops at its first differing meeting and a later
+worker turn continues. No request-level token cache hides remote revocation.
+Current limits and live qualification remain in the sprint brief.
 
 ## Ownership and Nango
 

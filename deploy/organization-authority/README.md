@@ -334,7 +334,7 @@ update the app. The compatibility DM-code challenge
 available as the fallback for a machine without a browser.
 
 After that setup, the ordinary release updater only replaces artifacts within
-the current lineage: Authority V10, private-approval control-plane V3,
+the current lineage: Authority V11, private-approval control-plane V3,
 record-log V4, retrieval facts V3, retrieval content/lexical V2, and a six-role
 V2 root. It refuses older or mixed persisted state before runtime,
 configuration, or state mutation. Use `replace-rehearsal --confirm-no-live-users`
@@ -396,7 +396,7 @@ organization.
 
 ### Replace unreleased rehearsal state
 
-The current release requires fresh Authority V10 state. It cannot start over
+The current release requires fresh Authority V11 state. It cannot start over
 an earlier rehearsal lineage. For disposable rehearsal state with no live users,
 retire it through the explicit initial-owner attestation:
 
@@ -657,7 +657,7 @@ one reservation and preserves the previous history.
 The private `state/extraction-attempts.sqlite` file is durable spend history.
 Keep it with the retained Authority state and backups; never delete it to clear
 a hold. Its schema and Authority lineage are checked on open. It is a separate
-versioned sidecar and does not migrate the V10 databases or require onboarding
+versioned sidecar and does not migrate the V11 databases or require onboarding
 to be repeated. Releases predating this guard do not enforce it; rolling back
 to those releases can resume repeated extraction calls.
 

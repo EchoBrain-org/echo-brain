@@ -1,3 +1,4 @@
+import { validatePersonMeetingRequestV1, validatePersonMeetingResultV1 } from '@echo-brain/organization-api';
 // The person host: an Electron utility process that runs the TypeScript person
 // client in-process. It is the only process that reads the session or holds a
 // token; what it posts back is a token-free view model or a failure code.
@@ -86,7 +87,7 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'projects.leave': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
   'employees.reissue': 45_000, 'employees.revoke': 45_000,
   'projects.jiraRead': 45_000, 'projects.jiraSet': 90_000, 'projects.confluenceRead': 45_000, 'projects.confluenceSet': 90_000, 'projects.confluenceSpaces': 45_000,
-  'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
+  'tools.meetings': 90_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
 };
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
 const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon']);
@@ -334,7 +335,7 @@ function listScopeArgs(scope: ListScope | undefined): string[] | null {
 /** An item's ref as the client takes it, built only from a known kind and an id of that kind's shape. Null for anything else. */
 function refArgument(ref: ItemRef | undefined): string | null {
   if (ref === null || typeof ref !== 'object' || typeof ref.id !== 'string') return null;
-  const shape = ref.kind === 'note' ? CONTEXT_ID : ref.kind === 'document' ? DOCUMENT_ID : ref.kind === 'meeting' ? RECORD_ID : null;
+  const shape = ref.kind === 'imported_meeting' ? /^cap_[a-f0-9]{64}$/ : ref.kind === 'note' ? CONTEXT_ID : ref.kind === 'document' ? DOCUMENT_ID : ref.kind === 'meeting' ? RECORD_ID : null;
   return shape?.test(ref.id) ? option('ref', `${ref.kind}:${ref.id}`) : null;
 }
 
@@ -653,6 +654,13 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
     // `person tools <verb> --tool <id>`. Connect returns once the page is open;
     // the window then reads the attempt every few seconds, so no call holds the
     // session for the minutes a person takes in the browser.
+    case 'tools.meetings': {
+      const { expect, request: raw } = params as Params<'tools.meetings'>;
+      let request;
+      try { request = validatePersonMeetingRequestV1(raw); } catch { return code('invalid_request', true); }
+      return forAccount(method, expect, ['tools', 'meetings', option('tool', request.tool_id), option('request', JSON.stringify(request))],
+        stdout => validatePersonMeetingResultV1(request.operation, (lastJson(stdout) as { result: unknown }).result));
+    }
     case 'tools.connect': {
       const { expect, tool_id: tool } = params as Params<'tools.connect'>;
       if (typeof tool !== 'string' || !TOOL_ID.test(tool)) return code('invalid_request');

@@ -9,7 +9,7 @@ import {
 import type { OrganizationRecordDecisionBriefV1, OrganizationRecordMeetingTimeV1 } from "@echo-brain/organization-protocol";
 import type { RecordApproverProjectorV1 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
-import { boundedTextV1, releasableBodyV1 } from "./person-item-text-v1.js";
+import { boundedTextV1, releasableBodyV1 } from "../application/person-item-text-v1.js";
 
 /**
  * Pure meeting presentation for the person list and open (ADR-0024). Every

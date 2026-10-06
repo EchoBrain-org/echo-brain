@@ -1,6 +1,6 @@
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../src/organization-control-plane/application/slack-integration-contracts.js";
 import Database from "better-sqlite3";
-import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { SqliteStablePrivateApprovalAuthorityFenceV1 } from "../../src/private-approval/sqlite-stable-private-approval-authority-fence-v1.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { canonicalJson, canonicalSha256 } from "../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
@@ -174,7 +174,7 @@ describe("private approval provider identity fence", () => {
     };
     const authorityDatabase = new Database(":memory:");
     databases.push(authorityDatabase);
-    applyAuthorityBaselineV10(authorityDatabase);
+    applyAuthorityBaselineV11(authorityDatabase);
     authorityDatabase.pragma("foreign_keys = OFF");
     authorityDatabase.prepare(`INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at)
       VALUES(1,'oau_fixture',?,'Fixture','{}',?,?)`).run(pending.organization_id, now(), now());

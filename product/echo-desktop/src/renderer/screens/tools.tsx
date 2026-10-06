@@ -1,3 +1,4 @@
+import { Meetings } from './meetings.js';
 import { useEffect, useRef } from 'preact/hooks';
 import type { ConnectedTool, ToolStatus } from '../../shared/protocol.js';
 import { message, toolMessage } from '../messages.js';
@@ -36,7 +37,7 @@ function ToolRow({ tool }: { tool: ConnectedTool }) {
         <span class="name">{tool.name}</span>
         <span class="state" data-testid="tool-state">{STATE[tool.status]}</span>
       </span>
-      {tool.status === 'linked' && (
+      {(tool.status === 'linked' || (tool.tool_id === 'granola' && tool.status !== 'unavailable')) && (
         <button type="button" class="plain-button" data-testid="tool-manage" onClick={() => manageTool(tool)}>Manage</button>
       )}
       {(tool.status === 'unlinked' || tool.status === 'revoked') && (
@@ -120,13 +121,14 @@ export function ToolManage({ sheet }: { sheet: ToolManageSheet }) {
   const { tool } = sheet;
   return (
     <div class="overlay" onClick={closeSheet}>
-      <div class="sheet confirm" role="dialog" aria-labelledby="tool-manage-title" data-testid="tool-manage-sheet" ref={box}
+      <div class={`sheet confirm${tool.tool_id === 'granola' ? ' meeting-manage' : ''}`} role="dialog" aria-labelledby="tool-manage-title" data-testid="tool-manage-sheet" ref={box}
         onClick={event => event.stopPropagation()} onKeyDown={event => trapTab(event, box.current)}>
         <div class="sheet-head">
           <h2 id="tool-manage-title">{tool.name}</h2>
           <button type="button" class="circle" aria-label="Close" onClick={closeSheet} disabled={sheet.busy}><Close /></button>
         </div>
-        <p>Connected. Disconnecting removes only your own {tool.name} connection; you can connect again later.</p>
+        {tool.tool_id === 'granola' && <Meetings />}
+        <p>{tool.tool_id === 'granola' ? 'Disconnecting stops new imports. Retained meetings and approved records keep their existing audience. You can reconnect later.' : <>Disconnecting removes only your own {tool.name} connection; you can connect again later.</>}</p>
         {sheet.failure && <p class="error" aria-live="polite">{message(sheet.failure)}</p>}
         <div class="choices">
           <button type="button" class="plain-button danger" data-testid="tool-disconnect" disabled={sheet.busy} onClick={() => void disconnectTool()}>

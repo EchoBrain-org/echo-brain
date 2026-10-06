@@ -1,3 +1,5 @@
+import { SqlitePersonImportedMeetingsV1 } from './person-imported-meetings-v1.js';
+import { releasableBodyV1 } from '../../../application/person-item-text-v1.js';
 import { randomUUID } from "node:crypto";
 import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import {
@@ -36,7 +38,7 @@ const MAXIMUM_OPEN_CHUNKS = 8;
 const MAXIMUM_OPEN_TEXT_BYTES = 8_192;
 const MAXIMUM_OPEN_CANONICAL_BYTES = 20 * 1024;
 const MAXIMUM_ORDINAL = 65_535;
-const NOTE_ID = /^ctx_[0-9a-f]{64}$/;
+const NOTE_ID = /^(?:ctx|cap)_[0-9a-f]{64}$/;
 const DOCUMENT_ID = /^doc_[0-9a-f]{64}$/;
 const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const GLOBAL: PersonAskScopeV2 = Object.freeze({ kind: "global" });
@@ -119,6 +121,7 @@ function count(value: number, maximum: number): boolean {
  * revision or a meeting.
  */
 export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
+  private readonly imported: SqlitePersonImportedMeetingsV1;
   private readonly collected = new WeakMap<PersonStoreHandleV1, Witness & { consumed: boolean }>();
   private readonly released = new WeakMap<PersonStoreReleaseV1, Witness>();
 
@@ -127,8 +130,9 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
     private readonly sessions: Sessions,
     private readonly organizationId: string,
   ) {
-    if (database.pragma("user_version", { simple: true }) !== 10 || database.pragma("foreign_keys", { simple: true }) !== 1) {
-      throw new Error("Person items require Authority V10 with foreign keys enabled");
+    this.imported = new SqlitePersonImportedMeetingsV1(database);
+    if (database.pragma("user_version", { simple: true }) !== 11 || database.pragma("foreign_keys", { simple: true }) !== 1) {
+      throw new Error("Person items require Authority V11 with foreign keys enabled");
     }
   }
 
@@ -169,19 +173,29 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
     const kind = input.ref.kind;
     let id: string;
     try {
-      id = kind === "note" ? validatePersonUploadContextId(input.ref.id) : kind === "document" ? validatePersonDocumentIdV1(input.ref.id) : notFound();
+      id = kind === "imported_meeting" ? (/^cap_[a-f0-9]{64}$/.test(input.ref.id) ? input.ref.id : notFound()) : kind === "note" ? validatePersonUploadContextId(input.ref.id) : kind === "document" ? validatePersonDocumentIdV1(input.ref.id) : notFound();
     } catch { notFound(); }
     const actor = this.authenticate(input.access_token);
     const grants = this.grants(actor);
-    if (kind === "note") {
-      if (input.from_ordinal !== undefined) invalid();
+    if (kind === "note" || kind === "imported_meeting") {
+      if (kind === "note" && input.from_ordinal !== undefined) invalid();
       const found = this.notes(actor, GLOBAL, grants, { ids: [id] })[0];
-      if (found === undefined) notFound();
+      if (found === undefined || found.row.kind !== kind) notFound();
       const current = this.fence(input.access_token, tuple(actor), grants.sha256);
+      if (kind === 'imported_meeting') {
+        const offset = input.from_ordinal ?? 0, body = releasableBodyV1(found.text);
+        if (!Number.isSafeInteger(offset) || offset < 0 || (offset > 0 && offset >= body.length)) notFound();
+        let text = '', bytes = 0;
+        for (const scalar of body.slice(offset)) { const size = Buffer.byteLength(scalar); if (bytes + size > 8192) break; text += scalar; bytes += size; }
+        const release = this.openRelease(current, grants, { notes: [found.row], documents: [] }, {
+          ref: `${kind}:${id}`, from_offset: offset, released_text_sha256: canonicalSha256(text),
+        });
+        return { kind, row: found.row, text, next_offset: offset + text.length < body.length ? offset + text.length : null, release };
+      }
       const release = this.openRelease(current, grants, { notes: [found.row], documents: [] }, {
         ref: `note:${id}`, released_text_sha256: canonicalSha256(found.text),
       });
-      return Object.freeze({ kind: "note" as const, row: found.row, text: found.text, release });
+      return Object.freeze({ kind, row: found.row, text: found.text, release });
     }
     const from = input.from_ordinal ?? 0;
     if (!Number.isSafeInteger(from) || from < 0 || from > MAXIMUM_ORDINAL) invalid();
@@ -273,13 +287,18 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
       if (!canonicalTime(row.received_at) || !NOTE_ID.test(row.context_id)) unavailable();
     }
     const projects = this.associations("authority_project_context_associations_v1", "context_id", actor, rows.map((row) => row.context_id), grants);
-    return Object.freeze(rows.map((row) => Object.freeze({
+    const notes = rows.map((row) => Object.freeze({
       row: Object.freeze({
         kind: "note" as const, id: row.context_id as `ctx_${string}`, title: row.title, added_at: row.received_at,
         visibility: row.audience_kind, association_project_ids: projects.get(row.context_id) ?? Object.freeze([]),
       }),
       text: row.text,
-    })));
+    }));
+    const imported = this.imported.rows(actor, scope, 'ids' in selection ? { ids: selection.ids } : undefined).map(item => ({
+      row: { kind: 'imported_meeting' as const, id: item.context_id, title: item.title, added_at: item.received_at, visibility: item.visibility,
+        association_project_ids: item.project_id === null ? [] : [item.project_id as ProjectIdV1] }, text: item.text,
+    })).filter(({ row }) => 'ids' in selection || selection.after === null || row.added_at < selection.after.added_at || (row.added_at === selection.after.added_at && row.id > selection.after.id));
+    return [...notes, ...imported].sort((a, b) => b.row.added_at.localeCompare(a.row.added_at) || a.row.id.localeCompare(b.row.id)).slice(0, 'ids' in selection ? selection.ids.length : selection.limit);
   }
 
   private documents(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, grants: Grants, selection: Selection): readonly { readonly row: PersonStoreDocumentRowV1; readonly filename: string }[] {

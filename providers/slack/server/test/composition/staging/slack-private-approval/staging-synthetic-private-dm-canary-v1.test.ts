@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { runStagingSyntheticPrivateDmCanaryV1 } from "../../../../src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.js";
 import { OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-config-v1";
 import { SYNTHETIC_DEMO_INITIAL_CURSOR_V1 } from "../../../../../../synthetic-demo/src/source/synthetic-demo-meeting-source-v1.js";
@@ -37,7 +37,7 @@ const telemetryRoots: string[] = [];
 
 function database(): Database.Database {
   const value = new Database(":memory:");
-  applyAuthorityBaselineV10(value);
+  applyAuthorityBaselineV11(value);
   value.prepare(
     `INSERT INTO authority_metadata VALUES (1, 'oau_test', 'org_test', 'Test', '{}', ?, ?)`,
   ).run(NOW, NOW);
@@ -52,7 +52,7 @@ function database(): Database.Database {
   ).run(NOW);
   value.prepare(
     `INSERT INTO authority_live_source_admission_v2 (
-       singleton, organization_id, principal_id, membership_id, membership_type,
+       source_key, organization_id, principal_id, membership_id, membership_type,
        source_adapter_id, source_adapter_version, source_adapter_instance_id,
        normalizer_version, source_custodian_sha256, source_custodian_assurance,
        source_custodian_observed_at, source_credential_reference_sha256,

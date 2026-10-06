@@ -215,7 +215,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     const slackBegin = await post('/v2/organization/tools/slack/install/begin', { request_id: `osi_${randomUUID()}` }); expect(slackBegin.status).toBe(201);
     const slackStatus = await post('/v2/organization/tools/slack/install/status', { attempt_id: slackBegin.body.attempt_id }); expect(slackStatus).toMatchObject({ status: 200, body: { status: 'complete', result: { kind: 'created', workspace_id: 'TFIXTURE' } } });
     expect(verifySlack).toHaveBeenCalledWith('xoxb-synthetic-slack', undefined);
-    expect((await tools()).map(tool => tool.tool_id).sort()).toEqual(['jira', 'slack']);
+    expect((await tools()).map(tool => tool.tool_id).sort()).toEqual(['granola', 'jira', 'slack']);
     telemetry.length = 0;
     jiraFetch.mockImplementationOnce(async () => Response.json({ error: 'private-provider-error' }, { status: 401 }));
     expect((await post('/v4/person/ask', { schema_version: 3, question: 'Check Jira again' })).status).toBe(401);

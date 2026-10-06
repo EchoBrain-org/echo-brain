@@ -80,3 +80,7 @@ export {
 } from "./person-content-policy-v2.js";
 
 export { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecV4, type RecordInputCodecRegistryV4, type RecordResolutionRefV4, type RecordHumanActEventV4, type ValidatedRecordInputV4 } from "./record-input-codec-v4.js";
+
+export * from './meeting-approval-event-v2.js';
+export * from './person-meeting-approval-record-input-v1.js';
+export * from './record-append-factories-v4.js';

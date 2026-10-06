@@ -8,10 +8,48 @@ import { createPersonConnectionLifecycleV1 } from '@echo-brain/provider-runtime/
 import { PersonConnectionStoreV1 } from '@echo-brain/provider-runtime/person-connection-store-v1';
 import { PersonProjectMappingStoreV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
 import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
+import { GRANOLA_PERSON_PROVIDER_V1 } from '../../granola/src/granola-mcp-v1.js';
 
 const person = { organization_id: 'org-fixture', principal_id: 'person-fixture', membership_id: 'membership-fixture' };
 const cloud = '00000000-0000-4000-8000-000000000007';
 const site = 'https://fixture.atlassian.net';
+
+describe('person-discovered workspace uses the shared consent lifecycle', () => {
+  it('pins a verified workspace on first consent and refuses workspace drift on reconnect', async () => {
+    const database = new Database(':memory:');
+    try {
+      let workspace = cloud; let tags: Readonly<Record<string, string>> = {};
+      const store = new PersonConnectionStoreV1(database, GRANOLA_PERSON_PROVIDER_V1);
+      const shared = createPersonConnectionLifecycleV1({ provider: GRANOLA_PERSON_PROVIDER_V1, store,
+        fetch: vi.fn(), authenticate: () => ({ ...person, authorization_sha256: canonicalSha256(person) }),
+        nango: { connect: async value => { tags = value; return { link: 'https://connect.nango.dev/fixture' }; },
+          find: async value => { expect(value).toEqual(tags); return 'reference'; },
+          connection: async () => ({ tags, access_token: 'synthetic' }), disconnect: async () => {} },
+        verify: async (_authenticated, input) => { input.require_account('fixture@example.test'); return { account_id: 'fixture@example.test', scope_id: workspace, origin: 'https://mcp.granola.ai' }; },
+      });
+      const first = await shared.application.connect({ access_token: 'person-session' });
+      expect(await shared.application.status({ access_token: 'second-client-same-person', attempt: first.attempt })).toMatchObject({ status: 'complete' });
+      const original = store.current(person)!;
+      expect(original.binding.external_scope_id).toBe(cloud);
+      const reconnect = await shared.application.connect({ access_token: 'person-session' });
+      workspace = '00000000-0000-4000-8000-000000000008';
+      expect(await shared.application.status({ access_token: 'person-session', attempt: reconnect.attempt })).toMatchObject({ status: 'failed', failure_reason: 'account_mismatch' });
+      expect(store.current(person)?.active).toBe(false);
+      expect(() => store.requireCurrent(original.binding)).toThrow(expect.objectContaining({ code: 'stale_access_state' }));
+    } finally { database.close(); }
+  });
+  it('checks a reconnect workspace in the atomic store commit too', () => {
+    const database = new Database(':memory:');
+    try {
+      const store = new PersonConnectionStoreV1(database, GRANOLA_PERSON_PROVIDER_V1);
+      const first = store.begin(person);
+      store.complete(person, first.attempt, 'reference', cloud, 'fixture@example.test', 'https://mcp.granola.ai');
+      const next = store.begin(person);
+      expect(() => store.complete(person, next.attempt, 'new-reference', '00000000-0000-4000-8000-000000000008', 'fixture@example.test', 'https://mcp.granola.ai')).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+      expect(store.current(person)?.active).toBe(false);
+    } finally { database.close(); }
+  });
+});
 
 describe('shared Atlassian custody with separate product identities', () => {
   it.each([

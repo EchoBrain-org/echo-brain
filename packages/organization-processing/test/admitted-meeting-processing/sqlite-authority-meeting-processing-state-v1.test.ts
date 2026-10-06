@@ -38,6 +38,21 @@ async function actionableFixture() {
 }
 
 describe("SQLite admitted meeting-processing state", () => {
+  it("keeps personal source progress and approval delivery isolated in the shared tables", async () => {
+    const { value, state, candidate } = await actionableFixture();
+    const columns = (value.pragma('table_info(authority_live_source_admission_v2)') as { name: string }[]).map(row => row.name).filter(name => name !== 'source_key');
+    const first = value.prepare('SELECT * FROM authority_live_source_admission_v2').get() as Record<string, unknown>;
+    value.prepare(`INSERT INTO authority_live_source_admission_v2 (${columns.join(',')}, source_key) VALUES (${columns.map(() => '?').join(',')}, ?)`)
+      .run(...columns.map(column => column === 'semantic_input_sha256' ? `sha256:${'b'.repeat(64)}` : column === 'source_adapter_instance_id' ? 'second-person-source' : column === 'singleton' ? 2 : first[column]), 'second');
+    const second = new SqliteAuthorityMeetingProcessingStateV1(value, fixtureCursorPolicy, 'llm', () => ADVANCED_AT, 'second');
+    const admission = await second.readAdmission();
+    expect(admission.source.instance_id).toBe('second-person-source');
+    expect(second.listPendingApprovalDeliveries()).toEqual([]);
+    expect(second.readFrozenCandidateForApproval(candidate.approval_id)).toBeUndefined();
+    expect(await second.advanceCursor({ expected_cursor: sourceCursor, next_cursor: nextCursor })).toBe('advanced');
+    expect((await state.readAdmission()).source.cursor).toBe(sourceCursor);
+    expect(state.listPendingApprovalDeliveries()).toHaveLength(1);
+  });
   it("fences source custody with current identity and owner membership inside the retaining transaction", async () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(value, fixtureCursorPolicy, "llm");

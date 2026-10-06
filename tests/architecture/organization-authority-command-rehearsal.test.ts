@@ -282,7 +282,7 @@ describe("Organization Authority command rehearsal", () => {
     };
     const slack = { nango: nango.client, manifest_provider: fakeManifest, provider: fakeSlack };
     const idle = await openOrganizationAuthorityService(config, { slack, api: { oidc_provider: new MockOidcProvider() } });
-    expect(idle.processing).toBe("idle_until_finalize");
+    expect(idle.processing).toBe("active");
     try {
       const loopback = `http://127.0.0.1:${String(idle.address.port)}`;
       const rewriteFetch: typeof fetch = async (input, init) => {
@@ -388,7 +388,7 @@ describe("Organization Authority command rehearsal", () => {
       { slack, active_processing: inactiveWorker },
     );
     try {
-      expect(active.processing).toBe("idle_until_finalize");
+      expect(active.processing).toBe("active");
       expect(
         await fetch(
           `http://127.0.0.1:${String(active.address.port)}/v1/authority-descriptor`,

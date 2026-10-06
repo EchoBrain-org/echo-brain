@@ -16,7 +16,8 @@
     "providers/shared/src/person-connection-http-application-v1.ts",
     "providers/shared/src/bounded-json-response-v1.ts",
     "providers/shared/src/atlassian-document-text-v1.ts",
-    "providers/shared/src/person-project-mapping-v1.ts"
+    "providers/shared/src/person-project-mapping-v1.ts",
+    "providers/shared/src/person-provider-mcp-transport-v1.ts"
   ],
   "owned_source_paths": [
     "providers/shared/src/**"
@@ -30,7 +31,8 @@
     "@echo-brain/organization-authority-kernel"
   ],
   "allowed_external_packages": [
-    "better-sqlite3"
+    "better-sqlite3",
+    "eventsource-parser"
   ],
   "allowed_node_builtins": [
     "crypto"
@@ -49,7 +51,8 @@
         "@echo-brain/organization-authority-kernel"
       ],
       "allowed_external_packages": [
-        "better-sqlite3"
+        "better-sqlite3",
+        "eventsource-parser"
       ],
       "allowed_node_builtins": [
         "crypto"

@@ -211,7 +211,8 @@
       "allowed_workspace_packages": [
         "@echo-brain/provider-jira-client",
         "@echo-brain/provider-slack-client",
-        "@echo-brain/provider-confluence-client"
+        "@echo-brain/provider-confluence-client",
+        "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": []

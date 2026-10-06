@@ -26,7 +26,7 @@ export function verifyPersistedOpenRouterDecisionProcessorAdmissionV1(
                 processor_adapter_version AS version,
                 processor_configuration_sha256 AS configuration_sha256
            FROM authority_live_source_admission_v2
-          WHERE singleton = 1`,
+          WHERE source_key = 1`,
       )
       .get() as PersistedProcessorCommitmentV1 | undefined;
     if (row === undefined) return;

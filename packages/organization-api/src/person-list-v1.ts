@@ -36,12 +36,13 @@ export const PERSON_OPEN_PARTICIPANTS_MAX_V1 = 32;
 export const PERSON_CURSOR_MAX_CHARACTERS_V1 = 512;
 export const PERSON_LIST_NOTICE_MEETINGS_UNAVAILABLE_V1 = 'meetings_unavailable';
 
-export type PersonItemKindV1 = 'note' | 'document' | 'meeting';
+export type PersonItemKindV1 = 'imported_meeting' | 'note' | 'document' | 'meeting';
+export type PersonImportedMeetingRefV1 = `imported_meeting:cap_${string}`;
 export type PersonNoteRefV1 = `note:ctx_${string}`;
 export type PersonDocumentRefV1 = `document:doc_${string}`;
 export type PersonMeetingRefV1 = `meeting:sha256:${string}`;
 export type PersonTranscriptRefV1 = `transcript:sha256:${string}`;
-export type PersonItemRefV1 = PersonNoteRefV1 | PersonDocumentRefV1 | PersonMeetingRefV1;
+export type PersonItemRefV1 = PersonImportedMeetingRefV1 | PersonNoteRefV1 | PersonDocumentRefV1 | PersonMeetingRefV1;
 export type PersonOpenRefV1 = PersonItemRefV1 | PersonTranscriptRefV1;
 export type PersonListVisibilityV1 = 'only_me' | 'team' | 'project';
 export type PersonListNoticeV1 = 'meetings_unavailable';
@@ -57,6 +58,7 @@ interface PersonListRowBaseV1 {
   /** The caller's joined projects only; never an audience roster. */
   readonly projects: readonly PersonListProjectRefV1[];
 }
+export interface PersonListImportedMeetingRowV1 extends PersonListRowBaseV1 { readonly kind: 'imported_meeting'; readonly ref: PersonImportedMeetingRefV1 }
 export interface PersonListNoteRowV1 extends PersonListRowBaseV1 { readonly kind: 'note'; readonly ref: PersonNoteRefV1 }
 export interface PersonListDocumentRowV1 extends PersonListRowBaseV1 {
   readonly kind: 'document';
@@ -71,7 +73,7 @@ export interface PersonListMeetingRowV1 extends PersonListRowBaseV1 {
   /** YYYY-MM-DD, a real calendar date. */
   readonly meeting_date?: string;
 }
-export type PersonListRowV1 = PersonListNoteRowV1 | PersonListDocumentRowV1 | PersonListMeetingRowV1;
+export type PersonListRowV1 = PersonListImportedMeetingRowV1 | PersonListNoteRowV1 | PersonListDocumentRowV1 | PersonListMeetingRowV1;
 
 /** project_id and mine are exclusive; neither means global. */
 export interface PersonListRequestV1 {
@@ -141,6 +143,7 @@ export interface PersonOpenMeetingAtomV1 {
   readonly part?: { readonly index: number; readonly count: number };
 }
 interface PersonOpenBaseV1 { readonly schema_version: 1; readonly kind: 'echo-person-open-v1'; readonly next_cursor: string | null }
+export interface PersonOpenImportedMeetingV1 extends PersonOpenBaseV1 { readonly ref: PersonImportedMeetingRefV1; readonly item: PersonListImportedMeetingRowV1; readonly text: string }
 export interface PersonOpenNoteV1 extends PersonOpenBaseV1 {
   readonly ref: PersonNoteRefV1;
   readonly item: PersonListNoteRowV1;
@@ -167,8 +170,9 @@ export interface PersonOpenTranscriptV1 extends PersonOpenBaseV1 {
   readonly ref: PersonTranscriptRefV1;
   readonly text: string;
 }
-export type PersonOpenResponseV1 = PersonOpenNoteV1 | PersonOpenDocumentV1 | PersonOpenMeetingV1 | PersonOpenTranscriptV1;
+export type PersonOpenResponseV1 = PersonOpenImportedMeetingV1 | PersonOpenNoteV1 | PersonOpenDocumentV1 | PersonOpenMeetingV1 | PersonOpenTranscriptV1;
 
+const IMPORTED_REF = /^imported_meeting:cap_[0-9a-f]{64}$/;
 const NOTE_REF = /^note:ctx_[0-9a-f]{64}$/;
 const DOCUMENT_REF = /^document:doc_[0-9a-f]{64}$/;
 const MEETING_REF = /^meeting:sha256:[0-9a-f]{64}$/;
@@ -232,7 +236,7 @@ function bounded<T>(result: T, maximumBytes: number, label: string): T {
 }
 
 export function validatePersonItemRefV1(value: unknown, label = 'Person item ref'): PersonItemRefV1 {
-  if (typeof value !== 'string' || !(NOTE_REF.test(value) || DOCUMENT_REF.test(value) || MEETING_REF.test(value))) fail(`${label} is invalid`);
+  if (typeof value !== 'string' || !(IMPORTED_REF.test(value) || NOTE_REF.test(value) || DOCUMENT_REF.test(value) || MEETING_REF.test(value))) fail(`${label} is invalid`);
   return value as PersonItemRefV1;
 }
 
@@ -242,9 +246,9 @@ export function validatePersonOpenRefV1(value: unknown, label = 'Person open ref
   return validatePersonItemRefV1(value, label);
 }
 
-export function personRefKindV1(ref: PersonOpenRefV1): 'note' | 'document' | 'meeting' | 'transcript' {
+export function personRefKindV1(ref: PersonOpenRefV1): 'imported_meeting' | 'note' | 'document' | 'meeting' | 'transcript' {
   const valid = validatePersonOpenRefV1(ref);
-  return valid.slice(0, valid.indexOf(':')) as 'note' | 'document' | 'meeting' | 'transcript';
+  return valid.slice(0, valid.indexOf(':')) as 'imported_meeting' | 'note' | 'document' | 'meeting' | 'transcript';
 }
 
 /** The text after the first colon: a context_id, a document_id, or a record digest. */
@@ -297,6 +301,7 @@ function row(value: unknown, label: string): PersonListRowV1 {
       ...(Object.hasOwn(input, 'meeting_date') ? { meeting_date: input.meeting_date as string } : {}),
     });
   }
+  if (kind === 'imported_meeting') return Object.freeze({ ref: ref as PersonImportedMeetingRefV1, kind, ...base });
   return Object.freeze({ ref: ref as PersonNoteRefV1, kind, ...base });
 }
 
@@ -503,7 +508,7 @@ export function validatePersonOpenResponseV1(value: unknown): PersonOpenResponse
   const input = object(value, 'Person open response');
   const ref = validatePersonOpenRefV1(input.ref, 'Person open response ref');
   const kind = personRefKindV1(ref);
-  const keys = kind === 'note' ? ['item', 'text']
+  const keys = kind === 'note' || kind === 'imported_meeting' ? ['item', 'text']
     : kind === 'document' ? ['item', 'filename', 'chunks']
     : kind === 'meeting' ? ['item', 'atoms', ...optionalKeys(input, ['meeting', 'transcript_ref'])]
     : ['text'];
@@ -512,6 +517,11 @@ export function validatePersonOpenResponseV1(value: unknown): PersonOpenResponse
   const next_cursor = input.next_cursor === null ? null : cursor(input.next_cursor, 'Person open response next_cursor');
   const base = { schema_version: 1 as const, kind: 'echo-person-open-v1' as const };
   switch (kind) {
+    case 'imported_meeting': {
+      const item = openItem(input.item, ref as PersonImportedMeetingRefV1) as PersonListImportedMeetingRowV1;
+      body(input.text, 'Imported meeting notes', 8192);
+      return bounded<PersonOpenImportedMeetingV1>({ ...base, ref: ref as PersonImportedMeetingRefV1, item, text: input.text, next_cursor }, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, 'Person open response');
+    }
     case 'note': {
       if (next_cursor !== null) fail('Person open note next_cursor is invalid');
       const item = openItem(input.item, ref as PersonNoteRefV1) as PersonListNoteRowV1;

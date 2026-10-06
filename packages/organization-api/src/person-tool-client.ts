@@ -34,7 +34,7 @@ export interface PersonToolHostV1 {
   withToolSession<T>(operation: (session: PersonToolSessionV1) => Promise<T>): Promise<T>;
 }
 /** The verbs of `echo-brain person tools <verb> --tool <tool_id>`, the same for every tool. */
-export type PersonToolVerbNameV1 = 'setup' | 'connect' | 'disconnect' | 'status' | 'cancel' | 'project';
+export type PersonToolVerbNameV1 = 'setup' | 'connect' | 'disconnect' | 'status' | 'cancel' | 'project' | 'meetings';
 
 export interface PersonToolVerbContextV1 {
   readonly host: PersonToolHostV1;

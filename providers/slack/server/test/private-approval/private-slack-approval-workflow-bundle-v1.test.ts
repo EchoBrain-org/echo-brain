@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { ProviderHttpRequestV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
 import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
@@ -49,7 +49,7 @@ function stateDirectory() {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "echo-slack-approval-bundle-")));
   directories.push(directory);
   const authority = openAuthorityDatabase(join(directory, "authority.sqlite"));
-  applyAuthorityBaselineV10(authority);
+  applyAuthorityBaselineV11(authority);
   authority.close();
   const database = openOrganizationControlDatabase(join(directory, "integrations.sqlite"));
   opened.push({ close: () => database.close() });

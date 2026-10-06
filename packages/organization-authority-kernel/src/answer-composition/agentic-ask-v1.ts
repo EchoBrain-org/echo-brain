@@ -454,7 +454,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     return [{ ...descriptor, kinds: [descriptor.kind] }];
   });
   const researchSources: readonly ResearchSource[] = Object.freeze([
-    { source_id: 'meeting', selector: 'meetings', kinds: ['decision', 'action', 'rationale'], description: 'Approved meeting records and admitted transcripts.' },
+    { source_id: 'meeting', selector: 'meetings', kinds: ['imported_meeting', 'decision', 'action', 'rationale'], description: 'Imported meeting notes (unapproved), approved meeting decisions, and explicitly shared transcripts. Keep imported notes distinct from approved decisions.' },
     { source_id: 'document', selector: 'documents', kinds: ['note', 'document_passage'], description: 'Uploaded document passages and notes.' },
     ...liveCatalog,
   ]);

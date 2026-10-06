@@ -38,7 +38,9 @@
     "openid-client": "6.8.4",
     "pdfjs-dist": "6.3.289",
     "yauzl": "3.4.0",
-    "@echo-brain/provider-confluence": "0.0.0-dev.0"
+    "@echo-brain/provider-confluence": "0.0.0-dev.0",
+    "@echo-brain/provider-granola": "0.0.0-dev.0",
+    "@echo-brain/provider-runtime": "0.0.0-dev.0"
   },
   "devDependencies": {
     "@types/yauzl": "3.4.0"

@@ -54,6 +54,9 @@
     },
     {
       "path": "../../providers/synthetic-demo"
+    },
+    {
+      "path": "../../providers/shared"
     }
   ]
 }

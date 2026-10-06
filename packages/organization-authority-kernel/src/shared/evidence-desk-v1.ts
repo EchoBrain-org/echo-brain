@@ -1,7 +1,7 @@
 import type { PersonAnswerEvidenceCitationV4, PersonAnswerScopeV3, PersonOpenRefV1 } from '@echo-brain/organization-api';
 
 /** Read-only evidence desk contract bound to one authenticated Person request. */
-export type EvidenceDeskKindV1 = 'decision' | 'action' | 'rationale' | 'note' | 'document_passage' | 'slack_message';
+export type EvidenceDeskKindV1 = 'imported_meeting' | 'decision' | 'action' | 'rationale' | 'note' | 'document_passage' | 'slack_message';
 export type EvidenceDeskVisibilityV1 = 'only_me' | 'team' | 'project' | 'projects' | 'approver_only';
 export type EvidenceDeskCitationV1 = PersonAnswerEvidenceCitationV4;
 /** Where an item came from. Meeting records and documents live in Echo; Slack is read live and never stored. */

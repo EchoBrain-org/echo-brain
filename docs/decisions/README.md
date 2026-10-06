@@ -52,6 +52,8 @@ separately.
 | [ADR-0028](ADR-0028-broadened-layer-1-source-captures.md) | Layer 1 holds the people directory, signed record log and source captures | proposed |
 | [ADR-0029](ADR-0029-capture-and-derive-foundation.md) | Project-scoped capture and exact derivation inputs | proposed |
 
+| [ADR-0030](ADR-0030-personal-meeting-custody-and-review.md) | Personal Granola custody and shared in-app meeting review | accepted |
+
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary
 changes; do not perform a mechanical rewrite that loses context.

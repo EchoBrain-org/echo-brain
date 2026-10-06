@@ -2,7 +2,7 @@ import type { ApprovedRecord, Visibility } from '../../shared/protocol.js';
 import { documentDetail, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreRecord, nextTextPage, projectChoices, refreshDocument,
+  addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreImportedMeeting, moreRecord, nextTextPage, projectChoices, refreshDocument,
   removableFrom, removeFromProject, saveOriginal, showProjectChoices, toggleReaderMenu, type ReaderState, type State,
 } from '../store.js';
 import { RecordDetail, UNTITLED } from './ask.js';
@@ -109,6 +109,7 @@ export function Reader({ state, reader, backTo }: { state: State; reader: Reader
       {saving && <div class={saving.error ? 'error' : 'notice'} data-testid="reader-save-status" aria-live="polite">{saving.text}</div>}
       {reader.failure && <div class="error">{message(reader.failure)}</div>}
       {content && <div class="body selectable" data-testid="reader-text">{content.text}</div>}
+      {reader.ref.kind === 'imported_meeting' && reader.importedNext && <button class="plain-button" disabled={reader.loading} onClick={moreImportedMeeting}>More notes</button>}
       {document && (document.chunks.length === 0 ? (
         <div class="body notice" data-testid="reader-text">Original saved · {EXTRACTION[document.document.extraction]}.</div>
       ) : (

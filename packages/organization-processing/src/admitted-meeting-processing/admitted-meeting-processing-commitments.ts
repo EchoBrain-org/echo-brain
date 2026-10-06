@@ -40,6 +40,7 @@ interface CommitmentRow {
 /** Reads no private file and exposes no private value. */
 export function readAdmittedMeetingProcessingCommitmentsV1(
   database: Database.Database,
+  sourceKey: string = '1',
 ): AdmittedMeetingProcessingCommitmentsV1 {
   const row = database
     .prepare(
@@ -50,9 +51,9 @@ export function readAdmittedMeetingProcessingCommitmentsV1(
               processor_configuration_sha256,
               processor_credential_reference_sha256
          FROM authority_live_source_admission_v2
-        WHERE singleton = 1`,
+        WHERE source_key = ?`,
     )
-    .get() as CommitmentRow | undefined;
+    .get(sourceKey) as CommitmentRow | undefined;
   if (row === undefined) {
     throw new Error("admitted-source processing has no source admission");
   }

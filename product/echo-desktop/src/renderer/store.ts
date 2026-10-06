@@ -1,3 +1,4 @@
+import type { PersonMeetingOperationV1, PersonMeetingResultsV1 } from '@echo-brain/organization-api';
 // All renderer state and the actions that change it. Every request carries the
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
@@ -280,6 +281,7 @@ export interface ReaderState {
   from: ReaderFrom;
   loading: boolean;
   content?: ContextContent;
+  importedNext?: string | null;
   document?: DocumentText;
   record?: ApprovedRecord;
   /** The record's next page, until all of it is read. */
@@ -723,6 +725,16 @@ export function cancelConnect(): void {
   }
 }
 
+/** Account-fenced command for the personal meeting sheet. No provider token enters the renderer. */
+export async function meetingCommand<K extends PersonMeetingOperationV1['operation']>(operation: PersonMeetingOperationV1 & { readonly operation: K }): Promise<PersonMeetingResultsV1[K]> {
+  const account = expect(), sheet = state.sheet;
+  if (!account || sheet?.kind !== 'tool-manage' || sheet.tool.tool_id !== 'granola' || state.concealed) throw new Error('Open Granola for the current account.');
+  const result = await rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 1, tool_id: 'granola' } });
+  if (state.sheet !== sheet || JSON.stringify(expect()) !== JSON.stringify(account) || state.concealed) throw new Error('Account or screen changed.');
+  if (!result.ok) { accountLost(result.failure); throw new Error(message(result.failure)); }
+  return result.value as PersonMeetingResultsV1[K];
+}
+
 export function manageTool(tool: ConnectedTool): void {
   if (!state.status?.account || state.concealed || state.sheet) return;
   set({ sheet: { kind: 'tool-manage', tool, busy: false } });
@@ -1023,6 +1035,7 @@ async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string): Prom
   const mine = ++readSeq;
   const shown = sameRef(state.reader?.ref, ref) ? state.reader : null;
   const kept = {
+    ...(shown?.content ? { content: shown.content, importedNext: shown.importedNext } : {}),
     ...(shown?.document ? { document: shown.document } : {}),
     ...(shown?.record ? { record: shown.record, recordNext: shown.recordNext } : {}),
   };
@@ -1035,6 +1048,11 @@ async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string): Prom
     return;
   }
   const opened = result.value;
+  if (opened.kind === 'imported_meeting') {
+    const content = cursor === undefined ? opened.content : kept.content ? { ...opened.content, text: kept.content.text + opened.content.text } : null;
+    if (!content) return;
+    set({ reader: { ref, from, loading: false, menu: 'closed', content, importedNext: opened.next_cursor } }); return;
+  }
   if (opened.kind === 'note') { set({ reader: { ref, from, loading: false, menu: 'closed', content: opened.content } }); return; }
   if (opened.kind === 'document') { set({ reader: { ref, from, loading: false, menu: 'closed', document: opened.document } }); return; }
   const record = cursor === undefined ? opened.record : kept.record ? joinRecord(kept.record, opened.record) : null;
@@ -1066,6 +1084,12 @@ export function joinRecord(shown: ApprovedRecord, next: ApprovedRecord): Approve
   const actions = join(shown.actions, next.actions);
   const rationales = join(shown.rationales, next.rationales);
   return decisions && actions && rationales ? { ...shown, decisions, actions, rationales } : null;
+}
+
+export function moreImportedMeeting(): void {
+  const reader = state.reader;
+  if (reader?.ref.kind !== 'imported_meeting' || !reader.importedNext || reader.loading) return;
+  void openReader(reader.ref, reader.from, reader.importedNext);
 }
 
 /** More, under a meeting's record: its next page. */

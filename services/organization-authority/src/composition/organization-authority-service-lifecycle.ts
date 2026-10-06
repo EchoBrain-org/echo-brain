@@ -66,6 +66,7 @@ export interface OrganizationAuthorityServiceLifecycleDependencies {
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
   readonly api?: OrganizationAuthorityApiRuntimeDependencies;
   readonly processing: OrganizationAuthorityProcessingCycleV1;
+  readonly additional_processing?: OrganizationAuthorityProcessingCycleV1;
   readonly start_api_runtime?: (
     config: OrganizationAuthorityApiRuntimeConfig,
     dependencies: OrganizationAuthorityApiRuntimeDependencies,
@@ -112,12 +113,13 @@ export async function runOrganizationAuthorityProcessingCycleV1(
   processing: OrganizationAuthorityProcessingCycleV1,
   signal: AbortSignal,
   lifecycle?: MeetingProcessingWorkerPhaseRunnerV1,
+  additional?: OrganizationAuthorityProcessingCycleV1,
 ): Promise<void> {
   const phase = <T>(
     name: Parameters<MeetingProcessingWorkerPhaseRunnerV1["runPhase"]>[0],
     operation: () => Promise<T>,
   ): Promise<T> => lifecycle?.runPhase(name, operation, signal) ?? operation();
-  await phase("recovery", () => processing.recoverV4Appends(signal));
+  await phase("recovery", async () => { await processing.recoverV4Appends(signal); await additional?.recoverV4Appends(signal); });
   signal.throwIfAborted();
   if (processing.hasFineGrainedSourceLifecycle === true) {
     await processing.pollAndStageAdmittedMeetings(signal);
@@ -127,7 +129,9 @@ export async function runOrganizationAuthorityProcessingCycleV1(
     );
   }
   signal.throwIfAborted();
-  await runOrganizationAuthorityApprovalPublicationV1(processing, signal, lifecycle);
+  await additional?.pollAndStageAdmittedMeetings(signal);
+  signal.throwIfAborted();
+  await runOrganizationAuthorityApprovalPublicationV1(processing, signal, lifecycle, additional);
 }
 
 /**
@@ -143,16 +147,18 @@ export async function runOrganizationAuthorityApprovalPublicationV1(
   processing: OrganizationAuthorityProcessingCycleV1,
   signal: AbortSignal,
   lifecycle?: MeetingProcessingWorkerPhaseRunnerV1,
+  additional?: OrganizationAuthorityProcessingCycleV1,
 ): Promise<void> {
   const phase = <T>(
     name: Parameters<MeetingProcessingWorkerPhaseRunnerV1["runPhase"]>[0],
     operation: () => Promise<T>,
   ): Promise<T> => lifecycle?.runPhase(name, operation, signal) ?? operation();
-  await phase("approval_observation", () =>
-    processing.observeAndFinalizePendingApprovals(signal),
-  );
+  await phase("approval_observation", async () => {
+    await processing.observeAndFinalizePendingApprovals(signal);
+    await additional?.observeAndFinalizePendingApprovals(signal);
+  });
   signal.throwIfAborted();
-  await phase("record_append", () => processing.appendFinalizedApprovalsToV4(signal));
+  await phase("record_append", async () => { await processing.appendFinalizedApprovalsToV4(signal); await additional?.appendFinalizedApprovalsToV4(signal); });
   signal.throwIfAborted();
 }
 
@@ -184,7 +190,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
     // it before validating the generation that will be served at startup.
     await lifecycle.runPhase(
       "recovery",
-      () => dependencies.processing.recoverV4Appends(startup.signal),
+      async () => { await dependencies.processing.recoverV4Appends(startup.signal); await dependencies.additional_processing?.recoverV4Appends(startup.signal); },
       startup.signal,
       false,
     );
@@ -237,6 +243,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
             dependencies.processing,
             signal,
             lifecycle,
+            dependencies.additional_processing ?? startedApi.processing,
           );
           lifecycle.succeedCycle();
         } catch (error) {
@@ -321,6 +328,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
               dependencies.processing,
               signal,
               lifecycle,
+              dependencies.additional_processing ?? startedApi.processing,
             );
           })
           .then(() => {

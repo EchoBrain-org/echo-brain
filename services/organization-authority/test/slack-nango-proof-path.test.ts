@@ -276,7 +276,7 @@ it("sets up, connects, links, approves, reconnects and restarts Slack through Na
   };
   const oidcProvider = new TestOidcProvider();
   let runtime = await openOrganizationAuthorityService(config, { api: { oidc_provider: oidcProvider } });
-  expect(runtime.processing).toBe("idle_until_finalize");
+  expect(runtime.processing).toBe("active");
   const origin = () => `http://127.0.0.1:${runtime.address.port}`;
   const call = async (path: string, token: string, body?: unknown) => {
     const response = await fetch(`${origin()}${path}`, body === undefined ? { headers: { authorization: `Bearer ${token}` } }
@@ -292,7 +292,7 @@ it("sets up, connects, links, approves, reconnects and restarts Slack through Na
     const session = /name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!;
     return (JSON.parse(Buffer.from(session, "base64url").toString("utf8")) as { access_token: string }).access_token;
   };
-  const slackTool = async (token: string) => (await call("/v4/person/tools", token)).body.tools[0];
+  const slackTool = async (token: string) => (await call("/v4/person/tools", token)).body.tools.find((tool: { tool_id: string }) => tool.tool_id === 'slack');
   /** Begins an install, lets the owner finish Nango's Connect page as `bot`, and reads the outcome. */
   const install = async (bot: Bot, token: string) => {
     const begun = await call(ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, owner, { request_id: `osi_${randomUUID()}` });
@@ -347,7 +347,7 @@ it("sets up, connects, links, approves, reconnects and restarts Slack through Na
     await runtime.close();
     const processorCommitment = createOpenRouterDecisionProcessorAdmissionCommitmentV1({ instance_id: "proof-llm", credential_reference: `file:${config.openrouter_credential_file}` });
     const admissionDb = openAuthorityDatabase(join(state, "authority.sqlite"), { fileMustExist: true });
-    try { admissionDb.prepare(`INSERT INTO authority_live_source_admission_v2 (singleton, organization_id, principal_id, membership_id, membership_type, source_adapter_id, source_adapter_version, source_adapter_instance_id, normalizer_version, source_custodian_sha256, source_custodian_assurance, source_custodian_observed_at, source_credential_reference_sha256, initial_cursor, cutoff_at, processor_adapter_id, processor_adapter_version, processor_instance_id, processor_configuration_sha256, processor_credential_reference_sha256, semantic_input_sha256, admitted_at) VALUES (1, ?, ?, ?, 'owner', ?, ?, ?, ?, ?, 'synthetic_fixture_owner', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    try { admissionDb.prepare(`INSERT INTO authority_live_source_admission_v2 (source_key, organization_id, principal_id, membership_id, membership_type, source_adapter_id, source_adapter_version, source_adapter_instance_id, normalizer_version, source_custodian_sha256, source_custodian_assurance, source_custodian_observed_at, source_credential_reference_sha256, initial_cursor, cutoff_at, processor_adapter_id, processor_adapter_version, processor_instance_id, processor_configuration_sha256, processor_credential_reference_sha256, semantic_input_sha256, admitted_at) VALUES (1, ?, ?, ?, 'owner', ?, ?, ?, ?, ?, 'synthetic_fixture_owner', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       initialized.organization_id, initialized.owner_principal_id, initialized.owner_membership_id, syntheticDemoMeetingSourceIdentityV1.adapter_id, syntheticDemoMeetingSourceIdentityV1.version, syntheticDemoMeetingSourceIdentityV1.instance_id, syntheticDemoMeetingSourceIdentityV1.version, canonicalSha256({ owner: OWNER_EMAIL }), NOW, canonicalSha256({ fixture: "slack-proof" }), SYNTHETIC_DEMO_INITIAL_CURSOR_V1, NOW, processorCommitment.adapter_id, processorCommitment.version, processorCommitment.instance_id, processorCommitment.configuration_sha256, processorCommitment.credential_reference_sha256, canonicalSha256({ fixture: "slack-proof-admission" }), NOW); } finally { admissionDb.close(); }
     const admitted = { source: syntheticDemoMeetingSourceIdentityV1, processor: processorCommitment };
     const meetings = meetingSource({ kind: "meeting-source", adapter_id: admitted.source.adapter_id, instance_id: admitted.source.instance_id, version: admitted.source.version });

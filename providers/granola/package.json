@@ -12,6 +12,18 @@
     "./granola-meeting-normalizer-v1": {
       "types": "./dist/granola-meeting-normalizer-v1.d.ts",
       "import": "./dist/granola-meeting-normalizer-v1.js"
+    },
+    "./granola-mcp-v1": {
+      "types": "./dist/granola-mcp-v1.d.ts",
+      "import": "./dist/granola-mcp-v1.js"
+    },
+    "./granola-person-connection-v1": {
+      "types": "./dist/granola-person-connection-v1.d.ts",
+      "import": "./dist/granola-person-connection-v1.js"
+    },
+    "./granola-folder-source-v1": {
+      "types": "./dist/granola-folder-source-v1.d.ts",
+      "import": "./dist/granola-folder-source-v1.js"
     }
   },
   "files": [
@@ -27,7 +39,9 @@
   "dependencies": {
     "@echo-brain/federation-protocol": "0.0.0-dev.0",
     "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
-    "@echo-brain/organization-processing": "0.0.0-dev.0"
+    "@echo-brain/organization-processing": "0.0.0-dev.0",
+    "fast-xml-parser": "5.11.2",
+    "@echo-brain/provider-runtime": "0.0.0-dev.0"
   },
   "engines": {
     "node": "22.22.1",

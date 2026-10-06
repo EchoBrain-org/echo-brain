@@ -1,7 +1,7 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import { SqlitePersonAgenticAskAuditV1 } from "../../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
-import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
@@ -13,7 +13,7 @@ const requestContext = {
 describe("agentic Ask audit", () => {
   it("writes a content-free success terminal witness to the existing immutable table", () => {
     const database = openAuthorityDatabase(":memory:");
-    applyAuthorityBaselineV10(database);
+    applyAuthorityBaselineV11(database);
     try {
       const context = { ...requestContext };
       const audit = new SqlitePersonAgenticAskAuditV1(database).forRequest(context);
@@ -37,7 +37,7 @@ describe("agentic Ask audit", () => {
 
   it.each(["cancelled", "timed_out"] as const)("records %s without output hashes", (outcome) => {
     const database = openAuthorityDatabase(":memory:");
-    applyAuthorityBaselineV10(database);
+    applyAuthorityBaselineV11(database);
     try {
       new SqlitePersonAgenticAskAuditV1(database, () => "2026-09-27T00:00:00.000Z").forRequest(requestContext).append({
         kind: "echo-agentic-ask-audit-v1", outcome, receipt_digests: [],

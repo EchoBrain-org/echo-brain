@@ -1,3 +1,4 @@
+import { retainedMeetingSourceCoordinateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 /**
  * Private Slack DM delivery for admitted meeting-processing candidates.
  *
@@ -29,10 +30,6 @@ import { type PrivateSlackApprovalReviewerTargetResolverInputV1, type PrivateSla
 import { SqlitePrivateSlackApprovalAssignmentStateV1, type PrivateApprovalAssignmentStateV1 } from "./sqlite-private-slack-approval-assignment-state-v1.js";
 import { listPrivateSlackApprovalEligibleProjectsV2 } from "./private-slack-approval-project-eligibility-v2.js";
 import { compileDecisionBrief } from "@echo-brain/organization-processing/core/processing/brief";
-import {
-  meetingSourceEnvelopeV1,
-  sourceContentSha256V1,
-} from "@echo-brain/organization-processing/core";
 import { PrivateSlackApprovalCardPosterV1, type PrivateSlackApprovalCardPresentationV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 import {
   APPROVAL_DELIVERY_QUARANTINE_REASON_V1,
@@ -399,27 +396,7 @@ function retainedTranscriptSourceV2(
   organizationId: string,
   meeting: ApprovalWorkflowStageInputV1["meeting"],
 ): PrivateApprovalTranscriptSourceV1 | undefined {
-  const source = meetingSourceEnvelopeV1(meeting);
-  const row = database.prepare(`SELECT revision_sha256
-    FROM authority_source_revisions_v1
-    WHERE organization_id=? AND source_id=? AND revision_id=?`).get(
-    organizationId,
-    source.item.source_id,
-    source.revision.revision_id,
-  ) as { readonly revision_sha256?: unknown } | undefined;
-  if (
-    row === undefined ||
-    typeof row.revision_sha256 !== "string" ||
-    !/^[0-9a-f]{64}$/.test(row.revision_sha256) ||
-    row.revision_sha256 !== sourceContentSha256V1(
-      (({ captured_at: _capturedAt, ...immutable }) => immutable)(source.revision),
-    )
-  ) return undefined;
-  return Object.freeze({
-    source_id: source.item.source_id,
-    revision_id: source.revision.revision_id,
-    source_sha256: `sha256:${row.revision_sha256}` as Digest,
-  });
+  return retainedMeetingSourceCoordinateV1(database, organizationId, meeting);
 }
 
 function candidateCommitment(

@@ -504,7 +504,7 @@ async function admittedFixture(input: {
   if (input.skip_source_admission !== true) {
     const authority = openAuthorityDatabase(join(initialized.state_directory, "authority.sqlite"), { fileMustExist: true });
     try {
-      authority.prepare(`INSERT INTO authority_live_source_admission_v2 (singleton, organization_id, principal_id, membership_id, membership_type, source_adapter_id, source_adapter_version, source_adapter_instance_id, normalizer_version, source_custodian_sha256, source_custodian_assurance, source_custodian_observed_at, source_credential_reference_sha256, initial_cursor, cutoff_at, processor_adapter_id, processor_adapter_version, processor_instance_id, processor_configuration_sha256, processor_credential_reference_sha256, semantic_input_sha256, admitted_at) VALUES (1, ?, ?, ?, 'owner', ?, ?, ?, ?, ?, 'synthetic_fixture_owner', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      authority.prepare(`INSERT INTO authority_live_source_admission_v2 (source_key, organization_id, principal_id, membership_id, membership_type, source_adapter_id, source_adapter_version, source_adapter_instance_id, normalizer_version, source_custodian_sha256, source_custodian_assurance, source_custodian_observed_at, source_credential_reference_sha256, initial_cursor, cutoff_at, processor_adapter_id, processor_adapter_version, processor_instance_id, processor_configuration_sha256, processor_credential_reference_sha256, semantic_input_sha256, admitted_at) VALUES (1, ?, ?, ?, 'owner', ?, ?, ?, ?, ?, 'synthetic_fixture_owner', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         initialized.organization_id, initialized.owner_principal_id, initialized.owner_membership_id,
         syntheticDemoMeetingSourceIdentityV1.adapter_id, syntheticDemoMeetingSourceIdentityV1.version, syntheticDemoMeetingSourceIdentityV1.instance_id, syntheticDemoMeetingSourceIdentityV1.version,
         canonicalSha256({ owner: "founder@example.com" }), NOW, canonicalSha256({ fixture: "private-approval" }), SYNTHETIC_DEMO_INITIAL_CURSOR_V1, NOW,
@@ -1084,7 +1084,7 @@ describe("Organization Authority runtime private approval lane", () => {
       openrouter_credential_file: join(parent, "not-read-openrouter"),
     });
     try {
-      expect(runtime.processing).toBe("idle_until_finalize");
+      expect(runtime.processing).toBe("active");
       expect(
         (
           await fetch(
@@ -1871,7 +1871,7 @@ it('runs submit/status from the exact packed Person CLI without an admitted meet
   } finally { await runtime.close(); }
 });
 
-it('refuses pre-V10 state and resumes stopped V10 sessions, signed records, pending and ambiguous approval work', async () => {
+it('refuses pre-V11 state and resumes stopped V11 sessions, signed records, pending and ambiguous approval work', async () => {
   const fixture = await admittedFixture({ seed_private_slack_connection: true });
   const source = fakeSource(fixture.source.identity, 3);
   const originalPost = fixture.poster.postMarker.bind(fixture.poster);
@@ -1889,8 +1889,8 @@ it('refuses pre-V10 state and resumes stopped V10 sessions, signed records, pend
     expect(rows('authority_person_session_families').length).toBeGreaterThan(0);
     expect(rows('authority_live_approval_outbox_v2')).toEqual(expect.arrayContaining([expect.objectContaining({ state: 'posting' }), expect.objectContaining({ state: 'staged' })]));
     expect(rows('authority_private_approval_terminal_receipts_v3').length).toBe(1);
-    // A current runtime must never accept pre-V10 state as active state: relabel
-    // a copy of the live file as V5 and exercise the strict V10 pre-open gate.
+    // A current runtime must never accept pre-V11 state as active state: relabel
+    // a copy of the live file as V5 and exercise the strict V11 pre-open gate.
     const legacyPath = join(root(), 'v5.sqlite'); current.exec(`VACUUM INTO '${legacyPath}'`); current.close();
     const legacy = new Database(legacyPath);
     const manifest = legacy.prepare('SELECT manifest_json FROM echo_state_lineage_manifest').pluck().get() as string;
@@ -1899,11 +1899,11 @@ it('refuses pre-V10 state and resumes stopped V10 sessions, signed records, pend
     legacy.pragma('user_version = 5'); legacy.close();
     const recordPath = join(fixture.initialized.state_directory, 'record-log.sqlite'); const recordBefore = readFileSync(recordPath);
     const controlPath = join(fixture.initialized.state_directory, 'integrations.sqlite'); const controlBefore = readFileSync(controlPath);
-    const preservedCurrentPath = join(root(), 'v10.sqlite');
+    const preservedCurrentPath = join(root(), 'v11.sqlite');
     renameSync(path, preservedCurrentPath);
     try {
       renameSync(legacyPath, path); chmodSync(path, 0o600);
-      await expect(openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, { processing_adapter_overrides: { source, processor: fakeProcessor(fixture.processorIdentity), private_approval_card_poster: fixture.poster } })).rejects.toThrow('schema version is not exactly 10');
+      await expect(openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, { processing_adapter_overrides: { source, processor: fakeProcessor(fixture.processorIdentity), private_approval_card_poster: fixture.poster } })).rejects.toThrow('schema version is not exactly 11');
     } finally {
       if (existsSync(path)) renameSync(path, legacyPath);
       renameSync(preservedCurrentPath, path); chmodSync(path, 0o600);

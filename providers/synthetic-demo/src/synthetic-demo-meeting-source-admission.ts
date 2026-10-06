@@ -263,7 +263,7 @@ export async function admitSyntheticMeetingSourceV1(input: {
                   processor_credential_reference_sha256,
                   semantic_input_sha256, admitted_at
              FROM authority_live_source_admission_v2
-            WHERE singleton = 1`,
+            WHERE source_key = 1`,
         )
         .get() as ExistingAdmissionV1 | undefined;
       if (existing !== undefined) {
@@ -305,7 +305,7 @@ export async function admitSyntheticMeetingSourceV1(input: {
       database
         .prepare(
           `INSERT INTO authority_live_source_admission_v2 (
-             singleton, organization_id, principal_id, membership_id,
+             source_key, organization_id, principal_id, membership_id,
              membership_type, source_adapter_id, source_adapter_version,
              source_adapter_instance_id, normalizer_version,
              source_custodian_sha256, source_custodian_assurance,
@@ -318,7 +318,7 @@ export async function admitSyntheticMeetingSourceV1(input: {
            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
-          1,
+          '1',
           admission.organization_id,
           admission.principal_id,
           admission.membership_id,

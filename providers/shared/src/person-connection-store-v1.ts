@@ -14,7 +14,7 @@ export interface PersonConnectionAttemptV1 {
   readonly status: PersonConnectionAttemptStatusV1;
   readonly failure_reason: PersonConnectionAttemptFailureV1 | null;
 }
-interface AttemptBody extends Omit<PersonConnectionAttemptV1, 'attempt'> { readonly person: ConnectedPersonV1; readonly expected_account?: string }
+interface AttemptBody extends Omit<PersonConnectionAttemptV1, 'attempt'> { readonly person: ConnectedPersonV1; readonly expected_account?: string; readonly expected_scope?: string }
 
 /** Provider-owned database; immutable Authority SQL baselines are not modified. No credentials or evidence. */
 export class PersonConnectionStoreV1 {
@@ -41,7 +41,8 @@ export class PersonConnectionStoreV1 {
     const failure_reason = value.failure_reason ?? null;
     if (failure_reason !== null && failure_reason !== 'provider_rejected' && failure_reason !== 'provider_unavailable' && failure_reason !== 'account_mismatch') this.provider.failure('unauthorized');
     return { person: Object.freeze({ ...value.person }), expires: value.expires, status, failure_reason,
-      ...(typeof value.expected_account === 'string' ? { expected_account: value.expected_account } : {}) } as AttemptBody;
+      ...(typeof value.expected_account === 'string' ? { expected_account: value.expected_account } : {}),
+      ...(typeof value.expected_scope === 'string' ? { expected_scope: value.expected_scope } : {}) } as AttemptBody;
   }
   private writeAttempt(person: ConnectedPersonV1, attempt: string, body: AttemptBody): void {
     this.db.prepare(`UPDATE ${this.attemptTable} SET body_json=? WHERE attempt=? AND person_key=?`).run(canonicalJson(body), attempt, this.key(person));
@@ -60,7 +61,8 @@ export class PersonConnectionStoreV1 {
       const old = this.current(person); this.revoke(person);
       const attempt = randomUUID();
       const body: AttemptBody = { person: Object.freeze({ ...person }), expires: this.now() + 30 * 60_000, status: 'pending', failure_reason: null,
-        ...(old === undefined ? {} : { expected_account: old.binding.external_subject_id }) };
+        ...(old === undefined ? {} : { expected_account: old.binding.external_subject_id,
+          ...(old.binding.external_scope_id === null ? {} : { expected_scope: old.binding.external_scope_id }) }) };
       this.db.prepare(`INSERT OR REPLACE INTO ${this.attemptTable} VALUES(?,?,?)`).run(attempt, this.key(person), canonicalJson(body));
       return this.publicAttempt(attempt, body);
     })();
@@ -83,6 +85,7 @@ export class PersonConnectionStoreV1 {
     return this.db.transaction(() => {
       const pending = this.pending(person, attempt);
       if (pending.expected_account !== undefined && pending.expected_account !== account) this.provider.failure('unauthorized');
+      if (!this.provider.scope_id_pattern.test(cloud) || (pending.expected_scope !== undefined && pending.expected_scope !== cloud)) this.provider.failure('unauthorized');
       const version = randomUUID();
       const binding = this.provider.copyBinding({ ...person, tool_id: this.provider.id, external_scope_id: cloud, external_subject_id: account, read_grant_sha256: canonicalSha256({ kind: `echo-${this.provider.id}-person-read-grant-v1`, ...person, cloud, account, reference, version }) });
       const stored = Object.freeze({ binding, reference: this.provider.string(reference, 512), site, version, active: true, attempt });

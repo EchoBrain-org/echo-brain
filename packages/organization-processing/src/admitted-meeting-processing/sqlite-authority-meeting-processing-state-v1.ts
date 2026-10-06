@@ -10,7 +10,18 @@ import {
   type AdapterIdentity,
   type DecisionSet,
   type MeetingDocument,
+  meetingSourceEnvelopeV1, sourceContentSha256V1,
 } from "../core/index.js";
+
+/** Exact retained revision commitment shared by every approval surface's transcript choice. */
+export function retainedMeetingSourceCoordinateV1(database: Database.Database, organizationId: string, meeting: MeetingDocument) {
+  const source = meetingSourceEnvelopeV1(meeting);
+  const row = database.prepare('SELECT revision_sha256 FROM authority_source_revisions_v1 WHERE organization_id=? AND source_id=? AND revision_id=?')
+    .get(organizationId, source.item.source_id, source.revision.revision_id) as { revision_sha256: string } | undefined;
+  const { captured_at: _capturedAt, ...immutable } = source.revision;
+  if (!row || !/^[a-f0-9]{64}$/.test(row.revision_sha256) || row.revision_sha256 !== sourceContentSha256V1(immutable)) return undefined;
+  return Object.freeze({ source_id: source.item.source_id, revision_id: source.revision.revision_id, source_sha256: `sha256:${row.revision_sha256}` as const });
+}
 import type { AdmittedMeetingSourceCursorPolicyV1 } from "./admitted-meeting-source-cursor-policy-v1.js";
 import {
   assertLegacyReviewPolicySnapshotV1,
@@ -157,6 +168,8 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
      */
     expectedProcessorAdapterId: string,
     now: () => string = () => new Date().toISOString(),
+    private readonly sourceKey: string = '1',
+    private readonly requireSourceCurrent: () => void = () => {},
   ) {
     if (expectedProcessorAdapterId.trim().length === 0) {
       throw new Error(
@@ -176,12 +189,13 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       this.database
         .prepare(
           `INSERT INTO authority_live_source_progress_v2 (
-             singleton, admission_semantic_input_sha256, cursor,
+             source_key, admission_semantic_input_sha256, cursor,
              cursor_version, updated_at
-           ) VALUES (1, ?, ?, 0, ?)
-           ON CONFLICT (singleton) DO NOTHING`,
+           ) VALUES (?, ?, ?, 0, ?)
+           ON CONFLICT (source_key) DO NOTHING`,
         )
         .run(
+          this.sourceKey,
           admission.semantic_input_sha256,
           admission.cursor,
           admission.admitted_at,
@@ -190,10 +204,10 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
         .prepare(
           `SELECT cursor
              FROM authority_live_source_progress_v2
-            WHERE singleton = 1
+            WHERE source_key = ?
               AND admission_semantic_input_sha256 = ?`,
         )
-        .get(admission.semantic_input_sha256) as ProgressRow | undefined;
+        .get(this.sourceKey, admission.semantic_input_sha256) as ProgressRow | undefined;
       if (progress === undefined) {
         throw new Error(
           "admitted meeting-processing progress conflicts with its admission",
@@ -215,6 +229,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
    */
   assertCurrentSourceAdmission(expectedSource: AdapterIdentity): void {
     if (!this.database.inTransaction) throw new Error("source admission guard requires the custody transaction");
+    this.requireSourceCurrent();
     const admission = this.admission();
     if (admission.membership_status !== "active") throw new AuthorityMeetingProcessingRevokedError();
     const current = admissionFrom(
@@ -258,6 +273,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     syntheticCanaryCursor?: string,
   ): Promise<MeetingProcessingCandidateV1> {
     return this.database.transaction(() => {
+      this.requireSourceCurrent();
       const admission = this.admission();
       if (admission.membership_status !== "active") {
         throw new AuthorityMeetingProcessingRevokedError();
@@ -477,11 +493,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           `SELECT candidate.candidate_id
              FROM authority_live_source_candidates_v2 AS candidate
             WHERE candidate.review_lineage_id = ?
-              AND candidate.review_input_sha256 = ?
+              AND candidate.review_input_sha256 = ? AND candidate.admission_semantic_input_sha256 = (SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = ?)
             ORDER BY candidate.created_at ASC
             `,
         )
-        .get(input.review_lineage_id, input.review_input_sha256) as
+        .get(input.review_lineage_id, input.review_input_sha256, this.sourceKey) as
         | { candidate_id: string }
         | undefined;
       if (row === undefined) return undefined;
@@ -499,6 +515,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
            JOIN authority_live_source_review_lineage_heads_v2 AS head
              ON head.review_lineage_id = candidate.review_lineage_id
           WHERE outbox.approval_id = ?
+            AND candidate.admission_semantic_input_sha256 = (SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = ?)
             AND outbox.state != 'superseded'
             AND NOT EXISTS (
               SELECT 1
@@ -507,7 +524,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
             )
             AND head.candidate_id = candidate.candidate_id`,
       )
-      .get(approvalId) as { readonly 1: number } | undefined;
+      .get(approvalId, this.sourceKey) as { readonly 1: number } | undefined;
     return row !== undefined;
   }
 
@@ -518,11 +535,13 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
    * frozen card snapshot before exposing it to a delivery worker.
    */
   listOutstandingApprovalPresentations(): readonly OutstandingApprovalPresentationV1[] {
-    return this.database.prepare(`SELECT approval_id, candidate_id, state
-      FROM authority_live_approval_outbox_v2
-      WHERE state IN ('posting', 'posted', 'staged')
-        OR (state = 'superseded' AND post_started_at IS NOT NULL AND tombstoned_at IS NULL)
-      ORDER BY approval_id`).all() as OutstandingApprovalPresentationV1[];
+    return this.database.prepare(`SELECT outbox.approval_id, outbox.candidate_id, outbox.state
+      FROM authority_live_approval_outbox_v2 AS outbox
+      JOIN authority_live_source_candidates_v2 AS candidate ON candidate.candidate_id = outbox.candidate_id
+      JOIN authority_live_source_admission_v2 AS admission ON admission.semantic_input_sha256 = candidate.admission_semantic_input_sha256
+      WHERE admission.source_key = ? AND (state IN ('posting', 'posted', 'staged')
+        OR (state = 'superseded' AND post_started_at IS NOT NULL AND tombstoned_at IS NULL))
+      ORDER BY approval_id`).all(this.sourceKey) as OutstandingApprovalPresentationV1[];
   }
 
   listPendingApprovalDeliveries(): readonly FrozenMeetingProcessingCandidateForApprovalV1[] {
@@ -534,7 +553,8 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
              ON candidate.candidate_id = outbox.candidate_id
            JOIN authority_live_source_review_lineage_heads_v2 AS head
              ON head.review_lineage_id = candidate.review_lineage_id
-          WHERE candidate.disposition = 'actionable'
+          WHERE candidate.admission_semantic_input_sha256 = (SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = ?)
+            AND candidate.disposition = 'actionable'
             AND head.candidate_id = candidate.candidate_id
             AND outbox.state IN ('queued', 'posting', 'posted')
             AND NOT EXISTS (
@@ -544,7 +564,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
             )
           ORDER BY candidate.created_at ASC, candidate.candidate_id ASC`,
       )
-      .all() as readonly { readonly approval_id: string }[];
+      .all(this.sourceKey) as readonly { readonly approval_id: string }[];
     return approvals.map(({ approval_id }) => {
       const candidate = this.readFrozenCandidateForApproval(approval_id);
       if (candidate === undefined) {
@@ -564,12 +584,13 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
            FROM authority_live_approval_outbox_v2 AS outbox
            JOIN authority_live_source_candidates_v2 AS candidate
              ON candidate.candidate_id = outbox.candidate_id
-          WHERE outbox.state = 'superseded'
+          WHERE candidate.admission_semantic_input_sha256 = (SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = ?)
+            AND outbox.state = 'superseded'
             AND outbox.post_started_at IS NOT NULL
             AND outbox.tombstoned_at IS NULL
           ORDER BY outbox.approval_id`,
       )
-      .all() as SupersededPrivateApprovalCardV1[];
+      .all(this.sourceKey) as SupersededPrivateApprovalCardV1[];
   }
 
   recordSupersededApprovalCardTombstoned(input: {
@@ -577,6 +598,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     readonly presentation_external_id: string;
   }): void {
     this.database.transaction(() => {
+      if (this.readCandidateByApprovalId(input.approval_id) === undefined) throw new Error('Approval belongs to another source');
       const current = this.database
         .prepare(
           `SELECT state,
@@ -641,11 +663,12 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     const updatedAt = this.now();
     assertCanonicalUtcMillis(updatedAt);
     return this.database.transaction(() => {
+      this.requireSourceCurrent();
       const update = this.database
         .prepare(
           `UPDATE authority_live_source_progress_v2
               SET cursor = ?, cursor_version = cursor_version + 1, updated_at = ?
-            WHERE singleton = 1
+            WHERE source_key = ?
               AND cursor = ?
               AND EXISTS (
                 SELECT 1
@@ -660,7 +683,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
                    AND membership.status = 'active'
               )`,
         )
-        .run(input.next_cursor, updatedAt, input.expected_cursor);
+        .run(input.next_cursor, updatedAt, this.sourceKey, input.expected_cursor);
       if (update.changes === 1) return "advanced" as const;
 
       const admission = this.admission();
@@ -682,6 +705,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
    * loading the frozen approval snapshot or any presentation content.
    */
   readDurableCardStagedAt(approvalId: string): string | null {
+    if (this.readCandidateByApprovalId(approvalId) === undefined) return null;
     const row = this.database
       .prepare(
         `SELECT updated_at
@@ -698,6 +722,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
   readApprovalDeliveryQuarantine(
     candidateId: string,
   ): ApprovalDeliveryQuarantineV1 | undefined {
+    if (this.findOutbox('candidate_id', candidateId) === undefined) return undefined;
     return this.database
       .prepare(
         `SELECT candidate_id, reason_code, quarantined_at
@@ -765,9 +790,9 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
            FROM authority_live_source_candidates_v2 AS candidate
            JOIN authority_live_source_admission_v2 AS admission
              ON admission.semantic_input_sha256 = candidate.admission_semantic_input_sha256
-          WHERE candidate.candidate_id = ?`,
+          WHERE candidate.candidate_id = ? AND admission.source_key = ?`,
       )
-      .get(candidateId) as
+      .get(candidateId, this.sourceKey) as
       | {
           readonly candidate_semantic_sha256: string;
           readonly source_cursor: string;
@@ -1172,9 +1197,9 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
             AND membership.organization_id = admission.organization_id
             AND membership.principal_id = admission.principal_id
             AND membership.membership_type = admission.membership_type
-          WHERE admission.singleton = 1`,
+          WHERE admission.source_key = ?`,
       )
-      .get() as AdmissionRow | undefined;
+      .get(this.sourceKey) as AdmissionRow | undefined;
     if (admission === undefined) {
       throw new Error("admitted meeting-processing has not been admitted");
     }
@@ -1186,9 +1211,9 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       .prepare(
         `SELECT cursor
            FROM authority_live_source_progress_v2
-          WHERE singleton = 1 AND admission_semantic_input_sha256 = ?`,
+          WHERE source_key = ? AND admission_semantic_input_sha256 = ?`,
       )
-      .get(admissionSemanticSha256) as ProgressRow | undefined;
+      .get(this.sourceKey, admissionSemanticSha256) as ProgressRow | undefined;
     if (progress === undefined) {
       throw new Error(
         "admitted meeting-processing progress has not been initialized",
@@ -1215,9 +1240,9 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
            FROM authority_live_source_candidates_v2 AS candidate
            LEFT JOIN authority_live_approval_outbox_v2 AS outbox
              ON outbox.candidate_id = candidate.candidate_id
-          WHERE candidate.candidate_semantic_sha256 = ?`,
+          WHERE candidate.candidate_semantic_sha256 = ? AND candidate.admission_semantic_input_sha256 = (SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = ?)`,
       )
-      .get(semanticSha256) as CandidateRow | undefined;
+      .get(semanticSha256, this.sourceKey) as CandidateRow | undefined;
   }
 
   private lineageHead(reviewLineageId: string): LineageHeadRow | undefined {
@@ -1228,9 +1253,9 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
            FROM authority_live_source_review_lineage_heads_v2 AS head
            JOIN authority_live_source_candidates_v2 AS candidate
              ON candidate.candidate_id = head.candidate_id
-          WHERE head.review_lineage_id = ?`,
+          WHERE head.review_lineage_id = ? AND candidate.admission_semantic_input_sha256 = (SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = ?)`,
       )
-      .get(reviewLineageId) as LineageHeadRow | undefined;
+      .get(reviewLineageId, this.sourceKey) as LineageHeadRow | undefined;
   }
 
   private supersedeUnresolvedLineageApprovals(
@@ -1252,6 +1277,10 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
             AND NOT EXISTS (
               SELECT 1
                 FROM authority_private_approval_terminal_receipts_v3 AS terminal
+               WHERE terminal.approval_id = authority_live_approval_outbox_v2.approval_id
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM authority_person_meeting_approval_actions_v1 AS terminal
                WHERE terminal.approval_id = authority_live_approval_outbox_v2.approval_id
             )`,
       )
@@ -1293,9 +1322,9 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
            FROM authority_live_source_candidates_v2 AS candidate
            JOIN authority_live_approval_outbox_v2 AS outbox
              ON outbox.candidate_id = candidate.candidate_id
-          WHERE ${column} = ?`,
+          WHERE ${column} = ? AND candidate.admission_semantic_input_sha256 = (SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = ?)`,
       )
-      .get(value) as ApprovalWorkflowOutboxV1 | undefined;
+      .get(value, this.sourceKey) as ApprovalWorkflowOutboxV1 | undefined;
   }
 }
 

@@ -1,10 +1,10 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV10,
+  applyAuthorityBaselineV11,
   AUTHORITY_BASELINE_APPLICATION_ID_V1,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V10,
-  authorityBaselineSha256V10,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
+  authorityBaselineSha256V11,
 } from "../../../../src/adapters/persistence/sqlite/baseline.js";
 
 const databases: Database.Database[] = [];
@@ -39,7 +39,7 @@ function seedProject(database: Database.Database, projectID: string, name: strin
 
 function seeded(): Database.Database {
   const database = opened();
-  applyAuthorityBaselineV10(database);
+  applyAuthorityBaselineV11(database);
   database.prepare("INSERT INTO authority_metadata VALUES (1, ?, ?, 'Fixture', '{}', ?, ?)").run(AUTHORITY, ORG, NOW, NOW);
   database.prepare("INSERT INTO authority_principals VALUES (?, ?, 'PM', ?)").run(PRINCIPAL, ORG, NOW);
   database.prepare("INSERT INTO authority_memberships(membership_id, organization_id, principal_id, membership_type, status, provisioned_at) VALUES (?, ?, ?, 'owner', 'active', ?)").run(MEMBERSHIP, ORG, PRINCIPAL, NOW);
@@ -72,13 +72,13 @@ function seededWithSources(): Database.Database {
   return database;
 }
 
-describe("Authority baseline V10", () => {
+describe("Authority baseline V11", () => {
   it("is fresh-only and stamps the Authority application id", () => {
-    expect(authorityBaselineSha256V10()).toBe("sha256:5a4054e97453f8b0abef844a1eda569b22ff54f2fbd8e4c41acda2ede1a2be76");
+    expect(authorityBaselineSha256V11()).toBe("sha256:3c688e2d1504b1ecb7b214c54864c0347dd1df22d09e252b22fc6fd7ec8335b2");
     const database = seeded();
-    expect(() => applyAuthorityBaselineV10(database)).toThrow("completely empty");
+    expect(() => applyAuthorityBaselineV11(database)).toThrow("completely empty");
     expect(database.pragma("application_id", { simple: true })).toBe(AUTHORITY_BASELINE_APPLICATION_ID_V1);
-    expect(database.pragma("user_version", { simple: true })).toBe(AUTHORITY_BASELINE_SCHEMA_VERSION_V10);
+    expect(database.pragma("user_version", { simple: true })).toBe(AUTHORITY_BASELINE_SCHEMA_VERSION_V11);
     expect(database.prepare("SELECT status FROM authority_projects_v1 WHERE project_id = ?").pluck().get(PROJECT)).toBe("active");
     expect(database.pragma("foreign_key_check")).toEqual([]);
   });
@@ -86,7 +86,7 @@ describe("Authority baseline V10", () => {
   it("refuses a nonempty database without mutating it", () => {
     const database = opened();
     database.exec("CREATE TABLE prior_state (id INTEGER PRIMARY KEY)");
-    expect(() => applyAuthorityBaselineV10(database)).toThrow("authority baseline requires a completely empty database");
+    expect(() => applyAuthorityBaselineV11(database)).toThrow("authority baseline requires a completely empty database");
     expect(database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'prior_state'").get()).toEqual({ name: "prior_state" });
   });
 
@@ -139,8 +139,8 @@ describe("Authority baseline V10", () => {
   it("freezes a nullable V2 private approval card after its first queued write", () => {
     const database = opened();
     database.pragma("foreign_keys = OFF");
-    applyAuthorityBaselineV10(database);
-    expect(database.pragma("user_version", { simple: true })).toBe(AUTHORITY_BASELINE_SCHEMA_VERSION_V10);
+    applyAuthorityBaselineV11(database);
+    expect(database.pragma("user_version", { simple: true })).toBe(AUTHORITY_BASELINE_SCHEMA_VERSION_V11);
     expect(database.prepare("PRAGMA table_info(authority_live_approval_outbox_v2)").all()).toEqual(expect.arrayContaining([expect.objectContaining({ name: "private_approval_card_v2_json", notnull: 0 })]));
     database.prepare("INSERT INTO authority_live_approval_outbox_v2(candidate_id,approval_id,stage_command_id,state,updated_at) VALUES ('can_test','apr_test','pas_test','queued','2026-09-26T00:00:00.000Z')").run();
     database.prepare("UPDATE authority_live_approval_outbox_v2 SET private_approval_card_v2_json = '{\"kind\":\"card\"}' WHERE candidate_id = 'can_test'").run();

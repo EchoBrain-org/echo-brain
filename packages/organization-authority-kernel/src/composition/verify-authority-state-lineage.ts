@@ -16,8 +16,8 @@ import {
   READABLE_SEARCH_LEXICAL_BASELINE_V2,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import {
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V10,
-  authorityBaselineSha256V10,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
+  authorityBaselineSha256V11,
 } from "../adapters/persistence/sqlite/baseline.js";
 import { StateLineagePreopenRefusal, verifyStateLineageBeforeOpen } from "../state-lineage/state-lineage-preopen-guard.js";
 import { validateStateLineageRootManifestV2 } from "../state-lineage/state-lineage-manifest-v1.js";
@@ -50,8 +50,8 @@ export function verifyAuthorityStateLineage(stateDirectory: string) {
     },
     expected_schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V10,
-        schema_sha256: authorityBaselineSha256V10(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
+        schema_sha256: authorityBaselineSha256V11(),
       },
       "control-plane": {
         database_schema_version:
