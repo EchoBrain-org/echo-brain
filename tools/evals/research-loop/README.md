@@ -30,8 +30,8 @@ reads their results.
 
 ## Founder steps, in order
 
-1. **Deploy staging with the endpoint on.** Release this branch to the staging
-   Authority through the operator playbook, with `ECHO_STAGING_RESEARCH_EVAL_V1=true`
+1. **Deploy staging with the endpoint on.** Release a build that contains this
+   evaluation to the staging Authority through the operator playbook, with `ECHO_STAGING_RESEARCH_EVAL_V1=true`
    in the host's Compose environment. The CLI refuses the switch on any other
    Authority origin; production never composes the routes.
 2. **Seed the THERM world** by hand, following `world/README.md`: the ECHO

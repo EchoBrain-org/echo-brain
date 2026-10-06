@@ -63,6 +63,30 @@
     "outcome": "answered",
     "audit_sha256": "sha256:7a509fbdea87eb9680887206e889acdb5e8965812995e079a55f6e542cdc3a79"
   },
+  "unusable_step_stop": {
+    "calls": 2,
+    "prompt_sha256": "sha256:e16c5816e57c2b28479794788b7753488c116ee24a75b6b6f72df73161d8334f",
+    "response_sha256": "sha256:a43239faf9399f4027dda89e15d7c6f375609a7e6dc7856a0b20c63b95df2d3a",
+    "model_inputs_sha256": "sha256:93fa3b21be4ee85bb784a9a8af99b24bf9314e278bab91badc6047cb840014c1",
+    "outcome": "partial",
+    "audit_sha256": "sha256:72616c455875076a9a8283ed65ae2b9dc588f78a28a4b21ce617b111fd0ec6e7"
+  },
+  "step_limit_stop": {
+    "calls": 11,
+    "prompt_sha256": "sha256:4c934bb6ca7c98051a93c0b82867bf1e2079529c355777059fedfdfa113e62a2",
+    "response_sha256": "sha256:ee9e2642bd6820d577639367efaf2857db8e539feb773cc8da5c7337e6d26e70",
+    "model_inputs_sha256": "sha256:deb1e4d3359b41ce3df1095ea97724ee0a5997f1f4b34ddaf293dc9d9923ee29",
+    "outcome": "partial",
+    "audit_sha256": "sha256:00b3eaa0d909c923773f516a7de997bea0bdda599b58b4cd8f6c446c676eb360"
+  },
+  "empty_catalog_stop": {
+    "calls": 1,
+    "prompt_sha256": "sha256:20990c860579b30779f4ac6ceca765e3e28f1f59389b18d4584678dada07b663",
+    "response_sha256": "sha256:097ae9ce68f9a785d85a918a88c707daa21b9a0a05b87b9dab2a4d52c905156d",
+    "model_inputs_sha256": "sha256:54ebbea9a68b9d4e86519914aeda503f5973334484cfe7d36182cbff7ca285ba",
+    "outcome": "not_found",
+    "audit_sha256": "sha256:bd22914f5a9c1e27341f454a719dde6188304ccae488d00285f9c7983f646c65"
+  },
   "live_ticket_and_page": {
     "calls": 4,
     "prompt_sha256": "sha256:64138d6b65c06d262f3d2e3d25834f3cf09750e04243324b54b0e08ad36534ff",

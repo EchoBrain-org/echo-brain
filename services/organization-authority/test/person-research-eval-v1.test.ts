@@ -1,6 +1,7 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { validatePersonResearchEvalReadResponseV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { describe, expect, it, vi } from 'vitest';
 import { createPersonResearchEvalV1, PERSON_RESEARCH_EVAL_RESULT_TTL_MS_V1 } from '../src/composition/person-research-eval-v1.js';
@@ -51,6 +52,16 @@ describe('staging research evaluation runs', () => {
     const result = await h.settled('token-a', receipt.run_id);
     expect(result).toMatchObject({ status: 'completed', research: { kind: 'echo-agentic-research-result-v1', trigger: 'ask', stop: { reason: 'unusable_step' } }, ask: { writer_evidence: [], response: { schema_version: 6 } } });
     await expect(h.read('token-a', receipt.run_id)).rejects.toMatchObject({ code: 'not_found' });
+    // The only durable trace is the loop's content-free audit.
+    expect(h.audits).toHaveLength(1);
+    expect(JSON.stringify(h.audits)).not.toContain('DVT');
+  });
+
+  it('records a deadline as a timed_out failure and frees the person for another run', async () => {
+    const h = harness({ generate: async () => { throw new AgenticAskDeadlineErrorV1(); } });
+    const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Too slow?' } });
+    expect(await h.settled('token-a', run.run_id)).toMatchObject({ status: 'failed', error: { code: 'timed_out', message: 'The research run reached its deadline' } });
+    await expect(h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Again?' } })).resolves.toMatchObject({ status: 'running' });
   });
 
   it('refuses a second run while one is running for the same person, but not for another person', async () => {

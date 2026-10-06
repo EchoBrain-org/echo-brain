@@ -13,6 +13,11 @@ import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } fro
  * the values recorded from main b108ad3. GOLDEN_WRITE=1 rewrites the fixture.
  */
 const FIXTURE = new URL("./agentic-ask-golden.v1.json", import.meta.url);
+/*
+ * Recording new scenarios: copy `git show b108ad3:<core path>` beside the core,
+ * point the import above at the copy, run with GOLDEN_WRITE=1, restore the
+ * import and delete the copy. Existing digests must not change.
+ */
 const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
 const checked = { checked_at: "2026-10-06T00:00:00.000Z" };
 
@@ -176,6 +181,36 @@ const SCENARIOS: Readonly<Record<string, Scenario>> = {
     replies: [
       step([part("What was approved?", [need("approved decisions", "found", ["E1", "E2"])])], [{ tool: "finish", args: {} }]),
       { sentences: [{ text: "Two decisions were approved.", evidence: ["E1", "E2"] }], not_found: [] },
+    ],
+  },
+  unusable_step_stop: {
+    version: 4, question: "What did the review decide?",
+    desk: () => ({
+      scope: { kind: "global" }, live_sources: [],
+      search: async () => result([]), open: async () => result([]), list: async () => result([]), revalidate: async () => checked,
+    }),
+    replies: [{ thoughts: "no parts" }, { still: "no parts" }],
+  },
+  step_limit_stop: {
+    version: 4, question: "List every DVT decision.",
+    desk: () => ({
+      scope: { kind: "global" }, live_sources: [],
+      search: async (input: { readonly query?: string }) => result([record(`decision-${input.query ?? "none"}`)]),
+      open: async () => result([]), list: async () => result([]), revalidate: async () => checked,
+    }),
+    replies: [
+      ...Array.from({ length: 10 }, (_, index) => step([part("Every DVT decision?", [need("all DVT decisions", "open")])], [{ tool: "search", args: { query: `DVT decision ${index + 1}` } }])),
+      { sentences: [{ text: "The review decided decision-DVT decision 1.", evidence: ["E1"] }], not_found: ["any further DVT decisions"] },
+    ],
+  },
+  empty_catalog_stop: {
+    version: 4, question: "What is open this week?",
+    desk: () => ({
+      scope: { kind: "global" }, live_sources: [],
+      search: async () => result([]), open: async () => result([]), list: async () => result([]), revalidate: async () => checked,
+    }),
+    replies: [
+      step([part("Open this week?", [need("open items this week", "open")])], [{ tool: "list", args: { source: "meetings" } }, { tool: "list", args: { source: "documents" } }]),
     ],
   },
   live_ticket_and_page: {

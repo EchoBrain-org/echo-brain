@@ -1,8 +1,9 @@
 # Research loop evaluation v1
 
-Status: design agreed in conversation on 2026-10-06, section by section;
-founder directed implementation the same day. Base: main `b108ad3` (includes
-#280, #281 and #282).
+Status: implemented on branch `feat/research-loop-eval` (base main `b108ad3`,
+which includes #280, #281 and #282). Founder steps remain: deploy staging with
+the switch on, seed the THERM additions, run the baseline and calibrate the
+judge (`tools/evals/research-loop/README.md`).
 
 ## Goal
 
@@ -334,3 +335,27 @@ and within budget.
 3. Background budget values are starting points.
 4. The judge's exact model and the seeding credential path are settled in the
    implementation plan.
+
+## Implementation notes
+
+- The request session is the shared request closure in
+  `packages/organization-authority-kernel/src/answer-composition/agentic-ask-v1.ts`:
+  it owns the deadline, call budget, fences and audit, and runs research as
+  its own phase before Ask's writer. `createAgenticResearchV1` exposes
+  `answerWithResearch` (Ask with its research result) and `research` (Check,
+  Sweep). Types and budgets live in `agentic-research-v1.ts`.
+- The golden replay (`agentic-ask-golden.test.ts`) covers every stop reason,
+  a repair, a writer fallback, an owner-filtered list, the small-scope preload
+  and a live ticket-and-page request; all twelve digests were recorded from the
+  `b108ad3` core and are reproduced exactly.
+- Starting evidence opens through `openCitation` on the evidence desk: ECHO
+  citations through the existing desk path, Jira and Confluence through new
+  reader methods that re-read the current item with the project or space pin.
+- Research-only audits carry `trigger` and use background limits (20 rounds,
+  48 calls); Ask audits are unchanged.
+- The endpoint is `POST /v1/person/research-eval/start` and `/read`, composed
+  only for the staging origin with `ECHO_STAGING_RESEARCH_EVAL_V1=true`. Ask
+  requests through it keep the product's 240-character question limit, so the
+  over-long case is measured as an ingress rejection.
+- The dataset has 29 cases: 19 development and 10 held out.
+
