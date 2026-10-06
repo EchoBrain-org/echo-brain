@@ -61,9 +61,9 @@ import {
   isAbort,
   object,
   raceAbort,
-  type AgenticAskGenerationObservationV1,
   type AgenticAskModelRoleV1,
 } from "./agentic-model-gate-v1.js";
+import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPortV1, type AgenticAuditContextV1 } from "./agentic-release-v1.js";
 import {
   AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
   AGENTIC_RESEARCH_LIVE_BUDGET_V1,
@@ -99,6 +99,7 @@ export {
   type AgenticAskGenerationObservationV1,
   type AgenticAskModelRoleV1,
 } from "./agentic-model-gate-v1.js";
+export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
 export {
   AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1,
   AGENTIC_ASK_MAX_PARTS_V1,
@@ -156,36 +157,6 @@ export function agenticAskContextBudgetBytesV1(contextTokens: number | undefined
   const tokens = typeof contextTokens === "number" && Number.isSafeInteger(contextTokens) && contextTokens > 0 ? contextTokens : AGENTIC_ASK_DEFAULT_CONTEXT_TOKENS_V1;
   const usable = Math.floor(tokens * (1 - CONTEXT_MARGIN)) - Math.ceil(Buffer.byteLength(systemPrompt, "utf8") / BYTES_PER_TOKEN) - outputTokens;
   return Math.max(16 * 1024, usable * BYTES_PER_TOKEN);
-}
-
-/** Content-free terminal witness. Route adapters bind identity and storage details. */
-export interface AgenticAskAuditEntryV1 {
-  readonly kind: "echo-agentic-ask-audit-v1";
-  /** Present only for research-only triggers; an Ask audit omits it. */
-  readonly trigger?: Exclude<AgenticResearchTriggerV1, "ask">;
-  /** Present only when the request ran beyond the live budget (research evaluation). */
-  readonly budget?: "background";
-  readonly outcome: PersonAnswerResponseV4["outcome"] | "cancelled" | "timed_out";
-  readonly receipt_digests: readonly Sha256Digest[];
-  /** Research steps run. */
-  readonly rounds: number;
-  readonly model_calls: number;
-  readonly repairs: number;
-  readonly fallbacks: number;
-  readonly citation_count: number;
-  readonly checked_at: string | null;
-  /** Hashes bind terminal output without retaining question, evidence, or prose. */
-  readonly prompt_sha256: Sha256Digest | null;
-  readonly answer_sha256: Sha256Digest | null;
-  readonly response_sha256: Sha256Digest | null;
-  /** Provider metadata only. It deliberately carries no prompt, output, or evidence. */
-  readonly generations: readonly AgenticAskGenerationObservationV1[];
-  readonly generation_usage: { readonly input_tokens: number | null; readonly output_tokens: number | null; readonly total_tokens: number | null };
-  readonly finish_reason_counts: Readonly<Record<string, number>>;
-}
-
-export interface AgenticAskAuditPortV1 {
-  append(entry: AgenticAskAuditEntryV1): Promise<unknown> | unknown;
 }
 
 export interface CreateAgenticAskV1Options {
@@ -923,27 +894,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           }
         },
       });
-      const audit = async (outcome: AgenticAskAuditEntryV1["outcome"], citations: number, result?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6, researched?: { readonly answer_sha256: Sha256Digest; readonly response_sha256: Sha256Digest }) => {
-        const { calls, repairs, generations, invocation_digests: invocationDigests } = gate.stats();
-        const aggregate = (field: keyof StructuredGenerationUsageV1): number | null => {
-          const values = generations.map(entry => entry.usage?.[field]);
-          return values.length === 0 || values.some(value => typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) ? null : values.reduce<number>((total, value) => total + value!, 0);
-        };
-        const finishReasonCounts: Record<string, number> = {};
-        for (const generation of generations) if (generation.finish_reason !== null) finishReasonCounts[generation.finish_reason] = (finishReasonCounts[generation.finish_reason] ?? 0) + 1;
-        await options.audit.append(Object.freeze({
-          kind: "echo-agentic-ask-audit-v1", ...(researchOnly ? { trigger: input.trigger as Exclude<AgenticResearchTriggerV1, "ask"> } : {}),
-          ...(beyondLive ? { budget: "background" as const } : {}),
-          outcome, receipt_digests: Object.freeze([...receipts]), rounds: steps, model_calls: calls, repairs, fallbacks, citation_count: citations, checked_at: checkedAt,
-          prompt_sha256: outcome === "cancelled" || outcome === "timed_out" ? null : canonicalSha256({ generation: options.generation.generation_adapter_id, invocations: invocationDigests }),
-          answer_sha256: researched?.answer_sha256 ?? (result === undefined ? null : canonicalSha256({ direct: result.direct ?? null, parts: result.parts })),
-          response_sha256: researched?.response_sha256 ?? (result === undefined ? null : canonicalSha256(result)),
-          generations: Object.freeze([...generations]),
-          generation_usage: Object.freeze({ input_tokens: aggregate("input_tokens"), output_tokens: aggregate("output_tokens"), total_tokens: aggregate("total_tokens") }),
-          finish_reason_counts: Object.freeze(finishReasonCounts),
-        }));
-        terminalAudited = true;
-      };
+      /** What every audit record of this request carries, read at the moment it is written. */
+      const auditContext = (): AgenticAuditContextV1 => ({
+        audit: options.audit, generation_adapter_id: options.generation.generation_adapter_id, gate_stats: gate.stats,
+        ...(researchOnly ? { trigger: input.trigger as Exclude<AgenticResearchTriggerV1, "ask"> } : {}),
+        background: beyondLive, receipts, rounds: steps, fallbacks,
+      });
 
       // ---- research bookkeeping (never enters a prompt) ----------------------
       const rounds: AgenticResearchRoundV1[] = [];
@@ -1130,16 +1086,17 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         const bundle = evidenceBundle();
         const researched = trimAgenticEvidenceBundleV1(bundle);
         if (researchOnly) {
-          // Research-only triggers: fence, audit, release fence. No writer runs.
+          // Research-only triggers: no writer runs; the trimmed bundle goes through the shared release step.
           phase = "final";
-          const fenced = await raceAbort(activeSignal, desk.revalidate({ signal: activeSignal })); checkedAt = fenced.checked_at;
           const needs = plan.flatMap(part => part.needs);
           const found = needs.filter(value => value.status === "found").length;
           const outcome = found === 0 ? (researchIncomplete ? "partial" as const : "not_found" as const) : found === needs.length && !researchIncomplete ? "answered" as const : "partial" as const;
-          await audit(outcome, citedShorts().size, undefined, { answer_sha256: canonicalSha256({ trigger: input.trigger, plan: researched.plan }), response_sha256: canonicalSha256(researched) });
-          const releaseFence = await raceAbort(activeSignal, desk.revalidate({ signal: activeSignal })); checkedAt = releaseFence.checked_at;
-          if (input.signal?.aborted) abort();
-          assertLive();
+          await releaseAgenticResultV1({
+            ...auditContext(), desk, outcome, citation_count: citedShorts().size, result: researched,
+            digests: { answer_sha256: canonicalSha256({ trigger: input.trigger, plan: researched.plan }), response_sha256: canonicalSha256(researched) },
+            fence_after_audit: true, signal: activeSignal, assert_live: assertLive, now,
+            on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
+          });
           clearTimeout(deadlineTimer);
           return Object.freeze({ bundle, research: researched, writer_evidence: Object.freeze([]) });
         }
@@ -1253,23 +1210,16 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         // A failed answer call still ends in a response (records or not found); its span keeps the failure.
         const answerUsage = usageOf("answer", answerModelMs);
         report(answerUsage === null ? { stage: "answer", event: "skipped", elapsed_ms: 0 } : { stage: "answer", event: "succeeded", elapsed_ms: answerModelMs, generation_usage: answerUsage, retrieval: { citation_count: validated.citations.length } });
-        assertLive();
         phase = "final";
-        const fenceStartedAt = now();
-        const revalidated = await raceAbort(activeSignal, desk.revalidate({ signal: activeSignal })); checkedAt = revalidated.checked_at;
-        report({ stage: "revalidation", event: "succeeded", elapsed_ms: now() - fenceStartedAt });
-        const auditStartedAt = now();
-        await audit(validated.outcome, validated.citations.length, validated);
-        report({ stage: "audit", event: "succeeded", elapsed_ms: now() - auditStartedAt, retrieval: { citation_count: validated.citations.length } });
-        // A disconnect or membership change during the durable terminal append
-        // must still suppress this new response path's publication.
-        if (tickets) {
-          const releaseFence = await raceAbort(activeSignal, desk.revalidate({ signal: activeSignal }));
-          checkedAt = releaseFence.checked_at;
-        }
-        // An abort that races the terminal audit still suppresses publication.
-        if (input.signal?.aborted) abort();
-        assertLive();
+        // V5/V6 keep the access check after the audit write; V4 never had one.
+        await releaseAgenticResultV1({
+          ...auditContext(), desk, outcome: validated.outcome, citation_count: validated.citations.length, result: validated, digests: "from_response",
+          fence_after_audit: tickets, signal: activeSignal, assert_live: assertLive, now,
+          on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
+          on_stage: event => report(event.stage === "revalidation"
+            ? { stage: "revalidation", event: "succeeded", elapsed_ms: event.elapsed_ms }
+            : { stage: "audit", event: "succeeded", elapsed_ms: event.elapsed_ms, retrieval: { citation_count: validated.citations.length } }),
+        });
         clearTimeout(deadlineTimer);
         ticketCitationCount = validated.citations.filter(value => value.citation.kind === "ticket").length;
         return Object.freeze({ response: validated, bundle, research: researched, writer_evidence: writerEvidence });
@@ -1277,12 +1227,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         clearTimeout(deadlineTimer);
         if (deadlineExpired || error instanceof AgenticAskDeadlineErrorV1) {
           terminalAbort.abort();
-          if (!terminalAudited) await audit("timed_out", 0);
+          if (!terminalAudited) await auditAgenticTerminalV1("timed_out", { ...auditContext(), checked_at: checkedAt });
           throw error instanceof AgenticAskDeadlineErrorV1 ? error : new AgenticAskDeadlineErrorV1();
         }
         if (input.signal?.aborted || isAbort(error, input.signal)) {
           terminalAbort.abort();
-          if (!terminalAudited) await audit("cancelled", 0);
+          if (!terminalAudited) await auditAgenticTerminalV1("cancelled", { ...auditContext(), checked_at: checkedAt });
           throw error;
         }
         terminalAbort.abort();
