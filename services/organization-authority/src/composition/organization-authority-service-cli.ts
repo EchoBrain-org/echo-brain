@@ -237,6 +237,13 @@ export async function runOrganizationAuthorityServiceCli(
     if (connectorRehearsal !== undefined && stagingSyntheticMeetingsDirectory !== undefined) {
       throw new Error('Staging connector rehearsal cannot select another synthetic source profile');
     }
+    const stagingResearchEval = process.env.ECHO_STAGING_RESEARCH_EVAL_V1;
+    if (stagingResearchEval !== undefined && !['', 'false', 'true'].includes(stagingResearchEval)) {
+      throw new Error('Staging research evaluation selection is invalid');
+    }
+    if (stagingResearchEval === 'true' && manifest.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) {
+      throw new Error('Research evaluation is available only on the staging Authority');
+    }
     const jiraCloudId = parsed['--jira-cloud-id'] ?? (stagingJiraAsk === 'true' ? connectorRehearsal?.profile.jira.cloud_id : undefined);
     const jiraIntegration = parsed['--jira-nango-integration'] ?? (stagingJiraAsk === 'true' ? connectorRehearsal?.profile.jira.integration_key : undefined);
     // Staging shares only the validated Atlassian site, never Jira's project or grant.
@@ -303,6 +310,7 @@ export async function runOrganizationAuthorityServiceCli(
       ...(agenticAskSmallScopeShortcut
         ? { agentic_ask_v1_small_scope_shortcut: true }
         : {}),
+      ...(stagingResearchEval === 'true' ? { staging_research_eval_v1: true as const } : {}),
       slack_nango: slackNango,
       ...(jiraCloudId === undefined ? {} : { jira_person_live: {
         enabled: true as const,

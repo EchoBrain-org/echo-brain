@@ -53,6 +53,7 @@ export * from './person-documents-v1.js';
 export * from './person-document-associations-v1.js';
 export * from './person-answer-v3.js';
 export * from './person-answer-v4.js';
+export * from './person-research-eval-v1.js';
 export * from './person-meeting-transcript-v1.js';
 export * from './person-list-v1.js';
 export * from './person-connector-access-v1.js';

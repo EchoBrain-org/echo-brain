@@ -33,7 +33,9 @@ import {
   ANSWER_PROMPT,
   AGENTIC_ASK_MAX_NEEDS_PER_PART_V1,
   AgenticAskOutputErrorV1,
+  CHECK_TASK_PROMPT,
   STEP_PROMPT,
+  SWEEP_TASK_PROMPT,
   answerSchema,
   cleanId,
   cleanLine,
@@ -51,7 +53,35 @@ import {
   type StepSource,
 } from "./agentic-ask-v1-model-protocol.js";
 import { compactAndValidateAgenticAskResponseV1 } from "./agentic-ask-v1-response.js";
+import {
+  AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
+  AGENTIC_RESEARCH_LIVE_BUDGET_V1,
+  AGENTIC_RESEARCH_MAX_FINDING_CITATIONS_V1,
+  AGENTIC_RESEARCH_MAX_FINDINGS_V1,
+  type AgenticAskWithResearchV1,
+  type AgenticResearchActionV1,
+  type AgenticResearchBudgetV1,
+  type AgenticResearchGoalV1,
+  type AgenticResearchInputV1,
+  type AgenticResearchItemV1,
+  type AgenticResearchPartV1,
+  type AgenticResearchResultV1,
+  type AgenticResearchRoundV1,
+  type AgenticResearchTriggerV1,
+} from "./agentic-research-v1.js";
+import { AuthorityOperationError } from "../domain/errors.js";
 
+export {
+  AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
+  AGENTIC_RESEARCH_LIVE_BUDGET_V1,
+  type AgenticAskWithResearchV1,
+  type AgenticResearchBudgetV1,
+  type AgenticResearchFindingV1,
+  type AgenticResearchGoalV1,
+  type AgenticResearchInputV1,
+  type AgenticResearchResultV1,
+  type AgenticResearchTriggerV1,
+} from "./agentic-research-v1.js";
 export {
   AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1,
   AGENTIC_ASK_MAX_PARTS_V1,
@@ -64,9 +94,9 @@ export {
  * the needs of each part; code owns scope, permissions, ids, budgets, paging,
  * de-duplication, the stop rules, and the response layout.
  */
-export const AGENTIC_ASK_MAX_STEPS_V1 = 10;
+export const AGENTIC_ASK_MAX_STEPS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_rounds;
 /** Request-wide model-call budget, including retries and repairs. */
-export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = 24;
+export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
 /**
  * The whole request, research through audit (ADR-0022). The Authority is
  * reached through Cloudflare, whose proxy drops an origin response that takes
@@ -74,9 +104,9 @@ export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = 24;
  * leaves room for the network; per-call time is also capped by the
  * generation profile.
  */
-export const AGENTIC_ASK_DEADLINE_MS_V1 = 90_000;
+export const AGENTIC_ASK_DEADLINE_MS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.deadline_ms;
 /** Time kept for the final answer call; research never starts inside it. */
-export const AGENTIC_ASK_ANSWER_RESERVE_MS_V1 = 25_000;
+export const AGENTIC_ASK_ANSWER_RESERVE_MS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.writer_reserve_ms;
 /** Time kept after the answer call for final revalidation and the audit. */
 export const AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 = 2_000;
 /** One research step's model call; a stalled host fails fast and research goes on. */
@@ -132,6 +162,10 @@ export type AgenticAskModelRoleV1 = "step" | "answer";
 /** Content-free terminal witness. Route adapters bind identity and storage details. */
 export interface AgenticAskAuditEntryV1 {
   readonly kind: "echo-agentic-ask-audit-v1";
+  /** Present only for research-only triggers; an Ask audit omits it. */
+  readonly trigger?: Exclude<AgenticResearchTriggerV1, "ask">;
+  /** Present only when the request ran beyond the live budget (research evaluation). */
+  readonly budget?: "background";
   readonly outcome: PersonAnswerResponseV4["outcome"] | "cancelled" | "timed_out";
   readonly receipt_digests: readonly Sha256Digest[];
   /** Research steps run. */
@@ -203,6 +237,8 @@ type Entry = {
   full: boolean;
   /** Opened explicitly (or preloaded); full text stays in the prompt while budget allows. */
   opened: boolean;
+  /** Loaded before round 1: starting evidence or the small-scope preload. */
+  preloaded?: boolean;
   touched: number;
   /** The latest search that returned this item; its preview shows where that search matched. */
   query?: string;
@@ -265,6 +301,33 @@ function raceAbort<T>(signal: AbortSignal, operation: Promise<T>): Promise<T> {
 }
 function questionText(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= 4_000 && value.trim() === value && value === value.normalize("NFC") && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) ? value : null;
+}
+/** A research goal the request can run, or null. Ask's question keeps its existing bounds. */
+function researchGoal(goal: AgenticResearchGoalV1): AgenticResearchGoalV1 | null {
+  if (goal.kind === "question") return questionText(goal.question) === null ? null : goal;
+  if (goal.kind === "check_record") return object(goal.record) === null ? null : goal;
+  if (goal.kind !== "recheck_findings" || !Array.isArray(goal.findings) || goal.findings.length === 0 || goal.findings.length > AGENTIC_RESEARCH_MAX_FINDINGS_V1) return null;
+  const line = (value: unknown) => typeof value === "string" && value.trim().length > 0 && Buffer.byteLength(value, "utf8") <= 1_000;
+  return goal.findings.every(finding => line(finding.finding) && line(finding.expected) && Array.isArray(finding.citations) && finding.citations.length > 0 &&
+    finding.citations.length <= AGENTIC_RESEARCH_MAX_FINDING_CITATIONS_V1 && finding.citations.every((citation: unknown) => object(citation) !== null)) ? goal : null;
+}
+/** Text that stands in for the question where research or layout needs one. */
+function goalText(goal: AgenticResearchGoalV1): string {
+  if (goal.kind === "question") return goal.question;
+  return goal.kind === "check_record" ? "Check the approved record against the project" : "Recheck earlier findings";
+}
+/** Starting citations, in order and without repeats. */
+function startingCitations(goal: AgenticResearchGoalV1): readonly unknown[] {
+  if (goal.kind === "question") return [];
+  const all = goal.kind === "check_record" ? [goal.record] : goal.findings.flatMap(finding => finding.citations);
+  const seen = new Set<string>();
+  return all.filter(citation => { const key = JSON.stringify(citation); if (seen.has(key)) return false; seen.add(key); return true; });
+}
+/** Identity of a cited object independent of the version or text released this time. */
+function citationIdentity(value: unknown): string {
+  const citation = object(value) ?? {};
+  const pick = ["kind", "tool_id", "atom_id", "ticket_id", "page_id", "document_id", "upload_id", "transcript_id", "channel_id", "message_ts"].filter(key => typeof citation[key] === "string");
+  return JSON.stringify(pick.map(key => [key, citation[key]]));
 }
 function privateItem(item: EvidenceDeskItemV2): boolean {
   return item.visibility === "only_me" || item.visibility === "approver_only";
@@ -437,6 +500,13 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
 export function createAgenticAskV2(options: CreateAgenticAskV2Options) {
   return createAgenticAskCore(options, 5) as { answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV5> };
 }
+/** The research loop for every trigger, with Ask's V6 writer available beside research-only runs. */
+export function createAgenticResearchV1(options: CreateAgenticAskV2Options) {
+  return createAgenticAskCore(options, 6) as unknown as {
+    answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }): Promise<AgenticAskWithResearchV1<PersonAnswerResponseV6>>;
+    research(input: AgenticResearchInputV1): Promise<AgenticResearchResultV1>;
+  };
+}
 /** V3 core keeps V5 strict and emits V6 only when a live page source is selected. */
 export function createAgenticAskV3(options: CreateAgenticAskV2Options) {
   return createAgenticAskCore(options, 6) as unknown as { answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV6> };
@@ -479,17 +549,29 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   const stepPrompt = liveCatalog.length === 0 ? STEP_PROMPT : `${STEP_PROMPT}\n\n${liveGuidance}`;
   const answerPrompt = liveCatalog.length === 0 ? ANSWER_PROMPT : `${ANSWER_PROMPT}\n\n${liveGuidance}`;
   const stepBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, stepPrompt, OUTPUT_TOKENS.step);
+  /** Background triggers add one task paragraph; Ask keeps its prompt exactly. */
+  const taskPrompts = { check_record: `${stepPrompt}\n\n${CHECK_TASK_PROMPT}`, recheck_findings: `${stepPrompt}\n\n${SWEEP_TASK_PROMPT}` } as const;
   const answerBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, answerPrompt, OUTPUT_TOKENS.answer);
-  return Object.freeze({
-    async answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6> {
-      if (questionText(input.question) === null) throw new AgenticAskOutputErrorV1("question is invalid");
+  /**
+   * One agentic request: shared session state (deadline, model-call budget,
+   * access fences, audit), a research phase, then the Ask writer.
+   */
+  type RequestOutput = { readonly response?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6; readonly research: AgenticResearchResultV1; readonly writer_evidence: readonly string[] };
+  const request = async (input: { readonly goal: AgenticResearchGoalV1; readonly trigger: AgenticResearchTriggerV1; readonly signal?: AbortSignal }, budget: AgenticResearchBudgetV1): Promise<RequestOutput> => {
+      const goal = researchGoal(input.goal);
+      if (goal === null) throw new AgenticAskOutputErrorV1(input.goal.kind === "question" ? "question is invalid" : "research goal is invalid");
+      const askedQuestion = goalText(goal);
+      const researchOnly = goal.kind !== "question";
+      const beyondLive = budget.deadline_ms > AGENTIC_RESEARCH_LIVE_BUDGET_V1.deadline_ms || budget.max_rounds > AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_rounds || budget.max_model_calls > AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
+      const researchPrompt = goal.kind === "question" ? stepPrompt : taskPrompts[goal.kind];
+      const researchBudget = goal.kind === "question" ? stepBudget : agenticAskContextBudgetBytesV1(options.generation.context_tokens, researchPrompt, OUTPUT_TOKENS.step);
       const startedAt = now();
       const requestDay = today();
-      const deadline = startedAt + AGENTIC_ASK_DEADLINE_MS_V1;
+      const deadline = startedAt + budget.deadline_ms;
       const terminalAbort = new AbortController();
       const activeSignal = input.signal === undefined ? terminalAbort.signal : AbortSignal.any([input.signal, terminalAbort.signal]);
       let deadlineExpired = false;
-      const deadlineTimer = setTimeout(() => { deadlineExpired = true; terminalAbort.abort(new AgenticAskDeadlineErrorV1()); }, AGENTIC_ASK_DEADLINE_MS_V1);
+      const deadlineTimer = setTimeout(() => { deadlineExpired = true; terminalAbort.abort(new AgenticAskDeadlineErrorV1()); }, budget.deadline_ms);
       deadlineTimer.unref?.();
       let calls = 0; let repairs = 0; let fallbacks = 0; let steps = 0; let checkedAt: string | null = null;
       // ---- journey observation (content-free; never alters the answer) ----
@@ -519,6 +601,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         open: (request: Parameters<EvidenceDeskPortV2["open"]>[0]) => timed(() => options.desk.open(request)),
         list: (request: Parameters<EvidenceDeskPortV2["list"]>[0]) => timed(() => options.desk.list(request)),
         revalidate: (request: Parameters<EvidenceDeskPortV2["revalidate"]>[0]) => timed(() => options.desk.revalidate(request)),
+        ...(options.desk.openCitation === undefined ? {} : { openCitation: (request: Parameters<NonNullable<EvidenceDeskPortV2["openCitation"]>>[0]) => timed(() => options.desk.openCitation!(request)) }),
       });
       let terminalAudited = false;
       const generations: AgenticAskGenerationObservationV1[] = [];
@@ -891,7 +974,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       let researchStop: 'finished' | 'empty_catalog' | 'no_progress' | 'step_limit' | 'budget' | 'unusable_step' = 'step_limit';
       const call = async (role: AgenticAskModelRoleV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, recovery = false): Promise<unknown> => {
         assertLive();
-        if (calls >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) throw new AgenticAskGenerationFailureV1("call budget exhausted", "fallback");
+        if (calls >= budget.max_model_calls) throw new AgenticAskGenerationFailureV1("call budget exhausted", "fallback");
         // Every call is preceded by a cumulative desk revalidation of what it may carry.
         const validated = await raceAbort(activeSignal, desk.revalidate({ signal: activeSignal }));
         checkedAt = validated.checked_at;
@@ -958,8 +1041,9 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           if (error instanceof AgenticAskGenerationFailureV1 && error.recovery === "fallback") throw error;
           reason = error instanceof AgenticAskGenerationFailureV1 && error.recovery === "retry" ? null : error.message;
         }
+        if (role === "step" && reason !== null) stepRejections.push(cleanLine(reason, 600));
         const minimum = role === "step" ? AGENTIC_ASK_MIN_STEP_MS_V1 : AGENTIC_ASK_MIN_ANSWER_MS_V1;
-        if (timeout() < minimum || calls >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) throw new AgenticAskGenerationFailureV1("no time left to repair", "fallback");
+        if (timeout() < minimum || calls >= budget.max_model_calls) throw new AgenticAskGenerationFailureV1("no time left to repair", "fallback");
         // A repair observes the rejected proposal and concrete validation
         // failure. These are ephemeral model inputs, never audit content.
         const repairUser = reason === null ? user : {
@@ -968,7 +1052,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         };
         return parse(await call(role, reason === null ? system : repairPrompt(system, reason), repairUser, schema, timeout, true));
       };
-      const audit = async (outcome: AgenticAskAuditEntryV1["outcome"], citations: number, result?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6) => {
+      const audit = async (outcome: AgenticAskAuditEntryV1["outcome"], citations: number, result?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6, researched?: { readonly answer_sha256: Sha256Digest; readonly response_sha256: Sha256Digest }) => {
         const aggregate = (field: keyof StructuredGenerationUsageV1): number | null => {
           const values = generations.map(entry => entry.usage?.[field]);
           return values.length === 0 || values.some(value => typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) ? null : values.reduce<number>((total, value) => total + value!, 0);
@@ -976,10 +1060,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         const finishReasonCounts: Record<string, number> = {};
         for (const generation of generations) if (generation.finish_reason !== null) finishReasonCounts[generation.finish_reason] = (finishReasonCounts[generation.finish_reason] ?? 0) + 1;
         await options.audit.append(Object.freeze({
-          kind: "echo-agentic-ask-audit-v1", outcome, receipt_digests: Object.freeze([...receipts]), rounds: steps, model_calls: calls, repairs, fallbacks, citation_count: citations, checked_at: checkedAt,
+          kind: "echo-agentic-ask-audit-v1", ...(researchOnly ? { trigger: input.trigger as Exclude<AgenticResearchTriggerV1, "ask"> } : {}),
+          ...(beyondLive ? { budget: "background" as const } : {}),
+          outcome, receipt_digests: Object.freeze([...receipts]), rounds: steps, model_calls: calls, repairs, fallbacks, citation_count: citations, checked_at: checkedAt,
           prompt_sha256: outcome === "cancelled" || outcome === "timed_out" ? null : canonicalSha256({ generation: options.generation.generation_adapter_id, invocations: invocationDigests }),
-          answer_sha256: result === undefined ? null : canonicalSha256({ direct: result.direct ?? null, parts: result.parts }),
-          response_sha256: result === undefined ? null : canonicalSha256(result),
+          answer_sha256: researched?.answer_sha256 ?? (result === undefined ? null : canonicalSha256({ direct: result.direct ?? null, parts: result.parts })),
+          response_sha256: researched?.response_sha256 ?? (result === undefined ? null : canonicalSha256(result)),
           generations: Object.freeze([...generations]),
           generation_usage: Object.freeze({ input_tokens: aggregate("input_tokens"), output_tokens: aggregate("output_tokens"), total_tokens: aggregate("total_tokens") }),
           finish_reason_counts: Object.freeze(finishReasonCounts),
@@ -987,9 +1073,57 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         terminalAudited = true;
       };
 
-      try {
+      // ---- research bookkeeping (never enters a prompt) ----------------------
+      const rounds: AgenticResearchRoundV1[] = [];
+      let stepRejections: string[] = [];
+      /** Short ids of the starting citations, in goal order. */
+      const startingShorts = new Map<string, string>();
+      const roundView = (tool: string, args: StepArgs, value: ToolResult | undefined): AgenticResearchActionV1 => {
+        const listed = (key: string) => Array.isArray(value?.[key]) ? (value![key] as readonly Record<string, unknown>[]).map(row => String(row.id)) : [];
+        const opened = Array.isArray(value?.opened) ? (value!.opened as readonly string[]) : [];
+        return Object.freeze({ tool, args: Object.freeze({ ...args }), result: Object.freeze({
+          items: [...listed("results"), ...listed("items")], opened: [...opened],
+          ...(typeof value?.note === "string" ? { note: value.note } : {}), ...(typeof value?.error === "string" ? { error: value.error } : {}),
+          ...(value?.truncated === true ? { truncated: true } : {}), ...(typeof value?.more === "boolean" ? { more: value.more } : {}),
+          ...(typeof value?.notice === "string" ? { notice: true } : {}),
+        }) });
+      };
+      const recordRound = (startedAt: number, actions: readonly AgenticResearchActionV1[]) => {
+        rounds.push(Object.freeze({ round: rounds.length + 1, elapsed_ms: Math.max(0, Math.round(now() - startedAt)), plan: planView() as readonly AgenticResearchPartV1[], actions: Object.freeze([...actions]), rejected: Object.freeze([...stepRejections]) }));
+        stepRejections = [];
+      };
+      const goalFields = (): Record<string, unknown> => {
+        if (goal.kind === "question") return { question: goal.question };
+        if (goal.kind === "check_record") return { task: "check_record", record_id: startingShorts.get(JSON.stringify(goal.record)) ?? null };
+        return { task: "recheck_findings", findings: goal.findings.map(finding => ({ finding: finding.finding, expected: finding.expected,
+          cited: finding.citations.map(citation => startingShorts.get(JSON.stringify(citation))).filter((short): short is string => short !== undefined) })) };
+      };
+      const researchStartedAt = now();
+
+      /** The research phase: optional preload, then the loop until a stop rule fires. */
+      const research = async (): Promise<void> => {
+        // ---- starting evidence: read fresh through the access-checked desk ----
+        for (const citation of startingCitations(goal)) {
+          assertLive();
+          if (desk.openCitation === undefined) throw new AuthorityOperationError("unavailable", "Starting evidence is unavailable");
+          const opened = await raceAbort(activeSignal, desk.openCitation({ citation, signal: activeSignal }));
+          observe(opened);
+          const readable = opened.items.filter(item => item.text !== undefined);
+          const anchor = readable.find(item => citationIdentity(item.citation) === citationIdentity(citation)) ?? readable[0];
+          cover('open', anchor === undefined ? undefined : evidenceDeskSourceV2(anchor), opened);
+          // Fail closed: research never runs without evidence its trigger names.
+          if (anchor === undefined) throw new AuthorityOperationError("not_found", "Starting evidence is not available");
+          let used = 0;
+          for (const item of [anchor, ...readable.filter(value => value !== anchor)]) {
+            if (item !== anchor && used + bytes(item.text) > AGENTIC_ASK_OPEN_BYTES_V1) break;
+            const entry = register(item); entry.opened = true; entry.preloaded = true; used += bytes(item.text);
+            if (item === anchor) startingShorts.set(JSON.stringify(citation), entry.short);
+          }
+          for (const item of opened.items.filter(value => value.text === undefined)) register(item);
+        }
+
         // ---- optional small-scope preload -----------------------------------
-        if (options.small_scope_shortcut === true) {
+        if (options.small_scope_shortcut === true && !researchOnly) {
           const inventory = await raceAbort(activeSignal, desk.search({ limit: AGENTIC_ASK_SHORTCUT_ITEMS_V1, inventory_mode: "items", signal: activeSignal }));
           observe(inventory);
           cover('search', undefined, inventory);
@@ -1001,8 +1135,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
               observe(opened);
               cover('open', evidenceDeskSourceV2(listed), opened);
               const exact = opened.items.find(item => item.id === listed.id && item.text !== undefined);
-              if (exact === undefined || used + bytes(exact.text) > stepBudget / 2) continue;
-              const entry = register(exact); entry.opened = true; used += bytes(exact.text);
+              if (exact === undefined || used + bytes(exact.text) > researchBudget / 2) continue;
+              const entry = register(exact); entry.opened = true; entry.preloaded = true; used += bytes(exact.text);
             }
           }
         }
@@ -1010,13 +1144,14 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         // ---- research loop --------------------------------------------------
         let results: ToolResult[] = [];
         let idleSteps = 0;
-        const stepTimeout = () => Math.min(AGENTIC_ASK_STEP_TIMEOUT_MS_V1, remaining() - AGENTIC_ASK_ANSWER_RESERVE_MS_V1 - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
-        while (steps < AGENTIC_ASK_MAX_STEPS_V1) {
+        const stepTimeout = () => Math.min(AGENTIC_ASK_STEP_TIMEOUT_MS_V1, remaining() - budget.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
+        while (steps < budget.max_rounds) {
           assertLive();
+          const roundStartedAt = now();
           // Leave room for the answer call and its possible repair.
-          if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || calls + 2 >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) { researchStop = 'budget'; break; }
-          const header = { question: input.question, ...context(requestDay), scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
-          const pad = scratchpad(stepBudget - bytes(JSON.stringify({ ...header, opened: [], seen: [] })));
+          if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || calls + 2 >= budget.max_model_calls) { researchStop = 'budget'; break; }
+          const header = { ...goalFields(), ...context(requestDay), scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: budget.max_rounds - steps - 1, plan: planView(), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
+          const pad = scratchpad(researchBudget - bytes(JSON.stringify({ ...header, opened: [], seen: [] })));
           researchPromptEntries = pad.read;
           const user = { ...header, opened: pad.opened, seen: pad.seen };
           const openIds = [...entries.values()].map(entry => entry.short);
@@ -1024,7 +1159,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable);
           let step: Step;
           try {
-            step = await withRepair("step", stepPrompt, user, stepSchema, stepTimeout, value => {
+            step = await withRepair("step", researchPrompt, user, stepSchema, stepTimeout, value => {
               const parsed = parseStep(value);
               if (parsed.actions.length === 0) throw new AgenticAskOutputErrorV1('actions must contain a read action or a valid finish');
               for (const action of parsed.actions) {
@@ -1060,7 +1195,9 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           catch (error) {
             if (isAbort(error, input.signal) || deadlineExpired || !(error instanceof AgenticAskOutputErrorV1)) throw error;
             // A research step that cannot finish stops research; the answer uses what was found.
-            fallbacks += 1; researchStop = 'unusable_step'; break;
+            fallbacks += 1; researchStop = 'unusable_step';
+            stepRejections.push(cleanLine(error.message, 600)); recordRound(roundStartedAt, []);
+            break;
           }
           steps += 1;
           plan = proposedPlan(step.parts);
@@ -1069,11 +1206,13 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           if (reads.length === 0) {
             researchIncomplete = false;
             researchStop = 'finished';
+            recordRound(roundStartedAt, [roundView("finish", {}, undefined)]);
             break;
           }
           const hadCitableEvidence = [...entries.values()].some(entry => entry.full);
           const before = hadCitableEvidence ? evidenceNovelty : retrievalProgress;
           results = [...await runReads(reads)];
+          recordRound(roundStartedAt, reads.map((action, index) => roundView(action.tool, action.args, results[index])));
           const catalogIsExhaustivelyEmpty = entries.size === 0 && sourceCatalog.length > 0 && sourceCatalog.every(source => {
             const normalized = readSource(source.source);
             return normalized !== undefined && exhaustivelyEmptySources.has(normalized);
@@ -1087,7 +1226,52 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           idleSteps = progressed ? 0 : idleSteps + 1;
           if (idleSteps >= 2) { researchStop = 'no_progress'; break; }
         }
-        if (plan.length === 0) plan = [newPart({ question: partQuestion(input.question), needs: [], notes: "" })];
+        if (plan.length === 0) plan = [newPart({ question: partQuestion(askedQuestion), needs: [], notes: "" })];
+      };
+      /** The research result in its eval view: released content only, no desk ids, refs or receipts. */
+      const researchResult = (): AgenticResearchResultV1 => {
+        const cited = citedShorts();
+        const usage = (field: "input_tokens" | "output_tokens" | "total_tokens"): number | null => {
+          const values = generations.filter(entry => entry.role === "step").map(entry => entry.usage?.[field]);
+          return values.length === 0 || values.some(value => typeof value !== "number") ? null : values.reduce<number>((total, value) => total + (value as number), 0);
+        };
+        const items: AgenticResearchItemV1[] = [...entries.values()].sort((left, right) => Number(left.short.slice(1)) - Number(right.short.slice(1))).map(entry => {
+          const described = describe(entry) as { readonly source: string; readonly date?: string; readonly date_kind?: string; readonly attributes?: Readonly<Record<string, string>> };
+          return Object.freeze({
+            id: entry.short, source: described.source, kind: entry.item.kind, title: entry.item.label, citation: entry.item.citation,
+            ...(described.date === undefined ? {} : { date: described.date, date_kind: described.date_kind ?? "unspecified" }),
+            ...(described.attributes === undefined ? {} : { attributes: described.attributes }),
+            ...(entry.item.text === undefined ? {} : { text: entry.item.text }),
+            read_in_full: entry.full, opened: entry.opened, preloaded: entry.preloaded === true, cited_by_plan: cited.has(entry.short),
+          });
+        });
+        return Object.freeze({
+          schema_version: 1 as const, kind: "echo-agentic-research-result-v1" as const, trigger: input.trigger, goal, budget,
+          plan: planView() as readonly AgenticResearchPartV1[], items: Object.freeze(items), rounds: Object.freeze([...rounds]),
+          coverage: Object.freeze({ reads: Object.freeze(readCoverage.map(read => Object.freeze({ ...read }))), inventories: Object.freeze(inventoryView().map(({ args, ...inventory }) => Object.freeze({ source: args.source, ...inventory }))), notices: Object.freeze([...notice]) }),
+          stop: Object.freeze({ reason: researchStop, completed: !researchIncomplete }),
+          cost: Object.freeze({ rounds: steps, model_calls: calls, repairs, fallbacks, input_tokens: usage("input_tokens"), output_tokens: usage("output_tokens"), total_tokens: usage("total_tokens"),
+            model_ms: Math.max(0, Math.round(stepModelMs)), desk_ms: Math.max(0, Math.round(deskMs)), elapsed_ms: Math.max(0, Math.round(now() - researchStartedAt)) }),
+        });
+      };
+
+      try {
+        await research();
+        const researched = researchResult();
+        if (researchOnly) {
+          // Research-only triggers: fence, audit, release fence. No writer runs.
+          phase = "final";
+          const fenced = await raceAbort(activeSignal, desk.revalidate({ signal: activeSignal })); checkedAt = fenced.checked_at;
+          const needs = plan.flatMap(part => part.needs);
+          const found = needs.filter(value => value.status === "found").length;
+          const outcome = found === 0 ? (researchIncomplete ? "partial" as const : "not_found" as const) : found === needs.length && !researchIncomplete ? "answered" as const : "partial" as const;
+          await audit(outcome, citedShorts().size, undefined, { answer_sha256: canonicalSha256({ trigger: input.trigger, plan: researched.plan }), response_sha256: canonicalSha256(researched) });
+          const releaseFence = await raceAbort(activeSignal, desk.revalidate({ signal: activeSignal })); checkedAt = releaseFence.checked_at;
+          if (input.signal?.aborted) abort();
+          assertLive();
+          clearTimeout(deadlineTimer);
+          return Object.freeze({ research: researched, writer_evidence: Object.freeze([]) });
+        }
 
         // Research is over: its desk time is the journey's retrieval stage and its step calls the planner stage.
         phase = "answer";
@@ -1097,7 +1281,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
 
         // ---- final answer ---------------------------------------------------
         const answerContext = {
-          question: input.question, ...context(requestDay), scope, source_catalog: sourceCatalog,
+          question: askedQuestion, ...context(requestDay), scope, source_catalog: sourceCatalog,
           research: {
             completed: !researchIncomplete, stop_reason: researchStop, reads: readCoverage,
             // Filters and planner need text are intentionally excluded. This describes
@@ -1125,8 +1309,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         report({ stage: "context", event: "succeeded", elapsed_ms: 0, retrieval: { context_atom_count: evidence.length } });
 
         let answer: Answer | null = null;
+        let writerEvidence: readonly string[] = [];
         const answerTimeout = () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1;
-        if (!generationStopped && evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && calls < AGENTIC_ASK_MAX_MODEL_CALLS_V1) {
+        if (!generationStopped && evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && calls < budget.max_model_calls) {
+          writerEvidence = Object.freeze(evidence.map(entry => entry.short));
           selectedTicketCount = evidence.filter(entry => entry.item.citation.kind === "ticket").length;
           const user = {
             ...answerContext,
@@ -1155,7 +1341,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           return indexes;
         };
         const isPrivate = (shorts: readonly string[]) => shorts.some(short => allowed.has(short) && privateItem(entryOf(short)!.item));
-        const question = partQuestion(input.question);
+        const question = partQuestion(askedQuestion);
         const statements = (answer?.sentences ?? [])
           .map(sentence => ({ sentence, shorts: sentence.evidence.filter(short => allowed.has(short)) }))
           .filter(value => value.shorts.length > 0)
@@ -1215,7 +1401,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         assertLive();
         clearTimeout(deadlineTimer);
         ticketCitationCount = validated.citations.filter(value => value.citation.kind === "ticket").length;
-        return validated;
+        return Object.freeze({ response: validated, research: researched, writer_evidence: writerEvidence });
       } catch (error) {
         clearTimeout(deadlineTimer);
         if (deadlineExpired || error instanceof AgenticAskDeadlineErrorV1) {
@@ -1233,6 +1419,19 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       } finally {
         if (tickets) annotateCoreRuntimeV1({ counts: { ticket_retrieved_items: retrievedTickets.size, ticket_context_items: ticketContextCount, ticket_citations: ticketCitationCount } });
       }
+  };
+  return Object.freeze({
+    async answer(input: { readonly question: string; readonly signal?: AbortSignal }) {
+      return (await request({ goal: { kind: "question", question: input.question }, trigger: "ask", ...(input.signal === undefined ? {} : { signal: input.signal }) }, AGENTIC_RESEARCH_LIVE_BUDGET_V1)).response!;
+    },
+    /** Ask plus its research result and writer input, for the research evaluation. */
+    async answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }) {
+      const output = await request({ goal: { kind: "question", question: input.question }, trigger: "ask", ...(input.signal === undefined ? {} : { signal: input.signal }) }, input.budget ?? AGENTIC_RESEARCH_LIVE_BUDGET_V1);
+      return Object.freeze({ response: output.response!, research: output.research, writer_evidence: output.writer_evidence });
+    },
+    /** A research-only trigger (Check, Sweep): no writer; the result is audited and returned. */
+    async research(input: AgenticResearchInputV1): Promise<AgenticResearchResultV1> {
+      return (await request({ goal: input.goal, trigger: input.trigger, ...(input.signal === undefined ? {} : { signal: input.signal }) }, input.budget ?? AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1)).research;
     },
   });
 }

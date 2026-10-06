@@ -1,5 +1,5 @@
-import type { PersonPageCitationV1, PersonSlackMessageCitationV1 } from '@echo-brain/organization-api';
-import type { EvidenceDeskKindV1, EvidenceDeskPortV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
+import { validatePersonEvidenceOpenRequestV1, type PersonAnswerCitationV3, type PersonPageCitationV1, type PersonSlackMessageCitationV1 } from '@echo-brain/organization-api';
+import type { EvidenceDeskKindV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
 import { liveSourceDescriptorV2, type PersonLiveSourceDescriptorV2, type EvidenceDeskPortV2, type EvidenceDeskResultV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -136,6 +136,33 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       const result = await lookup('evidence_list', registration, () => source.list({ ...(input.channel === undefined ? {} : { container: input.channel }), limit: Math.min(input.limit ?? 20, 20), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal }));
       input.signal?.throwIfAborted();
       return remember(result, registration);
+    },
+    /**
+     * Background triggers' starting evidence: a citation released by an earlier
+     * request. Live citations go to the source with the same tool identity and
+     * content kind; ECHO citations go to the base desk. Both apply this request's
+     * scope and permissions; nothing is opened from the citation alone.
+     */
+    async openCitation(input) {
+      input.signal?.throwIfAborted();
+      const value = input.citation;
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new AuthorityOperationError('invalid_request', 'Evidence citation is invalid');
+      const { kind, tool_id: toolId } = value as { readonly kind?: unknown; readonly tool_id?: unknown };
+      if (kind === 'ticket' || kind === 'page' || kind === 'slack_message') {
+        const registration = [...sources.values()].find(entry => entry.descriptor.kind === kind && entry.source.tool_id === toolId);
+        if (registration === undefined || registration.source.openCitation === undefined) return refused();
+        const result = await lookup('evidence_open', registration, () => registration.source.openCitation!({ citation: value, signal: input.signal }));
+        input.signal?.throwIfAborted();
+        return remember(result, registration);
+      }
+      const local = (base as EvidenceDeskPortV1 & { openCitation?(request: { readonly citation: PersonAnswerCitationV3; readonly neighbours?: number; readonly signal?: AbortSignal }): Promise<EvidenceDeskResultV1> }).openCitation;
+      if (local === undefined) return refused();
+      let citation: PersonAnswerCitationV3;
+      try { citation = validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation: value }).citation; }
+      catch { throw new AuthorityOperationError('invalid_request', 'Evidence citation is invalid'); }
+      const result = await local.call(base, { citation, ...(input.neighbours === undefined ? {} : { neighbours: input.neighbours }), ...(input.signal === undefined ? {} : { signal: input.signal }) });
+      input.signal?.throwIfAborted();
+      return remember(result, base);
     },
     async revalidate(input) {
       input.signal?.throwIfAborted();

@@ -443,3 +443,78 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls).toHaveLength(before);
   });
 });
+
+describe('Confluence open by an earlier citation (background trigger starting evidence)', () => {
+  const earlier = (pageId: string, scope = CLOUD): PersonPageCitationV1 => ({ kind: 'page', tool_id: 'confluence', external_scope_id: scope,
+    page_id: pageId, section_id: 's1', version: '1', permalink: `${ORIGIN}/wiki/pages/viewpage.action?pageId=${pageId}`, text_sha256: emptyHash as `sha256:${string}` });
+
+  it('re-reads the current version from its first section and audits it as an open', async () => {
+    const f = await fixture({ selected: ['42'], pages: [page({ id: '123', version: 5, document: document('Current gate text.') })] });
+    const result = await f.source.openCitation!({ citation: earlier('123') });
+    expect(result.items).toEqual([expect.objectContaining({ kind: 'page', text: 'Current gate text.', citation: expect.objectContaining({ page_id: '123', version: '5', section_id: 's1' }) })]);
+    expect(f.audits.at(-1)).toMatchObject({ operation: 'open' });
+  });
+
+  // Twenty reader sections: each normalized paragraph plus its newline occupies one section.
+  const twentySections = JSON.stringify({ type: 'doc', version: 1, content: Array.from({ length: 20 }, (_value, index) => {
+    const marker = `Current section ${index + 1}. `;
+    return { type: 'paragraph', content: [{ type: 'text', text: `${marker}${'x'.repeat(3071 - Buffer.byteLength(marker, 'utf8'))}` }] };
+  }) });
+  const digest = (text: string) => `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}` as `sha256:${string}`;
+
+  it('re-reads the cited section by position when the page is unchanged since the citation', async () => {
+    const f = await fixture({ selected: ['42'], pages: [page({ id: '123', version: 5, document: twentySections })] });
+
+    const result = await f.source.openCitation!({ citation: { ...earlier('123'), version: '5', section_id: 's20' } });
+
+    expect(result).toMatchObject({ truncated: false, items: [expect.objectContaining({ text: expect.stringContaining('Current section 20.'), citation: expect.objectContaining({ page_id: '123', version: '5', section_id: 's20' }) })] });
+    expect(result.items).toHaveLength(1);
+    expect(result.notice).toBeUndefined();
+  });
+
+  it('follows a cited section whose text moved when the page was edited', async () => {
+    const f = await fixture({ selected: ['42'], pages: [page({ id: '123', version: 5, document: twentySections })] });
+    const current = await f.source.openCitation!({ citation: { ...earlier('123'), version: '5', section_id: 's5' } });
+    const text = current.items[0]!.text!;
+
+    // Version 4 cited this text as s3; two sections were inserted above it since.
+    const result = await f.source.openCitation!({ citation: { ...earlier('123'), version: '4', section_id: 's3', text_sha256: digest(text) } });
+
+    expect(result).toMatchObject({ truncated: false, items: [expect.objectContaining({ text, citation: expect.objectContaining({ version: '5', section_id: 's5' }) })] });
+    expect(result.items).toHaveLength(1);
+    expect(result.notice).toBeUndefined();
+  });
+
+  it('returns the current page from the top with a notice when the cited text no longer exists', async () => {
+    const f = await fixture({ selected: ['42'], pages: [page({ id: '123', version: 5, document: twentySections })] });
+
+    // Section positions may have shifted, so s20 of version 4 is not assumed to be s20 now.
+    const result = await f.source.openCitation!({ citation: { ...earlier('123'), version: '4', section_id: 's20', text_sha256: digest('Earlier section 20.') } });
+
+    expect(result.truncated).toBe(true);
+    expect(result.items[0]).toMatchObject({ text: expect.stringContaining('Current section 1.'), citation: expect.objectContaining({ version: '5', section_id: 's1' }) });
+    expect(result.items.some(item => item.text?.includes('Current section 20.'))).toBe(false);
+    expect(result.notice).toMatch(/cited section changed since it was cited/u);
+  });
+
+  it('refuses an invalid cited section, or one missing from the unchanged page, instead of substituting another section', async () => {
+    const f = await fixture({ selected: ['42'], pages: [page({ id: '123', version: 5, document: document('Only section.') })] });
+
+    await expect(f.source.openCitation!({ citation: { ...earlier('123'), section_id: 'inventory' } })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.source.openCitation!({ citation: { ...earlier('123'), version: '5', section_id: 's20' } })).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.audits).toHaveLength(0);
+  });
+
+  it('refuses a page outside the mapped spaces', async () => {
+    const f = await fixture({ selected: ['42'], pages: [page({ id: '777', spaceId: '43' })] });
+    await expect(f.source.openCitation!({ citation: earlier('777') })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.audits).toHaveLength(0);
+  });
+
+  it('refuses a citation from another site', async () => {
+    const f = await fixture({ selected: ['42'] });
+    await expect(f.source.openCitation!({ citation: earlier('123', '00000000-0000-4000-8000-000000000099') })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(f.source.openCitation!({ citation: { ...earlier('123'), permalink: 'https://elsewhere.atlassian.net/wiki/pages/viewpage.action?pageId=123' } })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.audits).toHaveLength(0);
+  });
+});

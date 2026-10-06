@@ -6,6 +6,8 @@ services:
       # Select live Atlassian sources only with the fixed staging connector profile.
       ECHO_STAGING_JIRA_ASK_V1: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:+true}"
       ECHO_STAGING_CONFLUENCE_ASK_V1: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:+true}"
+      # The reviewed connector rehearsal selects evaluation too; no host environment edit.
+      ECHO_STAGING_RESEARCH_EVAL_V1: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:+true}"
     ports: !override
       - name: tunnel-origin
         target: 80

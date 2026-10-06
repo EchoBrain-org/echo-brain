@@ -66,12 +66,16 @@ import {
   PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
+  PERSON_RESEARCH_EVAL_READ_PATH_V1,
+  PERSON_RESEARCH_EVAL_START_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   PERSON_MEETING_TRANSCRIPT_PATH_V1,
   validatePersonAnswerRequestV3,
   validatePersonCapabilitiesV1,
   validatePersonEvidenceOpenRequestV1,
+  validatePersonResearchEvalReadRequestV1,
+  validatePersonResearchEvalStartRequestV1,
   validatePersonEvidenceSearchRequestV1,
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonMeetingTranscriptReadRequestV1,
@@ -80,6 +84,7 @@ import type { PersonMeetingTranscriptHttpApplicationV1, PersonSourceEvidenceHttp
 import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
 import type { PersonAnswerV4HttpApplication } from "./person-answer-v4-http-application.js";
 import type { PersonAnswerV5HttpApplication } from "./person-answer-v5-http-application.js";
+import type { PersonResearchEvalHttpApplicationV1 } from "./person-research-eval-http-application.js";
 import {
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
@@ -161,6 +166,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_answer_v4?: PersonAnswerV4HttpApplication;
   /** Optional page-capable Ask. It preserves the V3/V4 routes for installed clients. */
   readonly person_answer_v5?: PersonAnswerV5HttpApplication;
+  /** Staging-only research evaluation; its routes do not exist unless composed. */
+  readonly person_research_eval?: PersonResearchEvalHttpApplicationV1;
   /** Provider-owned account connection routes, selected by the composition root. */
   readonly person_tool_connections?: readonly ProviderHttpApplicationV1[];
   /** Opening a cited original; it needs no answer model. */
@@ -741,6 +748,10 @@ export function createOrganizationAuthorityHttpServer(
     [PERSON_ANSWER_PATH_V5, personCancellablePost(options.person_answer_v5, validatePersonAnswerRequestV3, (application, input) => application.ask(input))],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
+    ...(options.person_research_eval === undefined ? [] : [
+      [PERSON_RESEARCH_EVAL_START_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalStartRequestV1, (application, input) => application.start(input))],
+      [PERSON_RESEARCH_EVAL_READ_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalReadRequestV1, (application, input) => application.read(input))],
+    ] as const),
     [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence, validatePersonSourceEvidenceReadRequestV1, (application, input) => application.readSource(input))],
     [PERSON_MEETING_TRANSCRIPT_PATH_V1, personSourcePost(options.person_meeting_transcript, validatePersonMeetingTranscriptReadRequestV1, (application, input) => application.readTranscript(input))],
     [PERSON_LIST_PATH_V1, personCancellablePost(options.person_list, validatePersonListRequestV1, (application, input) => application.list(input))],

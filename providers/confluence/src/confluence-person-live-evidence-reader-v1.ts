@@ -127,6 +127,13 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       ...(item.text === undefined ? {} : { text: item.text }) });
   }
   function inventory(page: Page): Item { return Object.freeze({ page, section: 'inventory', offset: 0 }); }
+  /** A released page section has a stable reader coordinate. Inventories and continuations have no text to re-read. */
+  function citedSection(page: Page, citation: PersonPageCitationV1): Item {
+    const match = /^s([1-9][0-9]*)$/.exec(citation.section_id);
+    const number = match === null ? Number.NaN : Number(match[1]);
+    if (!Number.isSafeInteger(number)) confluenceFailure('not_found');
+    return Object.freeze({ page, section: citation.section_id, offset: number - 1 });
+  }
   function nextToken(raw: unknown, path: string): string | undefined {
     if (raw === undefined || raw === null) return undefined;
     const link = confluenceString(raw, 8192);
@@ -223,6 +230,44 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       if (returned.size !== expected.size) confluenceFailure('not_found');
     }
   }
+  /** Opens one released item: its page's current body from the item's section on. */
+  async function openItem(item: Item, maximum: number, signal?: AbortSignal, cited?: PersonPageCitationV1): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
+    await verify(signal);
+    const page = await exact(item.page.id, true, item.page.status, signal);
+    if (!samePage(page, item.page)) confluenceFailure('stale_access_state');
+    const normalized = normalizeConfluencePageDocumentV1(page.document!);
+    const texts = normalized.sections;
+    let offset = item.offset;
+    let single = item.text !== undefined || cited !== undefined;
+    let changed = false;
+    if (cited !== undefined && cited.version !== page.version) {
+      // Section ids are ordinals, so an edit above the cited section shifts them.
+      // Follow the cited text if it still exists; otherwise show the page from the top.
+      const moved = texts.findIndex(text => text.trim() !== '' && textDigest(text) === cited.text_sha256);
+      if (moved >= 0) offset = moved;
+      else { offset = 0; single = false; changed = true; }
+    }
+    if (offset >= texts.length) confluenceFailure(cited !== undefined ? 'not_found' : 'stale_access_state');
+    if (item.text !== undefined && textDigest(texts[offset]!) !== textDigest(item.text)) confluenceFailure('stale_access_state');
+    if (single && cited !== undefined && texts[offset]!.trim() === '') confluenceFailure('not_found');
+    const remaining = single ? 1 : texts.length - offset;
+    if (remaining > 1 && maximum < 2) confluenceFailure('invalid_request');
+    const count = remaining > maximum ? maximum - 1 : Math.min(remaining, maximum);
+    const result: Item[] = [];
+    for (let index = offset; index < offset + count; index += 1) {
+      // Empty/whitespace-only pages contain no releasable evidence.
+      if (texts[index]!.trim() !== '') result.push(Object.freeze({ page, section: `s${index + 1}`, offset: index, text: texts[index]! }));
+    }
+    const hasMore = !single && offset + count < texts.length;
+    if (hasMore) result.push(Object.freeze({ page, section: `continue:${offset + count}`, offset: offset + count }));
+    await verify(signal);
+    const notices = [
+      ...(changed ? ['The cited section changed since it was cited; this is the current page from the top.'] : []),
+      ...(normalized.incomplete ? ['Some Confluence page content could not be fully represented as text.'] : []),
+    ];
+    return Object.freeze({ items: Object.freeze(result.map(remember)), truncated: hasMore,
+      ...(notices.length === 0 ? {} : { notice: notices.join(' ') }) });
+  }
   await verify(options.signal);
   return Object.freeze({
     binding,
@@ -278,27 +323,20 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       const maximum = limit(input.limit, 8);
       const item = handles.get(input.handle);
       if (item === undefined) confluenceFailure('not_found');
+      return openItem(item, maximum, input.signal);
+    },
+    async openCitation(input): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
+      const maximum = limit(input.limit, 8);
+      let citation: PersonPageCitationV1;
+      try { citation = validatePersonPageCitationV1(input.citation); } catch { confluenceFailure('invalid_request'); }
+      if (citation.tool_id !== 'confluence' || citation.external_scope_id !== cloud || !ID.test(citation.page_id)) confluenceFailure('unauthorized');
       await verify(input.signal);
-      const page = await exact(item.page.id, true, item.page.status, input.signal);
-      if (!samePage(page, item.page)) confluenceFailure('stale_access_state');
-      const normalized = normalizeConfluencePageDocumentV1(page.document!);
-      const texts = normalized.sections;
-      if (item.offset >= texts.length) confluenceFailure('stale_access_state');
-      if (item.text !== undefined && textDigest(texts[item.offset]!) !== textDigest(item.text)) confluenceFailure('stale_access_state');
-      const single = item.text !== undefined;
-      const remaining = single ? 1 : texts.length - item.offset;
-      if (remaining > 1 && maximum < 2) confluenceFailure('invalid_request');
-      const count = remaining > maximum ? maximum - 1 : Math.min(remaining, maximum);
-      const result: Item[] = [];
-      for (let index = item.offset; index < item.offset + count; index += 1) {
-        // Empty/whitespace-only pages contain no releasable evidence.
-        if (texts[index]!.trim() !== '') result.push(Object.freeze({ page, section: `s${index + 1}`, offset: index, text: texts[index]! }));
-      }
-      const hasMore = !single && item.offset + count < texts.length;
-      if (hasMore) result.push(Object.freeze({ page, section: `continue:${item.offset + count}`, offset: item.offset + count }));
-      await verify(input.signal);
-      return Object.freeze({ items: Object.freeze(result.map(remember)), truncated: hasMore,
-        ...(normalized.incomplete ? { notice: 'Some Confluence page content could not be fully represented as text.' } : {}) });
+      // Current metadata through the exact read (space pin and permissions), then
+      // the cited section from the current page: a re-read never trusts an old
+      // version or silently substitutes another section.
+      const current = await exact(citation.page_id, false, undefined, input.signal);
+      if (citation.permalink !== permalink(current)) confluenceFailure('unauthorized');
+      return openItem(citedSection(current, citation), maximum, input.signal, citation);
     },
     async revalidate(input): Promise<void> {
       await verify(input.signal);

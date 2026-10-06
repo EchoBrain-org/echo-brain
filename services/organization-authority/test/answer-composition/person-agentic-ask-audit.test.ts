@@ -35,6 +35,31 @@ describe("agentic Ask audit", () => {
     } finally { database.close(); }
   });
 
+  it("records a research-only trigger under the background limits and keeps Ask limits for Ask", () => {
+    const database = openAuthorityDatabase(":memory:");
+    applyAuthorityBaselineV11(database);
+    try {
+      const store = new SqlitePersonAgenticAskAuditV1(database);
+      const entry = {
+        kind: "echo-agentic-ask-audit-v1" as const, outcome: "partial" as const, receipt_digests: [digest("receipt")],
+        rounds: 20, model_calls: 0, repairs: 0, fallbacks: 0, citation_count: 3,
+        checked_at: "2026-10-06T00:00:00.000Z", prompt_sha256: digest("prompt"), answer_sha256: digest("plan"), response_sha256: digest("result"),
+        generations: [], generation_usage: { input_tokens: null, output_tokens: null, total_tokens: null }, finish_reason_counts: {},
+      };
+      store.forRequest(requestContext).append({ ...entry, trigger: "check" });
+      const row = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").get() as { body_json: string };
+      expect(JSON.parse(row.body_json)).toMatchObject({ trigger: "check", rounds: 20, outcome: "partial" });
+      expect(() => store.forRequest({ ...requestContext, request_id: "ask_2" }).append(entry)).toThrow("Agentic Ask audit entry is invalid");
+      expect(() => store.forRequest({ ...requestContext, request_id: "ask_3" }).append({ ...entry, trigger: "ask" as never })).toThrow("Agentic Ask audit entry is invalid");
+      // A background-budget Ask (the evaluation's diagnostic) carries its budget instead of a trigger.
+      store.forRequest({ ...requestContext, request_id: "ask_4" }).append({ ...entry, budget: "background" });
+      expect(() => store.forRequest({ ...requestContext, request_id: "ask_5" }).append({ ...entry, budget: "huge" as never })).toThrow("Agentic Ask audit entry is invalid");
+      const rows = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").all() as { body_json: string }[];
+      expect(rows).toHaveLength(2);
+      expect(rows.map(value => JSON.parse(value.body_json))).toEqual(expect.arrayContaining([expect.objectContaining({ trigger: "check" }), expect.objectContaining({ budget: "background", rounds: 20 })]));
+    } finally { database.close(); }
+  });
+
   it.each(["cancelled", "timed_out"] as const)("records %s without output hashes", (outcome) => {
     const database = openAuthorityDatabase(":memory:");
     applyAuthorityBaselineV11(database);
