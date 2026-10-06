@@ -51,7 +51,13 @@ import {
   type StepSource,
 } from "./agentic-ask-v1-model-protocol.js";
 import { compactAndValidateAgenticAskResponseV1 } from "./agentic-ask-v1-response.js";
+import { AGENTIC_RESEARCH_LIVE_BUDGET_V1, type AgenticResearchBudgetV1 } from "./agentic-research-v1.js";
 
+export {
+  AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
+  AGENTIC_RESEARCH_LIVE_BUDGET_V1,
+  type AgenticResearchBudgetV1,
+} from "./agentic-research-v1.js";
 export {
   AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1,
   AGENTIC_ASK_MAX_PARTS_V1,
@@ -64,9 +70,9 @@ export {
  * the needs of each part; code owns scope, permissions, ids, budgets, paging,
  * de-duplication, the stop rules, and the response layout.
  */
-export const AGENTIC_ASK_MAX_STEPS_V1 = 10;
+export const AGENTIC_ASK_MAX_STEPS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_rounds;
 /** Request-wide model-call budget, including retries and repairs. */
-export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = 24;
+export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
 /**
  * The whole request, research through audit (ADR-0022). The Authority is
  * reached through Cloudflare, whose proxy drops an origin response that takes
@@ -74,9 +80,9 @@ export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = 24;
  * leaves room for the network; per-call time is also capped by the
  * generation profile.
  */
-export const AGENTIC_ASK_DEADLINE_MS_V1 = 90_000;
+export const AGENTIC_ASK_DEADLINE_MS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.deadline_ms;
 /** Time kept for the final answer call; research never starts inside it. */
-export const AGENTIC_ASK_ANSWER_RESERVE_MS_V1 = 25_000;
+export const AGENTIC_ASK_ANSWER_RESERVE_MS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.writer_reserve_ms;
 /** Time kept after the answer call for final revalidation and the audit. */
 export const AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 = 2_000;
 /** One research step's model call; a stalled host fails fast and research goes on. */
@@ -480,16 +486,19 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   const answerPrompt = liveCatalog.length === 0 ? ANSWER_PROMPT : `${ANSWER_PROMPT}\n\n${liveGuidance}`;
   const stepBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, stepPrompt, OUTPUT_TOKENS.step);
   const answerBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, answerPrompt, OUTPUT_TOKENS.answer);
-  return Object.freeze({
-    async answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6> {
+  /**
+   * One agentic request: shared session state (deadline, model-call budget,
+   * access fences, audit), a research phase, then the Ask writer.
+   */
+  const request = async (input: { readonly question: string; readonly signal?: AbortSignal }, budget: AgenticResearchBudgetV1): Promise<PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6> => {
       if (questionText(input.question) === null) throw new AgenticAskOutputErrorV1("question is invalid");
       const startedAt = now();
       const requestDay = today();
-      const deadline = startedAt + AGENTIC_ASK_DEADLINE_MS_V1;
+      const deadline = startedAt + budget.deadline_ms;
       const terminalAbort = new AbortController();
       const activeSignal = input.signal === undefined ? terminalAbort.signal : AbortSignal.any([input.signal, terminalAbort.signal]);
       let deadlineExpired = false;
-      const deadlineTimer = setTimeout(() => { deadlineExpired = true; terminalAbort.abort(new AgenticAskDeadlineErrorV1()); }, AGENTIC_ASK_DEADLINE_MS_V1);
+      const deadlineTimer = setTimeout(() => { deadlineExpired = true; terminalAbort.abort(new AgenticAskDeadlineErrorV1()); }, budget.deadline_ms);
       deadlineTimer.unref?.();
       let calls = 0; let repairs = 0; let fallbacks = 0; let steps = 0; let checkedAt: string | null = null;
       // ---- journey observation (content-free; never alters the answer) ----
@@ -891,7 +900,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       let researchStop: 'finished' | 'empty_catalog' | 'no_progress' | 'step_limit' | 'budget' | 'unusable_step' = 'step_limit';
       const call = async (role: AgenticAskModelRoleV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, recovery = false): Promise<unknown> => {
         assertLive();
-        if (calls >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) throw new AgenticAskGenerationFailureV1("call budget exhausted", "fallback");
+        if (calls >= budget.max_model_calls) throw new AgenticAskGenerationFailureV1("call budget exhausted", "fallback");
         // Every call is preceded by a cumulative desk revalidation of what it may carry.
         const validated = await raceAbort(activeSignal, desk.revalidate({ signal: activeSignal }));
         checkedAt = validated.checked_at;
@@ -959,7 +968,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           reason = error instanceof AgenticAskGenerationFailureV1 && error.recovery === "retry" ? null : error.message;
         }
         const minimum = role === "step" ? AGENTIC_ASK_MIN_STEP_MS_V1 : AGENTIC_ASK_MIN_ANSWER_MS_V1;
-        if (timeout() < minimum || calls >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) throw new AgenticAskGenerationFailureV1("no time left to repair", "fallback");
+        if (timeout() < minimum || calls >= budget.max_model_calls) throw new AgenticAskGenerationFailureV1("no time left to repair", "fallback");
         // A repair observes the rejected proposal and concrete validation
         // failure. These are ephemeral model inputs, never audit content.
         const repairUser = reason === null ? user : {
@@ -987,7 +996,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         terminalAudited = true;
       };
 
-      try {
+      /** The research phase: optional preload, then the loop until a stop rule fires. */
+      const research = async (): Promise<void> => {
         // ---- optional small-scope preload -----------------------------------
         if (options.small_scope_shortcut === true) {
           const inventory = await raceAbort(activeSignal, desk.search({ limit: AGENTIC_ASK_SHORTCUT_ITEMS_V1, inventory_mode: "items", signal: activeSignal }));
@@ -1010,12 +1020,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         // ---- research loop --------------------------------------------------
         let results: ToolResult[] = [];
         let idleSteps = 0;
-        const stepTimeout = () => Math.min(AGENTIC_ASK_STEP_TIMEOUT_MS_V1, remaining() - AGENTIC_ASK_ANSWER_RESERVE_MS_V1 - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
-        while (steps < AGENTIC_ASK_MAX_STEPS_V1) {
+        const stepTimeout = () => Math.min(AGENTIC_ASK_STEP_TIMEOUT_MS_V1, remaining() - budget.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
+        while (steps < budget.max_rounds) {
           assertLive();
           // Leave room for the answer call and its possible repair.
-          if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || calls + 2 >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) { researchStop = 'budget'; break; }
-          const header = { question: input.question, ...context(requestDay), scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
+          if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || calls + 2 >= budget.max_model_calls) { researchStop = 'budget'; break; }
+          const header = { question: input.question, ...context(requestDay), scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: budget.max_rounds - steps - 1, plan: planView(), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
           const pad = scratchpad(stepBudget - bytes(JSON.stringify({ ...header, opened: [], seen: [] })));
           researchPromptEntries = pad.read;
           const user = { ...header, opened: pad.opened, seen: pad.seen };
@@ -1088,6 +1098,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           if (idleSteps >= 2) { researchStop = 'no_progress'; break; }
         }
         if (plan.length === 0) plan = [newPart({ question: partQuestion(input.question), needs: [], notes: "" })];
+      };
+
+      try {
+        await research();
 
         // Research is over: its desk time is the journey's retrieval stage and its step calls the planner stage.
         phase = "answer";
@@ -1126,7 +1140,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
 
         let answer: Answer | null = null;
         const answerTimeout = () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1;
-        if (!generationStopped && evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && calls < AGENTIC_ASK_MAX_MODEL_CALLS_V1) {
+        if (!generationStopped && evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && calls < budget.max_model_calls) {
           selectedTicketCount = evidence.filter(entry => entry.item.citation.kind === "ticket").length;
           const user = {
             ...answerContext,
@@ -1233,6 +1247,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       } finally {
         if (tickets) annotateCoreRuntimeV1({ counts: { ticket_retrieved_items: retrievedTickets.size, ticket_context_items: ticketContextCount, ticket_citations: ticketCitationCount } });
       }
-    },
+  };
+  return Object.freeze({
+    answer: (input: { readonly question: string; readonly signal?: AbortSignal }) => request(input, AGENTIC_RESEARCH_LIVE_BUDGET_V1),
   });
 }
