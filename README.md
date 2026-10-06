@@ -36,7 +36,7 @@ It can:
 - let an owner list, invite, reissue or revoke employees; and
 - install signed CLI updates from a configured feed.
 
-It does not run meeting processing, hold Granola or Slack service
+It does not run meeting processing, hold provider OAuth or Slack service
 credentials, manage a LaunchAgent, keep a local product database, write a
 JSONL outbox, use installation signing keys or leases, or receive fleet update
 directives.

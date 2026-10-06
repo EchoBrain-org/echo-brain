@@ -90,27 +90,25 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 | `oidc-config.json`         | OIDC configuration, including the exact callback above.                                                                             |
 | `oidc-client-secret`       | OIDC client secret.                                                                                                                 |
 | `nango-secret-key`         | Nango environment secret key. The Authority uses it to create Slack connect sessions and fetch the bot token; an owner sets Slack up afterward with `person tools setup --tool slack`. |
-| `granola-credential`       | Organization Granola credential.                                                                                                    |
 | `llm-credential`           | Retained LLM provider credential.                                                                                                   |
 
 ### Optional staging connector rehearsal
 
 The ordinary manifest omits `staging_connector_rehearsal`. Initial preparation
-can enable the staging-only Granola/Jira/Slack rehearsal with this closed,
+can enable staging-only Jira read verification with this closed,
 nonsecret object in `onboarding.clean-v1.json`:
 
 ```json
 {
   "staging_connector_rehearsal": {
-    "schema_version": 2,
-    "kind": "echo-staging-connector-rehearsal-profile-v2",
-    "capture_policy": "initial-owner-granola-retained-jira-pointer-slack-pointer-v2",
+    "schema_version": 3,
+    "kind": "echo-staging-connector-rehearsal-profile-v3",
+    "read_policy": "initial-owner-jira-pointer-v3",
     "jira": {
       "cloud_id": "a8c0e112-6f72-4a0e-9c12-b7d8439f0abc",
       "integration_key": "jira",
       "project": "ECHO"
-    },
-    "slack": { "channel_id": "C0123456789" }
+    }
   }
 }
 ```
@@ -120,23 +118,22 @@ with the four synthetic-meeting input. The installed wrapper canonicalizes the
 object into `clean-data/private/staging-connector-rehearsal.json`, mode `0600`,
 and writes its digest to setup while binding the fixed file path in the
 release-bound environment snapshots. The
-ordinary eight-file preparation carries the profile inside the existing
+ordinary seven-file preparation carries the profile inside the existing
 nonsecret manifest. The four-synthetic-meeting provider-reuse transfer rejects
 an enabled connector profile; it cannot be used as an alternate connector
 input lane. The profile is fixed for the life of the rehearsal: a different
-Jira project or Slack channel needs a fresh rehearsal.
+Jira project needs a fresh rehearsal.
 
 The profile contains no Nango secret or Slack token. The Authority continues to
 read the existing `nango-secret-key`; the profile's Jira integration key is an
-ordinary Nango integration identifier. `channel_id` is historical and inert: the
-Slack bot only delivers approval DMs and reads no channel, but the field stays
-so the profile bytes, digest and sidecar bindings are unchanged. Granola keeps
-its existing organization-owned credential. Jira is read live through
-`verify-read`; only Granola can be captured. Jira and Slack capture requests
-are rejected before provider I/O and retain no new pointers, metadata or
-bodies. The historical V2 policy string stays unchanged so existing profile
-digests and sidecar bindings survive an ordinary release update without a
-reset. Existing retained rows are not purged by this change. Slack setup asks
+ordinary Nango integration identifier. The V3 profile removes the organization
+Granola capture policy and inert Slack channel field. The Authority and runner
+reject V1/V2 profiles; a selected older profile requires a fresh rehearsal with
+reviewed V3 inputs and new sidecar bindings. No retained rows are silently
+migrated or purged. Jira is read live through `verify-read`; all capture
+requests are rejected before provider I/O and retain no pointers or bodies.
+Slack approval qualification uses the separate synthetic release canary, whose
+staging-only source never discovers provider data. Slack setup asks
 only for the four delivery scopes (`chat:write`, `im:write`, `im:history`,
 `users:read`). A bot token installed before that keeps the two retired channel
 scopes until the app is reinstalled from scratch; nothing uses them. Jira's
@@ -200,7 +197,7 @@ with one fresh rehearsal, in this order:
    `--reuse-provider-inputs`. The archive keeps the old profiles, sidecar and
    Slack connection state.
 5. Put the profile above in `onboarding.clean-v1.json` and transfer the full
-   eight-file onboarding input directory; the transfer runs `doctor` and
+   seven-file onboarding input directory; the transfer runs `doctor` and
    `prepare` on the host. Then continue with `resume`.
 6. On the initial-owner machine, run `person tools setup --tool slack` with a
    new configuration token and complete Slack consent. Then link the owner with
@@ -208,7 +205,7 @@ with one fresh rehearsal, in this order:
    `person tools connect --tool jira`.
 7. Save the exact profile object as the runner's local profile before the
    [staging connector runner](../../services/organization-authority/README.md#staging-connector-rehearsal)
-   Granola captures and live Jira read checks.
+   live Jira read checks.
 
 Check that directory before spending an AWS session on it:
 
@@ -239,7 +236,7 @@ files in the checksum-bound courier archive and records the selected source in
 the private receipt, so `execute` does not depend on the controller still
 existing. `preflight` reports the fixture directory separately and applies the
 aggregate size limit to both directories. Leave this property out for ordinary
-onboarding; the established eight-file archive and host invocation are unchanged.
+onboarding; the established seven-file archive and host invocation are unchanged.
 Before planning this selected source, install matching reviewed host tooling
 through the [current-host staging release lane](../../deploy/release/README.md#automated-current-host-staging-lane).
 An older installed wrapper does not accept the selected-source flag; its failed
@@ -432,7 +429,7 @@ integration. Keep this order:
    `replace-rehearsal` archives, so it refuses to install afterward.
 2. Run `replace-rehearsal --confirm-no-live-users` without
    `--reuse-provider-inputs`.
-3. Transfer the full eight-file onboarding input directory (including
+3. Transfer the full seven-file onboarding input directory (including
    `nango-secret-key`); the transfer runs `doctor` and `prepare` on the host.
    Then continue with `resume`.
 
@@ -466,7 +463,7 @@ node ../../demo/staging/prepare-fixtures.mjs \
 
 # Add `stagingSyntheticMeetingsDir` to the private onboarding-transfer
 # controller. Its bounded courier delivers this exact directory together with
-# the ordinary eight input files and invokes doctor and prepare with it.
+# the ordinary seven input files and invokes doctor and prepare with it.
 ```
 
 The four required filenames are
@@ -475,9 +472,9 @@ The four required filenames are
 `04-commercial-exception-review.json`. `prepare` copies the approved corpus
 into `clean-data/meetings`, binds the normal Compose environment to it, and
 keeps the normal release profile, AWS logs, and runtime observability. The
-ordinary credential bundle still includes a Granola credential, but this
-selected synthetic source never polls Granola. Without the optional directory,
-the normal admitted Granola source remains unchanged. The wrapper carries the
+credential bundle requires no Granola inputs. Without the optional directory,
+the staging runtime selects empty synthetic canary infrastructure; content enters
+only through its explicit release-bound canary request. The wrapper carries the
 same selected directory through setup finalization and normal service startup;
 the Compose default is empty.
 
@@ -552,7 +549,7 @@ Before stopping the old Authority, replacement validates the staged inputs,
 the current accepted release and completed healthy runtime, and the same
 staging host, owner, runtime user, Region and Nango integration key.
 It copies only the five provider input files into a private host directory
-outside `clean-data`. The Granola and model-provider source files are used;
+outside `clean-data`. The model-provider source file is used;
 old installed credentials, databases and signing keys are not carried into the
 new organization. Normal onboarding verifies the providers again.
 
@@ -747,15 +744,14 @@ candidate before returning to accepted-onboarding commands.
 
 ## Activate replacement provider credentials
 
-Granola and LLM credentials are loaded when the Authority process starts.
+The LLM credential activates through a controlled Authority restart.
 Replacing a file by hand does not activate it in the running process and is not
-a supported status claim. Put both current replacement values in a separate
-current-executor-owned mode-`0700` directory containing exactly these
-mode-`0600` regular files:
+a supported status claim. Put the replacement value in a separate
+current-executor-owned mode-`0700` directory containing exactly this
+mode-`0600` regular file:
 
 | File                 | Purpose                                      |
 | -------------------- | -------------------------------------------- |
-| `granola-credential` | Replacement organization Granola credential. |
 | `llm-credential`     | Replacement LLM provider credential.         |
 
 Then run the single activation operation:
@@ -770,12 +766,12 @@ It holds the same single-operation lock as release stage, promotion, rollback,
 and status, so credential activation cannot race an image change.
 The scripts never auto-reclaim an existing lock: a killed wrapper can leave a
 Compose child or Docker Engine operation running after the wrapper PID exits.
-It validates both private inputs before stopping anything, installs both values
+It validates the private input before stopping anything, installs the value
 through the Authority's fixed stopped-state credential destinations, restarts
 the same accepted release, and waits for both container health and a public
 descriptor that exactly matches the local Authority. Its result contains
 only the release ID and boolean activation/health outcomes. If the replacement
-cannot start healthily, the previous two credentials are restored and the old
+cannot start healthily, the previous LLM source and active copies are restored and the old
 runtime is started again. Durable records, staged candidates, and Slack
 approval state are not rewritten. OIDC client-secret rotation and reconnecting
 the organization's Slack connection have separate identity/link semantics and

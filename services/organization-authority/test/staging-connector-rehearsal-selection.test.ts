@@ -3,14 +3,13 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readStagingConnectorRehearsalSelection } from '../src/composition/staging-connector-rehearsal-selection.js';
-import { STAGING_CONNECTOR_REHEARSAL_POLICY_V2 } from '../src/composition/staging-connector-rehearsal-protocol.js';
+import { STAGING_CONNECTOR_REHEARSAL_POLICY_V3 } from '../src/composition/staging-connector-rehearsal-protocol.js';
 
 const profile = {
-  schema_version: 2,
-  kind: 'echo-staging-connector-rehearsal-profile-v2',
-  capture_policy: STAGING_CONNECTOR_REHEARSAL_POLICY_V2,
+  schema_version: 3,
+  kind: 'echo-staging-connector-rehearsal-profile-v3',
+  read_policy: STAGING_CONNECTOR_REHEARSAL_POLICY_V3,
   jira: { cloud_id: '11111111-1111-4111-8111-111111111111', integration_key: 'jira-test', project: 'TEST' },
-  slack: { channel_id: 'C01234567' },
 };
 const release_id = 'clean-v1-connector-test';
 const roots: string[] = [];

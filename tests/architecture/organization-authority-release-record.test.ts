@@ -389,6 +389,9 @@ describe("Organization Authority clean-v1 release record", () => {
     [JSON.stringify({ schema_version: 1, kind: 'echo-clean-founder-setup-status-v1', runtime_status: 'not_ready' }), 0, false],
     [JSON.stringify({ schema_version: 1, kind: 'echo-clean-founder-setup-status-v1', runtime_status: 'ready_to_start' }), 1, false],
     [JSON.stringify({ schema_version: 1, kind: 'echo-clean-founder-setup-status-v1', runtime_status: 'ready_to_start' }), 0, true],
+    [JSON.stringify({ schema_version: 2, kind: 'echo-organization-authority-setup-status-v2', runtime_status: 'ready_to_start' }), 0, true],
+    [JSON.stringify({ schema_version: 2, kind: 'echo-clean-founder-setup-status-v1', runtime_status: 'ready_to_start' }), 0, false],
+    [JSON.stringify({ schema_version: true, kind: 'echo-clean-founder-setup-status-v1', runtime_status: 'ready_to_start' }), 0, false],
   ])('requires affirmative setup readiness as well as a successful command: %s / %s', (body, code, ready) => {
     const helper = readFileSync(UPDATE, 'utf8').match(/^safe_setup_status\(\) \{[\s\S]*?^\}/m)?.[0];
     expect(helper).toBeDefined();

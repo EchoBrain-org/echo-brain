@@ -1,58 +1,59 @@
 import { createHash } from "node:crypto";
+import { isCanonicalPersonEmail } from "@echo-brain/organization-authority-kernel/shared/person-email-rules";
 import type {
-  AdapterConfig,
-  AdapterConfigValidation,
-  AdapterHealth,
-  AdapterOperationContext,
-  JsonObject,
-  JsonValue,
-  MeetingBatch,
-  MeetingContentBlock,
-  MeetingContext,
-  MeetingDocument,
-  MeetingParticipant,
-  MeetingPullRequest,
-  MeetingSourceAdapter,
+  JsonObject, JsonValue, MeetingContentBlock, MeetingContext,
+  MeetingDocument, MeetingParticipant,
 } from "@echo-brain/organization-processing/core";
-import { AdapterError } from "@echo-brain/organization-processing/core";
-import { DEFAULT_GRANOLA_PAGE_SIZE, GRANOLA_API_KEY_RE, GranolaApiError, HttpGranolaApiClient, granolaNoteTimestamp, type GranolaApiClient, type GranolaListNote, type GranolaNoteDetail, type GranolaTranscriptItem } from "./granola-api-client.js";
-import { granolaRecordOwnerMatches, isCanonicalGranolaOwnerEmail } from "./record-owner-observation.js";
 
-export const GRANOLA_MEETING_SOURCE_ADAPTER_ID = "granola";
-export const GRANOLA_MEETING_SOURCE_ADAPTER_VERSION = "2.2.0";
-export const DEFAULT_GRANOLA_CURSOR_OVERLAP_MS = 1_000;
+/** Content mapping version retained so existing semantic revisions stay stable. */
+export const GRANOLA_MEETING_NORMALIZER_VERSION_V1 = "2.2.0";
 
-const GRANOLA_CURSOR_PREFIX = "granola:v1:";
-const MAX_CURSOR_OVERLAP_MS = 3_600_000;
-
-export type GranolaCredentialResolver = (
-  reference: string,
-) => string | undefined | Promise<string | undefined>;
-
-export interface GranolaMeetingSourceAdapterOptions {
-  client?: GranolaApiClient;
-  credentialResolver?: GranolaCredentialResolver;
-  now?: () => string;
+/**
+ * Transport-independent input for the retained content transforms. This is not
+ * the Granola MCP wire contract; connectors must validate and map their own
+ * responses before normalizing. No credentials, discovery, or owner admission
+ * are performed here.
+ */
+export interface GranolaNoteMetadataV1 {
+  id: string;
+  object?: string;
+  title?: string | null;
+  owner?: unknown;
+  created_at?: string;
+  updated_at?: string;
+  /** Provider fields not yet promoted into the typed Granola contract. */
+  provider_fields?: Record<string, unknown>;
 }
 
-interface GranolaMeetingSourceSettings {
-  pageSize: number;
-  cursorOverlapMs: number;
-  ownerEmail?: string;
+export interface GranolaTranscriptSpeaker {
+  id?: unknown;
+  name?: unknown;
+  display_name?: unknown;
+  email?: unknown;
+  source?: unknown;
+  diarization_label?: unknown;
+  [key: string]: unknown;
 }
 
-interface GranolaCursorState {
-  schema_version: 1;
-  watermark: string | null;
-  page_cursor: string | null;
-  page_high_watermark: string | null;
+export interface GranolaTranscriptItem {
+  text?: string;
+  start_time?: number | string | null;
+  end_time?: number | string | null;
+  start?: number | string | null;
+  end?: number | string | null;
+  speaker?: string | GranolaTranscriptSpeaker | null;
+  [key: string]: unknown;
 }
 
-/** Safe operator-visible phase; it deliberately never reveals a page token. */
-export type GranolaCursorPhase =
-  | "uninitialized"
-  | "initial-history"
-  | "live";
+export interface GranolaMeetingContentInputV1 extends GranolaNoteMetadataV1 {
+  summary_markdown?: string | null;
+  summary_text?: string | null;
+  transcript?: GranolaTranscriptItem[] | null;
+  attendees?: unknown;
+  calendar_event?: unknown;
+  folder_membership?: unknown;
+  web_url?: string | null;
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -60,22 +61,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function positiveInteger(value: unknown, maximum: number): value is number {
-  return (
-    Number.isInteger(value) &&
-    (value as number) > 0 &&
-    (value as number) <= maximum
-  );
-}
-
-function nonNegativeInteger(value: unknown, maximum: number): value is number {
-  return (
-    Number.isInteger(value) &&
-    (value as number) >= 0 &&
-    (value as number) <= maximum
-  );
 }
 
 function normalizedIso(value: unknown): string | null {
@@ -90,20 +75,6 @@ function normalizedIso(value: unknown): string | null {
       : value;
   const millis = new Date(timestamp).getTime();
   return Number.isNaN(millis) ? null : new Date(millis).toISOString();
-}
-
-function maxIso(...values: Array<string | null | undefined>): string | null {
-  let maximum: string | null = null;
-  for (const value of values) {
-    const normalized = normalizedIso(value);
-    if (normalized !== null && (maximum === null || normalized > maximum))
-      maximum = normalized;
-  }
-  return maximum;
-}
-
-function subtractMillis(timestamp: string, millis: number): string {
-  return new Date(new Date(timestamp).getTime() - millis).toISOString();
 }
 
 function sanitizeJson(value: unknown): JsonValue | undefined {
@@ -134,9 +105,9 @@ function stableJson(value: JsonValue): string {
     .join(",")}}`;
 }
 
-function sourceRevision(note: GranolaNoteDetail): string {
+function sourceRevision(note: GranolaMeetingContentInputV1): string {
   const normalized = sanitizeJson({
-    mapping_version: GRANOLA_MEETING_SOURCE_ADAPTER_VERSION,
+    mapping_version: GRANOLA_MEETING_NORMALIZER_VERSION_V1,
     id: note.id,
     object: note.object,
     title: note.title,
@@ -156,175 +127,6 @@ function sourceRevision(note: GranolaNoteDetail): string {
     .update(stableJson(normalized ?? null))
     .digest("hex");
   return `sha256:${digest}`;
-}
-
-function encodeCursor(state: GranolaCursorState): string {
-  return `${GRANOLA_CURSOR_PREFIX}${Buffer.from(JSON.stringify(state)).toString("base64url")}`;
-}
-
-function validCursorTimestamp(value: unknown): value is string | null {
-  return (
-    value === null ||
-    (typeof value === "string" && normalizedIso(value) === value)
-  );
-}
-
-function decodeCursor(cursor: string | undefined): GranolaCursorState {
-  if (cursor === undefined) {
-    return {
-      schema_version: 1,
-      watermark: null,
-      page_cursor: null,
-      page_high_watermark: null,
-    };
-  }
-
-  // The old Granola checkpoint stored the high-water mark as an ISO string.
-  // Accept it as a one-way migration path; all emitted cursors use v1 below.
-  const legacyWatermark = normalizedIso(cursor);
-  if (legacyWatermark === cursor) {
-    return {
-      schema_version: 1,
-      watermark: legacyWatermark,
-      page_cursor: null,
-      page_high_watermark: null,
-    };
-  }
-
-  if (!cursor.startsWith(GRANOLA_CURSOR_PREFIX)) {
-    throw new AdapterError(
-      "invalid_config",
-      "meeting-source cursor is invalid",
-      false,
-    );
-  }
-  try {
-    const parsed: unknown = JSON.parse(
-      Buffer.from(
-        cursor.slice(GRANOLA_CURSOR_PREFIX.length),
-        "base64url",
-      ).toString("utf8"),
-    );
-    if (
-      !isPlainObject(parsed) ||
-      parsed["schema_version"] !== 1 ||
-      !validCursorTimestamp(parsed["watermark"]) ||
-      !validCursorTimestamp(parsed["page_high_watermark"]) ||
-      (parsed["page_cursor"] !== null &&
-        !isNonEmptyString(parsed["page_cursor"]))
-    ) {
-      throw new Error("invalid cursor shape");
-    }
-    return {
-      schema_version: 1,
-      watermark: parsed["watermark"],
-      page_cursor: parsed["page_cursor"],
-      page_high_watermark: parsed["page_high_watermark"],
-    };
-  } catch (error) {
-    if (error instanceof AdapterError) throw error;
-    throw new AdapterError(
-      "invalid_config",
-      "meeting-source cursor is invalid",
-      false,
-    );
-  }
-}
-
-/**
- * Classifies a persisted cursor without returning its provider pagination
- * token. A watermark is the durable boundary between the one-time history
- * walk and normal incremental polling.
- */
-export function granolaCursorPhase(
-  cursor: string | undefined,
-): GranolaCursorPhase {
-  if (cursor === undefined) return "uninitialized";
-  return decodeCursor(cursor).watermark === null ? "initial-history" : "live";
-}
-
-/**
- * Starts v1 polling immediately after a stopped-time cutoff. The watermark is
- * stored one default overlap ahead so the next request asks Granola for notes
- * updated after exactly `cutoffAt`.
- */
-export function createGranolaPostCutoffCursor(cutoffAt: string): string {
-  if (normalizedIso(cutoffAt) !== cutoffAt) {
-    throw new Error(
-      "Granola post-cutoff timestamp must be a canonical ISO timestamp",
-    );
-  }
-  return encodeCursor({
-    schema_version: 1,
-    watermark: new Date(
-      new Date(cutoffAt).getTime() + DEFAULT_GRANOLA_CURSOR_OVERLAP_MS,
-    ).toISOString(),
-    page_cursor: null,
-    page_high_watermark: null,
-  });
-}
-
-/** Returns the stopped-time boundary without disclosing a pagination token. */
-export function granolaPostCutoffTimestamp(cursor: string): string {
-  const state = decodeCursor(cursor);
-  if (state.watermark === null || state.page_cursor !== null || state.page_high_watermark !== null) {
-    throw new Error("Granola cursor is not a post-cutoff activation cursor");
-  }
-  return new Date(
-    new Date(state.watermark).getTime() - DEFAULT_GRANOLA_CURSOR_OVERLAP_MS,
-  ).toISOString();
-}
-
-function adapterError(error: unknown): AdapterError {
-  if (error instanceof AdapterError) return error;
-  if (error instanceof GranolaApiError) {
-    switch (error.reason) {
-      case "auth_failed":
-        return new AdapterError(
-          "unauthorized",
-          "Granola authentication failed",
-          false,
-        );
-      case "rate_limited":
-        return new AdapterError(
-          "rate_limited",
-          "Granola rate limit exceeded",
-          true,
-        );
-      case "timeout":
-        return new AdapterError("timeout", "Granola request timed out", true);
-      case "pagination_failed":
-      case "api_failed":
-        return new AdapterError(
-          "temporarily_unavailable",
-          "Granola API is temporarily unavailable",
-          true,
-        );
-    }
-  }
-  return new AdapterError(
-    "temporarily_unavailable",
-    "Granola meeting source is temporarily unavailable",
-    true,
-  );
-}
-
-function settingsFrom(config: AdapterConfig): GranolaMeetingSourceSettings {
-  const settings = config.settings;
-  return {
-    pageSize:
-      typeof settings["page_size"] === "number"
-        ? settings["page_size"]
-        : DEFAULT_GRANOLA_PAGE_SIZE,
-    cursorOverlapMs:
-      typeof settings["cursor_overlap_ms"] === "number"
-        ? settings["cursor_overlap_ms"]
-        : DEFAULT_GRANOLA_CURSOR_OVERLAP_MS,
-    ownerEmail:
-      typeof settings["owner_email"] === "string"
-        ? settings["owner_email"]
-        : undefined,
-  };
 }
 
 function valueAtPath(value: unknown, path: readonly string[]): unknown {
@@ -347,7 +149,7 @@ function firstTimestamp(
   return undefined;
 }
 
-function meetingTime(note: GranolaNoteDetail): MeetingDocument["time"] {
+function meetingTime(note: GranolaMeetingContentInputV1): MeetingDocument["time"] {
   const scheduledStart = firstTimestamp(note.calendar_event, [
     ["scheduled_start_time"],
     ["start"],
@@ -543,7 +345,7 @@ function mergeParticipant(
   };
 }
 
-function noteParticipants(note: GranolaNoteDetail): MeetingParticipant[] {
+function noteParticipants(note: GranolaMeetingContentInputV1): MeetingParticipant[] {
   const candidates: Array<{
     participant: MeetingParticipant;
     role?: NonNullable<MeetingParticipant["roles"]>[number];
@@ -642,7 +444,7 @@ function participantWithCanonicalEmail(
   if (participant === null) return null;
   const canonicalEmails = (participant.identities ?? []).filter(
     (identity) =>
-      identity.kind === "email" && isCanonicalGranolaOwnerEmail(identity.value),
+      identity.kind === "email" && isCanonicalPersonEmail(identity.value),
   );
   return canonicalEmails.length === 1 ? participant : null;
 }
@@ -746,7 +548,7 @@ function transcriptBlock(
 }
 
 function noteContent(
-  note: GranolaNoteDetail,
+  note: GranolaMeetingContentInputV1,
   participants: readonly MeetingParticipant[],
 ): MeetingContentBlock[] {
   const blocks: MeetingContentBlock[] = [];
@@ -772,21 +574,7 @@ function noteContent(
   return blocks;
 }
 
-function hasCompletedMeetingContent(note: GranolaNoteDetail): boolean {
-  const hasSummary =
-    isNonEmptyString(note.summary_markdown) ||
-    isNonEmptyString(note.summary_text);
-  const hasTranscript = (note.transcript ?? []).some((turn) =>
-    isNonEmptyString(turn.text),
-  );
-
-  // Granola's public Notes API exposes a note only after summary and transcript
-  // generation complete. Fail closed if a response violates that contract; a
-  // later completed revision will be observed through its newer updated_at.
-  return hasSummary && hasTranscript;
-}
-
-function sourceExtensions(note: GranolaNoteDetail): JsonObject | undefined {
+function sourceExtensions(note: GranolaMeetingContentInputV1): JsonObject | undefined {
   const granola = sanitizeJson({
     object: note.object,
     owner: note.owner,
@@ -801,7 +589,7 @@ function sourceExtensions(note: GranolaNoteDetail): JsonObject | undefined {
 }
 
 function meetingContext(
-  note: GranolaNoteDetail,
+  note: GranolaMeetingContentInputV1,
   participants: readonly MeetingParticipant[],
 ): MeetingContext | undefined {
   const eventId = stringAt(note.calendar_event, [
@@ -861,7 +649,7 @@ function meetingContext(
 }
 
 function captureState(
-  note: GranolaNoteDetail,
+  note: GranolaMeetingContentInputV1,
   participants: readonly MeetingParticipant[],
   content: readonly MeetingContentBlock[],
 ): MeetingDocument["capture"] {
@@ -931,378 +719,43 @@ function captureState(
   };
 }
 
-function mergeNote(
-  listNote: GranolaListNote,
-  detail: GranolaNoteDetail,
-): GranolaNoteDetail {
-  if (detail.id !== listNote.id) {
-    throw new AdapterError(
-      "temporarily_unavailable",
-      "Granola returned a mismatched meeting identifier",
-      true,
-    );
-  }
-  const providerFields = {
-    ...(listNote.provider_fields ?? {}),
-    ...(detail.provider_fields ?? {}),
-  };
+/** Normalize validated content without acquiring or admitting a source. */
+export function normalizeGranolaMeetingV1(
+  note: GranolaMeetingContentInputV1,
+  source: MeetingDocument["provenance"]["source"],
+  observedAt: string,
+): MeetingDocument {
+  const participants = noteParticipants(note);
+  const content = noteContent(note, participants);
+  const time = meetingTime(note);
+  const context = meetingContext(note, participants);
+  const extensions = sourceExtensions(note);
+  const sourceCreatedAt = normalizedIso(note.created_at) ?? undefined;
+  const sourceUpdatedAt = normalizedIso(note.updated_at) ?? undefined;
   return {
-    ...listNote,
-    ...detail,
-    id: listNote.id,
-    title: detail.title ?? listNote.title,
-    owner: detail.owner ?? listNote.owner,
-    created_at: detail.created_at ?? listNote.created_at,
-    updated_at: detail.updated_at ?? listNote.updated_at,
-    ...(Object.keys(providerFields).length === 0
-      ? {}
-      : { provider_fields: providerFields }),
+    schema_version: 1,
+    id: `granola:${source.instance_id}:${note.id}`,
+    ...(isNonEmptyString(note.title) ? { title: note.title.trim() } : {}),
+    ...(time === undefined ? {} : { time }),
+    participants,
+    content,
+    artifacts: [],
+    capture: captureState(note, participants, content),
+    provenance: {
+      source: source,
+      external_id: note.id,
+      canonical_revision: sourceRevision(note),
+      observed_at: observedAt,
+      normalizer_version: GRANOLA_MEETING_NORMALIZER_VERSION_V1,
+      ...(sourceCreatedAt === undefined
+        ? {}
+        : { source_created_at: sourceCreatedAt }),
+      ...(sourceUpdatedAt === undefined
+        ? {}
+        : { source_updated_at: sourceUpdatedAt }),
+      ...(isNonEmptyString(note.web_url) ? { source_url: note.web_url } : {}),
+    },
+    ...(context === undefined ? {} : { context }),
+    ...(extensions === undefined ? {} : { extensions }),
   };
-}
-
-export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
-  readonly identity: MeetingSourceAdapter["identity"];
-  private readonly settings: GranolaMeetingSourceSettings;
-  private readonly now: () => string;
-  private readonly credentialResolver: GranolaCredentialResolver | undefined;
-  private client: GranolaApiClient | undefined;
-
-  constructor(
-    private readonly config: AdapterConfig,
-    options: GranolaMeetingSourceAdapterOptions = {},
-  ) {
-    this.identity = Object.freeze({
-      kind: "meeting-source" as const,
-      adapter_id: GRANOLA_MEETING_SOURCE_ADAPTER_ID,
-      instance_id: config.instance_id,
-      version: GRANOLA_MEETING_SOURCE_ADAPTER_VERSION,
-    });
-    this.settings = settingsFrom(config);
-    this.now = options.now ?? (() => new Date().toISOString());
-    this.credentialResolver = options.credentialResolver;
-    this.client = options.client;
-  }
-
-  validateConfig(config: AdapterConfig): AdapterConfigValidation {
-    const errors: string[] = [];
-    if (config.adapter_id !== GRANOLA_MEETING_SOURCE_ADAPTER_ID) {
-      errors.push(`adapter_id must be '${GRANOLA_MEETING_SOURCE_ADAPTER_ID}'`);
-    }
-    if (!/^[a-z][a-z0-9-]*$/.test(config.instance_id)) {
-      errors.push(
-        "instance_id must use lowercase letters, numbers, and hyphens",
-      );
-    } else if (config.instance_id !== this.identity.instance_id) {
-      errors.push("instance_id does not match the registered adapter instance");
-    }
-    if (this.client === undefined && !isNonEmptyString(config.credential_ref)) {
-      errors.push("credential_ref is required");
-    }
-    const allowedSettings = new Set([
-      "page_size",
-      "cursor_overlap_ms",
-      "owner_email",
-    ]);
-    for (const key of Object.keys(config.settings)) {
-      if (!allowedSettings.has(key))
-        errors.push(`settings.${key} is not supported`);
-    }
-    const pageSize = config.settings["page_size"];
-    if (
-      pageSize !== undefined &&
-      !positiveInteger(pageSize, DEFAULT_GRANOLA_PAGE_SIZE)
-    ) {
-      errors.push(
-        `settings.page_size must be an integer from 1 to ${DEFAULT_GRANOLA_PAGE_SIZE}`,
-      );
-    }
-    const overlap = config.settings["cursor_overlap_ms"];
-    if (
-      overlap !== undefined &&
-      !nonNegativeInteger(overlap, MAX_CURSOR_OVERLAP_MS)
-    ) {
-      errors.push(
-        `settings.cursor_overlap_ms must be an integer from 0 to ${MAX_CURSOR_OVERLAP_MS}`,
-      );
-    }
-    const ownerEmail = config.settings["owner_email"];
-    if (
-      ownerEmail !== undefined &&
-      !isCanonicalGranolaOwnerEmail(ownerEmail)
-    ) {
-      errors.push(
-        "settings.owner_email must be a canonical lowercase email address",
-      );
-    }
-    return { ok: errors.length === 0, errors };
-  }
-
-  async healthCheck(
-    operation?: AdapterOperationContext,
-  ): Promise<AdapterHealth> {
-    const checkedAt = normalizedIso(this.now());
-    if (checkedAt === null) {
-      return {
-        status: "unavailable",
-        checked_at: new Date().toISOString(),
-        message: "Granola adapter clock returned an invalid timestamp",
-      };
-    }
-    const validation = this.validateConfig(this.config);
-    if (!validation.ok) {
-      return {
-        status: "unavailable",
-        checked_at: checkedAt,
-        message: "Granola adapter configuration is invalid",
-        details: { error_count: validation.errors.length },
-      };
-    }
-    try {
-      this.assertNotCancelled(operation?.signal);
-      const client = await this.apiClient();
-      this.assertNotCancelled(operation?.signal);
-      await client.listNotes({ page_size: 1 }, { signal: operation?.signal });
-      return { status: "healthy", checked_at: checkedAt };
-    } catch (error) {
-      const mapped = adapterError(error);
-      return {
-        status: mapped.code === "unauthorized" ? "unauthorized" : "degraded",
-        checked_at: checkedAt,
-        message: mapped.message,
-        details: { retryable: mapped.retryable },
-      };
-    }
-  }
-
-  async pull(
-    request: MeetingPullRequest,
-    operation?: AdapterOperationContext,
-  ): Promise<MeetingBatch> {
-    const validation = this.validateConfig(this.config);
-    if (!validation.ok) {
-      throw new AdapterError(
-        "invalid_config",
-        "Granola adapter configuration is invalid",
-        false,
-      );
-    }
-    if (
-      request.limit !== undefined &&
-      (!Number.isInteger(request.limit) || request.limit <= 0)
-    ) {
-      throw new AdapterError(
-        "invalid_config",
-        "meeting pull limit must be a positive integer",
-        false,
-      );
-    }
-
-    const cursor = decodeCursor(request.cursor);
-    const observedAt = this.observedAt();
-    const updatedAfter =
-      cursor.watermark === null
-        ? undefined
-        : subtractMillis(cursor.watermark, this.settings.cursorOverlapMs);
-    const pageSize = Math.min(
-      request.limit ?? this.settings.pageSize,
-      this.settings.pageSize,
-    );
-
-    try {
-      this.assertNotCancelled(operation?.signal);
-      const client = await this.apiClient();
-      this.assertNotCancelled(operation?.signal);
-      const response = await client.listNotes(
-        {
-          ...(updatedAfter === undefined
-            ? {}
-            : { updated_after: updatedAfter }),
-          ...(cursor.page_cursor === null
-            ? {}
-            : { cursor: cursor.page_cursor }),
-          page_size: pageSize,
-        },
-        { signal: operation?.signal },
-      );
-
-      // The provider filter is not an admission proof. Validate the whole
-      // incremental page before fetching content, then enforce it locally.
-      if (updatedAfter !== undefined && response.notes.some(
-        (note) => granolaNoteTimestamp(note.updated_at) === null,
-      )) {
-        throw new GranolaApiError(
-          "Granola incremental page was missing a valid update timestamp",
-          "pagination_failed",
-        );
-      }
-
-      const meetings: MeetingDocument[] = [];
-      let pageHighWatermark = cursor.page_high_watermark;
-      for (const listNote of response.notes) {
-        this.assertNotCancelled(operation?.signal);
-        pageHighWatermark = maxIso(
-          pageHighWatermark,
-          listNote.updated_at,
-          updatedAfter === undefined ? listNote.created_at : undefined,
-        );
-        if (
-          updatedAfter !== undefined &&
-          granolaNoteTimestamp(listNote.updated_at)! <= updatedAfter
-        ) {
-          continue;
-        }
-        if (
-          this.settings.ownerEmail !== undefined &&
-          !granolaRecordOwnerMatches(
-            listNote.owner,
-            this.settings.ownerEmail,
-          )
-        ) {
-          continue;
-        }
-        const noteDetail = await client.getNote(listNote.id, {
-          signal: operation?.signal,
-        });
-        if (
-          this.settings.ownerEmail !== undefined &&
-          noteDetail.owner !== undefined &&
-          !granolaRecordOwnerMatches(
-            noteDetail.owner,
-            this.settings.ownerEmail,
-          )
-        ) {
-          continue;
-        }
-        const detail = mergeNote(listNote, noteDetail);
-        if (updatedAfter !== undefined) {
-          const detailUpdatedAt = granolaNoteTimestamp(detail.updated_at);
-          if (detailUpdatedAt === null) {
-            throw new GranolaApiError(
-              "Granola detail was missing a valid update timestamp",
-              "api_failed",
-            );
-          }
-          if (detailUpdatedAt < granolaNoteTimestamp(listNote.updated_at)!) {
-            throw new GranolaApiError(
-              "Granola detail was older than its list observation",
-              "api_failed",
-            );
-          }
-        }
-        // A detail can change after the list snapshot. Advancing to its newer
-        // time could skip another note changed while this page was fetched.
-        // Only list observations establish the next polling watermark.
-        if (!hasCompletedMeetingContent(detail)) continue;
-        meetings.push(this.toMeeting(detail, observedAt));
-      }
-
-      const nextCursor: GranolaCursorState = response.hasMore
-        ? {
-            schema_version: 1,
-            watermark: cursor.watermark,
-            page_cursor: response.cursor,
-            page_high_watermark: pageHighWatermark,
-          }
-        : {
-            schema_version: 1,
-            watermark:
-              maxIso(cursor.watermark, pageHighWatermark) ?? observedAt,
-            page_cursor: null,
-            page_high_watermark: null,
-          };
-      return { meetings, next_cursor: encodeCursor(nextCursor) };
-    } catch (error) {
-      throw adapterError(error);
-    }
-  }
-
-  private assertNotCancelled(signal: AbortSignal | undefined): void {
-    if (signal?.aborted === true) {
-      throw new AdapterError(
-        "timeout",
-        "Granola meeting pull was cancelled",
-        true,
-      );
-    }
-  }
-
-  private observedAt(): string {
-    const value = normalizedIso(this.now());
-    if (value === null) {
-      throw new AdapterError(
-        "temporarily_unavailable",
-        "clock returned an invalid timestamp",
-        true,
-      );
-    }
-    return value;
-  }
-
-  private async apiClient(): Promise<GranolaApiClient> {
-    if (this.client !== undefined) return this.client;
-    const reference = this.config.credential_ref;
-    if (!isNonEmptyString(reference)) {
-      throw new AdapterError(
-        "unauthorized",
-        "Granola credentials are unavailable",
-        false,
-      );
-    }
-    const apiKey = await this.credentialResolver?.(reference);
-    if (!isNonEmptyString(apiKey) || !GRANOLA_API_KEY_RE.test(apiKey)) {
-      throw new AdapterError(
-        "unauthorized",
-        "Granola credentials are unavailable",
-        false,
-      );
-    }
-    this.client = new HttpGranolaApiClient(apiKey);
-    return this.client;
-  }
-
-  private toMeeting(
-    note: GranolaNoteDetail,
-    observedAt: string,
-  ): MeetingDocument {
-    const participants = noteParticipants(note);
-    const content = noteContent(note, participants);
-    const time = meetingTime(note);
-    const context = meetingContext(note, participants);
-    const extensions = sourceExtensions(note);
-    const sourceCreatedAt = normalizedIso(note.created_at) ?? undefined;
-    const sourceUpdatedAt = normalizedIso(note.updated_at) ?? undefined;
-    return {
-      schema_version: 1,
-      id: `${GRANOLA_MEETING_SOURCE_ADAPTER_ID}:${this.identity.instance_id}:${note.id}`,
-      ...(isNonEmptyString(note.title) ? { title: note.title.trim() } : {}),
-      ...(time === undefined ? {} : { time }),
-      participants,
-      content,
-      artifacts: [],
-      capture: captureState(note, participants, content),
-      provenance: {
-        source: this.identity,
-        external_id: note.id,
-        canonical_revision: sourceRevision(note),
-        observed_at: observedAt,
-        normalizer_version: GRANOLA_MEETING_SOURCE_ADAPTER_VERSION,
-        ...(sourceCreatedAt === undefined
-          ? {}
-          : { source_created_at: sourceCreatedAt }),
-        ...(sourceUpdatedAt === undefined
-          ? {}
-          : { source_updated_at: sourceUpdatedAt }),
-        ...(isNonEmptyString(note.web_url) ? { source_url: note.web_url } : {}),
-      },
-      ...(context === undefined ? {} : { context }),
-      ...(extensions === undefined ? {} : { extensions }),
-    };
-  }
-}
-
-export function createGranolaMeetingSourceAdapter(
-  config: AdapterConfig,
-  options: GranolaMeetingSourceAdapterOptions = {},
-): GranolaMeetingSourceAdapter {
-  return new GranolaMeetingSourceAdapter(config, options);
 }

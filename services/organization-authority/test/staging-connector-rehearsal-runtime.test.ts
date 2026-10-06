@@ -27,24 +27,11 @@ vi.mock('@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/o
     close() {},
   }),
 }));
-vi.mock('@echo-brain/provider-granola/granola-meeting-source-bundle-v1', () => ({
-  createGranolaMeetingSourceBundleV1: () => ({ source_cursor_policy: {}, assert_admission_commitments() {}, create_source() { throw new Error('not admitted'); } }),
-}));
 vi.mock('@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1', () => ({
   createOpenRouterDecisionProcessorBundleV1: () => ({ processor_adapter_id: 'fixture', assert_admission_commitments() {} }),
 }));
 vi.mock('../src/composition/organization-authority-setup-cli.js', () => ({
   readOrganizationAuthoritySetupManifest: (directory: string) => ({ state_directory: directory, authority_url: 'https://authority-staging.echobrain.org', authority_id: 'oau_fixture', organization_id: 'org_fixture', state_lineage_id: 'lineage-fixture', owner_principal_id: 'prn_fixture', owner_membership_id: 'mem_fixture' }),
-}));
-vi.mock('../src/composition/connector-rehearsal-capture-v1.js', async importOriginal => ({
-  ...await importOriginal<typeof import('../src/composition/connector-rehearsal-capture-v1.js')>(),
-  openConnectorRehearsalCaptureV1: () => ({
-    async capture() {
-      state.captures += 1;
-      return { schema_version: 1, kind: 'echo-context-capture-rehearsal-receipt-v1', source_identity_sha256: `sha256:${'a'.repeat(64)}`, captures: [], counts: { captured: 0, admitted: 0, duplicate: 0, request_only: 0 } };
-    },
-    close() {},
-  }),
 }));
 vi.mock('../src/composition/jira-person-live-runtime-v1.js', async () => {
   const { AuthorityOperationError } = await import('@echo-brain/organization-authority-kernel/domain/errors');
@@ -101,7 +88,7 @@ vi.mock('../src/composition/organization-authority-composition-root.js', () => (
 
 import { openStagingConnectorRehearsalService } from '../src/composition/staging-connector-rehearsal-runtime.js';
 import { JIRA_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
-import { STAGING_CONNECTOR_REHEARSAL_PATH_V1, STAGING_CONNECTOR_REHEARSAL_POLICY_V2 } from '../src/composition/staging-connector-rehearsal-protocol.js';
+import { STAGING_CONNECTOR_REHEARSAL_PATH_V1, STAGING_CONNECTOR_REHEARSAL_POLICY_V3 } from '../src/composition/staging-connector-rehearsal-protocol.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); state.apps = []; state.config = undefined; state.api = undefined; state.captures = 0; state.jira = 0; state.demoteDuringCapture = false;
@@ -110,17 +97,15 @@ afterEach(() => { vi.restoreAllMocks(); state.apps = []; state.config = undefine
 
 function selection() {
   return { release_id: 'clean-v1-connector-test', authority_host: 'authority-staging.echobrain.org', profile: {
-    schema_version: 2 as const, kind: 'echo-staging-connector-rehearsal-profile-v2' as const,
-    capture_policy: STAGING_CONNECTOR_REHEARSAL_POLICY_V2 as typeof STAGING_CONNECTOR_REHEARSAL_POLICY_V2,
+    schema_version: 3 as const, kind: 'echo-staging-connector-rehearsal-profile-v3' as const,
+    read_policy: STAGING_CONNECTOR_REHEARSAL_POLICY_V3 as typeof STAGING_CONNECTOR_REHEARSAL_POLICY_V3,
     jira: { cloud_id: '00000000-0000-4000-8000-000000000001', integration_key: 'jira', project: 'ECHO' },
-    slack: { channel_id: 'C01234567' },
   } };
 }
 function config(directory: string) {
   return {
     state_directory: directory, authority_url: 'https://authority-staging.echobrain.org', host: '127.0.0.1', port: 39478,
-    oidc: {}, client_authentication: { method: 'none' as const }, pkce_key_file: '/fixture/pkce',
-    granola_credential_file: '/fixture/granola', granola_owner_email_file: '/fixture/owner', openrouter_credential_file: '/fixture/openrouter',
+    oidc: {}, client_authentication: { method: 'none' as const }, pkce_key_file: '/fixture/pkce', openrouter_credential_file: '/fixture/openrouter',
     slack_nango: { secret_key: 'not-a-live-secret', integration_key: 'slack' },
   } as never;
 }
@@ -134,7 +119,7 @@ async function readFixture() {
   const selected = selection(); const opened = await openStagingConnectorRehearsalService(config(directory), selected);
   const application = state.apps.find(app => app.routes.some(route => route.path === STAGING_CONNECTOR_REHEARSAL_PATH_V1))!;
   const profile_sha256 = (await import('@echo-brain/federation-protocol')).canonicalSha256(selected.profile);
-  const input = request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'jira' });
+  const input = request('staging-connector-rehearsal', 'owner', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'jira' });
   return { opened, application, input };
 }
 
@@ -238,27 +223,14 @@ it('binds a staging-only owner surface to a lineage/profile sidecar and returns 
   const opened = await openStagingConnectorRehearsalService(config(stateDirectory), selected);
   const capture = state.apps.find(app => app.routes.some(route => route.path === STAGING_CONNECTOR_REHEARSAL_PATH_V1))!;
   const profile_sha256 = (await import('@echo-brain/federation-protocol')).canonicalSha256(selected.profile);
-  await expect(capture.accept(request('staging-connector-rehearsal', 'other', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'status' }))).rejects.toThrow('unavailable');
-  const status = await capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'status' })) as { body: { qualified: boolean; granola_available: boolean } };
-  expect(status.body).toMatchObject({ qualified: false, granola_available: false });
-  const captured = await capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'granola', limit: 1 })) as { body: { receipt: { captures: unknown[] }; qualified: boolean } };
-  expect(captured.body).toMatchObject({ qualified: false, receipt: { captures: [] } });
-  expect(state.captures).toBe(1);
+  await expect(capture.accept(request('staging-connector-rehearsal', 'other', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'status' }))).rejects.toThrow('unavailable');
+  const status = await capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'status' })) as { body: { qualified: boolean } };
+  expect(status.body).toMatchObject({ qualified: false, processing: 'active' });
+  await expect(capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'granola', limit: 1 }))).rejects.toThrow('invalid');
+  expect(state.captures).toBe(0);
   const marker = JSON.parse(readFileSync(join(root, 'staging-connector-rehearsal-v1', 'binding.json'), 'utf8')) as Record<string, unknown>;
   expect(marker).toMatchObject({ state_lineage_id: 'lineage-fixture', principal_id: 'prn_fixture', membership_id: 'mem_fixture', profile_sha256 });
   expect(marker).not.toHaveProperty('release_id');
-  await opened.close();
-});
-
-it('withholds a capture receipt if the owner loses eligibility during provider work', async () => {
-  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
-  const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
-  const selected = selection();
-  const opened = await openStagingConnectorRehearsalService(config(stateDirectory), selected);
-  const capture = state.apps.find(app => app.routes.some(route => route.path === STAGING_CONNECTOR_REHEARSAL_PATH_V1))!;
-  const profile_sha256 = (await import('@echo-brain/federation-protocol')).canonicalSha256(selected.profile);
-  state.demoteDuringCapture = true;
-  await expect(capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'granola', limit: 1 }))).rejects.toThrow('unavailable');
   await opened.close();
 });
 

@@ -5,8 +5,8 @@ adapters and provider bundles and connects them to application ports.
 Provider-neutral runtime components must not import a provider implementation.
 
 - `organization-authority-composition-root.ts` is the deployable root. It
-  selects the Granola, OpenRouter and Slack bundles from the `providers/`
-  workspaces, the staging synthetic meeting source when configured, and the
+  selects the OpenRouter and Slack bundles from the `providers/` workspaces,
+  staging synthetic canary infrastructure (or the selected fixed fixture), and the
   Jira Person runtime (`jira-person-live-runtime-v1.ts`) only when its
   ADR-0026 gate allows it.
 - `organization-authority-service-cli.ts` instead opens
@@ -14,11 +14,9 @@ Provider-neutral runtime components must not import a provider implementation.
   connector rehearsal profile. That opt-in, staging-only root and its
   protocol and selection modules (`staging-connector-rehearsal-*`) sit at the
   top of this directory, not in `staging/`.
-- `connector-rehearsal-capture-v1.ts` is the owner-bound Granola capture used
-  by that root through `context-source-intake-v1.ts` and
-  `provider-context-intakes-v1.ts`. Jira supports live read verification only;
-  the Slack bot reads nothing. The rehearsal has no Jira or Slack capture or
-  storage path.
+- The connector rehearsal is a Jira-only, request-bound read verification.
+  The Slack bot reads nothing, and the rehearsal has no capture or storage
+  path.
 - `organization-authority-runtime.ts` composes the provider-neutral runtime.
   `organization-authority-service-lifecycle.ts` owns startup, the serialized
   worker, shutdown order and the operator-work gate.
@@ -32,7 +30,7 @@ Provider-neutral runtime components must not import a provider implementation.
   and `synthetic-demo-*` is the demo lane.
 
 Provider-neutral bundle seams live in `packages/organization-processing/src/ports/`.
-Concrete bundles live in `providers/granola`, `providers/openrouter`,
+Concrete bundles live in `providers/synthetic-demo`, `providers/openrouter`,
 `providers/slack/server` (private approval, Person identity, the private-DM
 staging canary and the fixed-channel context pointer source) and
 `providers/jira` (the gated Person connection, live reader and context

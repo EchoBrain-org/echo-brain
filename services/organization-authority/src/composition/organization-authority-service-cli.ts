@@ -316,8 +316,6 @@ export async function runOrganizationAuthorityServiceCli(
         integration_id: confluenceIntegration!,
         nango_authorization: () => slackNango.secret_key,
       } }),
-      granola_credential_file: manifest.granola_credential_file,
-      granola_owner_email_file: manifest.granola_owner_email_file,
       // The manifest retains its serialized compatibility field.
       openrouter_credential_file: manifest.llm_credential_file,
       ...(stagingSyntheticMeetingsDirectory === undefined

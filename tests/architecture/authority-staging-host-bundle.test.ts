@@ -195,7 +195,6 @@ describe("Authority staging host bundle", () => {
       "runtime-profile.active",
       "oidc-client-secret",
       "nango-secret-key",
-      "granola-credential-source",
       "llm-credential-source",
     ]) {
       expect(listed).not.toContain(forbidden);

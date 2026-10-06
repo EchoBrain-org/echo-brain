@@ -142,8 +142,12 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       const checked = await base.revalidate(input);
       input.signal?.throwIfAborted();
       if (sources.size === 0) return checked;
-      for (const { source, descriptor } of sources.values()) {
-        await observePersonLiveEvidenceV1('evidence_revalidate', descriptor.kind === 'slack_message' ? 'slack' : descriptor.kind, () => source.revalidate(input));
+      const providers = [...sources.values()];
+      // Bound independent provider I/O. Both local fences and the synchronous
+      // final grant checks remain in place; every provider must succeed.
+      for (let offset = 0; offset < providers.length; offset += 4) {
+        await Promise.all(providers.slice(offset, offset + 4).map(({ source, descriptor }) =>
+          observePersonLiveEvidenceV1('evidence_revalidate', descriptor.kind === 'slack_message' ? 'slack' : descriptor.kind, () => source.revalidate(input))));
         input.signal?.throwIfAborted();
       }
       // Local snapshots and original grants may change while a live reader awaits provider I/O.

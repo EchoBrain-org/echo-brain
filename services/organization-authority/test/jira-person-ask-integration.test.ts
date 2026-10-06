@@ -88,7 +88,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     state_directory: state, host: '127.0.0.1', port: await port(), authority_url: AUTHORITY, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: keys.pkce_sealing_key_reference.slice(5),
     slack_nango: { secret_key: 'synthetic-nango-key-0000000000000000', integration_key: 'slack' },
     jira_person_live: { enabled: true, cloud_id: CLOUD, integration_id: 'jira', nango_authorization: () => 'synthetic-nango-key-0000000000000000' },
-    granola_credential_file: privateFile('granola.key', 'synthetic-granola-credential-000000000000'), granola_owner_email_file: privateFile('granola-email', EMAIL), openrouter_credential_file: privateFile('openrouter.key', 'synthetic-openrouter-key-000000000000'),
+    openrouter_credential_file: privateFile('openrouter.key', 'synthetic-openrouter-key-000000000000'),
   }, {
     api: { oidc_provider, answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } } },
     jira_person_live_seams: { nango: jira.nango, fetch: jiraFetch },
@@ -191,7 +191,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     telemetry.length = 0;
     const jiraCalls = jiraFetch.mock.calls.length;
     expect((await post('/v4/person/ask', { schema_version: 3, question: 'What are my tickets?', mine: true })).body).toMatchObject({
-      outcome: 'partial', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't complete the search. Please try again." })],
+      outcome: 'not_found', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't find this in the sources you can access." })],
     });
     expect(jiraFetch).toHaveBeenCalledTimes(jiraCalls);
     expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'out_of_scope' }) })]));
@@ -225,7 +225,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'revoked', external_subject_id: null })]));
     telemetry.length = 0;
     expect((await post('/v4/person/ask', { schema_version: 3, question: 'What is in Jira?' })).body).toMatchObject({
-      outcome: 'partial', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't complete the search. Please try again." })],
+      outcome: 'not_found', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't find this in the sources you can access." })],
     });
     expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'unlinked' }) })]));
     expect(events().filter(event => event.diagnostic?.phase === 'evidence_search' && event.diagnostic.evidence_source === 'ticket')).toEqual([]);

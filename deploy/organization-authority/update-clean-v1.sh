@@ -659,7 +659,13 @@ import json, sys
 try:
     raw = sys.stdin.buffer.read(16385)
     status = json.loads(raw)
-    if len(raw) > 16384 or not isinstance(status, dict) or status.get("schema_version") != 1 or status.get("kind") != "echo-clean-founder-setup-status-v1" or status.get("runtime_status") != "ready_to_start":
+    if len(raw) > 16384 or not isinstance(status, dict):
+        raise ValueError()
+    # V1 is a read-only release-health contract needed when rolling back to an
+    # accepted older image. It does not re-enable organization Granola setup.
+    versions = {1: "echo-clean-founder-setup-status-v1", 2: "echo-organization-authority-setup-status-v2"}
+    version = status.get("schema_version")
+    if type(version) is not int or versions.get(version) != status.get("kind") or status.get("runtime_status") != "ready_to_start":
         raise ValueError()
 except (ValueError, TypeError):
     raise SystemExit("Authority setup is not ready or returned invalid status")

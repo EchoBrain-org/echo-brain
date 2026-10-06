@@ -53,9 +53,9 @@ interface ExistingAdmissionV1 {
   readonly principal_id: string;
   readonly membership_id: string;
   readonly membership_type: "owner";
-  readonly source_adapter_id: "synthetic-demo-source";
-  readonly source_adapter_version: "1.0.0";
-  readonly source_adapter_instance_id: "customer-demo";
+  readonly source_adapter_id: string;
+  readonly source_adapter_version: string;
+  readonly source_adapter_instance_id: string;
   readonly normalizer_version: "1.0.0";
   readonly source_custodian_sha256: Sha256Digest;
   readonly source_custodian_assurance: typeof CUSTODIAN_ASSURANCE;
@@ -143,9 +143,29 @@ function result(
 export async function admitSyntheticDemoMeetingSource(
   input: AdmitSyntheticDemoMeetingSourceInputV1,
 ): Promise<SyntheticDemoMeetingSourceAdmissionResultV1> {
+  const admitted = await admitSyntheticMeetingSourceV1({
+    ...input,
+    corpus: await loadSyntheticDemoMeetingCorpusV1(input.meetings_directory),
+    source: syntheticDemoMeetingSourceIdentityV1,
+    initial_cursor: SYNTHETIC_DEMO_INITIAL_CURSOR_V1,
+    semantic_kind: "echo-synthetic-demo-source-admission-semantic-input-v1",
+  });
+  return result(admitted.outcome, admitted.admission);
+}
+
+/** Internal admission shared by the fixed demo and staging canary infrastructure. */
+export async function admitSyntheticMeetingSourceV1(input: {
+  readonly state_directory: string;
+  readonly processor: DecisionProcessorAdmissionCommitmentV1;
+  readonly now?: () => string;
+  readonly corpus: SyntheticDemoMeetingCorpusV1;
+  readonly source: { readonly adapter_id: string; readonly instance_id: string; readonly version: string };
+  readonly initial_cursor: string;
+  readonly semantic_kind: string;
+}): Promise<{ readonly outcome: "admitted" | "already_admitted"; readonly admission: ExistingAdmissionV1 }> {
   assertDecisionProcessorAdmissionCommitmentV1(input.processor);
   await input.processor.preflight();
-  const corpus = await loadSyntheticDemoMeetingCorpusV1(input.meetings_directory);
+  const corpus = input.corpus;
   const lineage = verifyAuthorityStateLineage(input.state_directory);
   const database = openAuthorityDatabase(
     join(input.state_directory, "authority.sqlite"),
@@ -206,20 +226,20 @@ export async function admitSyntheticDemoMeetingSource(
       assertCorpusOwnersMatchCustodian(corpus, custodianDigest);
       const semanticInputSha256 = canonicalSha256({
         schema_version: 1,
-        kind: "echo-synthetic-demo-source-admission-semantic-input-v1",
+        kind: input.semantic_kind,
         organization_id: lineage.root.organization_id,
         principal_id: owner.principal_id,
         membership_id: owner.membership_id,
         membership_type: owner.membership_type,
         source: {
-          adapter_id: syntheticDemoMeetingSourceIdentityV1.adapter_id,
-          adapter_version: syntheticDemoMeetingSourceIdentityV1.version,
-          instance_id: syntheticDemoMeetingSourceIdentityV1.instance_id,
+          adapter_id: input.source.adapter_id,
+          adapter_version: input.source.version,
+          instance_id: input.source.instance_id,
           normalizer_version: "1.0.0",
           custodian_sha256: custodianDigest,
           custodian_assurance: CUSTODIAN_ASSURANCE,
           corpus_digest: corpus.corpus_digest,
-          initial_cursor: SYNTHETIC_DEMO_INITIAL_CURSOR_V1,
+          initial_cursor: input.initial_cursor,
         },
         processor: {
           adapter_id: input.processor.adapter_id,
@@ -253,7 +273,7 @@ export async function admitSyntheticDemoMeetingSource(
           );
         }
         database.exec("COMMIT");
-        return result("already_admitted", existing);
+        return { outcome: "already_admitted", admission: existing };
       }
 
       const admittedAt = (input.now ?? (() => new Date().toISOString()))();
@@ -263,15 +283,15 @@ export async function admitSyntheticDemoMeetingSource(
         principal_id: owner.principal_id,
         membership_id: owner.membership_id,
         membership_type: "owner",
-        source_adapter_id: syntheticDemoMeetingSourceIdentityV1.adapter_id,
-        source_adapter_version: syntheticDemoMeetingSourceIdentityV1.version,
-        source_adapter_instance_id: syntheticDemoMeetingSourceIdentityV1.instance_id,
+        source_adapter_id: input.source.adapter_id,
+        source_adapter_version: input.source.version,
+        source_adapter_instance_id: input.source.instance_id,
         normalizer_version: "1.0.0",
         source_custodian_sha256: custodianDigest,
         source_custodian_assurance: CUSTODIAN_ASSURANCE,
         source_custodian_observed_at: admittedAt,
         source_credential_reference_sha256: corpus.corpus_digest,
-        initial_cursor: SYNTHETIC_DEMO_INITIAL_CURSOR_V1,
+        initial_cursor: input.initial_cursor,
         cutoff_at: admittedAt,
         processor_adapter_id: input.processor.adapter_id,
         processor_instance_id: input.processor.instance_id,
@@ -322,7 +342,7 @@ export async function admitSyntheticDemoMeetingSource(
           admission.admitted_at,
         );
       database.exec("COMMIT");
-      return result("admitted", admission);
+      return { outcome: "admitted", admission };
     } catch (error) {
       try {
         database.exec("ROLLBACK");

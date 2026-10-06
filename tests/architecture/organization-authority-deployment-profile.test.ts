@@ -171,8 +171,6 @@ function preparedStatusFixture() {
     "oidc-config.json": "fixture",
     "oidc-client-secret": "fixture",
     "nango-secret-key": NANGO_SECRET_KEY,
-    "granola-credential-source": `grn_${"a".repeat(40)}`,
-    "granola-owner-email": "founder@example.com",
     "llm-credential-source": "b".repeat(43),
   };
   for (const [name, value] of Object.entries(privateFiles)) {
@@ -180,11 +178,6 @@ function preparedStatusFixture() {
     chmodSync(join(privateDir, name), 0o600);
   }
   chmodSync(stateCredentialDir, 0o700);
-  writeFileSync(
-    join(stateCredentialDir, "granola-credential"),
-    privateFiles["granola-credential-source"]!,
-    { mode: 0o600 },
-  );
   writeFileSync(
     join(stateCredentialDir, "llm-credential"),
     privateFiles["llm-credential-source"]!,
@@ -224,7 +217,6 @@ if [[ "$1" == compose ]]; then
       exit 0
       ;;
     *" credentials-install "*)
-      install -m 0600 ${JSON.stringify(join(privateDir, "granola-credential-source"))} ${JSON.stringify(join(stateCredentialDir, "granola-credential"))}
       install -m 0600 ${JSON.stringify(join(privateDir, "llm-credential-source"))} ${JSON.stringify(join(stateCredentialDir, "llm-credential"))}
       if [[ "$ECHO_FAKE_WAIT_DURING_INSTALL" == true ]]; then
         printf '%s\n' "$PPID" > ${JSON.stringify(installWaitMarker)}
@@ -532,7 +524,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).toContain("compose.clean-v1.yaml");
     expect(source).toContain("compose.clean-v1.ec2.yaml");
     expect(source).toContain('PRIVATE_DIR="$DATA_DIR/private"');
-    expect(source).toContain("granola-owner-email");
     expect(source).toContain("clean-v1-release.py");
     expect(source).toContain('$DEPLOY_DIR/release/clean-v1-release.py');
     expect(source).toContain("clean-v1-runtime-profile.py");
@@ -600,7 +591,8 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).not.toContain("migrations/");
     expect(source).not.toContain("dist/main.js");
     expect(source).not.toContain("--slack-bot-token ");
-    expect(source).not.toContain("--granola-credential ");
+    expect(source).not.toContain("--granola-credential");
+    expect(source).not.toContain("granola-owner-email");
     expect(source).not.toContain("--llm-credential ");
     expect(guide).toContain("never auto-reclaim an existing lock");
     expect(guide).toContain("Recover an interrupted operation lock");
@@ -1419,19 +1411,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     const fixture = preparedStatusFixture();
     {
       const inputDir = join(fixture.root, "provider-credentials");
-      const nextGranola = `grn_${"g".repeat(40)}`;
       const nextLlm = "l".repeat(43);
       mkdirSync(inputDir, { mode: 0o700 });
-      writeFileSync(join(inputDir, "granola-credential"), nextGranola, {
-        mode: 0o600,
-      });
       writeFileSync(join(inputDir, "llm-credential"), nextLlm, {
         mode: 0o600,
       });
 
-      expect(
-        readFileSync(join(fixture.stateCredentialDir, "granola-credential"), "utf8"),
-      ).not.toBe(nextGranola);
       expect(
         readFileSync(join(fixture.stateCredentialDir, "llm-credential"), "utf8"),
       ).not.toBe(nextLlm);
@@ -1445,12 +1430,8 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(rejected.status).toBe(1);
       expect(rejected.stderr).toContain("provider activation input");
       expect(rejected.stdout).not.toContain("provider_credentials_activated");
-      expect(rejected.stderr).not.toContain(nextGranola);
       expect(rejected.stderr).not.toContain(nextLlm);
       expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/ down\n/);
-      expect(
-        readFileSync(join(fixture.stateCredentialDir, "granola-credential"), "utf8"),
-      ).not.toBe(nextGranola);
       expect(
         readFileSync(join(fixture.stateCredentialDir, "llm-credential"), "utf8"),
       ).not.toBe(nextLlm);
@@ -1469,13 +1450,8 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       );
       expect(activated.stdout).toContain("public_descriptor_healthy=true");
       expect(activated.stdout).not.toContain(inputDir);
-      expect(activated.stdout).not.toContain(nextGranola);
       expect(activated.stdout).not.toContain(nextLlm);
-      expect(activated.stderr).not.toContain(nextGranola);
       expect(activated.stderr).not.toContain(nextLlm);
-      expect(
-        readFileSync(join(fixture.stateCredentialDir, "granola-credential"), "utf8"),
-      ).toBe(nextGranola);
       expect(
         readFileSync(join(fixture.stateCredentialDir, "llm-credential"), "utf8"),
       ).toBe(nextLlm);
@@ -1485,7 +1461,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(calls).toContain(" credentials-install ");
       expect(calls).toContain(" exec -T authority node ");
       expect(calls).not.toMatch(/ (bootstrap|finalize|resume) /);
-      expect(calls).not.toContain(nextGranola);
       expect(calls).not.toContain(nextLlm);
       expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
         "durable-work-must-survive",
@@ -1493,22 +1468,13 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     }
   });
 
-  it("restores and verifies both previous provider credentials when replacement startup fails", () => {
+  it("restores and verifies the previous LLM credential source and active copy when replacement startup fails", () => {
     const fixture = preparedStatusFixture();
     {
       const inputDir = join(fixture.root, "provider-credentials");
-      const nextGranola = `grn_${"r".repeat(40)}`;
       const nextLlm = "q".repeat(43);
-      const previousGranolaSource = readFileSync(
-        join(fixture.privateDir, "granola-credential-source"),
-        "utf8",
-      );
       const previousLlmSource = readFileSync(
         join(fixture.privateDir, "llm-credential-source"),
-        "utf8",
-      );
-      const previousGranolaActive = readFileSync(
-        join(fixture.stateCredentialDir, "granola-credential"),
         "utf8",
       );
       const previousLlmActive = readFileSync(
@@ -1516,9 +1482,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         "utf8",
       );
       mkdirSync(inputDir, { mode: 0o700 });
-      writeFileSync(join(inputDir, "granola-credential"), nextGranola, {
-        mode: 0o600,
-      });
       writeFileSync(join(inputDir, "llm-credential"), nextLlm, {
         mode: 0o600,
       });
@@ -1535,20 +1498,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       );
       expect(failed.stdout).not.toContain("provider_credentials_activated");
       expect(failed.stdout).not.toContain(inputDir);
-      expect(failed.stdout).not.toContain(nextGranola);
       expect(failed.stdout).not.toContain(nextLlm);
       expect(failed.stderr).not.toContain(inputDir);
-      expect(failed.stderr).not.toContain(nextGranola);
       expect(failed.stderr).not.toContain(nextLlm);
-      expect(
-        readFileSync(join(fixture.privateDir, "granola-credential-source"), "utf8"),
-      ).toBe(previousGranolaSource);
       expect(
         readFileSync(join(fixture.privateDir, "llm-credential-source"), "utf8"),
       ).toBe(previousLlmSource);
-      expect(
-        readFileSync(join(fixture.stateCredentialDir, "granola-credential"), "utf8"),
-      ).toBe(previousGranolaActive);
       expect(
         readFileSync(join(fixture.stateCredentialDir, "llm-credential"), "utf8"),
       ).toBe(previousLlmActive);
@@ -1559,7 +1514,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       ).toHaveLength(2);
       expect(calls.match(/ credentials-install /g)).toHaveLength(1);
       expect(calls).not.toMatch(/ (bootstrap|finalize|resume) /);
-      expect(calls).not.toContain(nextGranola);
       expect(calls).not.toContain(nextLlm);
       expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
         "durable-work-must-survive",
@@ -1571,18 +1525,9 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     const fixture = preparedStatusFixture();
     {
       const inputDir = join(fixture.root, "provider-credentials");
-      const nextGranola = `grn_${"i".repeat(40)}`;
       const nextLlm = "j".repeat(43);
-      const previousGranolaSource = readFileSync(
-        join(fixture.privateDir, "granola-credential-source"),
-        "utf8",
-      );
       const previousLlmSource = readFileSync(
         join(fixture.privateDir, "llm-credential-source"),
-        "utf8",
-      );
-      const previousGranolaActive = readFileSync(
-        join(fixture.stateCredentialDir, "granola-credential"),
         "utf8",
       );
       const previousLlmActive = readFileSync(
@@ -1590,9 +1535,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         "utf8",
       );
       mkdirSync(inputDir, { mode: 0o700 });
-      writeFileSync(join(inputDir, "granola-credential"), nextGranola, {
-        mode: 0o600,
-      });
       writeFileSync(join(inputDir, "llm-credential"), nextLlm, {
         mode: 0o600,
       });
@@ -1625,19 +1567,11 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(interrupted).toEqual({ code: 143, signal: null });
       expect(Date.now() - interruptedAt).toBeLessThan(4_000);
       expect(stdout).not.toContain("provider_credentials_activated");
-      expect(stdout).not.toContain(nextGranola);
       expect(stdout).not.toContain(nextLlm);
-      expect(stderr).not.toContain(nextGranola);
       expect(stderr).not.toContain(nextLlm);
-      expect(
-        readFileSync(join(fixture.privateDir, "granola-credential-source"), "utf8"),
-      ).toBe(previousGranolaSource);
       expect(
         readFileSync(join(fixture.privateDir, "llm-credential-source"), "utf8"),
       ).toBe(previousLlmSource);
-      expect(
-        readFileSync(join(fixture.stateCredentialDir, "granola-credential"), "utf8"),
-      ).toBe(previousGranolaActive);
       expect(
         readFileSync(join(fixture.stateCredentialDir, "llm-credential"), "utf8"),
       ).toBe(previousLlmActive);
@@ -1648,7 +1582,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(calls.match(/ down\n/g)).toHaveLength(2);
       expect(calls.match(/ credentials-install /g)).toHaveLength(1);
       expect(calls.match(/ up -d --no-build --wait --wait-timeout 90\n/g)).toHaveLength(1);
-      expect(calls).not.toContain(nextGranola);
       expect(calls).not.toContain(nextLlm);
       expect(stderr).toContain(
         "activation was interrupted; previous credentials were restored and verified",
@@ -1738,7 +1671,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       );
       for (const name of [
         "oidc-client-secret",
-        "granola-credential",
         "llm-credential",
       ]) {
         writeFileSync(join(inputDir, name), `${name}-value`);
@@ -1898,7 +1830,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       );
       expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).not.toContain("SLACK");
       expect(readFileSync(calls, "utf8")).not.toContain("pull");
-      expect(readFileSync(join(deploy, "clean-data/private/granola-owner-email"), "utf8")).toBe("founder@example.com");
       expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(image);
       expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
         `ECHO_CLEAN_AUTHORITY_UID=${statSync(inputDir).uid}`,
@@ -1953,8 +1884,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         "oidc-config.json",
         "oidc-client-secret",
         "nango-secret-key",
-        "granola-credential-source",
-        "granola-owner-email",
         "llm-credential-source",
       ]) {
         const metadata = statSync(join(deploy, "clean-data/private", fixedPrivate));
@@ -2067,21 +1996,20 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(readFileSync(join(deploy, "clean-data/meetings", firstMeeting), "utf8"))
         .toBe(admittedCopy);
 
-      // The same eight-file input carries a closed staging-only profile without
+      // The same seven-file input carries a closed staging-only profile without
       // putting its Nango configuration in the runtime profile or command line.
       expect(execFileSync("bash", [
         join(deploy, "onboard-clean-v1.sh"), "replace-rehearsal", "--confirm-no-live-users",
       ], commandEnvironment).toString()).toContain("rehearsal_replaced=true");
       const stagingProfile = {
-        schema_version: 2,
-        kind: "echo-staging-connector-rehearsal-profile-v2",
-        capture_policy: "initial-owner-granola-retained-jira-pointer-slack-pointer-v2",
+        schema_version: 3,
+        kind: "echo-staging-connector-rehearsal-profile-v3",
+        read_policy: "initial-owner-jira-pointer-v3",
         jira: {
           cloud_id: "A8C0E112-6F72-4A0E-9C12-B7D8439F0ABC",
           integration_key: "Jira_Staging",
           project: "ECHO_CORE",
         },
-        slack: { channel_id: "C0123456789" },
       };
       const enabledManifest = {
         ...JSON.parse(readFileSync(manifest, "utf8")),

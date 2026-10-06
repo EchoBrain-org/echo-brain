@@ -66,19 +66,17 @@ are defined by [INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semant
 An adapter owns provider transport and canonicalization. It must not redefine
 core evidence, identity, authorization, or approval semantics.
 
-The current meeting composition has one organization-owned Granola
-export/admission bridge. Its credential and owner binding are selected by the
-Authority and stay out of Person clients; admitted revisions then use the
-provider-neutral meeting-source and approval contracts.
+The organization Granola credential, owner admission, and REST polling path
+have been removed. `providers/granola` retains only transport-free meeting
+normalization and the generic context capture adapter. These transforms preserve
+semantic revisions, transcript attribution and capture bounds; they do not
+acquire provider data or establish access rights. Personal OAuth and folder
+intake remain the next phase of the
+[Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md).
 
-The Granola HTTP client bounds each streamed JSON body before parsing and the
-total assembled transcript across pages. Oversized inline transcripts use the
-paged fallback; bounds reject excess without truncation. These transport bounds
-are separate from representation-specific capture limits. Jira's server-only
-capture handoff derives its transport and current-grant fences from an
-authenticated Person connection. Both changes have synthetic-provider source
-proof; see the [capture integration scope](../product/2026-10-01-connector-context-integration-v1.md)
-for the remaining live profile and qualification work.
+Jira's server-only capture handoff derives its transport and current-grant fences
+from an authenticated Person connection. Meeting processing, approval, revision
+custody and shared connectors remain provider-neutral.
 
 ## Trust boundary
 

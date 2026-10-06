@@ -5,29 +5,13 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    "./granola-meeting-source-bundle-v1": {
-      "types": "./dist/granola-meeting-source-bundle-v1.d.ts",
-      "import": "./dist/granola-meeting-source-bundle-v1.js"
-    },
-    "./source/granola-api-client": {
-      "types": "./dist/source/granola-api-client.d.ts",
-      "import": "./dist/source/granola-api-client.js"
-    },
-    "./source/record-owner-observation": {
-      "types": "./dist/source/record-owner-observation.d.ts",
-      "import": "./dist/source/record-owner-observation.js"
-    },
-    "./granola-meeting-source-admission": {
-      "types": "./dist/granola-meeting-source-admission.d.ts",
-      "import": "./dist/granola-meeting-source-admission.js"
-    },
-    "./granola-setup-proof-v1": {
-      "types": "./dist/granola-setup-proof-v1.d.ts",
-      "import": "./dist/granola-setup-proof-v1.js"
-    },
     "./context/granola-context-source-v1": {
       "types": "./dist/context/granola-context-source-v1.d.ts",
       "import": "./dist/context/granola-context-source-v1.js"
+    },
+    "./granola-meeting-normalizer-v1": {
+      "types": "./dist/granola-meeting-normalizer-v1.d.ts",
+      "import": "./dist/granola-meeting-normalizer-v1.js"
     }
   },
   "files": [
@@ -43,8 +27,7 @@
   "dependencies": {
     "@echo-brain/federation-protocol": "0.0.0-dev.0",
     "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
-    "@echo-brain/organization-processing": "0.0.0-dev.0",
-    "@echo-brain/provider-runtime": "0.0.0-dev.0"
+    "@echo-brain/organization-processing": "0.0.0-dev.0"
   },
   "engines": {
     "node": "22.22.1",

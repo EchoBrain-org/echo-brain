@@ -134,7 +134,7 @@ try {
     const sourcePulls = read(join(root, 'provider-evidence.json')).source_pulls;
     const result = action('canary');
     assert.equal(read(join(root, 'provider-evidence.json')).source_pulls, sourcePulls,
-      'canary must not poll the live Granola source');
+      'canary must not poll the admitted meeting source');
     return result;
   };
   const rows = (database, sql) => {
@@ -158,8 +158,8 @@ try {
   success(action('install'));
   assert.equal(noEngineCalls(), '', 'inspection/install must never invoke container actions');
   success(action('stage'));
-  const admittedGranolaCursor = rows('authority.sqlite', 'SELECT cursor FROM authority_live_source_progress_v2');
-  assert.equal(admittedGranolaCursor.length, 1);
+  const admittedSourceCursor = rows('authority.sqlite', 'SELECT cursor FROM authority_live_source_progress_v2');
+  assert.equal(admittedSourceCursor.length, 1);
   const beforeFailure = read(join(root, 'provider-evidence.json'));
   // Source staging now reconciles pending delivery once before returning. Hold
   // both attempts so this operation proves the durable pending path.
@@ -223,11 +223,11 @@ try {
   assert.equal(contracts[0].dm_channel_id, providers.messages[0].channel);
   assert.equal(contracts[0].provider_message_ts, providers.messages[0].ts);
   assert.equal(contracts[0].card_sha256, outbox[0].frozen_card_sha256);
-  assert.deepEqual(rows('authority.sqlite', 'SELECT cursor FROM authority_live_source_progress_v2'), admittedGranolaCursor, 'canary must not advance the admitted Granola cursor');
+  assert.deepEqual(rows('authority.sqlite', 'SELECT cursor FROM authority_live_source_progress_v2'), admittedSourceCursor, 'canary must not advance the admitted source cursor');
   noApproval();
   assert.equal(readFileSync(join(release, 'runtime-environments', accepted.release_id + '.env'), 'utf8'), acceptedEnv);
   assert.equal(existsSync(join(host, '.staging-release-guard')), false);
-  process.stdout.write(JSON.stringify({ result: 'awaiting_human_slack_approval', simulated_boundaries: ['AWS/SSM', 'container engine and identity', 'public TLS routing', 'OIDC/Granola/LLM/Slack HTTP'] }) + '\n');
+  process.stdout.write(JSON.stringify({ result: 'awaiting_human_slack_approval', simulated_boundaries: ['AWS/SSM', 'container engine and identity', 'public TLS routing', 'OIDC/LLM/Slack HTTP'] }) + '\n');
 } catch (error) {
   for (const name of ['wrapper-output.jsonl', 'provider-evidence.json', 'runtime-error.txt']) if (existsSync(join(root, name))) process.stderr.write(name + ':\n' + readFileSync(join(root, name), 'utf8').slice(-18000) + '\n');
   process.stderr.write(runtimeError);

@@ -1,5 +1,6 @@
+import { admitStagingCanaryMeetingSourceV1, stagingCanaryMeetingSourceIdentityV1 } from "@echo-brain/provider-synthetic-demo/staging-canary-meeting-source-v1";
 /**
- * Stopped-state bootstrap for the shipped Granola/OpenRouter/Slack profile.
+ * Stopped-state bootstrap for the shipped OpenRouter/Slack profile.
  * Finalization intentionally requires Slack, which an owner sets up in the
  * ECHO app while the Authority runs. This is not a swappable setup port:
  * another profile needs a versioned bootstrap design. Provider verification
@@ -43,12 +44,10 @@ import {
 } from "@echo-brain/organization-authority-kernel/domain/person-session-rules";
 import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { readPrivateAuthorityCredential } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
-import { readGranolaSetupCredentialsV1, granolaSetupAdmissionProofV1 } from '@echo-brain/provider-granola/granola-setup-proof-v1';
 import {
   bootstrapOrganizationAuthorityState,
   type AuthorityStateSeedV1,
 } from "./organization-authority-state-bootstrap.js";
-import { runGranolaMeetingSourceAdmissionCli } from "./admit-granola-meeting-source-cli-v1.js";
 import { admitSyntheticDemoMeetingSource } from "@echo-brain/provider-synthetic-demo/synthetic-demo-meeting-source-admission";
 import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-admission-commitment";
 import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
@@ -74,10 +73,7 @@ const MANIFEST_DIRECTORY = "onboarding";
 const MANIFEST_FILENAME = "clean-founder-v1.json";
 const SETUP_PLAN_SUFFIX = ".clean-founder-setup-plan-v1.json";
 const INVITATION_FILENAME = "founder-person-invitation.json";
-const GRANOLA_CREDENTIAL_FILENAME = "granola-credential";
-const GRANOLA_OWNER_EMAIL_FILENAME = "granola-owner-email";
 const LLM_CREDENTIAL_FILENAME = "llm-credential";
-const SOURCE_INSTANCE_ID = "founder-granola-v1";
 const PROCESSOR_INSTANCE_ID = "founder-llm-v1";
 const DEFAULT_ARTIFACT_REVISION = "clean-founder-v1";
 const STAGING_SYNTHETIC_CANARY_ORIGIN =
@@ -88,7 +84,7 @@ const CLEAN_V1_RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 const USAGE = `usage:
   echo-organization-authority-setup bootstrap --state-dir <absolute-path> --organization-name <name> --owner-display-name <name> --owner-email <email> --authority-url <https-origin> --oidc-config <absolute-json-path> [--artifact-revision <revision>]
   echo-organization-authority-setup resume --state-dir <absolute-path>
-  echo-organization-authority-setup credentials-install --state-dir <absolute-path> --granola-credential-file <absolute-private-path> --granola-owner-email-file <absolute-private-path> --llm-credential-file <absolute-private-path>
+  echo-organization-authority-setup credentials-install --state-dir <absolute-path> --llm-credential-file <absolute-private-path>
   echo-organization-authority-setup finalize --state-dir <absolute-path> [--staging-synthetic-meetings-dir <absolute-path>]
   echo-organization-authority-setup status --state-dir <absolute-path>`;
 
@@ -107,9 +103,9 @@ const PROCESS_IO: CliIo = {
 };
 
 /** Slack is set up in the ECHO app, so the manifest names no Slack connection or channel. */
-export interface OrganizationAuthoritySetupManifestV2 {
-  readonly schema_version: 2;
-  readonly kind: "echo-clean-founder-onboarding-manifest-v2";
+export interface OrganizationAuthoritySetupManifestV3 {
+  readonly schema_version: 3;
+  readonly kind: "echo-clean-founder-onboarding-manifest-v3";
   readonly state_directory: string;
   readonly created_at: string;
   readonly artifact_revision: string;
@@ -122,8 +118,6 @@ export interface OrganizationAuthoritySetupManifestV2 {
   readonly state_lineage_id: string;
   readonly owner_principal_id: string;
   readonly owner_membership_id: string;
-  readonly granola_credential_file: string;
-  readonly granola_owner_email_file: string;
   readonly llm_credential_file: string;
   readonly setup_seed: AuthorityStateSeedV1;
   readonly owner_email: string;
@@ -147,8 +141,6 @@ interface FinalizeInput {
 }
 
 interface CredentialInstallInput extends FinalizeInput {
-  readonly granola_credential_source: string;
-  readonly granola_owner_email_source: string;
   readonly llm_credential_source: string;
 }
 
@@ -175,12 +167,6 @@ export interface OrganizationAuthoritySetupCliDependencies {
     readonly authority_url: string;
     readonly output_path: string;
   }) => Promise<void>;
-  readonly admit_source: (input: {
-    readonly state_directory: string;
-    readonly granola_credential_file: string;
-    readonly granola_owner_email_file: string;
-    readonly llm_credential_file: string;
-  }) => Promise<void>;
   readonly admit_staging_synthetic_source: (input: {
     readonly state_directory: string;
     readonly meetings_directory: string;
@@ -188,15 +174,15 @@ export interface OrganizationAuthoritySetupCliDependencies {
   }) => Promise<void>;
   /** Test seam only; production derives these facts from durable state. */
   readonly read_initial_owner_setup_status?: (
-    manifest: OrganizationAuthoritySetupManifestV2,
+    manifest: OrganizationAuthoritySetupManifestV3,
   ) => InitialOwnerSetupStatus;
   /** Test seam only; production derives this from immutable state. */
   readonly read_setup_canary_evidence?: (
-    manifest: OrganizationAuthoritySetupManifestV2,
+    manifest: OrganizationAuthoritySetupManifestV3,
   ) => SetupCanaryEvidence;
   /** Test seam only; production derives these facts from durable state. */
   readonly read_setup_stage?: (
-    manifest: OrganizationAuthoritySetupManifestV2,
+    manifest: OrganizationAuthoritySetupManifestV3,
   ) => OrganizationAuthoritySetupStage;
 }
 
@@ -235,27 +221,6 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
           input.authority_url,
           "--out",
           input.output_path,
-        ],
-        { stdout, stderr: () => undefined },
-      ),
-    );
-  },
-  admit_source: async (input) => {
-    await captureCommand((stdout) =>
-      runGranolaMeetingSourceAdmissionCli(
-        [
-          "--state-dir",
-          input.state_directory,
-          "--source-instance",
-          SOURCE_INSTANCE_ID,
-          "--processor-instance",
-          PROCESSOR_INSTANCE_ID,
-          "--granola-credential-file",
-          input.granola_credential_file,
-          "--granola-owner-email-file",
-          input.granola_owner_email_file,
-          "--llm-credential-file",
-          input.llm_credential_file,
         ],
         { stdout, stderr: () => undefined },
       ),
@@ -367,8 +332,6 @@ function parseCredentialInstall(
 ): CredentialInstallInput {
   const values = parseSetupFlags(arguments_, [
     "--state-dir",
-    "--granola-credential-file",
-    "--granola-owner-email-file",
     "--llm-credential-file",
   ]);
   const source = (key: string, label: string): string => {
@@ -378,14 +341,6 @@ function parseCredentialInstall(
   };
   return Object.freeze({
     state_directory: source("--state-dir", "state directory"),
-    granola_credential_source: source(
-      "--granola-credential-file",
-      "Granola credential source",
-    ),
-    granola_owner_email_source: source(
-      "--granola-owner-email-file",
-      "Granola owner email source",
-    ),
     llm_credential_source: source(
       "--llm-credential-file",
       "LLM credential source",
@@ -403,7 +358,7 @@ function siblingSetupPlanPath(stateDirectory: string): string {
 
 function writeCanonicalPrivateFile(
   path: string,
-  value: OrganizationAuthoritySetupManifestV2,
+  value: OrganizationAuthoritySetupManifestV3,
 ): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const temporaryPath = `${path}.installing-${randomUUID()}`;
@@ -459,7 +414,7 @@ function assertSetupSeed(seed: AuthorityStateSeedV1): void {
   }
 }
 
-function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV2 {
+function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV3 {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("organization setup manifest is invalid");
   }
@@ -473,8 +428,6 @@ function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV2 
     "authority_id",
     "authority_url",
     "created_at",
-    "granola_credential_file",
-    "granola_owner_email_file",
     "invitation_path",
     "kind",
     "llm_credential_file",
@@ -496,8 +449,8 @@ function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV2 
   ];
   const actualKeys = Object.keys(record).sort().join(",");
   if (
-    record.schema_version !== 2 ||
-    record.kind !== "echo-clean-founder-onboarding-manifest-v2" ||
+    record.schema_version !== 3 ||
+    record.kind !== "echo-clean-founder-onboarding-manifest-v3" ||
     actualKeys !== currentKeys.sort().join(",") ||
     keys
       .filter((key) => key !== "schema_version")
@@ -505,7 +458,7 @@ function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV2 
   ) {
     throw new Error("organization setup manifest is invalid");
   }
-  const manifest = record as unknown as OrganizationAuthoritySetupManifestV2;
+  const manifest = record as unknown as OrganizationAuthoritySetupManifestV3;
   if (
     !isCanonicalPersonEmail(manifest.owner_email) ||
     typeof manifest.organization_name !== "string" ||
@@ -520,8 +473,6 @@ function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV2 
     manifest.oidc_config_path,
     manifest.pkce_key_file,
     manifest.invitation_path,
-    manifest.granola_credential_file,
-    manifest.granola_owner_email_file,
     manifest.llm_credential_file,
   ]) {
     absolutePath(path, "organization setup manifest path");
@@ -529,7 +480,7 @@ function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV2 
   return Object.freeze(manifest);
 }
 
-function readPrivateManifest(path: string): OrganizationAuthoritySetupManifestV2 {
+function readPrivateManifest(path: string): OrganizationAuthoritySetupManifestV3 {
   const metadata = lstatSync(path);
   const currentUid = process.getuid?.();
   if (
@@ -557,7 +508,7 @@ function readPrivateManifest(path: string): OrganizationAuthoritySetupManifestV2
 
 export function readOrganizationAuthoritySetupManifest(
   stateDirectory: string,
-): OrganizationAuthoritySetupManifestV2 {
+): OrganizationAuthoritySetupManifestV3 {
   const canonicalStateDirectory = absolutePath(
     stateDirectory,
     "state directory",
@@ -574,7 +525,7 @@ export function readOrganizationAuthoritySetupManifest(
 function setupManifest(
   input: BootstrapInput,
   createdAt: string,
-): OrganizationAuthoritySetupManifestV2 {
+): OrganizationAuthoritySetupManifestV3 {
   const credentialsDirectory = join(input.state_directory, "credentials");
   const seed: AuthorityStateSeedV1 = Object.freeze({
     authority_id: federationId("oau"),
@@ -585,8 +536,8 @@ function setupManifest(
     control_plane_id: `ocp_${randomUUID()}`,
   });
   return Object.freeze({
-    schema_version: 2,
-    kind: "echo-clean-founder-onboarding-manifest-v2",
+    schema_version: 3,
+    kind: "echo-clean-founder-onboarding-manifest-v3",
     state_directory: input.state_directory,
     created_at: createdAt,
     artifact_revision: input.artifact_revision,
@@ -599,8 +550,6 @@ function setupManifest(
     state_lineage_id: seed.state_lineage_id,
     owner_principal_id: seed.owner_principal_id,
     owner_membership_id: seed.owner_membership_id,
-    granola_credential_file: join(credentialsDirectory, GRANOLA_CREDENTIAL_FILENAME),
-    granola_owner_email_file: join(credentialsDirectory, GRANOLA_OWNER_EMAIL_FILENAME),
     llm_credential_file: join(credentialsDirectory, LLM_CREDENTIAL_FILENAME),
     organization_name: input.organization_name,
     owner_display_name: input.owner_display_name,
@@ -610,7 +559,7 @@ function setupManifest(
 }
 
 function setupInputMatches(
-  manifest: OrganizationAuthoritySetupManifestV2,
+  manifest: OrganizationAuthoritySetupManifestV3,
   input: BootstrapInput,
 ): boolean {
   return (
@@ -624,7 +573,7 @@ function setupInputMatches(
 }
 
 function loadSetupManifest(stateDirectory: string): |{
-  readonly manifest: OrganizationAuthoritySetupManifestV2;
+  readonly manifest: OrganizationAuthoritySetupManifestV3;
   readonly location: "sibling" | "state";
 } | undefined {
   const sibling = siblingSetupPlanPath(stateDirectory);
@@ -651,7 +600,7 @@ function loadSetupManifest(stateDirectory: string): |{
   });
 }
 
-function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV2): void {
+function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV3): void {
   const verified = verifyAuthorityStateLineage(manifest.state_directory);
   if (
     verified.root.authority_id !== manifest.setup_seed.authority_id ||
@@ -664,7 +613,7 @@ function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV2): voi
   }
 }
 
-function publishSetupPlan(manifest: OrganizationAuthoritySetupManifestV2): void {
+function publishSetupPlan(manifest: OrganizationAuthoritySetupManifestV3): void {
   const source = siblingSetupPlanPath(manifest.state_directory);
   const destination = manifestPath(manifest.state_directory);
   if (existsSync(destination)) return;
@@ -762,7 +711,7 @@ function sha256Secret(value: string): `sha256:${string}` {
 }
 
 function usableInitialOwnerInvitation(
-  manifest: OrganizationAuthoritySetupManifestV2,
+  manifest: OrganizationAuthoritySetupManifestV3,
 ): boolean {
   try {
     const path = manifest.invitation_path;
@@ -855,7 +804,7 @@ function discardUnusableInvitation(path: string): void {
 }
 
 function plannedSlackIsActive(
-  manifest: OrganizationAuthoritySetupManifestV2,
+  manifest: OrganizationAuthoritySetupManifestV3,
 ): boolean {
   try {
     verifySetupGenesis(manifest);
@@ -866,7 +815,7 @@ function plannedSlackIsActive(
 }
 
 function durableSetupStage(
-  manifest: OrganizationAuthoritySetupManifestV2,
+  manifest: OrganizationAuthoritySetupManifestV3,
 ): OrganizationAuthoritySetupStage {
   return Object.freeze({
     credentials_ready: validPkceKeyPresent(manifest.pkce_key_file),
@@ -878,26 +827,24 @@ function durableSetupStage(
 interface InitialOwnerSetupStatus {
   readonly founder_oidc_bound: boolean;
   readonly founder_slack_link_active: boolean;
-  readonly granola_credentials_valid: boolean;
-  readonly granola_admission_present: boolean;
-  /** New generic fields retain the legacy Granola status vocabulary. */
-  readonly source_admission_present?: boolean;
-  readonly source_mode?: "granola" | "staging_synthetic";
-  readonly granola_admission_proof?: {
-    readonly owner_observation_assurance: "provider_record_owner_observed";
-    readonly owner_observed_at: string;
-  };
+  readonly llm_credential_valid: boolean;
+  readonly source_admission_present: boolean;
+  readonly source_mode?: "staging_synthetic" | "staging_canary";
+}
+
+function llmCredentialValid(full: InitialOwnerSetupStatus): boolean {
+  return full.llm_credential_valid;
 }
 
 function sourceAdmissionPresent(full: InitialOwnerSetupStatus): boolean {
-  return full.source_admission_present ?? full.granola_admission_present;
+  return full.source_admission_present;
 }
 
 function sourceMode(full: InitialOwnerSetupStatus):
-  | "granola"
   | "staging_synthetic"
+  | "staging_canary"
   | "none" {
-  return full.source_mode ?? (full.granola_admission_present ? "granola" : "none");
+  return full.source_mode ?? "none";
 }
 
 /**
@@ -908,7 +855,8 @@ function sourceMode(full: InitialOwnerSetupStatus):
 interface SetupCanaryEvidence {
   readonly source_progress_observed: boolean;
   /** A release-bound synthetic rehearsal is accepted only on the exact staging origin. */
-  readonly synthetic_staging_canary_observed?: boolean;readonly approved_record_present: boolean;
+  readonly synthetic_staging_canary_observed?: boolean;
+  readonly approved_record_present: boolean;
   readonly active_generation_current: boolean;
   readonly owner_layer1_read_after_head: boolean;
   readonly owner_layer2_read_after_generation: boolean;
@@ -952,6 +900,7 @@ type OrganizationAuthoritySetupNextStep =
   | "complete";
 
 function nextOrganizationAuthoritySetupStep(input: {
+  readonly authority_url: string;
   readonly genesis_published: boolean;
   readonly setup_plan_location: "sibling" | "state";
   readonly credentials_ready: boolean;
@@ -970,8 +919,8 @@ function nextOrganizationAuthoritySetupStep(input: {
   if (!input.full.founder_oidc_bound) return "complete_founder_browser_login";
   if (!input.slack_connected) return "connect_slack_in_app";
   if (!input.full.founder_slack_link_active) return "complete_founder_slack_link";
-  if (!input.full.granola_credentials_valid) return "install_provider_credentials";
-  if (!sourceAdmissionPresent(input.full)) return "run_finalize";
+  if (!llmCredentialValid(input.full)) return "install_provider_credentials";
+  if (input.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN && !sourceAdmissionPresent(input.full)) return "run_finalize";
   return "ready_to_start";
 }
 
@@ -988,16 +937,16 @@ function organizationAuthoritySetupInstruction(
     complete_founder_slack_link:
       "The owner runs person tools connect --tool slack to link their own Slack.",
     install_provider_credentials:
-      "Run the credentials-install command with the three private source files.",
-    run_finalize: "Run the finalize command.",
+      "Run credentials-install with the private LLM credential file.",
+    run_finalize: "Run finalize to admit the selected staging synthetic infrastructure.",
     ready_to_start:
-      "Start or restart the Authority runtime, then complete the setup canary.",
+      "Start or restart the Authority runtime, then check setup status.",
     complete: "Organization setup is complete.",
   }[step];
 }
 
 function readInitialOwnerSetupStatus(
-  manifest: OrganizationAuthoritySetupManifestV2,
+  manifest: OrganizationAuthoritySetupManifestV3,
   dependencies?: OrganizationAuthoritySetupCliDependencies,
 ): InitialOwnerSetupStatus {
   return (dependencies?.read_initial_owner_setup_status?.(manifest) ??
@@ -1087,34 +1036,15 @@ function activeGenerationPointer(
   });
 }
 
-/**
- * Setup runs before provider credentials are installed, so it must derive the
- * same non-secret projector contract that the admitted production runtime
- * binds from its fixed OpenRouter bundle. Before admission projection remains
- * disabled and the ordinary provider-free contract is expected.
- */
-function expectedSetupCanaryRetrievalContract(
-  authority: Database.Database
-) {
-  const sourceIsAdmitted =
-    authority
-      .prepare(
-        `SELECT 1
-           FROM authority_live_source_admission_v2
-          WHERE singleton = 1`,
-      )
-      .get() !== undefined;
-  return readableSearchGenerationContractV1(
-    sourceIsAdmitted
-      ? {
-          related_atom_projector: Object.freeze({
-            generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
-            model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
-            timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
-          }),
-        }
-      : {},
-  );
+/** Derive the runtime's fixed projector contract without reading credentials. */
+function expectedSetupCanaryRetrievalContract() {
+  return readableSearchGenerationContractV1({
+    related_atom_projector: Object.freeze({
+      generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+      model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+      timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+    }),
+  });
 }
 
 function sameRecordHead(
@@ -1160,7 +1090,7 @@ function pointerMatchesHead(
 
 function ownerReadAfter(
   authority: Database.Database,
-  manifest: OrganizationAuthoritySetupManifestV2,
+  manifest: OrganizationAuthoritySetupManifestV3,
   mode: "layer1" | "layer2",
   after: string,
 ): boolean {
@@ -1198,7 +1128,7 @@ function ownerReadAfter(
  * progress.
  */
 function stagingSyntheticCanaryObserved(
-  manifest: OrganizationAuthoritySetupManifestV2,
+  manifest: OrganizationAuthoritySetupManifestV3,
   authority: Database.Database,
   record: Database.Database,
 ): boolean {
@@ -1286,7 +1216,7 @@ function stagingSyntheticCanaryObserved(
  * between makes the terminal claim fail closed until the owner reruns status.
  */
 function setupCanaryEvidence(
-  manifest: OrganizationAuthoritySetupManifestV2,
+  manifest: OrganizationAuthoritySetupManifestV3,
 ): SetupCanaryEvidence {
   let authority: Database.Database | undefined;
   let record: Database.Database | undefined;
@@ -1333,7 +1263,7 @@ function setupCanaryEvidence(
       )
       .get() !== undefined;
     const expectedRetrievalContract =
-      expectedSetupCanaryRetrievalContract(authority);
+      expectedSetupCanaryRetrievalContract();
     const activeGenerationCurrent = pointerMatchesHead(
       initialPointer,
       initialHead,
@@ -1362,10 +1292,13 @@ function setupCanaryEvidence(
       sameRecordHead(initialHead, currentRecordHead(record)) &&
       sameGenerationPointer(initialPointer, activeGenerationPointer(authority));
     if (!stable) return EMPTY_SETUP_CANARY_EVIDENCE;
+    const canarySourceAdmitted = authority.prepare(
+      "SELECT 1 FROM authority_live_source_admission_v2 WHERE singleton = 1 AND source_adapter_id = ?",
+    ).get(stagingCanaryMeetingSourceIdentityV1.adapter_id) !== undefined;
     const complete =
       (syntheticFixtureApproval.source_admitted
         ? syntheticFixtureApproval.all_fixture_meetings_approved
-        : sourceProgressObserved || syntheticStagingCanaryObserved) &&
+        : canarySourceAdmitted ? syntheticStagingCanaryObserved : sourceProgressObserved || syntheticStagingCanaryObserved) &&
       approvedRecordPresent &&
       activeGenerationCurrent &&
       ownerLayer1ReadAfterHead &&
@@ -1388,7 +1321,7 @@ function setupCanaryEvidence(
 }
 
 function readSetupCanaryEvidence(
-  manifest: OrganizationAuthoritySetupManifestV2,
+  manifest: OrganizationAuthoritySetupManifestV3,
   dependencies?: OrganizationAuthoritySetupCliDependencies,
 ): SetupCanaryEvidence {
   return (dependencies?.read_setup_canary_evidence?.(manifest) ??
@@ -1396,13 +1329,13 @@ function readSetupCanaryEvidence(
 }
 
 function initialOwnerSetupStatus(
-  manifest: OrganizationAuthoritySetupManifestV2,
+  manifest: OrganizationAuthoritySetupManifestV3,
 ): InitialOwnerSetupStatus {
   const empty: InitialOwnerSetupStatus = {
     founder_oidc_bound: false,
     founder_slack_link_active: false,
-    granola_credentials_valid: false,
-    granola_admission_present: false,
+    llm_credential_valid: false,
+    source_admission_present: false,
   };
   try {
     verifySetupGenesis(manifest);
@@ -1411,7 +1344,6 @@ function initialOwnerSetupStatus(
       fileMustExist: true,
     });
     let initialOwnerOidcBound = false;
-    let granolaAdmissionProof: InitialOwnerSetupStatus["granola_admission_proof"];
     let admittedSourceMode: InitialOwnerSetupStatus["source_mode"];
     try {
       initialOwnerOidcBound = authority.prepare(
@@ -1449,19 +1381,21 @@ function initialOwnerSetupStatus(
             readonly source_custodian_observed_at: unknown;
           }
         | undefined;
-      granolaAdmissionProof = granolaSetupAdmissionProofV1(admission, SOURCE_INSTANCE_ID);
-      if (granolaAdmissionProof !== undefined) admittedSourceMode = 'granola';
-      else if (isSyntheticDemoSetupAdmissionV1(admission) && manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN) {
+      if (isSyntheticDemoSetupAdmissionV1(admission) && manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN) {
         admittedSourceMode = 'staging_synthetic';
+      } else if (manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN &&
+        admission?.source_adapter_id === stagingCanaryMeetingSourceIdentityV1.adapter_id &&
+        admission.source_adapter_instance_id === stagingCanaryMeetingSourceIdentityV1.instance_id &&
+        admission.source_custodian_assurance === "authority_initial_owner_identity") {
+        admittedSourceMode = 'staging_canary';
       }
     } finally {
       authority.close();
     }
-    let granolaCredentialsValid = false;
+    let llmCredentialValid = false;
     try {
-      readGranolaSetupCredentialsV1({ credential_file: manifest.granola_credential_file, owner_email_file: manifest.granola_owner_email_file, expected_owner_email: manifest.owner_email });
       void readPrivateAuthorityCredential(`file:${manifest.llm_credential_file}`);
-      granolaCredentialsValid = true;
+      llmCredentialValid = true;
     } catch {}
     const slackStatus = readInitialOwnerSlackSetupStatusV1({
       state_directory: manifest.state_directory,
@@ -1470,15 +1404,11 @@ function initialOwnerSetupStatus(
       return Object.freeze({
         founder_oidc_bound: initialOwnerOidcBound,
         founder_slack_link_active: slackStatus.identity_link_active,
-        granola_credentials_valid: granolaCredentialsValid,
-        granola_admission_present: granolaAdmissionProof !== undefined,
+        llm_credential_valid: llmCredentialValid,
         source_admission_present: admittedSourceMode !== undefined,
         ...(admittedSourceMode === undefined
           ? {}
           : { source_mode: admittedSourceMode }),
-        ...(granolaAdmissionProof === undefined
-          ? {}
-          : { granola_admission_proof: granolaAdmissionProof }),
       });
   } catch {
     return Object.freeze(empty);
@@ -1575,6 +1505,7 @@ async function bootstrap(
   const completedStage = stage();
   const completedFull = readInitialOwnerSetupStatus(manifest, dependencies);
   const nextStep = nextOrganizationAuthoritySetupStep({
+    authority_url: manifest.authority_url,
     genesis_published: true,
     setup_plan_location: "state",
     credentials_ready: completedStage.credentials_ready,
@@ -1586,9 +1517,6 @@ async function bootstrap(
     `${canonicalJson({
       ok: true,
       ...(!initialOwnerAlreadyBound ? { invitation_path: invitationPath } : {}),
-      ...(completedFull.granola_admission_proof === undefined
-        ? {}
-        : { granola_admission_proof: completedFull.granola_admission_proof }),
       next_step: nextStep,
       next_instruction: organizationAuthoritySetupInstruction(nextStep),
     } as never)}\n`,
@@ -1623,6 +1551,7 @@ async function resume(
     dependencies.read_setup_stage?.(manifest) ?? durableSetupStage(manifest);
   const full = readInitialOwnerSetupStatus(manifest, dependencies);
   const setupStep = nextOrganizationAuthoritySetupStep({
+    authority_url: manifest.authority_url,
     genesis_published: genesisPublished,
     setup_plan_location: setup.location,
     credentials_ready: genesisPublished && durable.credentials_ready,
@@ -1633,7 +1562,8 @@ async function resume(
   });
   if (
     setupStep === "ready_to_start" &&
-    readSetupCanaryEvidence(manifest, dependencies).complete
+    ((manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN && !sourceAdmissionPresent(full)) ||
+      readSetupCanaryEvidence(manifest, dependencies).complete)
   ) {
     status(input, io, dependencies);
     return;
@@ -1659,47 +1589,15 @@ function installProviderCredentials(
 ): void {
   const manifest = readOrganizationAuthoritySetupManifest(input.state_directory);
   verifySetupGenesis(manifest);
-  if (
-    manifest.granola_credential_file !==
-      join(input.state_directory, "credentials", GRANOLA_CREDENTIAL_FILENAME) ||
-    manifest.granola_owner_email_file !==
-      join(input.state_directory, "credentials", GRANOLA_OWNER_EMAIL_FILENAME) ||
-    manifest.llm_credential_file !==
-      join(input.state_directory, "credentials", LLM_CREDENTIAL_FILENAME)
-  ) {
-    throw new Error(
-      "organization setup does not have fixed provider credential destinations",
-    );
+  if (manifest.llm_credential_file !== join(input.state_directory, "credentials", LLM_CREDENTIAL_FILENAME)) {
+    throw new Error("organization setup does not have the fixed LLM credential destination");
   }
-
-  // Read and validate every source before replacing any destination. Values
-  // are never accepted as argv text and never enter output or durable setup
-  // metadata.
-  const { credential: granolaCredential, owner_email: granolaOwnerEmail } = readGranolaSetupCredentialsV1({
-    credential_file: input.granola_credential_source, owner_email_file: input.granola_owner_email_source, expected_owner_email: manifest.owner_email,
-  });
   const llmCredential = readPrivateAuthorityCredential(`file:${input.llm_credential_source}`);
-
-  installPrivateCredentialValue(
-    manifest.granola_credential_file,
-    granolaCredential,
-  );
-  installPrivateCredentialValue(
-    manifest.granola_owner_email_file,
-    granolaOwnerEmail,
-  );
   installPrivateCredentialValue(manifest.llm_credential_file, llmCredential);
-  if (!initialOwnerSetupStatus(manifest).granola_credentials_valid) {
-    throw new Error("organization setup provider credentials did not install");
+  if (!llmCredentialValid(initialOwnerSetupStatus(manifest))) {
+    throw new Error("organization setup LLM credential did not install");
   }
-  io.stdout(
-    `${canonicalJson({
-      ok: true,
-      credentials_ready: true,
-      next_instruction:
-        "Run echo-organization-authority-setup status to continue.",
-    } as never)}\n`,
-  );
+  io.stdout(`${canonicalJson({ ok: true, credentials_ready: true, next_instruction: "Run echo-organization-authority-setup status to continue." } as never)}\n`);
 }
 
 async function finalize(
@@ -1717,7 +1615,7 @@ async function finalize(
     !full.founder_oidc_bound && "initial-owner OIDC binding",
     !stage.slack_connected && "organization Slack connection",
     !full.founder_slack_link_active && "initial-owner Slack identity link",
-    !full.granola_credentials_valid && "provider credentials",
+    !llmCredentialValid(full) && "LLM credential",
   ].filter((value): value is string => typeof value === "string");
   if (missing.length > 0) {
     throw new Error(
@@ -1739,10 +1637,7 @@ async function finalize(
     ) {
       throw new Error("staging synthetic finalization conflicts with the admitted source");
     }
-    if (
-      stagingSyntheticMeetingsDirectory === undefined &&
-      admittedMode !== "granola"
-    ) {
+    if (stagingSyntheticMeetingsDirectory === undefined && admittedMode !== "staging_canary") {
       throw new Error("the admitted staging synthetic source requires its fixture selector at runtime");
     }
     if (stagingSyntheticMeetingsDirectory !== undefined) {
@@ -1760,12 +1655,15 @@ async function finalize(
       meetings_directory: stagingSyntheticMeetingsDirectory,
       llm_credential_file: manifest.llm_credential_file,
     });
-  } else {
-    await dependencies.admit_source({
+  }
+  if (stagingSyntheticMeetingsDirectory === undefined && manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN) {
+    await admitStagingCanaryMeetingSourceV1({
+      authority_url: manifest.authority_url,
       state_directory: manifest.state_directory,
-      granola_credential_file: manifest.granola_credential_file,
-      granola_owner_email_file: manifest.granola_owner_email_file,
-      llm_credential_file: manifest.llm_credential_file,
+      processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({
+        instance_id: PROCESSOR_INSTANCE_ID,
+        credential_reference: `file:${manifest.llm_credential_file}`,
+      }),
     });
   }
   io.stdout(
@@ -1773,13 +1671,15 @@ async function finalize(
       ok: true,
       runtime_status: "ready_to_start",
       runtime_observation: "not_observed",
-      canary_status: "not_complete",
+      canary_status: manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN ? "not_complete" : "not_required",
       source_mode:
-        stagingSyntheticMeetingsDirectory === undefined ? "granola" : "staging_synthetic",
-      source_admission_present: true,
+        stagingSyntheticMeetingsDirectory !== undefined ? "staging_synthetic" : manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN ? "staging_canary" : "none",
+      source_admission_present: stagingSyntheticMeetingsDirectory !== undefined || manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN,
       next_instruction:
         stagingSyntheticMeetingsDirectory === undefined
-          ? "Restart the same echo-organization-authority-serve serve command. The admitted Granola source begins at its post-cutoff boundary."
+          ? manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN
+            ? "Restart the Authority runtime, then run the release-bound synthetic canary."
+            : "Start or restart the Authority runtime. Meeting intake remains idle until a personal source is connected."
           : "Restart the same echo-organization-authority-serve serve command with the same staging synthetic fixture selector.",
     } as never)}\n`,
   );
@@ -1794,8 +1694,8 @@ function status(
   if (setup === undefined) {
     io.stdout(
       `${canonicalJson({
-        schema_version: 1,
-        kind: "echo-clean-founder-setup-status-v1",
+        schema_version: 2,
+        kind: "echo-organization-authority-setup-status-v2",
         setup_plan_present: false,
         genesis_published: false,
         credentials_ready: false,
@@ -1804,8 +1704,7 @@ function status(
         founder_invitation_valid: false,
         founder_oidc_bound: false,
         founder_slack_link_active: false,
-        granola_credentials_valid: false,
-        granola_admission_present: false,
+        llm_credential_valid: false,
         source_mode: "none",
         source_admission_present: false,
         source_progress_observed: false,
@@ -1842,6 +1741,7 @@ function status(
   const invitationValid =
     genesisPublished && usableInitialOwnerInvitation(setup.manifest);
   const nextStep = nextOrganizationAuthoritySetupStep({
+    authority_url: setup.manifest.authority_url,
     genesis_published: genesisPublished,
     setup_plan_location: setup.location,
     credentials_ready: credentialsReady,
@@ -1855,18 +1755,20 @@ function status(
   const canary = nextStep === "ready_to_start"
     ? readSetupCanaryEvidence(setup.manifest, dependencies)
     : EMPTY_SETUP_CANARY_EVIDENCE;
-  const terminalStep: OrganizationAuthoritySetupNextStep = canary.complete
+  const ordinarySourceFree = nextStep === "ready_to_start" &&
+    setup.manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN && !sourceAdmissionPresent(full);
+  const terminalStep: OrganizationAuthoritySetupNextStep = canary.complete || ordinarySourceFree
     ? "complete"
     : nextStep;
-  const canaryStatus = terminalStep === "complete"
+  const canaryStatus = ordinarySourceFree ? "not_required" : terminalStep === "complete"
     ? "complete"
     : nextStep === "ready_to_start"
       ? "not_complete"
       : "not_ready";
   io.stdout(
     `${canonicalJson({
-      schema_version: 1,
-      kind: "echo-clean-founder-setup-status-v1",
+      schema_version: 2,
+      kind: "echo-organization-authority-setup-status-v2",
       setup_plan_present: true,
       genesis_published: genesisPublished,
       credentials_ready: credentialsReady,
@@ -1875,8 +1777,7 @@ function status(
       founder_invitation_valid: invitationValid,
       founder_oidc_bound: full.founder_oidc_bound,
       founder_slack_link_active: full.founder_slack_link_active,
-      granola_credentials_valid: full.granola_credentials_valid,
-      granola_admission_present: full.granola_admission_present,
+      llm_credential_valid: llmCredentialValid(full),
       source_mode: sourceMode(full),
       source_admission_present: sourceAdmissionPresent(full),
       source_progress_observed: canary.source_progress_observed,

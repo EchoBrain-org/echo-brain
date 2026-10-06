@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { admitGranolaMeetingSource } from "@echo-brain/provider-granola/granola-meeting-source-admission";
+import { syntheticDemoMeetingSourceIdentityV1, SYNTHETIC_DEMO_INITIAL_CURSOR_V1 } from "@echo-brain/provider-synthetic-demo/source/synthetic-demo-meeting-source-v1";
 import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-admission-commitment";
 import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
@@ -18,7 +18,7 @@ import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organizati
 import type { DecisionProcessorAdapter, MeetingDocument, MeetingSourceAdapter } from "@echo-brain/organization-processing/core";
 import { privateSlackApprovalBlockKitActionIdV1 } from "../../../providers/slack/server/src/private-approval/private-slack-approval-block-kit-card-v1.js";
 import { privateSlackApprovalBlockKitActionIdV2 } from "../../../providers/slack/server/src/private-approval/private-slack-approval-block-kit-card-v2.js";
-import { createGranolaPostCutoffCursor } from "../../../providers/granola/src/source/meeting-source-adapter.js";
+
 import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import { openOrganizationAuthorityService, type OrganizationAuthorityServiceConfig } from "../src/composition/organization-authority-composition-root.js";
@@ -166,18 +166,18 @@ function meetingSource(identity: MeetingSourceAdapter["identity"]) {
   let released = 0;
   let delivered = 0;
   const meeting = (index: number): MeetingDocument => ({
-    schema_version: 1, id: `granola:proof:note-${index}`, title: `Proof meeting ${index}`,
+    schema_version: 1, id: `synthetic-demo-source:proof:meeting-${index}`, title: `Proof meeting ${index}`,
     provenance: { source: identity, external_id: `note-${index}`, canonical_revision: canonicalSha256({ note: index }), observed_at: NOW, normalizer_version: identity.version },
     capture: { state: "complete", components: [] },
     participants: [{ id: "founder", display_name: "Founder", identities: [{ kind: "email", value: OWNER_EMAIL }] }],
     content: [{ id: `note-${index}`, kind: "note", text: `Decision ${index}: ship the Nango switch-over.` }],
     artifacts: [], context: { owner_participant_id: "founder" },
-    extensions: { granola: { calendar_event: null, owner: { email: OWNER_EMAIL } } },
+    extensions: {},
   });
   const source: MeetingSourceAdapter = {
     identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: "healthy", checked_at: NOW }),
     pull: async (request) => delivered < released
-      ? { meetings: [meeting(++delivered)], next_cursor: createGranolaPostCutoffCursor(new Date(Date.parse(NOW) + delivered * 1_000).toISOString()) }
+      ? { meetings: [meeting(++delivered)], next_cursor: `synthetic-demo-source:customer-demo:1.0.0:v1:${String(delivered)}` }
       : { meetings: [], next_cursor: request.cursor },
   };
   return { source, release: (count: number) => { released += count; } };
@@ -271,8 +271,6 @@ it("sets up, connects, links, approves, reconnects and restarts Slack through Na
     state_directory: state, host: "127.0.0.1", port: await availablePort(), authority_url: AUTHORITY_URL, oidc: OIDC,
     client_authentication: { method: "none" }, pkce_key_file: credentials.pkce_sealing_key_reference.slice("file:".length),
     slack_nango: { base_url: NANGO_URL, secret_key: NANGO_KEY, integration_key: "slack" },
-    granola_credential_file: privateFile(join(root, "granola.key"), `grn_${"a".repeat(32)}`),
-    granola_owner_email_file: privateFile(join(root, "granola-owner-email"), OWNER_EMAIL),
     openrouter_credential_file: privateFile(join(root, "llm.key"), "llm-private-credential-material-000000"),
     worker_interval_ms: 10, on_worker_error: (error) => errors.push(error),
   };
@@ -347,17 +345,20 @@ it("sets up, connects, links, approves, reconnects and restarts Slack through Na
 
     // Finalize: provider credentials are admitted and the Authority restarts with active processing.
     await runtime.close();
-    const admitted = await admitGranolaMeetingSource({ state_directory: state, source_instance_id: "proof-granola",
-      granola_credential_reference: `file:${config.granola_credential_file}`, granola_owner_email_reference: `file:${config.granola_owner_email_file}`,
-      processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({ instance_id: "proof-llm", credential_reference: `file:${config.openrouter_credential_file}` }),
-      create_granola_record_owner_client: () => ({ listNotes: async () => ({ notes: [{ id: "preflight", owner: { email: OWNER_EMAIL } }], hasMore: false, cursor: null }) }),
-      now: () => NOW });
-    const meetings = meetingSource({ kind: "meeting-source", adapter_id: "granola", instance_id: admitted.source.instance_id, version: admitted.source.version });
+    const processorCommitment = createOpenRouterDecisionProcessorAdmissionCommitmentV1({ instance_id: "proof-llm", credential_reference: `file:${config.openrouter_credential_file}` });
+    const admissionDb = openAuthorityDatabase(join(state, "authority.sqlite"), { fileMustExist: true });
+    try { admissionDb.prepare(`INSERT INTO authority_live_source_admission_v2 (singleton, organization_id, principal_id, membership_id, membership_type, source_adapter_id, source_adapter_version, source_adapter_instance_id, normalizer_version, source_custodian_sha256, source_custodian_assurance, source_custodian_observed_at, source_credential_reference_sha256, initial_cursor, cutoff_at, processor_adapter_id, processor_adapter_version, processor_instance_id, processor_configuration_sha256, processor_credential_reference_sha256, semantic_input_sha256, admitted_at) VALUES (1, ?, ?, ?, 'owner', ?, ?, ?, ?, ?, 'synthetic_fixture_owner', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      initialized.organization_id, initialized.owner_principal_id, initialized.owner_membership_id, syntheticDemoMeetingSourceIdentityV1.adapter_id, syntheticDemoMeetingSourceIdentityV1.version, syntheticDemoMeetingSourceIdentityV1.instance_id, syntheticDemoMeetingSourceIdentityV1.version, canonicalSha256({ owner: OWNER_EMAIL }), NOW, canonicalSha256({ fixture: "slack-proof" }), SYNTHETIC_DEMO_INITIAL_CURSOR_V1, NOW, processorCommitment.adapter_id, processorCommitment.version, processorCommitment.instance_id, processorCommitment.configuration_sha256, processorCommitment.credential_reference_sha256, canonicalSha256({ fixture: "slack-proof-admission" }), NOW); } finally { admissionDb.close(); }
+    const admitted = { source: syntheticDemoMeetingSourceIdentityV1, processor: processorCommitment };
+    const meetings = meetingSource({ kind: "meeting-source", adapter_id: admitted.source.adapter_id, instance_id: admitted.source.instance_id, version: admitted.source.version });
     // Search enrichment would call OpenRouter; it answers with no related decisions instead.
     const answer_composition_generation = { structured_output: { generate: async () => ({ relationships: [] }) },
       generation: { generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
         answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } };
-    const active = async () => openOrganizationAuthorityService({ ...config, port: await availablePort() }, { api: { oidc_provider: oidcProvider, answer_composition_generation },
+    const active = async () => openOrganizationAuthorityService({ ...config, port: await availablePort(), synthetic_meeting_source_bundle: {
+      source_cursor_policy: { source_adapter_id: syntheticDemoMeetingSourceIdentityV1.adapter_id, assert_live_cursor(cursor) { expect(cursor).toMatch(/^synthetic-demo-source:customer-demo:1\.0\.0:v1:[0-9]+$/); } },
+      assert_admission_commitments(commitments) { expect(commitments.source.adapter_id).toBe(syntheticDemoMeetingSourceIdentityV1.adapter_id); }, create_source() { return meetings.source; },
+    } }, { api: { oidc_provider: oidcProvider, answer_composition_generation },
       processing_adapter_overrides: { source: meetings.source, processor: decisionProcessor({ kind: "decision-processor", adapter_id: "llm",
         instance_id: admitted.processor.instance_id, version: admitted.processor.version }) } });
     runtime = await active();

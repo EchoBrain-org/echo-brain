@@ -1,7 +1,7 @@
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
-import { validateStagingConnectorRehearsalProfileV2 } from './staging-connector-rehearsal-protocol.js';
+import { validateStagingConnectorRehearsalProfileV3 } from './staging-connector-rehearsal-protocol.js';
 
 const STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE = 'staging-connector-rehearsal.json';
 
@@ -35,7 +35,7 @@ export function readStagingConnectorRehearsalSelection(input: StagingConnectorRe
     const after = fstatSync(file);
     if (length !== state.size || length > 8192 || state.size !== after.size || state.mtimeMs !== after.mtimeMs ||
         state.ctimeMs !== after.ctimeMs) throw new Error('Staging connector rehearsal profile changed while reading');
-    const profile = validateStagingConnectorRehearsalProfileV2(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length))));
+    const profile = validateStagingConnectorRehearsalProfileV3(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length))));
     return Object.freeze({ profile, release_id, authority_host });
   } finally { closeSync(file); }
 }

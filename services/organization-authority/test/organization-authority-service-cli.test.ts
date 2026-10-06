@@ -48,8 +48,6 @@ vi.mock("../src/composition/organization-authority-setup-cli.js", () => ({
     authority_url: runtimeState.authority_url,
     oidc_config_path: "/private/oidc.json",
     pkce_key_file: "/private/pkce.key",
-    granola_credential_file: "/private/granola.credential",
-    granola_owner_email_file: "/private/granola-owner-email",
     llm_credential_file: "/private/llm.credential",
     owner_email: "founder@example.com",
   }),
@@ -243,10 +241,9 @@ function stagingProfileDirectory(): string {
   mkdirSync(join(root, "private"));
   const path = join(root, "private", "staging-connector-rehearsal.json");
   writeFileSync(path, JSON.stringify({
-    schema_version: 2, kind: "echo-staging-connector-rehearsal-profile-v2",
-    capture_policy: "initial-owner-granola-retained-jira-pointer-slack-pointer-v2",
+    schema_version: 3, kind: "echo-staging-connector-rehearsal-profile-v3",
+    read_policy: "initial-owner-jira-pointer-v3",
     jira: { cloud_id: "11111111-1111-4111-8111-111111111111", integration_key: "jira", project: "ECHO" },
-    slack: { channel_id: "C01234567" },
   }), { mode: 0o600 });
   runtimeState.authority_url = "https://authority-staging.echobrain.org";
   process.env.ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE = path;

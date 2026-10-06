@@ -61,7 +61,6 @@ function matchingResponse(response, request) {
   if (response.release_id !== request.release_id || response.profile_sha256 !== request.profile_sha256 ||
       response.action !== request.action ||
       (request.action !== "status" && response.tool !== request.tool)) fail();
-  if (request.action === "capture" && response.receipt.counts.captured > request.limit) fail();
   return response;
 }
 
@@ -83,14 +82,15 @@ async function dependencies() {
 export async function runStagingConnectorRehearsal(input, options = {}) {
   try {
     if (input === null || typeof input !== "object") fail();
-    if (!["status", "capture", "verify-read"].includes(input.action)) fail();
+    if (!["status", "verify-read"].includes(input.action)) fail();
+    const allowed = new Set(["action", "release_id", "profile_path", "person_home", ...(input.action === "verify-read" ? ["tool"] : [])]);
+    if (Object.keys(input).some(key => !allowed.has(key))) fail();
     const { contract, federation, client, store, authority } = await dependencies();
-    const profile = contract.validateStagingConnectorRehearsalProfileV2(profileFile(input.profile_path));
-    const binding = { schema_version: 2, release_id: input.release_id, profile_sha256: federation.canonicalSha256(profile) };
-    const request = contract.validateStagingConnectorRehearsalRequestV2(
-      input.action === "status" ? { ...binding, action: "status" } : input.action === "verify-read"
-        ? { ...binding, action: "verify-read", tool: input.tool }
-        : { ...binding, action: "capture", tool: input.tool, limit: input.limit },
+    const profile = contract.validateStagingConnectorRehearsalProfileV3(profileFile(input.profile_path));
+    const binding = { schema_version: 3, release_id: input.release_id, profile_sha256: federation.canonicalSha256(profile) };
+    const request = contract.validateStagingConnectorRehearsalRequestV3(
+      input.action === "status" ? { ...binding, action: "status" }
+        : { ...binding, action: "verify-read", tool: input.tool },
     );
     const personHome = absolutePath(input.person_home ?? homedir(), "person home");
     const fetchImplementation = options.fetch ?? globalThis.fetch;
@@ -107,8 +107,8 @@ export async function runStagingConnectorRehearsal(input, options = {}) {
       return session.transport.json({
         path: contract.STAGING_CONNECTOR_REHEARSAL_PATH_V1,
         body: request,
-        validate_request: contract.validateStagingConnectorRehearsalRequestV2,
-        validate_response: contract.validateStagingConnectorRehearsalResponseV2,
+        validate_request: contract.validateStagingConnectorRehearsalRequestV3,
+        validate_response: contract.validateStagingConnectorRehearsalResponseV3,
         maximum_response_bytes: 64 * 1024,
         timeout_ms: 75_000,
       });
@@ -122,21 +122,17 @@ export async function runStagingConnectorRehearsal(input, options = {}) {
 }
 
 function usage() {
-  return "usage: node tools/staging-connector-rehearsal.mjs <status|capture|verify-read> --release-id <clean-v1-release> --profile <absolute-local-profile-json> [--tool <granola|jira> [--limit <1..5>]]; capture accepts granola only; verify-read accepts jira with no limit";
+  return "usage: node tools/staging-connector-rehearsal.mjs <status|verify-read> --release-id <clean-v1-release> --profile <absolute-local-profile-json> [--tool jira]; verify-read accepts jira with no limit";
 }
 
 function parseCli(argv) {
   const action = argv[0];
-  const expected = action === "status" ? 5 : action === "capture" ? 9 : action === "verify-read" ? 7 : 0;
+  const expected = action === "status" ? 5 : action === "verify-read" ? 7 : 0;
   if (argv.length !== expected || argv[1] !== "--release-id" || argv[3] !== "--profile") fail(usage());
   const base = { action, release_id: argv[2], profile_path: absolutePath(argv[4], "profile") };
   if (action === "status") return Object.freeze(base);
-  if (action === "verify-read") {
-    if (argv[5] !== "--tool" || argv[6] !== "jira") fail(usage());
-    return Object.freeze({ ...base, tool: argv[6] });
-  }
-  if (argv[5] !== "--tool" || argv[7] !== "--limit" || argv[6] !== "granola" || !/^[1-5]$/.test(argv[8])) fail(usage());
-  return Object.freeze({ ...base, tool: argv[6], limit: Number(argv[8]) });
+  if (argv[5] !== "--tool" || argv[6] !== "jira") fail(usage());
+  return Object.freeze({ ...base, tool: argv[6] });
 }
 
 export async function main(argv = process.argv.slice(2)) {

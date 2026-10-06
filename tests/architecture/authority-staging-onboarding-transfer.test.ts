@@ -31,7 +31,6 @@ const INPUT_FILES = [
   "oidc-config.json",
   "oidc-client-secret",
   "nango-secret-key",
-  "granola-credential",
   "llm-credential",
 ];
 const REUSABLE_INPUT_FILES = [
@@ -394,7 +393,7 @@ describe("Authority staging onboarding input preflight", () => {
     const archive = privateDirectory("echo-authority-onboarding-archive-");
     const meetings = stagingSyntheticMeetingsDirectory();
     for (const name of INPUT_FILES) truncateSync(join(source, name), 6 * 1024 * 1024);
-    const totalBytes = 48 * 1024 * 1024 + STAGING_SYNTHETIC_MEETING_FILES
+    const totalBytes = 42 * 1024 * 1024 + STAGING_SYNTHETIC_MEETING_FILES
       .reduce((total, name) => total + readFileSync(join(meetings, name)).length, 0);
 
     const report = preflightOnboardingInput(privateConfig(source, archive, meetings));
@@ -433,7 +432,6 @@ describe("Authority staging onboarding input preflight", () => {
     // a credential never obtained, a file created empty, and one left readable.
     rmSync(join(source, "nango-secret-key"));
     writeFileSync(join(source, "llm-credential"), "", { mode: 0o600 });
-    chmodSync(join(source, "granola-credential"), 0o644);
 
     const report = preflightOnboardingInput(privateConfig(source, archive));
 
@@ -444,7 +442,6 @@ describe("Authority staging onboarding input preflight", () => {
     );
     expect(byName.get("nango-secret-key")).toBe("missing");
     expect(byName.get("llm-credential")).toBe("empty");
-    expect(byName.get("granola-credential")).toBe("not_private_regular");
     expect(byName.get("release.json")).toBe("ready");
     expect(report.next_action).toContain("nango-secret-key");
     expect(report.next_action).toContain("llm-credential");
@@ -484,10 +481,10 @@ describe("Authority staging onboarding input preflight", () => {
 
     expect(report).toMatchObject({
       ready: false,
-      total_bytes: 48 * 1024 * 1024,
+      total_bytes: 42 * 1024 * 1024,
       total_bytes_limit: 40 * 1024 * 1024,
-      bytes_over_limit: 8 * 1024 * 1024,
-      next_action: "reduce total required input bytes by at least 8388608, to at most 41943040, then rerun preflight",
+      bytes_over_limit: 2 * 1024 * 1024,
+      next_action: "reduce total required input bytes by at least 2097152, to at most 41943040, then rerun preflight",
     });
     expect(report.required_files.every((file) => file.state === "ready")).toBe(true);
   });
@@ -664,8 +661,8 @@ describe("Authority staging onboarding transfer", () => {
     expect(joined).toContain("member.issym() or member.islnk()");
     expect(joined).toContain("maximum_total_bytes");
     expect(joined).toContain('"nango-secret-key"');
-    expect(joined).toContain("oidc-client-secret nango-secret-key granola-credential llm-credential; do");
-    expect(joined).toContain('tr -d " ")" = 8');
+    expect(joined).toContain("oidc-client-secret nango-secret-key llm-credential; do");
+    expect(joined).toContain('tr -d " ")" = 7');
     expect(joined).not.toContain("slack");
     expect(joined).toContain("doctor --input-dir \"$input\" >/dev/null 2>&1");
     expect(joined).toContain("prepare --input-dir \"$input\" >/dev/null 2>&1");

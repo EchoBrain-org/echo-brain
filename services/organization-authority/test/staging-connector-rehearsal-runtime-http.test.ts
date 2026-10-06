@@ -8,53 +8,44 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { readPrivateAuthorityCredential } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
 import { runOrganizationAuthoritySetupCli } from '../src/composition/organization-authority-setup-cli.js';
 import { openStagingConnectorRehearsalService } from '../src/composition/staging-connector-rehearsal-runtime.js';
-import { STAGING_CONNECTOR_REHEARSAL_POLICY_V2 } from '../src/composition/staging-connector-rehearsal-protocol.js';
+import { STAGING_CONNECTOR_REHEARSAL_POLICY_V3 } from '../src/composition/staging-connector-rehearsal-protocol.js';
 import { readOrganizationAuthoritySetupManifest } from '../src/composition/organization-authority-setup-cli.js';
 import { readPersonOidcConfiguration } from '../src/composition/organization-authority-person-administration-cli.js';
 import { PERSON_ANSWER_PATH_V4 } from '@echo-brain/organization-api';
 import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
-import { FIXTURE_CLOUD, FIXTURE_EMAIL, configuration, connectSlackAndLinkOwner, port, prepare, privateFile, providerSeams, signInOwner } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
+import { FIXTURE_CLOUD, configuration, connectSlackAndLinkOwner, port, prepare, privateFile, providerSeams, signInOwner } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.unstubAllGlobals(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 function selection() {
   return { release_id: 'clean-v1-staging-connector', authority_host: 'authority-staging.echobrain.org', profile: {
-    schema_version: 2 as const, kind: 'echo-staging-connector-rehearsal-profile-v2' as const,
-    capture_policy: STAGING_CONNECTOR_REHEARSAL_POLICY_V2 as typeof STAGING_CONNECTOR_REHEARSAL_POLICY_V2,
+    schema_version: 3 as const, kind: 'echo-staging-connector-rehearsal-profile-v3' as const,
+    read_policy: STAGING_CONNECTOR_REHEARSAL_POLICY_V3 as typeof STAGING_CONNECTOR_REHEARSAL_POLICY_V3,
     jira: { cloud_id: FIXTURE_CLOUD, integration_key: 'jira', project: 'ECHO' },
-    slack: { channel_id: 'C01234567' },
   } };
 }
 
-it('retains Granola, refuses tool capture, and reuses the owner Jira grant for live Ask across restart', async () => {
+it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for live Ask across restart', async () => {
   const root = join(realpathSync(tmpdir()), `echo-staging-connector-${randomUUID()}`); roots.push(root);
   prepare(root);
   const config = configuration(root);
   privateFile(config.oidc.config_file, JSON.stringify({ issuer: 'https://issuer.example.test', client_id: 'connector-rehearsal-client', redirect_uri: `${STAGING_AUTHORITY_ORIGIN_V1}/v2/session/oidc/callback`, tenant: { kind: 'issuer' }, id_token_algorithms: ['RS256'], client_authentication: 'none' }));
-  privateFile(config.nango.secret_key_file, 'synthetic-nango-key-0000000000000000'); privateFile(config.granola.credential_file, `grn_${'a'.repeat(32)}`); privateFile(config.granola.owner_email_file, FIXTURE_EMAIL); privateFile(config.openrouter.credential_file, 'synthetic-openrouter-key-000000000000');
+  privateFile(config.nango.secret_key_file, 'synthetic-nango-key-0000000000000000'); privateFile(config.openrouter.credential_file, 'synthetic-openrouter-key-000000000000');
   const stateDirectory = join(root, 'state');
   expect(await runOrganizationAuthoritySetupCli(['bootstrap', '--state-dir', stateDirectory, '--organization-name', config.organization_name, '--owner-display-name', config.owner_name, '--owner-email', config.owner_email, '--authority-url', STAGING_AUTHORITY_ORIGIN_V1, '--oidc-config', config.oidc.config_file], { stdout: () => {}, stderr: () => {} })).toBe(0);
-  expect(await runOrganizationAuthoritySetupCli(['credentials-install', '--state-dir', stateDirectory, '--granola-credential-file', config.granola.credential_file, '--granola-owner-email-file', config.granola.owner_email_file, '--llm-credential-file', config.openrouter.credential_file], { stdout: () => {}, stderr: () => {} })).toBe(0);
+  expect(await runOrganizationAuthoritySetupCli(['credentials-install', '--state-dir', stateDirectory, '--llm-credential-file', config.openrouter.credential_file], { stdout: () => {}, stderr: () => {} })).toBe(0);
   const manifest = readOrganizationAuthoritySetupManifest(join(root, 'state'));
   const oidc = readPersonOidcConfiguration(config.oidc.config_file);
   const seams = providerSeams();
   const originalFetch = globalThis.fetch;
   const slackReads: string[] = [];
-  let granolaVisible = false;
   let modelCalls = 0;
   let modelRequests = 0;
-  const granolaTimestamp = new Date(Date.now() + 60_000).toISOString();
-  const granolaNote = { id: 'fixture-note', object: 'note', title: 'Staging retained capture', created_at: granolaTimestamp, updated_at: granolaTimestamp, summary_markdown: '## Decision\nRetain this synthetic meeting.', owner: { name: 'Founder', email: 'founder@example.test' }, attendees: [{ id: 'owner', email: 'founder@example.test' }], calendar_event: { start: { dateTime: granolaTimestamp } }, web_url: 'https://app.granola.ai/notes/fixture-note', transcript: [{ text: 'This is the retained synthetic transcript.', speaker: 'Founder' }] };
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
-    if (url.origin === 'https://public-api.granola.ai') {
-      if (url.pathname === '/v1/notes') return Response.json({ notes: granolaVisible ? [{ id: granolaNote.id, created_at: granolaNote.created_at, updated_at: granolaNote.updated_at, owner: granolaNote.owner }] : [], hasMore: false, cursor: null });
-      if (url.pathname === `/v1/notes/${granolaNote.id}`) return Response.json(granolaNote);
-      throw new Error(`unexpected Granola endpoint ${url.pathname}`);
-    }
     if (url.origin === 'https://slack.com') {
       // The bot only delivers. Nothing here may read Slack.
       slackReads.push(url.pathname);
@@ -86,7 +77,7 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
     oidc: oidc.configuration, client_authentication: { method: 'none' }, pkce_key_file: manifest.pkce_key_file,
     slack_nango: { secret_key: readPrivateAuthorityCredential(`file:${config.nango.secret_key_file}`), integration_key: 'slack' },
     ...(jiraAskEnabled ? { jira_person_live: { enabled: true as const, cloud_id: FIXTURE_CLOUD, integration_id: 'jira', nango_authorization: () => 'synthetic-nango-key-0000000000000000' } } : {}),
-    granola_credential_file: manifest.granola_credential_file, granola_owner_email_file: manifest.granola_owner_email_file, openrouter_credential_file: manifest.llm_credential_file,
+    openrouter_credential_file: manifest.llm_credential_file,
   }, selected, { api: { oidc_provider: seams.oidc_provider,
     answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } },
   }, slack: seams.slack, jira: seams.jira_person_live_seams });
@@ -97,8 +88,7 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
     const response = await fetch(`http://127.0.0.1:${runtime.address.port}${path}`, { method: 'POST', headers: { ...(token === '' ? {} : { authorization: `Bearer ${token}` }), 'content-type': 'application/json' }, body: JSON.stringify(body) });
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   };
-  const capture = (tool: 'granola' | 'jira' | 'slack') => post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool, limit: 1 });
-  const verifyRead = (tool: 'jira') => post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool });
+  const verifyRead = (tool: 'jira') => post('/v1/staging/connector-rehearsal', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool });
   try {
     owner = await signInOwner(`http://127.0.0.1:${runtime.address.port}`, seams, manifest.invitation_path);
     const beforeUnconnected = seams.jiraFetch.mock.calls.length;
@@ -110,22 +100,16 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
     const attempt = connect.body.attempt as string; jiraAttempt = attempt;
     expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
     const before = seams.jiraFetch.mock.calls.length;
-    expect((await post('/v1/staging/connector-rehearsal', { schema_version: 1, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'jira', limit: 1 })).status).toBe(400);
-    expect((await post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: 'clean-v1-wrong-binding', profile_sha256, action: 'capture', tool: 'granola', limit: 1 })).status).toBe(503);
+    expect((await post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'granola', limit: 1 })).status).toBe(400);
     expect(seams.jiraFetch).toHaveBeenCalledTimes(before);
-    expect((await post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'jira', limit: 1 }, '')).status).toBe(401);
     // A token from before the delivery-only manifest may still hold the two retired channel scopes.
     await connectSlackAndLinkOwner(post, seams, ['channels:history', 'channels:read', 'chat:write', 'im:history', 'im:write', 'users:read']);
   } finally { await runtime.close(); }
-  granolaVisible = true;
   const finalizeErrors: string[] = []; const finalized = await runOrganizationAuthoritySetupCli(['finalize', '--state-dir', stateDirectory], { stdout: () => {}, stderr: value => finalizeErrors.push(value) }); expect(finalized, finalizeErrors.join('')).toBe(0);
-  granolaVisible = false;
   runtime = await open();
   try {
     expect(runtime.processing).toBe('active');
     expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: jiraAttempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
-    const beforeCapture = new Database(join(manifest.state_directory, 'authority.sqlite'), { readonly: true });
-    const cursorBefore = (beforeCapture.prepare('SELECT cursor AS source_cursor FROM authority_live_source_progress_v2 WHERE singleton=1').get() as { source_cursor: string }).source_cursor; beforeCapture.close();
     const custodyCounts = () => {
       const database = new Database(join(manifest.state_directory, 'authority.sqlite'), { readonly: true });
       try { return ['authority_sources_v1', 'authority_source_revisions_v1', 'authority_source_contents_v1', 'authority_source_representations_v1']
@@ -158,35 +142,18 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
     expect(modelCalls).toBe(0);
     expect(modelRequests).toBe(modelRequestsBefore);
     // Slack has no verify-read: the bot never reads, and person reads are not built yet.
-    expect((await post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'slack' })).status).toBe(400);
+    expect((await post('/v1/staging/connector-rehearsal', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'slack' })).status).toBe(400);
     const jiraBeforeMismatch = seams.jiraFetch.mock.calls.length;
     for (const mismatch of [{ release_id: 'clean-v1-other-release' }, { profile_sha256: canonicalSha256('other') }]) {
-      expect((await post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'jira', ...mismatch })).status).toBe(503);
+      expect((await post('/v1/staging/connector-rehearsal', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'jira', ...mismatch })).status).toBe(503);
     }
     expect(seams.jiraFetch).toHaveBeenCalledTimes(jiraBeforeMismatch);
     expect(slackReads).toEqual([]);
-    granolaVisible = true;
-    expect(await capture('granola')).toMatchObject({ status: 200, body: { kind: 'echo-staging-connector-rehearsal-receipt-v2', qualified: false, tool: 'granola', receipt: { counts: { captured: 1, admitted: 1, request_only: 0 } } } });
-    expect(await capture('granola')).toMatchObject({ status: 200, body: { receipt: { counts: { captured: 1, admitted: 0, duplicate: 1 } } } });
-    const jiraBeforeRejected = seams.jiraFetch.mock.calls.length;
-    const slackBeforeRejected = slackReads.length;
-    const custodyBeforeRejected = custodyCounts();
-    for (const tool of ['jira', 'slack'] as const) expect((await capture(tool)).status).toBe(400);
-    expect(seams.jiraFetch).toHaveBeenCalledTimes(jiraBeforeRejected);
-    expect(slackReads).toHaveLength(slackBeforeRejected);
-    expect(custodyCounts()).toEqual(custodyBeforeRejected);
-    const retained = new Database(join(manifest.state_directory, 'authority.sqlite'), { readonly: true });
-    try {
-      expect((retained.prepare('SELECT cursor AS source_cursor FROM authority_live_source_progress_v2 WHERE singleton=1').get() as { source_cursor: string }).source_cursor).toBe(cursorBefore);
-      const sources = retained.prepare('SELECT adapter_id FROM authority_sources_v1').all();
-      expect(sources).toEqual([{ adapter_id: 'granola-context-capture' }]);
-    } finally { retained.close(); }
     // Local Ask remains available before Jira Ask is selected, without reading Jira.
     const jiraBeforeLocalAsk = seams.jiraFetch.mock.calls.length;
     expect(await post(PERSON_ANSWER_PATH_V4, { schema_version: 3, question: 'fixture' })).toMatchObject({ status: 200, body: { schema_version: 5, citations: [] } });
     expect(seams.jiraFetch).toHaveBeenCalledTimes(jiraBeforeLocalAsk);
-    granolaVisible = false;
-    await runtime.close();
+      await runtime.close();
     jiraAskEnabled = true;
     runtime = await open();
     // Enabling Ask reuses the existing consent in the same profile-bound sidecar.
@@ -242,7 +209,7 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
     expect(custodyCounts()).toEqual(custodyBeforeAsk);
     const control = new Database(join(manifest.state_directory, 'integrations.sqlite'));
     try { control.prepare("UPDATE organization_external_human_link_current SET current_status='revoked'").run(); } finally { control.close(); }
-    expect((await capture('slack')).status).toBe(400);
+    expect((await post('/v1/staging/connector-rehearsal', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'slack' })).status).toBe(400);
     expect(slackReads).toEqual([]);
   } finally { await runtime.close(); }
 });

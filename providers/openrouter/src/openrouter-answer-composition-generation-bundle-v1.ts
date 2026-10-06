@@ -20,12 +20,15 @@ export function createOpenRouterAnswerCompositionGenerationBundleV1(input: {
   return Object.freeze({
     load() {
       const credentialReference = `file:${input.credential_file}`;
-      const credential = readPrivateAuthorityCredential(credentialReference);
       return Object.freeze({
+        // Startup must not depend on an installed model credential. The API and
+        // non-model maintenance lanes are useful during bootstrap; resolve and
+        // validate the private file only when a request actually uses the model.
         structured_output: createOpenRouterStructuredGenerationAdapter({
           credential_ref: credentialReference,
-          credential_resolver: (reference) =>
-            reference === credentialReference ? credential : undefined,
+          credential_resolver: (reference) => reference === credentialReference
+            ? readPrivateAuthorityCredential(reference)
+            : undefined,
         }),
         generation: Object.freeze({
           generation_adapter_id:

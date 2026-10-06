@@ -29,7 +29,6 @@
     "@echo-brain/organization-protocol": "0.0.0-dev.0",
     "@echo-brain/organization-record": "0.0.0-dev.0",
     "@echo-brain/organization-retrieval": "0.0.0-dev.0",
-    "@echo-brain/provider-granola": "0.0.0-dev.0",
     "@echo-brain/provider-jira": "0.0.0-dev.0",
     "@echo-brain/provider-openrouter": "0.0.0-dev.0",
     "@echo-brain/provider-slack-server": "0.0.0-dev.0",
@@ -48,10 +47,5 @@
     "node": "22.22.1",
     "npm": "10.9.4"
   },
-  "exports": {
-    "./composition/admit-granola-meeting-source-cli-v1": {
-      "types": "./dist/composition/admit-granola-meeting-source-cli-v1.d.ts",
-      "import": "./dist/composition/admit-granola-meeting-source-cli-v1.js"
-    }
-  }
+  "exports": {}
 }
