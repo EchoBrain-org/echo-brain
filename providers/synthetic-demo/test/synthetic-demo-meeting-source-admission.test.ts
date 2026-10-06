@@ -23,6 +23,7 @@ import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organizati
 import { NodePersonSessionCrypto } from "../../../services/organization-authority/src/adapters/security/node-person-session-crypto.js";
 import { SystemAuthorityClock } from "../../../services/organization-authority/src/adapters/system/system-authority-clock.js";
 import { admitSyntheticDemoMeetingSource } from "../src/synthetic-demo-meeting-source-admission.js";
+import { admitStagingCanaryMeetingSourceV1, createStagingCanaryMeetingSourceBundleV1 } from "../src/staging-canary-meeting-source-v1.js";
 import {
   initializePersonSessionCredentials,
   issuePersonOnboardingInvitation,
@@ -158,6 +159,36 @@ afterEach(() => {
 });
 
 describe("synthetic-demo meeting-source admission", () => {
+  it("admits empty staging canary infrastructure only for a verified owner and preserves its immutable commitment", async () => {
+    const input = fixture();
+    const processor = {
+      adapter_id: "fixture-processor", instance_id: "fixture-runner", version: "fixture-v1",
+      configuration_sha256: canonicalSha256({ fixture: "configuration" }),
+      credential_reference_sha256: canonicalSha256({ fixture: "credential" }),
+      preflight: () => undefined,
+    };
+    const admission = {
+      state_directory: input.state_directory,
+      authority_url: "https://authority-staging.echobrain.org",
+      processor, now: () => ADMITTED_AT,
+    };
+    expect(() => createStagingCanaryMeetingSourceBundleV1("https://authority.example")).toThrow("only on the staging Authority");
+    await expect(admitStagingCanaryMeetingSourceV1({ ...admission, authority_url: "https://authority.example" })).rejects.toThrow("only on the staging Authority");
+    await expect(admitStagingCanaryMeetingSourceV1(admission)).rejects.toThrow("completed active initial-owner OIDC binding");
+    await completeInitialOwnerOnboarding(input);
+    await admitStagingCanaryMeetingSourceV1(admission);
+    await admitStagingCanaryMeetingSourceV1({ ...admission, now: () => { throw new Error("retry must not resample time"); } });
+    await expect(admitStagingCanaryMeetingSourceV1({ ...admission, processor: { ...processor, instance_id: "changed" } })).rejects.toThrow("semantic input conflicts");
+    const database = new Database(join(input.state_directory, "authority.sqlite"), { readonly: true, fileMustExist: true });
+    try {
+      expect(database.prepare("SELECT source_adapter_id,source_adapter_instance_id,initial_cursor,admitted_at FROM authority_live_source_admission_v2").all()).toEqual([{
+        source_adapter_id: "staging-canary-source", source_adapter_instance_id: "release-canary",
+        initial_cursor: "staging-canary-source:release-canary:v1:idle", admitted_at: ADMITTED_AT,
+      }]);
+      expect(database.prepare("SELECT count(*) AS count FROM authority_source_revisions_v1").get()).toEqual({ count: 0 });
+    } finally { database.close(); }
+  });
+
   it("admits the fixed corpus once and makes retries idempotent", async () => {
     const input = fixture();
     await completeInitialOwnerOnboarding(input);

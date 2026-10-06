@@ -86,9 +86,9 @@ export async function runStagingConnectorRehearsal(input, options = {}) {
     const allowed = new Set(["action", "release_id", "profile_path", "person_home", ...(input.action === "verify-read" ? ["tool"] : [])]);
     if (Object.keys(input).some(key => !allowed.has(key))) fail();
     const { contract, federation, client, store, authority } = await dependencies();
-    const profile = contract.validateStagingConnectorRehearsalProfileV2(profileFile(input.profile_path));
-    const binding = { schema_version: 2, release_id: input.release_id, profile_sha256: federation.canonicalSha256(profile) };
-    const request = contract.validateStagingConnectorRehearsalRequestV2(
+    const profile = contract.validateStagingConnectorRehearsalProfileV3(profileFile(input.profile_path));
+    const binding = { schema_version: 3, release_id: input.release_id, profile_sha256: federation.canonicalSha256(profile) };
+    const request = contract.validateStagingConnectorRehearsalRequestV3(
       input.action === "status" ? { ...binding, action: "status" }
         : { ...binding, action: "verify-read", tool: input.tool },
     );
@@ -107,8 +107,8 @@ export async function runStagingConnectorRehearsal(input, options = {}) {
       return session.transport.json({
         path: contract.STAGING_CONNECTOR_REHEARSAL_PATH_V1,
         body: request,
-        validate_request: contract.validateStagingConnectorRehearsalRequestV2,
-        validate_response: contract.validateStagingConnectorRehearsalResponseV2,
+        validate_request: contract.validateStagingConnectorRehearsalRequestV3,
+        validate_response: contract.validateStagingConnectorRehearsalResponseV3,
         maximum_response_bytes: 64 * 1024,
         timeout_ms: 75_000,
       });

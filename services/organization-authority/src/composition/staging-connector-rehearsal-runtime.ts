@@ -16,12 +16,12 @@ import { createHash } from 'node:crypto';
 import {
   STAGING_CONNECTOR_REHEARSAL_PATH_V1,
   STAGING_CONNECTOR_READ_REASONS_V1,
-  validateStagingConnectorRehearsalProfileV2,
-  validateStagingConnectorRehearsalRequestV2,
-  validateStagingConnectorRehearsalResponseV2,
-  type StagingConnectorRehearsalProfileV2,
-  type StagingConnectorRehearsalRequestV2,
-  type StagingConnectorRehearsalResponseV2,
+  validateStagingConnectorRehearsalProfileV3,
+  validateStagingConnectorRehearsalRequestV3,
+  validateStagingConnectorRehearsalResponseV3,
+  type StagingConnectorRehearsalProfileV3,
+  type StagingConnectorRehearsalRequestV3,
+  type StagingConnectorRehearsalResponseV3,
   type StagingConnectorReadPhaseV1,
   type StagingConnectorReadReasonV1,
   type StagingConnectorReadResultV1,
@@ -42,7 +42,7 @@ const SIDECAR_DATABASE = 'jira-person-connections.sqlite';
 const MAX_BINDING_BYTES = 8 * 1024;
 
 export interface StagingConnectorRehearsalSelection {
-  readonly profile: StagingConnectorRehearsalProfileV2;
+  readonly profile: StagingConnectorRehearsalProfileV3;
   readonly release_id: string;
   /** Exact public host that the staging candidate is configured to serve. */
   readonly authority_host: string;
@@ -176,19 +176,19 @@ function bearer(request: ProviderHttpRequestV1): string {
   if (value === undefined || !value.startsWith('Bearer ') || value.length === 7) unauthorized();
   return value.slice(7);
 }
-function requestBody(request: ProviderHttpRequestV1): StagingConnectorRehearsalRequestV2 {
+function requestBody(request: ProviderHttpRequestV1): StagingConnectorRehearsalRequestV3 {
   if (request.content_type === undefined || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.content_type)) invalid();
-  try { return validateStagingConnectorRehearsalRequestV2(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(request.raw_body))); }
+  try { return validateStagingConnectorRehearsalRequestV3(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(request.raw_body))); }
   catch { invalid(); }
 }
-function response(value: unknown): StagingConnectorRehearsalResponseV2 {
-  try { return validateStagingConnectorRehearsalResponseV2(value); }
+function response(value: unknown): StagingConnectorRehearsalResponseV3 {
+  try { return validateStagingConnectorRehearsalResponseV3(value); }
   catch { unavailable(); }
 }
-function requireSelection(config: OrganizationAuthorityServiceConfig, selection: StagingConnectorRehearsalSelection, dependencies: StagingConnectorRehearsalRuntimeDependenciesV1): { readonly profile: StagingConnectorRehearsalProfileV2; readonly profile_sha256: `sha256:${string}` } {
-  const profile = validateStagingConnectorRehearsalProfileV2(selection.profile);
+function requireSelection(config: OrganizationAuthorityServiceConfig, selection: StagingConnectorRehearsalSelection, dependencies: StagingConnectorRehearsalRuntimeDependenciesV1): { readonly profile: StagingConnectorRehearsalProfileV3; readonly profile_sha256: `sha256:${string}` } {
+  const profile = validateStagingConnectorRehearsalProfileV3(selection.profile);
   // Reuse the closed request validation for canonical release syntax.
-  validateStagingConnectorRehearsalRequestV2({ schema_version: 2, release_id: selection.release_id, profile_sha256: canonicalSha256(profile), action: 'status' });
+  validateStagingConnectorRehearsalRequestV3({ schema_version: 3, release_id: selection.release_id, profile_sha256: canonicalSha256(profile), action: 'status' });
   validateOrganizationAuthorityOrigin(config.authority_url);
   const authority = new URL(config.authority_url);
   if (config.authority_url !== STAGING_AUTHORITY_ORIGIN_V1 || selection.authority_host !== authority.host ||
@@ -310,7 +310,7 @@ export async function openStagingConnectorRehearsalService(
         if (runtime === undefined) unavailable();
         if (request.action === 'status') {
           requireOwner(access_token);
-          return Object.freeze({ status: 200 as const, body: response({ schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2', release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'status', processing: runtime?.processing ?? 'idle_until_finalize', granola_available: false, qualified: false }) });
+          return Object.freeze({ status: 200 as const, body: response({ schema_version: 3, kind: 'echo-staging-connector-rehearsal-receipt-v3', release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'status', processing: runtime?.processing ?? 'idle_until_finalize', qualified: false }) });
         }
         if (request.action === 'verify-read') {
           requireOwner(access_token);
@@ -318,11 +318,10 @@ export async function openStagingConnectorRehearsalService(
           captureInFlight = true;
           try {
             const result = await verifyRead(access_token, input.signal);
-            return Object.freeze({ status: 200 as const, body: response({ schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2', release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'verify-read', tool: request.tool, result, qualified: false }) });
+            return Object.freeze({ status: 200 as const, body: response({ schema_version: 3, kind: 'echo-staging-connector-rehearsal-receipt-v3', release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'verify-read', tool: request.tool, result, qualified: false }) });
           } finally { captureInFlight = false; }
         }
-        // The v2 parser remains for historical receipt verification, but organization Granola capture is retired.
-        unavailable();
+        invalid();
       },
     });
     const openJira = (sessions: Parameters<PersonHttpRuntimeFactory>[0], authorize_project?: PersonTicketProjectAuthorizationV1) => {

@@ -30,7 +30,7 @@ defines the supported operator and employee flow.
 - `meeting-source-bundle-v1.ts`, `decision-processor-bundle-v1.ts`, and
   `approval-workflow-bundle-v1.ts` in `packages/organization-processing/src/ports/`
   define provider-neutral composition seams.
-- `providers/granola/src/granola-meeting-source-bundle-v1.ts`,
+- `providers/synthetic-demo/src/synthetic-demo-meeting-source-bundle-v1.ts`,
   `providers/openrouter/src/openrouter-decision-processor-bundle-v1.ts`, and
   `providers/slack/server/src/private-approval/private-slack-approval-workflow-bundle-v1.ts`
   own the selected providers. Slack Person identity composition is under
@@ -127,8 +127,8 @@ npm run authority:staging-connector-rehearsal -- verify-read \
 The runner uses the installed Person session in the current user's home. That
 session must name the staging Authority and an active initial owner. The
 release ID and profile digest must match the running server. No token is accepted on the
-command line or printed. A failed capture is not retried automatically: a lost
-response may follow an already-committed observation.
+command line or printed. The diagnostic makes one bounded attempt and does not
+retry provider work automatically.
 
 `verify-read` is a separate, manually selected read proof: one inventory item,
 one exact open, and final provider and local authorization checks within 15
@@ -144,21 +144,19 @@ refuse. Refused receipts contain a finite phase/reason and the runner exits 1.
 before initiating a new consent flow, which can replace an existing connection.
 
 Receipts contain hashes and counts, never source contents, cursors, provider
-account IDs or credentials. A zero-item receipt is not a successful content
-capture. Only Granola supports capture; its receipts report retained admission
-or duplicate under the separate owner policy. Jira supports live
-`verify-read`. Jira and Slack capture requests are rejected before provider I/O, and no
-tool pointers, metadata or bodies enter Layer 1. Ordinary Granola polling owns the cursor and
-continues running. Slack approval tests use the existing synthetic release
-canary and human approval, with separate evidence. The diagnostic profile alone
-does not enable Ask. See the
+account IDs or credentials. The V3 protocol supports status and Jira
+`verify-read` only. All capture requests are rejected before provider I/O, and no
+tool pointers, metadata or bodies enter Layer 1. Organization Granola polling is
+removed. Slack approval tests use the existing synthetic release canary and
+human approval, with separate evidence. The diagnostic profile alone does not
+enable Ask. See the
 [scope and custody rules](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal).
 
-The V2 profile identifier and digest remain unchanged for compatibility with
-existing host and connection-sidecar bindings. Its historical pointer-policy
-name no longer enables tool capture. This code change requires an ordinary
-release update, not a profile rewrite or staging reset. It prevents new tool
-captures; it does not delete existing retained rows or deploy itself.
+The V3 profile removes the organization Granola policy and inert Slack channel.
+Older V1/V2 profiles and their bindings are refused. A selected older profile
+requires a fresh rehearsal under the operator playbook; this code does not
+migrate retained state or deploy itself. New V3 connection bindings remain
+stable across ordinary restarts with the same profile.
 
 The EC2 Compose overlay additionally selects `ECHO_STAGING_JIRA_ASK_V1=true`
 when the fixed connector profile is present. The CLI validates that profile and
@@ -335,7 +333,13 @@ echo-organization-authority-setup credentials-install \
 echo-organization-authority-setup finalize --state-dir /absolute/clean-state
 ```
 
-Finalization requires clean genesis, the organization Slack connection, the initial owner's OIDC binding and Slack identity link, and the LLM credential. With no synthetic fixture selector it admits no meeting source; intake starts idle.
+Finalization requires clean genesis, the organization Slack connection, the
+initial owner's OIDC binding and Slack identity link, and the LLM credential.
+Ordinary deployments admit no meeting source and start with intake idle. On the
+exact staging origin, finalization admits synthetic canary infrastructure with
+an empty source; only an explicit release-bound canary request supplies content.
+The existing four-meeting fixture selector instead admits its fixed synthetic
+corpus. Neither staging mode needs a Granola account or credential.
 
 ### 4. Restart the Authority service and run the canary
 
@@ -348,11 +352,17 @@ approved records, and reconciles the search index again.
 The deployment wrapper's `resume` output is the single source for staging's
 actor-scoped host, Slack, and release-matched Person-client actions. A staging
 terminal result accepts only the durable synthetic candidate tied to the
-running release; every other origin still requires newly admitted live-source
-progress. Both paths require an approved record, an exact-head search
-generation, and positive owner list and search reads after that head and
-generation. Status emits only boolean or enum evidence, never record, reader,
-query, or timestamp data.
+running release. Staging still requires an approved record, a search generation
+at the current record head, and positive owner list and search reads after that
+head and generation. A source-free ordinary deployment completes setup without
+meeting qualification; its status reports `not_required` and keeps absent
+canary evidence false. Status emits only boolean or enum evidence, never record,
+reader, query, or timestamp data.
+
+Setup manifests now use V3 and setup status uses V2. Earlier manifests require
+fresh setup; pinned Authority baseline SQL remains unchanged. The host release
+health reader accepts matched V1 or V2 status envelopes so rollback to an older
+accepted image can still be checked; this does not select a legacy connector.
 
 ## Person reads and permissions
 

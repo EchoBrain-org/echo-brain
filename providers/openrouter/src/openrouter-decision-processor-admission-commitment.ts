@@ -3,8 +3,8 @@ import type { DecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/organiz
 import { OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1, assertOpenRouterDecisionProcessorRuntimeCommitmentsV1, openRouterDecisionProcessorConfigurationSha256V1, openRouterDecisionProcessorCredentialReferenceSha256V1 } from "./openrouter-decision-processor-config-v1.js";
 
 /**
- * Current OpenRouter/LLM admission bundle. The Granola admission flow only
- * receives its generic commitment and preflight capability.
+ * Current OpenRouter/LLM admission bundle. Generic source admission receives
+ * only this commitment and its preflight capability.
  */
 export function createOpenRouterDecisionProcessorAdmissionCommitmentV1(input: {
   readonly instance_id: string;

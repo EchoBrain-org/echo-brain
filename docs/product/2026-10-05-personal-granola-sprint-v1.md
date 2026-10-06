@@ -82,7 +82,7 @@ Phase 1 passes when:
 
 Phase 1 code owners are `providers/granola`, Authority composition/setup,
 `tools`, and `deploy`. The cleanup worktree has the following removal/reuse
-inventory; this is implementation progress, not a completed qualification:
+inventory; live staging qualification remains separate:
 
 | Area | Disposition |
 | --- | --- |
@@ -95,9 +95,28 @@ inventory; this is implementation progress, not a completed qualification:
 
 The [setup](../../services/organization-authority/src/composition/organization-authority-setup-cli.ts)
 and [runtime composition](../../services/organization-authority/src/composition/organization-authority-composition-root.ts)
-are under correction and integration testing. Pinned Authority baseline SQL is
-unchanged. Full-suite verification and the final setup/rehearsal version
-inventory are required before phase 1 is complete.
+now leave ordinary meeting intake idle while Ask, personal updates, search
+maintenance and personal connectors remain available. On the exact staging
+origin, an explicit synthetic canary source preserves release approval proof
+without reading a provider. The four-meeting fixture lane remains separate.
+
+Version boundaries are explicit:
+
+- Setup manifest V3 omits Granola credentials; older manifests are refused.
+- Setup status V2 reports source mode and distinguishes ordinary source-free
+  completion from staging canary qualification. Missing evidence stays false.
+- Staging connector profile and request/receipt bodies use V3, with only status
+  and Jira read verification. V1/V2 profiles require a fresh rehearsal and
+  connection binding through the operator playbook.
+- The release health reader accepts matched V1/V2 setup-status envelopes only
+  to preserve rollback health checks for an older accepted image.
+- Pinned Authority baseline SQL is unchanged; there is no automatic migration.
+
+Local qualification covers source-free startup and personal connector reads,
+synthetic custody and approval, project audiences, transcript release,
+credential activation rollback, and retired-input refusal. The phase 1 pull
+request must record a passing full `npm run check` before phase 2 begins.
+No staging replacement, deployment, or real-provider intake is implied.
 
 ## Phase 2 Add personal Granola support
 

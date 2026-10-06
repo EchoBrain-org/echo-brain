@@ -18,7 +18,7 @@ const evidencePath = join(root, 'provider-evidence.json');
 const socket = join(root, 'canary.sock');
 const NOW = '2026-09-06T00:00:00.000Z';
 const ORIGIN = 'https://authority-staging.echobrain.org';
-const OWNER = 'founder@example.test';
+const OWNER = 'owner@example.test';
 const SLACK = { workspace: 'T012JOURNEY', app: 'A012JOURNEY', bot: 'B012JOURNEY', botUser: 'U012BOT', owner: 'U012OWNER', dm: 'D012JOURNEY' };
 const SCOPES = ['chat:write', 'im:history', 'im:write', 'users:read'];
 const OIDC = { issuer: 'https://issuer.example.test', client_id: 'journey-client', redirect_uri: `${ORIGIN}/v2/session/oidc/callback`, tenant: { kind: 'issuer' }, id_token_algorithms: ['RS256'] };
@@ -111,20 +111,19 @@ if (mode === 'init') {
   const initialized = bootstrapOrganizationAuthorityState({ state_directory: state, organization_display_name: 'Synthetic staging rehearsal', owner_display_name: 'Synthetic founder', created_at: NOW, creating_artifact_revision: 'staging-journey-fixture' });
   const owner = await seedOwner(initialized);
   const canary_project_id = await seedCanaryProject(initialized);
-  const granola = write(join(root, 'granola.fixture'), `grn_${'a'.repeat(32)}`);
-  const email = write(join(root, 'owner.fixture'), OWNER);
   const llm = write(join(root, 'llm.fixture'), 'synthetic-not-a-provider-credential-000000');
-  const { admitGranolaMeetingSource } = await import(pathToFileURL(join(REPO, 'providers/granola/dist/granola-meeting-source-admission.js')));
+  const meetings = join(REPO, 'demo/meetings');
+  const { admitSyntheticDemoMeetingSource } = await import(pathToFileURL(join(REPO, 'providers/synthetic-demo/dist/synthetic-demo-meeting-source-admission.js')));
   const { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } = await import(pathToFileURL(join(REPO, 'providers/openrouter/dist/openrouter-decision-processor-admission-commitment.js')));
-  const admitted = await admitGranolaMeetingSource({ state_directory: state, source_instance_id: 'founder-granola-v1', granola_credential_reference: `file:${granola}`, granola_owner_email_reference: `file:${email}`, processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({ instance_id: 'founder-llm-v1', credential_reference: `file:${llm}` }), create_granola_record_owner_client: () => ({ async listNotes() { return { notes: [{ id: 'fixture', owner: { email: OWNER } }], hasMore: false, cursor: null }; } }), now: () => NOW });
+  const admitted = await admitSyntheticDemoMeetingSource({ state_directory: state, meetings_directory: meetings, processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({ instance_id: 'founder-llm-v1', credential_reference: `file:${llm}` }), now: () => NOW });
   await seedSlack(initialized);
   const oidcPath = write(join(root, 'oidc.json'), { ...OIDC, client_authentication: 'none' });
-  const manifest = { schema_version: 2, kind: 'echo-clean-founder-onboarding-manifest-v2', state_directory: state, created_at: NOW, artifact_revision: 'staging-journey-fixture', authority_url: ORIGIN, oidc_config_path: oidcPath, pkce_key_file: owner.pkce_key_file, invitation_path: owner.invitationPath, authority_id: initialized.authority_id, organization_id: initialized.organization_id, state_lineage_id: initialized.state_lineage_id, owner_principal_id: initialized.owner_principal_id, owner_membership_id: initialized.owner_membership_id, granola_credential_file: granola, granola_owner_email_file: email, llm_credential_file: llm, setup_seed: Object.fromEntries(['authority_id', 'organization_id', 'state_lineage_id', 'owner_principal_id', 'owner_membership_id', 'control_plane_id'].map(key => [key, initialized[key]])), owner_email: OWNER, organization_name: 'Synthetic staging rehearsal', owner_display_name: 'Synthetic founder' };
+  const manifest = { schema_version: 3, kind: 'echo-clean-founder-onboarding-manifest-v3', state_directory: state, created_at: NOW, artifact_revision: 'staging-journey-fixture', authority_url: ORIGIN, oidc_config_path: oidcPath, pkce_key_file: owner.pkce_key_file, invitation_path: owner.invitationPath, authority_id: initialized.authority_id, organization_id: initialized.organization_id, state_lineage_id: initialized.state_lineage_id, owner_principal_id: initialized.owner_principal_id, owner_membership_id: initialized.owner_membership_id, llm_credential_file: llm, setup_seed: Object.fromEntries(['authority_id', 'organization_id', 'state_lineage_id', 'owner_principal_id', 'owner_membership_id', 'control_plane_id'].map(key => [key, initialized[key]])), owner_email: OWNER, organization_name: 'Synthetic staging rehearsal', owner_display_name: 'Synthetic founder' };
   mkdirSync(join(state, 'onboarding'), { recursive: true, mode: 0o700 });
   write(join(state, 'onboarding/clean-founder-v1.json'), manifest);
   // Explicit canary calls drive this test. Keep periodic provider retries out
   // of its fault-injection window even on a slow CI host.
-  write(metadataPath, { initialized, admitted, canary_project_id, config: { state_directory: state, host: '127.0.0.1', port: await port(), authority_url: ORIGIN, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: owner.pkce_key_file, slack_nango: { secret_key: 'synthetic-not-a-nango-secret-key-000000', integration_key: 'slack' }, granola_credential_file: granola, granola_owner_email_file: email, openrouter_credential_file: llm, worker_interval_ms: 3_600_000 } });
+  write(metadataPath, { initialized, admitted, canary_project_id, config: { state_directory: state, host: '127.0.0.1', port: await port(), authority_url: ORIGIN, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: owner.pkce_key_file, slack_nango: { secret_key: 'synthetic-not-a-nango-secret-key-000000', integration_key: 'slack' }, staging_synthetic_meetings_directory: meetings, staging_synthetic_owner_email: OWNER, openrouter_credential_file: llm, worker_interval_ms: 3_600_000 } });
   write(evidencePath, { extraction_calls: 0, source_pulls: 0, requests: [], messages: [], publish_failures_remaining: 0, worker_errors: [] });
 } else if (mode === 'serve') {
   const metadata = read(metadataPath);
@@ -172,7 +171,7 @@ if (mode === 'init') {
     const evidence = read(evidencePath); evidence.extraction_calls++; write(evidencePath, evidence);
     return { schema_version: 1, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity, generated_at: NOW, signals: [{ id: 'fixture-decision', kind: 'decision', status: 'decided', text: 'Rehearse the exact candidate and await human approval.', subject: 'staging', confidence: 1, evidence: [{ meeting_id: meeting.id, block_id: 'synthetic-decision' }] }] };
   } };
-  const source = { identity: { kind: 'meeting-source', adapter_id: 'granola', instance_id: metadata.admitted.source.instance_id, version: metadata.admitted.source.version }, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: NOW }), async pull(request) { const evidence = read(evidencePath); evidence.source_pulls++; write(evidencePath, evidence); return { meetings: [], next_cursor: request.cursor }; } };
+  const source = { identity: { kind: 'meeting-source', adapter_id: metadata.admitted.source.adapter_id, instance_id: metadata.admitted.source.instance_id, version: metadata.admitted.source.version }, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: NOW }), async pull(request) { const evidence = read(evidencePath); evidence.source_pulls++; write(evidencePath, evidence); return { meetings: [], next_cursor: request.cursor }; } };
   const { openOrganizationAuthorityService } = await product('composition/organization-authority-composition-root.js');
   const runtime = await openOrganizationAuthorityService({ ...metadata.config, on_worker_error(error) { const evidence = read(evidencePath); evidence.worker_errors.push(error.message); write(evidencePath, evidence); } }, { processing_adapter_overrides: { source, processor, private_approval_card_poster: new PrivateSlackApprovalCardPosterV1(async () => 'synthetic-provider-token', { fetchImpl }) } });
   assert.equal(runtime.processing, 'active');

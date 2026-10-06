@@ -30,7 +30,6 @@
     "@echo-brain/organization-processing",
     "@echo-brain/provider-openrouter",
     "@echo-brain/provider-slack-server",
-    "@echo-brain/provider-granola",
     "@echo-brain/provider-synthetic-demo",
     "@echo-brain/provider-jira",
     "@echo-brain/provider-confluence"
@@ -571,7 +570,6 @@
         "@echo-brain/organization-authority-kernel",
         "@echo-brain/organization-processing",
         "@echo-brain/provider-slack-server",
-        "@echo-brain/provider-granola",
         "@echo-brain/provider-jira",
         "@echo-brain/provider-synthetic-demo",
         "@echo-brain/provider-openrouter",

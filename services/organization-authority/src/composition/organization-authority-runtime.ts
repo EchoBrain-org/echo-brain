@@ -180,15 +180,6 @@ export interface OrganizationAuthorityRuntimeDependencies {
   };
 }
 
-class IdleOrganizationAuthorityProcessing
-  implements OrganizationAuthorityProcessingCycleV1 {
-  async recoverV4Appends(): Promise<void> {}
-  async pollAndStageAdmittedMeetings(): Promise<void> {}
-  async observeAndFinalizePendingApprovals(): Promise<void> {}
-  async appendFinalizedApprovalsToV4(): Promise<void> {}
-  async reconcileReadableSearchGeneration(): Promise<void> {}
-}
-
 interface ReadableSearchReconcilerV1 {
   reconcile(signal: AbortSignal): Promise<unknown>;
 }
@@ -197,23 +188,23 @@ class OrganizationAuthorityProcessingCoordinator
   implements OrganizationAuthorityProcessingCycleV1 {
   readonly hasFineGrainedSourceLifecycle = true;
   constructor(
-    private readonly source: AdmittedMeetingProcessingCycleV1,
-    private readonly approvals: ApprovalWorkflowProcessingV1,
+    private readonly source: AdmittedMeetingProcessingCycleV1 | undefined,
+    private readonly approvals: ApprovalWorkflowProcessingV1 | undefined,
     private readonly readableSearch: ReadableSearchReconcilerV1,
     private readonly updates: PersonUpdateProcessingBindingV1,
     private readonly journeyTelemetry?: MeetingApprovalJourneyTelemetryPortV1,
   ) {}
 
   setWorkerLifecycle(lifecycle: MeetingProcessingWorkerPhaseRunnerV1): void {
-    this.source.setWorkerLifecycle(lifecycle);
+    this.source?.setWorkerLifecycle(lifecycle);
   }
 
   recoverV4Appends(signal: AbortSignal): Promise<void> {
-    return this.approvals.recoverV4Appends(signal);
+    return this.approvals?.recoverV4Appends(signal) ?? Promise.resolve();
   }
 
   async pollAndStageAdmittedMeetings(signal: AbortSignal): Promise<void> {
-    try { await this.source.runOnce(signal); }
+    try { await this.source?.runOnce(signal); }
     catch (error) {
       if (signal.aborted || (!(error instanceof AdapterError) && !(error instanceof AuthorityMeetingProcessingRevokedError))) throw error;
     }
@@ -222,15 +213,15 @@ class OrganizationAuthorityProcessingCoordinator
   }
 
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void> {
-    return this.approvals.observeAndFinalizePendingApprovals(signal);
+    return this.approvals?.observeAndFinalizePendingApprovals(signal) ?? Promise.resolve();
   }
 
   appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void> {
-    return this.approvals.appendFinalizedApprovalsToV4(signal);
+    return this.approvals?.appendFinalizedApprovalsToV4(signal) ?? Promise.resolve();
   }
 
   reconcileApprovalPresentations(signal: AbortSignal): ReturnType<NonNullable<ApprovalWorkflowProcessingV1["reconcileApprovalPresentations"]>> {
-    return this.approvals.reconcileApprovalPresentations?.(signal) ?? Promise.resolve();
+    return this.approvals?.reconcileApprovalPresentations?.(signal) ?? Promise.resolve();
   }
 
   async reconcileReadableSearchGeneration(signal: AbortSignal): ReturnType<OrganizationAuthorityProcessingCycleV1["reconcileReadableSearchGeneration"]> {
@@ -275,9 +266,9 @@ class OrganizationAuthorityProcessingCoordinator
 
 /**
  * Provider-neutral Organization Authority runtime composition. Before source
- * admission, it exposes API routes and does no background work. An explicit source bundle supplies
- * the admitted source only after finalization; all remaining construction is
- * shared by every meeting provider.
+ * admission, API routes, Ask, personal updates and search maintenance remain
+ * available. An explicit source bundle supplies the admitted source after
+ * finalization; the remaining construction is shared by every meeting provider.
  */
 export async function openOrganizationAuthorityRuntime(
   config: OrganizationAuthorityRuntimeConfig,
@@ -320,18 +311,74 @@ export async function openOrganizationAuthorityRuntime(
       )
       .get() !== undefined;
   if (!sourceIsAdmitted) {
-    authority.close();
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api, worker_interval_ms: config.worker_interval_ms },
-      {
-        processing: new IdleOrganizationAuthorityProcessing(),
-        api: baseApiDependencies,
-        on_worker_error: config.on_worker_error,
-        on_worker_telemetry: config.on_worker_telemetry,
-        ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
-      },
+    const record = openOrganizationRecordDatabase(
+      join(config.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
     );
-    return { ...runtime, processing: "idle_until_finalize" };
+    try {
+      const signer = FileOrganizationAuthoritySigner.openExisting({
+        directory: join(config.state_directory, "keys"),
+        authority_id: lineage.root.authority_id,
+        organization_id: lineage.root.organization_id,
+      });
+      const answerGeneration =
+        dependencies.api?.answer_composition_generation ??
+        config.answer_composition_generation_bundle.load();
+      const relatedAtomProjector = relatedAtomProjectorBinding(answerGeneration);
+      const readableSearchContract = readableSearchGenerationContractV1({
+        related_atom_projector: relatedAtomProjector.profile,
+      });
+      const readableSearch = createReadableSearchGenerationReconcilerV1({
+        state_directory: config.state_directory,
+        root: lineage.root,
+        authority,
+        record,
+        signer,
+        policy_projectors: config.record_policy_fact_projectors,
+        record_input_codecs: config.record_input_codecs,
+        related_atom_projector: relatedAtomProjector,
+      });
+      const runtime = await startOrganizationAuthorityServiceLifecycle(
+        { api, worker_interval_ms: config.worker_interval_ms },
+        {
+          processing: new OrganizationAuthorityProcessingCoordinator(
+            undefined,
+            undefined,
+            readableSearch,
+            createPersonUpdateProcessingV1(
+              answerGeneration,
+              new SqlitePersonUpdateEnrichmentWorkV2(
+                authority,
+                new SqliteProjectUploadEnrichmentAuthorizationV1(authority),
+              ),
+            ),
+          ),
+          api: {
+            ...baseApiDependencies,
+            answer_composition_generation: answerGeneration,
+            readable_search_retrieval_contract_sha256:
+              readableSearchContract.retrieval_contract_sha256,
+          },
+          on_worker_error: config.on_worker_error,
+          on_worker_telemetry: config.on_worker_telemetry,
+          ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
+        },
+      );
+      return {
+        ...runtime,
+        // Meeting polling is idle, while Ask and source-independent maintenance
+        // remain active.
+        processing: "idle_until_finalize" as const,
+        close: async () => {
+          try { await runtime.close(); }
+          finally { record.close(); authority.close(); }
+        },
+      };
+    } catch (error) {
+      record.close();
+      authority.close();
+      throw error;
+    }
   }
   if (dependencies.active_processing !== undefined) {
     authority.close();

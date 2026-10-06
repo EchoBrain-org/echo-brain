@@ -119,8 +119,8 @@ function readyStatusDependencies(
     read_initial_owner_setup_status: () => ({
       founder_oidc_bound: true,
       founder_slack_link_active: true,
-      granola_credentials_valid: true,
-      granola_admission_present: true,
+      llm_credential_valid: true,
+      source_admission_present: true,
     }),
     read_setup_canary_evidence: () => ({
       source_progress_observed: complete(),
@@ -306,7 +306,7 @@ function installDurableCanaryFixture(
       state,
       manifest,
       { position: 1, record_sha256: recordSha256 },
-      sourceAdmitted && !options.pointer_uses_disabled_projector_contract,
+      !options.pointer_uses_disabled_projector_contract,
     ),
   );
   const authority = new Database(join(state, "authority.sqlite"));
@@ -1164,8 +1164,8 @@ describe("Organization Authority setup coordinator", () => {
         read_initial_owner_setup_status: () => ({
           founder_oidc_bound: true,
           founder_slack_link_active: true,
-          granola_credentials_valid: true,
-          granola_admission_present: false,
+          llm_credential_valid: true,
+          source_admission_present: false,
         }),
       },
     );
@@ -1204,8 +1204,8 @@ describe("Organization Authority setup coordinator", () => {
         read_initial_owner_setup_status: () => ({
           founder_oidc_bound: true,
           founder_slack_link_active: true,
-          granola_credentials_valid: true,
-          granola_admission_present: false,
+          llm_credential_valid: true,
+          source_admission_present: false,
         }),
       },
     );
@@ -1231,8 +1231,8 @@ describe("Organization Authority setup coordinator", () => {
           read_initial_owner_setup_status: () => ({
             founder_oidc_bound: true,
             founder_slack_link_active: true,
-            granola_credentials_valid: true,
-            granola_admission_present: false,
+            llm_credential_valid: true,
+            source_admission_present: false,
           }),
         },
       ),
@@ -1268,8 +1268,7 @@ describe("Organization Authority setup coordinator", () => {
           read_initial_owner_setup_status: () => ({
             founder_oidc_bound: true,
             founder_slack_link_active: true,
-            granola_credentials_valid: true,
-            granola_admission_present: false,
+            llm_credential_valid: true,
             source_mode: "staging_synthetic",
             source_admission_present: true,
           }),
@@ -1314,8 +1313,7 @@ describe("Organization Authority setup coordinator", () => {
       read_initial_owner_setup_status: () => ({
         founder_oidc_bound: true,
         founder_slack_link_active: true,
-        granola_credentials_valid: true,
-        granola_admission_present: false,
+        llm_credential_valid: true,
         source_admission_present: true,
         source_mode: "staging_synthetic",
       }),
@@ -1372,8 +1370,8 @@ describe("Organization Authority setup coordinator", () => {
         read_initial_owner_setup_status: () => ({
           founder_oidc_bound: false,
           founder_slack_link_active: false,
-          granola_credentials_valid: false,
-          granola_admission_present: false,
+          llm_credential_valid: false,
+          source_admission_present: false,
         }),
       },
     );
@@ -1408,8 +1406,8 @@ describe("Organization Authority setup coordinator", () => {
         read_initial_owner_setup_status: () => ({
           founder_oidc_bound: true,
           founder_slack_link_active: true,
-          granola_credentials_valid: true,
-          granola_admission_present: false,
+          llm_credential_valid: true,
+          source_admission_present: false,
         }),
       },
     );
@@ -1429,7 +1427,7 @@ describe("Organization Authority setup coordinator", () => {
       ...base,
       read_initial_owner_setup_status: () => ({
         founder_oidc_bound: true, founder_slack_link_active: true, llm_credential_valid: true,
-        granola_credentials_valid: false, granola_admission_present: false,
+        source_admission_present: false,
       }),
       read_setup_stage: () => CONNECTED_STAGE,
     };
@@ -1440,6 +1438,15 @@ describe("Organization Authority setup coordinator", () => {
     expect(order).toEqual([]);
     for (const line of stdout.trim().split("\n")) {
       expect(JSON.parse(line)).toMatchObject({ source_mode: "none", source_admission_present: false });
+    }
+    for (const command of ["status", "resume"]) {
+      stdout = "";
+      expect(await runOrganizationAuthoritySetupCli([command, "--state-dir", state], io, deps)).toBe(0);
+      expect(JSON.parse(stdout)).toMatchObject({
+        next_step: "complete", runtime_status: "ready_to_start", canary_status: "not_required",
+        source_admission_present: false, source_progress_observed: false,
+        approved_record_present: false, owner_layer1_read_after_head: false,
+      });
     }
   });
 
@@ -1453,8 +1460,8 @@ describe("Organization Authority setup coordinator", () => {
       read_initial_owner_setup_status: () => ({
         founder_oidc_bound: true,
         founder_slack_link_active: false,
-        granola_credentials_valid: false,
-        granola_admission_present: false,
+        llm_credential_valid: false,
+        source_admission_present: false,
       }),
     };
     let stdout = "";
@@ -1678,7 +1685,7 @@ describe("Organization Authority setup coordinator", () => {
   it.each([
     ["complete", {}, true, true, true, true, true],
     [
-      "expects the disabled projector contract before source admission",
+      "expects the active projector contract without source admission",
       { source_admitted: false },
       false,
       true,
@@ -1769,8 +1776,7 @@ describe("Organization Authority setup coordinator", () => {
         read_initial_owner_setup_status: () => ({
           founder_oidc_bound: true,
           founder_slack_link_active: true,
-          granola_credentials_valid: true,
-          granola_admission_present: false,
+          llm_credential_valid: true,
           source_mode: "staging_synthetic",
           source_admission_present: true,
         }),

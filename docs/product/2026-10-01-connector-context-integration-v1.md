@@ -40,20 +40,18 @@ provider may impose a lower bound. Returned cursors are caller-owned and are
 returned only after successful admission of the batch. Cancellation and identity
 drift prevent admission. A read grant never implies a retention grant.
 
-The Granola capture factory in
-the now-retired `provider-context-intakes-v1.ts`
-provides this library mapping; the Jira and Slack capture adapters were
-removed because tools are read live, never stored. The
-the now-retired organization Granola rehearsal capture
-constructs only Granola intake:
+The retired `provider-context-intakes-v1.ts` factory selected the Granola
+library mapping below. The organization acquisition path and Jira/Slack capture
+selection have since been removed; tools are read live. The following table
+records the original library representations:
 
 | Source  | Mapping and representation                                                                                                                                                                                                                                          | Authority disposition                                                                                                                            |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Granola | Reuses the one configured meeting adapter. Selected normalized summaries, notes and transcripts become a bounded exact snapshot. A source start time produces a meeting payload; otherwise a plain-text note payload. Participant refs remain opaque.               | Explicit retained policy with synchronous transaction fence, or request-only                                                                     |
 | Jira    | Uses the existing person-bound transport and fixed configured project. Preserves ticket key, status, labels, provider update time, optional priority and opaque assignee account reference. Body is omitted for a pointer.                                          | Request-only by default. An explicit Authority binding may retain pointers only through the shared SQLite admission fence; excerpts are refused. |
 
-Granola still uses its existing organization API credential directly. This
-integration does not add another setup, Nango sync or background poller. Jira
+The retired Granola path used an organization API credential directly. It added
+no second setup, Nango sync or background poller. The current Jira implementation
 reuses its transport and current-grant fence, with no new OAuth implementation.
 Jira date-only due dates are omitted rather than converted into invented UTC
 instants. Provider display names never create directory identities.
@@ -109,9 +107,9 @@ exists: the Slack bot only delivers approvals, and reading Slack for Ask will
 use each Person's own grant. Jira can be constrained to the configured project,
 including exact reads and final citation revalidation.
 
-These source tests do not activate new permissions on the current V2 staging
-profile. That profile still rejects generic live-reader injection and permits
-capture only for Granola. The separately invoked `verify-read` diagnostic
+These source tests do not activate new permissions on the current V3 staging
+profile. That profile rejects generic live-reader injection and all capture.
+The separately invoked `verify-read` diagnostic
 described below permits one transient, zero-model read, not a live Ask grant.
 A live cross-source qualification must be
 separately authorized for the exact release, owner, Jira project,
@@ -168,27 +166,18 @@ real-provider qualification remains the outstanding live proof:
   intake remains responsible for checking limits and current authorization
   before any durable admission; a receipt wrapper cannot undo prior writes.
 
-Granola HTTP JSON is now limited to 2 MiB while streaming, before parsing.
-Missing or misleading Content-Length cannot bypass that limit. Oversized inline
-transcripts use the existing paged fallback; each page is bounded and assembled
-transcripts are limited to 16 MiB. These are provider transport limits, separate
-from the selected context snapshot's 128 KiB limit. Oversized data is rejected,
-never silently truncated. Focused source tests cover cancellation and fallback;
-real provider qualification is still pending.
-
-Granola capture is a retained, initial-owner-scoped qualification observation
-under the shared capture foundation. It reads the current admitted cursor but
-does not advance it. The legacy processing cycle remains the single owner of
-meeting intake, approval publication and that cursor. There is no scheduler or
-automatic convergence.
+The retired organization Granola transport bounded streamed JSON and paged
+transcripts. Its cursor and fallback semantics are historical evidence, not a
+contract for personal MCP acquisition. The retained normalizer and context
+mapping have no HTTP client or source cursor. The personal sprint must verify
+its own authenticated transport, response bounds and update behavior.
 
 ## Staging connector rehearsal
 
-Under the current tools-are-read-live scope, capture is available only for
-Granola meetings and notes. Jira supports `verify-read` only; Jira and Slack
-capture requests are refused before provider I/O, and the Slack bot reads
-nothing. The capture-core work is
-parked, and the merged capture/derive foundations remain unused by this path.
+The rehearsal supports Jira `verify-read` only. Organization Granola capture
+and polling are retired by the personal Granola sprint. All capture requests
+are refused before provider I/O, and the Slack bot reads nothing. The merged
+capture/derive foundations remain available for explicit authorized intake.
 
 The selected live-test target is the existing staging Authority. One versioned
 opt-in profile reuses its HTTPS origin, Google sign-in and owner session. The
@@ -197,17 +186,14 @@ privately by the host wrapper at a fixed path, and selected only on the exact
 staging origin. It is fixed for the life of a rehearsal; another Jira project
 needs a fresh rehearsal.
 
-The closed, nonsecret profile has `schema_version: 2`, kind
-`echo-staging-connector-rehearsal-profile-v2`, capture policy
-`initial-owner-granola-retained-jira-pointer-slack-pointer-v2`, the fixed Jira
-`cloud_id`, `integration_key` and `project`, and one Slack `channel_id`. The
-historical policy identifier and the Slack `channel_id` are preserved solely
-for profile/sidecar digest compatibility; neither authorizes capture or a read,
-and the channel is never read. No profile rewrite or reset is needed for these
-removals. The profile accepts no credentials, arbitrary endpoints, message
-bodies or caller-selected owner. The earlier request-only V1 profile and its
-predecessor-anchored V2 rebind are retired: the wrapper refuses them at prepare,
-and the Authority and runner refuse them at startup.
+The closed, nonsecret profile has `schema_version: 3`, kind
+`echo-staging-connector-rehearsal-profile-v3`, read policy
+`initial-owner-jira-pointer-v3`, and the fixed Jira `cloud_id`, `integration_key`
+and `project`. It accepts no credentials, arbitrary endpoints, message bodies
+or caller-selected owner. V1/V2 profiles, the organization Granola policy and
+the inert Slack channel field are retired. The wrapper, Authority and runner
+refuse earlier profiles. A selected older profile needs a fresh rehearsal under
+the operator playbook; existing bindings are not reinterpreted in place.
 
 This is an explicit staging qualification selection, not a production startup
 profile or downstream read capability. It does not accept ADR-0026 or enable the
@@ -223,10 +209,7 @@ release ID and the exact nonsecret profile. The client verifies the staging
 session and uses the existing bounded Person transport; no bearer credential
 enters command arguments, host control, output or a test receipt. The server
 compares the expected release and profile digest and authenticates the exact
-initial owner. Each Granola capture pulls 1–5 items under the runtime's exclusive work
-lane, propagates cancellation, and releases only validated counts and hashes.
-The current-owner and source/grant checks apply around provider reads and
-durable admission. Concurrent capture requests are refused rather than queued.
+initial owner. The request has no capture action or meeting limit.
 
 The separate `verify-read` action explicitly authorizes a bounded, request-local
 diagnostic under that same owner and fixed profile. It checks the local connection
@@ -237,14 +220,13 @@ without pagination or retries. No body enters custody, an audit, a model or the
 receipt. The receipt contains only a source-coordinate hash, text hash and
 positive UTF-8 byte count up to 3 KiB, or an allowlisted refusal phase and reason.
 Jira's normalized issue text includes its key and summary, so this does not prove
-a nonempty description. Empty results refuse. This action preserves the V2
-profile/hash and existing connection bindings; it does not enable generic live-reader injection,
-search, Evidence Desk or Ask.
+a nonempty description. Empty results refuse. This action preserves the selected
+V3 profile and connection bindings; it does not enable generic live-reader
+injection, search, Evidence Desk or Ask.
 
-Granola uses the same admitted source object as ordinary meeting processing.
-Its separate owner-scoped capture policy permits retained snapshots; this test
-never moves the legacy meeting cursor. Ordinary polling remains the cursor
-owner, so an observation may legitimately contain zero items.
+The staging canary has its own admitted synthetic infrastructure. Its source
+returns no meetings and reads no provider. The existing explicit release-bound
+canary request exercises shared custody, extraction, approval and retrieval.
 
 Jira bindings come from verified connections: Jira uses the initial owner's
 existing connection and current grant. A working token or Nango tag does not
@@ -255,12 +237,10 @@ with request-only capture; the existing live reader handles verification.
 Previously retained staging rows are not purged by this code change.
 
 The `/v1/staging/connector-rehearsal` endpoint carries explicitly versioned
-request and response bodies. The outer receipt has schema version 2 and kind
-`echo-staging-connector-rehearsal-receipt-v2`; its nested generic capture
-receipt remains V1 and supports only Granola meeting/note captures. Successful
-captures report admission or duplicate, never
-request-only. All receipts remain `qualified: false` and omit provider content
-and cursors.
+request and response bodies. The outer receipt has schema version 3 and kind
+`echo-staging-connector-rehearsal-receipt-v3`. It carries status or a Jira read
+result; there is no nested capture receipt. All receipts remain
+`qualified: false` and omit provider content and cursors.
 
 Jira consent attempts and connection references live in a private rehearsal
 sidecar outside the canonical Authority databases. A marker binds that sidecar
@@ -276,7 +256,7 @@ The [service guide](../../services/organization-authority/README.md#staging-conn
 owns the commands. Source tests are not live qualification: the server image,
 matching Person client and reviewed host tooling must first be deployed through
 the existing operator lane. Every receipt remains `qualified: false`; successful
-captures are evidence for those observations, not blanket provider acceptance.
+read checks are evidence for those observations, not blanket provider acceptance.
 
 ### Retired Slack public-channel read capability
 
@@ -291,22 +271,16 @@ reinstalled from scratch; nothing uses them.
 
 ## Boundaries before activation
 
-The general production profile registers neither shared-capture source in a scheduler.
-The explicit staging profile mounts bounded Granola capture and explicitly
-requested zero-model tool read verification.
-The existing meeting approval path remains the production path; a later startup
-profile must select a single owner for each source cursor, rather than polling
-the same source through both paths. Jira live Ask requires the explicit
-ADR-0026 runtime selection described below. Slack bot
-approval history is not a personal content read grant.
+The general production profile registers no organization meeting source. The
+explicit staging profile mounts request-bound, zero-model Jira verification;
+synthetic approval qualification has separate canary infrastructure. The shared
+meeting processing and approval code remains available for personal intake.
+Jira live Ask requires the explicit ADR-0026 runtime selection described below.
+Slack bot approval history is not a personal content read grant.
 
-Malformed or oversized provider items fail the bounded pull without returning a
-cursor. Earlier committed captures can be replayed and deduplicate, but a
-permanently invalid item still requires intervention. This slice adds no retry
-loop, rejection ledger or skip policy. Durable rejection accounting and cursor
-progress past bad items must be designed before unattended ingestion. Granola's
-transport bounds limit memory use; they do not solve the existing bad-note
-retry problem.
+The personal Granola sprint must prove bounded discovery, deduplication,
+revocation, durable retries and progress past malformed items against the actual
+OAuth MCP contract before enabling automatic folder intake.
 
 Tool capture, change history, retained Slack snapshots and tool retention rules
 are outside the current Layer 1 scope. The existing tool capture adapters remain
@@ -320,7 +294,11 @@ connection. The EC2 overlay enables the switch only when that profile is present
 Project mapping and per-person Slack tokens remain separate work. The merged
 capture/derive foundations stay dormant.
 
-## Granola provider research, verified 2026-10-01
+## Historical Granola provider research, verified 2026-10-01
+
+The conclusions below record the earlier organization-key design. The personal
+Granola sprint supersedes that selection with OAuth MCP and selected-folder
+intake; public REST findings do not establish the new authenticated contract.
 
 The Granola connector research used public provider documentation and Nango's
 published source. No account connection, credential, authenticated API request

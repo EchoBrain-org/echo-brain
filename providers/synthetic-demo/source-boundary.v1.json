@@ -11,7 +11,8 @@
     "providers/synthetic-demo/src/source/synthetic-demo-meeting-source-v1.ts",
     "providers/synthetic-demo/src/synthetic-demo-pre-slack-evaluator-v1.ts",
     "providers/synthetic-demo/src/synthetic-demo-meeting-source-admission.ts",
-    "providers/synthetic-demo/src/synthetic-demo-admitted-meeting-source-cursor-policy-v1.ts"
+    "providers/synthetic-demo/src/synthetic-demo-admitted-meeting-source-cursor-policy-v1.ts",
+    "providers/synthetic-demo/src/staging-canary-meeting-source-v1.ts"
   ],
   "owned_source_paths": [
     "providers/synthetic-demo/src/**"

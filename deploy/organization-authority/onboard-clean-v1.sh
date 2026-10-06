@@ -508,28 +508,22 @@ if profile is None:
     print('false')
     print('disabled')
 else:
-    expected_profile = {'schema_version', 'kind', 'capture_policy', 'jira', 'slack'}
+    expected_profile = {'schema_version', 'kind', 'read_policy', 'jira'}
     if authority_host != 'authority-staging.echobrain.org' or not isinstance(profile, dict) or set(profile) != expected_profile:
         raise SystemExit(1)
-    if profile.get('schema_version') != 2 or profile.get('kind') != 'echo-staging-connector-rehearsal-profile-v2' or profile.get('capture_policy') != 'initial-owner-granola-retained-jira-pointer-slack-pointer-v2':
+    if profile.get('schema_version') != 3 or profile.get('kind') != 'echo-staging-connector-rehearsal-profile-v3' or profile.get('read_policy') != 'initial-owner-jira-pointer-v3':
         raise SystemExit(1)
     jira = profile.get('jira')
-    slack = profile.get('slack')
     if not isinstance(jira, dict) or set(jira) != {'cloud_id', 'integration_key', 'project'}:
-        raise SystemExit(1)
-    if not isinstance(slack, dict) or set(slack) != {'channel_id'}:
         raise SystemExit(1)
     cloud_id = jira.get('cloud_id')
     jira_integration = jira.get('integration_key')
     project = jira.get('project')
-    channel_id = slack.get('channel_id')
     if not isinstance(cloud_id, str) or not re.fullmatch(r'[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}', cloud_id):
         raise SystemExit(1)
     if not isinstance(jira_integration, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}', jira_integration):
         raise SystemExit(1)
     if not isinstance(project, str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{1,31}', project):
-        raise SystemExit(1)
-    if not isinstance(channel_id, str) or not re.fullmatch(r'C[A-Z0-9]{2,63}', channel_id):
         raise SystemExit(1)
     canonical = json.dumps(profile, sort_keys=True, separators=(',', ':'))
     print('true')

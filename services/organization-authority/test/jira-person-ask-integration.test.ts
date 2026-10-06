@@ -191,7 +191,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     telemetry.length = 0;
     const jiraCalls = jiraFetch.mock.calls.length;
     expect((await post('/v4/person/ask', { schema_version: 3, question: 'What are my tickets?', mine: true })).body).toMatchObject({
-      outcome: 'partial', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't complete the search. Please try again." })],
+      outcome: 'not_found', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't find this in the sources you can access." })],
     });
     expect(jiraFetch).toHaveBeenCalledTimes(jiraCalls);
     expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'out_of_scope' }) })]));
@@ -225,7 +225,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'revoked', external_subject_id: null })]));
     telemetry.length = 0;
     expect((await post('/v4/person/ask', { schema_version: 3, question: 'What is in Jira?' })).body).toMatchObject({
-      outcome: 'partial', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't complete the search. Please try again." })],
+      outcome: 'not_found', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't find this in the sources you can access." })],
     });
     expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'unlinked' }) })]));
     expect(events().filter(event => event.diagnostic?.phase === 'evidence_search' && event.diagnostic.evidence_source === 'ticket')).toEqual([]);

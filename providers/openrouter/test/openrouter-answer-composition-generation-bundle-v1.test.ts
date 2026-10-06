@@ -41,10 +41,16 @@ describe("OpenRouter answer-composition generation bundle", () => {
     expect(runtime.structured_output.generate).toBeTypeOf("function");
   });
 
-  it("defers credential access until the active runtime loads", () => {
+  it("loads without credentials and checks the private file only when generating", async () => {
     const bundle = createOpenRouterAnswerCompositionGenerationBundleV1({
       credential_file: "/private/missing-openrouter-credential",
     });
-    expect(() => bundle.load()).toThrow();
+    const runtime = bundle.load();
+    expect(runtime.structured_output.generate_with_observation).toBeTypeOf("function");
+    await expect(runtime.structured_output.generate({
+      model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+      system_prompt: "fixture", user_prompt: "fixture", schema: { type: "object" },
+      max_output_tokens: 1, timeout_ms: 1_000,
+    })).rejects.toThrow();
   });
 });

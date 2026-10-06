@@ -22,7 +22,6 @@ import {
   runOrganizationAuthoritySetupCli,
   type OrganizationAuthoritySetupCliDependencies,
 } from "../../services/organization-authority/src/composition/organization-authority-setup-cli.js";
-import { runGranolaMeetingSourceAdmissionCli } from "@echo-brain/organization-authority/composition/admit-granola-meeting-source-cli-v1";
 import {
   initializePersonSessionCredentials,
   issuePersonOnboardingInvitation,
@@ -210,47 +209,7 @@ function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
         output_path: input.output_path,
       });
     },
-    admit_source: async (input) => {
-      const output = commandOutput();
-      const status = await runGranolaMeetingSourceAdmissionCli(
-        [
-          "--state-dir",
-          input.state_directory,
-          "--source-instance",
-          "initial-owner-granola-v1",
-          "--processor-instance",
-          "initial-owner-llm-v1",
-          "--granola-credential-file",
-          input.granola_credential_file,
-          "--granola-owner-email-file",
-          input.granola_owner_email_file,
-          "--llm-credential-file",
-          input.llm_credential_file,
-        ],
-        { stdout: output.write, stderr: () => undefined },
-        {
-          createGranolaRecordOwnerClient: () => ({
-            async listNotes() {
-              return {
-                notes: [
-                  {
-                    id: "initial-owner-preflight-note",
-                    owner: { email: "owner@example.com" },
-                  },
-                ],
-                hasMore: false,
-                cursor: null,
-              };
-            },
-          }),
-        },
-      );
-      expect(status).toBe(0);
-      oneJson(output);
-    },
-    admit_staging_synthetic_source: async () => {
-      throw new Error("the ordinary onboarding rehearsal must retain its Granola source");
-    },
+    admit_staging_synthetic_source: async () => { throw new Error("ordinary onboarding has no organization meeting source"); },
   };
 }
 
@@ -272,7 +231,7 @@ async function setupStatus(stateDirectory: string): Promise<Record<string, unkno
 }
 
 describe("Organization Authority command rehearsal", () => {
-  it("runs bootstrap, owner login, Slack set up in the app, the owner's Slack link, stopped finalize, then active restart", async () => {
+  it("runs source-free bootstrap, owner login, Slack setup, finalize, and service restart", async () => {
     const root = directory();
     const stateDirectory = join(root, "state");
     const oidcConfigPath = join(root, "oidc.json");
@@ -319,8 +278,6 @@ describe("Organization Authority command rehearsal", () => {
       client_authentication: { method: "none" },
       pkce_key_file: join(stateDirectory, "credentials", "person-session-pkce-sealing-key"),
       slack_nango: SLACK_NANGO,
-      granola_credential_file: join(stateDirectory, "credentials", "granola-credential"),
-      granola_owner_email_file: join(stateDirectory, "credentials", "granola-owner-email"),
       openrouter_credential_file: join(stateDirectory, "credentials", "llm-credential"),
     };
     const slack = { nango: nango.client, manifest_provider: fakeManifest, provider: fakeSlack };
@@ -412,14 +369,6 @@ describe("Organization Authority command rehearsal", () => {
     }
 
     privateCredential(
-      join(stateDirectory, "credentials", "granola-credential"),
-      `grn_${"a".repeat(32)}`,
-    );
-    privateCredential(
-      join(stateDirectory, "credentials", "granola-owner-email"),
-      "owner@example.com",
-    );
-    privateCredential(
       join(stateDirectory, "credentials", "llm-credential"),
       "x".repeat(32),
     );
@@ -432,14 +381,14 @@ describe("Organization Authority command rehearsal", () => {
     expect(finalizeStatus, finalized.values.join("")).toBe(0);
     expect(oneJson<{ ok: boolean }>(finalized).ok).toBe(true);
 
-    // The worker is inactive, so this restart proves only that the finalized Authority serves its
-    // descriptor; slack-nango-proof-path.test.ts proves the approval lane loads on the in-app connection.
+    // The source-free restart keeps meeting polling idle while the normal API
+    // and source-independent worker services remain available.
     const active = await openOrganizationAuthorityService(
       { ...config, port: await availablePort() },
       { slack, active_processing: inactiveWorker },
     );
     try {
-      expect(active.processing).toBe("active");
+      expect(active.processing).toBe("idle_until_finalize");
       expect(
         await fetch(
           `http://127.0.0.1:${String(active.address.port)}/v1/authority-descriptor`,

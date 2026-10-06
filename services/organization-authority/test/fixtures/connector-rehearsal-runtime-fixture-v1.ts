@@ -47,7 +47,6 @@ export function configuration(root: string) {
     owner_email: FIXTURE_EMAIL,
     oidc: { config_file: join(privateRoot, 'oidc-config.json') },
     nango: { secret_key_file: join(privateRoot, 'nango-secret-key') },
-    granola: { credential_file: join(privateRoot, 'granola-organization-key'), owner_email_file: join(privateRoot, 'granola-owner-email') },
     openrouter: { credential_file: join(privateRoot, 'openrouter-credential') },
   };
 }

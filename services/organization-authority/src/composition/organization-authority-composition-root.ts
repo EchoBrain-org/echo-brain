@@ -1,3 +1,5 @@
+import { createStagingCanaryMeetingSourceBundleV1 } from "@echo-brain/provider-synthetic-demo/staging-canary-meeting-source-v1";
+import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 import { composePersonExternalIdentityRuntimeBundlesV1 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
@@ -33,6 +35,7 @@ import { openConfluencePersonLiveRuntimeV1, type ConfluencePersonLiveConfigurati
 import type { PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { JIRA_LIVE_CONNECTOR_V1, CONFLUENCE_LIVE_CONNECTOR_V1 } from './person-live-connector-registry-v1.js';
 import type { OrganizationAuthorityApiRuntimeDependencies } from './organization-authority-api-runtime.js';
+import type { MeetingSourceBundleV1 } from '@echo-brain/organization-processing/ports/meeting-source-bundle-v1';
 
 export interface OrganizationAuthorityServiceConfig
   extends Omit<
@@ -47,6 +50,8 @@ export interface OrganizationAuthorityServiceConfig
   /** Both fixture fields are required together and staging-origin guarded. */
   readonly staging_synthetic_meetings_directory?: string;
   readonly staging_synthetic_owner_email?: string;
+  /** Explicit generic test fixture; deployable CLI never supplies this seam. */
+  readonly synthetic_meeting_source_bundle?: MeetingSourceBundleV1;
   readonly openrouter_credential_file: string;
   /** Jira remains absent unless this explicit selection is supplied after release approval. */
   readonly jira_person_live?: JiraPersonLiveConfigurationV1;
@@ -85,6 +90,8 @@ export interface OrganizationAuthorityServiceDependencies
   readonly jira_person_live_seams?: JiraPersonLiveRuntimeSeamsV1;
   /** Provider-only test seams; production reads every page through the asker's Nango grant. */
   readonly confluence_person_live_seams?: ConfluencePersonLiveRuntimeSeamsV1;
+  /** Synthetic-test seam. Deployable selection remains staging-origin guarded. */
+  readonly meeting_source_bundle?: MeetingSourceBundleV1;
   /** Test seams for Nango's and Slack's HTTP APIs. */
   readonly slack?: {
     readonly nango?: NangoConnectionClientV1;
@@ -129,7 +136,7 @@ function composeSlackV1(
 
 /**
  * The deployable service selects OpenRouter and Slack while meeting intake is optional.
- * Only the staging synthetic fixture may select an organization-level meeting source;
+ * Only staging synthetic infrastructure may select an organization-level meeting source;
  * the shared runtime and personal live connector registry remain provider-neutral.
  */
 export async function openOrganizationAuthorityService(
@@ -139,6 +146,7 @@ export async function openOrganizationAuthorityService(
   const {
     staging_synthetic_meetings_directory,
     staging_synthetic_owner_email,
+    synthetic_meeting_source_bundle,
     openrouter_credential_file,
     slack_nango,
     jira_person_live,
@@ -150,8 +158,8 @@ export async function openOrganizationAuthorityService(
   if (staging_synthetic_meetings_directory === undefined && staging_synthetic_owner_email !== undefined) {
     throw new Error("staging synthetic meeting source owner requires a fixture selector");
   }
-  const meetingSourceBundle = staging_synthetic_meetings_directory === undefined
-    ? undefined
+  const meetingSourceBundle = dependencies.meeting_source_bundle ?? synthetic_meeting_source_bundle ?? (staging_synthetic_meetings_directory === undefined
+    ? (config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 ? createStagingCanaryMeetingSourceBundleV1(config.authority_url) : undefined)
     : await createSyntheticDemoMeetingSourceBundleV1({
         meetings_directory: assertStagingSyntheticMeetingSourceSelectionV1({
           authority_url: sharedConfig.authority_url,
@@ -160,7 +168,7 @@ export async function openOrganizationAuthorityService(
         owner_email: staging_synthetic_owner_email ?? (() => {
           throw new Error("staging synthetic meeting source requires the admitted owner email");
         })(),
-      });
+      }));
   const sharedProcessingAdapterOverrides =
     dependencies.processing_adapter_overrides === undefined
       ? undefined

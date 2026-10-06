@@ -95,21 +95,20 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 ### Optional staging connector rehearsal
 
 The ordinary manifest omits `staging_connector_rehearsal`. Initial preparation
-can enable the staging-only Granola/Jira/Slack rehearsal with this closed,
+can enable staging-only Jira read verification with this closed,
 nonsecret object in `onboarding.clean-v1.json`:
 
 ```json
 {
   "staging_connector_rehearsal": {
-    "schema_version": 2,
-    "kind": "echo-staging-connector-rehearsal-profile-v2",
-    "capture_policy": "initial-owner-granola-retained-jira-pointer-slack-pointer-v2",
+    "schema_version": 3,
+    "kind": "echo-staging-connector-rehearsal-profile-v3",
+    "read_policy": "initial-owner-jira-pointer-v3",
     "jira": {
       "cloud_id": "a8c0e112-6f72-4a0e-9c12-b7d8439f0abc",
       "integration_key": "jira",
       "project": "ECHO"
-    },
-    "slack": { "channel_id": "C0123456789" }
+    }
   }
 }
 ```
@@ -123,19 +122,18 @@ ordinary seven-file preparation carries the profile inside the existing
 nonsecret manifest. The four-synthetic-meeting provider-reuse transfer rejects
 an enabled connector profile; it cannot be used as an alternate connector
 input lane. The profile is fixed for the life of the rehearsal: a different
-Jira project or Slack channel needs a fresh rehearsal.
+Jira project needs a fresh rehearsal.
 
 The profile contains no Nango secret or Slack token. The Authority continues to
 read the existing `nango-secret-key`; the profile's Jira integration key is an
-ordinary Nango integration identifier. `channel_id` is historical and inert: the
-Slack bot only delivers approval DMs and reads no channel, but the field stays
-so the profile bytes, digest and sidecar bindings are unchanged. Granola keeps
-its existing organization-owned credential. Jira is read live through
-`verify-read`; only Granola can be captured. Jira and Slack capture requests
-are rejected before provider I/O and retain no new pointers, metadata or
-bodies. The historical V2 policy string stays unchanged so existing profile
-digests and sidecar bindings survive an ordinary release update without a
-reset. Existing retained rows are not purged by this change. Slack setup asks
+ordinary Nango integration identifier. The V3 profile removes the organization
+Granola capture policy and inert Slack channel field. The Authority and runner
+reject V1/V2 profiles; a selected older profile requires a fresh rehearsal with
+reviewed V3 inputs and new sidecar bindings. No retained rows are silently
+migrated or purged. Jira is read live through `verify-read`; all capture
+requests are rejected before provider I/O and retain no pointers or bodies.
+Slack approval qualification uses the separate synthetic release canary, whose
+staging-only source never discovers provider data. Slack setup asks
 only for the four delivery scopes (`chat:write`, `im:write`, `im:history`,
 `users:read`). A bot token installed before that keeps the two retired channel
 scopes until the app is reinstalled from scratch; nothing uses them. Jira's
@@ -207,7 +205,7 @@ with one fresh rehearsal, in this order:
    `person tools connect --tool jira`.
 7. Save the exact profile object as the runner's local profile before the
    [staging connector runner](../../services/organization-authority/README.md#staging-connector-rehearsal)
-   Granola captures and live Jira read checks.
+   live Jira read checks.
 
 Check that directory before spending an AWS session on it:
 
@@ -465,7 +463,7 @@ node ../../demo/staging/prepare-fixtures.mjs \
 
 # Add `stagingSyntheticMeetingsDir` to the private onboarding-transfer
 # controller. Its bounded courier delivers this exact directory together with
-# the ordinary eight input files and invokes doctor and prepare with it.
+# the ordinary seven input files and invokes doctor and prepare with it.
 ```
 
 The four required filenames are
@@ -475,7 +473,8 @@ The four required filenames are
 into `clean-data/meetings`, binds the normal Compose environment to it, and
 keeps the normal release profile, AWS logs, and runtime observability. The
 credential bundle requires no Granola inputs. Without the optional directory,
-ordinary runtime has no organization meeting source. The wrapper carries the
+the staging runtime selects empty synthetic canary infrastructure; content enters
+only through its explicit release-bound canary request. The wrapper carries the
 same selected directory through setup finalization and normal service startup;
 the Compose default is empty.
 

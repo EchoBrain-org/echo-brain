@@ -1,3 +1,4 @@
+import { admitStagingCanaryMeetingSourceV1 } from "@echo-brain/provider-synthetic-demo/staging-canary-meeting-source-v1";
 import Database from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -52,7 +53,8 @@ import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { SystemAuthorityClock } from "../src/adapters/system/system-authority-clock.js";
-import { admitGranolaMeetingSource } from "@echo-brain/provider-granola/granola-meeting-source-admission";
+import { syntheticDemoMeetingSourceIdentityV1, SYNTHETIC_DEMO_INITIAL_CURSOR_V1 } from "@echo-brain/provider-synthetic-demo/source/synthetic-demo-meeting-source-v1";
+import { syntheticDemoAdmittedMeetingSourceCursorPolicyV1 } from "@echo-brain/provider-synthetic-demo/synthetic-demo-admitted-meeting-source-cursor-policy-v1";
 import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-admission-commitment";
 import {
   initializePersonSessionCredentials,
@@ -93,7 +95,7 @@ import type {
   MeetingSourceAdapter,
 } from "@echo-brain/organization-processing/core";
 import { AdapterError } from "@echo-brain/organization-processing/core";
-import { createGranolaPostCutoffCursor } from "../../../providers/granola/src/source/meeting-source-adapter.js";
+
 import type { PrivateSlackApprovalCardPresentationV1, PrivateSlackApprovalPostOutcomeV1, PrivateSlackApprovalTerminalPresentationV1, PrivateSlackApprovalUpdateOutcomeV1 } from "@echo-brain/provider-slack-server/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1";
 
 const roots: string[] = [];
@@ -317,7 +319,7 @@ function fakeSource(
   let pulls = 0;
   const meeting: MeetingDocument = {
     schema_version: 1,
-    id: "granola:founder-granola:note-live-test",
+    id: "synthetic-demo-source:customer-demo:meeting-live-test",
     title: "Live migration review",
     provenance: {
       source: identity,
@@ -343,12 +345,7 @@ function fakeSource(
     ],
     artifacts: [],
     context: { owner_participant_id: "founder" },
-    extensions: {
-      granola: {
-        calendar_event: null,
-        owner: { email: "founder@example.com" },
-      },
-    },
+    extensions: {},
   };
   return {
     identity,
@@ -365,9 +362,7 @@ function fakeSource(
               provenance: { ...meeting.provenance, external_id: `${meeting.provenance.external_id}-${index}`,
                 canonical_revision: canonicalSha256({ note: "live-test", index }) },
             })],
-            next_cursor: createGranolaPostCutoffCursor(
-              new Date(Date.parse(NOW) + pulls * 1_000).toISOString(),
-            ),
+            next_cursor: `synthetic-demo-source:customer-demo:1.0.0:v1:${String(Math.min(pulls, 4))}`,
           }
         : { meetings: [], next_cursor: request.cursor };
     },
@@ -483,6 +478,7 @@ async function waitFor(assertion: () => boolean, label: string): Promise<void> {
 
 async function admittedFixture(input: {
   readonly seed_private_slack_connection?: boolean;
+  readonly skip_source_admission?: boolean;
 } = {}) {
   const parent = root();
   const initialized = bootstrapOrganizationAuthorityState({
@@ -497,43 +493,26 @@ async function admittedFixture(input: {
     parent,
     owner_membership_id: initialized.owner_membership_id,
   });
-  const granola_credential_file = privateFile(
-    parent,
-    "granola.key",
-    `grn_${"a".repeat(32)}`,
-  );
-  const granola_owner_email_file = privateFile(
-    parent,
-    "granola-owner-email",
-    "founder@example.com",
-  );
   const openrouterCredentialFile = privateFile(
     parent,
     "llm.key",
     "llm-private-credential-material-000000",
   );
-  const admitted = await admitGranolaMeetingSource({
-    state_directory: initialized.state_directory,
-    source_instance_id: "founder-granola",
-    granola_credential_reference: `file:${granola_credential_file}`,
-    granola_owner_email_reference: `file:${granola_owner_email_file}`,
-    processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({
-      instance_id: "founder-llm",
-      credential_reference: `file:${openrouterCredentialFile}`,
-    }),
-    create_granola_record_owner_client: () => ({
-      async listNotes() {
-        return {
-          notes: [
-            { id: "preflight-only", owner: { email: "founder@example.com" } },
-          ],
-          hasMore: false,
-          cursor: null,
-        };
-      },
-    }),
-    now: () => NOW,
+  const processorCommitment = createOpenRouterDecisionProcessorAdmissionCommitmentV1({
+    instance_id: "founder-llm", credential_reference: `file:${openrouterCredentialFile}`,
   });
+  if (input.skip_source_admission !== true) {
+    const authority = openAuthorityDatabase(join(initialized.state_directory, "authority.sqlite"), { fileMustExist: true });
+    try {
+      authority.prepare(`INSERT INTO authority_live_source_admission_v2 (singleton, organization_id, principal_id, membership_id, membership_type, source_adapter_id, source_adapter_version, source_adapter_instance_id, normalizer_version, source_custodian_sha256, source_custodian_assurance, source_custodian_observed_at, source_credential_reference_sha256, initial_cursor, cutoff_at, processor_adapter_id, processor_adapter_version, processor_instance_id, processor_configuration_sha256, processor_credential_reference_sha256, semantic_input_sha256, admitted_at) VALUES (1, ?, ?, ?, 'owner', ?, ?, ?, ?, ?, 'synthetic_fixture_owner', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        initialized.organization_id, initialized.owner_principal_id, initialized.owner_membership_id,
+        syntheticDemoMeetingSourceIdentityV1.adapter_id, syntheticDemoMeetingSourceIdentityV1.version, syntheticDemoMeetingSourceIdentityV1.instance_id, syntheticDemoMeetingSourceIdentityV1.version,
+        canonicalSha256({ owner: "founder@example.com" }), NOW, canonicalSha256({ fixture: "private-approval" }), SYNTHETIC_DEMO_INITIAL_CURSOR_V1, NOW,
+        processorCommitment.adapter_id, processorCommitment.version, processorCommitment.instance_id, processorCommitment.configuration_sha256, processorCommitment.credential_reference_sha256, canonicalSha256({ fixture: "private-approval-admission" }), NOW,
+      );
+    } finally { authority.close(); }
+  }
+  const admitted = { source: syntheticDemoMeetingSourceIdentityV1, processor: processorCommitment };
   if (input.seed_private_slack_connection ?? false) {
     await seedPrivateSlackConnection({
       state_directory: initialized.state_directory,
@@ -546,7 +525,7 @@ async function admittedFixture(input: {
   }
   const source = fakeSource({
     kind: "meeting-source",
-    adapter_id: "granola",
+    adapter_id: admitted.source.adapter_id,
     instance_id: admitted.source.instance_id,
     version: admitted.source.version,
   });
@@ -561,8 +540,11 @@ async function admittedFixture(input: {
     client_authentication: { method: "none" },
     pkce_key_file,
     slack_nango: SLACK_NANGO,
-    granola_credential_file,
-    granola_owner_email_file,
+    synthetic_meeting_source_bundle: {
+      source_cursor_policy: syntheticDemoAdmittedMeetingSourceCursorPolicyV1,
+      assert_admission_commitments(commitments) { expect(commitments.source.adapter_id).toBe(syntheticDemoMeetingSourceIdentityV1.adapter_id); },
+      create_source() { return source; },
+    },
     openrouter_credential_file: openrouterCredentialFile,
     worker_interval_ms: 10,
     on_worker_error: (error) => errors.push(error),
@@ -591,6 +573,7 @@ async function activeFixture(input: {
 } = {}) {
   const fixture = await admittedFixture({
     seed_private_slack_connection: true,
+    skip_source_admission: input.canary_only,
   });
   if (input.seed_project === true) {
     const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, "authority.sqlite"), { fileMustExist: true });
@@ -600,14 +583,25 @@ async function activeFixture(input: {
       authority.prepare(`INSERT INTO authority_project_memberships_v1 (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at,revoked_at) VALUES ('pgm_11111111-1111-4111-8111-111111111111',?,?,?,?,?,'lead','active',?,NULL)`).run(project_id, fixture.initialized.organization_id, fixture.initialized.owner_principal_id, fixture.initialized.owner_membership_id, "owner", NOW);
     } finally { authority.close(); }
   }
+  if (input.canary_only === true) {
+    await admitStagingCanaryMeetingSourceV1({
+      authority_url: "https://authority-staging.echobrain.org",
+      state_directory: fixture.initialized.state_directory,
+      processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({
+        instance_id: fixture.processorIdentity.instance_id,
+        credential_reference: `file:${fixture.config.openrouter_credential_file}`,
+      }),
+      now: () => NOW,
+    });
+  }
   const config = input.canary_only === true
-    ? { ...fixture.config, authority_url: "https://authority-staging.echobrain.org",
+    ? { ...fixture.config, synthetic_meeting_source_bundle: undefined, authority_url: "https://authority-staging.echobrain.org",
         oidc: { ...fixture.config.oidc, redirect_uri: "https://authority-staging.echobrain.org/v2/session/oidc/callback" } }
     : fixture.config;
   const source = input.canary_only === true ? fakeSource(fixture.source.identity, 0) : fixture.source;
   const runtime = await openOrganizationAuthorityService(config, {
     processing_adapter_overrides: {
-      source,
+      ...(input.canary_only === true ? {} : { source }),
       processor: fakeProcessor(fixture.processorIdentity),
       private_approval_card_poster: fixture.poster,
     },
@@ -1054,9 +1048,10 @@ describe("Organization Authority runtime private approval lane", () => {
 
   it("rejects the legacy synthetic entrypoint outside the exact staging Authority", async () => {
     const fixture = await admittedFixture();
+    const { synthetic_meeting_source_bundle: _fixtureBundle, ...ordinaryConfig } = fixture.config;
     await expect(
       openSyntheticDemoOrganizationAuthorityServiceV1({
-        ...fixture.config,
+        ...ordinaryConfig,
         meetings_directory: "/fixture/meetings",
         owner_email: "founder@example.com",
       }),
@@ -1086,8 +1081,6 @@ describe("Organization Authority runtime private approval lane", () => {
         "file:".length,
       ),
       slack_nango: SLACK_NANGO,
-      granola_credential_file: join(parent, "not-read-granola"),
-      granola_owner_email_file: join(parent, "not-read-owner"),
       openrouter_credential_file: join(parent, "not-read-openrouter"),
     });
     try {
@@ -1102,39 +1095,6 @@ describe("Organization Authority runtime private approval lane", () => {
     } finally {
       await runtime.close();
     }
-  });
-
-  it("rejects a changed Granola credential reference before it can open that credential", async () => {
-    const fixture = await activeFixture();
-    await fixture.runtime.close();
-    await expect(
-      openOrganizationAuthorityService({
-        ...fixture.config,
-        granola_credential_file: join(
-          fixture.initialized.state_directory,
-          "replacement-granola-credential-not-read",
-        ),
-      }),
-    ).rejects.toThrow(
-      /source credential reference differs from the admitted commitment/,
-    );
-  });
-
-  it("rejects a changed Granola owner before it can construct the source", async () => {
-    const fixture = await activeFixture();
-    await fixture.runtime.close();
-    const granolaOwnerEmailFile = fixture.config.granola_owner_email_file;
-    if (granolaOwnerEmailFile === undefined) {
-      throw new Error("active Granola fixture must include its owner email file");
-    }
-    writeFileSync(
-      granolaOwnerEmailFile,
-      "replacement-owner@example.com",
-    );
-    chmodSync(granolaOwnerEmailFile, 0o600);
-    await expect(openOrganizationAuthorityService(fixture.config)).rejects.toThrow(
-      /owner differs from the admitted custodian commitment/,
-    );
   });
 
   it("rejects a changed LLM credential reference before it can open that credential", async () => {
@@ -1602,7 +1562,9 @@ describe("Organization Authority runtime private approval lane", () => {
     const canary = { canary_id: "project-source-canary", owner_email: "founder@example.com", observed_at: NOW };
     const progress = () => authority.prepare("SELECT cursor,cursor_version FROM authority_live_source_progress_v2").get();
     try {
-      await waitFor(() => fixture.source.pulls() > 0, "empty provider poll");
+      await waitFor(() => fixture.errors.length > 0 || progress() !== undefined, "canary infrastructure initialization");
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      expect(authority.prepare("SELECT count(*) AS count FROM authority_source_revisions_v1").get()).toEqual({ count: 0 });
       const originalProgress = progress();
       const result = await fixture.runtime.run_staging_synthetic_private_dm_canary!(canary);
       expect(result).toMatchObject({ kind: "staged", reused_frozen_extraction: false });
@@ -1873,7 +1835,7 @@ describe("Organization Authority runtime private approval lane", () => {
 
 
 
-it('runs submit/status from the exact packed Person CLI against a disposable Authority', async () => {
+it('runs submit/status from the exact packed Person CLI without an admitted meeting source', async () => {
   const parent = root();
   const repository = createCoherentWorktreeSnapshot(resolve(import.meta.dirname, '../../..'), parent);
   const run = (command: string, args: string[], cwd = repository) => {
@@ -1888,8 +1850,8 @@ it('runs submit/status from the exact packed Person CLI against a disposable Aut
   const install = join(parent, 'installed'); mkdirSync(install);
   run('tar', ['-xzf', artifact, '-C', install]);
   const cli = await import(pathToFileURL(join(install, 'package/dist/index.js')).href) as typeof import('../../../src/product/person-client/index.js');
-  const fixture = await admittedFixture({ seed_private_slack_connection: true });
-  const runtime = await openOrganizationAuthorityService({ ...fixture.config, worker_interval_ms: 60_000 }, { processing_adapter_overrides: { source: fakeSource(fixture.source.identity, 0), processor: fakeProcessor(fixture.processorIdentity), private_approval_card_poster: fixture.poster } });
+  const fixture = await admittedFixture({ seed_private_slack_connection: true, skip_source_admission: true });
+  const runtime = await openOrganizationAuthorityService({ ...fixture.config, synthetic_meeting_source_bundle: undefined, worker_interval_ms: 60_000 });
   const home = join(parent, 'person-home'); mkdirSync(home);
   try {
     const origin = `http://127.0.0.1:${runtime.address.port}`;

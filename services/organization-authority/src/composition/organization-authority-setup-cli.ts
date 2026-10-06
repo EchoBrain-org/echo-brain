@@ -1,3 +1,4 @@
+import { admitStagingCanaryMeetingSourceV1, stagingCanaryMeetingSourceIdentityV1 } from "@echo-brain/provider-synthetic-demo/staging-canary-meeting-source-v1";
 /**
  * Stopped-state bootstrap for the shipped OpenRouter/Slack profile.
  * Finalization intentionally requires Slack, which an owner sets up in the
@@ -826,33 +827,24 @@ function durableSetupStage(
 interface InitialOwnerSetupStatus {
   readonly founder_oidc_bound: boolean;
   readonly founder_slack_link_active: boolean;
-  readonly llm_credential_valid?: boolean;
-  /** Frozen status compatibility: organization Granola is no longer configured. */
-  readonly granola_credentials_valid: boolean;
-  readonly granola_admission_present: boolean;
-  /** New generic fields retain the legacy Granola status vocabulary. */
-  readonly source_admission_present?: boolean;
-  readonly source_mode?: "staging_synthetic";
-  readonly granola_admission_proof?: {
-    readonly owner_observation_assurance: "provider_record_owner_observed";
-    readonly owner_observed_at: string;
-  };
+  readonly llm_credential_valid: boolean;
+  readonly source_admission_present: boolean;
+  readonly source_mode?: "staging_synthetic" | "staging_canary";
 }
 
 function llmCredentialValid(full: InitialOwnerSetupStatus): boolean {
-  // The fallback is limited to injected pre-v3 test seams; persisted v3 status always sets the LLM fact.
-  return full.llm_credential_valid ?? full.granola_credentials_valid;
+  return full.llm_credential_valid;
 }
 
 function sourceAdmissionPresent(full: InitialOwnerSetupStatus): boolean {
-  return full.source_admission_present ?? full.granola_admission_present;
+  return full.source_admission_present;
 }
 
 function sourceMode(full: InitialOwnerSetupStatus):
-  | "granola"
   | "staging_synthetic"
+  | "staging_canary"
   | "none" {
-  return full.source_mode ?? (full.granola_admission_present ? "granola" : "none");
+  return full.source_mode ?? "none";
 }
 
 /**
@@ -863,7 +855,8 @@ function sourceMode(full: InitialOwnerSetupStatus):
 interface SetupCanaryEvidence {
   readonly source_progress_observed: boolean;
   /** A release-bound synthetic rehearsal is accepted only on the exact staging origin. */
-  readonly synthetic_staging_canary_observed?: boolean;readonly approved_record_present: boolean;
+  readonly synthetic_staging_canary_observed?: boolean;
+  readonly approved_record_present: boolean;
   readonly active_generation_current: boolean;
   readonly owner_layer1_read_after_head: boolean;
   readonly owner_layer2_read_after_generation: boolean;
@@ -907,6 +900,7 @@ type OrganizationAuthoritySetupNextStep =
   | "complete";
 
 function nextOrganizationAuthoritySetupStep(input: {
+  readonly authority_url: string;
   readonly genesis_published: boolean;
   readonly setup_plan_location: "sibling" | "state";
   readonly credentials_ready: boolean;
@@ -926,7 +920,7 @@ function nextOrganizationAuthoritySetupStep(input: {
   if (!input.slack_connected) return "connect_slack_in_app";
   if (!input.full.founder_slack_link_active) return "complete_founder_slack_link";
   if (!llmCredentialValid(input.full)) return "install_provider_credentials";
-  if (!sourceAdmissionPresent(input.full)) return "run_finalize";
+  if (input.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN && !sourceAdmissionPresent(input.full)) return "run_finalize";
   return "ready_to_start";
 }
 
@@ -944,9 +938,9 @@ function organizationAuthoritySetupInstruction(
       "The owner runs person tools connect --tool slack to link their own Slack.",
     install_provider_credentials:
       "Run credentials-install with the private LLM credential file.",
-    run_finalize: "Run the finalize command.",
+    run_finalize: "Run finalize to admit the selected staging synthetic infrastructure.",
     ready_to_start:
-      "Start or restart the Authority runtime, then complete the setup canary.",
+      "Start or restart the Authority runtime, then check setup status.",
     complete: "Organization setup is complete.",
   }[step];
 }
@@ -1042,34 +1036,15 @@ function activeGenerationPointer(
   });
 }
 
-/**
- * Setup runs before provider credentials are installed, so it must derive the
- * same non-secret projector contract that the admitted production runtime
- * binds from its fixed OpenRouter bundle. Before admission projection remains
- * disabled and the ordinary provider-free contract is expected.
- */
-function expectedSetupCanaryRetrievalContract(
-  authority: Database.Database
-) {
-  const sourceIsAdmitted =
-    authority
-      .prepare(
-        `SELECT 1
-           FROM authority_live_source_admission_v2
-          WHERE singleton = 1`,
-      )
-      .get() !== undefined;
-  return readableSearchGenerationContractV1(
-    sourceIsAdmitted
-      ? {
-          related_atom_projector: Object.freeze({
-            generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
-            model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
-            timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
-          }),
-        }
-      : {},
-  );
+/** Derive the runtime's fixed projector contract without reading credentials. */
+function expectedSetupCanaryRetrievalContract() {
+  return readableSearchGenerationContractV1({
+    related_atom_projector: Object.freeze({
+      generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+      model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+      timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+    }),
+  });
 }
 
 function sameRecordHead(
@@ -1288,7 +1263,7 @@ function setupCanaryEvidence(
       )
       .get() !== undefined;
     const expectedRetrievalContract =
-      expectedSetupCanaryRetrievalContract(authority);
+      expectedSetupCanaryRetrievalContract();
     const activeGenerationCurrent = pointerMatchesHead(
       initialPointer,
       initialHead,
@@ -1317,10 +1292,13 @@ function setupCanaryEvidence(
       sameRecordHead(initialHead, currentRecordHead(record)) &&
       sameGenerationPointer(initialPointer, activeGenerationPointer(authority));
     if (!stable) return EMPTY_SETUP_CANARY_EVIDENCE;
+    const canarySourceAdmitted = authority.prepare(
+      "SELECT 1 FROM authority_live_source_admission_v2 WHERE singleton = 1 AND source_adapter_id = ?",
+    ).get(stagingCanaryMeetingSourceIdentityV1.adapter_id) !== undefined;
     const complete =
       (syntheticFixtureApproval.source_admitted
         ? syntheticFixtureApproval.all_fixture_meetings_approved
-        : sourceProgressObserved || syntheticStagingCanaryObserved) &&
+        : canarySourceAdmitted ? syntheticStagingCanaryObserved : sourceProgressObserved || syntheticStagingCanaryObserved) &&
       approvedRecordPresent &&
       activeGenerationCurrent &&
       ownerLayer1ReadAfterHead &&
@@ -1357,8 +1335,7 @@ function initialOwnerSetupStatus(
     founder_oidc_bound: false,
     founder_slack_link_active: false,
     llm_credential_valid: false,
-    granola_credentials_valid: false,
-    granola_admission_present: false,
+    source_admission_present: false,
   };
   try {
     verifySetupGenesis(manifest);
@@ -1406,6 +1383,11 @@ function initialOwnerSetupStatus(
         | undefined;
       if (isSyntheticDemoSetupAdmissionV1(admission) && manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN) {
         admittedSourceMode = 'staging_synthetic';
+      } else if (manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN &&
+        admission?.source_adapter_id === stagingCanaryMeetingSourceIdentityV1.adapter_id &&
+        admission.source_adapter_instance_id === stagingCanaryMeetingSourceIdentityV1.instance_id &&
+        admission.source_custodian_assurance === "authority_initial_owner_identity") {
+        admittedSourceMode = 'staging_canary';
       }
     } finally {
       authority.close();
@@ -1423,8 +1405,6 @@ function initialOwnerSetupStatus(
         founder_oidc_bound: initialOwnerOidcBound,
         founder_slack_link_active: slackStatus.identity_link_active,
         llm_credential_valid: llmCredentialValid,
-        granola_credentials_valid: false,
-        granola_admission_present: false,
         source_admission_present: admittedSourceMode !== undefined,
         ...(admittedSourceMode === undefined
           ? {}
@@ -1525,6 +1505,7 @@ async function bootstrap(
   const completedStage = stage();
   const completedFull = readInitialOwnerSetupStatus(manifest, dependencies);
   const nextStep = nextOrganizationAuthoritySetupStep({
+    authority_url: manifest.authority_url,
     genesis_published: true,
     setup_plan_location: "state",
     credentials_ready: completedStage.credentials_ready,
@@ -1536,9 +1517,6 @@ async function bootstrap(
     `${canonicalJson({
       ok: true,
       ...(!initialOwnerAlreadyBound ? { invitation_path: invitationPath } : {}),
-      ...(completedFull.granola_admission_proof === undefined
-        ? {}
-        : { granola_admission_proof: completedFull.granola_admission_proof }),
       next_step: nextStep,
       next_instruction: organizationAuthoritySetupInstruction(nextStep),
     } as never)}\n`,
@@ -1573,6 +1551,7 @@ async function resume(
     dependencies.read_setup_stage?.(manifest) ?? durableSetupStage(manifest);
   const full = readInitialOwnerSetupStatus(manifest, dependencies);
   const setupStep = nextOrganizationAuthoritySetupStep({
+    authority_url: manifest.authority_url,
     genesis_published: genesisPublished,
     setup_plan_location: setup.location,
     credentials_ready: genesisPublished && durable.credentials_ready,
@@ -1583,7 +1562,8 @@ async function resume(
   });
   if (
     setupStep === "ready_to_start" &&
-    readSetupCanaryEvidence(manifest, dependencies).complete
+    ((manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN && !sourceAdmissionPresent(full)) ||
+      readSetupCanaryEvidence(manifest, dependencies).complete)
   ) {
     status(input, io, dependencies);
     return;
@@ -1657,10 +1637,7 @@ async function finalize(
     ) {
       throw new Error("staging synthetic finalization conflicts with the admitted source");
     }
-    if (
-      stagingSyntheticMeetingsDirectory === undefined &&
-      admittedMode !== "granola"
-    ) {
+    if (stagingSyntheticMeetingsDirectory === undefined && admittedMode !== "staging_canary") {
       throw new Error("the admitted staging synthetic source requires its fixture selector at runtime");
     }
     if (stagingSyntheticMeetingsDirectory !== undefined) {
@@ -1679,18 +1656,30 @@ async function finalize(
       llm_credential_file: manifest.llm_credential_file,
     });
   }
+  if (stagingSyntheticMeetingsDirectory === undefined && manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN) {
+    await admitStagingCanaryMeetingSourceV1({
+      authority_url: manifest.authority_url,
+      state_directory: manifest.state_directory,
+      processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({
+        instance_id: PROCESSOR_INSTANCE_ID,
+        credential_reference: `file:${manifest.llm_credential_file}`,
+      }),
+    });
+  }
   io.stdout(
     `${canonicalJson({
       ok: true,
       runtime_status: "ready_to_start",
       runtime_observation: "not_observed",
-      canary_status: "not_complete",
+      canary_status: manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN ? "not_complete" : "not_required",
       source_mode:
-        stagingSyntheticMeetingsDirectory === undefined ? "none" : "staging_synthetic",
-      source_admission_present: stagingSyntheticMeetingsDirectory !== undefined,
+        stagingSyntheticMeetingsDirectory !== undefined ? "staging_synthetic" : manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN ? "staging_canary" : "none",
+      source_admission_present: stagingSyntheticMeetingsDirectory !== undefined || manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN,
       next_instruction:
         stagingSyntheticMeetingsDirectory === undefined
-          ? "Start or restart the Authority runtime. Meeting intake remains idle until a personal source is connected."
+          ? manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN
+            ? "Restart the Authority runtime, then run the release-bound synthetic canary."
+            : "Start or restart the Authority runtime. Meeting intake remains idle until a personal source is connected."
           : "Restart the same echo-organization-authority-serve serve command with the same staging synthetic fixture selector.",
     } as never)}\n`,
   );
@@ -1705,8 +1694,8 @@ function status(
   if (setup === undefined) {
     io.stdout(
       `${canonicalJson({
-        schema_version: 1,
-        kind: "echo-clean-founder-setup-status-v1",
+        schema_version: 2,
+        kind: "echo-organization-authority-setup-status-v2",
         setup_plan_present: false,
         genesis_published: false,
         credentials_ready: false,
@@ -1716,8 +1705,6 @@ function status(
         founder_oidc_bound: false,
         founder_slack_link_active: false,
         llm_credential_valid: false,
-        granola_credentials_valid: false,
-        granola_admission_present: false,
         source_mode: "none",
         source_admission_present: false,
         source_progress_observed: false,
@@ -1754,6 +1741,7 @@ function status(
   const invitationValid =
     genesisPublished && usableInitialOwnerInvitation(setup.manifest);
   const nextStep = nextOrganizationAuthoritySetupStep({
+    authority_url: setup.manifest.authority_url,
     genesis_published: genesisPublished,
     setup_plan_location: setup.location,
     credentials_ready: credentialsReady,
@@ -1767,18 +1755,20 @@ function status(
   const canary = nextStep === "ready_to_start"
     ? readSetupCanaryEvidence(setup.manifest, dependencies)
     : EMPTY_SETUP_CANARY_EVIDENCE;
-  const terminalStep: OrganizationAuthoritySetupNextStep = canary.complete
+  const ordinarySourceFree = nextStep === "ready_to_start" &&
+    setup.manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN && !sourceAdmissionPresent(full);
+  const terminalStep: OrganizationAuthoritySetupNextStep = canary.complete || ordinarySourceFree
     ? "complete"
     : nextStep;
-  const canaryStatus = terminalStep === "complete"
+  const canaryStatus = ordinarySourceFree ? "not_required" : terminalStep === "complete"
     ? "complete"
     : nextStep === "ready_to_start"
       ? "not_complete"
       : "not_ready";
   io.stdout(
     `${canonicalJson({
-      schema_version: 1,
-      kind: "echo-clean-founder-setup-status-v1",
+      schema_version: 2,
+      kind: "echo-organization-authority-setup-status-v2",
       setup_plan_present: true,
       genesis_published: genesisPublished,
       credentials_ready: credentialsReady,
@@ -1788,8 +1778,6 @@ function status(
       founder_oidc_bound: full.founder_oidc_bound,
       founder_slack_link_active: full.founder_slack_link_active,
       llm_credential_valid: llmCredentialValid(full),
-      granola_credentials_valid: false,
-      granola_admission_present: full.granola_admission_present,
       source_mode: sourceMode(full),
       source_admission_present: sourceAdmissionPresent(full),
       source_progress_observed: canary.source_progress_observed,

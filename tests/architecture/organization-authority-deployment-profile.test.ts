@@ -1996,21 +1996,20 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(readFileSync(join(deploy, "clean-data/meetings", firstMeeting), "utf8"))
         .toBe(admittedCopy);
 
-      // The same eight-file input carries a closed staging-only profile without
+      // The same seven-file input carries a closed staging-only profile without
       // putting its Nango configuration in the runtime profile or command line.
       expect(execFileSync("bash", [
         join(deploy, "onboard-clean-v1.sh"), "replace-rehearsal", "--confirm-no-live-users",
       ], commandEnvironment).toString()).toContain("rehearsal_replaced=true");
       const stagingProfile = {
-        schema_version: 2,
-        kind: "echo-staging-connector-rehearsal-profile-v2",
-        capture_policy: "initial-owner-granola-retained-jira-pointer-slack-pointer-v2",
+        schema_version: 3,
+        kind: "echo-staging-connector-rehearsal-profile-v3",
+        read_policy: "initial-owner-jira-pointer-v3",
         jira: {
           cloud_id: "A8C0E112-6F72-4A0E-9C12-B7D8439F0ABC",
           integration_key: "Jira_Staging",
           project: "ECHO_CORE",
         },
-        slack: { channel_id: "C0123456789" },
       };
       const enabledManifest = {
         ...JSON.parse(readFileSync(manifest, "utf8")),
