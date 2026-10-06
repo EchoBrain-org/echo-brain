@@ -39,7 +39,7 @@
     "util"
   ],
   "runtime_assets": [
-    "packages/organization-authority-kernel/baselines/authority-baseline-v10.sql"
+    "packages/organization-authority-kernel/baselines/authority-baseline-v11.sql"
   ],
   "layer_rules": [
     {

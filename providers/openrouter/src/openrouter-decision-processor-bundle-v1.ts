@@ -6,7 +6,7 @@ import {
 import type { AdapterConfig } from "@echo-brain/organization-processing/core/contracts/adapter";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
 import type { AdmittedMeetingProcessingCommitmentsV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments";
-import { assertOpenRouterDecisionProcessorRuntimeCommitmentsV1, fixedOpenRouterDecisionProcessorConfigV1 } from "./openrouter-decision-processor-config-v1.js";
+import { assertOpenRouterDecisionProcessorRuntimeCommitmentsV1, fixedOpenRouterDecisionProcessorConfigV1, OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1, openRouterDecisionProcessorConfigurationSha256V1, openRouterDecisionProcessorCredentialReferenceSha256V1 } from "./openrouter-decision-processor-config-v1.js";
 import type { DecisionProcessorBundleV1 } from "@echo-brain/organization-processing/ports/decision-processor-bundle-v1";
 
 function assertProcessorConfig(
@@ -38,6 +38,10 @@ export function createOpenRouterDecisionProcessorBundleV1(input: {
   let commitmentsChecked = false;
   return Object.freeze({
     processor_adapter_id: "llm",
+    current_commitments(instance_id: string) {
+      return Object.freeze({ adapter_id: 'llm', instance_id, version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
+        configuration_sha256: openRouterDecisionProcessorConfigurationSha256V1(), credential_reference_sha256: openRouterDecisionProcessorCredentialReferenceSha256V1(credentialReference) });
+    },
     assert_admission_commitments(
       commitments: AdmittedMeetingProcessingCommitmentsV1,
     ): void {

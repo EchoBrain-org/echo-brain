@@ -171,7 +171,7 @@ const HELP: Readonly<Record<string, string>> = {
 
 Start here:
   status                                      Who you are on this machine (no network).
-  list                                        The newest notes, documents and approved meetings you can read, 25 at a time.
+  list                                        The newest notes, documents, imported meetings and approved meetings you can read, 25 at a time.
   list --project <project-id> | --mine        Only one of your projects, or only what you added.
   open --ref <ref>                            Read one item from list or from an ask citation.
   ask --question <text> [--project <project-id> | --mine]   Answer with citations.
@@ -181,7 +181,7 @@ Commands:
   login       Sign in with an invitation or existing Authority identity.
   status      Show client build identity and sign-in state.
   logout      Remove the local session.
-  list        List the newest notes, documents and approved meetings you can read.
+  list        List the newest notes, documents, imported meetings and approved meetings you can read.
   open        Read one item by its ref from list or an ask citation.
   ask         Ask a question over context you may read.
   evidence    Search or open released Ask evidence.
@@ -205,7 +205,7 @@ Provide exactly one identity option. --open-browser opens the handoff automatica
 Shows installed_version, client_build source_sha/source_kind, sign-in state, membership type, and Authority origin.
 Client provenance does not identify the Authority build serving requests. Status is local and makes no network request.
 `,
-  tools: `usage: echo-brain person tools [<setup|connect|disconnect|status|cancel|project> --tool <tool> [options]]
+  tools: `usage: echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings> --tool <tool> [options]]
 
 Without a verb, lists your organization's tools and your link to each; owners also see each tool's organization setup.
 setup (owners only) and connect open the tool's page in your browser and wait. A token is read only from standard input.
@@ -223,9 +223,9 @@ Ask one question using at most 240 Unicode code points, 1–32 distinct normaliz
 `,
   list: `usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]
 
-Lists the newest things you can read now, 25 per page: notes, documents and approved meetings. Each row has a ref for person open, a title, when it was added (added_at), who can see it (only_me, team or project) and the projects you belong to that it is filed under. Rows never carry text.
-Without a scope flag the list covers the notes, documents and approved meetings ask can read (not Slack messages or shared transcripts); the first page also shows who you are, your connected tools and your projects.
---project lists one project you belong to. --mine lists only what you added: notes you saved, documents you uploaded and meetings you approved in Slack (approved means you were the approver, not an attendee or action owner).
+Lists the newest things you can read now, 25 per page: notes, documents, imported meetings and approved meetings. Each row has a ref for person open, a title, when it was added (added_at), who can see it (only_me, team or project) and the projects you belong to that it is filed under. Rows never carry text.
+Without a scope flag the list covers the notes, documents, imported meetings and approved meetings ask can read (not Slack messages or shared transcripts); the first page also shows who you are, your connected tools and your projects.
+--project lists one project you belong to. --mine lists only what you added: notes you saved, documents you uploaded and meetings you imported or approved (approved means you were the approver, not an attendee or action owner).
 Pass next_cursor as --cursor with the same scope for the next page; null means the end.
 notice "meetings_unavailable" means meetings are still being indexed and come on a later page. A first page with no items and that notice is not the end: follow its next_cursor later. A later page that could only wait for meetings fails with unavailable (503): retry the same --cursor later.
 `,
@@ -237,7 +237,7 @@ Reads one item under your current access: a note's full text, a document's extra
 
 Search or open released evidence under a fresh signed-in request. Use the citation JSON returned by search with open.
 `,
-  "evidence-search": `usage: echo-brain person evidence search [--query <text>] [--project <project-id>] [--kind <decision|action|rationale|note|document_passage>] [--limit <1-50>]
+  "evidence-search": `usage: echo-brain person evidence search [--query <text>] [--project <project-id>] [--kind <imported_meeting|decision|action|rationale|note|document_passage>] [--limit <1-50>]
 
 Without --query, lists readable evidence titles and kinds without body text.
 `,
@@ -407,7 +407,7 @@ Shows each employee's name, canonical email, membership state, and invitation st
 `,
 };
 
-const TOOL_VERBS: readonly PersonToolVerbNameV1[] = ['setup', 'connect', 'disconnect', 'status', 'cancel', 'project'];
+const TOOL_VERBS: readonly PersonToolVerbNameV1[] = ['setup', 'connect', 'disconnect', 'status', 'cancel', 'project', 'meetings'];
 
 function toolVerb(value: string | undefined): PersonToolVerbNameV1 | undefined {
   return TOOL_VERBS.find((verb) => verb === value);
@@ -1173,12 +1173,12 @@ export async function runPersonClientCli(
       case 'evidence-search': {
         const project_id = values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, 'project'));
         const kind = values.kind;
-        if (kind !== undefined && !['decision', 'action', 'rationale', 'note', 'document_passage'].includes(String(kind))) throw new Error('Invalid evidence kind');
+        if (kind !== undefined && !['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'].includes(String(kind))) throw new Error('Invalid evidence kind');
         const limit = values.limit === undefined ? undefined : Number(values.limit);
         if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)) throw new Error('Invalid evidence limit');
         print(stdout, { ok: true, result: await client.evidenceSearch({ schema_version: 1,
           ...(values.query === undefined ? {} : { query: requiredText(values, 'query') }),
-          ...(kind === undefined ? {} : { kinds: [kind as 'decision' | 'action' | 'rationale' | 'note' | 'document_passage'] as const }),
+          ...(kind === undefined ? {} : { kinds: [kind as 'imported_meeting' | 'decision' | 'action' | 'rationale' | 'note' | 'document_passage'] as const }),
           ...(limit === undefined ? {} : { limit }),
           ...(project_id === undefined ? {} : { project_id }),
         }, dependencies.abort_signal) });

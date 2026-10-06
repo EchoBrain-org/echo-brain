@@ -130,7 +130,7 @@ export interface PersonOriginalContextRetrievalPortV1 {
 
 /** Desk-only, request-bound original evidence release.  Callers of the
  * PersonOriginalContextRetrievalPortV1 cannot invoke these methods. */
-export type OriginalContextDeskKindV1 = "note" | "document_passage";
+export type OriginalContextDeskKindV1 = "note" | "document_passage" | "imported_meeting";
 export type OriginalContextDeskVisibilityV1 = "only_me" | "team" | "project" | "projects";
 
 export interface OriginalContextDeskItemV1 {

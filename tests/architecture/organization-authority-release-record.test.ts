@@ -322,7 +322,7 @@ function writeStateWithLegacyProcessorAdmission(
     authority
       .prepare(
         `INSERT INTO authority_live_source_admission_v2 (
-          singleton, organization_id, principal_id, membership_id, membership_type,
+          source_key, organization_id, principal_id, membership_id, membership_type,
           source_adapter_id, source_adapter_version, source_adapter_instance_id,
           normalizer_version, source_custodian_sha256,
           source_custodian_assurance, source_custodian_observed_at,

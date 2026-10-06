@@ -42,6 +42,8 @@ const ALLOWED_LEAF_IMPORTS = new Set([
   "node:path",
   "node:worker_threads",
   "openid-client",
+  "fast-xml-parser",
+  "eventsource-parser",
 ]);
 
 const FORBIDDEN_SELECTED_MODULES = [

@@ -67,18 +67,18 @@ export function createCoreInput({ authority, coordinates: { organization_id }, o
   const processor_configuration_sha256 = canonicalSha256({ kind: "echo-capacity-core-input-deterministic-processor-v1" });
   const processor_credential_reference_sha256 = canonicalSha256({ kind: "echo-capacity-core-input-no-provider-credential-v1" });
   authority.transaction(() => {
-    const existing = authority.prepare("SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE singleton = 1").get();
+    const existing = authority.prepare("SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = '1'").get();
     if (existing !== undefined) throw new Error("core input setup requires an unadmitted Authority state");
     authority.prepare(
       `INSERT INTO authority_live_source_admission_v2 (
-        singleton, organization_id, principal_id, membership_id, membership_type,
+        source_key, organization_id, principal_id, membership_id, membership_type,
         source_adapter_id, source_adapter_version, source_adapter_instance_id,
         normalizer_version, source_custodian_sha256, source_custodian_assurance,
         source_custodian_observed_at, source_credential_reference_sha256,
         initial_cursor, cutoff_at, processor_adapter_id, processor_instance_id,
         processor_adapter_version, processor_configuration_sha256,
         processor_credential_reference_sha256, semantic_input_sha256, admitted_at
-      ) VALUES (1, ?, ?, ?, 'owner', ?, ?, ?, ?, ?, 'fixture_owner_declared', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES ('1', ?, ?, ?, 'owner', ?, ?, ?, ?, ?, 'fixture_owner_declared', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       organization_id, authorization.principal_id, authorization.membership_id,
       SOURCE.adapter_id, SOURCE.version, SOURCE.instance_id, SOURCE.version,

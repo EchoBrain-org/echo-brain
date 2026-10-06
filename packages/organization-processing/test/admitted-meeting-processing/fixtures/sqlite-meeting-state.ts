@@ -1,7 +1,7 @@
 import {
   type Sha256Digest
 } from "@echo-brain/federation-protocol";
-import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import Database from "better-sqlite3";
 import type {
   ActionableMeetingProcessingCandidateV1,
@@ -92,7 +92,7 @@ export const decisions: DecisionSet = {
 export function database(path = ":memory:"): Database.Database {
   const value = new Database(path);
   value.pragma("foreign_keys = ON");
-  applyAuthorityBaselineV10(value);
+  applyAuthorityBaselineV11(value);
   value
     .prepare(
       `INSERT INTO authority_metadata
@@ -116,7 +116,7 @@ export function database(path = ":memory:"): Database.Database {
   value
     .prepare(
       `INSERT INTO authority_live_source_admission_v2 (
-         singleton, organization_id, principal_id, membership_id,
+         source_key, organization_id, principal_id, membership_id,
          membership_type, source_adapter_id, source_adapter_version,
          source_adapter_instance_id, normalizer_version, source_custodian_sha256,
          source_custodian_assurance, source_custodian_observed_at,

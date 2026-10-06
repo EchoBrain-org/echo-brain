@@ -73,6 +73,36 @@ function apiRuntime(events: string[]): RunningOrganizationAuthorityApiRuntime {
 }
 
 describe("Organization Authority service lifecycle", () => {
+  it("recovers personal approvals before search readiness and serializes their publication in the existing worker", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const personalEvents: string[] = [];
+    const runtime = await startOrganizationAuthorityServiceLifecycle({ api: apiConfig, worker_interval_ms: 1_000 }, {
+      processing: processing(events, undefined, async () => { expect(personalEvents[0]).toBe('recover'); }),
+      additional_processing: processing(personalEvents),
+      start_api_runtime: async () => { expect(events).toEqual(['recover', 'reconcile']); return apiRuntime(events); },
+    });
+    try {
+      runtime.requestApprovalPublication();
+      await vi.advanceTimersByTimeAsync(5);
+      expect(personalEvents).toContain('finalize');
+      expect(personalEvents).toContain('append');
+      expect(personalEvents).not.toContain('reconcile');
+    } finally { await runtime.close(); }
+  });
+
+  it("does not serve search if a personal approved append cannot recover", async () => {
+    const start = vi.fn();
+    const primary = processing([]);
+    const search = vi.spyOn(primary, 'reconcileReadableSearchGeneration');
+    await expect(startOrganizationAuthorityServiceLifecycle({ api: apiConfig, worker_interval_ms: 1_000 }, {
+      processing: primary,
+      additional_processing: { ...processing([]), recoverV4Appends: async () => { throw new Error('pending signed append'); } },
+      start_api_runtime: start,
+    })).rejects.toThrow('pending signed append');
+    expect(search).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
   it("coalesces search wakes at completion and failure boundaries without self-retrying failures", async () => {
     vi.useFakeTimers();
     const blocked = deferred();

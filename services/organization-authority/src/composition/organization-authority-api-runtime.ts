@@ -81,12 +81,21 @@ export interface OrganizationAuthorityApiRuntimeConfig {
   readonly pkce_sealing_key: Uint8Array;
 }
 
+export interface PersonHttpRuntimeResourcesV1 {
+  readonly on_processing_queued?: () => void;
+  readonly database: import('better-sqlite3').Database;
+  readonly record: import('better-sqlite3').Database;
+  readonly coordinates: { readonly authority_id: string; readonly organization_id: string; readonly state_lineage_id: string };
+}
+export interface PersonHttpRuntimeV1 {
+  readonly applications: readonly ProviderHttpApplicationV1[];
+  readonly processing?: import('./organization-authority-service-lifecycle.js').OrganizationAuthorityProcessingCycleV1;
+  tools?(token: string): Promise<readonly import('@echo-brain/organization-api').OrganizationPersonToolV4[]>;
+  close(): void;
+}
 export interface OrganizationAuthorityApiRuntimeDependencies extends LegacyPersonLiveConnectorsV1 {
   /** Selected HTTP capabilities independent of ticket retrieval or Ask. The selecting root owns their lifecycle. */
-  readonly person_http_runtime_factory?: (authentication: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>) => {
-    readonly applications: readonly ProviderHttpApplicationV1[];
-    close(): void;
-  };
+  readonly person_http_runtime_factory?: (authentication: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>, resources: PersonHttpRuntimeResourcesV1) => PersonHttpRuntimeV1;
   /** Selected capabilities; adding a provider does not add a runtime or Ask slot. */
   readonly live_connectors?: readonly PersonLiveConnectorDefinitionV1[];
   /** Server-only agentic Ask experiment: open the whole readable scope first when it is small. */
@@ -115,7 +124,26 @@ export interface OrganizationAuthorityApiRuntimeDependencies extends LegacyPerso
     ProviderHttpApplicationV1;
 }
 
+/** Recover personal writes before search startup, then attach the API's authenticated sessions. */
+export function preparePersonHttpRuntimeV1(factory: OrganizationAuthorityApiRuntimeDependencies['person_http_runtime_factory'], resources: PersonHttpRuntimeResourcesV1) {
+  if (factory === undefined) return undefined;
+  let sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'> | undefined;
+  const runtime = factory({ authenticateAccess(input) {
+    if (sessions === undefined) throw new AuthorityOperationError('unavailable', 'Person API is starting');
+    return sessions.authenticateAccess(input);
+  } }, resources);
+  let closed = false;
+  const close = () => { if (!closed) { closed = true; runtime.close(); } };
+  return { processing: runtime.processing, close,
+    attach(authentication: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>, current: PersonHttpRuntimeResourcesV1): PersonHttpRuntimeV1 {
+      if (closed || sessions !== undefined || canonicalSha256(current.coordinates) !== canonicalSha256(resources.coordinates)) throw new Error('Personal runtime cannot be rebound');
+      sessions = authentication; return { ...runtime, close };
+    },
+  };
+}
+
 export interface RunningOrganizationAuthorityApiRuntime {
+  readonly processing?: PersonHttpRuntimeV1['processing'];
   readonly address: AddressInfo;
   /** Stops ingress immediately while lifecycle-owned work retains its handles. */
   stopAcceptingRequests?(): void;
@@ -221,7 +249,8 @@ export async function startOrganizationAuthorityApiRuntime(
       descriptor: definition.descriptor, scopes: definition.scopes, minimum_response_version: definition.minimum_response_version,
       application: runtime.application,
     }));
-    personHttp = dependencies.person_http_runtime_factory?.(sessions);
+    personHttp = dependencies.person_http_runtime_factory?.(sessions, { database, record: recordDatabase,
+      coordinates: { authority_id: metadata.authority_id, organization_id: metadata.organization_id, state_lineage_id: lineage.root.state_lineage_id } });
     externalIdentity = dependencies.external_identity_runtime_bundle?.open({
       state_directory: config.state_directory,
       authority_id: metadata.authority_id,
@@ -289,6 +318,7 @@ export async function startOrganizationAuthorityApiRuntime(
     const documents = new SqlitePersonDocumentRepositoryV1(database);
     const originalItems = new SqlitePersonOriginalItemsV1(database, sessions, metadata.organization_id);
     const personTools = async (token: string) => [
+      ...await (personHttp?.tools?.(token) ?? []),
       ...await (externalIdentity?.tools(token) ?? Promise.resolve([])),
       ...(await Promise.all(liveConnectors.map(({ runtime }) => runtime.tools?.(token) ?? []))).flat(),
     ];
@@ -401,6 +431,7 @@ export async function startOrganizationAuthorityApiRuntime(
     };
     return {
       address,
+      ...(personHttp?.processing === undefined ? {} : { processing: personHttp.processing }),
       stopAcceptingRequests,
       close: async () => {
         stopAcceptingRequests();

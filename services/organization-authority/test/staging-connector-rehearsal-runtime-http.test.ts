@@ -165,7 +165,7 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
       return validateOrganizationPersonToolsV4(await response.json()).tools;
     };
     const catalog = await tools();
-    expect(catalog.map(tool => tool.tool_id).sort()).toEqual(['jira', 'slack']);
+    expect(catalog.map(tool => tool.tool_id).sort()).toEqual(['granola', 'jira', 'slack']);
     expect(catalog).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', availability: 'enabled', personal_status: 'linked', external_scope_id: FIXTURE_CLOUD })]));
     // Each Person can connect Jira, without seeing or using the owner's grant.
     const invited = await post('/v1/person/employees', { name: 'Fixture Employee', email: 'employee@example.test' });
@@ -179,7 +179,7 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
     const page = await (await fetch(`http://127.0.0.1:${runtime.address.port}/v2/session/oidc/callback?state=${encodeURIComponent(seams.oidcState())}&code=employee`)).text();
     const employee = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
     const employeeCatalog = await tools(employee);
-    expect(employeeCatalog.map(tool => tool.tool_id).sort()).toEqual(['jira', 'slack']);
+    expect(employeeCatalog.map(tool => tool.tool_id).sort()).toEqual(['granola', 'jira', 'slack']);
     expect(employeeCatalog).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', availability: 'enabled', personal_status: 'unlinked', external_scope_id: null, external_subject_id: null })]));
     const employeeConnect = await post('/v1/person/tools/jira/connect', { schema_version: 1 }, employee);
     expect(employeeConnect.status).toBe(201);

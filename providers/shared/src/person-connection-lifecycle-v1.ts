@@ -38,19 +38,19 @@ export function createPersonConnectionLifecycleV1(options: {
   readonly provider: PersonProviderV1;
   readonly store: PersonConnectionStoreV1;
   readonly nango: NangoPersonConnectionV1;
-  readonly scope_id: string;
+  /** Omit only when the provider verifies the person's active scope during consent. */
+  readonly scope_id?: string;
   readonly fetch: typeof fetch;
   readonly authenticate: (access_token: string) => PersonConnectionAuthorizationV1;
   readonly verify: (authenticated: PersonConnectionAuthenticatedFetchV1, input: {
     readonly signal?: AbortSignal;
     readonly require_account: (account: string) => void;
-  }) => Promise<Readonly<{ account_id: string; origin: string }>>;
+  }) => Promise<Readonly<{ account_id: string; origin: string; scope_id?: string }>>;
 }) {
   const { provider } = options;
   const { string, copyBinding } = provider;
   const failure: PersonProviderV1['failure'] = provider.failure;
-  if (!provider.scope_id_pattern.test(options.scope_id) || options.store.provider.id !== provider.id) failure('invalid_request');
-  const cloud = options.scope_id;
+  if ((options.scope_id !== undefined && !provider.scope_id_pattern.test(options.scope_id)) || options.store.provider.id !== provider.id) failure('invalid_request');
   function actor(token: string) {
     const authorization = Object.freeze({ ...options.authenticate(token) });
     const person = Object.freeze({ organization_id: authorization.organization_id, principal_id: authorization.principal_id, membership_id: authorization.membership_id });
@@ -64,7 +64,7 @@ export function createPersonConnectionLifecycleV1(options: {
       // Defensive allowlist BEFORE obtaining or attaching a credential, even if a future caller bypasses the transport.
       const target = new URL(url);
       if (target.origin !== provider.credential_origin || target.username !== '' || target.password !== '' || target.hash !== '' ||
-          !provider.credential_paths(cloud).some(path => path.endsWith('/') ? target.pathname.startsWith(path) : target.pathname === path) ||
+          !provider.credential_paths(binding.external_scope_id ?? '').some(path => path.endsWith('/') ? target.pathname.startsWith(path) : target.pathname === path) ||
           init.redirect !== 'error') failure('unauthorized');
       const connection = await options.nango.connection(reference, init.signal ?? undefined);
       if (canonicalSha256(connection.tags) !== canonicalSha256(expectedTags)) failure('unauthorized');
@@ -81,16 +81,28 @@ export function createPersonConnectionLifecycleV1(options: {
     const pending = options.store.pending(person, attempt);
     const current = () => { requirePerson(); options.store.pending(person, attempt); signal?.throwIfAborted(); };
     const safeReference = string(reference, 512);
-    const temporary = copyBinding({ ...person, tool_id: provider.id, external_scope_id: cloud, external_subject_id: pending.expected_account ?? 'unverified', read_grant_sha256: canonicalSha256({ attempt }) });
+    const temporary = copyBinding({ ...person, tool_id: provider.id, external_scope_id: options.scope_id ?? 'unverified', external_subject_id: pending.expected_account ?? 'unverified', read_grant_sha256: canonicalSha256({ attempt }) });
     const verified = await options.verify(authenticated(temporary, safeReference, tags(person, attempt), current), {
       signal,
       require_account(account) {
         if (pending.expected_account !== undefined && account !== pending.expected_account) throw new PersonConnectionCompletionFailure('account_mismatch');
       },
     });
-    current(); options.store.complete(person, attempt, safeReference, cloud, verified.account_id, verified.origin);
+    const scope = verified.scope_id ?? options.scope_id;
+    if (scope === undefined || !provider.scope_id_pattern.test(scope)) failure('invalid_output');
+    if ((options.scope_id !== undefined && scope !== options.scope_id) ||
+        (pending.expected_scope !== undefined && scope !== pending.expected_scope)) throw new PersonConnectionCompletionFailure('account_mismatch');
+    current(); options.store.complete(person, attempt, safeReference, scope, verified.account_id, verified.origin);
   }
-  return Object.freeze({ actor, tags, authenticated, application: Object.freeze({
+  /** A request or Authority worker supplies its own current-person fence. No saved session tokens. */
+  function open(person: ConnectedPersonV1, requirePerson: () => void, signal?: AbortSignal) {
+    requirePerson(); signal?.throwIfAborted();
+    const stored = options.store.current(person);
+    if (stored === undefined || !stored.active) failure('unauthorized');
+    const current = () => { requirePerson(); options.store.requireCurrent(stored.binding); signal?.throwIfAborted(); };
+    return Object.freeze({ stored, current, transport: authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current) });
+  }
+  return Object.freeze({ actor, tags, authenticated, open, application: Object.freeze({
     /** Catalog status is local to this Person; listing tools never reads the provider or refreshes consent. */
     tool(input: { readonly access_token: string }): OrganizationPersonToolV4 {
       const { person, requirePerson } = actor(input.access_token);

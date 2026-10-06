@@ -3,7 +3,7 @@ import { RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_SHA256, RESTRICTED_REVIEWER_PERS
 import { type PrivateApprovalResolutionV1 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
 import type { PendingPrivateApprovalV2 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import { describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PrivateSlackApprovalReviewerTargetV1 } from "../../src/private-approval/resolve-private-slack-approval-reviewer-target-v1.js";
 import { SqlitePrivateSlackApprovalAssignmentStateV1, type PrivateApprovalCandidateCommitmentV1, type CanonicalPrivateApprovalV4ReceiptV1, type StagePrivateApprovalAssignmentInputV1 } from "../../src/private-approval/sqlite-private-slack-approval-assignment-state-v1.js";
@@ -21,7 +21,7 @@ const LINK_CONTRACT_SHA256 = canonicalSha256({ link: "contract" });
 
 function fixture(outbox: "queued" | "posted" = "posted") {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV10(database);
+  applyAuthorityBaselineV11(database);
   database.pragma("foreign_keys = OFF");
   database
     .prepare(

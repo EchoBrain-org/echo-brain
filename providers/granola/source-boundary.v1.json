@@ -8,7 +8,10 @@
   "package_json": "providers/granola/package.json",
   "entry_points": [
     "providers/granola/src/context/granola-context-source-v1.ts",
-    "providers/granola/src/granola-meeting-normalizer-v1.ts"
+    "providers/granola/src/granola-meeting-normalizer-v1.ts",
+    "providers/granola/src/granola-mcp-v1.ts",
+    "providers/granola/src/granola-person-connection-v1.ts",
+    "providers/granola/src/granola-folder-source-v1.ts"
   ],
   "owned_source_paths": [
     "providers/granola/src/**"
@@ -19,9 +22,12 @@
   "allowed_workspace_packages": [
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-authority-kernel",
-    "@echo-brain/organization-processing"
+    "@echo-brain/organization-processing",
+    "@echo-brain/provider-runtime"
   ],
-  "allowed_external_packages": [],
+  "allowed_external_packages": [
+    "fast-xml-parser"
+  ],
   "allowed_node_builtins": [
     "crypto"
   ],
@@ -36,9 +42,12 @@
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-authority-kernel",
-        "@echo-brain/organization-processing"
+        "@echo-brain/organization-processing",
+        "@echo-brain/provider-runtime"
       ],
-      "allowed_external_packages": [],
+      "allowed_external_packages": [
+        "fast-xml-parser"
+      ],
       "allowed_node_builtins": [
         "crypto"
       ]

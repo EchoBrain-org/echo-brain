@@ -1,6 +1,6 @@
--- Authority baseline V10: project settings and frozen private approval cards,
+-- Authority baseline V11: independent personal meeting-source progress,
 -- plus project context, raw Person uploads, and optional search enrichment.
--- Fresh initialization only; no V9-to-V10 transition or backfill exists, and
+-- Fresh initialization only; no V10-to-V11 transition or backfill exists, and
 -- this file is never an in-place upgrade.
 
 CREATE TABLE authority_metadata (
@@ -502,11 +502,11 @@ CREATE TABLE authority_readable_search_active_generation (
 ) STRICT;
 
 CREATE TABLE authority_live_source_admission_v2 (
-  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  source_key TEXT PRIMARY KEY CHECK (length(source_key) BETWEEN 1 AND 128),
   organization_id TEXT NOT NULL REFERENCES authority_metadata(organization_id),
   principal_id TEXT NOT NULL REFERENCES authority_principals(principal_id),
   membership_id TEXT NOT NULL REFERENCES authority_memberships(membership_id),
-  membership_type TEXT NOT NULL CHECK (membership_type = 'owner'),
+  membership_type TEXT NOT NULL CHECK (membership_type IN ('owner', 'employee')),
   source_adapter_id TEXT NOT NULL CHECK (length(trim(source_adapter_id)) BETWEEN 1 AND 128),
   source_adapter_version TEXT NOT NULL CHECK (length(trim(source_adapter_version)) BETWEEN 1 AND 128),
   source_adapter_instance_id TEXT NOT NULL CHECK (
@@ -523,7 +523,7 @@ CREATE TABLE authority_live_source_admission_v2 (
     source_custodian_observed_at = strftime('%Y-%m-%dT%H:%M:%fZ', source_custodian_observed_at)
   ),
   source_credential_reference_sha256 TEXT NOT NULL CHECK (source_credential_reference_sha256 LIKE 'sha256:%'),
-  initial_cursor TEXT NOT NULL UNIQUE CHECK (length(initial_cursor) BETWEEN 1 AND 65536),
+  initial_cursor TEXT NOT NULL CHECK (length(initial_cursor) BETWEEN 1 AND 65536),
   cutoff_at TEXT NOT NULL CHECK (unixepoch(cutoff_at) IS NOT NULL),
   processor_adapter_id TEXT NOT NULL CHECK (length(trim(processor_adapter_id)) BETWEEN 1 AND 128),
   processor_adapter_version TEXT NOT NULL CHECK (length(trim(processor_adapter_version)) BETWEEN 1 AND 128),
@@ -535,18 +535,37 @@ CREATE TABLE authority_live_source_admission_v2 (
   processor_credential_reference_sha256 TEXT NOT NULL CHECK (processor_credential_reference_sha256 LIKE 'sha256:%'),
   semantic_input_sha256 TEXT NOT NULL UNIQUE CHECK (semantic_input_sha256 LIKE 'sha256:%'),
   admitted_at TEXT NOT NULL CHECK (unixepoch(admitted_at) IS NOT NULL),
+  UNIQUE (source_key, semantic_input_sha256),
   FOREIGN KEY (membership_id, organization_id, principal_id, membership_type)
     REFERENCES authority_memberships(membership_id, organization_id, principal_id, membership_type)
 ) STRICT;
 
 CREATE TABLE authority_live_source_progress_v2 (
-  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  source_key TEXT PRIMARY KEY CHECK (length(source_key) BETWEEN 1 AND 128),
   admission_semantic_input_sha256 TEXT NOT NULL UNIQUE
     REFERENCES authority_live_source_admission_v2(semantic_input_sha256),
-  cursor TEXT NOT NULL UNIQUE CHECK (length(cursor) BETWEEN 1 AND 65536),
+  cursor TEXT NOT NULL CHECK (length(cursor) BETWEEN 1 AND 65536),
   cursor_version INTEGER NOT NULL CHECK (cursor_version >= 0),
-  updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL)
+  updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
+  FOREIGN KEY (source_key, admission_semantic_input_sha256)
+    REFERENCES authority_live_source_admission_v2(source_key, semantic_input_sha256)
 ) STRICT;
+
+-- Personal intake configuration. Meeting text stays in the existing source store.
+CREATE TABLE authority_person_meeting_sources_v1 (
+  source_key TEXT PRIMARY KEY REFERENCES authority_live_source_admission_v2(source_key),
+  person_key TEXT NOT NULL CHECK (person_key LIKE 'sha256:%'),
+  project_id TEXT REFERENCES authority_projects_v1(project_id),
+  folder_id TEXT CHECK (folder_id IS NULL OR length(folder_id) BETWEEN 1 AND 256),
+  settings_revision INTEGER NOT NULL CHECK (settings_revision >= 0),
+  CHECK (folder_id IS NULL OR project_id IS NOT NULL)
+) STRICT;
+CREATE UNIQUE INDEX authority_person_meeting_one_watch_v1 ON authority_person_meeting_sources_v1(person_key) WHERE folder_id IS NOT NULL;
+CREATE TRIGGER authority_person_meeting_settings_ordered_v1
+BEFORE UPDATE ON authority_person_meeting_sources_v1
+WHEN NEW.source_key != OLD.source_key OR NEW.person_key != OLD.person_key OR NEW.project_id IS NOT OLD.project_id
+  OR NEW.settings_revision != OLD.settings_revision + 1
+BEGIN SELECT RAISE(ABORT, 'personal meeting settings require ordered changes'); END;
 
 CREATE TABLE authority_live_source_candidates_v2 (
   candidate_id TEXT PRIMARY KEY CHECK (candidate_id GLOB 'cnd_*'),
@@ -601,6 +620,25 @@ CREATE TABLE authority_live_approval_outbox_v2 (
     (state = 'superseded' AND ((provider_message_ts IS NULL AND frozen_card_sha256 IS NULL AND approved_snapshot_json IS NULL AND approved_snapshot_sha256 IS NULL AND post_started_at IS NULL AND control_approval_sha256 IS NULL) OR (frozen_card_sha256 IS NOT NULL AND approved_snapshot_json IS NOT NULL AND approved_snapshot_sha256 IS NOT NULL AND post_started_at IS NOT NULL)) AND superseded_by_candidate_id IS NOT NULL AND superseded_at IS NOT NULL AND (tombstoned_at IS NULL OR provider_message_ts IS NOT NULL))
   )
 ) STRICT;
+
+-- Authenticated in-app human actions and append recovery, without a second candidate store.
+CREATE TABLE authority_person_meeting_approval_actions_v1 (
+  sequence INTEGER PRIMARY KEY,
+  approval_id TEXT NOT NULL UNIQUE REFERENCES authority_live_approval_outbox_v2(approval_id),
+  command_id TEXT NOT NULL UNIQUE CHECK (length(command_id) BETWEEN 1 AND 128),
+  body_json TEXT NOT NULL CHECK (json_valid(body_json) AND json_type(body_json) = 'object'
+    AND json_extract(body_json, '$.request.action') IN ('approve', 'reject')),
+  receipt_json TEXT CHECK (receipt_json IS NULL OR (json_valid(receipt_json) AND json_type(receipt_json) = 'object')),
+  CHECK (receipt_json IS NULL OR json_extract(body_json, '$.request.action') = 'approve')
+) STRICT;
+CREATE TRIGGER authority_person_meeting_action_immutable_v1
+BEFORE UPDATE ON authority_person_meeting_approval_actions_v1
+WHEN NEW.sequence != OLD.sequence OR NEW.approval_id != OLD.approval_id OR NEW.command_id != OLD.command_id
+  OR NEW.body_json != OLD.body_json OR OLD.receipt_json IS NOT NULL OR NEW.receipt_json IS NULL
+BEGIN SELECT RAISE(ABORT, 'personal meeting action is immutable'); END;
+CREATE TRIGGER authority_person_meeting_action_delete_denied_v1
+BEFORE DELETE ON authority_person_meeting_approval_actions_v1
+BEGIN SELECT RAISE(ABORT, 'personal meeting action deletion is denied'); END;
 
 CREATE TABLE authority_private_approval_assignments_v3 (
   approval_id TEXT NOT NULL UNIQUE CHECK (approval_id GLOB 'apr_*'),
@@ -1211,7 +1249,7 @@ BEGIN SELECT RAISE(ABORT, 'live source admission deletion is denied'); END;
 
 CREATE TRIGGER authority_live_source_progress_v2_only_advances
 BEFORE UPDATE ON authority_live_source_progress_v2
-WHEN NEW.singleton != OLD.singleton
+WHEN NEW.source_key != OLD.source_key
   OR NEW.admission_semantic_input_sha256 != OLD.admission_semantic_input_sha256
   OR NEW.cursor = OLD.cursor
   OR NEW.cursor_version != OLD.cursor_version + 1
@@ -2124,7 +2162,7 @@ BEGIN
    WHERE organization_id = OLD.organization_id;
 END;
 
-PRAGMA user_version = 10;
+PRAGMA user_version = 11;
 
 -- A malformed legacy retained note must not pin the source-admission worker.
 -- The disposition carries no title, body, request ID or exception text.

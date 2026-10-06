@@ -316,7 +316,7 @@ function installDurableCanaryFixture(
       authority
         .prepare(
         `INSERT INTO authority_live_source_admission_v2
-         (singleton, organization_id, principal_id, membership_id, membership_type,
+         (source_key, organization_id, principal_id, membership_id, membership_type,
           source_adapter_id, source_adapter_version, source_adapter_instance_id,
           normalizer_version, source_custodian_sha256,
           source_custodian_assurance, source_custodian_observed_at,
@@ -344,7 +344,7 @@ function installDurableCanaryFixture(
       authority
         .prepare(
         `INSERT INTO authority_live_source_progress_v2
-         (singleton, admission_semantic_input_sha256, cursor, cursor_version, updated_at)
+         (source_key, admission_semantic_input_sha256, cursor, cursor_version, updated_at)
          VALUES (1, ?, 'granola:v1:live:canary', ?, ?)`,
         )
         .run(admissionSemanticSha256, options.cursor_version ?? 1, issuedAt);
@@ -618,7 +618,7 @@ function installSyntheticFixtureApprovalEvidence(
     authority
       .prepare(
         `INSERT INTO authority_live_source_admission_v2
-         (singleton, organization_id, principal_id, membership_id, membership_type,
+         (source_key, organization_id, principal_id, membership_id, membership_type,
           source_adapter_id, source_adapter_version, source_adapter_instance_id,
           normalizer_version, source_custodian_sha256,
           source_custodian_assurance, source_custodian_observed_at,
@@ -647,7 +647,7 @@ function installSyntheticFixtureApprovalEvidence(
     authority
       .prepare(
         `INSERT INTO authority_live_source_progress_v2
-         (singleton, admission_semantic_input_sha256, cursor, cursor_version, updated_at)
+         (source_key, admission_semantic_input_sha256, cursor, cursor_version, updated_at)
          VALUES (1, ?, 'synthetic-demo-source:customer-demo:1.0.0:v1:4', 4, ?)`,
       )
       .run(admissionSemanticSha256, issuedAt);

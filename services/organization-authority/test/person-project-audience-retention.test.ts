@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
 import { SqlitePersonTextSourceInboxV1 } from "../src/adapters/persistence/sqlite/person-text-source-v1.js";
 import { SqliteSourceAdmissionStoreV1 } from "../src/adapters/persistence/sqlite/source-admission-v1.js";
@@ -19,7 +19,7 @@ const PROJECT_TWO = "prj_22222222-2222-4222-8222-222222222222";
 afterEach(() => { for (const database of databases.splice(0)) database.close(); });
 
 function fixture() {
-  const database = new Database(":memory:"); databases.push(database); database.pragma("foreign_keys=ON"); applyAuthorityBaselineV10(database);
+  const database = new Database(":memory:"); databases.push(database); database.pragma("foreign_keys=ON"); applyAuthorityBaselineV11(database);
   database.prepare("INSERT INTO authority_metadata VALUES (1, ?, ?, 'Fixture', '{}', ?, ?)").run(AUTHORITY, ORG, NOW, NOW);
   database.prepare("INSERT INTO authority_principals VALUES (?, ?, 'PM', ?)").run(PRINCIPAL, ORG, NOW);
   database.prepare("INSERT INTO authority_memberships(membership_id,organization_id,principal_id,membership_type,status,provisioned_at) VALUES (?, ?, ?, 'owner', 'active', ?)").run(MEMBER, ORG, PRINCIPAL, NOW);

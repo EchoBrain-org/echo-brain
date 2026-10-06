@@ -16,6 +16,10 @@ export function createPersonProviderJsonTransportV1<Input extends { readonly sig
   provider: Pick<PersonProviderV1, 'copyBinding' | 'failure'>,
   authenticated: PersonProviderAuthenticatedFetchV1,
   request: (input: Input, binding: PersonConnectorReadBindingV1) => Readonly<{ url: URL; method?: 'GET' | 'POST'; body?: Readonly<Record<string, unknown>> }>,
+  responseFormat?: Readonly<{
+    accept: string;
+    decode(response: Response, options: { readonly maxBytes: number; readonly signal: AbortSignal }): Promise<unknown>;
+  }>,
 ) {
   const binding = provider.copyBinding(authenticated.binding);
   const digest = canonicalSha256(binding);
@@ -36,7 +40,7 @@ export function createPersonProviderJsonTransportV1<Input extends { readonly sig
         current();
         response = await abortableProviderOperationV1(() => fetchAuthenticated(selected.url.href, {
           method: selected.method ?? 'GET', redirect: 'error', signal,
-          headers: { Accept: 'application/json', ...(selected.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+          headers: { Accept: responseFormat?.accept ?? 'application/json', ...(selected.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
           ...(selected.body === undefined ? {} : { body: JSON.stringify(selected.body) }),
         }), signal, disposeProviderResponseV1);
         signal.throwIfAborted();
@@ -47,8 +51,8 @@ export function createPersonProviderJsonTransportV1<Input extends { readonly sig
           if (response.status === 429) failure('rate_limited');
           failure('unavailable');
         }
-        if (!/^application\/(?:json|[a-z0-9.+-]+\+json)(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) failure('invalid_output');
-        const result = await readBoundedJsonResponseV1(response, { maxBytes: PERSON_PROVIDER_RESPONSE_MAX_BYTES_V1, signal });
+        if (responseFormat === undefined && !/^application\/(?:json|[a-z0-9.+-]+\+json)(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) failure('invalid_output');
+        const result = await (responseFormat?.decode ?? readBoundedJsonResponseV1)(response, { maxBytes: PERSON_PROVIDER_RESPONSE_MAX_BYTES_V1, signal });
         signal.throwIfAborted();
         current();
         return result;

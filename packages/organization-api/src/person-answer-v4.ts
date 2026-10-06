@@ -32,7 +32,7 @@ export const PERSON_EVIDENCE_LABEL_MAX_BYTES_V1 = 1024;
 /** The final response ceiling remains authoritative, including citation metadata. */
 export const PERSON_ANSWER_FALLBACK_TOTAL_MAX_BYTES_V4 = PERSON_ANSWER_RESPONSE_MAX_BYTES_V4;
 
-export type PersonEvidenceKindV1 = 'decision' | 'action' | 'rationale' | 'note' | 'document_passage' | 'slack_message';
+export type PersonEvidenceKindV1 = 'imported_meeting' | 'decision' | 'action' | 'rationale' | 'note' | 'document_passage' | 'slack_message';
 export type PersonEvidenceVisibilityV1 = 'only_me' | 'team' | 'project' | 'projects' | 'approver_only';
 type ApprovedRecordPolicyV3 = Extract<PersonAnswerCitationV3, { readonly kind: 'approved_record' }>['policy_id'];
 
@@ -248,7 +248,7 @@ function citationKey(value: PersonAnswerEvidenceCitationV6): string {
 function evidenceKind(value: unknown, label: string, version: 4 | 5 | 6 = 4): asserts value is PersonEvidenceKindV3 {
   if (version === 6 && value === 'page') return;
   if (version >= 5 && value === 'ticket') return;
-  if (!['decision', 'action', 'rationale', 'note', 'document_passage', 'slack_message'].includes(value as string)) fail(`${label} is invalid`);
+  if (!['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage', 'slack_message'].includes(value as string)) fail(`${label} is invalid`);
 }
 
 function visibility(value: unknown, label: string): asserts value is PersonEvidenceVisibilityV1 {
@@ -276,7 +276,7 @@ function citationRefConsistent(cited: PersonAnswerEvidenceCitationV6, ref: Perso
   if (cited.kind === 'approved_record') return ref === `meeting:${cited.record_sha256}`;
   if (cited.kind === 'source_revision') {
     return cited.document_id === undefined
-      ? ref.startsWith('note:') || ref.startsWith('transcript:')
+      ? ref.startsWith('imported_meeting:') || ref.startsWith('note:') || ref.startsWith('transcript:')
       : ref === `document:${cited.document_id}`;
   }
   return false;

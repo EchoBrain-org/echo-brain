@@ -29,11 +29,13 @@ const PROJECT_B = 'prj_00000000-0000-4000-8000-000000000002';
 const projectId = (index: number) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
 const hex = (index: number) => index.toString(16).padStart(64, '0');
 const NOTE = `note:ctx_${'a'.repeat(64)}`;
+const IMPORTED = `imported_meeting:cap_${'d'.repeat(64)}`;
 const DOCUMENT = `document:doc_${'b'.repeat(64)}`;
 const MEETING = `meeting:sha256:${'c'.repeat(64)}`;
 const TRANSCRIPT = `transcript:sha256:${'c'.repeat(64)}`;
 
 const noteRow = { ref: NOTE, kind: 'note', title: 'Pricing notes', added_at: '2026-09-21T22:00:00.000Z', visibility: 'only_me', projects: [] };
+const importedRow = { ref: IMPORTED, kind: 'imported_meeting', title: 'Imported meeting (unapproved): Pricing review', added_at: '2026-09-21T22:00:00.000Z', visibility: 'only_me', projects: [] };
 const documentRow = {
   ref: DOCUMENT, kind: 'document', title: 'Pricing memo', added_at: '2026-09-21T21:30:00.000Z', visibility: 'project',
   projects: [{ project_id: PROJECT_A, name: 'Apollo' }], media_type: 'application/pdf', extraction_state: 'ready', size_bytes: 1_245_184,
@@ -60,6 +62,7 @@ const NEVER_FIELDS = [
 ];
 
 const openNote = { schema_version: 1, kind: 'echo-person-open-v1', ref: NOTE, item: noteRow, text: 'Annual plans first.\n', next_cursor: null };
+const openImportedMeeting = { schema_version: 1, kind: 'echo-person-open-v1', ref: IMPORTED, item: importedRow, text: '', next_cursor: null };
 const openDocument = {
   schema_version: 1, kind: 'echo-person-open-v1', ref: DOCUMENT, item: documentRow, filename: 'pricing-memo.pdf',
   chunks: [{ anchor: { kind: 'page', start: 1 }, text: 'Pricing memo\n' }], next_cursor: 'AnR3',
@@ -250,6 +253,12 @@ describe('Person list and open public contracts', () => {
     expect(() => validatePersonOpenResponseV1({ ...openNote, next_cursor: 'AnR3' })).toThrow('next_cursor');
     expect(() => validatePersonOpenResponseV1({ ...openNote, item: { ...noteRow, ref: `note:ctx_${'d'.repeat(64)}` } })).toThrow('inconsistent');
     expect(() => validatePersonOpenResponseV1({ ...openNote, item: documentRow })).toThrow('inconsistent');
+  });
+
+  it('opens a transcript-only imported meeting with an empty notes representation', () => {
+    expect(validatePersonOpenResponseV1(openImportedMeeting)).toEqual(openImportedMeeting);
+    expect(() => validatePersonOpenResponseV1({ ...openImportedMeeting, item: noteRow })).toThrow('inconsistent');
+    expect(() => validatePersonOpenResponseV1({ ...openNote, text: '' })).toThrow('text');
   });
 
   it('opens a document page of at most eight anchored chunks', () => {

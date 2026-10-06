@@ -104,7 +104,7 @@ const MEDIA: Record<string, DocumentSummary['type']> = {
 
 /** The id after each kind of ref, as the API writes it: `note:ctx_…`, `document:doc_…`, `meeting:sha256:…`. */
 const ITEM_REF: Readonly<Record<ItemRef['kind'], RegExp>> = {
-  note: /^ctx_[0-9a-f]{64}$/, document: /^doc_[0-9a-f]{64}$/, meeting: /^sha256:[0-9a-f]{64}$/,
+  imported_meeting: /^cap_[0-9a-f]{64}$/, note: /^ctx_[0-9a-f]{64}$/, document: /^doc_[0-9a-f]{64}$/, meeting: /^sha256:[0-9a-f]{64}$/,
 };
 
 function itemRef(raw: unknown): ItemRef {
@@ -180,6 +180,8 @@ export function openView(raw: unknown, ref: ItemRef, first: boolean): Opened {
   const project_ids = list(object(value.item).projects).map(project => text(object(project).project_id));
   const next = nextCursor(value.next_cursor);
   switch (ref.kind) {
+    case 'imported_meeting':
+      return { kind: 'imported_meeting', content: { context_id: ref.id, title: item.title, text: typeof value.text === 'string' ? value.text : (() => { throw new ViewError(); })(), received_at: item.added_at, audience: item.visibility, project_ids }, next_cursor: next };
     case 'note':
       if (next !== null) throw new ViewError();
       return { kind: 'note', content: {

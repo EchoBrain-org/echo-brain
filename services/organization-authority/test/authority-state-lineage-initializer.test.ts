@@ -14,7 +14,7 @@ import {
   type InitializeAuthorityStateLineageV2Input,
 } from "../src/state-lineage/authority-state-lineage-initializer.js";
 
-import { applyAuthorityBaselineV10, AUTHORITY_BASELINE_SCHEMA_VERSION_V10, authorityBaselineSha256V10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV11, AUTHORITY_BASELINE_SCHEMA_VERSION_V11, authorityBaselineSha256V11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import {
   openOrganizationControlDatabase, applyOrganizationControlBaselineV3, ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3, organizationControlBaselineSha256V3,
@@ -116,8 +116,8 @@ function realBaselineInput(
     ...input(stateDirectory),
     schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V10,
-        schema_sha256: authorityBaselineSha256V10(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
+        schema_sha256: authorityBaselineSha256V11(),
       },
       "control-plane": {
         database_schema_version:
@@ -152,7 +152,7 @@ function realBaselineInput(
       },
     },
     top_level_appliers: {
-      authority: { apply: applyAuthorityBaselineV10 },
+      authority: { apply: applyAuthorityBaselineV11 },
       "control-plane": { apply: applyOrganizationControlBaselineV3 },
       "record-log": { apply: applyOrganizationRecordLogBaselineV4 },
     },

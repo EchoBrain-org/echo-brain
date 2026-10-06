@@ -34,7 +34,7 @@ import type {
   PersonTranscriptByRecordPortV1,
 } from "../application/ports/person-list-v1.js";
 import type { PersonListHttpApplicationV1 } from "../presentation/person-list-http-application-v1.js";
-import { boundedTextV1 } from "./person-item-text-v1.js";
+import { boundedTextV1 } from "../application/person-item-text-v1.js";
 import {
   PERSON_LIST_START_V1,
   decodePersonListCursorV1,
@@ -52,7 +52,7 @@ import {
 const COLLECT_LIMIT = PERSON_LIST_PAGE_SIZE_V1 + 1;
 const SOURCES = ["note", "document", "meeting"] as const satisfies readonly PersonListSourceV1[];
 const IDS: Readonly<Record<PersonListSourceV1, RegExp>> = {
-  note: /^ctx_[0-9a-f]{64}$/,
+  note: /^(?:ctx|cap)_[0-9a-f]{64}$/,
   document: /^doc_[0-9a-f]{64}$/,
   meeting: /^sha256:[0-9a-f]{64}$/,
 };
@@ -60,10 +60,10 @@ const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const DONE: PersonListSourcePositionV1 = Object.freeze({ state: "done" });
 
 type StoreRow = PersonStoreNoteRowV1 | PersonStoreDocumentRowV1 | PersonStoreMeetingRowV1;
-type Ordered = { readonly kind: PersonListSourceV1; readonly id: string; readonly added_at: string };
+type Ordered = { readonly kind: PersonListSourceV1 | "imported_meeting"; readonly id: string; readonly added_at: string };
 type Joined = ReturnType<PersonListDirectoryPortV1["joinedProjects"]>;
 type Opened =
-  | Extract<ReturnType<PersonOriginalItemsPortV1["open"]>, { readonly kind: "note" }>
+  | Extract<ReturnType<PersonOriginalItemsPortV1["open"]>, { readonly kind: "note" | "imported_meeting" }>
   | Extract<ReturnType<PersonOriginalItemsPortV1["open"]>, { readonly kind: "document" }>
   | (ReturnType<PersonMeetingItemsPortV1["openMeeting"]> & { readonly kind: "meeting" })
   | (ReturnType<PersonTranscriptByRecordPortV1["readApprovedMeetingTranscriptByRecordV1"]> & { readonly kind: "transcript" });
@@ -132,8 +132,10 @@ function projectRow(row: StoreRow, joined: Joined): PersonListRowV1 {
     projects: joined.projects.filter((project) => associated.has(project.project_id)).map(({ project_id, name }) => ({ project_id, name })),
   };
   switch (row.kind) {
+    case "imported_meeting":
+      return { ref: `imported_meeting:${row.id as `cap_${string}`}`, kind: "imported_meeting", ...base };
     case "note":
-      return { ref: `note:${row.id}`, kind: "note", ...base };
+      return { ref: `note:${row.id as `ctx_${string}`}`, kind: "note", ...base };
     case "document":
       return { ref: `document:${row.id}`, kind: "document", ...base, media_type: row.media_type, extraction_state: row.extraction_state, size_bytes: row.size_bytes };
     case "meeting":
@@ -160,9 +162,9 @@ function canonicalTime(value: unknown): value is string {
 /** A store page must be its own kind, strictly ordered, strictly after the cursor, and inside the scope. */
 function assertSource(kind: PersonListSourceV1, rows: readonly StoreRow[], after: PersonListSourcePositionV1, scope: PersonAnswerScopeV3): void {
   if (rows.length > COLLECT_LIMIT) invalidOutput();
-  let previous: Ordered | undefined = after.state === "after" ? { kind, id: after.id, added_at: after.added_at } : undefined;
+  let previous: Ordered | undefined = after.state === "after" ? { kind: after.id.startsWith("cap_") ? "imported_meeting" : kind, id: after.id, added_at: after.added_at } : undefined;
   for (const row of rows) {
-    if (row.kind !== kind || !IDS[kind].test(row.id) || !canonicalTime(row.added_at)) invalidOutput();
+    if ((row.kind !== kind && !(kind === "note" && row.kind === "imported_meeting")) || !IDS[kind].test(row.id) || !canonicalTime(row.added_at)) invalidOutput();
     if (previous !== undefined && compareRows(previous, row) >= 0) invalidOutput();
     if (scope.kind === "project" && !row.association_project_ids.includes(scope.project_id)) invalidOutput();
     previous = row;
@@ -257,7 +259,7 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
     const emitted = SOURCES.flatMap((source) => fetched[source] ?? []).sort(compareRows).slice(0, PERSON_LIST_PAGE_SIZE_V1);
     // A later page that can only wait for meetings would hand back its own cursor forever.
     if (request.cursor !== undefined && held && emitted.length === 0) unavailable();
-    const of = (source: PersonListSourceV1): readonly StoreRow[] => emitted.filter((row) => row.kind === source);
+    const of = (source: PersonListSourceV1): readonly StoreRow[] => emitted.filter((row) => row.kind === source || (source === "note" && row.kind === "imported_meeting"));
     const next: PersonListPositionsV1 = Object.freeze({
       note: advance(positions.note, fetched.note, of("note")),
       document: advance(positions.document, fetched.document, of("document")),
@@ -301,12 +303,13 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
     const kind = personRefKindV1(ref);
     const id = personRefIdV1(ref);
     switch (kind) {
+      case "imported_meeting":
       case "note":
       case "document": {
         const opened = options.originals.open({
           access_token,
-          ref: kind === "note" ? { kind, id: id as `ctx_${string}` } : { kind, id: id as `doc_${string}` },
-          ...(position?.kind === "document" ? { from_ordinal: position.from_ordinal } : {}),
+          ref: kind === "imported_meeting" ? { kind, id: id as `cap_${string}` } : kind === "note" ? { kind, id: id as `ctx_${string}` } : { kind, id: id as `doc_${string}` },
+          ...(position?.kind === "imported_meeting" ? { from_ordinal: position.offset } : position?.kind === "document" ? { from_ordinal: position.from_ordinal } : {}),
         });
         if (opened.kind !== kind) invalidOutput();
         return opened;
@@ -333,6 +336,8 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
   function openResponse(opened: Opened, ref: PersonOpenRefV1, binding: PersonOpenCursorBindingV1, joined: Joined): unknown {
     const base = { schema_version: 1, kind: "echo-person-open-v1", ref };
     switch (opened.kind) {
+      case "imported_meeting":
+        return { ...base, item: projectRow(opened.row, joined), text: opened.text, next_cursor: opened.next_offset == null ? null : encodePersonOpenCursorV1(binding, { kind: "imported_meeting", offset: opened.next_offset }) };
       case "note":
         return { ...base, item: projectRow(opened.row, joined), text: opened.text, next_cursor: null };
       case "document":
@@ -396,7 +401,7 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
       }
       let current: PersonAccessAuthorization;
       try {
-        if (opened.kind === "note" || opened.kind === "document") options.originals.revalidate({ access_token, release: opened.release });
+        if (opened.kind === "imported_meeting" || opened.kind === "note" || opened.kind === "document") options.originals.revalidate({ access_token, release: opened.release });
         if (opened.kind === "meeting") options.meetings.revalidateMeetingRelease({ access_token, release: opened.release });
         current = authenticate(access_token);
         if (!samePersonReleaseAuthorizationV1(actor, current) || options.directory.joinedProjects(current).grants_sha256 !== joined.grants_sha256) notFound();

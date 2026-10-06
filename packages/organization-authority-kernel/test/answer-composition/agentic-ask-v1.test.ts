@@ -252,7 +252,7 @@ describe("agentic Ask: research loop", () => {
     ]);
     await ask({ desk: evidence, model: script.model }).answer({ question: 'When is launch?' });
     expect(evidence.search).toHaveBeenCalledTimes(2);
-    expect(evidence.search).toHaveBeenNthCalledWith(1, expect.objectContaining({ query: 'launch date', kinds: ['decision', 'action', 'rationale'] }));
+    expect(evidence.search).toHaveBeenNthCalledWith(1, expect.objectContaining({ query: 'launch date', kinds: ['imported_meeting', 'decision', 'action', 'rationale'] }));
     expect(evidence.search).toHaveBeenNthCalledWith(2, expect.objectContaining({ query: 'launch date', kinds: ['note', 'document_passage'] }));
   });
 

@@ -82,7 +82,7 @@ describe('thin live ticket dispatcher', () => {
     expect(result.items.map(item => item.id)).toEqual(['local-1', 'ticket-1', 'slack-1', 'local-2', 'ticket-2', 'slack-2']);
     expect(result.truncated).toBe(true);
     expect(result.receipt_digests).toEqual([receipt('local'), receipt('jira'), receipt('slack')]);
-    expect(f.base.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'launch', kinds: ['decision', 'action', 'rationale', 'note', 'document_passage'] }));
+    expect(f.base.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'launch', kinds: ['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'] }));
   });
   it('routes provider-neutral page sections through opaque request ids and publishes only their descriptor', async () => {
     const f = mixedFixture();

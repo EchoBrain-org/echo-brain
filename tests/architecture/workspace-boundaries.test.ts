@@ -383,8 +383,10 @@ describe("workspace source boundaries", () => {
         "@echo-brain/organization-record",
         "@echo-brain/organization-retrieval",
         "@echo-brain/provider-confluence",
+        "@echo-brain/provider-granola",
         "@echo-brain/provider-jira",
         "@echo-brain/provider-openrouter",
+        "@echo-brain/provider-runtime",
         "@echo-brain/provider-slack-server",
         "@echo-brain/provider-synthetic-demo"
       ],
@@ -454,7 +456,8 @@ describe("workspace source boundaries", () => {
       "@echo-brain/provider-granola": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-authority-kernel",
-        "@echo-brain/organization-processing"
+        "@echo-brain/organization-processing",
+        "@echo-brain/provider-runtime"
       ],
       "@echo-brain/provider-runtime": [
         "@echo-brain/federation-protocol",
@@ -643,7 +646,7 @@ describe("workspace source boundaries", () => {
   it("ships only the current baselines", () => {
     const expectedByRoot: Record<string, string[]> = {
       "packages/organization-authority-kernel": [
-        "authority-baseline-v10.sql",
+        "authority-baseline-v11.sql",
       ],
       "packages/organization-control-plane": [
         "organization-control-plane-baseline-v3.sql",

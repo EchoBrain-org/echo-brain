@@ -14,7 +14,7 @@ export function syntheticFixtureApprovalEvidence(
     .prepare(
       `SELECT semantic_input_sha256
          FROM authority_live_source_admission_v2
-        WHERE singleton = 1 AND organization_id = ? AND principal_id = ?
+        WHERE source_key = 1 AND organization_id = ? AND principal_id = ?
           AND membership_id = ? AND membership_type = 'owner'
           AND source_adapter_id = ? AND source_adapter_instance_id = ?
           AND source_adapter_version = ?

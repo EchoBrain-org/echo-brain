@@ -1,3 +1,4 @@
+import type { PersonMeetingRequestV1, PersonMeetingResultsV1 } from '@echo-brain/organization-api';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
 // validated output, and the renderer never sees a token, a path or a
@@ -45,7 +46,7 @@ export type ListScope = { readonly kind: 'mine' } | { readonly kind: 'project'; 
 
 /** One item, by kind and id: a note's context id, a document's id, or an approved meeting's record digest. */
 export interface ItemRef {
-  readonly kind: 'note' | 'document' | 'meeting';
+  readonly kind: 'imported_meeting' | 'note' | 'document' | 'meeting';
   readonly id: string;
 }
 
@@ -290,6 +291,7 @@ export interface ApprovedRecord {
 
 /** One item opened by its ref: a note's text, a page of a document's text, or a page of a meeting's approved record. */
 export type Opened =
+  | { readonly kind: 'imported_meeting'; readonly content: ContextContent; readonly next_cursor: string | null }
   | { readonly kind: 'note'; readonly content: ContextContent }
   | { readonly kind: 'document'; readonly document: DocumentText }
   | { readonly kind: 'meeting'; readonly record: ApprovedRecord; readonly next_cursor: string | null };
@@ -394,6 +396,8 @@ export interface ProjectConfluenceMapping {
 export interface ConfluenceSpacesPage { items: readonly ConfluenceSpace[]; next_cursor: string | null }
 
 export interface HostMethods {
+  'tools.meetings': { params: { expect: Expect; request: PersonMeetingRequestV1 }; result: PersonMeetingResultsV1[keyof PersonMeetingResultsV1] };
+
   'app.status': { params: Record<string, never>; result: AppStatus };
   'signin.begin': { params: { authority_url: string }; result: AppStatus };
   /** The renderer names the invitation only by a handle main issued; main swaps in the path. */
@@ -514,7 +518,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'notes.submit', 'documents.upload', 'ask.run', 'ask.cancel', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'documents.save', 'projects.read',
   'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
-  'employees.reissue', 'employees.revoke', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet', 'projects.confluenceRead', 'projects.confluenceSet', 'projects.confluenceSpaces',
+  'employees.reissue', 'employees.revoke', 'tools.meetings', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet', 'projects.confluenceRead', 'projects.confluenceSet', 'projects.confluenceSpaces',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'source.openSlack', 'source.openTicket', 'source.openPage', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
@@ -523,7 +527,7 @@ export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
   'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.invite', 'employees.reissue',
-  'employees.revoke', 'tools.disconnect', 'projects.jiraSet', 'projects.confluenceSet',
+  'employees.revoke', 'tools.meetings', 'tools.disconnect', 'projects.jiraSet', 'projects.confluenceSet',
 ]);
 /** Host methods whose reply is the account status: main keeps the Account menu current from them. */
 export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'signin.invitation', 'account.signOut']);

@@ -7,7 +7,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1, openRouterDecisionProcessorConfigurationSha256V1 } from "../src/openrouter-decision-processor-config-v1.js";
 import { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } from "../src/verify-openrouter-decision-processor-admission-v1.js";
@@ -29,7 +29,7 @@ function authorityState(): { readonly root: string; readonly database: string } 
   const database = join(root, "authority.sqlite");
   const authority = openAuthorityDatabase(database);
   try {
-    applyAuthorityBaselineV10(authority);
+    applyAuthorityBaselineV11(authority);
     authority
       .prepare(
         `INSERT INTO authority_metadata (
@@ -70,7 +70,7 @@ function admitProcessor(
     authority
       .prepare(
         `INSERT INTO authority_live_source_admission_v2 (
-          singleton, organization_id, principal_id, membership_id, membership_type,
+          source_key, organization_id, principal_id, membership_id, membership_type,
           source_adapter_id, source_adapter_version, source_adapter_instance_id,
           normalizer_version, source_custodian_sha256,
           source_custodian_assurance, source_custodian_observed_at,

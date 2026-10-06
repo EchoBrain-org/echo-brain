@@ -207,7 +207,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     const limit = input.limit ?? (input.query === undefined ? 50 : 10);
     if (input.query === undefined) {
       latestRecordTruncated = false;
-      const sourceKinds = input.kinds?.filter((kind): kind is "note" | "document_passage" => kind === "note" || kind === "document_passage");
+      const sourceKinds = input.kinds?.filter((kind): kind is "note" | "document_passage" | "imported_meeting" => kind === "note" || kind === "document_passage" || kind === "imported_meeting");
       const released = options.originals.deskSearch({
         access_token: options.access_token,
         scope: options.scope,
@@ -222,7 +222,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
       return result(items.slice(0, limit), released.truncated || latestRecordTruncated || items.length > limit, [released.receipt, ...recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256)]);
     }
     latestRecordTruncated = false;
-    const sourceKinds = input.kinds?.filter((kind): kind is "note" | "document_passage" => kind === "note" || kind === "document_passage");
+    const sourceKinds = input.kinds?.filter((kind): kind is "note" | "document_passage" | "imported_meeting" => kind === "note" || kind === "document_passage" || kind === "imported_meeting");
     const released = options.originals.deskSearch({ access_token: options.access_token, scope: options.scope, query: input.query, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }) });
     const beforeRecords = recordReleases.length;
     const echoItems = [originals(released), searchRecords(input.query, input.kinds)].map((list) => list.filter((item) => input.kinds === undefined || input.kinds.includes(item.kind)));
@@ -245,7 +245,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
       const items = records(options.records.listDeskBatch({ access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
       return result(items.slice(0, limit), latestRecordTruncated || items.length > limit, recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256));
     }
-    const sourceKinds = input.kinds?.filter((kind): kind is "note" | "document_passage" => kind === "note" || kind === "document_passage");
+    const sourceKinds = input.kinds?.filter((kind): kind is "note" | "document_passage" | "imported_meeting" => kind === "note" || kind === "document_passage" || kind === "imported_meeting");
     if (sourceKinds !== undefined && sourceKinds.length === 0) return result([], false, []);
     const released = options.originals.deskSearch({ access_token: options.access_token, scope: options.scope, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }) });
     const items = originals(released);

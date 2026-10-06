@@ -1,10 +1,12 @@
+import { openGranolaPersonLiveRuntimeV1 } from './granola-person-live-runtime-v1.js';
+import { createPersonMeetingApprovalPolicyProjectorV1, projectPersonMeetingApproverV1 } from './person-meeting-approval-projection-v1.js';
 import { createStagingCanaryMeetingSourceBundleV1 } from "@echo-brain/provider-synthetic-demo/staging-canary-meeting-source-v1";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 import { composePersonExternalIdentityRuntimeBundlesV1 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
-import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
+import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, PERSON_MEETING_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v2";
-const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3]);
+const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([PERSON_MEETING_APPROVAL_RECORD_INPUT_CODEC_V1, HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3]);
 import { composeRecordApproverProjectorsV1, createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { createPrivateSlackBlockApprovalPolicyProjectorV1, projectPrivateSlackBlockApprovalApproverV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
 import { createPrivateSlackBlockApprovalPolicyProjectorV2, createPrivateSlackBlockApprovalPolicyProjectorV3, projectPrivateSlackBlockApprovalApproverV2 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2";
@@ -180,8 +182,25 @@ export async function openOrganizationAuthorityService(
             ? {}
             : { processor: dependencies.processing_adapter_overrides.processor }),
         };
-  const apiDependencies = {
+  const decisionProcessor = createOpenRouterDecisionProcessorBundleV1({ credential_file: openrouter_credential_file });
+  const policyProjectors = createRecordPolicyFactProjectorRegistryV1([
+    createPersonPolicyFactProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV1(),
+    createPrivateSlackBlockApprovalPolicyProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV3(), createPersonMeetingApprovalPolicyProjectorV1(),
+  ]);
+  const apiDependencies: OrganizationAuthorityApiRuntimeDependencies = {
     ...dependencies.api,
+    person_http_runtime_factory: (sessions, resources) => {
+      const existing = dependencies.api?.person_http_runtime_factory?.(sessions, resources);
+      // This root selects one personal intake runtime; a caller cannot silently replace its worker.
+      try {
+        if (existing?.processing !== undefined) throw new Error('Personal meeting processing is already selected');
+        const granola = openGranolaPersonLiveRuntimeV1({ state_directory: sharedConfig.state_directory, sessions, resources,
+          processor: decisionProcessor, projectors: policyProjectors, nango_authorization: () => slack_nango.secret_key });
+        return { applications: [...(existing?.applications ?? []), ...granola.applications], processing: granola.processing,
+          tools: async token => [...await (existing?.tools?.(token) ?? []), ...await granola.tools(token)],
+          close() { granola.close(); existing?.close(); } };
+      } catch (error) { existing?.close(); throw error; }
+    },
     live_connectors: [
       ...(dependencies.api?.live_connectors ?? []),
       ...(jira_person_live === undefined ? [] : [{ ...JIRA_LIVE_CONNECTOR_V1,
@@ -196,6 +215,7 @@ export async function openOrganizationAuthorityService(
       }]),
     ],
     record_approver: composeRecordApproverProjectorsV1([
+      projectPersonMeetingApproverV1,
       projectPrivateSlackBlockApprovalApproverV1,
       projectPrivateSlackBlockApprovalApproverV2,
       ...(dependencies.api?.record_approver === undefined ? [] : [dependencies.api.record_approver]),
@@ -208,9 +228,7 @@ export async function openOrganizationAuthorityService(
     {
       ...sharedConfig,
       ...(meetingSourceBundle === undefined ? {} : { meeting_source_bundle: meetingSourceBundle }),
-      decision_processor_bundle: createOpenRouterDecisionProcessorBundleV1({
-        credential_file: openrouter_credential_file,
-      }),
+      decision_processor_bundle: decisionProcessor,
       approval_workflow_bundle: createPrivateSlackApprovalWorkflowBundleV1({
         state_directory: sharedConfig.state_directory,
         bot_token_source: slack.bot_token_source,
@@ -231,13 +249,7 @@ export async function openOrganizationAuthorityService(
           credential_file: openrouter_credential_file,
         }),
       record_input_codecs: RECORD_INPUT_CODECS,
-      record_policy_fact_projectors:
-        createRecordPolicyFactProjectorRegistryV1([
-          createPersonPolicyFactProjectorV2(),
-          createPrivateSlackBlockApprovalPolicyProjectorV1(),
-          createPrivateSlackBlockApprovalPolicyProjectorV2(),
-          createPrivateSlackBlockApprovalPolicyProjectorV3(),
-        ]),
+      record_policy_fact_projectors: policyProjectors,
       run_staging_synthetic_private_dm_canary: (input) =>
         runStagingSyntheticPrivateDmCanaryV1(input),
     },

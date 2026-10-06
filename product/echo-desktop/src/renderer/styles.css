@@ -425,3 +425,9 @@ button.toast:hover { background: #211f1f; }
 .tool-mark.off { opacity: 0.45; }
 .sheet.tool-connect:focus { outline: none; }
 .sheet.confirm p.context { font-size: 12.5px; color: var(--faint); }
+
+.meeting-manage { width: min(780px, 90vw); max-height: 90vh; overflow-y: auto; }
+.personal-meetings label { display: block; margin: 12px 0; }
+.personal-meetings select { margin-left: 8px; max-width: 95%; }
+.personal-meetings pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; font: inherit; }
+.personal-meetings ul { padding-left: 20px; }

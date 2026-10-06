@@ -31,7 +31,7 @@ import {
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import type Database from "better-sqlite3";
 import { captureRecordProjectsV1, type CaptureRecordProjectsV1, type RecordProjectAuthorizationV1 } from "./person-record-project-scope-v1.js";
-import { boundedTextV1 } from "./person-item-text-v1.js";
+import { boundedTextV1 } from "../application/person-item-text-v1.js";
 import {
   RecordMetadataCacheV1,
   approverDisplayNameV1,

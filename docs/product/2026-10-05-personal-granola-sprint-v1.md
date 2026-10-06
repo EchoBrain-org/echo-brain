@@ -1,7 +1,8 @@
 # Personal Granola integration sprint
 
-Status: scope approved on 2026-10-05; phase 1 cleanup is in progress in Codex
-Cloud. Phase 2 has not started. Base: main `605ed5a`. The same-day scope update
+Status: phase 1 merged in PR #282 and qualified on staging. Phase 2 is implemented
+in `feat/granola-personal-phase2`, based on `b108ad31`; CI and live qualification
+remain pending. Phase 2 is not yet deployed. The same-day scope update
 requires one selected personal Granola folder mapped to an ECHO project, with
 automatic intake when meetings enter that folder or meetings in it change.
 Live verification target: Granola folder **ECHO**, with **ECHO** also treated as
@@ -159,9 +160,15 @@ Public discovery was checked on 2026-10-05 without credentials. The
 identifies the MCP endpoint and authorization server; the
 [authorization metadata](https://mcp-auth.granola.ai/.well-known/oauth-authorization-server)
 advertises dynamic client registration and authorization-code PKCE with S256.
-This is discovery evidence only; no authenticated tool schema or live folder
-behavior has been verified. Webhook availability for the ECHO folder remains
-unknown and must be checked through the connected account.
+Authenticated MCP identity, folder, meeting XML and transcript JSON were checked
+on 2026-10-06 through the Nango test connection. ECHO folder ID is
+`17ac0545-4d05-45c7-ad38-8298b7fb7d12` in the EchoBrain workspace; it was empty.
+The existing ECHO project is `prj_b5eef451-770c-497c-985f-a4fcb1ca0025`.
+These coordinates must be resolved again after a fresh staging reset. The test
+connection is not an ECHO Person grant. Native API-key webhooks do not establish
+OAuth coverage for all folder moves, so this slice uses bounded reconciliation.
+See [ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md) for
+custody, audience, recovery, bounds and fresh-state requirements.
 
 First verify the actual authenticated MCP contract: account/workspace identity,
 list/open/transcript response shapes, pagination, content limits, and account
@@ -215,6 +222,20 @@ transport and parsing behind them; do not copy Jira/Confluence OAuth machinery,
 create a parallel approval service, or introduce another meeting store.
 Replace founder-singleton assumptions only where personal intake requires it.
 Every new persisted field must support a named phase 2 behavior and its test.
+
+The 2026-10-06 implementation constraint carries forward the founder's
+2026-10-05 rejection of the Confluence integration's recurring 4–5k-line cost:
+start from shared orchestration rather than copy a connector and extract it
+afterward. Nango owns consent, credentials, and refresh. Extend the existing
+connection lifecycle, HTTP/CLI commands, Tools UI, custody, processing, and
+approval boundaries where personal intake needs new behavior. Granola owns
+only its verified MCP contract, folder semantics, and content normalization.
+Do not add provider-specific Ask routes, a second meeting store, duplicated
+approval machinery, or repeated transport/lifecycle test suites. Shared
+extensions must serve the existing callers too; speculative frameworks are
+not part of this sprint. Before PR review, account for production, tests,
+wiring, and documentation separately, identify reused paths, and justify the
+remaining provider-specific code and per-operation network calls.
 
 Keep phase 1 and phase 2 as separate reviewable changes. Complete local checks
 for a phase before submitting its CI candidate. Phase 2 starts after phase 1

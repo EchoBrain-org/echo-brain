@@ -1,20 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV10,
+  applyAuthorityBaselineV11,
   AUTHORITY_BASELINE_APPLICATION_ID_V1,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V10,
-  authorityBaselineSha256V10,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
+  authorityBaselineSha256V11,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
-const AUTHORITY_BASELINE_SHA256_V10 =
-  "sha256:5a4054e97453f8b0abef844a1eda569b22ff54f2fbd8e4c41acda2ede1a2be76";
+const AUTHORITY_BASELINE_SHA256_V11 =
+  "sha256:3c688e2d1504b1ecb7b214c54864c0347dd1df22d09e252b22fc6fd7ec8335b2";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-30T00:00:00.000Z";
 
 function openedCurrentDatabase() {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV10(database);
+  applyAuthorityBaselineV11(database);
   return database;
 }
 
@@ -46,7 +46,7 @@ function seedCandidate(database: ReturnType<typeof openedCurrentDatabase>): void
   database
     .prepare(
       `INSERT INTO authority_live_source_admission_v2 (
-        singleton, organization_id, principal_id, membership_id, membership_type,
+        source_key, organization_id, principal_id, membership_id, membership_type,
         source_adapter_id, source_adapter_version, source_adapter_instance_id,
         normalizer_version, source_custodian_sha256,
         source_custodian_assurance, source_custodian_observed_at,
@@ -128,12 +128,12 @@ describe("Authority approval-delivery-quarantine schema", () => {
   it("retains the current quarantine schema and its role headers", () => {
     const database = openedCurrentDatabase();
     try {
-      expect(authorityBaselineSha256V10()).toBe(AUTHORITY_BASELINE_SHA256_V10);
+      expect(authorityBaselineSha256V11()).toBe(AUTHORITY_BASELINE_SHA256_V11);
       expect(database.pragma("application_id", { simple: true })).toBe(
         AUTHORITY_BASELINE_APPLICATION_ID_V1,
       );
       expect(database.pragma("user_version", { simple: true })).toBe(
-        AUTHORITY_BASELINE_SCHEMA_VERSION_V10,
+        AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
       );
       expect(
         database
@@ -217,7 +217,7 @@ describe("Authority approval-delivery-quarantine schema", () => {
   it("refuses to relabel occupied state as a fresh database", () => {
     const database = openedCurrentDatabase();
     try {
-      expect(() => applyAuthorityBaselineV10(database)).toThrow(
+      expect(() => applyAuthorityBaselineV11(database)).toThrow(
         /completely empty database/,
       );
     } finally {

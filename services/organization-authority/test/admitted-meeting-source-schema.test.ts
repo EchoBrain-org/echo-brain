@@ -1,20 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV10,
+  applyAuthorityBaselineV11,
   AUTHORITY_BASELINE_APPLICATION_ID_V1,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V10,
-  authorityBaselineSha256V10,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
+  authorityBaselineSha256V11,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
-const AUTHORITY_BASELINE_SHA256_V10 =
-  "sha256:5a4054e97453f8b0abef844a1eda569b22ff54f2fbd8e4c41acda2ede1a2be76";
+const AUTHORITY_BASELINE_SHA256_V11 =
+  "sha256:3c688e2d1504b1ecb7b214c54864c0347dd1df22d09e252b22fc6fd7ec8335b2";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-29T00:00:00.000Z";
 
 function openedCurrentDatabase() {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV10(database);
+  applyAuthorityBaselineV11(database);
   return database;
 }
 
@@ -51,7 +51,7 @@ function admitSyntheticSource(
   database
     .prepare(
       `INSERT INTO authority_live_source_admission_v2 (
-        singleton, organization_id, principal_id, membership_id, membership_type,
+        source_key, organization_id, principal_id, membership_id, membership_type,
         source_adapter_id, source_adapter_version, source_adapter_instance_id,
         normalizer_version, source_custodian_sha256,
         source_custodian_assurance, source_custodian_observed_at,
@@ -71,15 +71,35 @@ function admitSyntheticSource(
 }
 
 describe("Authority admitted meeting-source schema", () => {
+  it('cannot attach progress to a different source admission', () => {
+    const database = openedCurrentDatabase();
+    try {
+      seedOwner(database); admitSyntheticSource(database);
+      expect(() => database.prepare(`INSERT INTO authority_live_source_progress_v2
+        (source_key,admission_semantic_input_sha256,cursor,cursor_version,updated_at)
+        VALUES ('another-person',?,'cursor',0,?)`).run(DIGEST, NOW)).toThrow(/FOREIGN KEY/);
+    } finally { database.close(); }
+  });
+  it('persists personal intake settings without another meeting body and requires ordered mapping changes', () => {
+    const database = openedCurrentDatabase();
+    try {
+      seedOwner(database); admitSyntheticSource(database);
+      database.prepare('INSERT INTO authority_person_meeting_sources_v1 VALUES (?, ?, NULL, NULL, 0)').run('1', DIGEST);
+      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v1 SET settings_revision=2 WHERE source_key=?').run('1')).toThrow('ordered');
+      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v1 SET folder_id=?,settings_revision=1 WHERE source_key=?').run('folder', '1')).toThrow();
+      expect(database.prepare('SELECT settings_revision FROM authority_person_meeting_sources_v1').pluck().get()).toBe(0);
+      expect((database.pragma('table_info(authority_person_meeting_approval_actions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['sequence', 'approval_id', 'command_id', 'body_json', 'receipt_json']);
+    } finally { database.close(); }
+  });
   it("is a pinned fresh-only provider-neutral schema with stable role headers", () => {
     const database = openedCurrentDatabase();
     try {
-      expect(authorityBaselineSha256V10()).toBe(AUTHORITY_BASELINE_SHA256_V10);
+      expect(authorityBaselineSha256V11()).toBe(AUTHORITY_BASELINE_SHA256_V11);
       expect(database.pragma("application_id", { simple: true })).toBe(
         AUTHORITY_BASELINE_APPLICATION_ID_V1,
       );
       expect(database.pragma("user_version", { simple: true })).toBe(
-        AUTHORITY_BASELINE_SCHEMA_VERSION_V10,
+        AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
       );
       const tables = database
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -117,7 +137,7 @@ describe("Authority admitted meeting-source schema", () => {
       database
         .prepare(
           `INSERT INTO authority_live_source_progress_v2 (
-            singleton, admission_semantic_input_sha256, cursor, cursor_version, updated_at
+            source_key, admission_semantic_input_sha256, cursor, cursor_version, updated_at
           ) VALUES (1, ?, 'not-a-granola-prefix', 0, ?)`,
         )
         .run(DIGEST, NOW);
@@ -125,7 +145,7 @@ describe("Authority admitted meeting-source schema", () => {
         .prepare(
           `UPDATE authority_live_source_progress_v2
            SET cursor = 'arbitrary-provider-cursor', cursor_version = 1, updated_at = ?
-           WHERE singleton = 1`,
+           WHERE source_key = 1`,
         )
         .run(NOW);
       expect(() =>
@@ -133,7 +153,7 @@ describe("Authority admitted meeting-source schema", () => {
           .prepare(
             `UPDATE authority_live_source_progress_v2
              SET cursor = 'same-version', cursor_version = 1, updated_at = ?
-             WHERE singleton = 1`,
+             WHERE source_key = 1`,
           )
           .run(NOW),
       ).toThrow(/ordered cursor advances/);
@@ -236,7 +256,7 @@ describe("Authority admitted meeting-source schema", () => {
   it("refuses to reinitialize an occupied database", () => {
     const database = openedCurrentDatabase();
     try {
-      expect(() => applyAuthorityBaselineV10(database)).toThrow(
+      expect(() => applyAuthorityBaselineV11(database)).toThrow(
         /completely empty database/,
       );
     } finally {

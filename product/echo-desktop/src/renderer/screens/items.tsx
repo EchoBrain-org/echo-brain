@@ -10,7 +10,7 @@ export function Mark({ visibility }: { visibility: Visibility }) {
   return <span class="mark" aria-hidden="true" />;
 }
 
-const ICONS = { note: Note, document: Page, meeting: Calendar };
+const ICONS = { imported_meeting: Calendar, note: Note, document: Page, meeting: Calendar };
 
 /**
  * One row: what kind it is, its title (a document's kind and size under it),

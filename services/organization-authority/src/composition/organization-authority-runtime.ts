@@ -1,3 +1,4 @@
+import { preparePersonHttpRuntimeV1 } from './organization-authority-api-runtime.js';
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { createPersonUpdateProcessingV1, type PersonUpdateProcessingBindingV1 } from './person-update-processing-v1.js';
 import { SqlitePersonUpdateEnrichmentWorkV2 } from '../adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
@@ -302,12 +303,21 @@ export async function openOrganizationAuthorityRuntime(
     join(config.state_directory, "authority.sqlite"),
     { fileMustExist: true },
   );
+  let preparedPerson: ReturnType<typeof preparePersonHttpRuntimeV1>;
+  let personalPublication: (() => void) | undefined;
+  function preparePersonal(record: import('better-sqlite3').Database): void {
+    preparedPerson = preparePersonHttpRuntimeV1(baseApiDependencies.person_http_runtime_factory, {
+      database: authority, record, coordinates: { authority_id: lineage.root.authority_id, organization_id: lineage.root.organization_id, state_lineage_id: lineage.root.state_lineage_id },
+      on_processing_queued: () => personalPublication?.(),
+    });
+  }
+  const personalApi = () => preparedPerson === undefined ? {} : { person_http_runtime_factory: preparedPerson.attach };
   const sourceIsAdmitted =
     authority
       .prepare(
         `SELECT 1
            FROM authority_live_source_admission_v2
-          WHERE singleton = 1`,
+          WHERE source_key = 1`,
       )
       .get() !== undefined;
   if (!sourceIsAdmitted) {
@@ -316,6 +326,7 @@ export async function openOrganizationAuthorityRuntime(
       { fileMustExist: true },
     );
     try {
+      preparePersonal(record);
       const signer = FileOrganizationAuthoritySigner.openExisting({
         directory: join(config.state_directory, "keys"),
         authority_id: lineage.root.authority_id,
@@ -341,6 +352,7 @@ export async function openOrganizationAuthorityRuntime(
       const runtime = await startOrganizationAuthorityServiceLifecycle(
         { api, worker_interval_ms: config.worker_interval_ms },
         {
+          additional_processing: preparedPerson?.processing,
           processing: new OrganizationAuthorityProcessingCoordinator(
             undefined,
             undefined,
@@ -355,6 +367,7 @@ export async function openOrganizationAuthorityRuntime(
           ),
           api: {
             ...baseApiDependencies,
+            ...personalApi(),
             answer_composition_generation: answerGeneration,
             readable_search_retrieval_contract_sha256:
               readableSearchContract.retrieval_contract_sha256,
@@ -364,17 +377,17 @@ export async function openOrganizationAuthorityRuntime(
           ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
         },
       );
+      personalPublication = () => runtime.requestApprovalPublication();
       return {
         ...runtime,
-        // Meeting polling is idle, while Ask and source-independent maintenance
-        // remain active.
-        processing: "idle_until_finalize" as const,
+        processing: preparedPerson?.processing === undefined ? "idle_until_finalize" : "active",
         close: async () => {
           try { await runtime.close(); }
-          finally { record.close(); authority.close(); }
+          finally { preparedPerson?.close(); record.close(); authority.close(); }
         },
       };
     } catch (error) {
+      preparedPerson?.close();
       record.close();
       authority.close();
       throw error;
@@ -419,6 +432,7 @@ export async function openOrganizationAuthorityRuntime(
     }
   }
   try {
+    preparePersonal(record);
     const meetingSourceBundle = config.meeting_source_bundle;
     if (meetingSourceBundle === undefined) {
       throw new Error("an admitted meeting source requires its provider bundle");
@@ -529,6 +543,7 @@ export async function openOrganizationAuthorityRuntime(
     const runtime = await startOrganizationAuthorityServiceLifecycle(
       { api, worker_interval_ms: config.worker_interval_ms },
       {
+        additional_processing: preparedPerson?.processing,
         processing: new OrganizationAuthorityProcessingCoordinator(
           sourceCycle,
           approvals.processing,
@@ -541,6 +556,7 @@ export async function openOrganizationAuthorityRuntime(
         ),
         api: {
           ...baseApiDependencies,
+          ...personalApi(),
           answer_composition_generation: answerGeneration,
           readable_search_retrieval_contract_sha256:
             readableSearchContract.retrieval_contract_sha256,
@@ -559,7 +575,8 @@ export async function openOrganizationAuthorityRuntime(
         ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
       },
     );
-    requestApprovalPublication = () => runtime.requestApprovalPublication();
+    personalPublication = () => runtime.requestApprovalPublication();
+    requestApprovalPublication = personalPublication;
     return {
       address: runtime.address,
       processing: "active",
@@ -613,6 +630,7 @@ export async function openOrganizationAuthorityRuntime(
           try { openedApprovals?.close?.(); } finally {
             meetingApprovalJourneyTelemetry?.close();
             extractionAttempts?.close();
+            preparedPerson?.close();
             record.close();
             authority.close();
           }
@@ -623,6 +641,7 @@ export async function openOrganizationAuthorityRuntime(
     try { openedApprovals?.close?.(); } finally {
       meetingApprovalJourneyTelemetry?.close();
       extractionAttempts?.close();
+      preparedPerson?.close();
       record.close();
       authority.close();
     }

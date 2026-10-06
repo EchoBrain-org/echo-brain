@@ -25,7 +25,7 @@ interface PersonStoreRowBaseV1 {
   /** Association ∩ the caller's active grants, sorted. */
   readonly association_project_ids: readonly ProjectIdV1[];
 }
-export interface PersonStoreNoteRowV1 extends PersonStoreRowBaseV1 { readonly kind: "note"; readonly id: `ctx_${string}` }
+export interface PersonStoreNoteRowV1 extends PersonStoreRowBaseV1 { readonly kind: "note" | "imported_meeting"; readonly id: `ctx_${string}` | `cap_${string}` }
 export interface PersonStoreDocumentRowV1 extends PersonStoreRowBaseV1 {
   readonly kind: "document";
   readonly id: `doc_${string}`;
@@ -62,10 +62,10 @@ export interface PersonOriginalItemsPortV1 {
   /** Global access. Every item failure: AuthorityOperationError('not_found'). Audited. */
   open(input: {
     readonly access_token: string;
-    readonly ref: { readonly kind: "note"; readonly id: `ctx_${string}` } | { readonly kind: "document"; readonly id: `doc_${string}` };
+    readonly ref: { readonly kind: "note" | "imported_meeting"; readonly id: `ctx_${string}` | `cap_${string}` } | { readonly kind: "document"; readonly id: `doc_${string}` };
     readonly from_ordinal?: number;
   }):
-    | { readonly kind: "note"; readonly row: PersonStoreNoteRowV1; readonly text: string; readonly release: PersonStoreReleaseV1 }
+    | { readonly kind: "note" | "imported_meeting"; readonly row: PersonStoreNoteRowV1; readonly text: string; readonly next_offset?: number | null; readonly release: PersonStoreReleaseV1 }
     | {
       readonly kind: "document"; readonly row: PersonStoreDocumentRowV1; readonly filename: string;
       readonly chunks: readonly { readonly anchor_kind: "page" | "paragraph"; readonly anchor_start: number; readonly text: string }[];

@@ -6,7 +6,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-v1.js';
 
-const LOCAL_KINDS: readonly EvidenceDeskKindV1[] = ['decision', 'action', 'rationale', 'note', 'document_passage'];
+const LOCAL_KINDS: readonly EvidenceDeskKindV1[] = ['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'];
 
 export type { PersonLiveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 export interface RegisteredPersonLiveEvidenceSourceV2 {
@@ -72,7 +72,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       for (const kind of requestedKinds ?? []) if ((kind === 'ticket' || kind === 'page') && ![...sources.values()].some(value => value.descriptor.kind === kind)) refused();
       if (selectedSource !== undefined && requestedKinds?.some(kind => kind !== selectedSource.descriptor.kind)) refused();
       const liveKinds = new Set([...sources.values()].map(value => value.descriptor.kind));
-      const localKinds = selectedId === 'meeting' ? ['decision', 'action', 'rationale'] as const : selectedId === 'document' ? ['note', 'document_passage'] as const : selectedId === 'slack' ? ['slack_message'] as const : undefined;
+      const localKinds = selectedId === 'meeting' ? ['imported_meeting', 'decision', 'action', 'rationale'] as const : selectedId === 'document' ? ['note', 'document_passage'] as const : selectedId === 'slack' ? ['slack_message'] as const : undefined;
       const kinds = (requestedKinds ?? localKinds)?.filter((kind): kind is EvidenceDeskKindV1 => kind !== 'ticket' && kind !== 'page' && !liveKinds.has(kind as 'slack_message')) ?? (liveKinds.has('slack_message') ? LOCAL_KINDS : undefined);
       const page = (source: Source, operation: () => Promise<EvidenceDeskResultV2>) =>
         Promise.resolve().then(operation).then(result => ({ source, result }));

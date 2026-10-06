@@ -1,16 +1,16 @@
-import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
+import { createRecordEnvelopeFactoryV4, createRecordReceiptFactoryV2, createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v1.js";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3, PRIVATE_SLACK_BLOCK_APPROVAL_CONSEQUENCE_V2_KIND, PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND, PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND, privateSlackBlockApprovalConsequenceV2Sha256, buildPrivateSlackBlockApprovalRecordInputV2, buildPrivateSlackBlockApprovalRecordInputV3, type PrivateSlackBlockApprovalResolutionRefV2 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v2.js";
 const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3]);
-import { canonicalSha256, type JsonObject, type Sha256Digest } from "@echo-brain/federation-protocol";
-import { ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT, ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT, RESTRICTED_REVIEWER_PERSON_POLICY_ID, createOrganizationRecordEnvelopeV4, createOrganizationRecordReceiptV2, organizationAuthorityPinSha256, validateDecisionProcessorProvenanceV1, validateMeetingSourceProvenanceV1, verifyOrganizationAuthorityPin, verifyOrganizationRecordEnvelopeV4, verifyOrganizationRecordReceiptV2, validateOrganizationRecordReceiptBodyV2 } from "@echo-brain/organization-protocol";
+import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
+import { ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT, ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT, RESTRICTED_REVIEWER_PERSON_POLICY_ID, createOrganizationRecordEnvelopeV4, organizationAuthorityPinSha256, validateDecisionProcessorProvenanceV1, validateMeetingSourceProvenanceV1, verifyOrganizationAuthorityPin } from "@echo-brain/organization-protocol";
 import { buildPrivateSlackBlockApprovalRecordInputV1 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v1.js";
 import type {
   DecisionProcessorProvenanceV1,
   MeetingSourceProvenanceV1,
   PinnedOrganizationAuthority,
 } from "@echo-brain/organization-protocol";
-import { type AppendV4RecordInput, type AppendedV4Record, type V4ReceiptFactory, type V4RecordEnvelopeFactory, type V4RecordEnvelopeView } from "@echo-brain/organization-record/organization-record-api-v1";
+import { type AppendV4RecordInput, type AppendedV4Record, type V4ReceiptFactory, type V4RecordEnvelopeFactory } from "@echo-brain/organization-record/organization-record-api-v1";
 import { type RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1 } from "../../../../organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.js";
 import type { OrganizationAuthoritySigner } from "@echo-brain/organization-authority-kernel/application/ports/organization-authority-signer";
 
@@ -396,54 +396,11 @@ export class PrivateSlackBlockV4RecordWriterV1 {
     readonly processor_provenance: DecisionProcessorProvenanceV1;
     readonly issued_at: string;
   }): V4RecordEnvelopeFactory {
-    return {
-      create: async (allocation) =>
-        (await createOrganizationRecordEnvelopeV4(
-          {
-            envelope_id: this.options.next_envelope_id(),
-            issued_at: input.issued_at,
-            predecessor_position: allocation.predecessor_position,
-            predecessor_record_sha256: allocation.predecessor_record_sha256,
-            human_act_record_input: input.human_act_record_input,
-            source_provenance: input.source_provenance,
-            processor_provenance: input.processor_provenance,
-          },
-          this.options.pinned_authority,
-          this.options.state_lineage_id,
-          (message, expectedKeyId) => this.options.signer.sign(message, expectedKeyId), RECORD_INPUT_CODECS,
-        )) as unknown as JsonObject,
-      verify: (value) =>
-        verifyOrganizationRecordEnvelopeV4(
-          value,
-          this.options.pinned_authority,
-          this.options.state_lineage_id, RECORD_INPUT_CODECS,
-        ) as unknown as V4RecordEnvelopeView & JsonObject,
-    };
+    return createRecordEnvelopeFactoryV4({ ...this.options, sign: (message, keyId) => this.options.signer.sign(message, keyId), codecs: RECORD_INPUT_CODECS }, input, this.options.next_envelope_id) as V4RecordEnvelopeFactory;
   }
 
   private receiptFactory(): V4ReceiptFactory {
-    return {
-      createSeed: ({ envelope, position, issued_at, policy_fact_outcome }) =>
-        validateOrganizationRecordReceiptBodyV2({
-          schema_version: 2, kind: "echo-organization-record-receipt-v2",
-          authority_id: envelope.body.authority_id, organization_id: envelope.body.organization_id,
-          state_lineage_id: envelope.body.state_lineage_id, envelope_id: envelope.body.envelope_id,
-          semantic_idempotency_key: envelope.body.semantic_idempotency_key, event_kind: envelope.body.event.kind,
-          record_position: position, record_sha256: envelope.record_sha256,
-          predecessor_record_sha256: envelope.body.predecessor_record_sha256,
-          record_head_position: position, record_head_sha256: envelope.record_sha256,
-          issued_at, policy_fact_outcome,
-        }) as unknown as JsonObject,
-      sign: async ({ envelope, receipt_seed }) =>
-        (await createOrganizationRecordReceiptV2({
-          envelope: envelope as never,
-          record_position: envelope.body.predecessor_position === null ? 1 : envelope.body.predecessor_position + 1,
-          issued_at: (receipt_seed as { readonly issued_at: string }).issued_at,
-        }, this.options.pinned_authority, this.options.state_lineage_id,
-        (message, expectedKeyId) => this.options.signer.sign(message, expectedKeyId), RECORD_INPUT_CODECS)) as unknown as JsonObject,
-      verify: ({ receipt, envelope }) =>
-        verifyOrganizationRecordReceiptV2(receipt, envelope as never, this.options.pinned_authority, this.options.state_lineage_id, RECORD_INPUT_CODECS) as unknown as JsonObject,
-    };
+    return createRecordReceiptFactoryV2({ ...this.options, sign: (message, keyId) => this.options.signer.sign(message, keyId), codecs: RECORD_INPUT_CODECS });
   }
 }
 

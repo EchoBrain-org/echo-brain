@@ -1,3 +1,4 @@
+import { validateMeetingApprovalConsequenceV2, validateMeetingApprovalEventV2 } from '@echo-brain/organization-protocol';
 /**
  * V2 record codec for project-scoped private Slack approvals.
  *
@@ -18,12 +19,9 @@ import {
   restrictedReviewerPersonPolicyContractSha256,
 } from "@echo-brain/organization-protocol";
 import {
-  approvedDecisionSnapshotV2Sha256,
-  assertDigest,
   assertPositiveSafeInteger,
   canonicalSnapshot,
   organizationProtocolValidationFailure,
-  validateApprovedDecisionSnapshotV2,
   type ApprovedDecisionSnapshotV2,
 } from "@echo-brain/organization-protocol/record-codec-support-v4";
 import { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from "@echo-brain/organization-protocol";
@@ -49,13 +47,10 @@ const REF_KEYS = [
   "audit_sequence", "audit_entry_sha256", "provider_action_kind", "provider_action_schema_version", "provider_action_sha256",
   "authorization_proof_sha256", "audience_project_ids", "association_project_ids", "share_transcript", "transcript_source",
 ] as const;
-const CONSEQUENCE_KEYS = ["schema_version", "kind", "policy_id", "audience_project_ids", "association_project_ids", "share_transcript", "transcript_source"] as const;
 const SOURCE_KEYS = ["source_id", "revision_id", "source_sha256"] as const;
 const ASSIGNEE_KEYS = ["principal_id", "membership_id"] as const;
 const LINK_KEYS = ["provider", "external_identity_link_id", "external_identity_link_contract_sha256", "provider_subject_id"] as const;
 const INPUT_KEYS = [PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_V2_FIELD, "event"] as const;
-const APPROVED_EVENT_KEYS = ["kind", "approved_snapshot", "approved_snapshot_sha256", "policy_id", "policy_contract_sha256", "policy_consequence", "policy_consequence_sha256"] as const;
-const REJECTED_EVENT_KEYS = ["kind"] as const;
 
 export interface PrivateSlackBlockApprovalTranscriptSourceV2 {
   readonly source_id: string;
@@ -126,17 +121,7 @@ function source(value: unknown, label: string): PrivateSlackBlockApprovalTranscr
   const record = exact(value, SOURCE_KEYS, label);
   return Object.freeze({ source_id: identifier(record.source_id, `${label}.source_id`), revision_id: identifier(record.revision_id, `${label}.revision_id`), source_sha256: digest(record.source_sha256, `${label}.source_sha256`) });
 }
-function consequence(value: unknown): PrivateSlackBlockApprovalConsequenceV2 {
-  const record = exact(value, CONSEQUENCE_KEYS, "Private Slack block approval consequence v2");
-  if (record.schema_version !== 2 || record.kind !== PRIVATE_SLACK_BLOCK_APPROVAL_CONSEQUENCE_V2_KIND) fail("Private Slack block approval consequence v2 has an unsupported envelope");
-  const policyId = policy(record.policy_id, "Private Slack block approval consequence v2 policy");
-  const audience = ids(record.audience_project_ids, "Private Slack block approval consequence v2 audience projects", policyId === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID);
-  const association = ids(record.association_project_ids, "Private Slack block approval consequence v2 association projects", policyId === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID);
-  if (policyId === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID && (audience.length !== association.length || audience.some((id, index) => id !== association[index]))) fail("Private Slack block approval consequence v2 lean project audience and association must match");
-  if (policyId !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID && (audience.length !== 0 || association.length !== 0)) fail("Private Slack block approval consequence v2 non-project policy must not carry projects");
-  if (typeof record.share_transcript !== "boolean") fail("Private Slack block approval consequence v2 share_transcript must be boolean");
-  return Object.freeze({ schema_version: 2, kind: PRIVATE_SLACK_BLOCK_APPROVAL_CONSEQUENCE_V2_KIND, policy_id: policyId, audience_project_ids: audience, association_project_ids: association, share_transcript: record.share_transcript, transcript_source: source(record.transcript_source, "Private Slack block approval consequence v2 transcript source") });
-}
+function consequence(value: unknown): PrivateSlackBlockApprovalConsequenceV2 { return validateMeetingApprovalConsequenceV2(value, PRIVATE_SLACK_BLOCK_APPROVAL_CONSEQUENCE_V2_KIND) as PrivateSlackBlockApprovalConsequenceV2; }
 export function privateSlackBlockApprovalConsequenceV2Sha256(value: PrivateSlackBlockApprovalConsequenceV2): Sha256Digest { return canonicalSha256(consequence(value)); }
 function policyContract(policyId: V2PolicyId): Sha256Digest {
   if (policyId === RESTRICTED_REVIEWER_PERSON_POLICY_ID) return restrictedReviewerPersonPolicyContractSha256();
@@ -165,14 +150,7 @@ export function validatePrivateSlackBlockApprovalResolutionRefV2(value: unknown)
   return Object.freeze({ schema_version: 2, kind: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND, authority_id: ref.authority_id as string, organization_id: ref.organization_id as string, state_lineage_id: ref.state_lineage_id as string, command_id: ref.command_id as string, approval_id: ref.approval_id as string, candidate_sha256: ref.candidate_sha256 as Sha256Digest, frozen_card_sha256: ref.frozen_card_sha256 as Sha256Digest, approved_snapshot_sha256: ref.approved_snapshot_sha256 as Sha256Digest, final_approver: Object.freeze({ principal_id: approver.principal_id as string, membership_id: approver.membership_id as string }), current_slack_identity_link: Object.freeze({ provider: "slack", external_identity_link_id: link.external_identity_link_id as string, external_identity_link_contract_sha256: link.external_identity_link_contract_sha256 as Sha256Digest, provider_subject_id: link.provider_subject_id as string }), action: ref.action, selected_policy_id: selected, policy_contract_sha256: ref.policy_contract_sha256 as Sha256Digest | null, policy_consequence_sha256: ref.policy_consequence_sha256 as Sha256Digest | null, comment: ref.comment as string | null, audit_event_id: ref.audit_event_id as string, audit_sequence: ref.audit_sequence as number, audit_entry_sha256: ref.audit_entry_sha256 as Sha256Digest, provider_action_kind: "echo-signed-slack-block-action-v1", provider_action_schema_version: 1, provider_action_sha256: ref.provider_action_sha256 as Sha256Digest, authorization_proof_sha256: ref.authorization_proof_sha256 as Sha256Digest, audience_project_ids: audience, association_project_ids: association, share_transcript: ref.share_transcript, transcript_source: source(ref.transcript_source, "resolution v2 transcript source") });
 }
 export function privateSlackBlockApprovalResolutionRefV2Sha256(value: PrivateSlackBlockApprovalResolutionRefV2): Sha256Digest { return canonicalSha256(validatePrivateSlackBlockApprovalResolutionRefV2(value)); }
-export function validatePrivateSlackBlockApprovalEventV2(value: unknown): PrivateSlackBlockApprovalEventV2 {
-  if (value !== null && typeof value === "object" && !Array.isArray(value) && (value as Record<string, unknown>).kind === "rejected") { exact(value, REJECTED_EVENT_KEYS, "Private Slack block rejected event v2"); return Object.freeze({ kind: "rejected" }); }
-  const event = exact(value, APPROVED_EVENT_KEYS, "Private Slack block approved event v2"); if (event.kind !== "approved") fail("Private Slack block approval event v2 is unsupported");
-  const snapshot = validateApprovedDecisionSnapshotV2(event.approved_snapshot); assertDigest(event.approved_snapshot_sha256, "approved event v2 snapshot digest"); if (event.approved_snapshot_sha256 !== approvedDecisionSnapshotV2Sha256(snapshot)) fail("approved event v2 snapshot digest does not match");
-  const policyId = policy(event.policy_id, "approved event v2 policy"); const selectedConsequence = consequence(event.policy_consequence); const consequenceDigest = digest(event.policy_consequence_sha256, "approved event v2 consequence digest");
-  if (event.policy_contract_sha256 !== policyContract(policyId) || selectedConsequence.policy_id !== policyId || consequenceDigest !== privateSlackBlockApprovalConsequenceV2Sha256(selectedConsequence)) fail("approved event v2 policy consequence is invalid");
-  return Object.freeze({ kind: "approved", approved_snapshot: snapshot, approved_snapshot_sha256: event.approved_snapshot_sha256 as Sha256Digest, policy_id: policyId, policy_contract_sha256: event.policy_contract_sha256 as Sha256Digest, policy_consequence: selectedConsequence, policy_consequence_sha256: consequenceDigest });
-}
+export function validatePrivateSlackBlockApprovalEventV2(value: unknown): PrivateSlackBlockApprovalEventV2 { return validateMeetingApprovalEventV2(value, PRIVATE_SLACK_BLOCK_APPROVAL_CONSEQUENCE_V2_KIND) as PrivateSlackBlockApprovalEventV2; }
 export function validatePrivateSlackBlockApprovalRecordInputV2(value: unknown): ValidatedPrivateSlackBlockApprovalRecordInputV2 {
   const input = exact(value, INPUT_KEYS, "Private Slack block approval record input v2"); const ref = validatePrivateSlackBlockApprovalResolutionRefV2(input[PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_V2_FIELD]); const event = validatePrivateSlackBlockApprovalEventV2(input.event);
   if (event.kind === "approved") { const c = event.policy_consequence; if (ref.action !== "approve" || ref.selected_policy_id !== event.policy_id || ref.policy_contract_sha256 !== event.policy_contract_sha256 || ref.policy_consequence_sha256 !== event.policy_consequence_sha256 || ref.approved_snapshot_sha256 !== event.approved_snapshot_sha256 || ref.approval_id !== event.approved_snapshot.approval_id || ref.share_transcript !== c.share_transcript || ref.transcript_source.source_id !== c.transcript_source.source_id || ref.transcript_source.revision_id !== c.transcript_source.revision_id || ref.transcript_source.source_sha256 !== c.transcript_source.source_sha256 || ref.audience_project_ids.length !== c.audience_project_ids.length || ref.audience_project_ids.some((id, index) => id !== c.audience_project_ids[index]) || ref.association_project_ids.length !== c.association_project_ids.length || ref.association_project_ids.some((id, index) => id !== c.association_project_ids[index])) fail("Private Slack block approved event v2 does not match resolution"); }

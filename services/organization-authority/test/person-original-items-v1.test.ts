@@ -361,7 +361,7 @@ describe("person original items store", () => {
     const extracting = f.document("member", { kind: "only_me" }, [PROJECT_ALPHA]);
     for (const token of ["owner", "member"]) {
       for (const row of f.walk(token, GLOBAL).rows) {
-        const opened = f.items.open({ access_token: token, ref: row.kind === "note" ? { kind: "note", id: row.id } : { kind: "document", id: row.id } });
+        const opened = f.items.open({ access_token: token, ref: row.kind !== "document" ? { kind: row.kind, id: row.id } : { kind: "document", id: row.id } });
         expect(opened.row).toEqual(row);
         f.items.revalidate({ access_token: token, release: opened.release });
       }
@@ -527,7 +527,7 @@ describe("person original items store", () => {
         outputs.push(collected, f.items.commit({ access_token: token, handle: collected.handle, notes: collected.notes.length, documents: collected.documents.length }));
       }
       for (const row of f.walk(token, GLOBAL).rows) {
-        outputs.push(f.items.open({ access_token: token, ref: row.kind === "note" ? { kind: "note", id: row.id } : { kind: "document", id: row.id } }));
+        outputs.push(f.items.open({ access_token: token, ref: row.kind !== "document" ? { kind: row.kind, id: row.id } : { kind: "document", id: row.id } }));
       }
     }
     const serialized = JSON.stringify(outputs);

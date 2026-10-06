@@ -1237,10 +1237,10 @@ function setupCanaryEvidence(
         `SELECT 1
            FROM authority_live_source_progress_v2 AS progress
            JOIN authority_live_source_admission_v2 AS admission
-             ON admission.singleton = 1
+             ON admission.source_key = 1
             AND admission.semantic_input_sha256 =
                 progress.admission_semantic_input_sha256
-          WHERE progress.singleton = 1
+          WHERE progress.source_key = 1
             AND progress.cursor_version > 0
           LIMIT 1`,
       )
@@ -1293,7 +1293,7 @@ function setupCanaryEvidence(
       sameGenerationPointer(initialPointer, activeGenerationPointer(authority));
     if (!stable) return EMPTY_SETUP_CANARY_EVIDENCE;
     const canarySourceAdmitted = authority.prepare(
-      "SELECT 1 FROM authority_live_source_admission_v2 WHERE singleton = 1 AND source_adapter_id = ?",
+      "SELECT 1 FROM authority_live_source_admission_v2 WHERE source_key = 1 AND source_adapter_id = ?",
     ).get(stagingCanaryMeetingSourceIdentityV1.adapter_id) !== undefined;
     const complete =
       (syntheticFixtureApproval.source_admitted
@@ -1363,7 +1363,7 @@ function initialOwnerSetupStatus(
         `SELECT source_adapter_id, source_adapter_instance_id,
                 source_custodian_assurance, source_custodian_observed_at
            FROM authority_live_source_admission_v2
-          WHERE singleton = 1 AND organization_id = ? AND principal_id = ?
+          WHERE source_key = 1 AND organization_id = ? AND principal_id = ?
             AND membership_id = ? AND membership_type = 'owner'
             AND processor_adapter_id = 'llm'
             AND processor_instance_id = ?

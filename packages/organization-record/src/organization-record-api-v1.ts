@@ -60,3 +60,5 @@ export type {
   RecordPolicyFactProjectorRegistryV1,
   RecordPolicyFactProjectorV1,
 } from "./application/record-policy-fact-projection-v1.js";
+
+export { projectApprovedMeetingPolicyFactsV1 } from './application/approved-meeting-policy-projection-v1.js';

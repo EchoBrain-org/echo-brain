@@ -124,3 +124,61 @@ test('a stopped connection needs attention and reconnects; Manage disconnects on
   await expect(page.getByRole('region', { name: 'Connected' })).toHaveCount(0);
   expect(toolCalls()).toEqual(['slack disconnect']);
 });
+
+
+test('Granola browsing requires explicit retention, then offers personal review with transcript sharing off', async ({}, testInfo) => {
+  run = await launch('granola');
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
+  const meetings = page.getByRole('region', { name: 'Personal meetings' });
+  await expect(meetings).toContainText('ari@example.test · EchoBrain');
+  await meetings.getByLabel('Granola folder').selectOption({ label: 'ECHO (1)' });
+  await meetings.getByRole('button', { name: 'Browse meetings' }).click();
+  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
+  const add = meetings.getByRole('button', { name: 'Add to ECHO', exact: true });
+  await expect(add).toBeDisabled();
+  expect(run.calls().filter(call => call.body?.operation === 'import')).toHaveLength(0);
+  await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
+  await add.click();
+  await expect(meetings.getByRole('button', { name: 'Pilot planning', exact: true })).toHaveCount(2);
+  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).last().click();
+  await expect(meetings.getByLabel('Share the transcript with the selected audience')).not.toBeChecked();
+  await meetings.getByRole('button', { name: 'Approve', exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('granola-review.png') });
+  await meetings.getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect.poll(() => run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
+  expect(run.calls().find(call => call.body?.operation === 'import')?.body).toMatchObject({ retain: true, project_id: null });
+  expect(run.calls().find(call => call.body?.operation === 'review')?.body).toMatchObject({ action: 'approve', share_transcript: false, project_id: null });
+});
+
+test('Granola saves a selected folder while its initial baseline is preparing', async () => {
+  run = await launch('granola-preparing');
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
+  const meetings = page.getByRole('region', { name: 'Personal meetings' });
+  await meetings.getByLabel('Granola folder').selectOption({ label: 'ECHO (1)' });
+  await meetings.getByLabel('Save to').selectOption({ label: 'Apollo' });
+  await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
+  await meetings.getByRole('button', { name: 'Use folder for automatic import' }).click();
+  await expect(meetings).toContainText('Preparing automatic import: ECHO → Apollo.');
+  await expect(meetings.getByRole('status')).toHaveText('Folder saved. Existing history stays in Granola until you import it.');
+  await meetings.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(meetings).toContainText('Automatic import active: ECHO → Apollo.');
+  expect(run.calls().find(call => call.body?.operation === 'watch')?.body).toMatchObject({ folder_id: '00000000-0000-4000-8000-000000000011', project_id: 'prj_11111111-1111-4111-8111-111111111111', retain: true });
+});
+
+test('Granola browsing failure leaves retained meetings available for review', async () => {
+  run = await launch('granola-browse-unavailable');
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
+  const meetings = page.getByRole('region', { name: 'Personal meetings' });
+  await expect(meetings.getByRole('status')).toBeVisible();
+  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click({ timeout: 5_000 });
+  await expect(meetings.getByLabel('Share the transcript with the selected audience')).not.toBeChecked();
+  await meetings.getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect(meetings).toContainText('approved');
+  expect(run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
+});
