@@ -546,6 +546,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       const byShort = new Map<string, string>();
       const searchesRun: { readonly query: string; readonly source?: EvidenceDeskSourceV2 }[] = [];
       const researchObservations: AskResearchObservationV1[] = [];
+      // Observed read coverage, never the planner's hypotheses or raw tool arguments.
+      const readCoverage: { tool: 'search' | 'open' | 'list'; source: string; returned_items: number; truncated: boolean; notice: boolean }[] = [];
+      const cover = (tool: 'search' | 'open' | 'list', source: string | undefined, result: EvidenceDeskResultV2) => {
+        readCoverage.push({ tool, source: source === undefined ? 'available_sources' : sourcesById.get(source)?.selector ?? source,
+          returned_items: result.items.length, truncated: result.truncated, notice: result.notice !== undefined });
+      };
       /** Sources whose complete, unfiltered inventory was observed empty. */
       const exhaustivelyEmptySources = new Set<EvidenceDeskSourceV2>();
       let retrievalProgress = 0;
@@ -606,6 +612,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         const result = await raceAbort(signal, desk.search({ query, ...(source === undefined ? {} : { source, kinds: sourcesById.get(source)!.kinds }), limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal }));
         const apply = () => {
           observe(result);
+          cover('search', source, result);
           researchObservations.push({ operation: 'search', fingerprint: JSON.stringify({ query: query.toLowerCase(), source: source ?? null }), complete: !result.truncated && result.notice === undefined });
           retrievalProgress += 1;
           const found = result.items.map(item => register(item));
@@ -638,6 +645,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         }
         const apply = () => {
           observe(result);
+          cover('open', evidenceDeskSourceV2(entry.item), result);
           const anchor = result.items.find(item => item.id === entry.item.id && item.text !== undefined);
           const others = result.items.filter(item => item.id !== entry.item.id && item.text !== undefined);
           const admitted: Entry[] = [];
@@ -688,6 +696,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         const apply = () => {
           if (result !== undefined) {
             observe(result);
+            cover('list', request.source, result);
             currentState.available = currentState.available && result.notice === undefined;
             if (!currentState.fetched || result.next_cursor !== currentState.cursor) retrievalProgress += 1;
             currentState.fetched = true; currentState.cursor = result.next_cursor; currentState.truncated = result.truncated;
@@ -876,6 +885,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       // ---- model calls -----------------------------------------------------
       let generationStopped = false;
       let researchIncomplete = true;
+      let researchStop: 'finished' | 'empty_catalog' | 'no_progress' | 'step_limit' | 'budget' | 'unusable_step' = 'step_limit';
       const call = async (role: AgenticAskModelRoleV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, recovery = false): Promise<unknown> => {
         assertLive();
         if (calls >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) throw new AgenticAskGenerationFailureV1("call budget exhausted", "fallback");
@@ -999,7 +1009,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         while (steps < AGENTIC_ASK_MAX_STEPS_V1) {
           assertLive();
           // Leave room for the answer call and its possible repair.
-          if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || calls + 2 >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) break;
+          if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || calls + 2 >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) { researchStop = 'budget'; break; }
           const header = { question: input.question, ...context(requestDay), scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
           const pad = scratchpad(stepBudget - bytes(JSON.stringify({ ...header, opened: [], seen: [] })));
           researchPromptEntries = pad.read;
@@ -1045,7 +1055,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           catch (error) {
             if (isAbort(error, input.signal) || deadlineExpired || !(error instanceof AgenticAskOutputErrorV1)) throw error;
             // A research step that cannot finish stops research; the answer uses what was found.
-            fallbacks += 1; break;
+            fallbacks += 1; researchStop = 'unusable_step'; break;
           }
           steps += 1;
           plan = proposedPlan(step.parts);
@@ -1053,6 +1063,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           const reads = step.actions.filter(action => action.tool !== "finish");
           if (reads.length === 0) {
             researchIncomplete = false;
+            researchStop = 'finished';
             break;
           }
           const hadCitableEvidence = [...entries.values()].some(entry => entry.full);
@@ -1064,11 +1075,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           });
           if (catalogIsExhaustivelyEmpty) {
             researchIncomplete = false;
+            researchStop = 'empty_catalog';
             break;
           }
           const progressed = (hadCitableEvidence ? evidenceNovelty : retrievalProgress) > before;
           idleSteps = progressed ? 0 : idleSteps + 1;
-          if (idleSteps >= 2) break;
+          if (idleSteps >= 2) { researchStop = 'no_progress'; break; }
         }
         if (plan.length === 0) plan = [newPart({ question: partQuestion(input.question), needs: [], notes: "" })];
 
@@ -1079,11 +1091,22 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         report(stepUsage === null ? { stage: "planner", event: "skipped", elapsed_ms: 0 } : { stage: "planner", event: "succeeded", elapsed_ms: stepModelMs, generation_usage: stepUsage });
 
         // ---- final answer ---------------------------------------------------
+        const answerContext = {
+          question: input.question, ...context(requestDay), scope, source_catalog: sourceCatalog,
+          research: {
+            completed: !researchIncomplete, stop_reason: researchStop, reads: readCoverage,
+            // Filters and planner need text are intentionally excluded. This describes
+            // inventories actually read, not whether an arbitrary fact exists.
+            inventories: inventoryView().map(({ args, ...inventory }) => ({ source: args.source, ...inventory })),
+            notices: [...notice], omitted_evidence_items: 0,
+          },
+        };
+        const writerBudget = Math.max(0, answerBudget - bytes(JSON.stringify({ ...answerContext, evidence: [] })));
         const cited = [...citedShorts()].map(short => entryOf(short)!);
         const evidence: Entry[] = []; let evidenceBytes = 0;
         const admit = (entry: Entry) => {
-          const cost = bytes(entry.item.text) + 200;
-          if (evidence.includes(entry) || evidenceBytes + cost > answerBudget) return;
+          const cost = bytes(JSON.stringify({ ...describe(entry), text: entry.item.text })) + 1;
+          if (evidence.includes(entry) || evidenceBytes + cost > writerBudget) return;
           evidence.push(entry); evidenceBytes += cost;
         };
         for (const entry of cited) admit(entry);
@@ -1092,6 +1115,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         // can read them even when research stopped at their previews; `full` still
         // records what research read, not what the writer is allowed to read now.
         for (const entry of [...entries.values()].filter(value => !value.full && value.item.text !== undefined).sort((left, right) => right.touched - left.touched)) admit(entry);
+        answerContext.research.omitted_evidence_items = [...entries.values()].filter(entry => entry.item.text !== undefined && !evidence.includes(entry)).length;
         const allowed = new Set(evidence.map(entry => entry.short));
         report({ stage: "context", event: "succeeded", elapsed_ms: 0, retrieval: { context_atom_count: evidence.length } });
 
@@ -1100,7 +1124,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         if (!generationStopped && evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && calls < AGENTIC_ASK_MAX_MODEL_CALLS_V1) {
           selectedTicketCount = evidence.filter(entry => entry.item.citation.kind === "ticket").length;
           const user = {
-            question: input.question, ...context(requestDay), scope, source_catalog: sourceCatalog,
+            ...answerContext,
             // Working hypotheses are not user requirements or evidence. The
             // writer assesses the original question against released text.
             evidence: evidence.map(entry => ({ ...describe(entry), text: entry.item.text })),
