@@ -125,6 +125,11 @@ function failureOf(error: unknown): { reason: OrganizationSlackInstallFailureRea
   return { reason: "provider_unavailable" };
 }
 
+function disconnectsBoundConnection(reason: OrganizationSlackInstallFailureReasonV1): boolean {
+  return reason === "attempt_mismatch" || reason === "app_mismatch" ||
+    reason === "identity_mismatch" || reason === "workspace_mismatch";
+}
+
 function unavailable(): AuthorityOperationError {
   return new AuthorityOperationError("unavailable", "Slack setup is unavailable");
 }
@@ -283,7 +288,7 @@ export class SlackOrganizationSetupWorkflowV1 {
         throw error;
       }
       if (connection === undefined) return statusResponse(attempt);
-      if (!tagsMatch(connection, attempt, this.options.organization_id)) throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
+      if (!tagsMatch(connection, attempt, this.options.organization_id)) throw new SlackConnectionRefusedErrorV1("attempt_mismatch");
       // Ownership is re-checked after Slack's auth.test, the last round-trip before the only durable write.
       const verifier: SlackConnectionVerifierV1 = { verifyConnection: async (token, signal) => {
         const verified = await this.options.verifier.verifyConnection(token, signal);
@@ -328,8 +333,10 @@ export class SlackOrganizationSetupWorkflowV1 {
       const { reason } = failureOf(error);
       // The active connection's Nango connection now holds another workspace or bot, or is gone.
       const bound = attempt.reconnect ?? attempt.rebind;
-      if (bound !== null && (reason === "workspace_mismatch" ||
-        (error instanceof NangoClientErrorV1 && error.code === "not_found"))) {
+      if (bound !== null && (
+        disconnectsBoundConnection(reason) ||
+        (error instanceof NangoClientErrorV1 && error.code === "not_found")
+      )) {
         this.options.health.markNeedsReinstall(bound.state_sha256);
       }
       this.settle(attempt, "failed", reason);

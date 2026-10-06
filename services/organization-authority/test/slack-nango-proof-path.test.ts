@@ -113,7 +113,7 @@ function fakeNango(slack: ReturnType<typeof fakeSlack>) {
     if (request.method === "POST") {
       const body = await request.json() as { tags: Record<string, string>; connection_id?: string; integrations_config_defaults: unknown };
       // Each organization's private app keeps its own OAuth client and the four scopes.
-      expect(body.integrations_config_defaults).toEqual({ slack: { connection_config: {
+      expect(body.integrations_config_defaults).toEqual({ slack: { authorization_params: { client_id: APP.client_id }, connection_config: {
         oauth_client_id_override: APP.client_id, oauth_client_secret_override: APP.client_secret, oauth_scopes_override: SCOPES } } });
       sessions.push({ tags: body.tags, reconnect_connection_id: url.pathname === "/connect/sessions/reconnect" ? body.connection_id! : null });
       return Response.json({ data: { token: "nango-session-token", connect_link: `${NANGO_URL}/connect/${sessions.length}`, expires_at: "2099-01-01T00:00:00.000Z" } });
@@ -293,10 +293,11 @@ it("sets up, connects, links, approves, reconnects and restarts Slack through Na
     return (JSON.parse(Buffer.from(session, "base64url").toString("utf8")) as { access_token: string }).access_token;
   };
   const slackTool = async (token: string) => (await call("/v4/person/tools", token)).body.tools.find((tool: { tool_id: string }) => tool.tool_id === 'slack');
-  /** Begins an install, lets the owner finish Nango's Connect page as `bot`, and reads the outcome. */
+  /** Begins native Nango OAuth, lets the owner consent as `bot`, and reads the outcome. */
   const install = async (bot: Bot, token: string) => {
     const begun = await call(ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, owner, { request_id: `osi_${randomUUID()}` });
-    expect(begun).toMatchObject({ status: 201, body: { connect_link: `${NANGO_URL}/connect/${nango.sessions.length}` } });
+    expect(begun).toMatchObject({ status: 201, body: { connect_link: `${NANGO_URL}/oauth/connect/slack?connect_session_token=nango-session-token` } });
+    for (const secret of [CONFIGURATION_TOKEN, NANGO_KEY, APP.client_secret, APP.signing_secret]) expect(begun.body.connect_link).not.toContain(secret);
     nango.finishConnect(bot, token);
     return (await call(ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, owner, { attempt_id: begun.body.attempt_id })).body;
   };

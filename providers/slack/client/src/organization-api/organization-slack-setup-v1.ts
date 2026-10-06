@@ -54,6 +54,9 @@ export type OrganizationSlackInstallFailureReasonV1 =
   | 'provider_rejected'
   | 'provider_unavailable'
   | 'permissions_missing'
+  | 'attempt_mismatch'
+  | 'app_mismatch'
+  | 'identity_mismatch'
   | 'workspace_mismatch'
   | 'already_connected';
 
@@ -73,7 +76,8 @@ export interface OrganizationSlackInstallStatusResponseV1 {
 }
 
 const FAILURE_REASONS: readonly string[] = [
-  'provider_rejected', 'provider_unavailable', 'permissions_missing', 'workspace_mismatch', 'already_connected',
+  'provider_rejected', 'provider_unavailable', 'permissions_missing', 'attempt_mismatch', 'app_mismatch', 'identity_mismatch',
+  'workspace_mismatch', 'already_connected',
 ];
 const STATUSES: readonly string[] = ['pending', 'complete', 'cancelled', 'expired', 'failed'];
 const RESULT_KINDS: readonly string[] = ['created', 'reconnected'];
@@ -85,14 +89,34 @@ const WORKSPACE_ID = /^T[A-Z0-9]{2,}$/;
 const HTTPS_LINK = /^https:\/\/[A-Za-z0-9.-]+(?::[1-9][0-9]{0,4})?(?:[/?#]|$)/;
 
 /** Never puts the candidate value in the message: these fields carry secrets. */
-function assertVisibleAscii(value: unknown, minimum: number, maximum: number, label: string): void {
+function assertVisibleAscii(value: unknown, minimum: number, maximum: number, label: string): asserts value is string {
   if (typeof value !== 'string' || value.length < minimum || value.length > maximum || !VISIBLE_ASCII.test(value)) {
     fail(`${label} is invalid`);
   }
 }
 
-function assertMatch(value: unknown, pattern: RegExp, label: string): void {
+function assertMatch(value: unknown, pattern: RegExp, label: string): asserts value is string {
   if (typeof value !== 'string' || value.length > 128 || !pattern.test(value)) fail(`${label} is invalid`);
+}
+
+export function validateOrganizationSlackConfigurationTokenV1(value: unknown): string {
+  assertVisibleAscii(value, 16, 512, 'Slack app configuration token');
+  return value;
+}
+
+export function validateOrganizationSlackAppClientIdV1(value: unknown): string {
+  assertMatch(value, CLIENT_ID, 'Slack app client ID');
+  return value;
+}
+
+export function validateOrganizationSlackAppClientSecretV1(value: unknown): string {
+  assertVisibleAscii(value, 8, 255, 'Slack app client secret');
+  return value;
+}
+
+export function validateOrganizationSlackAppSigningSecretV1(value: unknown): string {
+  assertVisibleAscii(value, 8, 255, 'Slack app signing secret');
+  return value;
 }
 
 export function validateOrganizationSlackSetupRequestV1(value: unknown): OrganizationSlackSetupRequestV1 {
@@ -100,12 +124,12 @@ export function validateOrganizationSlackSetupRequestV1(value: unknown): Organiz
   const record = asEnumerableRecord(value, label);
   assertExactKeys(record, ['request_id', 'configuration_token', ...(Object.hasOwn(record, 'existing_app') ? ['existing_app'] : [])], label);
   assertId(record.request_id, 'oss', `${label} request_id`);
-  assertVisibleAscii(record.configuration_token, 16, 512, `${label} configuration_token`);
+  const configurationToken = validateOrganizationSlackConfigurationTokenV1(record.configuration_token);
   if (Object.hasOwn(record, 'existing_app')) {
-    return { request_id: record.request_id as string, configuration_token: record.configuration_token as string,
+    return { request_id: record.request_id as string, configuration_token: configurationToken,
       existing_app: validateOrganizationSlackExistingAppV1(record.existing_app) };
   }
-  return record as unknown as OrganizationSlackSetupRequestV1;
+  return { request_id: record.request_id as string, configuration_token: configurationToken };
 }
 
 export function validateOrganizationSlackExistingAppV1(value: unknown): OrganizationSlackExistingAppV1 {
@@ -113,11 +137,8 @@ export function validateOrganizationSlackExistingAppV1(value: unknown): Organiza
   const record = asEnumerableRecord(value, label);
   assertExactKeys(record, ['app_id', 'client_id', 'client_secret', 'signing_secret'], label);
   assertMatch(record.app_id, APP_ID, `${label} app_id`);
-  assertMatch(record.client_id, CLIENT_ID, `${label} client_id`);
-  assertVisibleAscii(record.client_secret, 8, 255, `${label} client_secret`);
-  assertVisibleAscii(record.signing_secret, 8, 255, `${label} signing_secret`);
-  return Object.freeze({ app_id: record.app_id as string, client_id: record.client_id as string,
-    client_secret: record.client_secret as string, signing_secret: record.signing_secret as string });
+  return Object.freeze({ app_id: record.app_id as string, client_id: validateOrganizationSlackAppClientIdV1(record.client_id),
+    client_secret: validateOrganizationSlackAppClientSecretV1(record.client_secret), signing_secret: validateOrganizationSlackAppSigningSecretV1(record.signing_secret) });
 }
 
 export function validateOrganizationSlackSetupResponseV1(value: unknown): OrganizationSlackSetupResponseV1 {
