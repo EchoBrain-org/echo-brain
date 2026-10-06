@@ -12,7 +12,7 @@ import { codeChecks } from "./lib/checks.mjs";
 import { createOpenRouterJudge, judgeInput, parseJudge } from "./lib/judge.mjs";
 import { aggregate, markdownReport, withholdJudgeMetrics } from "./lib/report.mjs";
 import { calibrationSheet, calibrationStatus, scoreCalibration } from "./lib/calibration.mjs";
-import { privateDirectory, readJson, savedRuns, writePrivateJson, writePrivateText } from "./lib/private-files.mjs";
+import { privateDirectory, readJson, savedRunFiles, writePrivateJson, writePrivateText } from "./lib/private-files.mjs";
 
 const USAGE = `Research loop evaluation (docs/product/2026-10-06-research-loop-eval-v1.md)
 
@@ -128,7 +128,7 @@ async function grade(args) {
   const cases = new Map(dataset.cases.map(entry => [entry.id, substitutePerson(entry, bound.test_person)]));
   const judge = args["no-judge"] === true ? null : await createOpenRouterJudge({ credential_file: args["judge-credential-file"], model: args["judge-model"] });
   const graded = [];
-  for (const saved of savedRuns(out)) {
+  for (const { file, sha256, run: saved } of savedRunFiles(out)) {
     const testCase = cases.get(saved.case_id);
     const checks = codeChecks(testCase, saved, dataset);
     let judged = null; let judgeError = null;
@@ -136,7 +136,7 @@ async function grade(args) {
       try { judged = parseJudge(testCase, await judge(judgeInput(testCase, saved))); }
       catch (error) { judgeError = String(error?.message ?? error).slice(0, 300); }
     }
-    graded.push({ checks, judge: judged, judge_error: judgeError });
+    graded.push({ run: { file, sha256 }, checks, judge: judged, judge_error: judgeError });
   }
   writePrivateJson(out, "graded.json", { schema_version: 1, judge_model: judge === null ? null : args["judge-model"], graded_at: new Date().toISOString(), runs: graded });
   process.stdout.write(`graded ${graded.length} runs${judge === null ? " (code checks only)" : ""}\n`);
@@ -145,16 +145,23 @@ async function grade(args) {
 function report(args) {
   const out = privateDirectory(args.out);
   const graded = readJson(join(out, "graded.json"));
-  const runs = savedRuns(out);
+  const files = savedRunFiles(out);
+  const runs = files.map(entry => entry.run);
   const models = new Set(runs.map(run => run.model).filter(model => typeof model === "string" && model.length > 0));
   if (models.size !== 1 || runs.some(run => typeof run.model !== "string" || run.model.length === 0)) throw new Error("report needs one evaluated loop model across all saved runs");
+  const sources = new Set(runs.map(run => run.source_sha));
+  if (sources.size !== 1 || runs.some(run => typeof run.source_sha !== "string" || run.source_sha.length === 0)) throw new Error("report needs one source commit across all saved runs");
+  // Metrics come from graded.json and identity from the run files: they must be the same runs.
+  if (!Array.isArray(graded.runs) || graded.runs.length !== files.length || graded.runs.some((entry, index) => entry?.run?.file !== files[index].file || entry.run.sha256 !== files[index].sha256)) {
+    throw new Error("saved runs changed since grading; run grade again");
+  }
   let calibration = null;
   try { if (existsSync(join(out, "calibration-result.json"))) calibration = readJson(join(out, "calibration-result.json")); } catch { calibration = null; }
   const judgeCalibration = calibrationStatus(graded, calibration);
   const reportRuns = judgeCalibration.trusted ? graded.runs : graded.runs.map(entry => ({ ...entry, judge: null }));
   const result = judgeCalibration.trusted ? aggregate(reportRuns) : withholdJudgeMetrics(aggregate(reportRuns));
   const identity = { split: [...new Set(graded.runs.map(entry => entry.checks.split))].join("+"), state: [...new Set(runs.map(entry => entry.state))].join("+"),
-    source_sha: runs[0]?.source_sha ?? null, model: [...models][0], world: "therm-v1", judge: graded.judge_model, judge_calibration: judgeCalibration, graded_at: graded.graded_at };
+    source_sha: [...sources][0], model: [...models][0], world: "therm-v1", judge: graded.judge_model, judge_calibration: judgeCalibration, graded_at: graded.graded_at };
   writePrivateJson(out, "report.json", { identity, ...result });
   writePrivateText(out, "report.md", markdownReport(identity, result));
   process.stdout.write(`report.md written: ${result.summary.cases_complete_in_every_run} of ${result.summary.cases} cases complete and supported in every run${judgeCalibration.trusted ? "" : "; judge metrics withheld"}\n`);

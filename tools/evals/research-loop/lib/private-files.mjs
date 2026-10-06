@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,8 +44,11 @@ export function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-/** Every saved run under `runs/`, in a stable order. */
-export function savedRuns(directory) {
+/** Every saved run under `runs/`, in a stable order, with its file name and byte digest. */
+export function savedRunFiles(directory) {
   const root = join(directory, "runs");
-  return readdirSync(root, { recursive: true }).filter(name => String(name).endsWith(".json")).sort().map(name => readJson(join(root, String(name))));
+  return readdirSync(root, { recursive: true }).map(String).filter(name => name.endsWith(".json")).sort().map(file => {
+    const bytes = readFileSync(join(root, file));
+    return { file, sha256: createHash("sha256").update(bytes).digest("hex"), run: JSON.parse(bytes.toString("utf8")) };
+  });
 }

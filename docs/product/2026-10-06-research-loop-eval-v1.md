@@ -358,6 +358,10 @@ and within budget.
 - Starting evidence opens through `openCitation` on the evidence desk: ECHO
   citations through the existing desk path, Jira and Confluence through new
   reader methods that re-read the current item with the project or space pin.
+  A Confluence section is re-read by position only when the page version is
+  unchanged; after an edit, the reader follows the cited text if it still
+  exists, and otherwise returns the current page from the top with a notice
+  that the cited section changed.
 - Research-only audits carry `trigger` and use background limits (20 rounds,
   48 calls); Ask audits are unchanged.
 - The endpoint is `POST /v1/person/research-eval/start` and `/read`, composed

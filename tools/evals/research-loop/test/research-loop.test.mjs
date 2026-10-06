@@ -197,8 +197,8 @@ test("grade and report run end to end on saved runs without a judge", async () =
   writePrivateJson(out, "bindings.json", { ...bindings, test_person: "Zhen Ye" });
   const testCase = caseById("bug-fix-dates-vs-dvt-review");
   const run = completedRun(testCase, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [{ statements: [{}] }], citations: [{}] } });
-  writePrivateJson(out, `runs/${testCase.id}/live-1.json`, { ...run, case_id: testCase.id, split: "development", state: "S0", trigger: "ask", model: "test-loop-model" });
-  writePrivateJson(out, "runs/overlong-dvt-schedule-check/live-1.json", { case_id: "overlong-dvt-schedule-check", split: "development", state: "S0", trigger: "ask", budget: "live", trial: 1, model: "test-loop-model", outcome: "rejected", error: { code: "query_too_long" } });
+  writePrivateJson(out, `runs/${testCase.id}/live-1.json`, { ...run, case_id: testCase.id, split: "development", state: "S0", trigger: "ask", model: "test-loop-model", source_sha: "commit-a" });
+  writePrivateJson(out, "runs/overlong-dvt-schedule-check/live-1.json", { case_id: "overlong-dvt-schedule-check", split: "development", state: "S0", trigger: "ask", budget: "live", trial: 1, model: "test-loop-model", source_sha: "commit-a", outcome: "rejected", error: { code: "query_too_long" } });
   await main(["grade", "--no-judge", "--out", out]);
   await main(["report", "--out", out]);
   const report = readJson(join(out, "report.json"));
@@ -210,13 +210,14 @@ test("grade and report run end to end on saved runs without a judge", async () =
 
 test("report withholds judge metrics until its exact grading pass is calibrated", async () => {
   const { main } = await import("../cli.mjs");
-  const { writePrivateJson, readJson } = await import("../lib/private-files.mjs");
+  const { writePrivateJson, readJson, savedRunFiles } = await import("../lib/private-files.mjs");
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-uncalibrated-")));
   const testCase = caseById("bug-fix-dates-vs-dvt-review");
   const checks = codeChecks(testCase, completedRun(testCase, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [{ statements: [{}] }], citations: [{}] } }), dataset);
   const judge = { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [], parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "yes", answer_correct: "yes" })), gaps: [], must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false, verdicts: [], notes: "" };
-  writePrivateJson(out, "graded.json", { schema_version: 1, judge_model: "anthropic/claude-test", graded_at: "2026-10-06T00:00:00.000Z", runs: [{ checks, judge, judge_error: null }] });
   writePrivateJson(out, `runs/${testCase.id}/live-1.json`, { source_sha: "source", state: "S0", model: "test-loop-model" });
+  const [{ file, sha256 }] = savedRunFiles(out);
+  writePrivateJson(out, "graded.json", { schema_version: 1, judge_model: "anthropic/claude-test", graded_at: "2026-10-06T00:00:00.000Z", runs: [{ run: { file, sha256 }, checks, judge, judge_error: null }] });
   await main(["report", "--out", out]);
   const report = readJson(join(out, "report.json"));
   assert.equal(report.identity.judge_calibration.status, "untrusted");
@@ -233,4 +234,31 @@ test("runs record an explicit loop model and reports refuse mixed identities", a
   writePrivateJson(out, "runs/a/live-1.json", { state: "S0", model: "loop-a" });
   writePrivateJson(out, "runs/b/live-1.json", { state: "S0", model: "loop-b" });
   await assert.rejects(main(["report", "--out", out]), /one evaluated loop model/u);
+});
+
+test("reports refuse runs from more than one source commit", async () => {
+  const { main } = await import("../cli.mjs");
+  const { writePrivateJson } = await import("../lib/private-files.mjs");
+  const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-source-")));
+  writePrivateJson(out, "bindings.json", { ...bindings, test_person: "Zhen Ye" });
+  const rejected = { split: "development", state: "S0", trigger: "ask", budget: "live", trial: 1, model: "loop-a", outcome: "rejected", error: { code: "query_too_long" } };
+  writePrivateJson(out, "runs/overlong-dvt-schedule-check/live-1.json", { ...rejected, case_id: "overlong-dvt-schedule-check", source_sha: "commit-a" });
+  writePrivateJson(out, "runs/overlong-dvt-schedule-check/live-2.json", { ...rejected, case_id: "overlong-dvt-schedule-check", trial: 2, source_sha: "commit-b" });
+  await main(["grade", "--no-judge", "--out", out]);
+  await assert.rejects(main(["report", "--out", out]), /one source commit/u);
+});
+
+test("reports refuse saved runs that changed after grading", async () => {
+  const { main } = await import("../cli.mjs");
+  const { writePrivateJson } = await import("../lib/private-files.mjs");
+  const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-regraded-")));
+  writePrivateJson(out, "bindings.json", { ...bindings, test_person: "Zhen Ye" });
+  const rejected = { case_id: "overlong-dvt-schedule-check", split: "development", state: "S0", trigger: "ask", budget: "live", trial: 1, model: "loop-a", source_sha: "commit-a", outcome: "rejected", error: { code: "query_too_long" } };
+  writePrivateJson(out, "runs/overlong-dvt-schedule-check/live-1.json", rejected);
+  await main(["grade", "--no-judge", "--out", out]);
+  writePrivateJson(out, "runs/overlong-dvt-schedule-check/live-2.json", { ...rejected, trial: 2 });
+  await assert.rejects(main(["report", "--out", out]), /changed since grading/u, "an added run");
+  await main(["grade", "--no-judge", "--out", out]);
+  writePrivateJson(out, "runs/overlong-dvt-schedule-check/live-2.json", { ...rejected, trial: 2, outcome: "failed", error: { code: "unavailable" } });
+  await assert.rejects(main(["report", "--out", out]), /changed since grading/u, "an overwritten run");
 });
