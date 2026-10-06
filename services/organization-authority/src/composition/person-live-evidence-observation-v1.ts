@@ -10,7 +10,7 @@ function failureResult(error: unknown): CoreRuntimeDetailV1['result'] {
 }
 
 /** Source categories and counts only: provider failures must not enter content capture. */
-export function observePersonLiveEvidenceV1<T>(phase: 'evidence_connection' | 'evidence_search' | 'evidence_list' | 'evidence_open', source: NonNullable<CoreRuntimeDetailV1['evidence_source']>, operation: () => Promise<T>): Promise<T> {
+export function observePersonLiveEvidenceV1<T>(phase: 'evidence_connection' | 'evidence_search' | 'evidence_list' | 'evidence_open' | 'evidence_revalidate', source: NonNullable<CoreRuntimeDetailV1['evidence_source']>, operation: () => Promise<T>): Promise<T> {
   return withoutCoreRuntimeContentV1(() => observeCoreRuntimeV1(phase, async () => {
     annotateCoreRuntimeV1({ evidence_source: source });
     try { return await operation(); }

@@ -260,6 +260,27 @@ describe('registered live source dispatch', () => {
   const registration = (source: PersonLiveEvidenceSourceV1, source_id: string, scope: RegisteredPersonLiveEvidenceSourceV2['scope'] = { kind: 'global' }): RegisteredPersonLiveEvidenceSourceV2 => ({
     source, scope, descriptor: { source_id, selector: source_id, kind: 'page', description: `Pages from ${source_id}`, metadata_only_list: true, tool_id: source.tool_id },
   });
+  it('observes a provider revalidation failure without capturing content or changing the failure fences', async () => {
+    const f = mixedFixture();
+    const failure = new AuthorityOperationError('unavailable', 'private-provider-revalidation-error');
+    vi.mocked(f.page.revalidate).mockRejectedValueOnce(failure);
+    const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [registration(f.page, 'knowledge-one')]);
+    const events: CoreRuntimeObservationV1[] = [];
+    const content = vi.fn();
+    const input = { signal: new AbortController().signal };
+    await observeCoreRuntimeV1('ask_request', async () => {
+      await expect(desk.revalidate(input)).rejects.toBe(failure);
+    }, { observer: event => { events.push(event); }, content_observer: content });
+    expect(events.filter(event => !event.root && event.event === 'failed')).toMatchObject([
+      { phase: 'evidence_revalidate', evidence_source: 'page', result: 'unavailable' },
+    ]);
+    expect(new Set(events.map(event => event.operation_id)).size).toBe(1);
+    expect(f.page.revalidate).toHaveBeenCalledExactlyOnceWith(input);
+    expect(f.base.revalidate).toHaveBeenCalledTimes(1);
+    expect(f.page.assertCurrent).not.toHaveBeenCalled();
+    expect(JSON.stringify(events)).not.toContain('private-provider-revalidation-error');
+    expect(content).not.toHaveBeenCalled();
+  });
   it.each(['search', 'list'] as const)('runs %s concurrently across local, ticket and two page providers without changing ownership', async method => {
     const f = mixedFixture();
     const secondItems = f.pages.map(item => ({ ...item, id: `second-${item.id}`, citation: { ...item.citation, tool_id: 'other-knowledge' } }));
