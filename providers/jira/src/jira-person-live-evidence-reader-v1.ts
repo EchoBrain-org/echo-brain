@@ -145,16 +145,24 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     }
     const ids = new Set(input.cursor?.ids);
     const selected: ParsedJiraIssueV1[] = [];
-    for (const raw of jiraArray(page.issues, input.maximum)) {
+    const discovered = jiraArray(page.issues, input.maximum).map(raw => {
       const reference = jiraRecord(raw);
       const id = jiraString(reference.id, 20, JIRA_ID);
       if (ids.has(id)) jiraFailure('invalid_output');
       ids.add(id);
       if (ids.size > REQUEST_MAX_HANDLES || tokens.size > REQUEST_MAX_HANDLES) jiraFailure('unavailable');
+      return id;
+    });
+    for (let offset = 0; offset < discovered.length; offset += 4) {
       // Search is eventually consistent. Exact reads enforce current issue security before exposing even its title.
-      const current = await issue(id, input.origin, input.inventory, input.signal);
-      if (input.projectId !== undefined && current.project_id !== input.projectId) jiraFailure('invalid_output');
-      selected.push(current);
+      // Independent reads overlap in bounded batches, with results admitted in
+      // discovery order only after the entire batch passes its scope checks.
+      const batch = await Promise.all(discovered.slice(offset, offset + 4).map(async id => {
+        const current = await issue(id, input.origin, input.inventory, input.signal);
+        if (input.projectId !== undefined && current.project_id !== input.projectId) jiraFailure('invalid_output');
+        return current;
+      }));
+      selected.push(...batch);
     }
     return { selected, token, tokens, ids };
   }
