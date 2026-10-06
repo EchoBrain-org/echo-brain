@@ -1,8 +1,9 @@
 # Research trigger contract v1
 
-Status: design approved in conversation on 2026-10-06; awaiting written-spec
-review. Stacked on PR #284 (research loop evaluation v1, branch
-`feat/research-loop-eval`).
+Status: written spec approved on 2026-10-06. Implementation plan:
+`docs/superpowers/plans/2026-10-06-research-trigger-contract.md`. Stacked on
+PR [#284](https://github.com/EchoBrain-org/echo-brain/pull/284) (research loop
+evaluation v1, branch `feat/research-loop-eval`).
 
 ## Goal
 
