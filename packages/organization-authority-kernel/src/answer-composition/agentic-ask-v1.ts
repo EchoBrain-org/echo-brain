@@ -595,6 +595,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       };
       const describe = (entry: Entry): Record<string, unknown> => ({
         id: entry.short, source: entry.item.source_id === undefined ? evidenceDeskSourceV2(entry.item) : sourcesById.get(entry.item.source_id)?.selector ?? entry.item.source_id, kind: entry.item.kind, title: entry.item.label,
+        provenance: { kind: entry.item.citation.kind, ...(entry.item.citation.kind === 'page' ? { version: entry.item.citation.version } : {}) },
         ...(entry.item.occurred_at === undefined ? {} : { date: entry.item.occurred_at }),
         ...(attributesOf(entry.item) === undefined ? {} : { attributes: attributesOf(entry.item) }),
       });

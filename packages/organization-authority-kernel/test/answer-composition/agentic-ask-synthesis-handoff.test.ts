@@ -41,6 +41,10 @@ async function run(options: { truncated?: boolean; notice?: string; idle?: boole
 }
 
 describe('synthesis receives observed research coverage', () => {
+  it('carries citation provenance and page version into the writer', async () => {
+    const { writer } = await run();
+    expect(writer.evidence).toEqual([expect.objectContaining({ provenance: { kind: 'page', version: '3' } })]);
+  });
   it('preserves truncation and availability notices without promoting planner notes', async () => {
     const { writer, audit } = await run({ truncated: true, notice: 'Some page sections could not be represented.' });
     expect(writer.research).toMatchObject({ stop_reason: 'finished', notices: ['Some page sections could not be represented.'], reads: [
