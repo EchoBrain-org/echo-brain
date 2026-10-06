@@ -1,10 +1,9 @@
 export interface StagingConnectorRehearsalInput {
-  readonly action: 'status' | 'capture' | 'verify-read';
+  readonly action: 'status' | 'verify-read';
   readonly release_id: string;
   readonly profile_path: string;
   readonly person_home?: string;
-  readonly tool?: 'granola' | 'jira'; // capture: granola; verify-read: jira
-  readonly limit?: number;
+  readonly tool?: 'jira';
 }
 
 export function runStagingConnectorRehearsal(

@@ -90,7 +90,7 @@ function url(input: RequestInfo | URL): URL {
   return new URL(input.url);
 }
 
-function response(profileValue: ReturnType<typeof profile>, action: 'status' | 'capture', tool?: 'granola' | 'jira' | 'slack') {
+function response(profileValue: ReturnType<typeof profile>, action: 'status' | 'verify-read') {
   const common = {
     schema_version: 2,
     kind: 'echo-staging-connector-rehearsal-receipt-v2',
@@ -101,14 +101,8 @@ function response(profileValue: ReturnType<typeof profile>, action: 'status' | '
   } as const;
   return action === 'status'
     ? { ...common, processing: 'active' as const, granola_available: true }
-    : { ...common, tool: tool!, receipt: {
-      schema_version: 1,
-      kind: 'echo-context-capture-rehearsal-receipt-v1',
-      source_identity_sha256: canonicalSha256({ source: tool }),
-      captures: [{ source_type: tool === 'jira' ? 'ticket' as const : tool === 'slack' ? 'message' as const : 'note' as const, admission: 'admitted' as const,
-        source_id_sha256: canonicalSha256('source'), revision_id_sha256: canonicalSha256('revision'), content_sha256: canonicalSha256('content').slice(7) }],
-      counts: { captured: 1, admitted: 1, duplicate: 0, request_only: 0 },
-    } };
+    : { ...common, tool: 'jira', result: { status: 'verified',
+      source_coordinate_sha256: canonicalSha256('source'), text_sha256: canonicalSha256('content'), text_bytes: 42 } };
 }
 
 describe('staging connector rehearsal wrapper', () => {
@@ -149,53 +143,35 @@ describe('staging connector rehearsal wrapper', () => {
     }
   });
 
-  it('rejects Jira and Slack capture and a retired V1 profile before any request', async () => {
-    const directory = root();
-    const home = join(directory, 'person-home');
-    const profilePath = join(directory, 'profile.json');
-    const configured = profile(profilePath);
-    install(home);
-    for (const tool of ['jira', 'slack'] as const) {
+  it('rejects all retired capture commands before any request', async () => {
+    for (const tool of ['granola', 'jira', 'slack']) {
       let calls = 0;
       await assert.rejects(runStagingConnectorRehearsal({ action: 'capture', release_id: 'clean-v1-fixture-release',
-        // Slack is outside the typed input on purpose: the wrapper must refuse it at run time too.
-        profile_path: profilePath, person_home: home, tool: tool as never, limit: 1 }, {
+        profile_path: '/no-profile-needed', tool, limit: 1 } as never, {
         fetch: async () => { calls += 1; return Response.json({}); },
       }), /Staging connector rehearsal failed/);
       assert.equal(calls, 0);
     }
-
-    writeFileSync(profilePath, JSON.stringify({ schema_version: 1, kind: 'echo-staging-connector-rehearsal-profile-v1',
-      capture_policy: 'initial-owner-granola-retained-jira-request-only-v1', jira: configured.jira }));
-    let calls = 0;
-    await assert.rejects(runStagingConnectorRehearsal({ action: 'capture', release_id: 'clean-v1-fixture-release',
-      profile_path: profilePath, person_home: home, tool: 'granola', limit: 1 }, {
-      fetch: async () => { calls += 1; return Response.json({}); },
-    }), /Staging connector rehearsal failed/);
-    assert.equal(calls, 0);
   });
 
-  it('refuses a V1 or request-only receipt for Granola capture', async () => {
-    const directory = root();
-    const home = join(directory, 'person-home');
-    const profilePath = join(directory, 'profile.json');
-    const configured = profile(profilePath);
+  it('refuses a legacy receipt or content-bearing read receipt', async () => {
+    const directory = root(); const home = join(directory, 'person-home');
+    const profilePath = join(directory, 'profile.json'); const configured = profile(profilePath);
     install(home);
-    const accepted = response(configured, 'capture', 'granola');
-    if (!('receipt' in accepted)) throw new Error('fixture receipt is invalid');
-    const requestOnly = { ...accepted, receipt: { ...accepted.receipt,
-      captures: [{ ...accepted.receipt.captures[0]!, admission: 'request_only' }], counts: { captured: 1, admitted: 0, duplicate: 0, request_only: 1 } } };
-    for (const receipt of [{ ...accepted, schema_version: 1, kind: 'echo-staging-connector-rehearsal-receipt-v1' }, requestOnly]) {
-      let captureCalls = 0;
-      await assert.rejects(runStagingConnectorRehearsal({ action: 'capture', release_id: 'clean-v1-fixture-release',
-        profile_path: profilePath, person_home: home, tool: 'granola', limit: 1 }, {
-        fetch: async (input: RequestInfo | URL) => {
+    const accepted = response(configured, 'verify-read');
+    for (const receipt of [
+      { ...accepted, schema_version: 1, kind: 'echo-staging-connector-rehearsal-receipt-v1' },
+      { ...accepted, receipt: { source_text: 'private content' } },
+    ]) {
+      let reads = 0;
+      await assert.rejects(runStagingConnectorRehearsal({ action: 'verify-read', release_id: 'clean-v1-fixture-release',
+        profile_path: profilePath, person_home: home, tool: 'jira' }, {
+        fetch: async input => {
           if (url(input).pathname === '/v1/authority-descriptor') return Response.json(descriptor());
-          captureCalls += 1;
-          return Response.json(receipt);
+          reads += 1; return Response.json(receipt);
         },
       }), /Staging connector rehearsal failed/);
-      assert.equal(captureCalls, 1);
+      assert.equal(reads, 1);
     }
   });
 
@@ -225,60 +201,38 @@ describe('staging connector rehearsal wrapper', () => {
     assert.ok(!JSON.stringify(result).includes('a'.repeat(43)));
   });
 
-  it('makes one capture request and never retries a lost or refused response', async () => {
+  it('makes one read request and never retries a lost or refused response', async () => {
     const directory = root();
     const home = join(directory, 'person-home');
     const profilePath = join(directory, 'profile.json');
     profile(profilePath);
     install(home);
-    let captureCalls = 0;
+    let readCalls = 0;
     const fetch: typeof globalThis.fetch = async (input) => {
       const target = url(input);
       if (target.pathname === '/v1/authority-descriptor') return Response.json(descriptor());
-      captureCalls += 1;
+      readCalls += 1;
       return new Response(JSON.stringify({ error: { code: 'internal', message: 'private source text must not escape' } }), {
         status: 500, headers: { 'content-type': 'application/json' },
       });
     };
     await assert.rejects(
-      runStagingConnectorRehearsal({ action: 'capture', release_id: 'clean-v1-fixture-release', profile_path: profilePath, person_home: home, tool: 'granola', limit: 1 }, { fetch }),
+      runStagingConnectorRehearsal({ action: 'verify-read', release_id: 'clean-v1-fixture-release', profile_path: profilePath, person_home: home, tool: 'jira' }, { fetch }),
       /Staging connector rehearsal failed/,
     );
-    assert.equal(captureCalls, 1);
+    assert.equal(readCalls, 1);
   });
 
-  it('rejects malformed, over-limit, or wrongly-bound receipts without exposing provider content', async () => {
-    const directory = root();
-    const home = join(directory, 'person-home');
-    const profilePath = join(directory, 'profile.json');
-    const configured = profile(profilePath);
-    install(home);
-    const accepted = response(configured, 'capture', 'granola');
-    if (!('receipt' in accepted)) throw new Error('fixture receipt is invalid');
-    const overLimit = {
-      ...accepted,
-      receipt: {
-        ...accepted.receipt,
-        captures: [...accepted.receipt.captures, { ...accepted.receipt.captures[0], source_id_sha256: canonicalSha256('second-source') }],
-        counts: { captured: 2, admitted: 2, duplicate: 0, request_only: 0 },
-      },
-    };
-    const cases = [
-      { ...accepted, release_id: 'clean-v1-other-release' },
-      { ...accepted, remote_provider_text: 'do not print this source content' },
-      overLimit,
-    ];
-    for (const remote of cases) {
-      const fetch: typeof globalThis.fetch = async (input) => {
-        const target = url(input);
-        if (target.pathname === '/v1/authority-descriptor') return Response.json(descriptor());
-        return Response.json(remote);
-      };
-      await assert.rejects(
-        runStagingConnectorRehearsal({ action: 'capture', release_id: 'clean-v1-fixture-release', profile_path: profilePath, person_home: home, tool: 'granola', limit: 1 }, { fetch }),
-        error => error instanceof Error && error.message === 'Staging connector rehearsal failed',
-      );
-    }
+  it('rejects capture-only inputs and retired profiles before bearer traffic', async () => {
+    const directory = root(); const home = join(directory, 'person-home');
+    const profilePath = join(directory, 'profile.json'); const configured = profile(profilePath);
+    install(home); let calls = 0;
+    const fetch: typeof globalThis.fetch = async () => { calls += 1; return Response.json({}); };
+    const input = { action: 'verify-read' as const, release_id: 'clean-v1-fixture-release', profile_path: profilePath, person_home: home, tool: 'jira' as const };
+    await assert.rejects(runStagingConnectorRehearsal({ ...input, limit: 1 } as never, { fetch }));
+    writeFileSync(profilePath, JSON.stringify({ ...configured, schema_version: 1, kind: 'echo-staging-connector-rehearsal-profile-v1' }));
+    await assert.rejects(runStagingConnectorRehearsal(input, { fetch }));
+    assert.equal(calls, 0);
   });
 
   it('refreshes an expired access session only through staging before the request', async () => {

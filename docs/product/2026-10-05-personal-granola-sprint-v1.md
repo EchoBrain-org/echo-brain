@@ -135,6 +135,15 @@ Deliver the complete personal slice:
    new reads and invalidates in-flight admission. Already approved records keep
    their recorded audience; disconnect must explain this consequence.
 
+Public discovery was checked on 2026-10-05 without credentials. The
+[resource metadata](https://mcp.granola.ai/.well-known/oauth-protected-resource)
+identifies the MCP endpoint and authorization server; the
+[authorization metadata](https://mcp-auth.granola.ai/.well-known/oauth-authorization-server)
+advertises dynamic client registration and authorization-code PKCE with S256.
+This is discovery evidence only; no authenticated tool schema or live folder
+behavior has been verified. Webhook availability for the ECHO folder remains
+unknown and must be checked through the connected account.
+
 First verify the actual authenticated MCP contract: account/workspace identity,
 list/open/transcript response shapes, pagination, content limits, and account
 or workspace changes. Granola's documentation does not establish immutable
