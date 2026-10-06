@@ -573,3 +573,46 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(f.request).not.toHaveBeenCalled();
   });
 });
+
+describe('Jira open by an earlier citation (background trigger starting evidence)', () => {
+  const earlier = (ticketId: string, scope = cloudid): PersonTicketCitationV1 => ({ kind: 'ticket', tool_id: 'jira', external_scope_id: scope,
+    ticket_id: ticketId, permalink: `${origin}/browse/ECHO-${Number(ticketId) - 10000}`, text_sha256: digest('an older body') as `sha256:${string}` });
+
+  it('re-reads the current ticket body through the exact read and audits it as an open', async () => {
+    const f = fixture();
+    const { source } = await f.make('ECHO');
+    const result = await source.openCitation!({ citation: earlier('10002') });
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ kind: 'ticket', label: 'ECHO-2: Review security', attributes: { status: 'In progress' } });
+    expect(result.items[0]!.text).toContain('Launch Friday');
+    expect(result.items[0]!.citation.text_sha256).not.toBe(digest('an older body'));
+    expect(f.releases.at(-1)).toMatchObject({ operation: 'open' });
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10002` }));
+  });
+
+  it('refuses a citation from another Jira site', async () => {
+    const f = fixture();
+    const { source } = await f.make('ECHO');
+    await expect(source.openCitation!({ citation: earlier('10001', '00000000-0000-4000-8000-000000000099') })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.releases).toHaveLength(0);
+  });
+
+  it('refuses a ticket outside the pinned project', async () => {
+    const f = fixture();
+    const base = ticket('10003');
+    f.state.tickets.set('10003', { ...base, key: 'OTHER-3', fields: { ...base.fields, project: { id: '20000', key: 'OTHER', self: `${origin}/rest/api/3/project/20000`, name: 'Other' } } });
+    const { source } = await f.make('ECHO');
+    await expect(source.openCitation!({ citation: earlier('10003') })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.releases).toHaveLength(0);
+  });
+
+  it('is unavailable through a reader that cannot open citations', async () => {
+    const f = fixture();
+    const { reader } = await f.make('ECHO');
+    const { openCitation: _openCitation, ...bare } = reader;
+    const source = createAuditedPersonLiveEvidenceSourceV1({ actor: binding,
+      access: { tool_id: 'jira', identity_status: 'linked', external_scope_id: cloudid, external_subject_id: binding.external_subject_id, read_status: 'connected', read_capabilities: ['live_evidence'] },
+      read_grant_sha256: binding.read_grant_sha256, reader: bare, authorization: f.authorization, audit: f.audit });
+    await expect(source.openCitation!({ citation: earlier('10001') })).rejects.toMatchObject({ code: 'unavailable' });
+  });
+});

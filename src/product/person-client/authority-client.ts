@@ -10,6 +10,16 @@ import {
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
+  PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1,
+  PERSON_RESEARCH_EVAL_READ_PATH_V1,
+  PERSON_RESEARCH_EVAL_START_PATH_V1,
+  validatePersonResearchEvalReadRequestV1,
+  validatePersonResearchEvalReadResponseV1,
+  validatePersonResearchEvalStartReceiptV1,
+  validatePersonResearchEvalStartRequestV1,
+  type PersonResearchEvalReadResponseV1,
+  type PersonResearchEvalStartReceiptV1,
+  type PersonResearchEvalStartRequestV1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   PERSON_MEETING_TRANSCRIPT_PATH_V1,
   PERSON_LIST_PATH_V1,
@@ -1353,6 +1363,20 @@ export class PersonAuthorityClient {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
     }
     return response;
+  }
+
+  /** Staging-only research evaluation: starts one research run (research loop evaluation v1). */
+  async startResearchEval(accessToken: string, value: PersonResearchEvalStartRequestV1, signal?: AbortSignal): Promise<PersonResearchEvalStartReceiptV1> {
+    return this.json({ path: PERSON_RESEARCH_EVAL_START_PATH_V1, body: value,
+      validate_request: validatePersonResearchEvalStartRequestV1, validate_response: validatePersonResearchEvalStartReceiptV1,
+      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
+  }
+
+  /** Reads a research run; a finished result is delivered once and may carry released text. */
+  async readResearchEval(accessToken: string, runId: string, signal?: AbortSignal): Promise<PersonResearchEvalReadResponseV1> {
+    return this.json({ path: PERSON_RESEARCH_EVAL_READ_PATH_V1, body: { schema_version: 1, run_id: runId },
+      validate_request: validatePersonResearchEvalReadRequestV1, validate_response: validatePersonResearchEvalReadResponseV1,
+      access_token: accessToken, maximum_response_bytes: PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, timeout_ms: ASK_TIMEOUT_MS, signal });
   }
 
   async evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {

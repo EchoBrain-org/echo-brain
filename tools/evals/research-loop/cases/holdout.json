@@ -1,0 +1,675 @@
+{
+  "schema_version": 1,
+  "split": "holdout",
+  "world": "therm-v1",
+  "cases": [
+    {
+      "id": "dvt-gate-review-date",
+      "trigger": "ask",
+      "state": "S0",
+      "situation": 1,
+      "kind": "lookup",
+      "scope": { "kind": "project", "project": "THERM" },
+      "budget": "live",
+      "question": "When is the DVT gate review?",
+      "expected_outcome": "answerable",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "date",
+          "requirement": "The DVT gate review is on 2026-10-23.",
+          "evidence": [{ "page": "1441793", "section": "DVT review — hold on accuracy" }, { "ticket": "THERM-50" }]
+        }
+      ],
+      "expected_needs": [
+        "DVT gate review date"
+      ],
+      "gaps": [],
+      "must_not": [
+        "gives 2026-10-01 (the DVT round 1 results review meeting) as the gate review date",
+        "gives DVT-R2's 2026-10-30 as the review date",
+        "answers with ECHO's own DVT gate",
+        "treats THERM mock results as evidence that the ECHO product passed EVT (or any ECHO gate)"
+      ],
+      "never_appears": [
+        { "meeting": "M6", "item": "decision" },
+        { "meeting": "M6", "item": "action" },
+        { "meeting": "M6", "item": "rationale" },
+        { "meeting": "M6", "item": "transcript" }
+      ],
+      "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }, { "ticket": "ECHO-6" }, { "ticket": "ECHO-23" }]
+    },
+    {
+      "id": "can-pvt-start",
+      "trigger": "ask",
+      "state": "S0",
+      "situation": 2,
+      "kind": "status",
+      "scope": { "kind": "project", "project": "THERM" },
+      "budget": "live",
+      "question": "Can PVT start? If not, what is it waiting for?",
+      "expected_outcome": "answerable",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "status",
+          "requirement": "PVT has not started; GATE-PVT waits for DVT.",
+          "evidence": [
+            { "ticket": "THERM-51" },
+            { "ticket": "THERM-43" },
+            { "ticket": "THERM-44" },
+            { "ticket": "THERM-45" },
+            { "ticket": "THERM-4" },
+            { "ticket": "THERM-46" },
+            { "page": "1441793", "section": "Gate policy" },
+            { "page": "1441793", "section": "PVT review — factory readiness" },
+            { "page": "1441793", "section": "DVT review — hold on accuracy" },
+            { "page": "1015989", "section": "Current illustrative scenario" },
+            { "page": "1212607", "section": "Coverage summary" },
+            { "page": "1409025", "section": "Verification and gate acceptance" },
+            { "page": "1212589", "section": "Delivery and gate strategy" },
+            { "page": "1409042", "section": "BUG-412 walkthrough" },
+            { "page": "1474561", "section": "Mock workflow convention" }
+          ]
+        },
+        {
+          "id": "p2",
+          "type": "status",
+          "requirement": "DVT is on HOLD (TC-D-03 failure, BUG-412 open).",
+          "evidence": [
+            { "ticket": "THERM-50" },
+            { "ticket": "THERM-46" },
+            { "ticket": "THERM-4" },
+            { "ticket": "THERM-1" },
+            { "page": "1441793", "section": "Gate policy" },
+            { "page": "1441793", "section": "DVT review — hold on accuracy" },
+            { "page": "1015989", "section": "Current illustrative scenario" },
+            { "page": "1015989", "section": "Board and ownership conventions" },
+            { "page": "1212607", "section": "Coverage summary" },
+            { "page": "1409025", "section": "Verification and gate acceptance" },
+            { "page": "1409042", "section": "BUG-412 walkthrough" },
+            { "page": "1212589", "section": "Delivery and gate strategy" },
+            { "meeting": "M3", "item": "decision" },
+            { "meeting": "M3", "item": "transcript" }
+          ]
+        },
+        {
+          "id": "p3",
+          "type": "fact",
+          "requirement": "PVT also needs approved factory limits, fixture qualification and named Manufacturing/Ops approval.",
+          "evidence": [
+            { "ticket": "THERM-51" },
+            { "page": "1441793", "section": "PVT review — factory readiness" },
+            { "page": "1474561", "section": "Decision register" },
+            { "page": "1212589", "section": "Dependencies, risks and mitigations" },
+            { "page": "1212589", "section": "Open decisions" },
+            { "page": "1409025", "section": "Questions that prevent a real approved baseline" }
+          ]
+        }
+      ],
+      "expected_needs": [
+        "PVT gate status",
+        "DVT gate status",
+        "PVT entry and acceptance criteria"
+      ],
+      "gaps": [],
+      "must_not": [
+        "says PVT can start now",
+        "treats the PVT NOT STARTED tests as failed",
+        "treats THERM mock results as evidence that the ECHO product passed EVT (or any ECHO gate)"
+      ],
+      "never_appears": [
+        { "meeting": "M6", "item": "decision" },
+        { "meeting": "M6", "item": "action" },
+        { "meeting": "M6", "item": "rationale" },
+        { "meeting": "M6", "item": "transcript" }
+      ],
+      "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }, { "ticket": "ECHO-7" }, { "ticket": "ECHO-27" }]
+    },
+    {
+      "id": "bug-412-trace-confirmed",
+      "trigger": "ask",
+      "state": "S0",
+      "situation": 4,
+      "kind": "multi-hop",
+      "scope": { "kind": "project", "project": "THERM" },
+      "budget": "live",
+      "question": "Which requirement does BUG-412 trace to, and has that link been confirmed?",
+      "expected_outcome": "answerable",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "fact",
+          "requirement": "BUG-412 traces through TC-D-03 to MRD-01 (accuracy), as a proposed link.",
+          "evidence": [
+            { "ticket": "THERM-38" },
+            { "ticket": "THERM-1" },
+            { "ticket": "THERM-46" },
+            { "ticket": "THERM-47" },
+            { "page": "1409042", "section": "How to use this thread map" },
+            { "page": "1409042", "section": "BUG-412 walkthrough" },
+            { "page": "1212607", "section": "TC-D-03 — 100 readings, ≥99 within spec" },
+            { "page": "1409025", "section": "Functional requirements" },
+            { "page": "1212589", "section": "Market requirements and priority" },
+            { "page": "1015989", "section": "Follow the failure thread" }
+          ]
+        },
+        {
+          "id": "p2",
+          "type": "status",
+          "requirement": "Not confirmed: TRACE-01 is open (To Do, due 2026-10-14, assigned to the asker).",
+          "evidence": [
+            { "ticket": "THERM-47" },
+            { "ticket": "THERM-46" },
+            { "ticket": "THERM-50" },
+            { "page": "1409042", "section": "BUG-412 walkthrough" },
+            { "page": "1441793", "section": "DVT review — hold on accuracy" },
+            { "page": "1474561", "section": "Decision register" },
+            { "page": "1409025", "section": "Seeded defect and retest" },
+            { "page": "1409025", "section": "Release and change management" },
+            { "page": "1212607", "section": "DVT round 2 and regression policy" },
+            { "page": "1015989", "section": "Follow the failure thread" },
+            { "meeting": "M4", "item": "decision" },
+            { "meeting": "M4", "item": "transcript" }
+          ]
+        }
+      ],
+      "expected_needs": [
+        "BUG-412 requirement link",
+        "TRACE-01 status and owner"
+      ],
+      "gaps": [],
+      "must_not": [
+        "states the MRD-01 link as confirmed",
+        "says TRACE-01 is done",
+        "treats THERM mock results as evidence that the ECHO product passed EVT (or any ECHO gate)"
+      ],
+      "never_appears": [
+        { "meeting": "M6", "item": "decision" },
+        { "meeting": "M6", "item": "action" },
+        { "meeting": "M6", "item": "rationale" },
+        { "meeting": "M6", "item": "transcript" }
+      ],
+      "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }]
+    },
+    {
+      "id": "prd-caught-up-with-display",
+      "trigger": "ask",
+      "state": "S0",
+      "situation": 5,
+      "kind": "cross-check",
+      "scope": { "kind": "project", "project": "THERM" },
+      "budget": "live",
+      "question": "Has the PRD caught up with the display precision the customer approved?",
+      "expected_outcome": "answerable",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "change",
+          "requirement": "The customer review approved a two-decimal (0.01 °C) display on 2026-09-30.",
+          "evidence": [{ "meeting": "M2", "item": "decision" }, { "meeting": "M2", "item": "transcript" }]
+        },
+        {
+          "id": "p2",
+          "type": "conflict",
+          "requirement": "The PRD still requires one decimal (PRD-D01 and related sections).",
+          "evidence": [
+            { "page": "1409025", "section": "Functional requirements" },
+            { "page": "1409025", "section": "System architecture" },
+            { "page": "1409025", "section": "Measurement behavior and edge cases" },
+            { "page": "1409025", "section": "Implementation breakdown" }
+          ]
+        },
+        {
+          "id": "p3",
+          "type": "owner",
+          "requirement": "The asker owns the PRD update, due 2026-10-07.",
+          "evidence": [{ "meeting": "M2", "item": "action" }, { "meeting": "M2", "item": "transcript" }]
+        }
+      ],
+      "expected_needs": [
+        "approved display precision",
+        "PRD display requirement",
+        "owner of the PRD update"
+      ],
+      "gaps": [],
+      "must_not": [
+        "says the PRD already shows two decimals",
+        "assigns the PRD update to someone other than the asker",
+        "treats THERM mock results as evidence that the ECHO product passed EVT (or any ECHO gate)"
+      ],
+      "never_appears": [
+        { "meeting": "M6", "item": "decision" },
+        { "meeting": "M6", "item": "action" },
+        { "meeting": "M6", "item": "rationale" },
+        { "meeting": "M6", "item": "transcript" }
+      ],
+      "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }]
+    },
+    {
+      "id": "bug-412-fix-build",
+      "trigger": "ask",
+      "state": "S0",
+      "situation": 7,
+      "kind": "honest-gap",
+      "scope": { "kind": "project", "project": "THERM" },
+      "budget": "live",
+      "question": "Which firmware build fixes BUG-412?",
+      "expected_outcome": "partial",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "fact",
+          "requirement": "No fix build or candidate is identified; BUG-412 closure needs one.",
+          "evidence": [
+            { "ticket": "THERM-48" },
+            { "ticket": "THERM-46" },
+            { "ticket": "THERM-50" },
+            { "ticket": "THERM-1" },
+            { "ticket": "THERM-4" },
+            { "page": "1441793", "section": "DVT review — hold on accuracy" },
+            { "page": "1409025", "section": "Seeded defect and retest" },
+            { "page": "1212607", "section": "DVT round 2 and regression policy" },
+            { "page": "1409042", "section": "BUG-412 walkthrough" },
+            { "meeting": "M4", "item": "action" },
+            { "meeting": "M4", "item": "transcript" }
+          ]
+        },
+        {
+          "id": "p2",
+          "type": "change",
+          "requirement": "The failure review moved the likely fix to hardware, so a firmware build may not be the fix.",
+          "evidence": [
+            { "meeting": "M4", "item": "decision" },
+            { "meeting": "M4", "item": "action" },
+            { "meeting": "M4", "item": "transcript" }
+          ]
+        }
+      ],
+      "expected_needs": [
+        "BUG-412 fix status",
+        "identified fix candidate",
+        "latest decision on the fix"
+      ],
+      "gaps": [
+        "a build or candidate identifier that fixes BUG-412"
+      ],
+      "must_not": [
+        "names a firmware build or version as the fix",
+        "says BUG-412 is fixed",
+        "treats THERM mock results as evidence that the ECHO product passed EVT (or any ECHO gate)"
+      ],
+      "never_appears": [
+        { "meeting": "M6", "item": "decision" },
+        { "meeting": "M6", "item": "action" },
+        { "meeting": "M6", "item": "rationale" },
+        { "meeting": "M6", "item": "transcript" }
+      ],
+      "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }]
+    },
+    {
+      "id": "my-assigned-therm-tickets",
+      "trigger": "ask",
+      "state": "S0",
+      "situation": 9,
+      "kind": "status",
+      "scope": { "kind": "project", "project": "THERM" },
+      "budget": "live",
+      "question": "Which THERM tickets are assigned to me, and when are they due?",
+      "expected_outcome": "answerable",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "owner",
+          "requirement": "TRACE-01 is assigned to the asker, due 2026-10-14.",
+          "evidence": [{ "ticket": "THERM-47" }]
+        },
+        {
+          "id": "p2",
+          "type": "owner",
+          "requirement": "MRD-REVIEW, PRD-REVIEW and OD-REGISTER are assigned to the asker with no due date.",
+          "evidence": [{ "ticket": "THERM-52" }, { "ticket": "THERM-53" }, { "ticket": "THERM-54" }]
+        }
+      ],
+      "expected_needs": [
+        "Jira tickets assigned to the asker",
+        "their due dates"
+      ],
+      "gaps": [],
+      "must_not": [
+        "lists BUG-412, DVT-R2, GATE-DVT or another unassigned ticket as assigned to the asker",
+        "lists meeting actions owned by others as the asker's tickets",
+        "treats THERM mock results as evidence that the ECHO product passed EVT (or any ECHO gate)"
+      ],
+      "never_appears": [
+        { "meeting": "M6", "item": "decision" },
+        { "meeting": "M6", "item": "action" },
+        { "meeting": "M6", "item": "rationale" },
+        { "meeting": "M6", "item": "transcript" }
+      ],
+      "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }]
+    },
+    {
+      "id": "tc-d-03-in-progress-date",
+      "trigger": "ask",
+      "state": "S0",
+      "situation": 11,
+      "kind": "honest-gap",
+      "scope": { "kind": "project", "project": "THERM" },
+      "budget": "live",
+      "question": "When was TC-D-03 marked In Progress?",
+      "expected_outcome": "partial",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "status",
+          "requirement": "TC-D-03 is In Progress, representing the seeded mock fail.",
+          "evidence": [
+            { "ticket": "THERM-38" },
+            { "page": "1212607", "section": "TC-D-03 — 100 readings, ≥99 within spec" },
+            { "page": "1474561", "section": "Mock workflow convention" },
+            { "page": "1015989", "section": "Board and ownership conventions" }
+          ]
+        }
+      ],
+      "expected_needs": [
+        "TC-D-03 current status",
+        "date of the status change"
+      ],
+      "gaps": [
+        "the date TC-D-03 moved to In Progress (only in Jira change history)"
+      ],
+      "must_not": [
+        "states a transition date as established fact",
+        "presents the created date or page preparation date as the In Progress date",
+        "treats THERM mock results as evidence that the ECHO product passed EVT (or any ECHO gate)"
+      ],
+      "never_appears": [
+        { "meeting": "M6", "item": "decision" },
+        { "meeting": "M6", "item": "action" },
+        { "meeting": "M6", "item": "rationale" },
+        { "meeting": "M6", "item": "transcript" }
+      ],
+      "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }]
+    },
+    {
+      "id": "cross-project-evt-global",
+      "trigger": "ask",
+      "state": "S0",
+      "situation": null,
+      "kind": "status",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "Did we pass EVT?",
+      "expected_outcome": "answerable",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "status",
+          "requirement": "All six THERM EVT tests are seeded mock passes.",
+          "evidence": [
+            { "ticket": "THERM-31" },
+            { "ticket": "THERM-32" },
+            { "ticket": "THERM-33" },
+            { "ticket": "THERM-34" },
+            { "ticket": "THERM-35" },
+            { "ticket": "THERM-36" },
+            { "ticket": "THERM-49" },
+            { "page": "1441793", "section": "Gate policy" },
+            { "page": "1441793", "section": "EVT review — source feasibility examples" },
+            { "page": "1212607", "section": "Coverage summary" },
+            { "page": "1015989", "section": "Current illustrative scenario" },
+            { "page": "1409025", "section": "Verification and gate acceptance" },
+            { "page": "1212589", "section": "Delivery and gate strategy" }
+          ]
+        },
+        {
+          "id": "p2",
+          "type": "status",
+          "requirement": "GATE-EVT is To Do; the real EVT sign-off is pending.",
+          "evidence": [
+            { "ticket": "THERM-49" },
+            { "page": "1441793", "section": "Gate policy" },
+            { "page": "1441793", "section": "EVT review — source feasibility examples" },
+            { "page": "1015989", "section": "Current illustrative scenario" },
+            { "page": "1409025", "section": "Verification and gate acceptance" }
+          ]
+        }
+      ],
+      "expected_needs": [
+        "EVT test results",
+        "EVT gate decision status"
+      ],
+      "gaps": [],
+      "must_not": [
+        "says EVT was formally signed off or approved",
+        "treats THERM mock results as evidence that the ECHO product passed EVT (or any ECHO gate)",
+        "cites ECHO's EVT gate or pipeline page as THERM's EVT status"
+      ],
+      "never_appears": [
+        { "meeting": "M6", "item": "decision" },
+        { "meeting": "M6", "item": "action" },
+        { "meeting": "M6", "item": "rationale" },
+        { "meeting": "M6", "item": "transcript" }
+      ],
+      "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }, { "ticket": "ECHO-5" }, { "ticket": "ECHO-17" }]
+    },
+    {
+      "id": "check-t2-dvt-review-decisions",
+      "trigger": "check",
+      "state": "S0",
+      "situation": 1,
+      "kind": "cross-check",
+      "scope": { "kind": "project", "project": "THERM" },
+      "budget": "background",
+      "record": { "meeting": "M3" },
+      "expected_outcome": "answerable",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "status",
+          "requirement": "The GATE-DVT hold agrees with Jira and Confluence.",
+          "evidence": [
+            { "ticket": "THERM-50" },
+            { "ticket": "THERM-46" },
+            { "ticket": "THERM-4" },
+            { "ticket": "THERM-1" },
+            { "page": "1441793", "section": "Gate policy" },
+            { "page": "1441793", "section": "DVT review — hold on accuracy" },
+            { "page": "1015989", "section": "Current illustrative scenario" },
+            { "page": "1015989", "section": "Board and ownership conventions" },
+            { "page": "1212607", "section": "Coverage summary" },
+            { "page": "1409025", "section": "Verification and gate acceptance" },
+            { "page": "1409042", "section": "BUG-412 walkthrough" },
+            { "page": "1212589", "section": "Delivery and gate strategy" },
+            { "meeting": "M3", "item": "decision" },
+            { "meeting": "M3", "item": "transcript" }
+          ]
+        },
+        {
+          "id": "p2",
+          "type": "date",
+          "requirement": "DVT-R2's Jira due date (2026-10-30) agrees with the decision.",
+          "evidence": [{ "ticket": "THERM-48" }]
+        },
+        {
+          "id": "p3",
+          "type": "conflict",
+          "requirement": "DVT-R2 completes after the 2026-10-23 DVT gate review.",
+          "evidence": [
+            { "page": "1441793", "section": "DVT review — hold on accuracy" },
+            { "ticket": "THERM-50" },
+            { "ticket": "THERM-48" }
+          ]
+        },
+        {
+          "id": "p4",
+          "type": "fact",
+          "requirement": "DVT-R2 depends on the BUG-412 fix (due 2026-10-28) and TRACE-01 (due 2026-10-14).",
+          "evidence": [
+            { "ticket": "THERM-48" },
+            { "ticket": "THERM-46" },
+            { "ticket": "THERM-47" },
+            { "ticket": "THERM-50" }
+          ]
+        },
+        {
+          "id": "p5",
+          "type": "change",
+          "requirement": "Regression scope is unresolved; QA's proposal is owed to the PM by 2026-10-09.",
+          "evidence": [
+            { "ticket": "THERM-48" },
+            { "ticket": "THERM-54" },
+            { "page": "1474561", "section": "Decision register" },
+            { "page": "1212607", "section": "DVT round 2 and regression policy" },
+            { "page": "1441793", "section": "DVT review — hold on accuracy" },
+            { "page": "1212589", "section": "Dependencies, risks and mitigations" },
+            { "page": "1212589", "section": "Open decisions" },
+            { "page": "1409025", "section": "Questions that prevent a real approved baseline" },
+            { "page": "1015989", "section": "Reviews and outstanding decisions" },
+            { "meeting": "M3", "item": "action" },
+            { "meeting": "M3", "item": "transcript" }
+          ]
+        },
+        {
+          "id": "p6",
+          "type": "change",
+          "requirement": "The later failure review moved the likely fix to hardware, putting DVT-R2's firmware-only assumption and date at risk.",
+          "evidence": [
+            { "meeting": "M4", "item": "decision" },
+            { "meeting": "M4", "item": "transcript" },
+            { "meeting": "M5", "item": "transcript" },
+            { "ticket": "THERM-48" }
+          ]
+        },
+        {
+          "id": "p7",
+          "type": "owner",
+          "requirement": "No gate authority is named; the PM owes it by 2026-10-16; DVT-R2's owner role is QA.",
+          "evidence": [
+            { "ticket": "THERM-50" },
+            { "ticket": "THERM-54" },
+            { "page": "1441793", "section": "Gate policy" },
+            { "page": "1474561", "section": "Decision register" },
+            { "page": "1212589", "section": "Open decisions" },
+            { "page": "1212589", "section": "Delivery and gate strategy" },
+            { "page": "1015989", "section": "Reviews and outstanding decisions" },
+            { "meeting": "M3", "item": "action" },
+            { "meeting": "M3", "item": "transcript" },
+            { "ticket": "THERM-48" }
+          ]
+        }
+      ],
+      "expected_needs": [
+        "GATE-DVT status in Jira and Confluence",
+        "DVT-R2 due date and dependencies",
+        "DVT gate review date",
+        "regression scope decision",
+        "later decisions that change the fix",
+        "gate authority"
+      ],
+      "gaps": [],
+      "must_not": [
+        "claims DVT-R2 finishes before the gate review",
+        "claims the hold is lifted",
+        "attributes Rafael Moreno's regression-scope proposal to {{TEST_PERSON}}",
+        "states a confirmed sample delivery date",
+        "treats THERM mock results as evidence that the ECHO product passed EVT (or any ECHO gate)"
+      ],
+      "never_appears": [
+        { "meeting": "M6", "item": "decision" },
+        { "meeting": "M6", "item": "action" },
+        { "meeting": "M6", "item": "rationale" },
+        { "meeting": "M6", "item": "transcript" }
+      ],
+      "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }, { "ticket": "ECHO-6" }, { "ticket": "ECHO-23" }]
+    },
+    {
+      "id": "sweep-owner-and-requirement-followups",
+      "trigger": "sweep",
+      "state": "S1",
+      "situation": null,
+      "kind": "status",
+      "scope": { "kind": "project", "project": "THERM" },
+      "budget": "background",
+      "findings": [
+        {
+          "finding": "The MRD-02 epic (THERM-2) acceptance still says one-decimal display.",
+          "expected": "THERM-2 acceptance reflects the two-decimal display.",
+          "citations": [{ "ticket": "THERM-2" }, { "meeting": "M2", "item": "decision" }]
+        },
+        {
+          "finding": "BUG-412's fix owner is not recorded in Jira.",
+          "expected": "A Jira item records Hardware as the confirmed fix owner role.",
+          "citations": [{ "ticket": "THERM-46" }, { "ticket": "THERM-47" }]
+        },
+        {
+          "finding": "No named DVT gate authority is recorded.",
+          "expected": "GATE-DVT names the gate authority.",
+          "citations": [{ "ticket": "THERM-50" }, { "meeting": "M3", "item": "action" }]
+        }
+      ],
+      "expected_outcome": "answerable",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "change",
+          "requirement": "THERM-2 still says one decimal.",
+          "evidence": [{ "ticket": "THERM-2" }]
+        },
+        {
+          "id": "p2",
+          "type": "change",
+          "requirement": "TRACE-01 now records Hardware as the confirmed fix owner role.",
+          "evidence": [{ "ticket": "THERM-47" }]
+        },
+        {
+          "id": "p3",
+          "type": "status",
+          "requirement": "GATE-DVT still lists the gate authority as TBD.",
+          "evidence": [
+            { "ticket": "THERM-50" },
+            { "page": "1441793", "section": "Gate policy" },
+            { "page": "1474561", "section": "Decision register" }
+          ]
+        }
+      ],
+      "expected_needs": [
+        "current MRD-02 epic text",
+        "current Jira record of the BUG-412 fix owner",
+        "current GATE-DVT text"
+      ],
+      "gaps": [],
+      "must_not": [
+        "reports THERM-2 updated",
+        "reports a named gate authority",
+        "concludes the fix owner is unrecorded from BUG-412's unchanged text without reading TRACE-01",
+        "treats THERM mock results as evidence that the ECHO product passed EVT (or any ECHO gate)"
+      ],
+      "never_appears": [
+        { "meeting": "M6", "item": "decision" },
+        { "meeting": "M6", "item": "action" },
+        { "meeting": "M6", "item": "rationale" },
+        { "meeting": "M6", "item": "transcript" }
+      ],
+      "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }],
+      "verdicts": [
+        {
+          "finding": "The MRD-02 epic (THERM-2) acceptance still says one-decimal display.",
+          "expected": "not_landed",
+          "proof": [{ "ticket": "THERM-2" }]
+        },
+        {
+          "finding": "BUG-412's fix owner is not recorded in Jira.",
+          "expected": "landed",
+          "proof": [{ "ticket": "THERM-47" }]
+        },
+        {
+          "finding": "No named DVT gate authority is recorded.",
+          "expected": "not_landed",
+          "proof": [{ "ticket": "THERM-50" }]
+        }
+      ]
+    }
+  ]
+}

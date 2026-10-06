@@ -68,15 +68,22 @@ export class SqlitePersonAgenticAskAuditV1 {
   }
 
   private appendBound(context: AgenticAskAuditRequestContextV1, entry: AgenticAskAuditEntryV1): Sha256Digest {
+    // Research-only triggers and background-budget Ask runs (research loop evaluation v1).
+    const background = entry.trigger !== undefined || entry.budget !== undefined;
+    const limits = background
+      ? { rounds: 20, model_calls: 48, receipts: 512, citations: 360 }
+      : { rounds: 10, model_calls: 24, receipts: 128, citations: 40 };
     if (
       entry.kind !== "echo-agentic-ask-audit-v1" ||
+      (entry.trigger !== undefined && entry.trigger !== "check" && entry.trigger !== "sweep") ||
+      (entry.budget !== undefined && entry.budget !== "background") ||
       !["answered", "partial", "not_found", "off_scope", "cancelled", "timed_out"].includes(entry.outcome) ||
-      !Array.isArray(entry.receipt_digests) || entry.receipt_digests.length > 128 ||
+      !Array.isArray(entry.receipt_digests) || entry.receipt_digests.length > limits.receipts ||
       new Set(entry.receipt_digests).size !== entry.receipt_digests.length ||
       !entry.receipt_digests.every((digest) => /^sha256:[a-f0-9]{64}$/.test(digest)) ||
       ![entry.rounds, entry.model_calls, entry.repairs, entry.fallbacks, entry.citation_count]
         .every((value) => Number.isSafeInteger(value) && value >= 0) ||
-      entry.rounds > 10 || entry.model_calls > 24 || entry.repairs > 24 || entry.fallbacks > 16 || entry.citation_count > 40 ||
+      entry.rounds > limits.rounds || entry.model_calls > limits.model_calls || entry.repairs > limits.model_calls || entry.fallbacks > 16 || entry.citation_count > limits.citations ||
       (entry.checked_at !== null && new Date(entry.checked_at).toISOString() !== entry.checked_at) ||
       ![entry.prompt_sha256, entry.answer_sha256, entry.response_sha256]
         .every((digest) => digest === null || /^sha256:[a-f0-9]{64}$/.test(digest)) ||
@@ -105,6 +112,8 @@ export class SqlitePersonAgenticAskAuditV1 {
       kind: "echo-person-agentic-ask-audit-v1",
       context_kind: "answer_composition",
       ...context,
+      ...(entry.trigger === undefined ? {} : { trigger: entry.trigger }),
+      ...(entry.budget === undefined ? {} : { budget: entry.budget }),
       outcome: entry.outcome,
       receipt_digests: entry.receipt_digests,
       rounds: entry.rounds,
