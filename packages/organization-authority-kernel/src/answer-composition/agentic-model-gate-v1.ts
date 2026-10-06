@@ -6,7 +6,7 @@ import type {
   StructuredGenerationPort,
   StructuredGenerationUsageV1,
 } from "./structured-generation-v1.js";
-import { observeCoreRuntimeV1, withoutCoreRuntimeContentV1 } from "../shared/core-runtime-observation-v1.js";
+import { observeCoreRuntimeV1, withoutCoreRuntimeContentV1, type CoreRuntimePhaseV1 } from "../shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, cleanLine, repairPrompt } from "./agentic-ask-v1-model-protocol.js";
 
 /**
@@ -22,6 +22,16 @@ export const AGENTIC_ASK_MIN_ANSWER_MS_V1 = 3_000;
 export const AGENTIC_MODEL_OUTPUT_TOKENS_V1 = Object.freeze({ step: 1_500, answer: 1_500 } as const);
 
 export type AgenticAskModelRoleV1 = "step" | "answer";
+
+/**
+ * One model call as its caller names it: the role the audit records (research
+ * steps are `step`, every renderer call is `answer`) and the runtime span the
+ * call runs in (Ask uses `ask_planner` and `ask_answer`).
+ */
+export interface AgenticModelCallV1 {
+  readonly role: AgenticAskModelRoleV1;
+  readonly span: CoreRuntimePhaseV1;
+}
 
 export interface AgenticAskGenerationObservationV1 {
   readonly role: AgenticAskModelRoleV1;
@@ -135,8 +145,8 @@ export interface AgenticModelGateStatsV1 {
 }
 
 export interface AgenticModelGateV1 {
-  call(role: AgenticAskModelRoleV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, recovery?: boolean): Promise<unknown>;
-  withRepair<T>(role: AgenticAskModelRoleV1, system: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, parse: (value: unknown) => T, on_rejection?: (reason: string) => void): Promise<T>;
+  call(model_call: AgenticModelCallV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, recovery?: boolean): Promise<unknown>;
+  withRepair<T>(model_call: AgenticModelCallV1, system: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, parse: (value: unknown) => T, on_rejection?: (reason: string) => void): Promise<T>;
   stats(): AgenticModelGateStatsV1;
 }
 
@@ -152,7 +162,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     if (options.is_deadline_expired() || now() >= deadline) throw new AgenticAskDeadlineErrorV1();
     if (activeSignal.aborted) throw new DOMException("Ask stopped", "AbortError");
   };
-  const call = async (role: AgenticAskModelRoleV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, recovery = false): Promise<unknown> => {
+  const call = async ({ role, span }: AgenticModelCallV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, recovery = false): Promise<unknown> => {
     assertLive();
     if (calls >= budget.max_model_calls) throw new AgenticAskGenerationFailureV1("call budget exhausted", "fallback");
     // Every call is preceded by a cumulative desk revalidation of what it may carry.
@@ -171,8 +181,8 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     invocationDigests.push(canonicalSha256({ role, model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms }));
     // Live-provider evidence must never reach runtime content capture.
     const contentSafe = <T>(operation: () => Promise<T>): Promise<T> => {
-      // Each call is its own span, so provider model calls carry the step or answer purpose.
-      const observed = () => observeCoreRuntimeV1(role === "step" ? "ask_planner" : "ask_answer", () => {
+      // Each call is its own span, named by its caller, so provider model calls carry that purpose.
+      const observed = () => observeCoreRuntimeV1(span, () => {
         options.on_span?.({ role, phase: "enter" });
         return operation();
       });
@@ -207,10 +217,11 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     }
   };
   /** At most one extra call: temporary failures retry unchanged; invalid output gets repair guidance. */
-  const withRepair = async <T>(role: AgenticAskModelRoleV1, system: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, parse: (value: unknown) => T, on_rejection?: (reason: string) => void): Promise<T> => {
+  const withRepair = async <T>(model_call: AgenticModelCallV1, system: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, parse: (value: unknown) => T, on_rejection?: (reason: string) => void): Promise<T> => {
+    const { role } = model_call;
     let reason: string | null;
     let rejected: unknown;
-    try { rejected = await call(role, system, user, schema, timeout); return parse(rejected); }
+    try { rejected = await call(model_call, system, user, schema, timeout); return parse(rejected); }
     catch (error) {
       if (isAbort(error, options.input_signal) || options.is_deadline_expired() || !(error instanceof AgenticAskOutputErrorV1)) throw error;
       if (error instanceof AgenticAskGenerationFailureV1 && error.recovery === "fallback") throw error;
@@ -225,7 +236,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
       ...object(user), validation_error: reason,
       ...(rejected === undefined ? {} : { rejected_response: cleanLine(JSON.stringify(rejected), 4_000) }),
     };
-    return parse(await call(role, reason === null ? system : repairPrompt(system, reason), repairUser, schema, timeout, true));
+    return parse(await call(model_call, reason === null ? system : repairPrompt(system, reason), repairUser, schema, timeout, true));
   };
   return Object.freeze({
     call, withRepair,

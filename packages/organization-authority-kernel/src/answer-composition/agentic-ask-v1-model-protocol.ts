@@ -123,6 +123,13 @@ export function cleanLine(value: unknown, maximumChars: number): string {
   return truncate(value.normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim(), maximumChars);
 }
 
+/** A response part's question: V4 bounds part questions to 1 KiB of single-line text. */
+export function partQuestion(value: string): string {
+  let text = cleanLine(value, 400);
+  while (Buffer.byteLength(text, "utf8") > 1_000) text = cleanLine(text.slice(0, -8), 400);
+  return text.length === 0 ? "Question" : text;
+}
+
 /** Model-facing evidence ids are short `E<n>` labels; accept common spellings. */
 export function cleanId(value: unknown): string | null {
   if (typeof value !== "string" && typeof value !== "number") return null;

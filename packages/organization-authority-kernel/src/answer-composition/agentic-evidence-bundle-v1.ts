@@ -74,6 +74,20 @@ export function attributesOf(item: EvidenceDeskItemV2): EvidenceDeskItemV2["attr
   return Object.freeze({ ...item.attributes, owner: "none recorded" });
 }
 
+/**
+ * How a model sees one item, research step or renderer alike: its short id,
+ * source selector, kind, title, provenance, date and details. Never its text,
+ * desk id, receipt or citation.
+ */
+export function describeAgenticEvidenceItemV1(entry: { readonly short: string; readonly source: string; readonly item: EvidenceDeskItemV2 }): Record<string, unknown> {
+  return {
+    id: entry.short, source: entry.source, kind: entry.item.kind, title: entry.item.label,
+    provenance: { kind: entry.item.citation.kind, ...(entry.item.citation.kind === 'page' ? { version: entry.item.citation.version } : {}) },
+    ...(entry.item.occurred_at === undefined ? {} : { date: entry.item.occurred_at, date_kind: entry.item.date_kind ?? 'unspecified' }),
+    ...(attributesOf(entry.item) === undefined ? {} : { attributes: attributesOf(entry.item) }),
+  };
+}
+
 /** The evaluation's view: released content only, no desk ids, refs, receipts or model-call records. */
 export function trimAgenticEvidenceBundleV1(bundle: AgenticEvidenceBundleV1): AgenticResearchResultV1 {
   const items: AgenticResearchItemV1[] = bundle.items.map(entry => {

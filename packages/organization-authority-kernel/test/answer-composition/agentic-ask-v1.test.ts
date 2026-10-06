@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { validatePersonAnswerResponseV4 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
@@ -1339,5 +1342,36 @@ describe("agentic Ask: small-scope preload", () => {
     expect(evidence.search).toHaveBeenCalledWith(expect.objectContaining({ inventory_mode: "items" }));
     expect(script.prompt(0).opened.map((value: { text: string }) => value.text)).toEqual(expect.arrayContaining(["Full text A.", "Full text B."]));
     expect(result.outcome).toBe("answered");
+  });
+});
+
+describe("agentic Ask: architecture", () => {
+  const root = fileURLToPath(new URL("../../src/answer-composition/", import.meta.url));
+  const sources = (directory: string): string[] => readdirSync(directory).flatMap(name => {
+    const path = join(directory, name);
+    return statSync(path).isDirectory() ? sources(path) : path.endsWith(".ts") ? [path] : [];
+  });
+  const named = (path: string) => relative(root, path).split("\\").join("/");
+
+  it("keeps renderers to the bundle: no desk port and no search, open, list or openCitation", () => {
+    const renderers = sources(join(root, "renderers"));
+    expect(renderers.map(named)).toContain("renderers/ask-renderer-v1.ts");
+    for (const path of renderers) {
+      const source = readFileSync(path, "utf8");
+      expect(source, named(path)).not.toMatch(/from\s+["'][^"']*evidence-desk[^"']*["']/u);
+      expect(source, named(path)).not.toMatch(/\.\s*(?:search|open|list|openCitation)\s*\(/u);
+    }
+  });
+
+  it("calls the model only from the shared gate", () => {
+    const files = sources(root);
+    expect(files.length).toBeGreaterThan(5);
+    for (const path of files) {
+      const source = readFileSync(path, "utf8");
+      if (named(path) === "agentic-model-gate-v1.ts") { expect(source).toMatch(/\.generate\(/u); continue; }
+      // The port's own declaration names the methods; nothing else may touch them.
+      if (named(path) === "structured-generation-v1.ts") { expect(source, named(path)).not.toMatch(/\.\s*generate(?:_with_observation)?\b/u); continue; }
+      expect(source, named(path)).not.toMatch(/\bgenerate(?:_with_observation)?\b/u);
+    }
   });
 });

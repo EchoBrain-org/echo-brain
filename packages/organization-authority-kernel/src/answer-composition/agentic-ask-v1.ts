@@ -3,7 +3,6 @@ import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-proto
 import type {
   PersonAnswerResponseV5,
   PersonAnswerResponseV6,
-  PersonAnswerPartV4,
   PersonAnswerResponseV4,
 } from "@echo-brain/organization-api";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
@@ -34,14 +33,12 @@ import {
   CHECK_TASK_PROMPT,
   STEP_PROMPT,
   SWEEP_TASK_PROMPT,
-  answerSchema,
   cleanId,
   cleanLine,
   createStepSchema,
   normalizeQuery,
-  parseAnswer,
   parseStep,
-  type Answer,
+  partQuestion,
   type NeedStatus,
   type Step,
   type StepAction,
@@ -49,10 +46,8 @@ import {
   type StepPart,
   type StepSource,
 } from "./agentic-ask-v1-model-protocol.js";
-import { compactAndValidateAgenticAskResponseV1 } from "./agentic-ask-v1-response.js";
-import { attributesOf, trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
+import { describeAgenticEvidenceItemV1, trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
 import {
-  AGENTIC_ASK_MIN_ANSWER_MS_V1,
   AGENTIC_ASK_MIN_STEP_MS_V1,
   AGENTIC_MODEL_OUTPUT_TOKENS_V1 as OUTPUT_TOKENS,
   AgenticAskDeadlineErrorV1,
@@ -62,8 +57,10 @@ import {
   object,
   raceAbort,
   type AgenticAskModelRoleV1,
+  type AgenticModelCallV1,
 } from "./agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPortV1, type AgenticAuditContextV1 } from "./agentic-release-v1.js";
+import { createAskRendererV1 } from "./renderers/ask-renderer-v1.js";
 import {
   AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
   AGENTIC_RESEARCH_LIVE_BUDGET_V1,
@@ -108,9 +105,10 @@ export {
 
 /**
  * Agentic Ask (RFC-0003): one research loop over three read tools (search,
- * open, list) plus `finish`, then one answer call. The model plans parts and
- * the needs of each part; code owns scope, permissions, ids, budgets, paging,
- * de-duplication, the stop rules, and the response layout.
+ * open, list) plus `finish`, then Ask's renderer (renderers/ask-renderer-v1.ts):
+ * one answer call over the evidence bundle and a code-owned layout. The model
+ * plans parts and the needs of each part; code owns scope, permissions, ids,
+ * budgets, paging, de-duplication, the stop rules, and the response layout.
  */
 export const AGENTIC_ASK_MAX_STEPS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_rounds;
 /** Request-wide model-call budget, including retries and repairs. */
@@ -148,9 +146,8 @@ const BYTES_PER_TOKEN = 3;
 /** Share of the context window left unused as a safety margin. */
 const CONTEXT_MARGIN = 0.1;
 const MAX_SEEN_ENTRIES = 300;
-const NOT_FOUND_GAP = "I couldn't find this in the sources you can access.";
-const RECORDS_GAP = "I found these records, but could not write a verified summary.";
-const INCOMPLETE_SEARCH_GAP = "I couldn't complete the search. Please try again.";
+/** Research steps run in Ask's planner span; the audit records them as `step` calls. */
+const STEP_CALL: AgenticModelCallV1 = Object.freeze({ role: "step", span: "ask_planner" });
 
 /** Scratchpad bytes that fit beside a system prompt and an output reserve in the model's context window. */
 export function agenticAskContextBudgetBytesV1(contextTokens: number | undefined, systemPrompt: string, outputTokens: number): number {
@@ -245,9 +242,6 @@ function citationIdentity(value: unknown): string {
   const pick = ["kind", "tool_id", "atom_id", "ticket_id", "page_id", "document_id", "upload_id", "transcript_id", "channel_id", "message_ts"].filter(key => typeof citation[key] === "string");
   return JSON.stringify(pick.map(key => [key, citation[key]]));
 }
-function privateItem(item: EvidenceDeskItemV2): boolean {
-  return item.visibility === "only_me" || item.visibility === "approver_only";
-}
 /** Desk refusals a model can cause (a stale id, an invalid request) become tool results, not failures. */
 function toolRefusal(error: unknown): string | null {
   const value = object(error);
@@ -302,12 +296,6 @@ function queryPreview(text: string, query: string | undefined): string {
   const space = line.indexOf(" ", best.start);
   const start = line[best.start - 1] === " " ? best.start : space >= 0 && space < best.first ? space + 1 : best.first;
   return cleanLine(`…${line.slice(start)}`, AGENTIC_ASK_PREVIEW_CHARS_V1);
-}
-function partQuestion(value: string): string {
-  // V4 bounds part questions to 1 KiB of single-line text.
-  let text = cleanLine(value, 400);
-  while (Buffer.byteLength(text, "utf8") > 1_000) text = cleanLine(text.slice(0, -8), 400);
-  return text.length === 0 ? "Question" : text;
 }
 function needKey(value: string): string { return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim(); }
 
@@ -458,7 +446,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   const answerBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, answerPrompt, OUTPUT_TOKENS.answer);
   /**
    * One agentic request: shared session state (deadline, model-call budget,
-   * access fences, audit), a research phase, then the Ask writer.
+   * access fences, audit), a research phase, then Ask's renderer and the
+   * shared release step.
    */
   type RequestOutput = { readonly response?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6; readonly bundle: AgenticEvidenceBundleV1; readonly research: AgenticResearchResultV1; readonly writer_evidence: readonly string[] };
   const request = async (input: { readonly goal: AgenticResearchGoalV1; readonly trigger: AgenticResearchTriggerV1; readonly signal?: AbortSignal }, budget: AgenticResearchBudgetV1): Promise<RequestOutput> => {
@@ -578,12 +567,9 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         const deskId = id === null ? undefined : byShort.get(id);
         return deskId === undefined ? undefined : entries.get(deskId);
       };
-      const describe = (entry: Entry): Record<string, unknown> => ({
-        id: entry.short, source: entry.item.source_id === undefined ? evidenceDeskSourceV2(entry.item) : sourcesById.get(entry.item.source_id)?.selector ?? entry.item.source_id, kind: entry.item.kind, title: entry.item.label,
-        provenance: { kind: entry.item.citation.kind, ...(entry.item.citation.kind === 'page' ? { version: entry.item.citation.version } : {}) },
-        ...(entry.item.occurred_at === undefined ? {} : { date: entry.item.occurred_at, date_kind: entry.item.date_kind ?? 'unspecified' }),
-        ...(attributesOf(entry.item) === undefined ? {} : { attributes: attributesOf(entry.item) }),
-      });
+      /** The source selector the models see for an item. */
+      const selectorOf = (item: EvidenceDeskItemV2): string => item.source_id === undefined ? evidenceDeskSourceV2(item) : sourcesById.get(item.source_id)?.selector ?? item.source_id;
+      const describe = (entry: Entry): Record<string, unknown> => describeAgenticEvidenceItemV1({ short: entry.short, source: selectorOf(entry.item), item: entry.item });
       // Tool results carry discovery metadata. Bodies appear once, in the budgeted scratchpad.
       const listing = (entry: Entry): Record<string, unknown> => describe(entry);
 
@@ -987,7 +973,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable);
           let step: Step;
           try {
-            step = await gate.withRepair("step", researchPrompt, user, stepSchema, stepTimeout, value => {
+            step = await gate.withRepair(STEP_CALL, researchPrompt, user, stepSchema, stepTimeout, value => {
               const parsed = parseStep(value);
               if (parsed.actions.length === 0) throw new AgenticAskOutputErrorV1('actions must contain a read action or a valid finish');
               for (const action of parsed.actions) {
@@ -1065,7 +1051,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           return values.length === 0 || values.some(value => typeof value !== "number") ? null : values.reduce<number>((total, value) => total + (value as number), 0);
         };
         const items: AgenticEvidenceBundleItemV1[] = [...entries.values()].sort((left, right) => Number(left.short.slice(1)) - Number(right.short.slice(1))).map(entry => Object.freeze({
-          short: entry.short, source: (describe(entry) as { readonly source: string }).source, item: entry.item,
+          short: entry.short, source: selectorOf(entry.item), item: entry.item,
           full: entry.full, opened: entry.opened, preloaded: entry.preloaded === true, touched: entry.touched,
           ...(entry.query === undefined ? {} : { query: entry.query }), cited_by_plan: cited.has(entry.short),
         }));
@@ -1107,122 +1093,40 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         const stepUsage = usageOf("step", stepModelMs);
         report(stepUsage === null ? { stage: "planner", event: "skipped", elapsed_ms: 0 } : { stage: "planner", event: "succeeded", elapsed_ms: stepModelMs, generation_usage: stepUsage });
 
-        // ---- final answer ---------------------------------------------------
-        const answerContext = {
-          question: askedQuestion, ...context(requestDay), scope, source_catalog: sourceCatalog,
-          research: {
-            completed: !researchIncomplete, stop_reason: researchStop, reads: readCoverage,
-            // Filters and planner need text are intentionally excluded. This describes
-            // inventories actually read, not whether an arbitrary fact exists.
-            inventories: inventoryView().map(({ args, ...inventory }) => ({ source: args.source, ...inventory })),
-            notices: [...notice], omitted_evidence_items: [...entries.values()].filter(entry => entry.item.text !== undefined).length,
-          },
-        };
-        const writerBudget = Math.max(0, answerBudget - bytes(JSON.stringify({ ...answerContext, evidence: [] })));
-        const cited = [...citedShorts()].map(short => entryOf(short)!);
-        const evidence: Entry[] = []; let evidenceBytes = 0;
-        const admit = (entry: Entry) => {
-          const cost = bytes(JSON.stringify({ ...describe(entry), text: entry.item.text })) + 1;
-          if (evidence.includes(entry) || evidenceBytes + cost > writerBudget) return;
-          evidence.push(entry); evidenceBytes += cost;
-        };
-        for (const entry of cited) admit(entry);
-        for (const entry of [...entries.values()].filter(value => value.full).sort((left, right) => right.touched - left.touched)) admit(entry);
-        // Search already released these passage bodies through the desk. The writer
-        // can read them even when research stopped at their previews; `full` still
-        // records what research read, not what the writer is allowed to read now.
-        for (const entry of [...entries.values()].filter(value => !value.full && value.item.text !== undefined).sort((left, right) => right.touched - left.touched)) admit(entry);
-        answerContext.research.omitted_evidence_items = [...entries.values()].filter(entry => entry.item.text !== undefined && !evidence.includes(entry)).length;
-        const allowed = new Set(evidence.map(entry => entry.short));
-        report({ stage: "context", event: "succeeded", elapsed_ms: 0, retrieval: { context_atom_count: evidence.length } });
-
-        let answer: Answer | null = null;
-        let writerEvidence: readonly string[] = [];
-        const answerTimeout = () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1;
-        if (!gate.stats().stopped && evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && gate.stats().calls < budget.max_model_calls) {
-          writerEvidence = Object.freeze(evidence.map(entry => entry.short));
-          selectedTicketCount = evidence.filter(entry => entry.item.citation.kind === "ticket").length;
-          const user = {
-            ...answerContext,
-            // Working hypotheses are not user requirements or evidence. The
-            // writer assesses the original question against released text.
-            evidence: evidence.map(entry => ({ ...describe(entry), text: entry.item.text })),
-          };
-          try { answer = await gate.withRepair("answer", answerPrompt, user, answerSchema, answerTimeout, parseAnswer); }
-          catch (error) {
-            if (isAbort(error, input.signal) || deadlineExpired || !(error instanceof AgenticAskOutputErrorV1)) throw error;
-            fallbacks += 1;
-          }
-        }
-
-        // ---- layout (code, not model): one part, read as one paragraph ------
-        const used: Entry[] = [];
-        const use = (shorts: readonly string[]): number[] => {
-          const indexes: number[] = [];
-          for (const short of shorts) {
-            if (!allowed.has(short)) continue;
-            const entry = entryOf(short)!;
-            if (!used.includes(entry)) used.push(entry);
-            const index = used.indexOf(entry);
-            if (!indexes.includes(index)) indexes.push(index);
-          }
-          return indexes;
-        };
-        const isPrivate = (shorts: readonly string[]) => shorts.some(short => allowed.has(short) && privateItem(entryOf(short)!.item));
-        const question = partQuestion(askedQuestion);
-        const statements = (answer?.sentences ?? [])
-          .map(sentence => ({ sentence, shorts: sentence.evidence.filter(short => allowed.has(short)) }))
-          .filter(value => value.shorts.length > 0)
-          .map(value => ({ text: value.sentence.text, citation_indexes: use(value.shorts), private: isPrivate(value.shorts) }));
-        const notFound = answer?.not_found ?? [];
-        const incomplete = researchIncomplete || (answer === null && evidence.length > 0);
-        const gapText = incomplete && (statements.length === 0 || notFound.length > 0)
-          ? cleanLine(`${INCOMPLETE_SEARCH_GAP}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`, 600)
-          : notFound.length === 0 ? undefined : cleanLine(`Not found: ${notFound.join("; ")}.`, 600);
-        type Draft = { status: PersonAnswerPartV4["status"]; statements: typeof statements; gap?: string; records?: { text: string; citation_indexes: number[]; private: boolean }[] };
-        let draft: Draft;
-        if (statements.length > 0) {
-          draft = gapText === undefined ? { status: "answered", statements } : { status: "partial", statements, gap: gapText };
-        } else {
-          // Honor a completed writer's no-match result instead of substituting research-selected records.
-          // Raw fallback remains limited to research-read evidence; merely sending
-          // a search passage to a failed writer does not make it a useful answer.
-          const fallback = notFound.length > 0 ? [] : (answer === null ? evidence.filter(entry => entry.full) : cited.filter(entry => allowed.has(entry.short))).slice(0, 3);
-          const records = fallback.map(entry => ({ text: entry.item.text!, citation_indexes: use([entry.short]), private: privateItem(entry.item) }));
-          draft = records.length > 0
-            ? { status: "records_only", statements: [], records, gap: RECORDS_GAP }
-            : { status: "not_found", statements: [], gap: gapText ?? (researchIncomplete || (answer === null && evidence.length > 0) ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP) };
-        }
-        const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
-        const outcome = !anyEvidence ? (incomplete ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
-        const result = Object.freeze({
-          schema_version: responseVersion, kind: responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk.scope, outcome,
-          parts: Object.freeze([Object.freeze({
-            question, status: draft.status,
-            statements: Object.freeze(draft.statements.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))),
-            ...(draft.gap === undefined ? {} : { gap: draft.gap }),
-            ...(draft.records === undefined ? {} : { records: Object.freeze(draft.records.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))) }),
-          })]),
-          citations: Object.freeze(anyEvidence ? used.map(entry => Object.freeze({ citation: entry.item.citation, kind: entry.item.kind, label: entry.item.label, visibility: entry.item.visibility, ...(entry.item.ref === undefined ? {} : { ref: entry.item.ref }) })) : []),
-          ...(notice.size === 0 ? {} : { notice: [...notice].join(" ") }),
+        // ---- Ask's renderer: the writer and the layout read only the bundle ----
+        const writer = createAskRendererV1({
+          response_version: responseVersion, answer_prompt: answerPrompt, answer_budget: answerBudget,
+          source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
         });
-        const validated = responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
+        const ticketsAmong = (shorts: readonly string[]) => shorts.filter(short => bundle.items.find(item => item.short === short)?.item.citation.kind === "ticket").length;
+        const rendered = await writer.render({
+          bundle, trigger_input: { question: askedQuestion }, gate, signal: activeSignal,
+          // The release step keeps its reserve after the writer.
+          remaining: () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
+          on_context: selected => {
+            report({ stage: "context", event: "succeeded", elapsed_ms: 0, retrieval: { context_atom_count: selected.length } });
+            // Counted as answer context only once the writer call starts (its span).
+            selectedTicketCount = ticketsAmong(selected);
+          },
+        });
+        fallbacks += rendered.fallbacks;
+        const validated = rendered.result.response;
         // A failed answer call still ends in a response (records or not found); its span keeps the failure.
         const answerUsage = usageOf("answer", answerModelMs);
-        report(answerUsage === null ? { stage: "answer", event: "skipped", elapsed_ms: 0 } : { stage: "answer", event: "succeeded", elapsed_ms: answerModelMs, generation_usage: answerUsage, retrieval: { citation_count: validated.citations.length } });
+        report(answerUsage === null ? { stage: "answer", event: "skipped", elapsed_ms: 0 } : { stage: "answer", event: "succeeded", elapsed_ms: answerModelMs, generation_usage: answerUsage, retrieval: { citation_count: rendered.cited.length } });
         phase = "final";
         // V5/V6 keep the access check after the audit write; V4 never had one.
         await releaseAgenticResultV1({
-          ...auditContext(), desk, outcome: validated.outcome, citation_count: validated.citations.length, result: validated, digests: "from_response",
+          ...auditContext(), desk, outcome: rendered.outcome, citation_count: rendered.cited.length, result: validated, digests: "from_response",
           fence_after_audit: tickets, signal: activeSignal, assert_live: assertLive, now,
           on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
           on_stage: event => report(event.stage === "revalidation"
             ? { stage: "revalidation", event: "succeeded", elapsed_ms: event.elapsed_ms }
-            : { stage: "audit", event: "succeeded", elapsed_ms: event.elapsed_ms, retrieval: { citation_count: validated.citations.length } }),
+            : { stage: "audit", event: "succeeded", elapsed_ms: event.elapsed_ms, retrieval: { citation_count: rendered.cited.length } }),
         });
         clearTimeout(deadlineTimer);
         ticketCitationCount = validated.citations.filter(value => value.citation.kind === "ticket").length;
-        return Object.freeze({ response: validated, bundle, research: researched, writer_evidence: writerEvidence });
+        return Object.freeze({ response: validated, bundle, research: researched, writer_evidence: rendered.result.writer_evidence });
       } catch (error) {
         clearTimeout(deadlineTimer);
         if (deadlineExpired || error instanceof AgenticAskDeadlineErrorV1) {
