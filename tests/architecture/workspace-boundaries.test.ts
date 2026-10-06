@@ -455,8 +455,7 @@ describe("workspace source boundaries", () => {
       "@echo-brain/provider-granola": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-authority-kernel",
-        "@echo-brain/organization-processing",
-        "@echo-brain/provider-runtime"
+        "@echo-brain/organization-processing"
       ],
       "@echo-brain/provider-runtime": [
         "@echo-brain/federation-protocol",

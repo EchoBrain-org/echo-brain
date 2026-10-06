@@ -80,12 +80,24 @@ Phase 1 passes when:
 6. Architecture, documentation, lint, build, type checks, and the full test suite
    pass. The removal/reuse inventory accounts for each surviving Granola module.
 
-Initial code owners are `providers/granola`, Authority composition/setup,
-`tools`, and `deploy`. Start from
-[the existing bundle](../../providers/granola/src/granola-meeting-source-bundle-v1.ts),
-[setup](../../services/organization-authority/src/composition/organization-authority-setup-cli.ts),
-and [composition](../../services/organization-authority/src/composition/organization-authority-composition-root.ts).
-Update these references when the obsolete files are removed.
+Phase 1 code owners are `providers/granola`, Authority composition/setup,
+`tools`, and `deploy`. The cleanup worktree has the following removal/reuse
+inventory; this is implementation progress, not a completed qualification:
+
+| Area | Disposition |
+| --- | --- |
+| Organization Granola credentials, owner observation, admission, bundle and setup proof | Removed from the provider workspace and selecting composition. |
+| Granola REST client, owner filtering, poll cursors and organization capture route | Removed; no compatibility connector remains. |
+| [`granola-meeting-normalizer-v1.ts`](../../providers/granola/src/granola-meeting-normalizer-v1.ts) | Retained content transforms only. Input is transport-independent and is not claimed to be the MCP response contract. Mapping version stays stable for existing semantic revisions. |
+| [`granola-context-source-v1.ts`](../../providers/granola/src/context/granola-context-source-v1.ts) | Retained shared capture mapping and injected source adapter. No credentials or active acquisition. |
+| Host preparation and credential activation | Seven-file onboarding input, with no Granola key or owner-email file. LLM credential activation retains its stopped-state install, health checks and rollback. |
+| Generic custody, processing, projects, approval and connectors | Retained. Synthetic approval tests no longer import Granola polling/cursor code. |
+
+The [setup](../../services/organization-authority/src/composition/organization-authority-setup-cli.ts)
+and [runtime composition](../../services/organization-authority/src/composition/organization-authority-composition-root.ts)
+are under correction and integration testing. Pinned Authority baseline SQL is
+unchanged. Full-suite verification and the final setup/rehearsal version
+inventory are required before phase 1 is complete.
 
 ## Phase 2 Add personal Granola support
 

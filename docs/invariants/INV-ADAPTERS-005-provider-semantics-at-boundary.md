@@ -168,7 +168,7 @@ generation or data flow. Shared-contract review, meaningful substitution tests
 and provider qualification remain necessary.
 
 The V1 setup and service CLIs deliberately select the fixed
-Granola/OpenRouter/Slack product profile. The service CLI also parses the Jira
+OpenRouter/Slack product profile. The service CLI also parses the Jira
 live selection (`--jira-cloud-id`, `--jira-nango-integration`) and requires the
 accepted Jira code gate, one configured cloud site, and Nango Cloud. Setup
 status, planning and finalization require Slack and are not provider-swappable. Provider

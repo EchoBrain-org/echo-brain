@@ -7,8 +7,9 @@ tools, Ask responses, source admission and Slack onboarding continue through
 their current interfaces.
 
 The [connector/context integration](../product/2026-10-01-connector-context-integration-v1.md)
-provides retained Granola capture and live Jira/Slack read verification in the
-staging rehearsal. Jira and Slack capture requests are refused, and their
+retains shared capture contracts and personal live-read verification. The
+organization Granola capture route is retired. Jira and Slack capture requests
+are refused, and their
 pointers, metadata and bodies are not admitted to Layer 1. Existing provider
 capture contracts remain dormant library code; they have no active rehearsal
 or production registration. Shared capture types remain in
@@ -122,11 +123,12 @@ export-equivalent API access, revision identity and cursor behavior; ECHO
 continues to bind custody, audience, immutable revisions and approval policy.
 An export grant does not automatically authorize retention or sharing.
 
-The current meeting profile selects one organization-owned Granola export
-bridge. Its organization credential and canonical owner-email binding are
-Authority-only inputs; every exported revision enters the same source-admission
-and approval path. There is no Person-client Granola connection flow or
-per-person Granola credential in this profile.
+The ordinary runtime no longer selects an organization Granola export bridge
+or requires its credentials. Generic source admission and approval remain, as
+does staging-only synthetic meeting infrastructure. Personal Granola OAuth and
+selected-folder intake are specified by the
+[Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md)
+and are not implemented by the cleanup phase.
 
 ## Ownership and Nango
 

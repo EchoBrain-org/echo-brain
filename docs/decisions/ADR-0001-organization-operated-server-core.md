@@ -18,6 +18,20 @@ updates: []
 
 # ADR-0001: Organization-operated server-core processing
 
+## Granola cleanup amendment, 2026-10-05
+
+The [Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md)
+retires the organization-owned Granola key, founder-only admission and automatic
+organization export described in item 4 below. Organization startup and
+onboarding no longer depend on Granola. The old description is retained as
+historical rationale, not an active connector or credential requirement.
+
+The next phase specifies personal OAuth through Nango, with explicit import or
+an authorized folder-to-project mapping before custody and processing. It does
+not authorize broad workspace ingestion. Shared audience, transcript release,
+revision and signed-record approval boundaries remain. The cleanup phase does
+not claim the personal connector is implemented or qualified.
+
 ## Current operator and custody relationship
 
 [ADR-0008](ADR-0008-echo-hosted-authority-by-default.md), accepted on

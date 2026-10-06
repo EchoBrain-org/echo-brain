@@ -72,7 +72,7 @@ not source custody or permission authority. They cannot make a user readable on
 the server, run background processing or redirect a request to another account.
 The 2026-09-23 extension below defines their explicit cleanup/retry lifecycle.
 
-Granola, Slack service, and model-provider credentials are server-owned. They
+Slack service and model-provider credentials are server-owned. They
 must not enter the Person session, CLI output, or package artifact.
 
 ## Identity

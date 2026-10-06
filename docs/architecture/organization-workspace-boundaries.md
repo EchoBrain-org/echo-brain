@@ -96,8 +96,9 @@ Routes call application use cases rather than SQLite. The service owns one
 organization, Person identity and sessions, authorization, and process lifecycle.
 Provider bundles receive explicit state/action/transport ports. The listener stays
 loopback-only behind the trusted reverse proxy. Stopped-state setup selects the
-fixed V1 Granola/OpenRouter/Slack profile. Its manifest, readiness checks and
-finalization require Slack; setup is not a swappable provider port. Another
+current OpenRouter/Slack profile without an organization meeting source. Its
+manifest, readiness checks and finalization require Slack; setup is not a
+swappable provider port. Another
 profile requires a versioned bootstrap design alongside the runtime selection.
 Provider verification, identity SQL, credential interpretation and source
 admission proofs stay in their provider folders.

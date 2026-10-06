@@ -6,9 +6,11 @@ in #251 (`1d7e72b`). It implements the ingestion-only direction in the
 [foundation design](2026-10-01-context-intake-foundation-v1-design.md).
 It does not accept the proposed design or ADRs by implication.
 
-The current staging scope retains Granola meetings and notes and reads Jira and
-Slack live. The tool capture libraries described below remain dormant;
-the rehearsal no longer constructs them or admits tool data to Layer 1.
+The organization Granola acquisition and rehearsal paths described below were
+retired by the [Personal Granola cleanup](2026-10-05-personal-granola-sprint-v1.md).
+This document preserves their implementation evidence as historical context.
+Shared capture transforms, custody, approval and personal connector code remain;
+tool capture libraries have no active production registration.
 
 ## Implemented path
 

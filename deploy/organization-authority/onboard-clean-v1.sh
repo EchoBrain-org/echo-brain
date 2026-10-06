@@ -30,9 +30,7 @@ EXTRACTION_ATTEMPT_COMMAND="services/organization-authority/dist/clean-extractio
 RUNTIME_UID=''
 RUNTIME_GID=''
 EXECUTOR_UID=''
-ACTIVATION_GRANOLA_SOURCE_BACKUP=''
 ACTIVATION_LLM_SOURCE_BACKUP=''
-ACTIVATION_GRANOLA_ACTIVE_BACKUP=''
 ACTIVATION_LLM_ACTIVE_BACKUP=''
 ACTIVATION_ROLLBACK_FAILURE_STAGE=''
 ACTIVATION_CHILD_PID=''
@@ -135,7 +133,6 @@ INPUT_RUNTIME_PROFILE_NAME='runtime-profile.json'
 INPUT_OIDC_CONFIG_NAME='oidc-config.json'
 INPUT_OIDC_SECRET_NAME='oidc-client-secret'
 INPUT_NANGO_SECRET_KEY_NAME='nango-secret-key'
-INPUT_GRANOLA_CREDENTIAL_NAME='granola-credential'
 INPUT_LLM_CREDENTIAL_NAME='llm-credential'
 STAGING_CONNECTOR_REHEARSAL_PROFILE_NAME='staging-connector-rehearsal.json'
 STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH="$PRIVATE_DIR/$STAGING_CONNECTOR_REHEARSAL_PROFILE_NAME"
@@ -146,7 +143,6 @@ input_runtime_profile=''
 input_oidc_config=''
 input_oidc_secret=''
 input_nango_secret_key=''
-input_granola_credential=''
 input_llm_credential=''
 input_runtime_user=''
 input_organization_name=''
@@ -698,7 +694,6 @@ check_input_dir() {
     "$INPUT_OIDC_CONFIG_NAME"
     "$INPUT_OIDC_SECRET_NAME"
     "$INPUT_NANGO_SECRET_KEY_NAME"
-    "$INPUT_GRANOLA_CREDENTIAL_NAME"
     "$INPUT_LLM_CREDENTIAL_NAME"
   )
   for name in "${expected[@]}"; do
@@ -718,7 +713,6 @@ check_input_dir() {
   input_oidc_config="$input_dir/$INPUT_OIDC_CONFIG_NAME"
   input_oidc_secret="$input_dir/$INPUT_OIDC_SECRET_NAME"
   input_nango_secret_key="$input_dir/$INPUT_NANGO_SECRET_KEY_NAME"
-  input_granola_credential="$input_dir/$INPUT_GRANOLA_CREDENTIAL_NAME"
   input_llm_credential="$input_dir/$INPUT_LLM_CREDENTIAL_NAME"
   return 0
 }
@@ -730,7 +724,6 @@ check_provider_activation_input_dir() {
 
   local name path
   local -a expected=(
-    "$INPUT_GRANOLA_CREDENTIAL_NAME"
     "$INPUT_LLM_CREDENTIAL_NAME"
   )
   for name in "${expected[@]}"; do
@@ -745,10 +738,8 @@ check_provider_activation_input_dir() {
   shopt -u nullglob dotglob
   [[ ${#entries[@]} -eq ${#expected[@]} ]] || return 1
 
-  input_granola_credential="$input_dir/$INPUT_GRANOLA_CREDENTIAL_NAME"
   input_llm_credential="$input_dir/$INPUT_LLM_CREDENTIAL_NAME"
-  python3 - "$input_granola_credential" "$input_llm_credential" <<'PY'
-import re
+  python3 - "$input_llm_credential" <<'PY'
 import sys
 
 def credential(path):
@@ -760,10 +751,7 @@ def credential(path):
         raise SystemExit(1)
     return value.decode("ascii")
 
-granola = credential(sys.argv[1])
-credential(sys.argv[2])
-if re.fullmatch(r"grn_[A-Za-z0-9][A-Za-z0-9_-]*", granola) is None:
-    raise SystemExit(1)
+credential(sys.argv[1])
 PY
 }
 
@@ -1126,7 +1114,7 @@ require_prepared() {
   [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'clean Compose environment is missing; run prepare again with the same inputs'
   python3 "$RELEASE_TOOL" validate "$RELEASE_FILE" >/dev/null || fail 'persisted release record is no longer canonical clean-v1'
   runtime_profile_matches_prepared_tuple || fail 'prepared runtime profile tuple is missing, noncanonical, or drifted from the accepted release; a retired connector rehearsal selection needs a fresh rehearsal (see the deploy README)'
-  for required in oidc-config.json oidc-client-secret nango-secret-key granola-credential-source granola-owner-email llm-credential-source; do
+  for required in oidc-config.json oidc-client-secret nango-secret-key llm-credential-source; do
     [[ -f "$PRIVATE_DIR/$required" && ! -L "$PRIVATE_DIR/$required" ]] || fail "fixed private input is missing: $required"
   done
   staging_meetings_directory >/dev/null
@@ -1463,9 +1451,7 @@ ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=$connector_rehearsal_profile_file"
   copy_exact_private "$input_nango_secret_key" "$PRIVATE_DIR/nango-secret-key" 'Nango secret key'
   materialize_staging_connector_rehearsal_profile || fail 'could not persist the staging connector rehearsal profile'
   [[ "$input_staging_connector_rehearsal_enabled" != true ]] || own_for_runtime "$STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH"
-  copy_exact_private "$input_granola_credential" "$PRIVATE_DIR/granola-credential-source" 'Granola credential'
   copy_exact_private "$input_llm_credential" "$PRIVATE_DIR/llm-credential-source" 'LLM credential'
-  write_exact_private "$PRIVATE_DIR/granola-owner-email" "$input_owner_email" 'Granola owner email'
   if [[ -n "$input_staging_synthetic_meetings_dir" ]]; then
     require_safe_directory_target "$DATA_DIR/meetings" 'staging meetings directory'
     install -d -m 0700 "$DATA_DIR/meetings"
@@ -1514,7 +1500,6 @@ capture_rehearsal_provider_inputs() {
     "$PRIVATE_DIR/oidc-config.json:$INPUT_OIDC_CONFIG_NAME"
     "$PRIVATE_DIR/oidc-client-secret:$INPUT_OIDC_SECRET_NAME"
     "$PRIVATE_DIR/nango-secret-key:$INPUT_NANGO_SECRET_KEY_NAME"
-    "$PRIVATE_DIR/granola-credential-source:$INPUT_GRANOLA_CREDENTIAL_NAME"
     "$PRIVATE_DIR/llm-credential-source:$INPUT_LLM_CREDENTIAL_NAME"
   )
   for source in "${sources[@]}"; do
@@ -1535,7 +1520,7 @@ remove_rehearsal_captured_inputs() {
   [[ -d "$destination" && ! -L "$destination" && "$(portable_stat_uid "$destination")" == "$(id -u)" && "$(portable_stat_mode "$destination")" == 700 ]] || return 1
   rm -f "$destination/$INPUT_MANIFEST_NAME" "$destination/$INPUT_RELEASE_NAME" "$destination/$INPUT_RUNTIME_PROFILE_NAME" \
     "$destination/$INPUT_OIDC_CONFIG_NAME" "$destination/$INPUT_OIDC_SECRET_NAME" "$destination/$INPUT_NANGO_SECRET_KEY_NAME" \
-    "$destination/$INPUT_GRANOLA_CREDENTIAL_NAME" "$destination/$INPUT_LLM_CREDENTIAL_NAME" || return 1
+    "$destination/$INPUT_LLM_CREDENTIAL_NAME" || return 1
   rmdir "$destination"
 }
 
@@ -1679,7 +1664,7 @@ replace_rehearsal() {
     local required_source
     for required_source in \
       "$PRIVATE_DIR/oidc-config.json" "$PRIVATE_DIR/oidc-client-secret" "$PRIVATE_DIR/nango-secret-key" \
-      "$PRIVATE_DIR/granola-credential-source" "$PRIVATE_DIR/llm-credential-source"; do
+      "$PRIVATE_DIR/llm-credential-source"; do
       require_runtime_private_file "$required_source" 'existing provider input'
     done
   fi
@@ -1802,8 +1787,6 @@ install_credentials() {
   compose_clean run --rm --no-deps --entrypoint node authority \
     "$SETUP_COMMAND" credentials-install \
     --state-dir /echo-clean/state \
-    --granola-credential-file /echo-clean/private/granola-credential-source \
-    --granola-owner-email-file /echo-clean/private/granola-owner-email \
     --llm-credential-file /echo-clean/private/llm-credential-source
 }
 
@@ -1811,8 +1794,6 @@ install_credentials_quiet() {
   activation_compose_quiet run --rm --no-deps --entrypoint node authority \
     "$SETUP_COMMAND" credentials-install \
     --state-dir /echo-clean/state \
-    --granola-credential-file /echo-clean/private/granola-credential-source \
-    --granola-owner-email-file /echo-clean/private/granola-owner-email \
     --llm-credential-file /echo-clean/private/llm-credential-source
 }
 
@@ -1855,17 +1836,11 @@ backup_runtime_private() {
 }
 
 restore_provider_backups() {
-  local granola_source_backup="$1" llm_source_backup="$2"
-  local granola_active_backup="$3" llm_active_backup="$4"
-  local granola_source_destination="$PRIVATE_DIR/granola-credential-source"
+  local llm_source_backup="$1" llm_active_backup="$2"
   local llm_source_destination="$PRIVATE_DIR/llm-credential-source"
   local active_directory="$DATA_DIR/state/credentials"
   replace_runtime_private \
-      "$granola_source_backup" "$granola_source_destination" 'granola-credential' &&
-    replace_runtime_private \
       "$llm_source_backup" "$llm_source_destination" 'llm-credential' &&
-    replace_runtime_private \
-      "$granola_active_backup" "$active_directory/granola-credential" 'granola-active' &&
     replace_runtime_private \
       "$llm_active_backup" "$active_directory/llm-credential" 'llm-active'
 }
@@ -1877,9 +1852,7 @@ provider_rollback_and_verify() {
     return 1
   fi
   if ! restore_provider_backups \
-      "$ACTIVATION_GRANOLA_SOURCE_BACKUP" \
       "$ACTIVATION_LLM_SOURCE_BACKUP" \
-      "$ACTIVATION_GRANOLA_ACTIVE_BACKUP" \
       "$ACTIVATION_LLM_ACTIVE_BACKUP"; then
     ACTIVATION_ROLLBACK_FAILURE_STAGE='restore'
     return 1
@@ -1909,9 +1882,7 @@ provider_rollback_and_verify() {
 
 remove_provider_rollback_copies() {
   rm -f \
-    "$ACTIVATION_GRANOLA_SOURCE_BACKUP" \
     "$ACTIVATION_LLM_SOURCE_BACKUP" \
-    "$ACTIVATION_GRANOLA_ACTIVE_BACKUP" \
     "$ACTIVATION_LLM_ACTIVE_BACKUP" >/dev/null 2>&1
 }
 
@@ -1946,10 +1917,8 @@ activation_rollback_on_exit() {
 }
 
 arm_provider_rollback() {
-  ACTIVATION_GRANOLA_SOURCE_BACKUP="$1"
-  ACTIVATION_LLM_SOURCE_BACKUP="$2"
-  ACTIVATION_GRANOLA_ACTIVE_BACKUP="$3"
-  ACTIVATION_LLM_ACTIVE_BACKUP="$4"
+  ACTIVATION_LLM_SOURCE_BACKUP="$1"
+  ACTIVATION_LLM_ACTIVE_BACKUP="$2"
   trap 'activation_rollback_on_exit "$?"' EXIT
   trap 'activation_signal_exit 129' HUP
   trap 'activation_signal_exit 130' INT
@@ -1969,17 +1938,13 @@ activate_provider_credentials() {
     fail 'a candidate release is staged; finish its promotion or rollback before activating provider credentials'
   fi
   if ! check_provider_activation_input_dir; then
-    fail 'provider activation input must contain exactly current-executor-owned mode-0600 granola-credential and llm-credential files in a mode-0700 directory'
+    fail 'provider activation input must contain exactly current-executor-owned mode-0600 llm-credential file in a mode-0700 directory'
   fi
   select_runtime_identity "$(setup_value runtime_user)"
-  local granola_source_destination="$PRIVATE_DIR/granola-credential-source"
   local llm_source_destination="$PRIVATE_DIR/llm-credential-source"
   local active_directory="$DATA_DIR/state/credentials"
-  local granola_active_destination="$active_directory/granola-credential"
   local llm_active_destination="$active_directory/llm-credential"
-  require_runtime_private_file "$granola_source_destination" 'Granola credential source'
   require_runtime_private_file "$llm_source_destination" 'LLM credential source'
-  require_runtime_private_file "$granola_active_destination" 'active Granola credential'
   require_runtime_private_file "$llm_active_destination" 'active LLM credential'
   require_image_present
   local status_json
@@ -1987,40 +1952,28 @@ activate_provider_credentials() {
   terminal_green "$status_json" || \
     fail 'provider credentials can activate only on a complete, healthy Authority using the accepted image'
 
-  local granola_source_backup llm_source_backup
-  local granola_active_backup llm_active_backup
-  if ! granola_source_backup="$(mktemp "$PRIVATE_DIR/.granola-source.previous.XXXXXX" 2>/dev/null)" ||
-    ! llm_source_backup="$(mktemp "$PRIVATE_DIR/.llm-source.previous.XXXXXX" 2>/dev/null)" ||
-    ! granola_active_backup="$(mktemp "$active_directory/.granola-active.previous.XXXXXX" 2>/dev/null)" ||
+  local llm_source_backup llm_active_backup
+  if ! llm_source_backup="$(mktemp "$PRIVATE_DIR/.llm-source.previous.XXXXXX" 2>/dev/null)" ||
     ! llm_active_backup="$(mktemp "$active_directory/.llm-active.previous.XXXXXX" 2>/dev/null)"; then
-    rm -f "${granola_source_backup:-}" "${llm_source_backup:-}" \
-      "${granola_active_backup:-}" "${llm_active_backup:-}" >/dev/null 2>&1 || true
+    rm -f "${llm_source_backup:-}" "${llm_active_backup:-}" >/dev/null 2>&1 || true
     fail 'could not prepare private provider-credential rollback copies'
   fi
-  if ! backup_runtime_private "$granola_source_destination" "$granola_source_backup" ||
-    ! backup_runtime_private "$llm_source_destination" "$llm_source_backup" ||
-    ! backup_runtime_private "$granola_active_destination" "$granola_active_backup" ||
+  if ! backup_runtime_private "$llm_source_destination" "$llm_source_backup" ||
     ! backup_runtime_private "$llm_active_destination" "$llm_active_backup"; then
-    rm -f "$granola_source_backup" "$llm_source_backup" \
-      "$granola_active_backup" "$llm_active_backup" >/dev/null 2>&1 || true
+    rm -f "$llm_source_backup" "$llm_active_backup" >/dev/null 2>&1 || true
     fail 'could not prepare private provider-credential rollback copies'
   fi
 
-  arm_provider_rollback \
-    "$granola_source_backup" "$llm_source_backup" \
-    "$granola_active_backup" "$llm_active_backup"
+  arm_provider_rollback "$llm_source_backup" "$llm_active_backup"
 
   if ! activation_compose_quiet down; then
     disarm_provider_rollback
-    rm -f "$granola_source_backup" "$llm_source_backup" \
-      "$granola_active_backup" "$llm_active_backup" >/dev/null 2>&1 || true
+    rm -f "$llm_source_backup" "$llm_active_backup" >/dev/null 2>&1 || true
     fail 'could not stop the healthy Authority before provider-credential activation'
   fi
 
   local installed=false
   if replace_runtime_private \
-      "$input_granola_credential" "$granola_source_destination" 'granola-credential' &&
-    replace_runtime_private \
       "$input_llm_credential" "$llm_source_destination" 'llm-credential' &&
     install_credentials_quiet; then
     installed=true

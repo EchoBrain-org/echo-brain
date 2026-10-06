@@ -69,11 +69,11 @@ organization Slack connection exists. The
 [Slack connection onboarding gate](organization-control-plane.md#slack-connection-onboarding-gate)
 defines that ceremony and its credential custody.
 
-Granola is one organization-owned meeting export and admission bridge. Its
-credential and canonical owner-email binding stay on the Authority; people do
-not connect Granola from the Person client or supply individual Granola keys.
-It emits revisions through the existing meeting-source admission and approval
-path before any meeting becomes readable context.
+Organization onboarding no longer requires a Granola credential, owner binding,
+or source admission. Shared meeting admission and approval remain available.
+Personal OAuth and selected-folder intake are specified in the
+[Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md);
+that connection flow is not implemented by the cleanup phase.
 
 After that organization tool is active, a signed-in Person runs
 `echo-brain person tools connect --tool slack` (browser sign-in, or a DM-code

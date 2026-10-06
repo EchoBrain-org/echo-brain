@@ -7,12 +7,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { runStagingSyntheticPrivateDmCanaryV1 } from "../../../../src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.js";
 import { OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-config-v1";
-import { createGranolaPostCutoffCursor } from "../../../../../../granola/src/source/meeting-source-adapter.js";
+import { SYNTHETIC_DEMO_INITIAL_CURSOR_V1 } from "../../../../../../synthetic-demo/src/source/synthetic-demo-meeting-source-v1.js";
 import {
   assertStagingSyntheticMeetingCanaryV1,
   createStagingSyntheticMeetingCanaryV1,
 } from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
-import { granolaAdmittedMeetingSourceCursorPolicyV1 } from "../../../../../../granola/src/granola-admitted-meeting-source-cursor-policy-v1.js";
+import { syntheticDemoAdmittedMeetingSourceCursorPolicyV1 } from "../../../../../../synthetic-demo/src/synthetic-demo-admitted-meeting-source-cursor-policy-v1.js";
 import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/review-lineage-semantics";
 import type {
   ApprovalWorkflowStageInputV1,
@@ -60,11 +60,11 @@ function database(): Database.Database {
        processor_adapter_version, processor_configuration_sha256,
        processor_credential_reference_sha256, semantic_input_sha256, admitted_at
      ) VALUES (1, 'org_test', 'prn_test', 'mem_test', 'owner',
-       'granola', '2.2.0', 'founder-granola', '2.2.0', ?,
+       'synthetic-demo-source', '1.0.0', 'staging-synthetic-demo', '1.0.0', ?,
        'provider_record_owner_observed', ?, ?, ?, ?, 'llm', 'founder-llm', ?,
        ?, ?, ?, ?)`,
   ).run(
-    SHA, NOW, SHA, createGranolaPostCutoffCursor(NOW), NOW,
+    SHA, NOW, SHA, SYNTHETIC_DEMO_INITIAL_CURSOR_V1, NOW,
     OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1, SHA, SHA, SHA, NOW,
   );
   databases.push(value);
@@ -240,7 +240,7 @@ describe("staging synthetic private-DM canary", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceCursorPolicyV1,
+      syntheticDemoAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => NOW,
     );
@@ -280,7 +280,7 @@ describe("staging synthetic private-DM canary", () => {
     );
     expect(
       value.prepare("SELECT cursor FROM authority_live_source_progress_v2").pluck().get(),
-    ).toBe(createGranolaPostCutoffCursor(NOW));
+    ).toBe(SYNTHETIC_DEMO_INITIAL_CURSOR_V1);
     expect(value.prepare("SELECT count(*) FROM authority_sources_v1").pluck().get()).toBe(1);
     expect(value.prepare("SELECT count(*) FROM authority_source_revisions_v1").pluck().get()).toBe(1);
     expect(value.prepare("SELECT count(*) FROM authority_source_contents_v1").pluck().get()).toBe(1);
@@ -290,7 +290,7 @@ describe("staging synthetic private-DM canary", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceCursorPolicyV1,
+      syntheticDemoAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => NOW,
     );
@@ -338,14 +338,14 @@ describe("staging synthetic private-DM canary", () => {
     expect(value.prepare("SELECT count(*) FROM authority_source_revisions_v1").pluck().get()).toBe(1);
     expect(value.prepare("SELECT count(*) FROM authority_source_contents_v1").pluck().get()).toBe(1);
     expect(value.prepare("SELECT count(*) FROM authority_live_source_candidates_v2").pluck().get()).toBe(0);
-    expect(value.prepare("SELECT cursor FROM authority_live_source_progress_v2").pluck().get()).toBe(createGranolaPostCutoffCursor(NOW));
+    expect(value.prepare("SELECT cursor FROM authority_live_source_progress_v2").pluck().get()).toBe(SYNTHETIC_DEMO_INITIAL_CURSOR_V1);
   });
 
   it("recovers an existing V1 canary without rewriting it as V2", async () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceCursorPolicyV1,
+      syntheticDemoAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => NOW,
     );
@@ -378,7 +378,7 @@ describe("staging synthetic private-DM canary", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceCursorPolicyV1,
+      syntheticDemoAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => NOW,
     );
@@ -429,7 +429,7 @@ describe("staging synthetic private-DM canary", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceCursorPolicyV1,
+      syntheticDemoAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => NOW,
     );
@@ -465,7 +465,7 @@ describe("staging synthetic private-DM canary", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceCursorPolicyV1,
+      syntheticDemoAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => NOW,
     );
@@ -506,7 +506,7 @@ describe("staging synthetic private-DM canary", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceCursorPolicyV1,
+      syntheticDemoAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => NOW,
     );
@@ -529,7 +529,7 @@ describe("staging synthetic private-DM canary", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceCursorPolicyV1,
+      syntheticDemoAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => NOW,
     );
@@ -550,7 +550,7 @@ describe("staging synthetic private-DM canary", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceCursorPolicyV1,
+      syntheticDemoAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => NOW,
     );

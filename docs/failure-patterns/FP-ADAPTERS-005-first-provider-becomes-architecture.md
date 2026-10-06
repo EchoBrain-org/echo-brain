@@ -85,5 +85,5 @@ policy projection, boundary-manifest rules, negative architecture probes, and
 a synthetic source using the same core port. The pattern remains `mitigating`;
 full provider qualification is still pending, static checks cannot detect every
 semantic leak, and initial-owner onboarding plus the compatibility CLI still
-intentionally select the concrete Granola, OpenRouter, and Slack product
+intentionally select the concrete OpenRouter and Slack product
 profile.

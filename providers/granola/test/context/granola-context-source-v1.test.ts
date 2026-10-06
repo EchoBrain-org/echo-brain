@@ -9,12 +9,10 @@ import {
   createGranolaContextSourceV1,
   mapGranolaMeetingToContextCaptureContentV1,
 } from "../../src/context/granola-context-source-v1.js";
-import type {
-  GranolaApiClient,
-  GranolaListParams,
-  GranolaNoteDetail,
-} from "../../src/source/granola-api-client.js";
-import { GranolaMeetingSourceAdapter } from "../../src/source/meeting-source-adapter.js";
+import {
+  normalizeGranolaMeetingV1,
+  type GranolaMeetingContentInputV1,
+} from "../../src/granola-meeting-normalizer-v1.js";
 
 const config: AdapterConfig = {
   adapter_id: "granola",
@@ -22,7 +20,7 @@ const config: AdapterConfig = {
   settings: { page_size: 1 },
 };
 
-const detail: GranolaNoteDetail = {
+const detail: GranolaMeetingContentInputV1 = {
   id: "note-1",
   title: "Product review",
   created_at: "2026-07-15T16:00:00.000Z",
@@ -36,46 +34,23 @@ const detail: GranolaNoteDetail = {
   transcript: [{ text: "We should ship it.", speaker: "Alice" }],
 };
 
-class FakeGranolaClient implements GranolaApiClient {
-  readonly listCalls: GranolaListParams[] = [];
-  readonly detailCalls: string[] = [];
-
-  constructor(private readonly note: GranolaNoteDetail) {}
-
-  async listNotes(params: GranolaListParams) {
-    this.listCalls.push(params);
-    return {
-      notes: [
-        {
-          id: this.note.id,
-          created_at: this.note.created_at,
-          updated_at: this.note.updated_at,
-        },
-      ],
-      hasMore: false,
-      cursor: null,
-    };
-  }
-
-  async getNote(noteId: string): Promise<GranolaNoteDetail> {
-    this.detailCalls.push(noteId);
-    return this.note;
-  }
-}
-
-function meetingSource(note: GranolaNoteDetail, client = new FakeGranolaClient(note)) {
-  return {
-    client,
-    source: new GranolaMeetingSourceAdapter(config, {
-      client,
-      now: () => "2026-07-16T00:00:00.000Z",
+function meetingSource(note: GranolaMeetingContentInputV1) {
+  const identity = { kind: "meeting-source" as const, adapter_id: "granola", instance_id: "primary", version: "2.2.0" };
+  const source: MeetingSourceAdapter = {
+    identity,
+    validateConfig: () => ({ ok: true, errors: [] }),
+    healthCheck: async () => ({ status: "healthy", checked_at: "2026-07-16T00:00:00.000Z" }),
+    pull: async () => ({
+      meetings: [normalizeGranolaMeetingV1(note, identity, "2026-07-16T00:00:00.000Z")],
+      next_cursor: "fixture-next",
     }),
   };
+  return { source };
 }
 
 describe("Granola context capture source", () => {
   it("wraps one configured Granola meeting source and retains its normalized observation", async () => {
-    const { client, source } = meetingSource(detail);
+    const { source } = meetingSource(detail);
     const adapter = createGranolaContextSourceV1({
       source,
       now: () => "2026-07-16T01:00:00.000Z",
@@ -99,8 +74,6 @@ describe("Granola context capture source", () => {
       ok: false,
       errors: ["instance_id does not match the registered adapter instance"],
     });
-    expect(client.listCalls).toEqual([{ page_size: 1 }]);
-    expect(client.detailCalls).toEqual(["note-1"]);
     expect(batch.next_cursor).toBeDefined();
     expect(batch.sources).toHaveLength(1);
     expect(batch.sources[0]).toMatchObject({
@@ -265,12 +238,12 @@ describe("Granola context capture source", () => {
   });
 
   it("rejects an oversized source observation without producing a cursor", async () => {
-    const oversized: GranolaNoteDetail = {
+    const oversized: GranolaMeetingContentInputV1 = {
       ...detail,
       id: "too-large",
       summary_markdown: "A".repeat(129 * 1024),
     };
-    const { client, source } = meetingSource(oversized);
+    const { source } = meetingSource(oversized);
     const adapter = createGranolaContextSourceV1({
       source,
       now: () => "2026-07-16T01:00:00.000Z",
@@ -284,6 +257,5 @@ describe("Granola context capture source", () => {
       code: "permanently_rejected",
       retryable: false,
     } satisfies Partial<AdapterError>);
-    expect(client.listCalls).toEqual([{ page_size: 1 }, { page_size: 1 }]);
   });
 });

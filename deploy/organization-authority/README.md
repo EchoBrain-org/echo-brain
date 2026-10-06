@@ -119,7 +119,7 @@ with the four synthetic-meeting input. The installed wrapper canonicalizes the
 object into `clean-data/private/staging-connector-rehearsal.json`, mode `0600`,
 and writes its digest to setup while binding the fixed file path in the
 release-bound environment snapshots. The
-ordinary eight-file preparation carries the profile inside the existing
+ordinary seven-file preparation carries the profile inside the existing
 nonsecret manifest. The four-synthetic-meeting provider-reuse transfer rejects
 an enabled connector profile; it cannot be used as an alternate connector
 input lane. The profile is fixed for the life of the rehearsal: a different
@@ -199,7 +199,7 @@ with one fresh rehearsal, in this order:
    `--reuse-provider-inputs`. The archive keeps the old profiles, sidecar and
    Slack connection state.
 5. Put the profile above in `onboarding.clean-v1.json` and transfer the full
-   eight-file onboarding input directory; the transfer runs `doctor` and
+   seven-file onboarding input directory; the transfer runs `doctor` and
    `prepare` on the host. Then continue with `resume`.
 6. On the initial-owner machine, run `person tools setup --tool slack` with a
    new configuration token and complete Slack consent. Then link the owner with
@@ -238,7 +238,7 @@ files in the checksum-bound courier archive and records the selected source in
 the private receipt, so `execute` does not depend on the controller still
 existing. `preflight` reports the fixture directory separately and applies the
 aggregate size limit to both directories. Leave this property out for ordinary
-onboarding; the established eight-file archive and host invocation are unchanged.
+onboarding; the established seven-file archive and host invocation are unchanged.
 Before planning this selected source, install matching reviewed host tooling
 through the [current-host staging release lane](../../deploy/release/README.md#automated-current-host-staging-lane).
 An older installed wrapper does not accept the selected-source flag; its failed
@@ -431,7 +431,7 @@ integration. Keep this order:
    `replace-rehearsal` archives, so it refuses to install afterward.
 2. Run `replace-rehearsal --confirm-no-live-users` without
    `--reuse-provider-inputs`.
-3. Transfer the full eight-file onboarding input directory (including
+3. Transfer the full seven-file onboarding input directory (including
    `nango-secret-key`); the transfer runs `doctor` and `prepare` on the host.
    Then continue with `resume`.
 
@@ -474,9 +474,8 @@ The four required filenames are
 `04-commercial-exception-review.json`. `prepare` copies the approved corpus
 into `clean-data/meetings`, binds the normal Compose environment to it, and
 keeps the normal release profile, AWS logs, and runtime observability. The
-ordinary credential bundle still includes a Granola credential, but this
-selected synthetic source never polls Granola. Without the optional directory,
-the normal admitted Granola source remains unchanged. The wrapper carries the
+credential bundle requires no Granola inputs. Without the optional directory,
+ordinary runtime has no organization meeting source. The wrapper carries the
 same selected directory through setup finalization and normal service startup;
 the Compose default is empty.
 
@@ -551,7 +550,7 @@ Before stopping the old Authority, replacement validates the staged inputs,
 the current accepted release and completed healthy runtime, and the same
 staging host, owner, runtime user, Region and Nango integration key.
 It copies only the five provider input files into a private host directory
-outside `clean-data`. The Granola and model-provider source files are used;
+outside `clean-data`. The model-provider source file is used;
 old installed credentials, databases and signing keys are not carried into the
 new organization. Normal onboarding verifies the providers again.
 
@@ -744,9 +743,86 @@ handoff with `terminal_green=false` and `resume` refuses to start or act on the
 candidate. Use `update-clean-v1.sh status`, then promote or roll back that
 candidate before returning to accepted-onboarding commands.
 
-## Provider credential replacement
+## Activate replacement provider credentials
 
-Organization Granola credential activation was retired in Personal Granola phase 1. Use a reviewed host replacement for LLM credential changes; do not mutate retained private files by hand.
+The LLM credential activates through a controlled Authority restart.
+Replacing a file by hand does not activate it in the running process and is not
+a supported status claim. Put the replacement value in a separate
+current-executor-owned mode-`0700` directory containing exactly this
+mode-`0600` regular file:
+
+| File                 | Purpose                                      |
+| -------------------- | -------------------------------------------- |
+| `llm-credential`     | Replacement LLM provider credential.         |
+
+Then run the single activation operation:
+
+```sh
+./onboard-clean-v1.sh activate-provider-credentials \
+  --input-dir /absolute/private/echo-provider-credentials
+```
+
+The operation requires a completed, healthy Authority on the accepted image.
+It holds the same single-operation lock as release stage, promotion, rollback,
+and status, so credential activation cannot race an image change.
+The scripts never auto-reclaim an existing lock: a killed wrapper can leave a
+Compose child or Docker Engine operation running after the wrapper PID exits.
+It validates the private input before stopping anything, installs the value
+through the Authority's fixed stopped-state credential destinations, restarts
+the same accepted release, and waits for both container health and a public
+descriptor that exactly matches the local Authority. Its result contains
+only the release ID and boolean activation/health outcomes. If the replacement
+cannot start healthily, the previous LLM source and active copies are restored and the old
+runtime is started again. Durable records, staged candidates, and Slack
+approval state are not rewritten. OIDC client-secret rotation and reconnecting
+the organization's Slack connection have separate identity/link semantics and
+are intentionally outside this operation.
+
+### Recover an interrupted operation lock
+
+For a bounded staging-release operation, a root-owned
+`.staging-release-guard` outside `clean-data` is an additional interlock. Preserve
+it and the original operation receipt if execution is unconfirmed or reports
+`control_path_changed`. The legacy-lock cleanup below does not authorize
+removing this guard. Follow the [automated release lane](../release/README.md#automated-current-host-staging-lane)
+and investigate the exact command and pinned control-state identity first.
+
+If an activation or release wrapper was killed without running its exit trap,
+leave `clean-data/.authority-operation-lock` in place until the old Docker work
+is conclusively stopped. On the EC2 Authority host:
+
+1. Restart the host before recovery. This is the lean V1 way to terminate an
+   orphaned Compose client and any in-flight operation whose state cannot be
+   proven from the dead wrapper PID alone. Wait for Docker to become responsive.
+2. From this directory, inspect without deleting anything:
+
+   ```sh
+   authority_lock=clean-data/.authority-operation-lock
+   cat "$authority_lock/owner-pid"
+   ps -p "$(cat "$authority_lock/owner-pid")" -o pid=,ppid=,command=
+   docker compose --env-file .env.clean-v1 \
+     -f compose.clean-v1.yaml -f compose.clean-v1.ec2.yaml ps --all
+   find clean-data/private clean-data/state/credentials -maxdepth 1 \
+     -type f -name '.*.previous.*' -print
+   ```
+
+3. If the recorded process still exists, a container is starting or restarting,
+   or any `.previous` credential rollback copy is listed, keep the lock. For a
+   credential interruption, restore a known Authority-state recovery unit; when
+   there are no live users, `replace-rehearsal --confirm-no-live-users` is the
+   supported clean replacement path.
+4. Only when the old process is absent, Docker is settled, and no rollback copy
+   exists, remove exactly the owner file and empty lock directory:
+
+   ```sh
+   rm -- "$authority_lock/owner-pid"
+   rmdir -- "$authority_lock"
+   ```
+
+5. If `clean-data/release/candidate.clean-v1.json` exists, run
+   `./update-clean-v1.sh status` and then promote or roll back that candidate.
+   Otherwise run `./onboard-clean-v1.sh status`. Do not start another mutation
+   until that status is understood.
 
 ## Release and recovery
 

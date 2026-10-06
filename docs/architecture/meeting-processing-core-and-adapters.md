@@ -56,14 +56,14 @@ meeting provider -> MeetingSourceAdapter -> MeetingSourceBridgeV1 ------+
                            /                    \
             document extraction/index       meeting decision workflow
 
-Granola meeting rehearsal
+Reusable context capture adapter (no active Granola acquisition)
   -> SourceAdapterV1<ContextCaptureContentV1>.pull()
   -> createContextSourceIntakeV1() -> intakeContextBatchV1()
   -> SqliteContextCaptureStoreV1 (a SourceAdmissionStoreV1)
 ```
 
-The staging connector rehearsal captures only Granola meeting content. Its
-Jira and Slack checks verify live reads without retaining their payloads.
+The organization Granola staging capture route is retired. Personal connector
+checks verify live reads without retaining their payloads.
 Legacy capture contracts remain compiled but do not supply tool Ask; captured
 context feeds no processing, retrieval or Ask stage. See
 [connector contracts](connector-contracts.md) for that separate contract.
@@ -198,11 +198,11 @@ Nango outage out of the startup gate and retains bounded, cancellable attempts.
 
 ## Current composition
 
-The Organization Authority composition root concretely selects one
-organization-owned Granola export/admission bridge as the meeting source,
-OpenRouter with the pinned Claude Sonnet processing version as the
-decision processor, Slack for private approval cards, interactions, and
-identity, and Authority SQLite state. It separately
+The Organization Authority composition root selects OpenRouter with the pinned
+Claude Sonnet processing version as the decision processor, Slack for private
+approval cards, interactions and identity, and Authority SQLite state. Ordinary
+startup requires no organization meeting source. Staging-only synthetic sources
+exercise the retained meeting pipeline without Granola. It separately
 composes the bounded Person `ask` path above Layer 3 with a pinned OpenRouter
 DeepSeek planner/answer model. The other LLM transports are compiled
 alternatives, not active runtime dependencies. This is an allowed selecting
@@ -214,8 +214,7 @@ request-bound Person read capability. Global Ask reads tickets visible through
 the asker's own Jira connection; project Ask additionally requires the saved
 ECHO-to-Jira project mapping, and Mine excludes Jira. Jira data is read live for
 the request and does not enter source admission or canonical meeting
-processing. The staging rehearsal keeps Jira and Slack verification request-only;
-its retained capture selection is Granola meeting content.
+processing. Personal connector verification remains request-only.
 
 Confluence follows the same personal live-read boundary through its own
 provider and selecting runtime. Global Ask discovers pages visible to the
@@ -260,7 +259,7 @@ Sharing follows capabilities, so a provider reuses only the layers it needs:
 
 | Shared layer | Current consumers | Provider-owned behavior |
 | --- | --- | --- |
-| Bounded JSON/UTF-8 reads, byte limits, abort/deadline handling and response cleanup | Jira, Confluence, Slack setup clients, Granola API client, Nango broker | URLs, HTTP/media-type policy, error meanings, retries and provider payloads |
+| Bounded JSON/UTF-8 reads, byte limits, abort/deadline handling and response cleanup | Jira, Confluence, Slack setup clients, Nango broker | URLs, HTTP/media-type policy, error meanings, retries and provider payloads |
 | Personal Nango connection lifecycle, binding store, connection HTTP/client contracts | Jira and Confluence | OAuth scopes, resource/account verification and API permissions |
 | Project mapping store and current project-grant fence | Jira and Confluence | Mapping shape, project/space discovery and visibility checks |
 | Native Atlassian Document Format text normalization | Jira and Confluence | Requested representation, unsupported-content policy and evidence section identity |
@@ -296,9 +295,10 @@ Revalidation checks every released source, then all local grants synchronously.
 Older construction inputs translate into this same dispatch path, while older
 answer versions retain their strict citation contracts.
 
-Granola remains a meeting intake adapter with durable admission and decision
-processing. It shares bounded HTTP mechanics; its cursor, custody and processing
-contracts remain distinct from personal live reads. Slack's organization app,
+Granola retains transport-free meeting normalization and context capture
+transforms. Its organization acquisition and owner-admission code is retired;
+shared meeting custody and processing contracts remain distinct from personal
+live reads. Slack's organization app,
 private approval cards and human action records likewise retain their own
 lifecycle. A Slack Person read requires a separately authorized binding; an
 organization approval installation alone grants no such access. This refactor
@@ -341,8 +341,8 @@ and
 
 ## Known provider-neutrality caveats
 
-- Initial-owner onboarding and the compatibility CLI select the concrete Granola,
-  OpenRouter, and Slack profile; there is no universal source-onboarding flow.
+- Initial-owner onboarding and the compatibility CLI select the concrete
+  OpenRouter and Slack profile; there is no universal source-onboarding flow.
 - The boundary covers external capabilities, not interchangeable SQLite,
   file-key, Node-runtime, or authentication-protocol implementations. The
   source port is pull-oriented; Person push submissions use the durable edge
