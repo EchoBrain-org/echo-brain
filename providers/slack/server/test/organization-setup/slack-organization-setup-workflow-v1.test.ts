@@ -7,7 +7,7 @@ import type { PersonAccessAuthorization } from "@echo-brain/organization-authori
 import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
 import { applyOrganizationControlBaselineV3, openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
-import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
+import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1, type OrganizationSlackInstallFailureReasonV1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-browser-link";
 import { NangoClientErrorV1, type NangoConnectionClientV1, type NangoSlackConnectionV1 } from "../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
@@ -419,7 +419,7 @@ describe("Slack organization setup workflow v1", () => {
       f.connections.set("nango-conn-1", { ...f.connections.get("nango-conn-1")!, tags: { ...reconnect.tags, ...wrongTag } });
 
       await expect(f.workflow.installStatus({ attempt_id: begun.attempt_id }, "owner"))
-        .resolves.toMatchObject({ status: "failed", failure_reason: "workspace_mismatch" });
+        .resolves.toMatchObject({ status: "failed", failure_reason: "attempt_mismatch" });
       expect(readActiveSlackConnectionV1(f.database)).toEqual(before);
       expect(snapshot()).toEqual(frozen);
     }
@@ -562,7 +562,7 @@ describe("Slack organization setup workflow v1", () => {
     for (const secret of [CLIENT_SECRET, SIGNING_SECRET]) expect(heldAttempts()).not.toContain(secret);
   });
 
-  it("refuses a connection whose tags name another attempt, organization or owner", async () => {
+  it("reports an attempt mismatch when a connection's tags name another attempt, organization or owner", async () => {
     const { workflow, nango, connections, finishConnect, database } = setup();
     await workflow.setup(SETUP_REQUEST, "owner");
     const foreign: Record<string, string>[] = [{ echo_organization_id: `org_${uuid(9)}` }, { echo_membership_id: `mem_${uuid(9)}` }, { echo_attempt_id: `ssi_${uuid(9)}` }];
@@ -571,9 +571,28 @@ describe("Slack organization setup workflow v1", () => {
       const connection = finishConnect();
       connections.set(connection.connection_id, { ...connection, tags: { ...connection.tags, ...tags } });
       nango.findConnectionIdByTag.mockResolvedValueOnce(connection.connection_id);
-      await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "failed", failure_reason: "workspace_mismatch" });
+      await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "failed", failure_reason: "attempt_mismatch" });
     }
     expect(readActiveSlackConnectionV1(database)).toBeUndefined();
+  });
+
+  it("retries an adopted app with its saved credentials after an app mismatch", async () => {
+    const f = setup();
+    await f.workflow.setup(ADOPT_REQUEST, "owner");
+    const first = await f.workflow.beginInstall(BEGIN_REQUEST, "owner");
+    f.finishConnect({ app_id: "A0OTHER" });
+    await expect(f.workflow.installStatus({ attempt_id: first.attempt_id }, "owner"))
+      .resolves.toMatchObject({ status: "failed", failure_reason: "app_mismatch" });
+
+    const retry = await f.workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
+    expect(retry.attempt_id).not.toBe(first.attempt_id);
+    expect(f.nango.createConnectSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      client_id: EXISTING_APP.client_id,
+      client_secret: EXISTING_APP.client_secret,
+      scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1,
+    }));
+    expect(f.manifest.createApp).not.toHaveBeenCalled();
+    expect(f.manifest.updateApp).toHaveBeenCalledTimes(1);
   });
 
   it("lets only the beginning owner session read, commit or cancel the attempt", async () => {
@@ -750,18 +769,18 @@ describe("Slack organization setup workflow v1", () => {
     const before = await connect();
     const bundle = findSlackAppCredentialsByReferenceSha256V1(secrets, before.state.credential_reference_sha256);
     connections.delete("nango-conn-1");
-    const cases: [Partial<NangoSlackConnectionV1>, Record<string, string>][] = [
-      [{ connection_id: "nango-conn-2" }, { echo_attempt_id: `ssi_${uuid(9)}` }],
-      [{ connection_id: "nango-conn-3" }, { echo_membership_id: `mem_${uuid(9)}` }],
-      [{ connection_id: "nango-conn-4", team_id: "T02" }, {}],
-      [{ connection_id: "nango-conn-5", bot_user_id: "UOTHER" }, {}],
+    const cases: [Partial<NangoSlackConnectionV1>, Record<string, string>, OrganizationSlackInstallFailureReasonV1][] = [
+      [{ connection_id: "nango-conn-2" }, { echo_attempt_id: `ssi_${uuid(9)}` }, "attempt_mismatch"],
+      [{ connection_id: "nango-conn-3" }, { echo_membership_id: `mem_${uuid(9)}` }, "attempt_mismatch"],
+      [{ connection_id: "nango-conn-4", team_id: "T02" }, {}, "workspace_mismatch"],
+      [{ connection_id: "nango-conn-5", bot_user_id: "UOTHER" }, {}, "workspace_mismatch"],
     ];
-    for (const [index, [overrides, tags]] of cases.entries()) {
+    for (const [index, [overrides, tags, expectedReason]] of cases.entries()) {
       const begun = await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(index + 10)}` }, "owner");
       const connection = finishConnect(overrides);
       connections.set(connection.connection_id, { ...connection, tags: { ...connection.tags, ...tags } });
       nango.findConnectionIdByTag.mockResolvedValueOnce(connection.connection_id);
-      await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "failed", failure_reason: "workspace_mismatch" });
+      await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "failed", failure_reason: expectedReason });
       expect(workflow.organizationSetup()).toBe("needs_reinstall");
     }
     expect(nango.createReconnectSession).not.toHaveBeenCalled();

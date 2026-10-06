@@ -1408,7 +1408,7 @@ describe("Person client", () => {
         expect(refused.code).toBe(1);
         expect(refused.paths).toEqual(["/v2/organization/tools/slack/install/begin", "/v2/organization/tools/slack/install/status"]);
         expect(JSON.parse(refused.stderr)).toEqual({ ok: false, action: "tools-setup",
-          error: "The install did not match this organization's Slack app and workspace. Run setup again with --reconnect and choose the organization's workspace.",
+          error: "The install did not match this organization's existing Slack workspace or bot. Run setup with --reconnect and choose the organization's workspace; your app credentials are saved.",
           reason: "workspace_mismatch" });
 
         const started = await runTools(home, ["tools", "setup", "--tool", "slack", "--reconnect", "--no-wait"], { read_input: noToken });
@@ -1418,15 +1418,42 @@ describe("Person client", () => {
       });
     });
 
-    it("adopts the selected Slack app from one hidden JSON input without printing credentials", async () => {
+    it.each([
+      ["app_mismatch", "different app", "Do not change shared Nango integration credentials"],
+      ["attempt_mismatch", "this setup attempt", "--reconnect"],
+      ["identity_mismatch", "different workspace or bot identities", "Your app credentials are saved"],
+    ])("explains %s without requesting credentials again", async (reason, explanation, recovery) => {
       await withHome(async home => {
         await installFixtureSession(home);
+        const run = await runTools(home, ["tools", "setup", "--tool", "slack", "--reconnect"], {
+          read_input: () => { throw new Error("saved app credentials must be reused"); },
+          statuses: [installStatus("failed", { failure_reason: reason })],
+        });
+        expect(run.code).toBe(1);
+        expect(run.prompts).toEqual([]);
+        expect(run.paths).toEqual(["/v2/organization/tools/slack/install/begin", "/v2/organization/tools/slack/install/status"]);
+        expect(JSON.parse(run.stderr)).toMatchObject({ reason, error: expect.stringContaining(explanation) });
+        expect(JSON.parse(run.stderr).error).toContain(recovery);
+        expect(run.stderr).not.toContain("choose the organization's workspace");
+      });
+    });
+
+    it("adopts the selected Slack app from named hidden inputs without printing credentials", async () => {
+      await withHome(async home => {
+        await installFixtureSession(home);
+        const inputs = [SETUP_TOKEN, EXISTING_APP.client_id, EXISTING_APP.client_secret, EXISTING_APP.signing_secret];
         const run = await runTools(home, ["tools", "setup", "--tool", "slack", "--existing-app", EXISTING_APP.app_id, "--no-wait"], {
-          read_input: () => JSON.stringify(EXISTING_INPUT),
+          read_input: () => {
+            const input = inputs.shift();
+            if (input === undefined) throw new Error("unexpected extra credential prompt");
+            return input;
+          },
         });
         expect(run.code, run.stderr).toBe(0);
-        expect(run.prompts).toHaveLength(1);
-        expect(run.prompts[0]).toContain("input hidden");
+        expect(run.prompts).toEqual([
+          expect.stringContaining("configuration token"), expect.stringContaining("client ID"),
+          expect.stringContaining("client secret"), expect.stringContaining("signing secret"),
+        ]);
         expect(run.paths).toEqual(["/v2/organization/tools/slack/setup", "/v2/organization/tools/slack/install/begin"]);
         expect(run.bodies[0]).toEqual({ request_id: "oss_00000000-0000-4000-8000-000000000021",
           configuration_token: SETUP_TOKEN, existing_app: EXISTING_APP });
@@ -1434,6 +1461,20 @@ describe("Person client", () => {
           expect(run.stdout).not.toContain(value);
           expect(run.stderr).not.toContain(value);
         }
+      });
+    });
+
+    it("keeps the existing one-line JSON input working for noninteractive setup", async () => {
+      await withHome(async home => {
+        await installFixtureSession(home);
+        const run = await runTools(home, ["tools", "setup", "--tool", "slack", "--existing-app", EXISTING_APP.app_id, "--no-wait"], {
+          read_input: () => JSON.stringify(EXISTING_INPUT),
+        });
+        expect(run.code, run.stderr).toBe(0);
+        expect(run.prompts).toHaveLength(1);
+        expect(run.prompts[0]).toContain("configuration token");
+        expect(run.bodies[0]).toEqual({ request_id: "oss_00000000-0000-4000-8000-000000000021",
+          configuration_token: SETUP_TOKEN, existing_app: EXISTING_APP });
       });
     });
 
@@ -1488,6 +1529,31 @@ describe("Person client", () => {
             expect(run.stderr).not.toContain(secret);
           }
         }
+      });
+    });
+
+    it.each([
+      ["configuration token", ["private invalid token"], 1, "organization API: Slack app configuration token is invalid"],
+      ["client ID", [SETUP_TOKEN, "private-invalid-client-id"], 2, "organization API: Slack app client ID is invalid"],
+      ["client secret", [SETUP_TOKEN, EXISTING_APP.client_id, "private invalid secret"], 3, "organization API: Slack app client secret is invalid"],
+    ])("stops after an invalid named existing-app %s without reading later secrets", async (_field, inputs, promptCount, error) => {
+      await withHome(async home => {
+        await installFixtureSession(home);
+        const run = await runTools(home, ["tools", "setup", "--tool", "slack", "--existing-app", EXISTING_APP.app_id], {
+          read_input: () => {
+            const input = inputs.shift();
+            if (input === undefined) throw new Error("later secret must not be read");
+            return input;
+          },
+        });
+        expect(run.code).toBe(1);
+        expect(run.prompts).toHaveLength(promptCount);
+        expect(run.paths).toEqual([]);
+        expect(run.stdout).toBe("");
+        expect(JSON.parse(run.stderr).error).toBe(error);
+        expect(run.stderr).not.toContain("private invalid token");
+        expect(run.stderr).not.toContain("private-invalid-client-id");
+        expect(run.stderr).not.toContain("private invalid secret");
       });
     });
 

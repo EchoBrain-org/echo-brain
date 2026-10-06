@@ -22,11 +22,17 @@ export class SlackConnectionConflictError extends Error {
 }
 
 export type SlackConnectionRefusalReasonV1 =
+  | "attempt_mismatch"
+  | "app_mismatch"
+  | "identity_mismatch"
   | "workspace_mismatch"
   | "permissions_missing"
   | "already_connected";
 
 const REFUSAL_MESSAGES: Readonly<Record<SlackConnectionRefusalReasonV1, string>> = {
+  attempt_mismatch: "the Slack connection does not belong to this setup attempt",
+  app_mismatch: "the Slack install does not use this organization's ECHO app",
+  identity_mismatch: "Nango and Slack reported different connection identities",
   workspace_mismatch: "the Slack install does not match this organization's Slack app and workspace",
   permissions_missing: "the Slack install did not grant every permission ECHO needs",
   already_connected: "Slack is already connected to a different app or workspace.",
@@ -80,18 +86,15 @@ async function verifyInstall(
   const grantsRequested = (scopes: readonly string[]) => SLACK_PRIVATE_APP_BOT_SCOPES_V1.every((scope) => scopes.includes(scope));
   // The Nango parser already refuses an Enterprise Grid org-wide install.
   if (nango.app_id !== input.credential.credentials.app_id) {
-    throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
+    throw new SlackConnectionRefusedErrorV1("app_mismatch");
   }
   if (!grantsRequested(nango.granted_scopes)) {
     throw new SlackConnectionRefusedErrorV1("permissions_missing");
   }
   const verified = await input.verifier.verifyConnection(nango.bot_token, input.signal);
-  if (
-    verified.team_id !== nango.team_id ||
-    verified.app_id !== nango.app_id ||
-    verified.bot_user_id !== nango.bot_user_id
-  ) {
-    throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
+  if (verified.app_id !== nango.app_id) throw new SlackConnectionRefusedErrorV1("app_mismatch");
+  if (verified.team_id !== nango.team_id || verified.bot_user_id !== nango.bot_user_id) {
+    throw new SlackConnectionRefusedErrorV1("identity_mismatch");
   }
   if (!grantsRequested(verified.granted_scopes)) {
     throw new SlackConnectionRefusedErrorV1("permissions_missing");

@@ -332,12 +332,12 @@ describe("Nango Slack connection activation v1", () => {
     expect(rowCount(state.database, "organization_tool_connection_contracts")).toBe(0);
   });
 
-  it("refuses an app or team mismatch between Nango and auth.test", async () => {
+  it("distinguishes a configured app mismatch from a provider identity mismatch", async () => {
     const state = setup();
     const pending = pendingBundle(state);
-    await expectRefused(activate(state, { credential: pending, nango: nangoInstall({ app_id: "A0OTHER" }) }), "workspace_mismatch");
-    await expectRefused(activate(state, { credential: pending, nango: nangoInstall(), verifier: authTest(nangoInstall(), { team_id: "T99" }) }), "workspace_mismatch");
-    await expectRefused(activate(state, { credential: pending, nango: nangoInstall(), verifier: authTest(nangoInstall(), { app_id: "A0OTHER" }) }), "workspace_mismatch");
+    await expectRefused(activate(state, { credential: pending, nango: nangoInstall({ app_id: "A0OTHER" }) }), "app_mismatch");
+    await expectRefused(activate(state, { credential: pending, nango: nangoInstall(), verifier: authTest(nangoInstall(), { team_id: "T99" }) }), "identity_mismatch");
+    await expectRefused(activate(state, { credential: pending, nango: nangoInstall(), verifier: authTest(nangoInstall(), { app_id: "A0OTHER" }) }), "app_mismatch");
     expect(refs(state)).toEqual([pending.reference.secret_handle_id]);
     expect(rowCount(state.database, "organization_tool_connection_contracts")).toBe(0);
   });
