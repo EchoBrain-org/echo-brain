@@ -60,6 +60,8 @@ reads their results.
 
    `--model` is the operator-declared identifier for the configured loop model;
    it is recorded with every run and must be identical before a report is made.
+   Each run also records the commit it ran from; a report needs one commit, so
+   use a fresh `--out` directory after changing the code.
 
 6. **Sweeps at S1.** Apply `world/s1.json` `apply` by hand, run
    `--state S1` with the same explicit `--model`, then apply `revert` and
@@ -79,7 +81,8 @@ reads their results.
    present and founder agreement is at least 90%.
 9. **Report.** `report` writes `report.md` and `report.json` beside the runs.
    It withholds judge-derived metrics unless the current grading pass has a
-   trusted calibration result; code-check metrics remain available.
+   trusted calibration result; code-check metrics remain available. It refuses
+   if any run was added, removed or rewritten since `grade`; grade again.
 10. **Holdout** runs only for the final check of a loop change: `--split holdout`.
 
 Before any loop change, write down which report numbers it must raise and
