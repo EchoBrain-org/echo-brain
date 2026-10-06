@@ -78,7 +78,7 @@ export interface OrganizationAuthorityRuntimeConfig {
   /** Server-only agentic Ask experiment, off unless the serving profile opts in. */
   readonly agentic_ask_v1_small_scope_shortcut?: boolean;
   /** Explicit provider/source bundle. This generic root does not select one. */
-  readonly meeting_source_bundle: MeetingSourceBundleV1;
+  readonly meeting_source_bundle?: MeetingSourceBundleV1;
   /** Explicit decision-processor bundle. This generic root does not select one. */
   readonly decision_processor_bundle: DecisionProcessorBundleV1;
   /** Explicit approval/delivery bundle. This generic root does not select one. */
@@ -372,18 +372,22 @@ export async function openOrganizationAuthorityRuntime(
     }
   }
   try {
+    const meetingSourceBundle = config.meeting_source_bundle;
+    if (meetingSourceBundle === undefined) {
+      throw new Error("an admitted meeting source requires its provider bundle");
+    }
     const sourceState = new SqliteAuthorityMeetingProcessingStateV1(
       authority,
-      config.meeting_source_bundle.source_cursor_policy,
+      meetingSourceBundle.source_cursor_policy,
       config.decision_processor_bundle.processor_adapter_id,
     );
     const commitments = readAdmittedMeetingProcessingCommitmentsV1(authority);
-    config.meeting_source_bundle.assert_admission_commitments(commitments);
+    meetingSourceBundle.assert_admission_commitments(commitments);
     config.decision_processor_bundle.assert_admission_commitments(commitments);
     const admission = await sourceState.readAdmission();
     const source =
       dependencies.processing_adapter_overrides?.source ??
-      config.meeting_source_bundle.create_source(admission);
+      meetingSourceBundle.create_source(admission);
     const processor =
       dependencies.processing_adapter_overrides?.processor ??
       config.decision_processor_bundle.create_processor(admission);
@@ -451,7 +455,7 @@ export async function openOrganizationAuthorityRuntime(
       extraction_attempts: extractionAttempts,
       state: sourceState,
       stager: approvals.stager,
-      source_cursor_policy: config.meeting_source_bundle.source_cursor_policy,
+      source_cursor_policy: meetingSourceBundle.source_cursor_policy,
       ...(meetingApprovalJourneyTelemetry === undefined
         ? {}
         : { journey_telemetry: meetingApprovalJourneyTelemetry }),

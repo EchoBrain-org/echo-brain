@@ -71,10 +71,7 @@ The older `echo-organization-authority-init-clean-state`, `-clean-founder`,
 `-admit-clean-granola-source` alias binaries were retired on 2026-09-06. The
 checked-in deploy scripts, container entrypoint, and harnesses already call the
 names above; automation outside this repository must use them too. The
-standalone `echo-organization-authority-person-admin` and
-`echo-organization-authority-admit-granola-meeting-source` developer binaries
-were retired later: `echo-organization-authority-setup` runs Person credential
-setup, the initial-owner invitation and Granola source admission in-process.
+standalone `echo-organization-authority-person-admin` and the organization Granola admission binary were retired later. `echo-organization-authority-setup` now runs Person credential setup and the initial-owner invitation; meeting intake is idle when no personal source is connected.
 
 Use absolute canonical paths. Private credential and invitation directories
 must be current-user `0700`; private input and invitation files must be
@@ -115,20 +112,13 @@ Save an exact copy of that profile object as a local nonsecret JSON file. Use
 the release-matched Person client to sign in and run the ordinary shared
 connection commands when a connection is absent: `person tools setup --tool slack`,
 `person tools connect --tool slack`, and `person tools connect --tool jira`.
-Slack setup asks only for the bot's four delivery scopes; human Slack consent
-is still required. Without live
-Jira Ask enabled, the diagnostic profile admits Jira connection commands only for
-its initial owner. Enabling live Jira Ask lets each Person connect their own
-account. Granola continues to use the host's direct organization credential.
+Slack setup asks only for the bot's four delivery scopes; human Slack consent is still required. Without live Jira Ask enabled, the diagnostic profile admits Jira connection commands only for its initial owner. Enabling live Jira Ask lets each Person connect their own account. Organization Granola capture is retired.
 
 After `npm run build`, the owner Mac can run:
 
 ```sh
 npm run authority:staging-connector-rehearsal -- status \
   --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json
-npm run authority:staging-connector-rehearsal -- capture \
-  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
-  --tool granola --limit 1
 npm run authority:staging-connector-rehearsal -- verify-read \
   --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
   --tool jira
@@ -333,31 +323,19 @@ echo-brain person session-refresh
 echo-brain person logout
 ```
 
-### 3. Install credentials and finalize while stopped
+### 3. Install the LLM credential and finalize while stopped
 
-Stop the Organization Authority service. Each source file must contain exactly its value, without
-trailing whitespace. The Granola owner-email file must contain the same
-canonical lowercase email given to bootstrap and proved by OIDC.
-This installs the single organization-owned Granola export/admission bridge;
-it does not create a Person Granola connection or accept a per-person key.
+Stop the Organization Authority service. The source file must contain exactly its value without trailing whitespace.
 
 ```sh
 echo-organization-authority-setup credentials-install \
   --state-dir /absolute/clean-state \
-  --granola-credential-file /absolute/private/granola-organization-key \
-  --granola-owner-email-file /absolute/private/granola-owner-email \
   --llm-credential-file /absolute/private/llm-provider-credential
 
-echo-organization-authority-setup finalize \
-  --state-dir /absolute/clean-state
+echo-organization-authority-setup finalize --state-dir /absolute/clean-state
 ```
 
-Credential installation validates all three inputs before replacing any fixed
-destination. Finalization requires the clean genesis, an exact active Slack
-connection, the initial owner's active OIDC binding and Slack identity link, and
-valid provider credentials. It creates no shared-channel/reaction approval
-binding; it admits only Granola notes created after a fresh cutoff. Existing
-notes are not imported.
+Finalization requires clean genesis, the organization Slack connection, the initial owner's OIDC binding and Slack identity link, and the LLM credential. With no synthetic fixture selector it admits no meeting source; intake starts idle.
 
 ### 4. Restart the Authority service and run the canary
 

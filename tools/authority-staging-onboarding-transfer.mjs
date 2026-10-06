@@ -64,7 +64,6 @@ const INPUT_FILES = Object.freeze([
   "oidc-config.json",
   "oidc-client-secret",
   "nango-secret-key",
-  "granola-credential",
   "llm-credential",
 ]);
 // Provider reuse carries only the non-secret inputs; the host keeps its current secrets.

@@ -668,8 +668,8 @@ privateFile(privateDirectory + "/oidc.json", canonicalJson({
 privateFile(privateDirectory + "/oidc-client-secret", "local-synthetic-not-a-provider-secret");
 privateFile(privateDirectory + "/pkce-key", "A".repeat(43));
 const manifest = {
-  schema_version: 2,
-  kind: "echo-clean-founder-onboarding-manifest-v2",
+  schema_version: 3,
+  kind: "echo-clean-founder-onboarding-manifest-v3",
   state_directory: state,
   created_at: createdAt,
   artifact_revision: process.env.ECHO_LOCAL_SOURCE,
@@ -682,8 +682,6 @@ const manifest = {
   state_lineage_id: reset.state_lineage_id,
   owner_principal_id: reset.owner_principal_id,
   owner_membership_id: reset.owner_membership_id,
-  granola_credential_file: privateDirectory + "/not-present-granola-credential",
-  granola_owner_email_file: privateDirectory + "/not-present-granola-owner-email",
   llm_credential_file: privateDirectory + "/not-present-llm-credential",
   setup_seed: {
     authority_id: reset.authority_id,

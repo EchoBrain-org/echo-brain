@@ -39,10 +39,10 @@ returned only after successful admission of the batch. Cancellation and identity
 drift prevent admission. A read grant never implies a retention grant.
 
 The Granola capture factory in
-[`provider-context-intakes-v1.ts`](../../services/organization-authority/src/composition/provider-context-intakes-v1.ts)
+the now-retired `provider-context-intakes-v1.ts`
 provides this library mapping; the Jira and Slack capture adapters were
 removed because tools are read live, never stored. The
-[rehearsal capture](../../services/organization-authority/src/composition/connector-rehearsal-capture-v1.ts)
+the now-retired organization Granola rehearsal capture
 constructs only Granola intake:
 
 | Source  | Mapping and representation                                                                                                                                                                                                                                          | Authority disposition                                                                                                                            |
@@ -67,8 +67,8 @@ character. Pointer metadata is still content and requires policy authorization.
 The Authority integration tests compose actual provider implementations with
 fake provider responses, then use the shared intake and real SQLite:
 
-- [Granola integration](../../services/organization-authority/test/granola-context-source-intake-v1.test.ts): actual meeting adapter over a fake Granola API client; one configured pull, retained captures, immutable replay/change and configured-instance refusal.
-- [Staging runtime HTTP](../../services/organization-authority/test/staging-connector-rehearsal-runtime-http.test.ts): the fixed profile's request binding, owner-bound Jira connection across restart, retained Granola, live Jira reads, no Slack read at all, and rejection of tool capture before provider I/O or custody writes.
+- Granola integration (retired organization-Granola proof): actual meeting adapter over a fake Granola API client; one configured pull, retained captures, immutable replay/change and configured-instance refusal.
+- Staging runtime HTTP (retired organization-Granola proof): the fixed profile's request binding, owner-bound Jira connection across restart, retained Granola, live Jira reads, no Slack read at all, and rejection of tool capture before provider I/O or custody writes.
 - [Intake composition](../../services/organization-authority/test/context-source-intake-v1.test.ts): provider-byte ownership across async checks, concurrent pull exclusion, retry cursor ownership, cancellation and identity drift.
 
 These are local source proofs. They are not provider-live, artifact, deployment
@@ -154,7 +154,7 @@ real-provider qualification remains the outstanding live proof:
 - Jira's server-only `captureConnection` derives a transport and current-grant
   fences from the authenticated Person's stored connection. It accepts no
   caller-selected account, site or connection locator. The
-  [staging HTTP test](../../services/organization-authority/test/staging-connector-rehearsal-runtime-http.test.ts)
+  staging HTTP test (retired organization-Granola proof)
   exercises this handoff through live read verification without retaining tool
   data, and the
   [provider connection test](../../providers/jira/test/jira-person-connection-v1.test.ts)

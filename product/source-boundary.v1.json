@@ -42,15 +42,12 @@
       "services/organization-authority/src/composition/organization-authority-setup-cli.ts",
       "services/organization-authority/src/composition/organization-authority-service-cli.ts",
       "services/organization-authority/src/synthetic-demo-main.ts",
-      "services/organization-authority/src/composition/admit-granola-meeting-source-cli-v1.ts",
       "services/organization-authority/src/composition/synthetic-demo-pre-slack-evaluator-cli-v1.ts",
       "services/organization-authority/src/composition/organization-authority-person-administration-cli.ts",
       "src/product/person-client/main.ts",
       "src/product/person-client/composition.ts",
       "services/organization-authority/src/composition/jira-person-live-runtime-v1.ts",
       "services/organization-authority/src/composition/confluence-person-live-runtime-v1.ts",
-      "services/organization-authority/src/composition/provider-context-intakes-v1.ts",
-      "services/organization-authority/src/composition/connector-rehearsal-capture-v1.ts",
       "services/organization-authority/src/composition/staging-connector-rehearsal-runtime.ts"
     ],
     "source_assemblies": [

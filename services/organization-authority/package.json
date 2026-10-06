@@ -48,10 +48,5 @@
     "node": "22.22.1",
     "npm": "10.9.4"
   },
-  "exports": {
-    "./composition/admit-granola-meeting-source-cli-v1": {
-      "types": "./dist/composition/admit-granola-meeting-source-cli-v1.d.ts",
-      "import": "./dist/composition/admit-granola-meeting-source-cli-v1.js"
-    }
-  }
+  "exports": {}
 }

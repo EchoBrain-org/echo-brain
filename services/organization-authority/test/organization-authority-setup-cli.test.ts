@@ -96,9 +96,6 @@ function dependencies(order: string[],): OrganizationAuthoritySetupCliDependenci
         pkce_key_file: input.pkce_key_file,
       });
     },
-    admit_source: async (input) => {
-      order.push(`admit:${input.granola_credential_file}`);
-    },
     admit_staging_synthetic_source: async (input) => {
       order.push(`admit-synthetic:${input.meetings_directory}`);
     },
@@ -767,7 +764,7 @@ describe("Organization Authority setup coordinator", () => {
     join(dirname(state), "oidc.json"),
   ];
 
-  it("bootstrap does not touch Slack: reset, credentials, manifest v2 and invitation", async () => {
+  it("bootstrap does not touch Slack: reset, credentials, manifest v3 and invitation", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     let stdout = "";
@@ -807,10 +804,10 @@ describe("Organization Authority setup coordinator", () => {
     expect(statSync(manifestPath).mode & 0o777).toBe(0o600);
     expect(readFileSync(manifestPath, "utf8")).not.toMatch(/slack|C123/);
     expect(readOrganizationAuthoritySetupManifest(state)).toMatchObject({
-      schema_version: 2,
-      kind: "echo-clean-founder-onboarding-manifest-v2",
+      schema_version: 3,
+      kind: "echo-clean-founder-onboarding-manifest-v3",
       owner_membership_id: expect.stringMatching(/^mem_/),
-      granola_credential_file: join(state, "credentials", "granola-credential"),
+      llm_credential_file: join(state, "credentials", "llm-credential"),
     });
   });
 
@@ -1174,11 +1171,9 @@ describe("Organization Authority setup coordinator", () => {
     );
 
     expect(status).toBe(0);
-    expect(order).toEqual([
-      `admit:${join(state, "credentials", "granola-credential")}`,
-    ]);
+    expect(order).toEqual([]);
     expect(stdout).not.toContain("con_clean-founder");
-    expect(stdout).toContain("post-cutoff boundary");
+    expect(JSON.parse(stdout)).toMatchObject({ source_mode: "none", source_admission_present: false });
   });
 
   it("admits the bounded fixture source only for the exact staging Authority", async () => {
@@ -1386,7 +1381,7 @@ describe("Organization Authority setup coordinator", () => {
     expect(result).toBe(1);
     // The real durable stage: nobody has set up Slack in the ECHO app yet.
     expect(stderr).toContain(
-      "organization setup finalize requires initial-owner OIDC binding, organization Slack connection, initial-owner Slack identity link, provider credentials",
+      "organization setup finalize requires initial-owner OIDC binding, organization Slack connection, initial-owner Slack identity link, LLM credential",
     );
     expect(order).toEqual([]);
   });
@@ -1424,42 +1419,28 @@ describe("Organization Authority setup coordinator", () => {
     expect(order).toEqual([]);
   });
 
-  it("resumes finalize after source admission fails without creating a Slack approval binding", async () => {
+  it("finalize is idempotent with no meeting source and leaves intake idle", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     const base = dependencies(order);
-    await runOrganizationAuthoritySetupCli(
-      bootstrapArgs(state),
-      { stdout: () => undefined, stderr: () => undefined },
-      base,
-    );
+    await runOrganizationAuthoritySetupCli(bootstrapArgs(state), { stdout: () => undefined, stderr: () => undefined }, base);
     order.splice(0);
-    const full = {
-      founder_oidc_bound: true,
-      founder_slack_link_active: true,
-      granola_credentials_valid: true,
-      granola_admission_present: false,
-    };
-    let failAdmission = true;
-    const retrying: OrganizationAuthoritySetupCliDependencies = {
+    const deps: OrganizationAuthoritySetupCliDependencies = {
       ...base,
-      admit_source: async (input) => {
-        order.push(`admit:${input.granola_credential_file}`);
-        if (failAdmission) {
-          failAdmission = false;
-          throw new Error("injected source admission failure");
-        }
-        full.granola_admission_present = true;
-      },
-      read_initial_owner_setup_status: () => ({ ...full }),
+      read_initial_owner_setup_status: () => ({
+        founder_oidc_bound: true, founder_slack_link_active: true, llm_credential_valid: true,
+        granola_credentials_valid: false, granola_admission_present: false,
+      }),
       read_setup_stage: () => CONNECTED_STAGE,
     };
-    const io = { stdout: () => undefined, stderr: () => undefined };
-
-    expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, retrying,),).toBe(1);
-    expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, retrying,),).toBe(0);
-    expect(order.filter((entry) => entry.startsWith("activate:"))).toHaveLength(0,);
-    expect(order.filter((entry) => entry.startsWith("admit:"))).toHaveLength(2);
+    let stdout = "";
+    const io = { stdout: (value: string) => { stdout += value; }, stderr: () => undefined };
+    expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, deps)).toBe(0);
+    expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, deps)).toBe(0);
+    expect(order).toEqual([]);
+    for (const line of stdout.trim().split("\n")) {
+      expect(JSON.parse(line)).toMatchObject({ source_mode: "none", source_admission_present: false });
+    }
   });
 
   it("next step after login is connect_slack_in_app, then the owner's own Slack link", async () => {
@@ -1498,7 +1479,7 @@ describe("Organization Authority setup coordinator", () => {
     });
   });
 
-  it("installs all provider credentials from private files without printing their values", async () => {
+  it("installs only the LLM credential from a private file without printing its value", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     await runOrganizationAuthoritySetupCli(
@@ -1534,10 +1515,6 @@ describe("Organization Authority setup coordinator", () => {
         "credentials-install",
         "--state-dir",
         state,
-        "--granola-credential-file",
-        sources.granola,
-        "--granola-owner-email-file",
-        sources.owner,
         "--llm-credential-file",
         sources.llm,
       ],
@@ -1553,17 +1530,9 @@ describe("Organization Authority setup coordinator", () => {
       credentials_ready: true,
     });
     for (const value of Object.values(values)) expect(stdout).not.toContain(value);
-    expect(readFileSync(join(credentialDirectory, "granola-credential"), "utf8"),)
-      .toBe(values.granola);
-    expect(readFileSync(join(credentialDirectory, "granola-owner-email"), "utf8"),)
-      .toBe(values.owner);
     expect(readFileSync(join(credentialDirectory, "llm-credential"), "utf8"),)
       .toBe(values.llm);
-    for (const filename of [
-      "granola-credential",
-      "granola-owner-email",
-      "llm-credential",
-    ]) {
+    for (const filename of ["llm-credential"]) {
       expect(statSync(join(credentialDirectory, filename)).mode & 0o777).toBe(
         0o600,
       );

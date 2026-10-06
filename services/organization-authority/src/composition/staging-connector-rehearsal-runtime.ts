@@ -7,10 +7,6 @@ import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel
 import { verifyAuthorityStateLineage } from '@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
 import type { ProviderHttpApplicationV1, ProviderHttpRequestV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
-import { readAdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments';
-import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
-import { createGranolaMeetingSourceBundleV1 } from '@echo-brain/provider-granola/granola-meeting-source-bundle-v1';
-import { createOpenRouterDecisionProcessorBundleV1 } from '@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1';
 import { validateOrganizationAuthorityOrigin } from '@echo-brain/organization-api';
 import { createJiraPersonLiveEvidenceReaderV1 } from '@echo-brain/provider-jira/jira-person-live-evidence-reader-v1';
 import Database from 'better-sqlite3';
@@ -30,7 +26,6 @@ import {
   type StagingConnectorReadReasonV1,
   type StagingConnectorReadResultV1,
 } from './staging-connector-rehearsal-protocol.js';
-import { isActiveInitialOwnerV1, openConnectorRehearsalCaptureV1, type OpenedConnectorRehearsalCaptureV1 } from './connector-rehearsal-capture-v1.js';
 import { openJiraPersonLiveRuntimeV1, type JiraPersonLiveRuntimeSeamsV1, type OpenedJiraPersonLiveRuntimeV1 } from './jira-person-live-runtime-v1.js';
 import { JIRA_LIVE_CONNECTOR_V1 } from './person-live-connector-registry-v1.js';
 import {
@@ -71,6 +66,13 @@ interface SidecarBindingV1 extends OwnerV1 {
   readonly authority_id: string;
   readonly state_lineage_id: string;
   readonly profile_sha256: `sha256:${string}`;
+}
+
+function isActiveInitialOwnerV1(database: Database.Database, owner: OwnerV1, authorization: PersonAccessAuthorization): boolean {
+  return authorization.organization_id === owner.organization_id && authorization.principal_id === owner.principal_id &&
+    authorization.membership_id === owner.membership_id && authorization.membership_type === 'owner' &&
+    database.prepare(`SELECT 1 FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND membership_type='owner' AND status='active'`)
+      .get(owner.organization_id, owner.principal_id, owner.membership_id) !== undefined;
 }
 
 function unavailable(): never {
@@ -222,9 +224,6 @@ export async function openStagingConnectorRehearsalService(
   });
   if (manifest.authority_url !== config.authority_url || manifest.authority_id !== lineage.authority_id ||
       lineage.organization_id !== owner.organization_id || lineage.state_lineage_id !== manifest.state_lineage_id) throw new Error('Staging connector rehearsal Authority binding is invalid');
-  if (config.granola_credential_file === undefined || config.granola_owner_email_file === undefined) {
-    throw new Error('Staging connector rehearsal requires the committed Granola source');
-  }
   const sidecar = openSidecar(config.state_directory, Object.freeze({
     schema_version: 1,
     kind: 'echo-staging-connector-rehearsal-sidecar-binding-v1',
@@ -234,27 +233,9 @@ export async function openStagingConnectorRehearsalService(
     profile_sha256: selected.profile_sha256,
   }));
   let runtime: OpenedOrganizationAuthorityRuntime | undefined;
-  let captures: OpenedConnectorRehearsalCaptureV1 | undefined;
   let jira: OpenedJiraPersonLiveRuntimeV1 | undefined;
   let fenceDatabase: Database.Database | undefined;
   try {
-    const sourceBundle = createGranolaMeetingSourceBundleV1({
-      granola_credential_file: config.granola_credential_file,
-      granola_owner_email_file: config.granola_owner_email_file,
-    });
-    const processorBundle = createOpenRouterDecisionProcessorBundleV1({ credential_file: config.openrouter_credential_file });
-    const authority = openAuthorityDatabase(join(config.state_directory, 'authority.sqlite'), { fileMustExist: true });
-    let granola: Parameters<typeof openConnectorRehearsalCaptureV1>[0]['granola'];
-    try {
-      if (authority.prepare('SELECT 1 FROM authority_live_source_admission_v2 WHERE singleton=1').get() !== undefined) {
-        const commitments = readAdmittedMeetingProcessingCommitmentsV1(authority);
-        sourceBundle.assert_admission_commitments(commitments);
-        processorBundle.assert_admission_commitments(commitments);
-        const state = new SqliteAuthorityMeetingProcessingStateV1(authority, sourceBundle.source_cursor_policy, processorBundle.processor_adapter_id);
-        const admission = await state.readAdmission();
-        granola = Object.freeze({ source: sourceBundle.create_source(admission), source_cursor_policy: sourceBundle.source_cursor_policy, processor_adapter_id: processorBundle.processor_adapter_id });
-      }
-    } finally { authority.close(); }
     fenceDatabase = openAuthorityDatabase(join(config.state_directory, 'authority.sqlite'), { fileMustExist: true });
     let authenticate: ((input: { readonly access_token: string }) => PersonAccessAuthorization) | undefined;
     const requireOwner = (access_token: string) => {
@@ -329,7 +310,7 @@ export async function openStagingConnectorRehearsalService(
         if (runtime === undefined) unavailable();
         if (request.action === 'status') {
           requireOwner(access_token);
-          return Object.freeze({ status: 200 as const, body: response({ schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2', release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'status', processing: runtime?.processing ?? 'idle_until_finalize', granola_available: runtime?.processing === 'active' && granola !== undefined, qualified: false }) });
+          return Object.freeze({ status: 200 as const, body: response({ schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2', release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'status', processing: runtime?.processing ?? 'idle_until_finalize', granola_available: false, qualified: false }) });
         }
         if (request.action === 'verify-read') {
           requireOwner(access_token);
@@ -340,18 +321,8 @@ export async function openStagingConnectorRehearsalService(
             return Object.freeze({ status: 200 as const, body: response({ schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2', release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'verify-read', tool: request.tool, result, qualified: false }) });
           } finally { captureInFlight = false; }
         }
-        if (captures === undefined || (request.tool === 'granola' && runtime.processing !== 'active')) unavailable();
-        const before = requireOwner(access_token);
-        if (input.signal?.aborted) unavailable();
-        if (captureInFlight) unavailable();
-        captureInFlight = true;
-        try {
-          const receipt = await captures.capture({ tool: request.tool, access_token, limit: request.limit, ...(input.signal === undefined ? {} : { signal: input.signal }) });
-          input.signal?.throwIfAborted();
-          const after = requireOwner(access_token);
-          if (before.access_credential_sha256 !== after.access_credential_sha256 || before.person_state_sha256 !== after.person_state_sha256 || before.session_state_sha256 !== after.session_state_sha256) unavailable();
-          return Object.freeze({ status: 200 as const, body: response({ schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2', release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'capture', tool: request.tool, receipt, qualified: false }) });
-        } catch (_error) { unavailable(); } finally { captureInFlight = false; }
+        // The v2 parser remains for historical receipt verification, but organization Granola capture is retired.
+        unavailable();
       },
     });
     const openJira = (sessions: Parameters<PersonHttpRuntimeFactory>[0], authorize_project?: PersonTicketProjectAuthorizationV1) => {
@@ -370,27 +341,17 @@ export async function openStagingConnectorRehearsalService(
     };
     const personFactory: PersonHttpRuntimeFactory = (sessions) => {
       if (jira === undefined) openJira(sessions);
-      captures = openConnectorRehearsalCaptureV1({
-        state_directory: config.state_directory,
-        initial_owner: owner,
-        authenticate_access: sessions,
-        exclusive: { run_exclusive: operation => runtime === undefined ? Promise.reject(new Error('Staging connector rehearsal is starting')) : runtime.runExclusive(operation) },
-        ...(granola === undefined ? {} : { granola }),
-      });
       const ownerJira: ProviderHttpApplicationV1 = Object.freeze({
         routes: jira!.connection_http.routes,
         accept: (request: ProviderHttpRequestV1) => { requireOwner(bearer(request)); return jira!.connection_http.accept(request); },
       });
       return Object.freeze({ applications: Object.freeze([...(jiraAsk === undefined ? [ownerJira] : []), capturesApplication]),
-        close() { captures?.close(); if (jiraAsk === undefined) jira?.close(); } });
+        close() { if (jiraAsk === undefined) jira?.close(); } });
     };
     runtime = await openOrganizationAuthorityService(serviceConfig, {
       ...dependencies,
       api: { ...dependencies.api, person_http_runtime_factory: personFactory, ...(jiraAsk === undefined ? {} : { live_connectors: [{ ...JIRA_LIVE_CONNECTOR_V1, open: openJira }] }) },
-      processing_adapter_overrides: granola === undefined ? dependencies.processing_adapter_overrides : {
-        ...dependencies.processing_adapter_overrides,
-        source: granola.source,
-      },
+      processing_adapter_overrides: dependencies.processing_adapter_overrides,
     });
     let closing: Promise<void> | undefined;
     return Object.freeze({
@@ -402,7 +363,7 @@ export async function openStagingConnectorRehearsalService(
       })(),
     });
   } catch (error) {
-    try { captures?.close(); jira?.close(); fenceDatabase?.close(); } finally { sidecar.close(); }
+    try { jira?.close(); fenceDatabase?.close(); } finally { sidecar.close(); }
     throw error;
   }
 }

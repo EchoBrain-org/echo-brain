@@ -66,7 +66,7 @@ The shared implementation packages are `packages/organization-processing` and
 | `providers/anthropic` | Anthropic transport and processor factory |
 | `providers/ollama` | Ollama transport and processor factory |
 | `providers/openrouter` | OpenRouter processing, generation and model vocabulary |
-| `providers/granola` | Granola source, custody, admission and setup proofs |
+| `providers/granola` | Transport-free Granola meeting normalization retained for the personal integration |
 | `providers/jira` | Person-bound Jira Nango connection store and HTTP application, gated live reader and context source; [authentication and support boundary](../../providers/jira/README.md) |
 | `providers/jira/client` | Jira connection wire contracts and shared Person tool commands; no server dependencies |
 | `providers/shared` | Reusable Nango personal connection lifecycle, local ownership state, HTTP routes, and bounded JSON transport; product grants and readers remain separate |

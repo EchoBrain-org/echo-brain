@@ -48,8 +48,6 @@ vi.mock("../src/composition/organization-authority-setup-cli.js", () => ({
     authority_url: runtimeState.authority_url,
     oidc_config_path: "/private/oidc.json",
     pkce_key_file: "/private/pkce.key",
-    granola_credential_file: "/private/granola.credential",
-    granola_owner_email_file: "/private/granola-owner-email",
     llm_credential_file: "/private/llm.credential",
     owner_email: "founder@example.com",
   }),
