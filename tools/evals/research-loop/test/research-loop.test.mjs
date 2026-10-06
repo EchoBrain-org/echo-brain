@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { datasetProblems, loadDataset, substitutePerson } from "../lib/dataset.mjs";
-import { itemMatches, ticketKey } from "../lib/match.mjs";
+import { itemMatches, satisfying, ticketKey } from "../lib/match.mjs";
 import { codeChecks } from "../lib/checks.mjs";
 import { exportBindings } from "../lib/bindings.mjs";
 import { startRequest } from "../lib/requests.mjs";
@@ -56,6 +56,25 @@ test("items match references by citation identity, never by E-number", () => {
   assert.equal(itemMatches({ kind: "document_passage", title: `Transcript: ${titleOf("M5")}` }, { meeting: "M5", item: "transcript" }, meetings), true);
 });
 
+test("a page section is carried by the chunk holding its heading or the next chunk, not by other chunks", () => {
+  const chunk = (index, text) => ({ id: `E${index}`, kind: "page", title: `Gate reviews · section ${index}`, text, citation: { page_id: "1441793", section_id: `s${index}`, version: "4" } });
+  const items = [chunk(1, "EVT review text"), chunk(2, "…## DVT review — hold on accuracy\nHOLD"), chunk(3, "continues the DVT hold"), chunk(4, "PVT review")];
+  const ref = { page: "1441793", section: "DVT review — hold on accuracy" };
+  assert.deepEqual(satisfying(items, ref, meetings).map(item => item.id), ["E2", "E3"]);
+  assert.deepEqual(satisfying(items, { page: "1441793" }, meetings).map(item => item.id), ["E1", "E2", "E3", "E4"]);
+  assert.deepEqual(satisfying([chunk(1, "EVT"), chunk(4, "PVT")], ref, meetings), []);
+});
+
+test("failed and rejected runs score zero and make a case incomplete, never unknown", () => {
+  const testCase = caseById("bug-fix-dates-vs-dvt-review");
+  const good = codeChecks(testCase, completedRun(testCase, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [{ statements: [{}] }], citations: [{}] } }), dataset);
+  const failed = codeChecks(testCase, { trial: 2, budget: "live", outcome: "failed", result: { status: "failed", error: { code: "rate_limited" } } }, dataset);
+  const report = aggregate([{ checks: good, judge: null }, { checks: failed, judge: null }]);
+  assert.equal(report.cases[0].complete_in_every_run, false);
+  assert.equal(report.cases[0].tools_found, (good.coverage.found / good.parts.length) / 2);
+  assert.equal(report.cases[0].failed_runs, 1);
+});
+
 test("code checks separate found, read, cited and handed, and fail on restricted items or markers", () => {
   const testCase = caseById("bug-fix-dates-vs-dvt-review");
   const items = [ticket("THERM-46", { id: "E1" }), ticket("THERM-12", { id: "E2", read: false, cited: false }), record("M6", "decision", "E3")];
@@ -94,7 +113,7 @@ test("reports weigh cases equally and keep unknowns unknown", () => {
   assert.equal(unjudged.cases[0].complete_in_every_run, null);
   assert.equal(unjudged.summary.cases_with_unknown_completion, 1);
   const judged = { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [], parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "yes", answer_correct: "yes" })),
-    gaps: [], must_not_violations: [], unsupported_claims: 0, false_abstention: false, verdicts: [], notes: "" };
+    gaps: [], must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false, verdicts: [], notes: "" };
   assert.equal(runScores({ checks, judge: judged }).complete_and_supported, true);
   assert.equal(runScores({ checks: { ...checks, leaks: [{ kind: "marker" }] }, judge: judged }).complete_and_supported, false);
   const other = codeChecks({ ...testCase, id: "other" }, completedRun(testCase, []), dataset);
@@ -107,7 +126,7 @@ test("reports weigh cases equally and keep unknowns unknown", () => {
 test("judge replies must cover every part, need and verdict, and calibration needs 90% agreement", () => {
   const testCase = caseById("sweep-two-decimal-propagation");
   const reply = { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [], parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "not_applicable", answer_correct: "not_applicable" })),
-    gaps: [], must_not_violations: [], unsupported_claims: 0, false_abstention: false, verdicts: testCase.verdicts.map(verdict => ({ finding: verdict.finding, judged: verdict.expected, matches_expected: true })), notes: "" };
+    gaps: [], must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false, verdicts: testCase.verdicts.map(verdict => ({ finding: verdict.finding, judged: verdict.expected, matches_expected: true })), notes: "" };
   const judged = parseJudge(testCase, reply);
   assert.throws(() => parseJudge(testCase, { ...reply, parts: reply.parts.slice(1) }));
   assert.throws(() => parseJudge(testCase, { ...reply, verdicts: [] }));

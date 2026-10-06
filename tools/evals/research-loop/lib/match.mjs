@@ -37,11 +37,32 @@ export function itemMatches(item, ref, meetings) {
   throw new Error(`unknown reference ${JSON.stringify(ref)}`);
 }
 
-/** Whether a matched page item covers the named section (text or title). */
+/** Whether a matched page item carries the named section heading (text or title). */
 export function sectionCovered(item, ref) {
   if (ref.section === undefined) return true;
   const section = lower(ref.section);
   return lower(item.text).includes(section) || lower(item.title).includes(section);
+}
+
+function sectionIndex(item) {
+  const match = /^s(\d+)$/u.exec(String(item.citation?.section_id ?? ""));
+  return match === null ? undefined : Number(match[1]);
+}
+
+/**
+ * Items that carry a referenced page section. Confluence releases a page as
+ * fixed-size text chunks, so a section is the chunk holding its heading and the
+ * chunk after it; a page reference without a section is any item of the page.
+ */
+export function satisfying(items, ref, meetings) {
+  const matched = matching(items, ref, meetings);
+  if (ref.page === undefined || ref.section === undefined) return matched;
+  const starts = matched.filter(item => sectionCovered(item, ref));
+  const accepted = new Set(starts.flatMap(item => {
+    const index = sectionIndex(item);
+    return index === undefined ? [`${item.citation?.version}:title`] : [`${item.citation?.version}:${index}`, `${item.citation?.version}:${index + 1}`];
+  }));
+  return matched.filter(item => starts.includes(item) || accepted.has(`${item.citation?.version}:${sectionIndex(item)}`));
 }
 
 export function matching(items, ref, meetings) {

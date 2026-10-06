@@ -16,6 +16,9 @@ export type { PersonResearchEvalHttpApplicationV1 } from '../presentation/person
 
 /** Completed results wait this long for the runner, then are dropped unread. */
 export const PERSON_RESEARCH_EVAL_RESULT_TTL_MS_V1 = 15 * 60_000;
+/** After a result is first read it stays this long, so a lost response can be read again. */
+export const PERSON_RESEARCH_EVAL_REREAD_MS_V1 = 60_000;
+const PURGE_INTERVAL_MS = 60_000;
 
 export interface CreatePersonResearchEvalOptionsV1 extends CreatePersonLiveAnswerRouteOptionsV1 {
   /** Wall clock for result expiry; tests pin it. */
@@ -27,6 +30,8 @@ type Run = {
   readonly controller: AbortController;
   status: 'running' | 'completed' | 'failed';
   expires_at: number;
+  /** The run's own access fence, rechecked before its evidence is released to the reader. */
+  revalidate?: (signal?: AbortSignal) => Promise<unknown>;
   research?: AgenticResearchResultV1;
   ask?: NonNullable<PersonResearchEvalReadResponseV1['ask']>;
   error?: NonNullable<PersonResearchEvalReadResponseV1['error']>;
@@ -65,6 +70,9 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
     const current = now();
     for (const [id, run] of runs) if (run.status !== 'running' && run.expires_at <= current) runs.delete(id);
   };
+  // Released text never outlives its expiry just because no further request arrives.
+  const sweeper = setInterval(purge, PURGE_INTERVAL_MS);
+  sweeper.unref?.();
   const ownerOf = (authorization: { readonly principal_id: string; readonly membership_id: string }) => `${authorization.principal_id}\u0000${authorization.membership_id}`;
 
   return Object.freeze<PersonResearchEvalHttpApplicationV1>({
@@ -91,8 +99,11 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       void (async () => {
         try {
           const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, signal }, context);
+          run.revalidate = readSignal => desk.revalidate({ ...(readSignal === undefined ? {} : { signal: readSignal }) });
           const asker = askerOf(options, authorization);
-          const loop = createAgenticResearchV1({ desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context), ...(asker === undefined ? {} : { asker }) });
+          // Ask runs exactly as served, including the optional small-scope preload.
+          const loop = createAgenticResearchV1({ desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
+            ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true && request.trigger === 'ask' ? { small_scope_shortcut: true } : {}) });
           if (request.trigger === 'ask') {
             const output = await loop.answerWithResearch({ question: request.question, budget, signal });
             run.research = output.research;
@@ -119,12 +130,20 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       if (run === undefined || run.owner !== ownerOf(authorization)) throw new AuthorityOperationError('not_found', 'Research run is not available');
       const base = { schema_version: 1 as const, kind: 'echo-person-research-eval-result-v1' as const, run_id: input.request.run_id };
       if (run.status === 'running') return Object.freeze({ ...base, status: 'running' as const });
-      // A finished result is delivered once.
-      runs.delete(input.request.run_id);
+      // A delivered result can be read again briefly if its response was lost, then it is dropped.
+      run.expires_at = Math.min(run.expires_at, now() + PERSON_RESEARCH_EVAL_REREAD_MS_V1);
       if (run.status === 'failed') return Object.freeze({ ...base, status: 'failed' as const, error: run.error! });
+      // Access is rechecked before evidence leaves the Authority, as for every Ask response.
+      try { await run.revalidate!(input.signal); }
+      catch (error) {
+        runs.delete(input.request.run_id);
+        const fenced = failure(error);
+        return Object.freeze({ ...base, status: 'failed' as const, error: fenced.code === 'unavailable' ? Object.freeze({ code: 'stale_access_state', message: FAILURE_MESSAGES.stale_access_state! }) : fenced });
+      }
       return Object.freeze({ ...base, status: 'completed' as const, research: JSON.parse(JSON.stringify(run.research)) as Readonly<Record<string, unknown>>, ...(run.ask === undefined ? {} : { ask: run.ask }) });
     },
     close() {
+      clearInterval(sweeper);
       for (const run of runs.values()) if (run.status === 'running') run.controller.abort();
       runs.clear();
     },

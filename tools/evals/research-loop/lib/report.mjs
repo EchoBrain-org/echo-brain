@@ -15,15 +15,20 @@ const median = values => {
 /** One graded run: code checks plus an optional judge result. */
 export function runScores(graded) {
   const { checks, judge } = graded;
-  if (checks.status !== "completed") return { status: checks.status, complete_and_supported: false };
+  // A run that failed or was rejected delivered nothing: it scores zero on quality, never "unknown".
+  if (checks.status !== "completed") {
+    return { status: checks.status, complete_and_supported: false, planner_needs_covered: 0, tools_found: 0, tools_read: 0, tools_handed: 0, research_established: 0,
+      ...(checks.trigger === "ask" ? { writer_parts_correct: 0 } : {}) };
+  }
   const parts = checks.parts.length;
   const ask = checks.trigger === "ask";
   const judged = judge ?? null;
   const established = judged === null ? null : judged.parts.filter(part => part.established_by_research).length;
   const answerCorrect = judged === null || !ask ? null : judged.parts.filter(part => part.answer_correct === "yes").length;
   const verdictsCorrect = judged === null || judged.verdicts.length === 0 ? null : rate(judged.verdicts.filter(verdict => verdict.matches_expected).length, judged.verdicts.length);
-  const complete = judged === null ? null
-    : checks.leaks.length === 0 && established === parts && judged.must_not_violations.length === 0 &&
+  const violations = judged === null ? null : judged.must_not.filter(entry => entry.violated).length;
+  const complete = checks.leaks.length > 0 ? false : judged === null ? null
+    : established === parts && violations === 0 &&
       (!ask || (answerCorrect === parts && judged.unsupported_claims === 0 && !judged.false_abstention)) &&
       (verdictsCorrect === null || verdictsCorrect === 1);
   return {
@@ -39,7 +44,7 @@ export function runScores(graded) {
     writer_unsupported_claims: judged === null || !ask ? null : judged.unsupported_claims,
     writer_false_abstention: judged === null || !ask ? null : judged.false_abstention,
     gaps_reported: judged === null || judged.gaps.length === 0 ? null : rate(judged.gaps.filter(gap => gap.reported).length, judged.gaps.length),
-    must_not_violations: judged === null ? null : judged.must_not_violations.length,
+    must_not_violations: violations,
     leaks: checks.leaks.length,
     noise_handed: checks.noise_handed,
     distractors_handed: checks.distractors.handed,
@@ -69,17 +74,18 @@ export function aggregate(gradedRuns) {
   const cases = [...byCase.values()].map(runs => {
     const { checks } = runs[0].graded;
     const completed = runs.filter(run => run.scores.status === "completed");
+    // Quality metrics include failed runs (as zeros); cost metrics describe completed runs only.
     const metrics = Object.fromEntries(METRICS.map(metric => {
-      const values = completed.map(run => run.scores[metric]).filter(value => typeof value === "number");
+      const values = runs.map(run => run.scores[metric]).filter(value => typeof value === "number");
       return [metric, mean(values)];
     }));
-    const judged = completed.filter(run => run.scores.complete_and_supported !== null);
+    const verdicts = runs.map(run => run.scores.complete_and_supported);
     return {
       case_id: checks.case_id, split: checks.split, trigger: checks.trigger, budget: checks.budget, runs: runs.length,
       failed_runs: runs.length - completed.length,
       rejected_at_ingress: runs.filter(run => run.scores.status === "rejected_at_ingress").length,
       false_abstention_runs: completed.filter(run => run.scores.writer_false_abstention === true).length,
-      complete_in_every_run: judged.length === runs.length && judged.length > 0 ? judged.every(run => run.scores.complete_and_supported) : null,
+      complete_in_every_run: verdicts.includes(false) ? false : verdicts.includes(null) ? null : true,
       stop_reasons: completed.reduce((counts, run) => ({ ...counts, [run.scores.stop_reason]: (counts[run.scores.stop_reason] ?? 0) + 1 }), {}),
       ...metrics,
     };

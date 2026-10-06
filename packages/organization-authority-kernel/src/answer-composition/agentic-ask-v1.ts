@@ -164,6 +164,8 @@ export interface AgenticAskAuditEntryV1 {
   readonly kind: "echo-agentic-ask-audit-v1";
   /** Present only for research-only triggers; an Ask audit omits it. */
   readonly trigger?: Exclude<AgenticResearchTriggerV1, "ask">;
+  /** Present only when the request ran beyond the live budget (research evaluation). */
+  readonly budget?: "background";
   readonly outcome: PersonAnswerResponseV4["outcome"] | "cancelled" | "timed_out";
   readonly receipt_digests: readonly Sha256Digest[];
   /** Research steps run. */
@@ -560,6 +562,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       if (goal === null) throw new AgenticAskOutputErrorV1(input.goal.kind === "question" ? "question is invalid" : "research goal is invalid");
       const askedQuestion = goalText(goal);
       const researchOnly = goal.kind !== "question";
+      const beyondLive = budget.deadline_ms > AGENTIC_RESEARCH_LIVE_BUDGET_V1.deadline_ms || budget.max_rounds > AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_rounds || budget.max_model_calls > AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
       const researchPrompt = goal.kind === "question" ? stepPrompt : taskPrompts[goal.kind];
       const researchBudget = goal.kind === "question" ? stepBudget : agenticAskContextBudgetBytesV1(options.generation.context_tokens, researchPrompt, OUTPUT_TOKENS.step);
       const startedAt = now();
@@ -1058,6 +1061,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         for (const generation of generations) if (generation.finish_reason !== null) finishReasonCounts[generation.finish_reason] = (finishReasonCounts[generation.finish_reason] ?? 0) + 1;
         await options.audit.append(Object.freeze({
           kind: "echo-agentic-ask-audit-v1", ...(researchOnly ? { trigger: input.trigger as Exclude<AgenticResearchTriggerV1, "ask"> } : {}),
+          ...(beyondLive ? { budget: "background" as const } : {}),
           outcome, receipt_digests: Object.freeze([...receipts]), rounds: steps, model_calls: calls, repairs, fallbacks, citation_count: citations, checked_at: checkedAt,
           prompt_sha256: outcome === "cancelled" || outcome === "timed_out" ? null : canonicalSha256({ generation: options.generation.generation_adapter_id, invocations: invocationDigests }),
           answer_sha256: researched?.answer_sha256 ?? (result === undefined ? null : canonicalSha256({ direct: result.direct ?? null, parts: result.parts })),

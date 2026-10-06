@@ -10,7 +10,7 @@ const TERNARY = { type: "string", enum: ["yes", "no", "not_applicable"] };
 
 export const JUDGE_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
-  required: ["needs", "invented_needs", "parts", "gaps", "must_not_violations", "unsupported_claims", "false_abstention", "verdicts", "notes"],
+  required: ["needs", "invented_needs", "parts", "gaps", "must_not", "unsupported_claims", "false_abstention", "verdicts", "notes"],
   properties: {
     needs: { type: "array", items: { type: "object", additionalProperties: false, required: ["expected", "covered"], properties: { expected: { type: "string" }, covered: { type: "boolean" } } } },
     invented_needs: { type: "array", items: { type: "string" } },
@@ -18,7 +18,7 @@ export const JUDGE_SCHEMA = Object.freeze({
       id: { type: "string" }, established_by_research: { type: "boolean" }, stated_in_answer: TERNARY, answer_correct: TERNARY,
     } } },
     gaps: { type: "array", items: { type: "object", additionalProperties: false, required: ["gap", "reported"], properties: { gap: { type: "string" }, reported: { type: "boolean" } } } },
-    must_not_violations: { type: "array", items: { type: "string" } },
+    must_not: { type: "array", items: { type: "object", additionalProperties: false, required: ["rule", "violated"], properties: { rule: { type: "string" }, violated: { type: "boolean" } } } },
     unsupported_claims: { type: "integer" },
     false_abstention: { type: "boolean" },
     verdicts: { type: "array", items: { type: "object", additionalProperties: false, required: ["finding", "judged", "matches_expected"], properties: {
@@ -30,12 +30,12 @@ export const JUDGE_SCHEMA = Object.freeze({
 
 export const JUDGE_SYSTEM = [
   "You grade one run of an organization-knowledge research loop against a written answer key. You are strict and literal.",
-  "Inputs: the case (question, approved record or earlier findings), the answer key, the research plan the loop wrote, every item research read (with its text), and, for Ask, the answer.",
+  "Inputs: the case (question, approved record or earlier findings), the answer key, the research plan the loop wrote, research.read_items (every item research read in full, with its text), and, for Ask, answer.writer_items (any other text the writer was given) and the answer.",
   "Rules:",
   "- needs: for each expected need, covered=true only if some plan need asks for the same fact in meaning. invented_needs: plan needs the case does not require.",
-  "- parts: established_by_research=true only if the text of items research read establishes the requirement (alternative wording is fine; matching words alone is not). For Ask, stated_in_answer says whether the answer states it, and answer_correct whether that statement is correct and supported by its citations. Use not_applicable when there is no answer.",
+  "- parts: established_by_research=true only if the text in research.read_items establishes the requirement (alternative wording is fine; matching words alone is not; writer_items do not count). For Ask, stated_in_answer says whether the answer states it, and answer_correct whether that statement is correct and supported by its citations. Use not_applicable when there is no answer.",
   "- gaps: reported=true only if the answer (or, without an answer, the plan) names the fact as not found or unconfirmed.",
-  "- must_not_violations: copy each must-not item the answer or plan notes violate.",
+  "- must_not: one entry per must-not rule, in the key's order, with violated=true if the answer or plan notes violate it.",
   "- unsupported_claims: count material answer claims not supported by the cited items. 0 without an answer.",
   "- false_abstention: true if the answer says something is not found or declines while the read items establish it.",
   "- verdicts (Sweep only): from the CURRENT items research read, judge each earlier finding as landed, not_landed, or no_evidence (the current item was not read); matches_expected compares with the key.",
@@ -52,11 +52,15 @@ function clip(text) {
 export function judgeInput(testCase, run) {
   const research = run.result.research;
   const ask = run.result.ask ?? null;
-  const read = research.items.filter(item => item.read_in_full || item.text !== undefined).map(item => ({
+  const view = item => ({
     id: item.id, kind: item.kind, title: item.title, ...(item.date === undefined ? {} : { date: item.date, date_kind: item.date_kind }),
     ...(item.attributes === undefined ? {} : { attributes: item.attributes }), text: clip(item.text),
-  }));
+  });
+  const read = research.items.filter(item => item.read_in_full).map(view);
+  const writerIds = new Set(ask?.writer_evidence ?? []);
+  const writerOnly = research.items.filter(item => writerIds.has(item.id) && !item.read_in_full && item.text !== undefined).map(view);
   const answer = ask === null ? null : {
+    writer_items: writerOnly,
     outcome: ask.response.outcome,
     parts: ask.response.parts.map(part => ({
       status: part.status,
@@ -92,6 +96,7 @@ export function parseJudge(testCase, value) {
   for (const part of testCase.parts) if (!parts.has(part.id)) throw new Error(`judge reply misses part ${part.id}`);
   if (value.needs.length !== testCase.expected_needs.length) throw new Error("judge reply needs do not match the key");
   if ((testCase.verdicts?.length ?? 0) !== value.verdicts.length) throw new Error("judge reply verdicts do not match the key");
+  if (!Array.isArray(value.must_not) || value.must_not.length !== testCase.must_not.length) throw new Error("judge reply must-not rules do not match the key");
   if (!Number.isSafeInteger(value.unsupported_claims) || value.unsupported_claims < 0) throw new Error("judge unsupported_claims is invalid");
   return {
     needs: value.needs.map(need => ({ expected: String(need.expected), covered: bool(need.covered, "need") })),
@@ -101,7 +106,7 @@ export function parseJudge(testCase, value) {
       return { id: part.id, established_by_research: bool(judged.established_by_research, "part"), stated_in_answer: judged.stated_in_answer, answer_correct: judged.answer_correct };
     }),
     gaps: value.gaps.map(gap => ({ gap: String(gap.gap), reported: bool(gap.reported, "gap") })),
-    must_not_violations: value.must_not_violations.map(String),
+    must_not: testCase.must_not.map((rule, index) => ({ rule, violated: bool(value.must_not[index].violated, "must_not") })),
     unsupported_claims: value.unsupported_claims,
     false_abstention: bool(value.false_abstention, "false_abstention"),
     verdicts: value.verdicts.map(verdict => ({ finding: String(verdict.finding), judged: verdict.judged, matches_expected: bool(verdict.matches_expected, "verdict") })),

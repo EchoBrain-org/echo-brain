@@ -68,14 +68,15 @@ export class SqlitePersonAgenticAskAuditV1 {
   }
 
   private appendBound(context: AgenticAskAuditRequestContextV1, entry: AgenticAskAuditEntryV1): Sha256Digest {
-    // Research-only triggers (research loop evaluation v1) run under the background budget.
-    const background = entry.trigger !== undefined;
+    // Research-only triggers and background-budget Ask runs (research loop evaluation v1).
+    const background = entry.trigger !== undefined || entry.budget !== undefined;
     const limits = background
       ? { rounds: 20, model_calls: 48, receipts: 512, citations: 360 }
       : { rounds: 10, model_calls: 24, receipts: 128, citations: 40 };
     if (
       entry.kind !== "echo-agentic-ask-audit-v1" ||
-      (background && entry.trigger !== "check" && entry.trigger !== "sweep") ||
+      (entry.trigger !== undefined && entry.trigger !== "check" && entry.trigger !== "sweep") ||
+      (entry.budget !== undefined && entry.budget !== "background") ||
       !["answered", "partial", "not_found", "off_scope", "cancelled", "timed_out"].includes(entry.outcome) ||
       !Array.isArray(entry.receipt_digests) || entry.receipt_digests.length > limits.receipts ||
       new Set(entry.receipt_digests).size !== entry.receipt_digests.length ||
@@ -111,7 +112,8 @@ export class SqlitePersonAgenticAskAuditV1 {
       kind: "echo-person-agentic-ask-audit-v1",
       context_kind: "answer_composition",
       ...context,
-      ...(background ? { trigger: entry.trigger } : {}),
+      ...(entry.trigger === undefined ? {} : { trigger: entry.trigger }),
+      ...(entry.budget === undefined ? {} : { budget: entry.budget }),
       outcome: entry.outcome,
       receipt_digests: entry.receipt_digests,
       rounds: entry.rounds,

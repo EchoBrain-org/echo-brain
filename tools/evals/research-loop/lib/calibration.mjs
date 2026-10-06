@@ -14,7 +14,7 @@ export function judgeChecks(testCase, judge) {
     checks.push({ id: `established:${part.id}`, question: `Do the items research read establish: "${requirement}"?`, judge: part.established_by_research });
     if (part.answer_correct !== "not_applicable") checks.push({ id: `answer:${part.id}`, question: `Does the answer state this correctly, supported by its citations: "${requirement}"?`, judge: part.answer_correct === "yes" });
   });
-  (testCase.must_not ?? []).forEach((rule, index) => checks.push({ id: `must_not:${index}`, question: `Does the answer or plan violate: "${rule}"?`, judge: judge.must_not_violations.some(value => value.trim() === rule.trim()) }));
+  judge.must_not.forEach((entry, index) => checks.push({ id: `must_not:${index}`, question: `Does the answer or plan violate: "${entry.rule}"?`, judge: entry.violated }));
   judge.verdicts.forEach((verdict, index) => checks.push({ id: `verdict:${index}`, question: `Is "${verdict.finding}" judged correctly as ${testCase.verdicts?.[index]?.expected ?? "?"}?`, judge: verdict.matches_expected }));
   if (testCase.trigger === "ask") checks.push({ id: "false_abstention", question: "Does the answer decline or say not found where the read items establish the fact?", judge: judge.false_abstention });
   return checks;

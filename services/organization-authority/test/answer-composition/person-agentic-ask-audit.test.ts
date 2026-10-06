@@ -51,6 +51,12 @@ describe("agentic Ask audit", () => {
       expect(JSON.parse(row.body_json)).toMatchObject({ trigger: "check", rounds: 20, outcome: "partial" });
       expect(() => store.forRequest({ ...requestContext, request_id: "ask_2" }).append(entry)).toThrow("Agentic Ask audit entry is invalid");
       expect(() => store.forRequest({ ...requestContext, request_id: "ask_3" }).append({ ...entry, trigger: "ask" as never })).toThrow("Agentic Ask audit entry is invalid");
+      // A background-budget Ask (the evaluation's diagnostic) carries its budget instead of a trigger.
+      store.forRequest({ ...requestContext, request_id: "ask_4" }).append({ ...entry, budget: "background" });
+      expect(() => store.forRequest({ ...requestContext, request_id: "ask_5" }).append({ ...entry, budget: "huge" as never })).toThrow("Agentic Ask audit entry is invalid");
+      const rows = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").all() as { body_json: string }[];
+      expect(rows).toHaveLength(2);
+      expect(rows.map(value => JSON.parse(value.body_json))).toEqual(expect.arrayContaining([expect.objectContaining({ trigger: "check" }), expect.objectContaining({ budget: "background", rounds: 20 })]));
     } finally { database.close(); }
   });
 

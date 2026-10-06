@@ -1,4 +1,4 @@
-import { itemMatches, leakMarkers, matching, sectionCovered } from "./match.mjs";
+import { itemMatches, leakMarkers, matching, satisfying } from "./match.mjs";
 
 /**
  * Code checks for one saved run (spec section 5): what research found, read,
@@ -16,16 +16,17 @@ export function codeChecks(testCase, run, dataset) {
   const ask = run.result.ask ?? null;
   const handedIds = new Set(testCase.trigger === "ask" ? ask?.writer_evidence ?? [] : items.filter(item => item.cited_by_plan).map(item => item.id));
   const parts = testCase.parts.map(part => {
-    const supporting = part.evidence.flatMap(ref => matching(items, ref, meetings).map(item => ({ item, ref })));
-    const ids = [...new Set(supporting.map(({ item }) => item.id))];
+    // Found: research discovered a supporting item (a page counts once discovered).
+    const discovered = part.evidence.flatMap(ref => matching(items, ref, meetings));
+    // Read, cited and handed need the item that actually carries the evidence (for a page, its section).
+    const supporting = [...new Set(part.evidence.flatMap(ref => satisfying(items, ref, meetings)))];
     return {
       id: part.id, type: part.type,
-      found: supporting.length > 0,
-      read: supporting.some(({ item }) => item.read_in_full),
-      cited_by_plan: supporting.some(({ item }) => item.cited_by_plan),
-      handed: supporting.some(({ item }) => handedIds.has(item.id)),
-      section_covered: supporting.some(({ item, ref }) => ref.page === undefined || sectionCovered(item, ref)),
-      item_ids: ids,
+      found: discovered.length > 0,
+      read: supporting.some(item => item.read_in_full),
+      cited_by_plan: supporting.some(item => item.cited_by_plan),
+      handed: supporting.some(item => handedIds.has(item.id)),
+      item_ids: [...new Set([...discovered, ...supporting].map(item => item.id))],
     };
   });
   const supportingIds = new Set(parts.flatMap(part => part.item_ids));
