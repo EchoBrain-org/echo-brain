@@ -393,3 +393,30 @@ describe('registered live source dispatch', () => {
     await expect(wrongKind.list({ source: first.descriptor.source_id })).rejects.toMatchObject({ code: 'invalid_output' });
   });
 });
+
+describe('open by an earlier citation', () => {
+  it('routes live citations to the source with the same tool and kind, and ECHO citations to the base desk', async () => {
+    const f = mixedFixture();
+    const ticketSource = { ...f.ticket, openCitation: vi.fn(async () => ({ items: [f.tickets[0]!], truncated: false, receipt_digests: [receipt('jira')] })) };
+    const baseOpen = vi.fn(async () => ({ items: [f.local[0]!], truncated: false, receipt_digests: [receipt('local')] }));
+    const desk = createPersonLiveEvidenceDeskV2({ ...f.base, openCitation: baseOpen } as EvidenceDeskPortV1, ticketSource, undefined, undefined, f.page);
+    const opened = await desk.openCitation!({ citation: f.tickets[0]!.citation });
+    expect(ticketSource.openCitation).toHaveBeenCalledWith(expect.objectContaining({ citation: f.tickets[0]!.citation }));
+    expect(opened.items).toEqual([expect.objectContaining({ id: 'ticket-1', source_id: 'ticket' })]);
+    // The opened item is now owned by its source: a later open goes to the same reader.
+    await desk.open({ item: 'ticket-1' });
+    expect(ticketSource.open).toHaveBeenCalledWith(expect.objectContaining({ item: 'ticket-1' }));
+    const local = await desk.openCitation!({ citation: f.local[0]!.citation });
+    expect(baseOpen).toHaveBeenCalledWith(expect.objectContaining({ citation: f.local[0]!.citation }));
+    expect(local.items[0]).not.toHaveProperty('source_id');
+  });
+
+  it('refuses a live citation whose tool is not bound to this request, or a source that cannot open citations', async () => {
+    const f = mixedFixture();
+    const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket, undefined, undefined, f.page);
+    await expect(desk.openCitation!({ citation: { ...f.tickets[0]!.citation, tool_id: 'other-tracker' } })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(desk.openCitation!({ citation: f.pages[0]!.citation })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(desk.openCitation!({ citation: f.local[0]!.citation })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(desk.openCitation!({ citation: 'not-a-citation' })).rejects.toMatchObject({ code: 'invalid_request' });
+  });
+});

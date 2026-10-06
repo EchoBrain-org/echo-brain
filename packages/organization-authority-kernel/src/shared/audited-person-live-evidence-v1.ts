@@ -232,6 +232,16 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       const page = await safeCall(() => reader.open({ handle: value.handle, limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) }), input.signal);
       return release('open', page, maximum, undefined, input.signal);
     },
+    async openCitation(input) {
+      const maximum = limit(input.limit);
+      if (reader.openCitation === undefined) throw new AuthorityOperationError('unavailable', 'Live evidence cannot open an earlier citation');
+      if (typeof input.citation !== 'object' || input.citation === null || Array.isArray(input.citation)) invalid('Live evidence citation is invalid');
+      current(input.signal);
+      // The reader validates the citation and applies its own tenant and pin checks;
+      // every released item still passes validateCitation and the audit below.
+      const page = await safeCall(() => reader.openCitation!({ citation: input.citation, limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) }), input.signal);
+      return release('open', page, maximum, undefined, input.signal);
+    },
     async list(input) {
       const maximum = limit(input.limit);
       if (input.container !== undefined && (typeof input.container !== 'string' || input.container.trim().length === 0 || Buffer.byteLength(input.container, 'utf8') > 256 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(input.container))) invalid('Live evidence container is invalid');

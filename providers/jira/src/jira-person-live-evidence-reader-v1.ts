@@ -197,6 +197,19 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         return Object.freeze({ items: remember([selected]), truncated: selected.truncated });
       }, input.signal);
     },
+    async openCitation(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
+      limit(input.limit);
+      let citation: PersonTicketCitationV1;
+      try { citation = validatePersonTicketCitationV1(input.citation); } catch { jiraFailure('invalid_request'); }
+      if (citation.tool_id !== binding.tool_id || citation.external_scope_id !== cloudid || !JIRA_ID.test(citation.ticket_id)) jiraFailure('unauthorized');
+      return safe(async () => {
+        const origin = await verifyConnection(input.signal);
+        // The exact read enforces current issue security and the project pin.
+        const selected = await issue(citation.ticket_id, origin, false, input.signal);
+        await verifyConnection(input.signal);
+        return Object.freeze({ items: remember([selected]), truncated: selected.truncated });
+      }, input.signal);
+    },
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       const maximum = Math.min(limit(input.limit), 20);
       if (input.container !== undefined && (typeof input.container !== 'string' || !(JIRA_ID.test(input.container) || JIRA_PROJECT_KEY.test(input.container)))) jiraFailure('invalid_request');

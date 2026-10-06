@@ -443,3 +443,28 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls).toHaveLength(before);
   });
 });
+
+describe('Confluence open by an earlier citation (background trigger starting evidence)', () => {
+  const earlier = (pageId: string, scope = CLOUD): PersonPageCitationV1 => ({ kind: 'page', tool_id: 'confluence', external_scope_id: scope,
+    page_id: pageId, section_id: 's1', version: '1', permalink: `${ORIGIN}/wiki/pages/viewpage.action?pageId=${pageId}`, text_sha256: emptyHash });
+
+  it('re-reads the current version from its first section and audits it as an open', async () => {
+    const f = await fixture({ selected: ['42'], pages: [page({ id: '123', version: 5, document: document('Current gate text.') })] });
+    const result = await f.source.openCitation!({ citation: earlier('123') });
+    expect(result.items).toEqual([expect.objectContaining({ kind: 'page', text: 'Current gate text.', citation: expect.objectContaining({ page_id: '123', version: '5', section_id: 's1' }) })]);
+    expect(f.audits.at(-1)).toMatchObject({ operation: 'open' });
+  });
+
+  it('refuses a page outside the mapped spaces', async () => {
+    const f = await fixture({ selected: ['42'], pages: [page({ id: '777', spaceId: '43' })] });
+    await expect(f.source.openCitation!({ citation: earlier('777') })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.audits).toHaveLength(0);
+  });
+
+  it('refuses a citation from another site', async () => {
+    const f = await fixture({ selected: ['42'] });
+    await expect(f.source.openCitation!({ citation: earlier('123', '00000000-0000-4000-8000-000000000099') })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(f.source.openCitation!({ citation: { ...earlier('123'), permalink: 'https://elsewhere.atlassian.net/wiki/pages/viewpage.action?pageId=123' } })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.audits).toHaveLength(0);
+  });
+});

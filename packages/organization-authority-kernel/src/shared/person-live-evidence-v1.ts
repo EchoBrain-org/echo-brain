@@ -63,6 +63,13 @@ export interface PersonLiveEvidenceReaderV1<C extends PersonLiveEvidenceCitation
   validateCitation(value: unknown): { readonly citation: C; readonly tool_id: string; readonly external_scope_id: string | null; readonly coordinates: PersonLiveEvidenceCoordinatesV1 };
   search(input: { readonly query: string; readonly limit: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidencePageV1<C>>;
   open(input: { readonly handle: string; readonly limit: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidencePageV1<C>>;
+  /**
+   * Re-reads the current item a citation released earlier names, applying the
+   * same tool, tenant, project/space pin and permission checks as an exact read.
+   * The adapter validates the citation's shape itself: it was issued by another
+   * request, so `validateCitation` cannot vouch for it.
+   */
+  openCitation?(input: { readonly citation: unknown; readonly limit: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidencePageV1<C>>;
   list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<C>>;
   /** Checks the provider connection AND current visibility of every released item, including inventory metadata. Token validity alone is insufficient. */
   revalidate(input: { readonly citations: readonly C[]; readonly signal?: AbortSignal }): Promise<void>;
@@ -112,6 +119,8 @@ export interface PersonLiveEvidenceSourceV1<C extends PersonLiveEvidenceCitation
   readonly tool_id: string;
   search(input: { readonly query: string; readonly limit?: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceResultV1<C>>;
   open(input: { readonly item: string; readonly limit?: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceResultV1<C>>;
+  /** Opens a citation released by an earlier request (background trigger starting evidence). */
+  openCitation?(input: { readonly citation: unknown; readonly limit?: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceResultV1<C>>;
   list(input: Omit<PersonLiveEvidenceListInputV1, 'limit'> & { readonly limit?: number }): Promise<PersonLiveEvidenceResultV1<C>>;
   /** Required before every subsequent model call and final response containing any released evidence. */
   revalidate(input: { readonly signal?: AbortSignal }): Promise<void>;

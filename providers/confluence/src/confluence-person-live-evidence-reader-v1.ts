@@ -223,6 +223,30 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       if (returned.size !== expected.size) confluenceFailure('not_found');
     }
   }
+  /** Opens one released item: its page's current body from the item's section on. */
+  async function openItem(item: Item, maximum: number, signal?: AbortSignal): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
+    await verify(signal);
+    const page = await exact(item.page.id, true, item.page.status, signal);
+    if (!samePage(page, item.page)) confluenceFailure('stale_access_state');
+    const normalized = normalizeConfluencePageDocumentV1(page.document!);
+    const texts = normalized.sections;
+    if (item.offset >= texts.length) confluenceFailure('stale_access_state');
+    if (item.text !== undefined && textDigest(texts[item.offset]!) !== textDigest(item.text)) confluenceFailure('stale_access_state');
+    const single = item.text !== undefined;
+    const remaining = single ? 1 : texts.length - item.offset;
+    if (remaining > 1 && maximum < 2) confluenceFailure('invalid_request');
+    const count = remaining > maximum ? maximum - 1 : Math.min(remaining, maximum);
+    const result: Item[] = [];
+    for (let index = item.offset; index < item.offset + count; index += 1) {
+      // Empty/whitespace-only pages contain no releasable evidence.
+      if (texts[index]!.trim() !== '') result.push(Object.freeze({ page, section: `s${index + 1}`, offset: index, text: texts[index]! }));
+    }
+    const hasMore = !single && item.offset + count < texts.length;
+    if (hasMore) result.push(Object.freeze({ page, section: `continue:${item.offset + count}`, offset: item.offset + count }));
+    await verify(signal);
+    return Object.freeze({ items: Object.freeze(result.map(remember)), truncated: hasMore,
+      ...(normalized.incomplete ? { notice: 'Some Confluence page content could not be fully represented as text.' } : {}) });
+  }
   await verify(options.signal);
   return Object.freeze({
     binding,
@@ -278,27 +302,19 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       const maximum = limit(input.limit, 8);
       const item = handles.get(input.handle);
       if (item === undefined) confluenceFailure('not_found');
+      return openItem(item, maximum, input.signal);
+    },
+    async openCitation(input): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
+      const maximum = limit(input.limit, 8);
+      let citation: PersonPageCitationV1;
+      try { citation = validatePersonPageCitationV1(input.citation); } catch { confluenceFailure('invalid_request'); }
+      if (citation.tool_id !== 'confluence' || citation.external_scope_id !== cloud || !ID.test(citation.page_id)) confluenceFailure('unauthorized');
       await verify(input.signal);
-      const page = await exact(item.page.id, true, item.page.status, input.signal);
-      if (!samePage(page, item.page)) confluenceFailure('stale_access_state');
-      const normalized = normalizeConfluencePageDocumentV1(page.document!);
-      const texts = normalized.sections;
-      if (item.offset >= texts.length) confluenceFailure('stale_access_state');
-      if (item.text !== undefined && textDigest(texts[item.offset]!) !== textDigest(item.text)) confluenceFailure('stale_access_state');
-      const single = item.text !== undefined;
-      const remaining = single ? 1 : texts.length - item.offset;
-      if (remaining > 1 && maximum < 2) confluenceFailure('invalid_request');
-      const count = remaining > maximum ? maximum - 1 : Math.min(remaining, maximum);
-      const result: Item[] = [];
-      for (let index = item.offset; index < item.offset + count; index += 1) {
-        // Empty/whitespace-only pages contain no releasable evidence.
-        if (texts[index]!.trim() !== '') result.push(Object.freeze({ page, section: `s${index + 1}`, offset: index, text: texts[index]! }));
-      }
-      const hasMore = !single && item.offset + count < texts.length;
-      if (hasMore) result.push(Object.freeze({ page, section: `continue:${item.offset + count}`, offset: item.offset + count }));
-      await verify(input.signal);
-      return Object.freeze({ items: Object.freeze(result.map(remember)), truncated: hasMore,
-        ...(normalized.incomplete ? { notice: 'Some Confluence page content could not be fully represented as text.' } : {}) });
+      // Current metadata through the exact read (space pin and permissions), then
+      // the page from its first section: a re-read never trusts the old version.
+      const current = await exact(citation.page_id, false, undefined, input.signal);
+      if (citation.permalink !== permalink(current)) confluenceFailure('unauthorized');
+      return openItem(inventory(current), maximum, input.signal);
     },
     async revalidate(input): Promise<void> {
       await verify(input.signal);
