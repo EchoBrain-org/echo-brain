@@ -67,7 +67,7 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
     ticket_id: id, permalink: `${input.origin}/browse/${key}`, text_sha256: jiraTextDigest(content?.text ?? '') });
   return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(),
     truncated: label.truncated || (content?.truncated ?? false),
-    value: Object.freeze({ citation, label: label.text, visibility: 'only_me', occurred_at,
+    value: Object.freeze({ citation, label: label.text, visibility: 'only_me', occurred_at, date_kind: 'created',
       attributes: Object.freeze({ status, ...(owner === undefined ? {} : { owner }), ...(due_at === undefined ? {} : { due_at }) }),
       ...(content === undefined ? {} : { text: content.text }) }) });
 }

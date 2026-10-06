@@ -121,7 +121,7 @@ describe('Confluence live reader through the audited evidence source', () => {
     const result = await f.source.list({ limit: 20 });
     expect(result.items.map(item => item.citation.page_id)).toEqual(['123', '124']);
     expect(result.items.every(item => item.text === undefined && item.citation.text_sha256 === emptyHash && item.visibility === 'only_me')).toBe(true);
-    expect(result.items[0]).toMatchObject({ kind: 'page', label: 'ECHO product requirements', occurred_at: '2026-10-05', citation: { section_id: 'inventory', version: '3', permalink: `${ORIGIN}/wiki/pages/viewpage.action?pageId=123` } });
+    expect(result.items[0]).toMatchObject({ kind: 'page', label: 'ECHO product requirements', occurred_at: '2026-10-05', date_kind: 'version_created', citation: { section_id: 'inventory', version: '3', permalink: `${ORIGIN}/wiki/pages/viewpage.action?pageId=123` } });
     const discovery = f.calls.find(call => call.path === '/api/v2/pages')!;
     expect(discovery.query.get('space-id')).toBeNull();
     expect(discovery.query.getAll('status')).toEqual(['current', 'archived', 'deleted', 'trashed']);

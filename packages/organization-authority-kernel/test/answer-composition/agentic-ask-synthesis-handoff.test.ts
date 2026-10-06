@@ -6,6 +6,7 @@ import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from '../../src/shared/ev
 const body = 'The gate decision is pending. A recorded Go decision is required.';
 const item: EvidenceDeskItemV2 = {
   id: 'synthetic-page', kind: 'page', label: 'Gate guide', text: body, visibility: 'only_me',
+  occurred_at: '2026-10-05',
   receipt_sha256: canonicalSha256('receipt'),
   citation: { kind: 'page', tool_id: 'confluence', external_scope_id: 'synthetic', page_id: '1', section_id: 's1', version: '3', permalink: 'https://example.test/wiki/1', text_sha256: sha256Digest(body) },
 };
@@ -44,6 +45,10 @@ describe('synthesis receives observed research coverage', () => {
   it('carries citation provenance and page version into the writer', async () => {
     const { writer } = await run();
     expect(writer.evidence).toEqual([expect.objectContaining({ provenance: { kind: 'page', version: '3' } })]);
+  });
+  it('does not silently interpret an untyped source date as an event date', async () => {
+    const { writer } = await run();
+    expect(writer.evidence).toEqual([expect.objectContaining({ date: '2026-10-05', date_kind: 'unspecified' })]);
   });
   it('preserves truncation and availability notices without promoting planner notes', async () => {
     const { writer, audit } = await run({ truncated: true, notice: 'Some page sections could not be represented.' });

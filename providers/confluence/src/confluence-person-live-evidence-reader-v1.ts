@@ -16,7 +16,7 @@ const REVALIDATION_BATCH_SIZE = 50;
 const LIST_STATUSES = Object.freeze(['current', 'archived', 'deleted', 'trashed']);
 const STATUSES = Object.freeze([...LIST_STATUSES, 'draft', 'historical']);
 const EMPTY_DIGEST = textDigest('');
-type Page = Readonly<{ id: string; space_id: string; title: string; version: string; status: string; occurred_at?: string; document?: string }>;
+type Page = Readonly<{ id: string; space_id: string; title: string; version: string; status: string; occurred_at?: string; date_kind?: 'created' | 'version_created'; document?: string }>;
 type Item = Readonly<{ page: Page; section: string; offset: number; text?: string }>;
 type Cursor = Readonly<{ selection: string; path: string; query: Readonly<Record<string, string | readonly string[]>>; token: string }>;
 
@@ -53,10 +53,10 @@ function metadata(raw: unknown, body = false): Page {
   }
   return Object.freeze({ id: confluenceString(record.id, 20, ID), space_id: confluenceString(record.spaceId, 20, ID),
     title: confluenceString(record.title, 1024), version: String(number), status,
-    ...(occurred_at === undefined ? {} : { occurred_at }), ...(document === undefined ? {} : { document }) });
+    ...(occurred_at === undefined ? {} : { occurred_at, date_kind: version.createdAt === undefined || version.createdAt === null ? 'created' as const : 'version_created' as const }), ...(document === undefined ? {} : { document }) });
 }
 function samePage(left: Page, right: Page): boolean {
-  return left.id === right.id && left.space_id === right.space_id && left.version === right.version && left.title === right.title && left.status === right.status && left.occurred_at === right.occurred_at;
+  return left.id === right.id && left.space_id === right.space_id && left.version === right.version && left.title === right.title && left.status === right.status && left.occurred_at === right.occurred_at && left.date_kind === right.date_kind;
 }
 function day(value: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(`${value}T00:00:00Z`)) || new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value) confluenceFailure('invalid_request');
@@ -123,7 +123,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     const label = item.section.startsWith('continue:') ? `Continue ${item.page.title} from section ${item.offset + 1}`
       : item.section === 'inventory' ? item.page.title : `${item.page.title} · section ${item.offset + 1}`;
     return Object.freeze({ citation, handle, label: boundedLabel(label), visibility: 'only_me',
-      attributes: Object.freeze({ status: item.page.status }), ...(item.page.occurred_at === undefined ? {} : { occurred_at: item.page.occurred_at }),
+      attributes: Object.freeze({ status: item.page.status }), ...(item.page.occurred_at === undefined ? {} : { occurred_at: item.page.occurred_at, date_kind: item.page.date_kind }),
       ...(item.text === undefined ? {} : { text: item.text }) });
   }
   function inventory(page: Page): Item { return Object.freeze({ page, section: 'inventory', offset: 0 }); }

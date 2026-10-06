@@ -70,7 +70,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
   it('discovers ticket summaries before fetching a selected body', async () => {
     const f = fixture(); const { source } = await f.make();
     const discovered = await source.search({ query: 'ship' });
-    expect(discovered.items[0]).toMatchObject({ label: 'ECHO-1: Ship connector', attributes: { status: 'In progress' } });
+    expect(discovered.items[0]).toMatchObject({ label: 'ECHO-1: Ship connector', date_kind: 'created', attributes: { status: 'In progress' } });
     expect(discovered.items[0]).not.toHaveProperty('text');
     expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !request.query?.fields?.includes('description'))).toBe(true);
     const opened = await source.open({ item: discovered.items[0]!.id });

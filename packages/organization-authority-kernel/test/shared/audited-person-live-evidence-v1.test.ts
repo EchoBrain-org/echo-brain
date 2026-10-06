@@ -125,6 +125,8 @@ describe('shared audited live evidence source V1', () => {
       { ...ticket(), text: 'x'.repeat(3073) },
       { ...ticket(), label: 'x'.repeat(1025) },
       { ...ticket(), occurred_at: '2026-02-30' },
+      { ...ticket(), date_kind: 'completed' },
+      { ...ticket(), occurred_at: undefined, date_kind: 'created' },
       { ...ticket(), attributes: { status: 'In progress', token: 'secret' } },
     ]) {
       f.select(page([item]));
