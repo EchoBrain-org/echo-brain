@@ -99,8 +99,9 @@ export interface AgenticResearchRoundV1 {
 }
 
 /**
- * Everything the loop knows when it stops (spec section 2), in the eval view:
- * every item in it was already released to the person running the trigger.
+ * The trimmed evidence bundle (`trimAgenticEvidenceBundleV1`): everything the
+ * loop knows when it stops, in the eval view, without the server records.
+ * Every item in it was already released to the person running the trigger.
  */
 export interface AgenticResearchResultV1 {
   readonly schema_version: 1;
