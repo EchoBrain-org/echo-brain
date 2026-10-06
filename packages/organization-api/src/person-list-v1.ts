@@ -212,9 +212,9 @@ function line(value: unknown, label: string, maximumBytes: number, controls = LI
 }
 
 /** Released text keeps its exact bytes, so it is neither trimmed nor normalized. */
-function body(value: unknown, label: string, maximumBytes: number): asserts value is string {
+function body(value: unknown, label: string, maximumBytes: number, allowEmpty = false): asserts value is string {
   if (
-    typeof value !== 'string' || value.length === 0 || BODY_CONTROLS.test(value) || LONE_SURROGATE.test(value) ||
+    typeof value !== 'string' || (!allowEmpty && value.length === 0) || BODY_CONTROLS.test(value) || LONE_SURROGATE.test(value) ||
     utf8ByteLength(value) > maximumBytes
   ) fail(`${label} is invalid`);
 }
@@ -519,7 +519,9 @@ export function validatePersonOpenResponseV1(value: unknown): PersonOpenResponse
   switch (kind) {
     case 'imported_meeting': {
       const item = openItem(input.item, ref as PersonImportedMeetingRefV1) as PersonListImportedMeetingRowV1;
-      body(input.text, 'Imported meeting notes', 8192);
+      // A valid import can contain only a transcript. That transcript remains
+      // unreleasable here, so its imported-notes representation is empty.
+      body(input.text, 'Imported meeting notes', 8192, true);
       return bounded<PersonOpenImportedMeetingV1>({ ...base, ref: ref as PersonImportedMeetingRefV1, item, text: input.text, next_cursor }, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, 'Person open response');
     }
     case 'note': {

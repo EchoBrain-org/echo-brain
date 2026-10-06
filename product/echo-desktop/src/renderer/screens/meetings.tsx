@@ -42,7 +42,7 @@ export function Meetings() {
     {busy && <p class="context">Working…</p>}
     {home && <>
       <p>{home.connected ? `${home.email} · ${home.workspace}` : 'Reconnect Granola to browse and import meetings.'}</p>
-      {watch && <p>Automatic import: {home.folders.find(f => f.id === watch.folder_id)?.title ?? 'Selected folder'} → {projects.find(p => p.project_id === watch.project_id)?.name ?? 'Selected project'}.
+      {watch && <p>{watch.baseline ? 'Automatic import active:' : 'Preparing automatic import:'} {home.folders.find(f => f.id === watch.folder_id)?.title ?? 'Selected folder'} → {projects.find(p => p.project_id === watch.project_id)?.name ?? 'Selected project'}.
         <button class="plain-button small" disabled={busy} onClick={() => void run(async () => { await meetingCommand({ operation: 'watch', folder_id: null, project_id: null, settings_sha256: home.settings_sha256, retain: true }); await refresh(); })}>Stop automatic import</button></p>}
       {home.sources.map(s => <div key={s.source_key}>
         {s.error && <p class="error">{s.error}</p>}
@@ -59,7 +59,7 @@ export function Meetings() {
         <label><input type="checkbox" checked={retain} disabled={busy} onChange={e => setRetain(e.currentTarget.checked)} /> I allow ECHO to retain notes and transcripts and process this import. Project members can read imported notes; transcripts stay private until explicitly shared at approval.</label>
         <button class="primary-button small" disabled={busy || !folder || !project || !retain} onClick={() => void run(async () => {
           await meetingCommand({ operation: 'watch', folder_id: folder, project_id: project, settings_sha256: home.settings_sha256, retain: true });
-          await refresh(); if (alive.current) setNotice('Automatic import is ready. New, moved, or edited meetings will enter ECHO. Existing history stays in Granola until you import it.');
+          await refresh(); if (alive.current) setNotice('Folder saved. Existing history stays in Granola until you import it.');
         })}>Use folder for automatic import</button>
         <p class="context">Checks about every five minutes. This folder can contain up to 50 meetings.</p>
         <ul>{meetings.map(m => <li key={m.id}><button class="plain-button" disabled={busy} onClick={() => void run(async () => {

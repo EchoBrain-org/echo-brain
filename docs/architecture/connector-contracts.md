@@ -137,8 +137,10 @@ requires an explicit approval choice. This is separate from the dormant general
 capture routes.
 
 Granola network cost is explicit: home uses 3 MCP calls; folder browse uses 4;
-a transient preview uses 3; an explicit background import uses 4. A full watch
-baseline or unchanged scan of N meetings uses `7 + ceil(N/10) + N` MCP calls
+a transient preview uses 3; an explicit background import uses 4. Watch setup
+uses 4 calls to validate account and folder access, then saves a pending baseline
+for the existing worker. A full background baseline or unchanged scan of N
+meetings uses `7 + ceil(N/10) + N` MCP calls
 (account, folder membership before/after, batched notes and individual transcripts).
 Each MCP call also uses one existing Nango connection lookup with current tag
 verification. A changed scan stops at its first differing meeting and a later

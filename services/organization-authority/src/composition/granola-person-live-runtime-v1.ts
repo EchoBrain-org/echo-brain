@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { createGranolaPersonConnectionV1 } from '@echo-brain/provider-granola/granola-person-connection-v1';
 import { GRANOLA_PERSON_PROVIDER_V1 } from '@echo-brain/provider-granola/granola-mcp-v1';
 import { GRANOLA_MEETING_NORMALIZER_VERSION_V1 } from '@echo-brain/provider-granola/granola-meeting-normalizer-v1';
-import { GranolaFolderSourceV1, granolaFolderInitialCursorV1, readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_FOLDER_CURSOR_POLICY_V1 } from '@echo-brain/provider-granola/granola-folder-source-v1';
+import { GranolaFolderSourceV1, readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_FOLDER_CURSOR_POLICY_V1 } from '@echo-brain/provider-granola/granola-folder-source-v1';
 import { PersonConnectionStoreV1 } from '@echo-brain/provider-runtime/person-connection-store-v1';
 import { createPersonConnectionHttpApplicationV1 } from '@echo-brain/provider-runtime/person-connection-http-application-v1';
 import { createNangoPersonConnectionV1, type NangoPersonConnectionV1 } from '@echo-brain/provider-runtime/nango-person-connection-v1';
@@ -54,12 +54,6 @@ export function openGranolaPersonLiveRuntimeV1(options: {
             email: session.account.email, workspace: session.account.workspace_name, current: session.current,
             async folders() { const folders = await session.api.folders(signal); await session.verify(); return folders.map(f => ({ id: f.id, title: f.title.slice(0, 128), count: f.note_count })); },
             async browse(folder) { const result = await session.folder(folder); return { meetings: result.meetings.map(m => ({ id: m.id, title: m.title.slice(0, 256), date: m.date })) }; },
-            async baseline(folder, identity) {
-              const source = new GranolaFolderSourceV1(identity, folder, async () => session, current);
-              const batch = await source.pull({ cursor: granolaFolderInitialCursorV1(folder), limit: 1 }, { signal: signal ?? AbortSignal.timeout(60_000) });
-              if (!batch.next_cursor || batch.meetings.length !== 0) throw new Error('Folder baseline is incomplete');
-              return readGranolaCheckpointV1(batch.next_cursor);
-            },
             async preview(meeting) { const detail = await session.api.meeting(meeting, signal); await session.verify();
               const notes = detail.private_notes ?? '', summary = detail.summary ?? '';
               return { id: detail.id, title: detail.title.slice(0, 256), notes: notes.slice(0, 8_000), summary: summary.slice(0, 8_000), truncated: notes.length > 8_000 || summary.length > 8_000 };

@@ -152,6 +152,23 @@ test('Granola browsing requires explicit retention, then offers personal review 
   expect(run.calls().find(call => call.body?.operation === 'review')?.body).toMatchObject({ action: 'approve', share_transcript: false, project_id: null });
 });
 
+test('Granola saves a selected folder while its initial baseline is preparing', async () => {
+  run = await launch('granola-preparing');
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
+  const meetings = page.getByRole('region', { name: 'Personal meetings' });
+  await meetings.getByLabel('Granola folder').selectOption({ label: 'ECHO (1)' });
+  await meetings.getByLabel('Save to').selectOption({ label: 'Apollo' });
+  await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
+  await meetings.getByRole('button', { name: 'Use folder for automatic import' }).click();
+  await expect(meetings).toContainText('Preparing automatic import: ECHO → Apollo.');
+  await expect(meetings.getByRole('status')).toHaveText('Folder saved. Existing history stays in Granola until you import it.');
+  await meetings.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(meetings).toContainText('Automatic import active: ECHO → Apollo.');
+  expect(run.calls().find(call => call.body?.operation === 'watch')?.body).toMatchObject({ folder_id: '00000000-0000-4000-8000-000000000011', project_id: 'prj_11111111-1111-4111-8111-111111111111', retain: true });
+});
+
 test('Granola browsing failure leaves retained meetings available for review', async () => {
   run = await launch('granola-browse-unavailable');
   const { page } = run;

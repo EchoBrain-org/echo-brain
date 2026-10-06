@@ -13,7 +13,7 @@ import { AdmittedMeetingProcessingCycleV1 } from '@echo-brain/organization-proce
 import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { readAdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments';
 import { bindApprovalWorkflowStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1';
-import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointV1, type PersonalMeetingCheckpointCodecV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
+import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointCodecV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { createPersonMeetingReviewV1, personMeetingReviewTextV1 } from './person-meeting-review-v1.js';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
@@ -30,7 +30,6 @@ export interface PersonMeetingProviderV1 {
     current(): void;
     folders(): Promise<PersonMeetingResultsV1['home']['folders']>;
     browse(folder: string): Promise<PersonMeetingResultsV1['browse']>;
-    baseline(folder: string, identity: MeetingSourceAdapter['identity']): Promise<PersonalMeetingCheckpointV1>;
     preview(meeting: string): Promise<PersonMeetingResultsV1['open']>;
   }>;
   source(setting: MeetingIntakeSettingV1, current: () => void): MeetingSourceAdapter & { requireCurrent(): void };
@@ -189,8 +188,9 @@ export function createPersonMeetingRuntimeV1(options: {
           if (intake.currentPerson(person, project).grant_sha256 !== grant) throw new AuthorityOperationError('stale_access_state', 'Meeting project access changed');
         };
         const identity = { ...session.identity, instance_id: `${session.identity.instance_id}-${canonicalSha256(project).slice(7, 31)}` };
-        let baseline: PersonalMeetingCheckpointV1 | undefined;
-        if (input.operation === 'watch') baseline = await session.baseline(input.folder_id!, identity);
+        // Validate folder access here; the existing worker builds its content
+        // baseline from the durable pending cursor without holding this request.
+        if (input.operation === 'watch') await session.browse(input.folder_id!);
         else await session.preview(input.meeting_id);
         return db.transaction(() => {
           currentProject();
@@ -198,7 +198,7 @@ export function createPersonMeetingRuntimeV1(options: {
           const commitments = processor.current_commitments?.(`personal-${canonicalSha256({ person, project }).slice(7, 39)}`);
           if (!commitments) throw new AuthorityOperationError('unavailable', 'Meeting processing unavailable');
           const setting = intake.ensure({ person, project_id: project, identity, normalizer_version: provider.normalizer_version, custodian: session.custodian, processor: commitments, current: currentProject });
-          if (input.operation === 'watch') intake.watch(setting, input.folder_id, currentProject, baseline);
+          if (input.operation === 'watch') intake.watch(setting, input.folder_id, currentProject);
           else intake.enqueue(setting, input.meeting_id, currentProject);
           observed.delete(setting.source_key);
           return { status: input.operation === 'watch' ? 'saved' : 'queued' };

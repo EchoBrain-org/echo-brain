@@ -125,7 +125,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const desktop = JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
   const contract = () => import(pathToFileURL(join(repository, 'packages/organization-api/dist/index.js')).href) as Promise<Contract>;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
-  let granolaImported = false, granolaApproved = false;
+  let granolaImported = false, granolaApproved = false, granolaWatch = false, granolaBaselineHomeReads = 0;
   // Thirteen people: the organization's directory comes in two pages.
   if (mode === 'many-people') {
     desktop.people.push(...Array.from({ length: 9 }, (_, index) => ({
@@ -493,9 +493,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const folderId = '00000000-0000-4000-8000-000000000011';
       const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning', project_id: null, status: granolaApproved ? 'approved' : 'pending' };
       switch (body?.operation) {
-        case 'home': return mode === 'granola-browse-unavailable' ? failure('unavailable', 503) : json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64), sources: [] });
+        case 'home': return mode === 'granola-browse-unavailable' ? failure('unavailable', 503) : json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64),
+          sources: mode === 'granola-preparing' && granolaWatch ? [{ source_key: 'pms_fixture', folder_id: folderId, project_id: 'prj_11111111-1111-4111-8111-111111111111', baseline: granolaBaselineHomeReads++ > 0, pending_imports: [], checked_at: null, error: null }] : [] });
         case 'browse': return json({ meetings: [{ id: meetingId, title: 'Pilot planning', date: '2026-10-06' }] });
         case 'open': return json({ id: meetingId, title: 'Pilot planning', notes: 'Launch the pilot next week.', summary: 'Decision: launch.', truncated: false });
+        case 'watch': granolaWatch = true; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
         case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' ? [review] : [] });
         case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.' });

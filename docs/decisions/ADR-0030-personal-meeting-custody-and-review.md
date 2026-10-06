@@ -41,9 +41,11 @@ and verified grant metadata only.
 
 Connecting or browsing retains no meeting body. An explicit import authorizes
 one meeting into private or project custody. A folder-to-project watch authorizes
-future new, moved-in and edited meetings in that exact folder. Establish a hash
-baseline before committing the watch; do not retain its history. Changing the
-mapping establishes another baseline. Removing a folder, losing its access,
+future new, moved-in and edited meetings in that exact folder. Save the watch
+as preparing; the existing worker establishes its hash baseline before automatic
+import becomes active. This scan can outlast a browser request and resumes after
+restart. Retain no history from that initial scan. Changing the mapping establishes
+another baseline. Removing a folder, losing its access,
 disconnecting, or losing current membership/project access stops new intake.
 An in-flight read cannot cross a changed ECHO grant or mapping at custody commit.
 An inaccessible queued explicit import remains pending until access returns or

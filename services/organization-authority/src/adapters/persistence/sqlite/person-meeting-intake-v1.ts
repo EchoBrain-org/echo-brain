@@ -66,7 +66,7 @@ export class SqlitePersonMeetingIntakeV1 {
     const next = this.cursor.write(checkpoint);
     this.db.prepare('UPDATE authority_live_source_progress_v2 SET cursor=?,cursor_version=cursor_version+1,updated_at=? WHERE source_key=? AND cursor!=?').run(next, new Date().toISOString(), sourceKey, next);
   }
-  watch(setting: MeetingIntakeSettingV1, folder: string | null, current: () => void, baseline?: PersonalMeetingCheckpointV1): void {
+  watch(setting: MeetingIntakeSettingV1, folder: string | null, current: () => void): void {
     this.db.transaction(() => {
       current();
       if (folder === null) this.currentPerson(setting); else this.requireCurrent(setting);
@@ -74,7 +74,7 @@ export class SqlitePersonMeetingIntakeV1 {
         if (old.folder_id === null && old.source_key !== setting.source_key) continue;
         const selected = old.source_key === setting.source_key ? folder : null;
         this.db.prepare('UPDATE authority_person_meeting_sources_v1 SET folder_id=NULL,settings_revision=settings_revision+1 WHERE source_key=?').run(old.source_key);
-        this.write(old.source_key, { ...(selected === null || baseline === undefined ? { folder: selected, baseline: false, revisions: {} } : baseline), manual: this.checkpoint(old.source_key).manual });
+        this.write(old.source_key, { folder: selected, baseline: false, revisions: {}, manual: this.checkpoint(old.source_key).manual });
       }
       // Clear the former watch first so the unique personal watch constraint also holds while moving projects.
       if (folder !== null) this.db.prepare('UPDATE authority_person_meeting_sources_v1 SET folder_id=?,settings_revision=settings_revision+1 WHERE source_key=?').run(folder, setting.source_key);

@@ -14,7 +14,7 @@ import { meeting as original, decisions } from '../../../packages/organization-p
 const id = '00000000-0000-4000-8000-000000000001';
 const folder = '00000000-0000-4000-8000-000000000002';
 const project = 'prj_00000000-0000-4000-8000-000000000003';
-async function fixture() {
+async function fixture(options: { readonly transcriptOnly?: boolean } = {}) {
   const f = await personMeetingReviewFixture();
   f.db.prepare('INSERT INTO authority_project_authorization_state_v1 VALUES (?,0,?)').run(f.actor.organization_id, new Date().toISOString());
   const person = { organization_id: f.actor.organization_id, principal_id: f.actor.principal_id, membership_id: f.actor.membership_id };
@@ -31,7 +31,6 @@ async function fixture() {
       return { identity: { kind: 'meeting-source', adapter_id: 'granola-person-mcp', instance_id: `granola-${canonicalSha256(actor).slice(7)}`, version: '1.0.0' },
         custodian: { actor }, email: 'fixture@example.test', workspace: 'Fixture', current() { guard(); current(); },
         async folders() { return [{ id: folder, title: 'ECHO', count: 0 }]; }, async browse() { return { meetings: [] }; },
-        async baseline(value) { return { folder: value, baseline: true, revisions: {}, manual: [] }; },
         async preview(value) { return { id: value, title: 'Test meeting', notes: 'Ship pilot.', summary: '', truncated: false }; },
       };
     },
@@ -41,8 +40,13 @@ async function fixture() {
         requireCurrent() { guard(); current(); },
         async pull(input) {
           guard(); current(); const cursor = readGranolaCheckpointV1(input.cursor!);
-          if (!cursor.manual[0]) return { meetings: [] };
-          const meeting: MeetingDocument = { ...original, content: [...original.content, { id: 'private-transcript', kind: 'transcript', text: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }], title: 'Test meeting', provenance: { ...original.provenance, source: identity, external_id: cursor.manual[0], canonical_revision: canonicalSha256('meeting version') } };
+          if (!cursor.manual[0]) {
+            if (cursor.folder === null || cursor.baseline) return { meetings: [] };
+            await duringPull?.();
+            return { meetings: [], next_cursor: writeGranolaCheckpointV1({ ...cursor, baseline: true, revisions: { [id]: canonicalSha256('historical meeting') } }) };
+          }
+          const transcript = { id: 'private-transcript', kind: 'transcript' as const, text: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' };
+          const meeting: MeetingDocument = { ...original, content: options.transcriptOnly ? [transcript] : [...original.content, transcript], title: 'Test meeting', provenance: { ...original.provenance, source: identity, external_id: cursor.manual[0], canonical_revision: canonicalSha256('meeting version') } };
           await duringPull?.();
           return { meetings: [meeting], next_cursor: writeGranolaCheckpointV1({ ...cursor, manual: cursor.manual.slice(1) }) };
         },
@@ -150,13 +154,60 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release: search })).toThrow();
     await expect(list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } })).rejects.toMatchObject({ code: 'not_found' });
   });
+  it('opens a valid transcript-only imported meeting with no releasable body', async () => {
+    const f = await fixture({ transcriptOnly: true }), runtime = f.create();
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const items = new SqlitePersonOriginalItemsV1(f.db, f.sessions, f.person.organization_id);
+    const list = createPersonListRouteV1({ organization_id: f.person.organization_id, sessions: f.sessions, tools: async () => [], directory: new SqlitePersonListDirectoryV1(f.db), originals: items,
+      meetings: { collectMeetings: () => ({ status: 'ok', rows: [], handle: {} }), commitMeetings: () => ({}), revalidateMeetingRelease() {}, admitMeeting() {}, openMeeting() { throw new Error('unused'); } },
+      transcripts: { readApprovedMeetingTranscriptByRecordV1() { throw new Error('unused'); } },
+    });
+    const page = await list.list({ access_token: 'owner', request: { schema_version: 1, mine: true } });
+    expect(page.items).toHaveLength(1);
+    const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } });
+    expect(opened).toMatchObject({ text: '', next_cursor: null });
+    expect(JSON.stringify(opened)).not.toContain('TRANSCRIPT_SECRET_DO_NOT_SHARE');
+  });
+  it('saves a pending watch before the background baseline finishes, survives restart, and retains no history', async () => {
+    const f = await fixture(), runtime = f.create(); f.grantProject();
+    const home = await f.call(runtime, { operation: 'home' });
+    await expect(f.call(runtime, { operation: 'watch', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 })).resolves.toEqual({ status: 'saved' });
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]?.baseline).toBe(false);
+    const before = f.db.prepare('SELECT count(*) FROM authority_source_revisions_v1').pluck().get();
+    let started!: () => void, release!: () => void;
+    const startedPull = new Promise<void>(resolve => { started = resolve; });
+    const finishPull = new Promise<void>(resolve => { release = resolve; });
+    f.duringPull(async () => { started(); await finishPull; });
+    const restarted = f.create();
+    const scan = restarted.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    await startedPull;
+    try { expect((await f.call(restarted, { operation: 'home' })).sources[0]?.baseline).toBe(false); }
+    finally { release(); await scan; }
+    expect((await f.call(restarted, { operation: 'home' })).sources[0]).toMatchObject({ baseline: true, pending_imports: [], error: null });
+    expect(f.db.prepare('SELECT count(*) FROM authority_source_revisions_v1').pluck().get()).toBe(before);
+    expect(f.extracted()).toBe(0);
+  });
+  it('discards an in-flight baseline when the person stops the watch', async () => {
+    const f = await fixture(), runtime = f.create(); f.grantProject();
+    const home = await f.call(runtime, { operation: 'home' });
+    await f.call(runtime, { operation: 'watch', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
+    const pending = await f.call(runtime, { operation: 'home' });
+    expect(pending.sources[0]?.baseline).toBe(false);
+    f.duringPull(async () => { await f.call(runtime, { operation: 'watch', folder_id: null, project_id: null, retain: true, settings_sha256: pending.settings_sha256 }); });
+    const before = f.db.prepare('SELECT count(*) FROM authority_source_revisions_v1').pluck().get();
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ folder_id: null, baseline: false });
+    expect(f.db.prepare('SELECT count(*) FROM authority_source_revisions_v1').pluck().get()).toBe(before);
+    expect(f.extracted()).toBe(0);
+  });
   it('uses compare-and-set across clients and permits stopping after project access is revoked', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject();
     const home = await f.call(runtime, { operation: 'home' });
     const watch = { operation: 'watch' as const, folder_id: folder, project_id: project, retain: true as const, settings_sha256: home.settings_sha256 };
     await f.call(runtime, watch);
     await expect(f.call(f.create(), watch)).rejects.toMatchObject({ code: 'stale_access_state' });
-    const next = await f.call(runtime, { operation: 'home' }); expect(next.sources[0]?.baseline).toBe(true);
+    const next = await f.call(runtime, { operation: 'home' }); expect(next.sources[0]?.baseline).toBe(false);
     f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(new Date().toISOString(), project);
     await f.call(runtime, { operation: 'watch', folder_id: null, project_id: null, retain: true, settings_sha256: next.settings_sha256 });
     expect((await f.call(runtime, { operation: 'home' })).sources[0]?.folder_id).toBeNull();
