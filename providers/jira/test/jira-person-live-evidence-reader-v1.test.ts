@@ -67,10 +67,38 @@ function fixture() {
 }
 
 describe('person-bound Jira live reader through the shared audited wrapper', () => {
+  it('bounds exact inventory reads at four and preserves discovery order', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      const ids = Array.from({ length: 20 }, (_, index) => String(10001 + index));
+      for (const id of ids) f.state.tickets.set(id, ticket(id));
+      f.state.pages = [page(ids)];
+      const original = f.request.getMockImplementation()!;
+      let active = 0; let maximum = 0;
+      f.request.mockImplementation(async input => {
+        if (input.path.startsWith(`${prefix}/issue/`)) {
+          active++; maximum = Math.max(maximum, active);
+          await new Promise(resolve => setTimeout(resolve, 10));
+          active--;
+        }
+        return original(input);
+      });
+      const { source } = await f.make();
+      const start = Date.now(); let elapsed = 0;
+      const pending = source.list({ limit: 20 }).then(result => { elapsed = Date.now() - start; return result; });
+      await vi.advanceTimersByTimeAsync(300);
+      const result = await pending;
+      expect(elapsed).toBe(50);
+      expect(maximum).toBe(4);
+      expect(result.items.map(item => item.citation.ticket_id)).toEqual(ids);
+      expect(f.audit.record).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
   it('discovers ticket summaries before fetching a selected body', async () => {
     const f = fixture(); const { source } = await f.make();
     const discovered = await source.search({ query: 'ship' });
-    expect(discovered.items[0]).toMatchObject({ label: 'ECHO-1: Ship connector', attributes: { status: 'In progress' } });
+    expect(discovered.items[0]).toMatchObject({ label: 'ECHO-1: Ship connector', date_kind: 'created', attributes: { status: 'In progress' } });
     expect(discovered.items[0]).not.toHaveProperty('text');
     expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !request.query?.fields?.includes('description'))).toBe(true);
     const opened = await source.open({ item: discovered.items[0]!.id });

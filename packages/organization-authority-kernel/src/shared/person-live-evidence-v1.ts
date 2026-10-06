@@ -1,4 +1,5 @@
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
+import type { EvidenceDeskDateKindV1 } from './evidence-desk-v1.js';
 import type { PersonConnectorAccessV1, PersonEvidenceAttributesV1, PersonPageCitationV1, PersonSlackMessageCitationV1, PersonTicketCitationV1 } from '@echo-brain/organization-api';
 
 export type PersonLiveEvidenceCitationV1 = PersonSlackMessageCitationV1 | PersonTicketCitationV1 | PersonPageCitationV1;
@@ -31,6 +32,7 @@ export interface PersonLiveEvidenceValueV1<C extends PersonLiveEvidenceCitationV
   readonly visibility: 'only_me' | 'team';
   readonly attributes?: PersonEvidenceAttributesV1;
   readonly occurred_at?: string;
+  readonly date_kind?: EvidenceDeskDateKindV1;
 }
 
 export interface PersonLiveEvidencePageV1<C extends PersonLiveEvidenceCitationV1 = PersonLiveEvidenceCitationV1> {
@@ -91,6 +93,7 @@ export interface PersonLiveEvidenceItemV1<C extends PersonLiveEvidenceCitationV1
   readonly visibility: 'only_me' | 'team';
   readonly attributes?: PersonEvidenceAttributesV1;
   readonly occurred_at?: string;
+  readonly date_kind?: EvidenceDeskDateKindV1;
   readonly receipt_sha256: Sha256Digest;
 }
 

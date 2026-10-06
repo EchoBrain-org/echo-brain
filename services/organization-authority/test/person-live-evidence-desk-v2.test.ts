@@ -28,6 +28,25 @@ function fixture(scope: EvidenceDeskPortV1['scope'] = { kind: 'global' }) {
   return { base, ticket, revokeBase: () => { current = false; } };
 }
 describe('thin live ticket dispatcher', () => {
+  it('overlaps independent provider checks while preserving both local fences', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = mixedFixture();
+      vi.mocked(f.ticket.revalidate).mockImplementation(() => new Promise(resolve => setTimeout(resolve, 80)));
+      vi.mocked(f.page.revalidate).mockImplementation(() => new Promise(resolve => setTimeout(resolve, 50)));
+      const start = Date.now(); let elapsed = 0;
+      const pending = createPersonLiveEvidenceDeskV2(f.base, f.ticket, undefined, undefined, f.page)
+        .revalidate({}).then(() => { elapsed = Date.now() - start; });
+      await vi.advanceTimersByTimeAsync(200);
+      await pending;
+      expect(elapsed).toBe(80);
+      expect(f.base.revalidate).toHaveBeenCalledTimes(2);
+      expect(f.ticket.revalidate).toHaveBeenCalledTimes(1);
+      expect(f.page.revalidate).toHaveBeenCalledTimes(1);
+      expect(f.ticket.assertCurrent).toHaveBeenCalledTimes(1);
+      expect(f.page.assertCurrent).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
   it('describes only the live sources bound for this request using provider-neutral source kinds', () => {
     const f = mixedFixture();
     const ticket = { ...f.ticket, tool_id: 'issue-fixture' };

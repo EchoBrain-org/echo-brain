@@ -105,7 +105,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     // Copy and validate the whole page before the first await/audit so adapters
     // cannot change the text or metadata while its release is being committed.
     try {
-      closedRecord(value, ['citation', 'handle', 'label', 'visibility'], ['text', 'attributes', 'occurred_at']);
+      closedRecord(value, ['citation', 'handle', 'label', 'visibility'], ['text', 'attributes', 'occurred_at', 'date_kind']);
       const validated = reader.validateCitation(value.citation);
       const citation = validated.citation;
       closedRecord(validated.coordinates, ['object_id'], ['container_id']);
@@ -123,6 +123,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       }
       if (value.text === undefined && citation.text_sha256 !== `sha256:${createHash('sha256').update('').digest('hex')}`) invalidOutput();
       if (value.occurred_at !== undefined) day(value.occurred_at);
+      if (value.date_kind !== undefined && (value.occurred_at === undefined || !['created', 'version_created', 'occurred'].includes(value.date_kind))) invalidOutput();
       let attributes: PersonLiveEvidenceValueV1['attributes'];
       if (value.attributes !== undefined) {
         closedRecord(value.attributes, [], ['owner', 'due_at', 'status']);
@@ -139,7 +140,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       }
       return Object.freeze({ citation: citation as C, coordinates, handle: value.handle, label: value.label, visibility: value.visibility,
         ...(value.text === undefined ? {} : { text: value.text }), ...(attributes === undefined ? {} : { attributes }),
-        ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at }) });
+        ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at }), ...(value.date_kind === undefined ? {} : { date_kind: value.date_kind }) });
     } catch { invalidOutput(); }
   };
 
@@ -188,7 +189,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       items: Object.freeze(prepared.map((value, index) => Object.freeze({
         id: ids[index]!, kind: value.citation.kind as C['kind'], citation: value.citation, label: value.label, visibility: value.visibility,
         ...(value.text === undefined ? {} : { text: value.text }), ...(value.attributes === undefined ? {} : { attributes: value.attributes }),
-        ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at }), receipt_sha256: receipt,
+        ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at }), ...(value.date_kind === undefined ? {} : { date_kind: value.date_kind }), receipt_sha256: receipt,
       }))),
       truncated, receipt_digests: Object.freeze([receipt]), ...(nextCursor === undefined ? {} : { next_cursor: nextCursor }),
       ...(page.notice === undefined ? {} : { notice: page.notice }),
