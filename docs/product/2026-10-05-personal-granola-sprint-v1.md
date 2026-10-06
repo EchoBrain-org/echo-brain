@@ -145,6 +145,17 @@ Historical bulk import remains out of scope; establish the initial folder
 baseline without bulk retention, then process entries and changes after it.
 People can explicitly select existing meetings.
 
+Prefer verifying Granola's native folder-scoped webhook trigger before choosing
+polling. The documented events cover first summary generation, summary edits,
+and newly granted access, with folder filters including subfolders. They do not
+yet prove an event for moving an already-accessible meeting into the watched
+folder, every kind of content edit, or compatibility between webhook note IDs
+and OAuth MCP reads. Verify those behaviors and the exact folder/subfolder scope.
+The documented webhook workflow uses API keys; retaining personal OAuth access
+requires proving that a notification can trigger a fresh authorized MCP read.
+A webhook notification is not permission to retain or share content. Any gaps
+need bounded reconciliation through the verified personal connection contract.
+
 Phase 2 proof includes a new meeting in the selected folder, an existing meeting
 entering that folder, and an edit to a meeting in it each triggering the pipeline
 without Add to ECHO; no automatic intake outside that folder; no historical
@@ -184,6 +195,8 @@ with explicit supersession where applicable.
 - [Nango Granola MCP](https://nango.dev/docs/api-integrations/granola-mcp):
   dynamic client registration and supported MCP calls.
 - [Granola webhooks](https://docs.granola.ai/webhooks): the documented webhook
-  path uses REST API keys; it is not evidence of an OAuth MCP change feed.
+  path supports folder filters and generation/edit/access events using REST
+  API keys; it is not evidence of an OAuth MCP change feed or every folder-entry
+  transition. Verify notification-to-MCP compatibility before selecting it.
 - [ECHO connector contracts](../architecture/connector-contracts.md): existing
   connection, live-read, and meeting-export responsibilities.
