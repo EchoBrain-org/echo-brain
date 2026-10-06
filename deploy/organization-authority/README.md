@@ -759,6 +759,26 @@ handoff with `terminal_green=false` and `resume` refuses to start or act on the
 candidate. Use `update-clean-v1.sh status`, then promote or roll back that
 candidate before returning to accepted-onboarding commands.
 
+An exception exists only for a candidate staged from the recorded
+`initial_onboarding` state. First install the verified Person kit matching that
+exact candidate release and use its installed absolute-path command for the
+human's Slack organization setup and personal Slack link. The previously
+accepted client does not verify the candidate's setup flow. Then the human host
+operator may run this installed command:
+
+```sh
+./onboard-clean-v1.sh continue-staged-initial-onboarding
+```
+
+It accepts only the digest-bound candidate readiness record for the intact
+accepted record, verifies that the running Authority, environment and runtime
+profile are the exact candidate, and advances only credential installation and
+finalization until `ready_to_start`. It refuses login, bootstrap, Slack steps,
+terminal completion, a missing or mismatched readiness record, and runtime
+drift. Its ready result remains `terminal_green=false`; run the ordinary
+candidate canary and approval path next. It neither changes the accepted
+record nor makes the candidate accepted.
+
 ## Activate replacement provider credentials
 
 The LLM credential activates through a controlled Authority restart.

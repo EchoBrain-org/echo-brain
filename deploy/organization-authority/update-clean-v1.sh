@@ -18,6 +18,7 @@ RELEASE_STATE_DIR="${ECHO_CLEAN_RELEASE_STATE_DIR:-$DEPLOY_DIR/clean-data/releas
 STATE_DIR="${ECHO_CLEAN_STATE_DIR:-${RELEASE_STATE_DIR%/*}/state}"
 CURRENT_RECORD="$RELEASE_STATE_DIR/current.clean-v1.json"
 CANDIDATE_RECORD="$RELEASE_STATE_DIR/candidate.clean-v1.json"
+SETUP_READINESS_DIR="$RELEASE_STATE_DIR/setup-readiness"
 RUNTIME_PROFILE_STATE_DIR="$RELEASE_STATE_DIR/runtime-profiles"
 ENVIRONMENT_STATE_DIR="$RELEASE_STATE_DIR/runtime-environments"
 CANARY_RECEIPT_DIR="$RELEASE_STATE_DIR/canary-receipts"
@@ -88,7 +89,7 @@ validate_profile() { python3 "$RUNTIME_PROFILE_TOOL" validate "$1" >/dev/null; }
 
 ensure_state_directories() {
   python3 - "$RELEASE_STATE_DIR" "$RUNTIME_PROFILE_STATE_DIR" "$ENVIRONMENT_STATE_DIR" \
-    "$RELEASE_STATE_DIR/history" "$RELEASE_STATE_DIR/failed" "$CANARY_RECEIPT_DIR" <<'PY'
+    "$RELEASE_STATE_DIR/history" "$RELEASE_STATE_DIR/failed" "$CANARY_RECEIPT_DIR" "$SETUP_READINESS_DIR" <<'PY'
 import os, pathlib, stat, sys
 
 for index, raw in enumerate(sys.argv[1:]):
@@ -478,11 +479,62 @@ finally: os.close(directory)
 PY
 }
 
+candidate_setup_class_path() {
+  local record="$1" id
+  id="$(field "$record" release-id)" || return 1
+  printf '%s/%s.json\n' "$SETUP_READINESS_DIR" "$id"
+}
+
+write_candidate_setup_class() {
+  local value="$1" accepted_record="$2" candidate_record="$3" path
+  [[ "$value" == ready || "$value" == initial_onboarding ]] || return 1
+  path="$(candidate_setup_class_path "$candidate_record")" || return 1
+  python3 - "$path" "$value" "$accepted_record" "$candidate_record" <<'PY'
+import hashlib, json, os, pathlib, stat, sys
+
+path = pathlib.Path(sys.argv[1])
+value = sys.argv[2]
+accepted, candidate = sys.argv[3:]
+if path.parent.is_symlink() or path.exists() or path.is_symlink() or not pathlib.Path(candidate).is_file():
+    raise SystemExit(1)
+def digest(raw): return hashlib.sha256(pathlib.Path(raw).read_bytes()).hexdigest()
+payload = json.dumps({
+    "accepted_sha256": None if accepted == "-" else digest(accepted),
+    "candidate_sha256": digest(candidate),
+    "setup_class": value,
+}, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
+temporary = path.parent / ("." + path.name + "." + os.urandom(16).hex())
+fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+try:
+    with os.fdopen(fd, "wb") as output:
+        output.write(payload); output.flush(); os.fsync(output.fileno())
+    os.link(temporary, path)
+    os.unlink(temporary)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try: os.fsync(directory)
+    finally: os.close(directory)
+finally:
+    if os.path.exists(temporary): os.unlink(temporary)
+PY
+}
+
+candidate_setup_class() {
+  local path accepted_record=-
+  path="$(candidate_setup_class_path "$CANDIDATE_RECORD")" || return 1
+  [[ ! -f "$CURRENT_RECORD" ]] || accepted_record="$CURRENT_RECORD"
+  python3 "$RELEASE_TOOL" setup-readiness "$path" "$accepted_record" "$CANDIDATE_RECORD"
+}
+
+remove_candidate_record() {
+  remove_record "$CANDIDATE_RECORD"
+}
+
 archive_candidate_as_failed() {
   local id
+  candidate_setup_class >/dev/null || return 1
   id="$(field "$CANDIDATE_RECORD" release-id)"
   copy_record "$CANDIDATE_RECORD" "$RELEASE_STATE_DIR/failed/$id.json" idempotent-immutable || return 1
-  remove_record "$CANDIDATE_RECORD"
+  remove_candidate_record
 }
 
 service_is_stopped() {
@@ -651,10 +703,12 @@ safe_descriptor_check() {
   '
 }
 
-safe_setup_status() {
-  compose_clean exec -T authority node \
+safe_update_setup_status() {
+  local raw
+  raw="$(compose_clean exec -T authority node \
     services/organization-authority/dist/clean-founder-main.js \
-    status --state-dir /echo-clean/state | python3 -c '
+    status --state-dir /echo-clean/state)" || return 1
+  printf '%s' "$raw" | python3 -c '
 import json, sys
 try:
     raw = sys.stdin.buffer.read(16385)
@@ -665,13 +719,38 @@ try:
     # accepted older image. It does not re-enable organization Granola setup.
     versions = {1: "echo-clean-founder-setup-status-v1", 2: "echo-organization-authority-setup-status-v2"}
     version = status.get("schema_version")
-    if type(version) is not int or versions.get(version) != status.get("kind") or status.get("runtime_status") != "ready_to_start":
+    if type(version) is not int or versions.get(version) != status.get("kind"):
+        raise ValueError()
+    if status.get("runtime_status") == "ready_to_start":
+        print("ready")
+    elif version == 2 and all(status.get(key) is True for key in (
+        "setup_plan_present", "genesis_published", "credentials_ready",
+        "invitation_file_present", "founder_oidc_bound",
+    )) and status.get("founder_invitation_valid") is False and \
+        status.get("source_mode") == "none" and status.get("runtime_status") == "not_ready" and \
+        status.get("runtime_observation") == "not_observed" and status.get("canary_status") == "not_ready":
+        progress = {
+            "connect_slack_in_app": (False, False, False, False),
+            "complete_founder_slack_link": (True, False, False, False),
+            "install_provider_credentials": (True, True, False, False),
+            "run_finalize": (True, True, True, False),
+        }
+        step = status.get("next_step")
+        state = tuple(status.get(key) for key in ("slack_connected", "founder_slack_link_active", "llm_credential_valid", "source_admission_present"))
+        if step not in progress or any(type(value) is not bool for value in state) or state != progress[step]:
+            raise ValueError()
+        print("initial_onboarding" if step == "connect_slack_in_app" else "initial_onboarding_progress")
+    else:
         raise ValueError()
 except (ValueError, TypeError):
     raise SystemExit("Authority setup is not ready or returned invalid status")
-sys.stdout.buffer.write(raw)
 '
 }
+
+safe_setup_status() {
+  [[ "$(safe_update_setup_status)" == ready ]]
+}
+
 
 authority_host() {
   python3 - "$ENV_FILE" <<'PY'
@@ -843,6 +922,8 @@ run_staging_private_dm_canary() {
   active_environment_matches "$record"
   running_exact_release "$record" || \
     fail 'staging canary requires the exact selected release to be running'
+  safe_setup_status || \
+    fail 'staging canary requires Authority setup readiness'
   host="$(authority_host)" || fail 'staging canary could not verify the Authority host'
   [[ "$host" == "authority-staging.echobrain.org" ]] || \
     fail 'staging canary is available only on the exact Authority staging host'
@@ -876,7 +957,7 @@ PY
 }
 
 start_and_check() {
-  local record="$1" expected expected_source
+  local record="$1" expected_setup_class="$2" allow_initial_progress="$3" expected expected_source observed_setup_class
   expected="$(field "$record" authority-image)"
   expected_source="$(field "$record" source-sha)"
   compose_clean pull authority || return 1
@@ -886,14 +967,21 @@ start_and_check() {
   compose_clean up -d --no-build --wait --wait-timeout 90 authority proxy || return 1
   running_exact_release "$record" || return 1
   safe_descriptor_check || return 1
-  safe_setup_status || return 1
+  observed_setup_class="$(safe_update_setup_status)" || return 1
+  if [[ "$expected_setup_class" == ready ]]; then
+    [[ "$observed_setup_class" == ready ]] || return 1
+  elif [[ "$allow_initial_progress" == true ]]; then
+    [[ "$observed_setup_class" == initial_onboarding || "$observed_setup_class" == ready || "$observed_setup_class" == initial_onboarding_progress ]] || return 1
+  else
+    [[ "$observed_setup_class" == initial_onboarding ]] || return 1
+  fi
   safe_public_descriptor_check
 }
 
 restore_accepted() {
-  local accepted_record="$1"
+  local accepted_record="$1" accepted_setup_class="$2"
   activate_release_tuple "$accepted_record" || return 1
-  start_and_check "$accepted_record"
+  start_and_check "$accepted_record" "$accepted_setup_class" true
 }
 
 usage() {
@@ -925,7 +1013,11 @@ case "$command" in
     candidate_id="$(field "$candidate" release-id)"
     release_id_unused "$candidate_id" || fail 'release_id was already used by current, candidate, history, or failed state'
     [[ ! -e "$CANDIDATE_RECORD" ]] || fail 'a candidate is already staged; promote or roll it back first'
+    candidate_setup_path="$(candidate_setup_class_path "$candidate")" || fail 'candidate release id is invalid'
+    [[ ! -e "$candidate_setup_path" && ! -L "$candidate_setup_path" ]] || fail 'a staged candidate setup class already exists'
     first_deploy=false
+    expected_setup_class=ready
+    accepted_marker_record=-
     if [[ -f "$CURRENT_RECORD" ]]; then
       validate "$CURRENT_RECORD"
       [[ "$(field "$candidate" baseline-class)" == "$(field "$CURRENT_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the current release'
@@ -936,6 +1028,12 @@ case "$command" in
       active_environment_matches "$CURRENT_RECORD"
       [[ "$(current_image)" == "$(field "$CURRENT_RECORD" authority-image)" ]] || fail 'environment image does not match the current accepted release record'
       running_exact_release "$CURRENT_RECORD" || fail 'current accepted release is stopped or runtime image drifted'
+      expected_setup_class="$(safe_update_setup_status)" || fail 'current accepted release setup is not ready for a staged update'
+      if [[ "$expected_setup_class" == initial_onboarding ]]; then
+        [[ "$(authority_host)" == authority-staging.echobrain.org ]] || \
+          fail 'initial-onboarding staging updates are available only on the exact Authority staging host'
+      fi
+      accepted_marker_record="$CURRENT_RECORD"
     else
       first_deploy=true
       if running_container_id authority >/dev/null; then
@@ -948,8 +1046,17 @@ case "$command" in
       remove_release_tuple "$candidate" || true
       fail 'could not persist the staged candidate release record'
     fi
-    if activate_release_tuple "$CANDIDATE_RECORD" && start_and_check "$CANDIDATE_RECORD"; then
-      printf '{"ok":true,"stage":"candidate_ready","accepted_release_present":%s,"next_action":"Run one bounded post-update canary, stop for founder Slack approval and the exact candidate-client record and answer checks, then promote with --canary-passed or run rollback."}\n' "$([[ "$first_deploy" == true ]] && printf false || printf true)"
+    if ! write_candidate_setup_class "$expected_setup_class" "$accepted_marker_record" "$CANDIDATE_RECORD"; then
+      remove_record "$CANDIDATE_RECORD" || true
+      remove_release_tuple "$candidate" || true
+      fail 'could not persist the staged candidate setup class'
+    fi
+    if activate_release_tuple "$CANDIDATE_RECORD" && start_and_check "$CANDIDATE_RECORD" "$expected_setup_class" false; then
+      next_action='Run one bounded post-update canary, stop for founder Slack approval and the exact candidate-client record and answer checks, then promote with --canary-passed or run rollback.'
+      if [[ "$expected_setup_class" == initial_onboarding ]]; then
+        next_action='Install the exact candidate Person kit, complete Slack setup and the owner Slack link, then have the human host operator run onboard-clean-v1.sh continue-staged-initial-onboarding before the candidate canary and approval checks.'
+      fi
+      printf '{"ok":true,"stage":"candidate_ready","accepted_release_present":%s,"next_action":"%s"}\n' "$([[ "$first_deploy" == true ]] && printf false || printf true)" "$next_action"
       exit 0
     fi
     if [[ "$first_deploy" == true ]]; then
@@ -957,7 +1064,7 @@ case "$command" in
       archive_candidate_as_failed || fail 'first deployment candidate was stopped but could not be marked failed; leave it staged and retry rollback'
       fail 'first deployment candidate failed health/setup checks; candidate was stopped and no release was accepted'
     fi
-    restore_accepted "$CURRENT_RECORD" || fail 'candidate failed and rollback also failed; candidate remains staged so recovery can be retried'
+    restore_accepted "$CURRENT_RECORD" "$expected_setup_class" || fail 'candidate failed and rollback also failed; candidate remains staged so recovery can be retried'
     archive_candidate_as_failed || fail 'candidate recovery was verified but the candidate could not be marked failed; leave it staged and retry rollback'
     fail 'candidate failed health/setup checks; previous accepted release tuple was restored and verified'
     ;;
@@ -971,30 +1078,33 @@ case "$command" in
     validate "$candidate"
     [[ -f "$CANDIDATE_RECORD" ]] || fail 'no staged candidate to promote'
     cmp -s "$candidate" "$CANDIDATE_RECORD" || fail 'promotion record does not match the staged candidate'
-    require_staged_canary_receipt "$CANDIDATE_RECORD"
     active_runtime_profile_matches "$CANDIDATE_RECORD"
     active_materialized_profile_matches
     active_environment_matches "$CANDIDATE_RECORD"
     running_exact_release "$CANDIDATE_RECORD" || fail 'candidate is stopped or runtime image drifted'
+    safe_setup_status || fail 'candidate setup is not ready for promotion'
+    require_staged_canary_receipt "$CANDIDATE_RECORD"
     safe_public_descriptor_check || fail 'candidate public descriptor is unavailable; roll back instead of promoting'
     if [[ -f "$CURRENT_RECORD" ]]; then
       validate "$CURRENT_RECORD"
       if cmp -s "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
-        remove_record "$CANDIDATE_RECORD"
+        remove_candidate_record
         printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","idempotent":true}\n'
         exit 0
       fi
+      candidate_setup_class >/dev/null || fail 'staged candidate setup class is missing or unsafe'
       [[ "$(field "$candidate" baseline-class)" == "$(field "$CURRENT_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the current release'
       stored_release_tuple_matches "$CURRENT_RECORD"
       copy_record "$CURRENT_RECORD" "$RELEASE_STATE_DIR/history/$(field "$CURRENT_RECORD" release-id).json" idempotent-immutable
       copy_record "$CANDIDATE_RECORD" "$CURRENT_RECORD" replace
     else
+      candidate_setup_class >/dev/null || fail 'staged candidate setup class is missing or unsafe'
       copy_record "$CANDIDATE_RECORD" "$CURRENT_RECORD" no-replace || fail 'could not accept first deployment candidate'
-      remove_record "$CANDIDATE_RECORD"
+      remove_candidate_record
       printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","first_deploy":true}\n'
       exit 0
     fi
-    remove_record "$CANDIDATE_RECORD"
+    remove_candidate_record
     printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","first_deploy":false}\n'
     ;;
   rollback)
@@ -1011,13 +1121,14 @@ case "$command" in
     [[ -f "$CURRENT_RECORD" ]] || fail 'accepted current release record is unsafe'
     validate "$CURRENT_RECORD"
     if cmp -s "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
-      remove_record "$CANDIDATE_RECORD"
+      remove_candidate_record
       printf '{"ok":true,"stage":"already_promoted","baseline_compatibility_class":"clean-v1"}\n'
       exit 0
     fi
+    expected_setup_class="$(candidate_setup_class)" || fail 'staged candidate setup class is missing or unsafe'
     [[ "$(field "$CURRENT_RECORD" baseline-class)" == "$(field "$CANDIDATE_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the accepted release'
     stored_release_tuple_matches "$CURRENT_RECORD"
-    restore_accepted "$CURRENT_RECORD" || fail 'rollback failed; candidate remains staged and runtime recovery is unconfirmed'
+    restore_accepted "$CURRENT_RECORD" "$expected_setup_class" || fail 'rollback failed; candidate remains staged and runtime recovery is unconfirmed'
     archive_candidate_as_failed || fail 'rollback recovery was verified but the candidate could not be marked failed; leave it staged and retry rollback'
     printf '{"ok":true,"stage":"rolled_back","baseline_compatibility_class":"clean-v1"}\n'
     ;;

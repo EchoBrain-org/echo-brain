@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Read the non-secret, canonical clean-v1 release record on an operator host."""
 
+import hashlib
 import json
 import os
+import pathlib
 import re
 import stat
 import sys
@@ -104,7 +106,52 @@ def read(path):
     return value
 
 
+def setup_readiness(path, accepted, candidate):
+    marker = pathlib.Path(path)
+    directory = os.open(marker.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        parent = os.fstat(directory)
+        if not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.geteuid() or stat.S_IMODE(parent.st_mode) != 0o700:
+            fail("setup readiness evidence directory is unsafe")
+        fd = os.open(marker.name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=directory)
+    finally:
+        os.close(directory)
+    try:
+        state = os.fstat(fd)
+        if not stat.S_ISREG(state.st_mode) or state.st_uid != os.geteuid() or stat.S_IMODE(state.st_mode) != 0o600 or state.st_nlink != 1:
+            fail("setup readiness evidence is unsafe")
+        raw = b""
+        while len(raw) <= 512:
+            chunk = os.read(fd, 513 - len(raw))
+            if not chunk: break
+            raw += chunk
+    finally:
+        os.close(fd)
+    if len(raw) > 512:
+        fail("setup readiness evidence is too large")
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        fail("setup readiness evidence is not valid JSON")
+    if not isinstance(value, dict) or set(value) != {"accepted_sha256", "candidate_sha256", "setup_class"}:
+        fail("setup readiness evidence shape is invalid")
+    if raw != json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n":
+        fail("setup readiness evidence is not canonical")
+    if value["setup_class"] not in ("ready", "initial_onboarding"):
+        fail("setup readiness evidence class is invalid")
+    digest = lambda item: hashlib.sha256(pathlib.Path(item).read_bytes()).hexdigest()
+    if value["candidate_sha256"] != digest(candidate):
+        fail("setup readiness evidence does not match the candidate")
+    if accepted == "-":
+        if value["accepted_sha256"] is not None: fail("setup readiness evidence does not match the accepted release")
+    elif value["accepted_sha256"] != digest(accepted):
+        fail("setup readiness evidence does not match the accepted release")
+    sys.stdout.write(value["setup_class"] + "\n")
+
+
 def main(argv):
+    if len(argv) == 4 and argv[0] == "setup-readiness":
+        setup_readiness(argv[1], argv[2], argv[3]); return
     if len(argv) not in (2, 3) or argv[0] not in ("validate", "field") or (argv[0] == "field" and len(argv) != 3):
         fail("usage: clean-v1-release.py <validate|field> <record> [authority-image|baseline-class|client-url|client-sha256|client-version|runtime-profile-url|runtime-profile-sha256|runtime-profile-version|agentic-ask-v1|small-scope-shortcut]")
     record = read(argv[1])

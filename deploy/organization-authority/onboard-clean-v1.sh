@@ -12,6 +12,7 @@ ENV_FILE="$DEPLOY_DIR/.env.clean-v1"
 SETUP_FILE="$PRIVATE_DIR/onboard-clean-v1.conf"
 RELEASE_FILE="$RELEASE_DIR/current.clean-v1.json"
 CANDIDATE_FILE="$RELEASE_DIR/candidate.clean-v1.json"
+CANDIDATE_SETUP_READINESS_DIR="$RELEASE_DIR/setup-readiness"
 RUNTIME_PROFILES_DIR="$RELEASE_DIR/runtime-profiles"
 RUNTIME_ENVIRONMENTS_DIR="$RELEASE_DIR/runtime-environments"
 ACTIVE_RUNTIME_PROFILE_FILE="$RELEASE_DIR/runtime-profile.active"
@@ -120,6 +121,7 @@ usage:
   onboard-clean-v1.sh activate-provider-credentials --input-dir <absolute-private-provider-directory>
   onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users [--reuse-provider-inputs <onboarding-id> [--content-telemetry <true|false>]]
   onboard-clean-v1.sh resume
+  onboard-clean-v1.sh continue-staged-initial-onboarding
   onboard-clean-v1.sh status
   onboard-clean-v1.sh extraction-attempts [--limit <1..100>]
   onboard-clean-v1.sh retry-extraction --admission-sha256 <sha256:digest> --review-lineage-id <rli_digest> --review-input-sha256 <sha256:digest> --expected-attempt <number> --expected-outcome <failed|succeeded|pending> --confirm-new-model-call [--recover-pending]
@@ -870,6 +872,7 @@ activation_compose_quiet() {
 }
 
 release_field() { python3 "$RELEASE_TOOL" field "$RELEASE_FILE" "$1"; }
+release_record_field() { python3 "$RELEASE_TOOL" field "$1" "$2"; }
 
 private_source() {
   local path="$1" label="$2"
@@ -1013,6 +1016,14 @@ accepted_runtime_environment_path() {
   printf '%s/%s.env\n' "$RUNTIME_ENVIRONMENTS_DIR" "$(release_field release-id)"
 }
 
+runtime_profile_path_for_release() {
+  printf '%s/%s.profile\n' "$RUNTIME_PROFILES_DIR" "$(release_record_field "$1" release-id)"
+}
+
+runtime_environment_path_for_release() {
+  printf '%s/%s.env\n' "$RUNTIME_ENVIRONMENTS_DIR" "$(release_record_field "$1" release-id)"
+}
+
 runtime_profile_files_match_deployment() {
   python3 - "$ACTIVE_RUNTIME_PROFILE_FILE" "$DEPLOY_DIR" <<'PY'
 import json
@@ -1085,21 +1096,29 @@ PY
 }
 
 runtime_profile_matches_prepared_tuple() {
-  local profile environment expected_digest expected_release
-  profile="$(accepted_runtime_profile_path)" || return 1
-  environment="$(accepted_runtime_environment_path)" || return 1
+  runtime_profile_matches_release_tuple "$RELEASE_FILE"
+}
+
+runtime_profile_matches_release_tuple() {
+  local record="$1" profile environment expected_digest expected_release
+  profile="$(runtime_profile_path_for_release "$record")" || return 1
+  environment="$(runtime_environment_path_for_release "$record")" || return 1
   [[ -f "$profile" && ! -L "$profile" ]] || return 1
   [[ -f "$ACTIVE_RUNTIME_PROFILE_FILE" && ! -L "$ACTIVE_RUNTIME_PROFILE_FILE" ]] || return 1
   [[ -f "$environment" && ! -L "$environment" ]] || return 1
-  validate_runtime_profile_tuple "$RELEASE_FILE" "$profile" || return 1
-  validate_runtime_profile_tuple "$RELEASE_FILE" "$ACTIVE_RUNTIME_PROFILE_FILE" || return 1
+  validate_runtime_profile_tuple "$record" "$profile" || return 1
+  validate_runtime_profile_tuple "$record" "$ACTIVE_RUNTIME_PROFILE_FILE" || return 1
   cmp -s "$profile" "$ACTIVE_RUNTIME_PROFILE_FILE" || return 1
   cmp -s "$environment" "$ENV_FILE" || return 1
-  expected_digest="$(release_field runtime-profile-sha256)" || return 1
-  expected_release="$(release_field release-id)" || return 1
+  expected_digest="$(release_record_field "$record" runtime-profile-sha256)" || return 1
+  expected_release="$(release_record_field "$record" release-id)" || return 1
   [[ "$(environment_value "$ENV_FILE" ECHO_CLEAN_RUNTIME_PROFILE_SHA256)" == "$expected_digest" ]] || return 1
   [[ "$(environment_value "$ENV_FILE" ECHO_CLEAN_RELEASE_ID)" == "$expected_release" ]] || return 1
   runtime_profile_files_match_deployment && staging_connector_rehearsal_matches_prepared_tuple
+}
+
+runtime_profile_matches_candidate_tuple() {
+  runtime_profile_matches_release_tuple "$CANDIDATE_FILE"
 }
 
 require_prepared() {
@@ -1154,6 +1173,16 @@ staged_candidate_present() {
     fail 'staged clean-v1 candidate record is unsafe'
   python3 "$RELEASE_TOOL" validate "$CANDIDATE_FILE" >/dev/null || \
     fail 'staged clean-v1 candidate record is not canonical'
+}
+
+candidate_setup_readiness_is_initial_onboarding() {
+  local candidate_id marker
+  candidate_id="$(release_record_field "$CANDIDATE_FILE" release-id)" || return 1
+  [[ "$candidate_id" =~ ^clean-v1-[a-z0-9][a-z0-9-]{2,63}$ ]] || return 1
+  [[ -d "$CANDIDATE_SETUP_READINESS_DIR" && ! -L "$CANDIDATE_SETUP_READINESS_DIR" && \
+    "$(portable_stat_mode "$CANDIDATE_SETUP_READINESS_DIR")" == 700 ]] || return 1
+  marker="$CANDIDATE_SETUP_READINESS_DIR/$candidate_id.json"
+  [[ "$(python3 "$RELEASE_TOOL" setup-readiness "$marker" "$RELEASE_FILE" "$CANDIDATE_FILE" 2>/dev/null)" == initial_onboarding ]]
 }
 
 next_step_from_status() {
@@ -1218,12 +1247,12 @@ healthy_authority() {
   [[ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id" 2>/dev/null)" == healthy ]]
 }
 
-authority_uses_accepted_image() {
-  local id expected_image expected_source running_image_id
+authority_uses_release_image() {
+  local record="$1" id expected_image expected_source running_image_id
   id="$(compose_clean ps -q authority 2>/dev/null)" || return 1
   [[ -n "$id" ]] || return 1
-  expected_image="$(release_field authority-image)"
-  expected_source="$(release_field source-sha)"
+  expected_image="$(release_record_field "$record" authority-image)"
+  expected_source="$(release_record_field "$record" source-sha)"
   running_image_id="$(docker inspect --format '{{.Image}}' "$id" 2>/dev/null)" || return 1
   [[ "$running_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
   docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' \
@@ -1231,20 +1260,30 @@ authority_uses_accepted_image() {
   [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$running_image_id" 2>/dev/null)" == "$expected_source" ]]
 }
 
-service_uses_accepted_runtime_profile() {
-  local service="$1" id expected_release expected_digest
+authority_uses_accepted_image() {
+  authority_uses_release_image "$RELEASE_FILE"
+}
+
+service_uses_release_runtime_profile() {
+  local record="$1" service="$2" id expected_release expected_digest
   id="$(compose_clean ps -q "$service" 2>/dev/null)" || return 1
   [[ -n "$id" ]] || return 1
-  expected_release="$(release_field release-id)" || return 1
-  expected_digest="$(release_field runtime-profile-sha256)" || return 1
+  expected_release="$(release_record_field "$record" release-id)" || return 1
+  expected_digest="$(release_record_field "$record" runtime-profile-sha256)" || return 1
   [[ "$(docker inspect --format '{{index .Config.Labels "io.echo-brain.release-id"}}' "$id" 2>/dev/null)" == "$expected_release" ]] || return 1
   [[ "$(docker inspect --format '{{index .Config.Labels "io.echo-brain.runtime-profile-sha256"}}' "$id" 2>/dev/null)" == "$expected_digest" ]]
 }
 
 runtime_uses_accepted_runtime_profile() {
   runtime_profile_matches_prepared_tuple && \
-    service_uses_accepted_runtime_profile authority && \
-    service_uses_accepted_runtime_profile proxy
+    service_uses_release_runtime_profile "$RELEASE_FILE" authority && \
+    service_uses_release_runtime_profile "$RELEASE_FILE" proxy
+}
+
+runtime_uses_candidate_runtime_profile() {
+  runtime_profile_matches_candidate_tuple && \
+    service_uses_release_runtime_profile "$CANDIDATE_FILE" authority && \
+    service_uses_release_runtime_profile "$CANDIDATE_FILE" proxy
 }
 
 terminal_green() {
@@ -2020,10 +2059,10 @@ resume() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
   require_host_prerequisites
-  require_prepared
   if staged_candidate_present; then
     fail 'a candidate release is staged; use update-clean-v1.sh status, then promote or roll it back before resuming accepted onboarding'
   fi
+  require_prepared
   ensure_image
   local status_json step loops=0
   while (( loops < 5 )); do
@@ -2112,13 +2151,79 @@ resume() {
   fail 'onboarding did not reach a human-action or ready stage after five durable transitions'
 }
 
+require_candidate_initial_onboarding_continuation() {
+  [[ -f "$SETUP_FILE" && ! -L "$SETUP_FILE" ]] || fail 'clean onboarding setup configuration is missing or unsafe'
+  [[ -f "$RELEASE_FILE" && ! -L "$RELEASE_FILE" ]] || fail 'accepted clean release record is missing or unsafe'
+  [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'clean Compose environment is missing or unsafe'
+  python3 "$RELEASE_TOOL" validate "$RELEASE_FILE" >/dev/null || fail 'accepted clean-v1 release record is not canonical'
+  staged_candidate_present
+  candidate_setup_readiness_is_initial_onboarding || \
+    fail 'staged candidate is not bound to this accepted initial-onboarding state'
+  select_runtime_identity "$(setup_value runtime_user)"
+  [[ "$(setup_value authority_host)" == authority-staging.echobrain.org ]] || \
+    fail 'staged initial-onboarding continuation is available only on the exact Authority staging host'
+  runtime_profile_matches_candidate_tuple || \
+    fail 'staged candidate runtime profile or environment is missing, noncanonical, or drifted'
+  for required in oidc-config.json oidc-client-secret nango-secret-key llm-credential-source; do
+    require_runtime_private_file "$PRIVATE_DIR/$required" 'fixed private input'
+  done
+  staging_meetings_directory >/dev/null
+  running_authority && healthy_authority && authority_uses_release_image "$CANDIDATE_FILE" && \
+    runtime_uses_candidate_runtime_profile || \
+    fail 'staged candidate is stopped, unhealthy, or differs from its exact release and runtime profile'
+}
+
+continue_staged_initial_onboarding() {
+  acquire_operation_lock continue-staged-initial-onboarding
+  trap 'release_operation_lock' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  require_host_prerequisites
+  require_candidate_initial_onboarding_continuation
+  local status_json step loops=0
+  while (( loops < 3 )); do
+    status_json="$(setup_status)"
+    step="$(next_step_from_status "$status_json")"
+    case "$step" in
+      install_provider_credentials)
+        compose_clean down
+        install_credentials
+        start_runtime
+        ;;
+      run_finalize)
+        compose_clean down
+        finalize
+        start_runtime
+        ;;
+      ready_to_start)
+        running_authority && healthy_authority && authority_uses_release_image "$CANDIDATE_FILE" && \
+          runtime_uses_candidate_runtime_profile || \
+          fail 'staged candidate no longer matches its exact release and runtime profile'
+        printf 'candidate_initial_onboarding_ready=true\n'
+        printf 'release_state=staged_candidate\n'
+        printf 'authority_exact_candidate_image=true\n'
+        printf 'runtime_exact_candidate_profile=true\n'
+        printf 'terminal_green=false\n'
+        printf 'next_action=Run update-clean-v1.sh canary for this exact staged candidate.\n'
+        return
+        ;;
+      *)
+        fail "staged initial-onboarding continuation refuses next_step: $step"
+        ;;
+    esac
+    ((loops += 1))
+  done
+  fail 'staged initial-onboarding continuation did not reach ready_to_start after three durable transitions'
+}
+
 status() {
   require_host_prerequisites
-  require_prepared
   if staged_candidate_present; then
     print_staged_candidate_status
     return
   fi
+  require_prepared
   require_image_present
   local status_json
   status_json="$(setup_status)"
@@ -2211,6 +2316,7 @@ case "${1:-}" in
   activate-provider-credentials) shift; activate_provider_credentials "$@" ;;
   replace-rehearsal) shift; replace_rehearsal "$@" ;;
   resume) [[ $# -eq 1 ]] || usage; resume ;;
+  continue-staged-initial-onboarding) [[ $# -eq 1 ]] || usage; continue_staged_initial_onboarding ;;
   status) [[ $# -eq 1 ]] || usage; status ;;
   extraction-attempts) shift; extraction_attempts "$@" ;;
   retry-extraction) shift; retry_extraction "$@" ;;
