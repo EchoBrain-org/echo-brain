@@ -344,3 +344,17 @@ export const ANSWER_PROMPT = [
 export function repairPrompt(system: string, reason: string): string {
   return `${system}\n\nYour previous reply could not be used: ${reason}. Reply again with only the JSON object, in exactly the shape shown above.`;
 }
+
+/** Check trigger: research starts from an approved record, not a person's question (research loop evaluation v1). */
+export const CHECK_TASK_PROMPT = [
+  "Task: there is no question from a person. This task replaces the question in the rules above.",
+  "An approved record is already read; record_id names it. Split it into its decisions, requirements and actions, one part each. For each, find what in the project agrees with it, conflicts with it, or must change: other approved decisions, tickets, pages and documents. For each, find the owner and any date it puts at risk against a stated milestone.",
+  "Record what each source says with its ids and dates. Do not decide whether a conflict is acceptable.",
+].join("\n");
+
+/** Sweep trigger: research rechecks earlier findings against current evidence. */
+export const SWEEP_TASK_PROMPT = [
+  "Task: there is no question from a person. This task replaces the question in the rules above.",
+  "findings lists earlier findings: what was expected to change, and in cited the ids of the items cited then, already re-read now. Make each finding one part. Re-read the current items and find their current state, and any newer item about the same change.",
+  "Never treat a finding as resolved without reading the current item. An item that could not be read is not evidence that anything changed.",
+].join("\n");

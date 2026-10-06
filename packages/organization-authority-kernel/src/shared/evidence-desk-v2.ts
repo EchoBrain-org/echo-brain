@@ -88,4 +88,17 @@ export interface EvidenceDeskPortV2 extends Omit<EvidenceDeskPortV1, 'search' | 
   search(input: Omit<EvidenceDeskSearchInputV1, 'kinds'> & { readonly source?: string; readonly kinds?: readonly EvidenceDeskKindV2[] }): Promise<EvidenceDeskResultV2>;
   open(input: EvidenceDeskOpenInputV1): Promise<EvidenceDeskResultV2>;
   list(input: EvidenceDeskListInputV2): Promise<EvidenceDeskResultV2>;
+  /**
+   * Opens one item from a citation released earlier, through the same scope
+   * and access checks as any read. Background triggers use it for their
+   * starting evidence; a desk without it cannot run them.
+   */
+  openCitation?(input: EvidenceDeskOpenCitationInputV2): Promise<EvidenceDeskResultV2>;
+}
+
+export interface EvidenceDeskOpenCitationInputV2 {
+  /** A citation released by an earlier read; validated by the source that owns it. */
+  readonly citation: unknown;
+  readonly neighbours?: number;
+  readonly signal?: AbortSignal;
 }
