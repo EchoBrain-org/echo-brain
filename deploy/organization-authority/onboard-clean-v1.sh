@@ -1162,6 +1162,16 @@ require_image_present() {
     fail 'accepted Authority image is not present locally; run resume to pull it explicitly'
 }
 
+require_candidate_image_present() {
+  local image source
+  image="$(release_record_field "$CANDIDATE_FILE" authority-image)" || return 1
+  source="$(release_record_field "$CANDIDATE_FILE" source-sha)" || return 1
+  docker image inspect "$image" >/dev/null 2>&1 || \
+    fail 'staged candidate Authority image is not present locally'
+  [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image" 2>/dev/null)" == "$source" ]] || \
+    fail 'staged candidate Authority image source differs from its release record'
+}
+
 setup_status() {
   compose_clean run --rm --no-deps --pull never --entrypoint node authority \
     "$SETUP_COMMAND" status --state-dir /echo-clean/state
@@ -2164,13 +2174,27 @@ require_candidate_initial_onboarding_continuation() {
     fail 'staged initial-onboarding continuation is available only on the exact Authority staging host'
   runtime_profile_matches_candidate_tuple || \
     fail 'staged candidate runtime profile or environment is missing, noncanonical, or drifted'
+  require_candidate_image_present
   for required in oidc-config.json oidc-client-secret nango-secret-key llm-credential-source; do
     require_runtime_private_file "$PRIVATE_DIR/$required" 'fixed private input'
   done
   staging_meetings_directory >/dev/null
+}
+
+require_running_candidate_runtime() {
+  running_authority || return 0
+  healthy_authority && authority_uses_release_image "$CANDIDATE_FILE" && \
+    runtime_uses_candidate_runtime_profile || \
+    fail 'running staged candidate is unhealthy or differs from its exact release and runtime profile'
+}
+
+require_ready_candidate_runtime() {
+  if ! running_authority; then
+    start_runtime || fail 'staged candidate could not restart; inspect its exact candidate status before retrying'
+  fi
   running_authority && healthy_authority && authority_uses_release_image "$CANDIDATE_FILE" && \
     runtime_uses_candidate_runtime_profile || \
-    fail 'staged candidate is stopped, unhealthy, or differs from its exact release and runtime profile'
+    fail 'staged candidate is unhealthy or differs from its exact release and runtime profile'
 }
 
 continue_staged_initial_onboarding() {
@@ -2183,23 +2207,22 @@ continue_staged_initial_onboarding() {
   require_candidate_initial_onboarding_continuation
   local status_json step loops=0
   while (( loops < 3 )); do
+    require_running_candidate_runtime
     status_json="$(setup_status)"
     step="$(next_step_from_status "$status_json")"
     case "$step" in
       install_provider_credentials)
         compose_clean down
         install_credentials
-        start_runtime
+        start_runtime || fail 'staged candidate could not restart after credential installation; retry this continuation only after inspecting its exact candidate status'
         ;;
       run_finalize)
         compose_clean down
         finalize
-        start_runtime
+        start_runtime || fail 'staged candidate could not restart after finalization; retry this continuation only after inspecting its exact candidate status'
         ;;
       ready_to_start)
-        running_authority && healthy_authority && authority_uses_release_image "$CANDIDATE_FILE" && \
-          runtime_uses_candidate_runtime_profile || \
-          fail 'staged candidate no longer matches its exact release and runtime profile'
+        require_ready_candidate_runtime
         printf 'candidate_initial_onboarding_ready=true\n'
         printf 'release_state=staged_candidate\n'
         printf 'authority_exact_candidate_image=true\n'

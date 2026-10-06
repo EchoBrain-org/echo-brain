@@ -115,6 +115,7 @@ function preparedStatusFixture() {
   const installReleaseMarker = join(root, "credential-install-release");
   const finalizedMarker = join(root, "finalized");
   const credentialsInstalledMarker = join(root, "credentials-installed");
+  const runtimeStoppedMarker = join(root, "runtime-stopped");
   const extractionStoppedMarker = join(root, "extraction-stopped");
   const image = "123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   const source = "c".repeat(40);
@@ -200,8 +201,10 @@ if [[ "$1" == compose ]]; then
         touch ${JSON.stringify(failedUpMarker)}
         exit 1
       fi
+      rm -f ${JSON.stringify(runtimeStoppedMarker)}
       exit 0
       ;;
+    *" down "*) touch ${JSON.stringify(runtimeStoppedMarker)}; exit 0 ;;
     *" stop -t 30 authority "*)
       [[ "$ECHO_FAKE_FAIL_EXTRACTION_STOP" != true ]] || exit 1
       touch ${JSON.stringify(extractionStoppedMarker)}
@@ -260,7 +263,7 @@ if [[ "$1" == inspect ]]; then
   if [[ "$*" == *io.echo-brain.release-id* ]]; then printf '%s\\n' "$ECHO_FAKE_RELEASE_ID"; exit 0; fi
   if [[ "$*" == *io.echo-brain.runtime-profile-sha256* ]]; then printf '%s\\n' "$ECHO_FAKE_RUNTIME_PROFILE_SHA256"; exit 0; fi
   if [[ "$*" == *.State.Running* ]]; then
-    if [[ -f ${JSON.stringify(extractionStoppedMarker)} ]]; then printf '%s\\n' false; else printf '%s\\n' "$ECHO_FAKE_RUNNING"; fi
+    if [[ -f ${JSON.stringify(extractionStoppedMarker)} || -f ${JSON.stringify(runtimeStoppedMarker)} ]]; then printf '%s\\n' false; else printf '%s\\n' "$ECHO_FAKE_RUNNING"; fi
     exit 0
   fi
   if [[ "$*" == *.State.Health* ]]; then printf '%s\\n' "$ECHO_FAKE_HEALTH"; exit 0; fi
@@ -367,6 +370,7 @@ exec /usr/bin/install "$@"
     calls,
     installWaitMarker,
     installReleaseMarker,
+    runtimeStoppedMarker,
     image,
     profile,
     releaseId,
@@ -928,6 +932,44 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(result.stdout).toContain("update-clean-v1.sh canary");
     }
 
+    {
+      const fixture = preparedStatusFixture();
+      const { candidate } = prepareCandidate(fixture);
+      const acceptedPath = join(fixture.releaseDir, "current.clean-v1.json");
+      const acceptedBytes = readFileSync(acceptedPath);
+      const interrupted = fixture.run("continue-staged-initial-onboarding", {
+        ECHO_FAKE_FAIL_FIRST_UP: "true",
+        ECHO_FAKE_SETUP_STATUS: '{"next_step":"run_finalize"}',
+        ECHO_FAKE_SETUP_STATUS_AFTER_FINALIZE: '{"next_step":"ready_to_start"}',
+      });
+      expect(interrupted.status).toBe(1);
+      expect(existsSync(fixture.runtimeStoppedMarker)).toBe(true);
+      expect(existsSync(candidate)).toBe(true);
+      expect(readFileSync(fixture.calls, "utf8")).toContain(
+        "clean-founder-main.js finalize",
+      );
+
+      const retry = fixture.run("continue-staged-initial-onboarding", {
+        ECHO_FAKE_SETUP_STATUS: '{"next_step":"run_finalize"}',
+        ECHO_FAKE_SETUP_STATUS_AFTER_FINALIZE: '{"next_step":"ready_to_start"}',
+      });
+      expect(retry.status, retry.stderr).toBe(0);
+      const finalizations = readFileSync(fixture.calls, "utf8")
+        .split("\n")
+        .filter((line) => line.includes("clean-founder-main.js finalize"));
+      expect(finalizations).toHaveLength(1);
+      expect(retry.stdout).toContain("candidate_initial_onboarding_ready=true");
+      expect(readFileSync(acceptedPath)).toEqual(acceptedBytes);
+      expect(existsSync(candidate)).toBe(true);
+
+      const stillStopped = fixture.run("continue-staged-initial-onboarding", {
+        ECHO_FAKE_RUNNING: "false",
+        ECHO_FAKE_SETUP_STATUS_AFTER_FINALIZE: '{"next_step":"ready_to_start"}',
+      });
+      expect(stillStopped.status).toBe(1);
+      expect(stillStopped.stdout).not.toContain("candidate_initial_onboarding_ready=true");
+    }
+
     for (const fault of ["missing_marker", "marker_mismatch", "runtime_drift", "unexpected_step"]) {
       const fixture = preparedStatusFixture();
       const { candidate, setupReadiness } = prepareCandidate(fixture);
@@ -946,6 +988,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       if (fault === "runtime_drift") {
         writeFileSync(join(fixture.deploy, ".env.clean-v1"), "runtime-drift\n");
       }
+      if (fault === "unexpected_step") writeFileSync(fixture.runtimeStoppedMarker, "stopped");
       const result = fixture.run("continue-staged-initial-onboarding", {
         ECHO_FAKE_SETUP_STATUS: fault === "unexpected_step"
           ? '{"next_step":"connect_slack_in_app"}'
@@ -955,6 +998,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(readFileSync(fixture.calls, "utf8")).not.toMatch(
         / (bootstrap|resume|finalize|credentials-install) /,
       );
+      expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/ (up -d|down) /);
       expect(existsSync(candidate)).toBe(true);
     }
   });

@@ -779,6 +779,10 @@ drift. Its ready result remains `terminal_green=false`; run the ordinary
 candidate canary and approval path next. It neither changes the accepted
 record nor makes the candidate accepted.
 
+If a transition or restart fails after stopping the candidate, retry the same
+continuation after inspecting its status. It reuses durable setup progress and
+the verified local candidate image, then restarts and verifies the exact runtime.
+
 ## Activate replacement provider credentials
 
 The LLM credential activates through a controlled Authority restart.
