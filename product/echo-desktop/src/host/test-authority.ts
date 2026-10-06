@@ -483,21 +483,21 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           slackLinked ? tool('slack', 'Slack', 'linked', 'T0123ABCD', 'U0123ABCD') : tool('slack', 'Slack', 'unlinked', 'T0123ABCD', null),
           tool('jira', 'Jira', jiraLinked ? 'linked' : mode === 'tools-revoked' ? 'revoked' : 'unlinked', JIRA_CLOUD, jiraLinked ? 'atlassian-account-1' : null),
           tool('confluence', 'Confluence', confluenceLinked ? 'linked' : 'unlinked', CONFLUENCE_CLOUD, confluenceLinked ? 'atlassian-account-1' : null),
-          mode === 'granola' ? tool('granola', 'Granola', 'linked', 'workspace', 'ari@example.test') : { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
+          mode.startsWith('granola') ? tool('granola', 'Granola', 'linked', 'workspace', 'ari@example.test') : { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
             external_scope_id: null, external_subject_id: null, organization_setup: null },
         ],
       });
     }
-    if (method === 'POST' && path === '/v1/person/meetings' && mode === 'granola') {
+    if (method === 'POST' && path === '/v1/person/meetings' && mode.startsWith('granola')) {
       const meetingId = '00000000-0000-4000-8000-000000000010';
       const folderId = '00000000-0000-4000-8000-000000000011';
       const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning', project_id: null, status: granolaApproved ? 'approved' : 'pending' };
       switch (body?.operation) {
-        case 'home': return json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64), sources: [] });
+        case 'home': return mode === 'granola-browse-unavailable' ? failure('unavailable', 503) : json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64), sources: [] });
         case 'browse': return json({ meetings: [{ id: meetingId, title: 'Pilot planning', date: '2026-10-06' }] });
         case 'open': return json({ id: meetingId, title: 'Pilot planning', notes: 'Launch the pilot next week.', summary: 'Decision: launch.', truncated: false });
         case 'import': granolaImported = true; return json({ status: 'queued' });
-        case 'reviews': return json({ reviews: granolaImported ? [review] : [] });
+        case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' ? [review] : [] });
         case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.' });
         case 'review': granolaApproved = true; return json({ status: 'publishing' });
       }

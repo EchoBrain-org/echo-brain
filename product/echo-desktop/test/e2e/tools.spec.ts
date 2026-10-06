@@ -151,3 +151,17 @@ test('Granola browsing requires explicit retention, then offers personal review 
   expect(run.calls().find(call => call.body?.operation === 'import')?.body).toMatchObject({ retain: true, project_id: null });
   expect(run.calls().find(call => call.body?.operation === 'review')?.body).toMatchObject({ action: 'approve', share_transcript: false, project_id: null });
 });
+
+test('Granola browsing failure leaves retained meetings available for review', async () => {
+  run = await launch('granola-browse-unavailable');
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
+  const meetings = page.getByRole('region', { name: 'Personal meetings' });
+  await expect(meetings.getByRole('status')).toBeVisible();
+  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click({ timeout: 5_000 });
+  await expect(meetings.getByLabel('Share the transcript with the selected audience')).not.toBeChecked();
+  await meetings.getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect(meetings).toContainText('approved');
+  expect(run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
+});

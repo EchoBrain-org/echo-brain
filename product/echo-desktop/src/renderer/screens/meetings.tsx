@@ -15,11 +15,15 @@ export function Meetings() {
   const [retain, setRetain] = useState(false), [share, setShare] = useState(false);
   const [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
   async function refresh(initialize = false) {
-    const [next, pending] = await Promise.all([meetingCommand({ operation: 'home' }), meetingCommand({ operation: 'reviews' })]);
+    const [next, pending] = await Promise.allSettled([meetingCommand({ operation: 'home' }), meetingCommand({ operation: 'reviews' })]);
     if (!alive.current) return;
-    setHome(next); setReviews(pending.reviews);
-    const watch = next.sources.find(s => s.folder_id !== null);
+    // Provider browsing and retained review have independent availability.
+    setHome(next.status === 'fulfilled' ? next.value : null);
+    setReviews(pending.status === 'fulfilled' ? pending.value.reviews : []);
+    const watch = next.status === 'fulfilled' ? next.value.sources.find(s => s.folder_id !== null) : undefined;
     if (watch && initialize) { setFolder(watch.folder_id!); setProject(watch.project_id!); }
+    if (next.status === 'rejected') throw next.reason;
+    if (pending.status === 'rejected') throw pending.reason;
   }
   async function run(work: () => Promise<void>) {
     if (busy) return; setBusy(true); setNotice('');
