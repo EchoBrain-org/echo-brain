@@ -7,6 +7,8 @@ const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const TIMEOUT_MS = 15_000;
 const INTEGRATION_KEY_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const BOT_TOKEN_PATTERN = /^xoxb-/;
+const VISIBLE_ASCII = /^[\x21-\x7e]+$/;
+const MAXIMUM_CONNECT_SESSION_TOKEN_LENGTH = 4096;
 
 /**
  * Configuration for one environment's Nango integration. `secret_key` comes
@@ -148,14 +150,23 @@ export function parseNangoSlackConnectionV1(value: unknown): NangoSlackConnectio
   });
 }
 
-/** `{ data: { token, connect_link, … } }`; only `connect_link` is returned, and `token` is never logged. */
-function parseNangoConnectSessionResponseV1(value: unknown): { connect_link: string } {
+/**
+ * Nango returns a short-lived Connect-session token alongside its hosted UI
+ * link. ECHO opens Nango's native OAuth endpoint instead: it keeps the
+ * selected OAuth client secret in Nango's server-side session defaults and
+ * lets Nango set its browser state cookie before redirecting to Slack.
+ */
+function parseNangoConnectSessionResponseV1(value: unknown, baseUrl: string, integrationKey: string): { connect_link: string } {
   const top = record(value);
   const data = top === undefined ? undefined : record(top.data);
-  const connectLink = data === undefined ? undefined : nonEmptyString(data.connect_link);
-  if (connectLink === undefined) {
+  const token = data === undefined ? undefined : data.token;
+  if (typeof token !== "string" || token.length === 0 || token.length > MAXIMUM_CONNECT_SESSION_TOKEN_LENGTH || !VISIBLE_ASCII.test(token)) {
     throw new NangoClientErrorV1("invalid_response", "Nango returned an invalid connect session");
   }
+  const nativeOAuth = new URL(`/oauth/connect/${encodeURIComponent(integrationKey)}`, baseUrl);
+  nativeOAuth.searchParams.set("connect_session_token", token);
+  const connectLink = nativeOAuth.toString();
+  if (connectLink.length > 4096) throw new NangoClientErrorV1("invalid_response", "Nango returned an invalid connect session");
   return Object.freeze({ connect_link: connectLink });
 }
 
@@ -213,6 +224,9 @@ function connectionConfigOverrides(
 ): Record<string, unknown> {
   return {
     [integrationKey]: {
+      authorization_params: {
+        client_id: input.client_id,
+      },
       connection_config: {
         oauth_client_id_override: input.client_id,
         oauth_client_secret_override: input.client_secret,
@@ -312,7 +326,7 @@ export class HttpNangoConnectionClientV1 implements NangoConnectionClientV1 {
         integrations_config_defaults: connectionConfigOverrides(this.integrationKey, input),
       },
     });
-    return parseNangoConnectSessionResponseV1(json);
+    return parseNangoConnectSessionResponseV1(json, this.baseUrl, this.integrationKey);
   }
 
   async createReconnectSession(input: {
@@ -332,7 +346,7 @@ export class HttpNangoConnectionClientV1 implements NangoConnectionClientV1 {
         integrations_config_defaults: connectionConfigOverrides(this.integrationKey, input),
       },
     });
-    return parseNangoConnectSessionResponseV1(json);
+    return parseNangoConnectSessionResponseV1(json, this.baseUrl, this.integrationKey);
   }
 
   async findConnectionIdByTag(input: { key: string; value: string }): Promise<string | undefined> {

@@ -112,8 +112,9 @@ existing app to the current recipe.
 
 Before the organization has any active Slack connection, an owner may instead
 run `person tools setup --tool slack --existing-app A0EXAMPLE`. This explicit
-option accepts the chosen app's credentials and a configuration token in one
-hidden stdin JSON object; it cannot be combined with `--reconnect`. The
+option accepts the chosen app's credentials and a configuration token through
+four named hidden prompts (existing scripts may still send one stdin JSON
+object); it cannot be combined with `--reconnect`. The
 Authority updates that app to its current manifest, replaces any pending
 credential bundle, and cancels stale pending install attempts before the new
 install. It does not delete an earlier external Slack app. An active
@@ -147,10 +148,29 @@ hash and the cards stay unchanged
 ([ADR-0027](../decisions/ADR-0027-rebind-lost-nango-slack-connection.md),
 proposed).
 
-Existing-app adoption preserves these checks. Applying the Slack manifest does
-not configure Nango's integration or establish OAuth configuration alignment;
-the returned connection still has to identify the chosen app and pass the
-same verification before activation.
+Existing-app adoption preserves these checks. Both newly created and adopted
+apps supply the saved client ID, client secret, and bot scopes in Nango's
+Connect-session `integrations_config_defaults` connection configuration, with
+the public client ID also supplied in `authorization_params.client_id`. The
+authorization request uses the latter; callback token exchange uses the saved
+connection configuration. The owner opens Nango's native `/oauth/connect/…`
+browser entry point using the short-lived session token. This avoids the hosted
+Connect UI's duplicate credential fields while retaining Nango's OAuth state
+cookie. ECHO implements no new OAuth callback or token exchange. Setup
+does not write shared Nango integration credentials, and an owner does not
+copy credentials into its dashboard for each setup. The returned connection
+still has to identify the chosen app and pass the same verification before
+activation. Failed or expired consent can reuse the saved credentials through
+`--reconnect`. App, attempt, and provider identity mismatches have distinct
+failure reasons; `workspace_mismatch` identifies an existing connection whose
+workspace or bot identity changed.
+
+This handoff follows Nango's [native frontend SDK authorization route](https://github.com/NangoHQ/nango/blob/aed783b43a2011963b068483386bfde4fe09a029/packages/frontend/lib/index.ts)
+and [OAuth controller](https://github.com/NangoHQ/nango/blob/aed783b43a2011963b068483386bfde4fe09a029/packages/server/lib/controllers/oauth.controller.ts).
+Connection defaults alone do not select the authorization client in that
+implementation. The initial Nango integration still needs its baseline OAuth
+configuration; its credentials need not be changed to match each ECHO app.
+Source-contract and regression tests do not replace live consent verification.
 
 The Slack bot token is never written to Authority state: Nango holds it, and
 the Authority fetches it at use time and caches it in memory for at most five

@@ -79,7 +79,11 @@ describe('organization Slack setup contract v1', () => {
     expect(validateOrganizationSlackSetupResponseV1({ ...SETUP_RESPONSE, organization_setup: 'connected' })).toMatchObject({ organization_setup: 'connected' });
     expect(validateOrganizationSlackInstallBeginResponseV1(BEGUN)).toEqual(BEGUN);
     for (const status of [PENDING, COMPLETE, REFUSED, { ...PENDING, status: 'cancelled' }, { ...PENDING, status: 'expired' },
-      { ...PENDING, status: 'failed', failure_reason: 'workspace_mismatch' }, { ...COMPLETE, result: { kind: 'reconnected', workspace_id: 'T01' } }]) {
+      { ...PENDING, status: 'failed', failure_reason: 'workspace_mismatch' },
+      { ...PENDING, status: 'failed', failure_reason: 'attempt_mismatch' },
+      { ...PENDING, status: 'failed', failure_reason: 'app_mismatch' },
+      { ...PENDING, status: 'failed', failure_reason: 'identity_mismatch' },
+      { ...COMPLETE, result: { kind: 'reconnected', workspace_id: 'T01' } }]) {
       expect(validateOrganizationSlackInstallStatusResponseV1(status)).toEqual(status);
     }
   });

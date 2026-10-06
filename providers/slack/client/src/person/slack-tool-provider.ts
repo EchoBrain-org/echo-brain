@@ -1,6 +1,12 @@
 import { PersonToolOutcomeErrorV1, type PersonToolProviderV1, type PersonToolVerbContextV1 } from '@echo-brain/organization-api';
 import { asEnumerableRecord, assertExactKeys } from '@echo-brain/organization-api/validation';
-import { validateOrganizationSlackExistingAppV1 } from '../organization-api/organization-slack-setup-v1.js';
+import {
+  validateOrganizationSlackAppClientIdV1,
+  validateOrganizationSlackAppClientSecretV1,
+  validateOrganizationSlackAppSigningSecretV1,
+  validateOrganizationSlackConfigurationTokenV1,
+  validateOrganizationSlackExistingAppV1,
+} from '../organization-api/organization-slack-setup-v1.js';
 import { beginSlackBrowserLink, beginSlackIdentityLink, beginSlackInstall, cancelSlackBrowserLink, cancelSlackInstall, completeSlackIdentityLink, disconnectSlack, setupSlackApp, slackBrowserLinkStatus, slackInstallStatus } from './slack-person-client.js';
 
 const POLL_MS = 2_000;
@@ -29,7 +35,10 @@ const INSTALL_FAILURES = {
   provider_rejected: 'Slack refused the install. Try again.',
   provider_unavailable: 'Slack setup is unavailable right now. Try again.',
   permissions_missing: 'The install did not grant the permissions ECHO needs. Try again.',
-  workspace_mismatch: "The install did not match this organization's Slack app and workspace. Run setup again with --reconnect and choose the organization's workspace.",
+  app_mismatch: 'Slack authorized a different app than the app saved in ECHO. Check the selected app\'s client ID and the Nango session\'s app before retrying. Do not change shared Nango integration credentials.',
+  attempt_mismatch: 'The Slack install did not belong to this setup attempt. Close older install tabs, then run setup with --reconnect to reuse your saved credentials.',
+  identity_mismatch: 'Slack and Nango reported different workspace or bot identities for the install. The connection was refused; investigate the provider connection before retrying. Your app credentials are saved.',
+  workspace_mismatch: "The install did not match this organization's existing Slack workspace or bot. Run setup with --reconnect and choose the organization's workspace; your app credentials are saved.",
   already_connected: 'Slack is already connected to a different app or workspace.',
 };
 const SIGN_IN_FAILURES = {
@@ -76,22 +85,49 @@ async function openAndWait(context: PersonToolVerbContextV1, begun: Attempt, url
 }
 
 const SETUP_TOKEN_PROMPT = 'Paste the Slack app configuration token (input hidden). Generate one at https://api.slack.com/apps → Your App Configuration Tokens.';
-const EXISTING_APP_PROMPT = 'Paste one-line JSON with configuration_token, client_id, client_secret and signing_secret (input hidden).';
+const EXISTING_APP_CONFIGURATION_TOKEN_PROMPT = 'Paste the selected Slack app configuration token (input hidden).';
+const EXISTING_APP_CLIENT_ID_PROMPT = 'Paste the selected Slack app client ID (input hidden).';
+const EXISTING_APP_CLIENT_SECRET_PROMPT = 'Paste the selected Slack app client secret (input hidden).';
+const EXISTING_APP_SIGNING_SECRET_PROMPT = 'Paste the selected Slack app signing secret (input hidden).';
 
-function existingAppInput(raw: string, appId: string) {
+function existingAppJsonInput(raw: string, appId: string) {
   try {
     if (Buffer.byteLength(raw, 'utf8') > 16 * 1024) throw new Error();
     const input = asEnumerableRecord(JSON.parse(raw), 'Slack existing-app input');
     assertExactKeys(input, ['configuration_token', 'client_id', 'client_secret', 'signing_secret'], 'Slack existing-app input');
-    if (typeof input.configuration_token !== 'string' || input.configuration_token.length < 16 ||
-        input.configuration_token.length > 512 || !/^[\x21-\x7e]+$/.test(input.configuration_token)) throw new Error();
-    const existingApp = validateOrganizationSlackExistingAppV1({ app_id: appId, client_id: input.client_id,
-      client_secret: input.client_secret, signing_secret: input.signing_secret });
-    return { configurationToken: input.configuration_token, existingApp };
+    return existingAppFieldsInput({ configurationToken: input.configuration_token, clientId: input.client_id,
+      clientSecret: input.client_secret, signingSecret: input.signing_secret }, appId);
   } catch {
     // JSON parser errors can contain the document, including credential bytes.
     throw new Error('Slack existing-app input is invalid');
   }
+}
+
+function existingAppFieldsInput(input: {
+  readonly configurationToken: unknown;
+  readonly clientId: unknown;
+  readonly clientSecret: unknown;
+  readonly signingSecret: unknown;
+}, appId: string) {
+  const configurationToken = validateOrganizationSlackConfigurationTokenV1(input.configurationToken);
+  const existingApp = validateOrganizationSlackExistingAppV1({ app_id: appId,
+    client_id: input.clientId, client_secret: input.clientSecret, signing_secret: input.signingSecret,
+  });
+  return { configurationToken, existingApp };
+}
+
+function isExistingAppJsonInput(value: string): boolean {
+  return value.startsWith('{') || value.startsWith('[') || value === 'null';
+}
+
+async function existingAppInput(context: PersonToolVerbContextV1, appId: string) {
+  const configurationToken = (await context.read_secret_line(EXISTING_APP_CONFIGURATION_TOKEN_PROMPT)).trim();
+  if (isExistingAppJsonInput(configurationToken)) return existingAppJsonInput(configurationToken, appId);
+  const validConfigurationToken = validateOrganizationSlackConfigurationTokenV1(configurationToken);
+  const clientId = validateOrganizationSlackAppClientIdV1((await context.read_secret_line(EXISTING_APP_CLIENT_ID_PROMPT)).trim());
+  const clientSecret = validateOrganizationSlackAppClientSecretV1((await context.read_secret_line(EXISTING_APP_CLIENT_SECRET_PROMPT)).trim());
+  const signingSecret = validateOrganizationSlackAppSigningSecretV1((await context.read_secret_line(EXISTING_APP_SIGNING_SECRET_PROMPT)).trim());
+  return existingAppFieldsInput({ configurationToken: validConfigurationToken, clientId, clientSecret, signingSecret }, appId);
 }
 
 async function setup(context: PersonToolVerbContextV1): Promise<void> {
@@ -105,7 +141,7 @@ async function setup(context: PersonToolVerbContextV1): Promise<void> {
     if (context.values.reconnect !== true) {
       const input = existingAppId === undefined
         ? { configurationToken: (await context.read_secret_line(SETUP_TOKEN_PROMPT)).trim(), existingApp: undefined }
-        : existingAppInput(await context.read_secret_line(EXISTING_APP_PROMPT), existingAppId);
+        : await existingAppInput(context, existingAppId);
       const app = await setupSlackApp(host, input.configurationToken, input.existingApp);
       context.print({ ok: true, phase: 'app-ready', app_id: app.app_id, organization_setup: app.organization_setup });
     }
@@ -170,7 +206,7 @@ const noWait = { type: 'boolean' } as const;
 export function createSlackPersonToolProviderV1(): PersonToolProviderV1 {
   const verbs: PersonToolProviderV1['verbs'] = {
     setup: {
-      description: 'Owner only. Reads a Slack app configuration token from standard input (hidden at a terminal), creates or updates the ECHO app, opens Install and waits up to 10 minutes. --existing-app <A…> adopts that app using one hidden JSON line with configuration_token, client_id, client_secret and signing_secret. --reconnect reads no token and installs the app already set up. --existing-app and --reconnect are mutually exclusive.',
+      description: 'Owner only. Reads a Slack app configuration token from standard input (hidden at a terminal), creates or updates the ECHO app, opens Install and waits up to 10 minutes. --existing-app <A…> adopts that app with named hidden prompts for its configuration token, client ID, client secret and signing secret; scripts may still send one JSON line. --reconnect reuses saved app credentials and installs the app already set up. --existing-app and --reconnect are mutually exclusive.',
       options: { reconnect: { type: 'boolean' }, 'existing-app': { type: 'string' }, 'no-wait': noWait },
       run: setup,
     },
