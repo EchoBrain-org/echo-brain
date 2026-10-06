@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "world": "therm-v1",
+  "note": "S1 = S0 plus these partial fixes. Apply only for Sweep runs; revert restores S0. Jira 'updated' timestamps and the Done resolution history cannot be reverted; ECHO cannot read either.",
+  "apply": [
+    {
+      "key": "THERM-18",
+      "set": {
+        "description_replace": {
+          "find": "Implement agreed one-decimal rounding and validity/state rendering; compare display to the same measurement identity in TC-D-06.",
+          "replace": "Implement the approved two-decimal (0.01 °C) rendering from the 2026-09-30 customer review, plus validity/state rendering; compare display to the same measurement identity in TC-D-06."
+        }
+      },
+      "why": "SW-22b now specifies two decimals (Sweep: landed) while TC-D-06 (THERM-40) and the PRD rows on page 1409025 stay one-decimal (Sweep: not landed)."
+    },
+    {
+      "key": "THERM-46",
+      "status": "Done",
+      "set": {},
+      "why": "BUG-412 closed without a retest: DVT-R2 (THERM-48) stays To Do and TC-D-03 (THERM-38) stays In Progress, so closure is not verified (Sweep: not landed). Description unchanged."
+    },
+    {
+      "key": "THERM-47",
+      "status": "Done",
+      "set": {
+        "description_replace": {
+          "find": "Owner roles: QA + Hardware + Firmware.\n\n## Canonical documents",
+          "replace": "Owner roles: QA + Hardware + Firmware.\n\n## Link confirmation\n\nQA and Hardware confirmed that TC-D-03 traces to MRD-01. Confirmed fix owner role: Hardware (HW-11), following the BUG-412 failure review. DVT-R2 retest scope: TC-D-03 and TC-D-01, plus the regression subset QA approves.\n\n## Canonical documents"
+        }
+      },
+      "why": "TRACE-01 done with a note confirming the MRD-01 link and the Hardware fix owner (Sweep: landed)."
+    }
+  ],
+  "revert": [
+    {
+      "key": "THERM-18",
+      "set": {
+        "description_replace": {
+          "find": "Implement the approved two-decimal (0.01 °C) rendering from the 2026-09-30 customer review, plus validity/state rendering; compare display to the same measurement identity in TC-D-06.",
+          "replace": "Implement agreed one-decimal rounding and validity/state rendering; compare display to the same measurement identity in TC-D-06."
+        }
+      },
+      "why": "Restore the S0 SW-22b work text."
+    },
+    {
+      "key": "THERM-46",
+      "status": "In Progress",
+      "set": {},
+      "why": "S0 status of BUG-412 is In Progress with no resolution; clear the resolution if the workflow does not."
+    },
+    {
+      "key": "THERM-47",
+      "status": "To Do",
+      "set": {
+        "description_replace": {
+          "find": "Owner roles: QA + Hardware + Firmware.\n\n## Link confirmation\n\nQA and Hardware confirmed that TC-D-03 traces to MRD-01. Confirmed fix owner role: Hardware (HW-11), following the BUG-412 failure review. DVT-R2 retest scope: TC-D-03 and TC-D-01, plus the regression subset QA approves.\n\n## Canonical documents",
+          "replace": "Owner roles: QA + Hardware + Firmware.\n\n## Canonical documents"
+        }
+      },
+      "why": "S0 status of TRACE-01 is To Do with no resolution; remove the confirmation section. Due date 2026-10-14 and assignee from S0 stay."
+    }
+  ]
+}
