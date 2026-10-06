@@ -576,7 +576,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
 
 describe('Jira open by an earlier citation (background trigger starting evidence)', () => {
   const earlier = (ticketId: string, scope = cloudid): PersonTicketCitationV1 => ({ kind: 'ticket', tool_id: 'jira', external_scope_id: scope,
-    ticket_id: ticketId, permalink: `${origin}/browse/ECHO-${Number(ticketId) - 10000}`, text_sha256: digest('an older body') });
+    ticket_id: ticketId, permalink: `${origin}/browse/ECHO-${Number(ticketId) - 10000}`, text_sha256: digest('an older body') as `sha256:${string}` });
 
   it('re-reads the current ticket body through the exact read and audits it as an open', async () => {
     const f = fixture();

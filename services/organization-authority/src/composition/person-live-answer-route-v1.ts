@@ -20,17 +20,62 @@ export interface CreatePersonLiveAnswerRouteOptionsV1 extends Omit<CreatePersonA
   readonly slack_live_for?: PersonContextLiveApplicationV1<PersonSlackMessageCitationV1>['source'];
 }
 
-export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1, response_version: 5): PersonAnswerV4HttpApplication;
-export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1, response_version: 6): PersonAnswerV5HttpApplication;
-/** One authenticated request pipeline; version adapters only select compatible evidence/output. */
-export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1, response_version: 5 | 6) {
-  const configured: readonly PersonLiveConnectorSourceV1[] = [
+/** Every live source this route was composed with, legacy construction included. */
+export function configuredPersonLiveSourcesV1(options: CreatePersonLiveAnswerRouteOptionsV1): readonly PersonLiveConnectorSourceV1[] {
+  return [
     ...(options.live_sources ?? []),
     ...(options.ticket_for === undefined ? [] : [{ ...LEGACY_TICKET_CONNECTOR_V1, application: { source: options.ticket_for } }]),
     ...(options.page_for === undefined ? [] : [{ ...LEGACY_PAGE_CONNECTOR_V1, application: { source: options.page_for } }]),
     ...(options.slack_live_for === undefined ? [] : [{ ...LEGACY_SLACK_CONNECTOR_V1, application: { source: options.slack_live_for } }]),
   ];
-  const compatible = configured.filter(source => source.minimum_response_version <= response_version);
+}
+
+export interface PersonLiveRequestContextV1 {
+  readonly authority_id: string;
+  readonly organization_id: string;
+  readonly state_lineage_id: string;
+  readonly principal_id: string;
+  readonly membership_id: string;
+  readonly session_family_id: string;
+  readonly request_id: string;
+}
+
+/**
+ * One request's evidence desk: ECHO context plus each compatible live source
+ * bound to this person and scope. Ask and the staging research evaluation
+ * compose it identically.
+ */
+export async function bindPersonLiveEvidenceDeskV1(
+  options: CreatePersonLiveAnswerRouteOptionsV1,
+  compatible: readonly PersonLiveConnectorSourceV1[],
+  input: { readonly access_token: string; readonly scope: ReturnType<typeof scopeOf>; readonly signal?: AbortSignal },
+  context: PersonLiveRequestContextV1,
+) {
+  const { scope } = input;
+  const bound: RegisteredPersonLiveEvidenceSourceV2[] = [];
+  for (const selected of compatible) {
+    const category = selected.descriptor.kind === 'slack_message' ? 'slack' : selected.descriptor.kind;
+    await observePersonLiveEvidenceV1('evidence_connection', category, async () => {
+      if (scope.kind === 'mine' || !selected.scopes.includes(scope.kind)) { annotateCoreRuntimeV1({ result: 'out_of_scope' }); return; }
+      const source = await selected.application.source({
+        ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}),
+        access_token: input.access_token, audit: options.audit.forLiveRequest(context),
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      });
+      input.signal?.throwIfAborted();
+      annotateCoreRuntimeV1({ result: source === undefined ? (scope.kind === 'project' ? 'unavailable' : 'unlinked') : 'verified' });
+      if (source !== undefined) bound.push({ descriptor: selected.descriptor, source, scope });
+    });
+  }
+  const base = createPersonEvidenceDeskV1({ access_token: input.access_token, scope, originals: options.originals, records: options.records });
+  return createRegisteredPersonLiveEvidenceDeskV2(base, bound);
+}
+
+export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1, response_version: 5): PersonAnswerV4HttpApplication;
+export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1, response_version: 6): PersonAnswerV5HttpApplication;
+/** One authenticated request pipeline; version adapters only select compatible evidence/output. */
+export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1, response_version: 5 | 6) {
+  const compatible = configuredPersonLiveSourcesV1(options).filter(source => source.minimum_response_version <= response_version);
   return Object.freeze({
     async ask(input: Parameters<PersonAnswerV5HttpApplication['ask']>[0]) {
       const scope = scopeOf(input.request);
@@ -41,23 +86,7 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
         principal_id: authorization.principal_id, membership_id: authorization.membership_id,
         session_family_id: authorization.session_family_id, request_id: `ask_${randomUUID()}`,
       };
-      const bound: RegisteredPersonLiveEvidenceSourceV2[] = [];
-      for (const selected of compatible) {
-        const category = selected.descriptor.kind === 'slack_message' ? 'slack' : selected.descriptor.kind;
-        await observePersonLiveEvidenceV1('evidence_connection', category, async () => {
-          if (scope.kind === 'mine' || !selected.scopes.includes(scope.kind)) { annotateCoreRuntimeV1({ result: 'out_of_scope' }); return; }
-          const source = await selected.application.source({
-            ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}),
-            access_token: input.access_token, audit: options.audit.forLiveRequest(context),
-            ...(input.signal === undefined ? {} : { signal: input.signal }),
-          });
-          input.signal?.throwIfAborted();
-          annotateCoreRuntimeV1({ result: source === undefined ? (scope.kind === 'project' ? 'unavailable' : 'unlinked') : 'verified' });
-          if (source !== undefined) bound.push({ descriptor: selected.descriptor, source, scope });
-        });
-      }
-      const base = createPersonEvidenceDeskV1({ access_token: input.access_token, scope, originals: options.originals, records: options.records });
-      const desk = createRegisteredPersonLiveEvidenceDeskV2(base, bound);
+      const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, ...(input.signal === undefined ? {} : { signal: input.signal }) }, context);
       const asker = askerOf(options, authorization);
       try {
         const create = response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;

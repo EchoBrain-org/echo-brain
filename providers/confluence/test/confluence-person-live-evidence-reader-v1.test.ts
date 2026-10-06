@@ -446,7 +446,7 @@ describe('Confluence live reader through the audited evidence source', () => {
 
 describe('Confluence open by an earlier citation (background trigger starting evidence)', () => {
   const earlier = (pageId: string, scope = CLOUD): PersonPageCitationV1 => ({ kind: 'page', tool_id: 'confluence', external_scope_id: scope,
-    page_id: pageId, section_id: 's1', version: '1', permalink: `${ORIGIN}/wiki/pages/viewpage.action?pageId=${pageId}`, text_sha256: emptyHash });
+    page_id: pageId, section_id: 's1', version: '1', permalink: `${ORIGIN}/wiki/pages/viewpage.action?pageId=${pageId}`, text_sha256: emptyHash as `sha256:${string}` });
 
   it('re-reads the current version from its first section and audits it as an open', async () => {
     const f = await fixture({ selected: ['42'], pages: [page({ id: '123', version: 5, document: document('Current gate text.') })] });

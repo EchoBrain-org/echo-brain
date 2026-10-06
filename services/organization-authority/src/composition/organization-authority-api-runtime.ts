@@ -6,6 +6,8 @@ import { SqlitePersonDocumentRepositoryV1 } from '../adapters/persistence/sqlite
 import { SqlitePersonTextSourceInboxV1 } from '../adapters/persistence/sqlite/person-text-source-v1.js';
 import { createPersonDocumentUploadStagingV1 } from '../adapters/files/document-upload-staging-v1.js';
 import { startPersonDocumentProcessingV1 } from './person-document-processing-v1.js';
+import { createPersonResearchEvalV1 } from './person-research-eval-v1.js';
+import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 import { createProjectContextApplicationV1 } from '../application/project-context-application-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
 import { createRecordProjectAuthorizationV1 } from './person-record-project-scope-v1.js';
@@ -91,6 +93,11 @@ export interface OrganizationAuthorityApiRuntimeDependencies extends LegacyPerso
   readonly live_connectors?: readonly PersonLiveConnectorDefinitionV1[];
   /** Server-only agentic Ask experiment: open the whole readable scope first when it is small. */
   readonly agentic_ask_v1_small_scope_shortcut?: boolean;
+  /**
+   * Staging-only research evaluation endpoint (research loop evaluation v1).
+   * Composed only for the staging Authority origin and only with the answer model.
+   */
+  readonly research_eval_v1?: true;
   /** Historical record protocol projection, independent of live ingress. */
   readonly record_approver?: RecordApproverProjectorV1;
   /**
@@ -304,6 +311,9 @@ export async function startOrganizationAuthorityApiRuntime(
       audit: new SqlitePersonAgenticAskAuditV1(database),
       ...(dependencies.agentic_ask_v1_small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
     };
+    const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && answerOptions !== undefined
+      ? createPersonResearchEvalV1({ ...answerOptions, live_sources: liveSources })
+      : undefined;
     let closing = false;
     const server = createOrganizationAuthorityHttpServer({
       is_closing: () => closing,
@@ -352,6 +362,7 @@ export async function startOrganizationAuthorityApiRuntime(
         person_answer_v4: createPersonAnswerV4Route({ ...answerOptions, live_sources: liveSources }),
         person_answer_v5: createPersonAnswerV5Route({ ...answerOptions, live_sources: liveSources }),
       }),
+      ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
       person_documents: createPersonDocumentApplicationV1({
         authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
         repository: documents,
@@ -404,6 +415,7 @@ export async function startOrganizationAuthorityApiRuntime(
       stopAcceptingRequests,
       close: async () => {
         stopAcceptingRequests();
+        researchEval?.close();
         await Promise.all([serverClosed, documentWorker?.close()]);
         for (const { runtime } of [...liveConnectors].reverse()) runtime.close();
         personHttp?.close();

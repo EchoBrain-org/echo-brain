@@ -37,6 +37,7 @@ const runtimeState = vi.hoisted(() => ({
     | undefined,
   agentic_ask_v1_enabled: undefined as true | undefined,
   agentic_ask_v1_small_scope_shortcut: undefined as true | undefined,
+  staging_research_eval_v1: undefined as true | undefined,
   authority_url: "https://authority.example",
   processing: "active" as "active" | "idle_until_finalize",
   shutdown_events: [] as string[],
@@ -75,6 +76,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly staging_meeting_approval_journey_telemetry_enabled?: true;
     readonly agentic_ask_v1_enabled?: true;
     readonly agentic_ask_v1_small_scope_shortcut?: true;
+    readonly staging_research_eval_v1?: true;
     readonly slack_nango: object;
     readonly jira_person_live?: object;
     readonly confluence_person_live?: object;
@@ -98,6 +100,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.agentic_ask_v1_enabled = config.agentic_ask_v1_enabled;
     runtimeState.agentic_ask_v1_small_scope_shortcut =
       config.agentic_ask_v1_small_scope_shortcut;
+    runtimeState.staging_research_eval_v1 = config.staging_research_eval_v1;
     runtimeState.slack_nango = config.slack_nango;
     runtimeState.jira_person_live = config.jira_person_live;
     runtimeState.confluence_person_live = config.confluence_person_live;
@@ -175,6 +178,8 @@ afterEach(() => {
   delete process.env.ECHO_SOURCE_SHA;
   delete process.env.ECHO_STAGING_JIRA_ASK_V1;
   delete process.env.ECHO_STAGING_CONFLUENCE_ASK_V1;
+  delete process.env.ECHO_STAGING_RESEARCH_EVAL_V1;
+  runtimeState.staging_research_eval_v1 = undefined;
   delete process.env.ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE;
   delete process.env.ECHO_CLEAN_RELEASE_ID;
   delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
@@ -331,6 +336,25 @@ describe("admitted runtime CLI events", () => {
       expect(runtimeState.jira_person_live).toBeUndefined();
     } finally { process.emit("SIGTERM"); await running; }
     expect(await running, errors.join("")).toBe(0);
+  });
+
+  it.each([undefined, "", "false", "true"])("composes the research evaluation endpoint on the staging Authority only with its switch (%s)", async flag => {
+    const directory = stagingProfileDirectory();
+    if (flag !== undefined) process.env.ECHO_STAGING_RESEARCH_EVAL_V1 = flag;
+    const errors: string[] = [];
+    const running = start({ stderr: value => errors.push(value) }, directory);
+    try {
+      await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+      expect(runtimeState.staging_research_eval_v1).toBe(flag === "true" ? true : undefined);
+    } finally { process.emit("SIGTERM"); await running; }
+    expect(await running, errors.join("")).toBe(0);
+  });
+
+  it.each(["true", "yes"])("refuses the research evaluation switch outside the staging Authority or with an invalid value (%s)", async flag => {
+    process.env.ECHO_STAGING_RESEARCH_EVAL_V1 = flag;
+    expect(await start({ stderr: () => undefined })).toBe(1);
+    expect(runtimeState.worker_error).toBeUndefined();
+    expect(runtimeState.staging_research_eval_v1).toBeUndefined();
   });
 
   it.each(["true", "invalid"])("refuses a staging Confluence switch without its fixed profile (%s)", async flag => {

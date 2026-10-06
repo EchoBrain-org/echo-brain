@@ -6,6 +6,7 @@ import { validatePersonQueryText } from '@echo-brain/organization-api';
 import { validatePersonSourceEvidenceReadRequestV1, validatePersonMeetingTranscriptReadRequestV1, type PersonSourceEvidenceReadRequestV1, type PersonMeetingTranscriptReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
+import type { PersonResearchEvalReadResponseV1, PersonResearchEvalStartReceiptV1, PersonResearchEvalStartRequestV1 } from '@echo-brain/organization-api';
 import {
   validateProjectPageRequestV2, validateProjectCreateV1, validateProjectIdV1,
   validateProjectContextBrowseV1, validateProjectDirectorySearchV1,
@@ -680,6 +681,15 @@ export class PersonClient {
         return authority.askV4(token, question, scope, signal);
       }
     });
+  }
+
+  /** Staging-only research evaluation (research loop evaluation v1); no CLI command exposes it. */
+  async startResearchEval(value: PersonResearchEvalStartRequestV1, signal?: AbortSignal): Promise<PersonResearchEvalStartReceiptV1> {
+    return this.withReadSession((authority, token) => authority.startResearchEval(token, value, signal));
+  }
+
+  async readResearchEval(runId: string, signal?: AbortSignal): Promise<PersonResearchEvalReadResponseV1> {
+    return this.withReadSession((authority, token) => authority.readResearchEval(token, runId, signal));
   }
 
   /** Each evidence invocation creates a new authenticated, scope-bound desk request. */
