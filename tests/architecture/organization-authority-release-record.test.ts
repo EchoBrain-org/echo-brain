@@ -79,7 +79,45 @@ function updateWrapperForTest(): string {
 
 // Unit container fixtures must explicitly return setup readiness. The connected
 // journey uses the real setup command and separately proves not_ready refusal.
-const READY_SETUP_DOCKER = `if [[ "$1" == compose && "$*" == *"clean-founder-main.js status --state-dir"* ]]; then printf '%s\\n' '{"schema_version":1,"kind":"echo-clean-founder-setup-status-v1","runtime_status":"ready_to_start"}'; exit 0; fi`;
+const READY_SETUP_DOCKER = `if [[ "$1" == compose && "$*" == *"clean-founder-main.js status --state-dir"* ]]; then if [[ -n "\${ECHO_TEST_SETUP_STATUS:-}" ]]; then printf '%s\\n' "$ECHO_TEST_SETUP_STATUS"; else printf '%s\\n' '{"schema_version":1,"kind":"echo-clean-founder-setup-status-v1","runtime_status":"ready_to_start"}'; fi; exit 0; fi`;
+
+const PRE_SLACK_ONBOARDING_STATUS = JSON.stringify({
+  schema_version: 2,
+  kind: "echo-organization-authority-setup-status-v2",
+  setup_plan_present: true,
+  genesis_published: true,
+  credentials_ready: true,
+  slack_connected: false,
+  invitation_file_present: true,
+  founder_invitation_valid: false,
+  founder_oidc_bound: true,
+  founder_slack_link_active: false,
+  llm_credential_valid: false,
+  source_mode: "none",
+  source_admission_present: false,
+  source_progress_observed: false,
+  synthetic_staging_canary_observed: false,
+  approved_record_present: false,
+  active_generation_current: false,
+  owner_layer1_read_after_head: false,
+  owner_layer2_read_after_generation: false,
+  next_step: "connect_slack_in_app",
+  runtime_status: "not_ready",
+  runtime_observation: "not_observed",
+  canary_status: "not_ready",
+});
+
+const INITIAL_ONBOARDING_PROGRESS_STATUS = JSON.stringify({
+  ...JSON.parse(PRE_SLACK_ONBOARDING_STATUS),
+  slack_connected: true,
+  next_step: "complete_founder_slack_link",
+});
+
+const READY_SETUP_STATUS = JSON.stringify({
+  schema_version: 2,
+  kind: "echo-organization-authority-setup-status-v2",
+  runtime_status: "ready_to_start",
+});
 
 function record(overrides: Record<string, unknown> = {}) {
   return {
@@ -271,19 +309,22 @@ function environmentDriftFixture(stateName = "release-state") {
     "if [[ \"$1\" == inspect && \"$*\" == *'.Image'* ]]; then echo \"$ECHO_TEST_IMAGE_ID\"; exit 0; fi",
     "if [[ \"$1\" == image && \"$*\" == *'org.opencontainers.image.revision'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_SOURCE_SHA=//p' \"$ECHO_CLEAN_ENV_FILE\"; exit 0; fi",
     "if [[ \"$1\" == image && \"$*\" == *'.RepoDigests'* ]]; then sed -n 's/^ECHO_CLEAN_AUTHORITY_IMAGE=//p' \"$ECHO_CLEAN_ENV_FILE\"; exit 0; fi",
+    "if [[ \"$1\" == image && \"$*\" == *'org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1'* ]]; then echo true; exit 0; fi",
     "if [[ \"$*\" == *'.Config.'* ]]; then exit 0; fi",
+    "if [[ \"$1\" == compose && \"$*\" == *'clean-founder-main.js status --state-dir'* && -n \"${ECHO_TEST_CANDIDATE_SETUP_STATUS:-}\" && \"$(sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' \"$ECHO_CLEAN_ENV_FILE\")\" != \"$ECHO_TEST_ACCEPTED_ID\" ]]; then printf '%s\\n' \"$ECHO_TEST_CANDIDATE_SETUP_STATUS\"; exit 0; fi",
     READY_SETUP_DOCKER,
     "if [[ \"$1\" == compose ]]; then exit 0; fi",
     "exit 91",
     "",
   ].join("\n"), { mode: 0o755 });
-  const environment = {
+  const environment: Record<string, string> = {
     PATH: `${bin}:${process.env.PATH}`,
     ECHO_CLEAN_ENV_FILE: envFile,
     ECHO_CLEAN_RELEASE_STATE_DIR: state,
     ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
     ECHO_TEST_DOCKER_LOG: log,
     ECHO_TEST_IMAGE_ID: `sha256:${"e".repeat(64)}`,
+    ECHO_TEST_ACCEPTED_ID: accepted.release_id,
   };
   return { root, envFile, state, profile, accepted, acceptedPath, snapshot, original,
     runtimeConfig, log, environment,
@@ -393,10 +434,42 @@ describe("Organization Authority clean-v1 release record", () => {
     [JSON.stringify({ schema_version: 2, kind: 'echo-clean-founder-setup-status-v1', runtime_status: 'ready_to_start' }), 0, false],
     [JSON.stringify({ schema_version: true, kind: 'echo-clean-founder-setup-status-v1', runtime_status: 'ready_to_start' }), 0, false],
   ])('requires affirmative setup readiness as well as a successful command: %s / %s', (body, code, ready) => {
-    const helper = readFileSync(UPDATE, 'utf8').match(/^safe_setup_status\(\) \{[\s\S]*?^\}/m)?.[0];
+    const source = readFileSync(UPDATE, 'utf8');
+    const updateHelper = source.match(/^safe_update_setup_status\(\) \{[\s\S]*?^\}/m)?.[0];
+    const helper = source.match(/^safe_setup_status\(\) \{[\s\S]*?^\}/m)?.[0];
+    expect(updateHelper).toBeDefined();
     expect(helper).toBeDefined();
-    const result = run('bash', ['-c', `set -euo pipefail\ncompose_clean() { printf '%s' "$ECHO_TEST_SETUP_BODY"; return "$ECHO_TEST_SETUP_CODE"; }\n${helper}\nsafe_setup_status`], { ECHO_TEST_SETUP_BODY: String(body), ECHO_TEST_SETUP_CODE: String(code) });
+    const result = run('bash', ['-c', `set -euo pipefail\ncompose_clean() { printf '%s' "$ECHO_TEST_SETUP_BODY"; return "$ECHO_TEST_SETUP_CODE"; }\n${updateHelper}\n${helper}\nsafe_setup_status`], { ECHO_TEST_SETUP_BODY: String(body), ECHO_TEST_SETUP_CODE: String(code) });
     expect(result.status === 0).toBe(ready);
+  });
+
+  it("classifies only the durable pre-Slack onboarding state as eligible for a staged update", () => {
+    const helper = readFileSync(UPDATE, "utf8").match(/^safe_update_setup_status\(\) \{[\s\S]*?^\}/m)?.[0];
+    expect(helper).toBeDefined();
+    const initial = JSON.stringify({
+      schema_version: 2,
+      kind: "echo-organization-authority-setup-status-v2",
+      setup_plan_present: true,
+      genesis_published: true,
+      credentials_ready: true,
+      slack_connected: false,
+      invitation_file_present: true,
+      founder_invitation_valid: false,
+      founder_oidc_bound: true,
+      founder_slack_link_active: false,
+      llm_credential_valid: false,
+      source_mode: "none",
+      source_admission_present: false,
+      next_step: "connect_slack_in_app",
+      runtime_status: "not_ready",
+      runtime_observation: "not_observed",
+      canary_status: "not_ready",
+    });
+    const result = run("bash", ["-c", `set -euo pipefail\ncompose_clean() { printf '%s' "$ECHO_TEST_SETUP_BODY"; return 0; }\n${helper}\nsafe_update_setup_status`], {
+      ECHO_TEST_SETUP_BODY: initial,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("initial_onboarding\n");
   });
 
   it("accepts the same canonical non-secret record in build and operator tools", () => {
@@ -2268,6 +2341,82 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
     expect(readFileSync(fixture.snapshot, "utf8")).toBe(fixture.original);
   });
 
+  it.each([
+    ["owner Slack-link progress", INITIAL_ONBOARDING_PROGRESS_STATUS],
+    ["ready setup", READY_SETUP_STATUS],
+  ])("stages a pre-Slack initial-onboarding candidate without weakening its canary or rollback gates after %s", (_name, laterStatus) => {
+    const fixture = environmentDriftFixture();
+    writeFileSync(fixture.envFile, fixture.original);
+    fixture.environment.ECHO_TEST_SETUP_STATUS = PRE_SLACK_ONBOARDING_STATUS;
+    const acceptedBytes = readFileSync(fixture.acceptedPath, "utf8");
+    const candidateRecord = releaseWithRuntimeProfile(fixture.profile, {
+      release_id: "clean-v1-20260822-pre-slack",
+      authority_image: {
+        reference: fixture.accepted.authority_image.reference.replace(/b{64}$/, "d".repeat(64)),
+      },
+    });
+    const candidate = writeRecord(candidateRecord);
+
+    const staged = fixture.execute("stage", "--release", candidate, "--runtime-profile", fixture.profile);
+    expect(staged.status, staged.stderr).toBe(0);
+    expect(staged.stdout).toContain("continue-staged-initial-onboarding");
+    expect(readFileSync(fixture.acceptedPath, "utf8")).toBe(acceptedBytes);
+    expect(existsSync(join(fixture.state, "candidate.clean-v1.json"))).toBe(true);
+
+    const canary = fixture.execute("canary");
+    expect(canary.status).toBe(1);
+    expect(canary.stderr).toContain("setup readiness");
+
+    fixture.environment.ECHO_TEST_SETUP_STATUS = laterStatus;
+    const rolledBack = fixture.execute("rollback");
+    expect(rolledBack.status, rolledBack.stderr).toBe(0);
+    expect(readFileSync(fixture.acceptedPath, "utf8")).toBe(acceptedBytes);
+    expect(existsSync(join(fixture.state, "candidate.clean-v1.json"))).toBe(false);
+  });
+
+  it("restores a ready accepted release when a candidate regresses to initial onboarding", () => {
+    const fixture = environmentDriftFixture();
+    writeFileSync(fixture.envFile, fixture.original);
+    fixture.environment.ECHO_TEST_CANDIDATE_SETUP_STATUS = PRE_SLACK_ONBOARDING_STATUS;
+    const acceptedBytes = readFileSync(fixture.acceptedPath, "utf8");
+    const candidate = writeRecord(releaseWithRuntimeProfile(fixture.profile, {
+      release_id: "clean-v1-ready-regression",
+      authority_image: { reference: fixture.accepted.authority_image.reference.replace(/b{64}$/, "d".repeat(64)) },
+    }));
+    const staged = fixture.execute("stage", "--release", candidate, "--runtime-profile", fixture.profile);
+    expect(staged.status).toBe(1);
+    expect(staged.stderr).toContain("previous accepted release tuple was restored and verified");
+    expect(readFileSync(fixture.acceptedPath, "utf8")).toBe(acceptedBytes);
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(fixture.original);
+    expect(existsSync(join(fixture.state, "candidate.clean-v1.json"))).toBe(false);
+  });
+
+  it.each(["missing", "corrupt"])("refuses promotion and rollback with %s setup-readiness evidence", (problem) => {
+    const fixture = environmentDriftFixture();
+    writeFileSync(fixture.envFile, fixture.original);
+    const acceptedBytes = readFileSync(fixture.acceptedPath, "utf8");
+    const releaseId = "clean-v1-readiness-evidence";
+    const candidate = writeRecord(releaseWithRuntimeProfile(fixture.profile, {
+      release_id: releaseId,
+      authority_image: { reference: fixture.accepted.authority_image.reference.replace(/b{64}$/, "d".repeat(64)) },
+    }));
+    const staged = fixture.execute("stage", "--release", candidate, "--runtime-profile", fixture.profile);
+    expect(staged.status, staged.stderr).toBe(0);
+    writeCanaryReceipt(fixture.state, releaseId);
+    const marker = join(fixture.state, "setup-readiness", `${releaseId}.json`);
+    if (problem === "missing") rmSync(marker);
+    else writeFileSync(marker, "{}\n");
+    const candidateEnvironment = readFileSync(fixture.envFile, "utf8");
+    for (const args of [["promote", "--release", candidate, "--canary-passed"], ["rollback"]]) {
+      const refused = fixture.execute(...args);
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toContain("setup class is missing or unsafe");
+      expect(readFileSync(fixture.acceptedPath, "utf8")).toBe(acceptedBytes);
+      expect(readFileSync(fixture.envFile, "utf8")).toBe(candidateEnvironment);
+      expect(existsSync(join(fixture.state, "candidate.clean-v1.json"))).toBe(true);
+    }
+  });
+
   it("refuses environment drift without disclosing private values", () => {
     const fixture = environmentDriftFixture();
     const before = readFileSync(fixture.envFile);
@@ -2468,6 +2617,12 @@ fi
     installActiveTuple(state, envFile, currentRecord, currentProfile);
     copyFileSync(current, join(state, "current.clean-v1.json"));
     copyFileSync(candidate, join(state, "candidate.clean-v1.json"));
+    mkdirSync(join(state, "setup-readiness"), { mode: 0o700 });
+    writeFileSync(join(state, "setup-readiness", `${candidateRecord.release_id}.json`), `${canonical({
+      accepted_sha256: createHash("sha256").update(readFileSync(current)).digest("hex"),
+      candidate_sha256: createHash("sha256").update(readFileSync(candidate)).digest("hex"),
+      setup_class: "ready",
+    })}\n`, { mode: 0o600 });
     const environment = {
       PATH: `${bin}:${process.env.PATH}`,
       ECHO_CLEAN_ENV_FILE: envFile,

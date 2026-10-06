@@ -9,6 +9,7 @@ import {
 const SECRET_KEY = "nango-secret-key-value";
 const CLIENT_SECRET = "client-secret-value";
 const INTEGRATION_KEY = "echo-slack";
+const SESSION_TOKEN = "nango-connect-session-token-value";
 
 const CONFIGURATION: NangoConfigurationV1 = Object.freeze({
   base_url: "https://api.nango.dev",
@@ -94,12 +95,12 @@ describe("HttpNangoConnectionClientV1 configuration", () => {
 });
 
 describe("HttpNangoConnectionClientV1.createConnectSession", () => {
-  it("sends the Bearer secret key and the exact connect-session body, returning only connect_link", async () => {
+  it("starts native browser OAuth with the selected app while keeping its secret in session defaults", async () => {
     const fetch = nangoFetch([
       200,
       {
         data: {
-          token: "nango-session-token-value",
+          token: SESSION_TOKEN,
           connect_link: "https://connect.nango.dev/abc",
           expires_at: "2026-10-01T00:00:00.000Z",
         },
@@ -114,7 +115,10 @@ describe("HttpNangoConnectionClientV1.createConnectSession", () => {
       scopes: SCOPES,
     });
 
-    expect(session).toEqual({ connect_link: "https://connect.nango.dev/abc" });
+    expect(session).toEqual({
+      connect_link: `https://api.nango.dev/oauth/connect/${INTEGRATION_KEY}?connect_session_token=${SESSION_TOKEN}`,
+    });
+    expect(session.connect_link).not.toContain(CLIENT_SECRET);
 
     expect(fetch).toHaveBeenCalledTimes(1);
     const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
@@ -128,6 +132,7 @@ describe("HttpNangoConnectionClientV1.createConnectSession", () => {
       allowed_integrations: [INTEGRATION_KEY],
       integrations_config_defaults: {
         [INTEGRATION_KEY]: {
+          authorization_params: { client_id: "client-id-value" },
           connection_config: {
             oauth_client_id_override: "client-id-value",
             oauth_client_secret_override: CLIENT_SECRET,
@@ -140,12 +145,12 @@ describe("HttpNangoConnectionClientV1.createConnectSession", () => {
 });
 
 describe("HttpNangoConnectionClientV1.createReconnectSession", () => {
-  it("sends connection_id, integration_id, tags and the same per-connection overrides", async () => {
+  it("uses the same native browser OAuth and selected-app defaults when reconnecting", async () => {
     const fetch = nangoFetch([
       200,
       {
         data: {
-          token: "nango-session-token-value",
+          token: SESSION_TOKEN,
           connect_link: "https://connect.nango.dev/def",
           expires_at: "2026-10-01T00:00:00.000Z",
         },
@@ -161,7 +166,10 @@ describe("HttpNangoConnectionClientV1.createReconnectSession", () => {
       scopes: SCOPES,
     });
 
-    expect(session).toEqual({ connect_link: "https://connect.nango.dev/def" });
+    expect(session).toEqual({
+      connect_link: `https://api.nango.dev/oauth/connect/${INTEGRATION_KEY}?connect_session_token=${SESSION_TOKEN}`,
+    });
+    expect(session.connect_link).not.toContain(CLIENT_SECRET);
 
     const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.nango.dev/connect/sessions/reconnect");
@@ -171,6 +179,7 @@ describe("HttpNangoConnectionClientV1.createReconnectSession", () => {
       tags: TAGS,
       integrations_config_defaults: {
         [INTEGRATION_KEY]: {
+          authorization_params: { client_id: "client-id-value" },
           connection_config: {
             oauth_client_id_override: "client-id-value",
             oauth_client_secret_override: CLIENT_SECRET,
@@ -179,6 +188,31 @@ describe("HttpNangoConnectionClientV1.createReconnectSession", () => {
         },
       },
     });
+  });
+});
+
+describe("HttpNangoConnectionClientV1 native OAuth session response", () => {
+  it.each([
+    [{ data: { connect_link: "https://connect.nango.dev/abc" } }],
+    [{ data: { token: "with whitespace" } }],
+    [{ data: { token: "x".repeat(4097) } }],
+    [{ data: { token: "x".repeat(4096) } }],
+    [{ data: { token: "/".repeat(1400) } }],
+  ])("rejects a malformed session token without returning the Nango response body", async (body) => {
+    const fetch = nangoFetch([200, body]);
+    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
+
+    const failure = await failureOf(client.createConnectSession({
+      tags: TAGS,
+      client_id: "client-id-value",
+      client_secret: CLIENT_SECRET,
+      scopes: SCOPES,
+    }));
+
+    expect(failure).toBeInstanceOf(NangoClientErrorV1);
+    expect((failure as NangoClientErrorV1).code).toBe("invalid_response");
+    expect((failure as NangoClientErrorV1).message).not.toContain(CLIENT_SECRET);
+    expect((failure as NangoClientErrorV1).message).not.toContain(JSON.stringify(body));
   });
 });
 

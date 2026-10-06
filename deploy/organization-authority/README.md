@@ -280,6 +280,17 @@ resume an unfinished install, or reconnect after Slack was uninstalled, after
 Nango lost the connection, or after an install landed in another workspace,
 without a new setup token.
 
+Enter Slack app credentials only in ECHO. ECHO supplies the saved client ID,
+client secret, and bot scopes to each Nango install or reconnect session using
+per-connection overrides, including the selected client ID for authorization.
+Do not copy them into the Nango dashboard's Slack
+integration settings for each organization or setup retry. The browser step
+is Slack consent in the intended workspace; it is not another credential-entry
+step. The browser opens Nango's native OAuth entry point, which redirects to
+Slack and retains Nango's callback state cookie. The configured Nango environment
+and integration key must still exist with their initial OAuth configuration;
+that one-time platform configuration is not repeated for each ECHO app.
+
 #### Use an existing Slack app before the first connection
 
 An owner can instead choose an existing app while the organization has **no
@@ -301,21 +312,27 @@ synthetic app ID with the chosen app's ID:
   --tool slack --existing-app A0EXAMPLE
 ```
 
-At the hidden prompt, paste one single-line JSON object containing exactly
-`configuration_token`, `client_id`, `client_secret`, and `signing_secret`, all
-strings. Use an app configuration token authorized to update the chosen app
-and that app's client ID, client secret, and signing secret. Only the app ID
-belongs in the command; never put the JSON in shell arguments, shell history,
-logs, or chat. A human may also pipe the privately prepared JSON from standard
-input. `--existing-app` cannot be combined with `--reconnect`.
+Answer the four named, hidden prompts separately: configuration token, client
+ID, client secret, and signing secret. Use an app configuration token authorized
+to update the chosen app and the credentials from that app's Basic Information
+page. No JSON formatting is needed at the terminal. Only the app ID belongs in
+the command; never put credentials in shell arguments, shell history, logs, or
+chat. Existing scripts may still pipe one privately prepared JSON object with
+exactly `configuration_token`, `client_id`, `client_secret`, and `signing_secret`,
+all strings. `--existing-app` cannot be combined with `--reconnect`.
 
 ECHO applies its current manifest to the chosen app, replaces the pending
 credential bundle, cancels stale pending install attempts, and opens a new
 Nango install. Any prior app remains in Slack; this command does not delete it.
-The human completes browser consent in the intended workspace. Adoption does
-not reconfigure the Nango integration or prove its OAuth configuration aligns
-with the chosen app. Completion still requires the existing app, workspace,
-bot, and scope checks; a different app or workspace is not an acceptable result.
+The human completes browser consent in the intended workspace. ECHO supplies
+these credentials to Nango through the same per-connection override used for
+a newly created app, without changing the integration's shared settings.
+Completion still requires the existing app, workspace, bot, and scope checks.
+If consent fails or expires after the app-ready result, rerun setup with
+`--reconnect` to reuse the saved app credentials; do not enter them again or
+repeat the Nango dashboard configuration. An app, attempt, or provider identity
+mismatch has its own error and requires investigating that mismatch before
+retrying; changing the selected workspace cannot repair an app mismatch.
 After installation completes, run `person tools` to verify organization setup,
 then `person tools connect --tool slack` for the owner's personal link.
 
@@ -741,6 +758,30 @@ This wrapper follows the accepted release only. While
 handoff with `terminal_green=false` and `resume` refuses to start or act on the
 candidate. Use `update-clean-v1.sh status`, then promote or roll back that
 candidate before returning to accepted-onboarding commands.
+
+An exception exists only for a candidate staged from the recorded
+`initial_onboarding` state. First install the verified Person kit matching that
+exact candidate release and use its installed absolute-path command for the
+human's Slack organization setup and personal Slack link. The previously
+accepted client does not verify the candidate's setup flow. Then the human host
+operator may run this installed command:
+
+```sh
+./onboard-clean-v1.sh continue-staged-initial-onboarding
+```
+
+It accepts only the digest-bound candidate readiness record for the intact
+accepted record, verifies that the running Authority, environment and runtime
+profile are the exact candidate, and advances only credential installation and
+finalization until `ready_to_start`. It refuses login, bootstrap, Slack steps,
+terminal completion, a missing or mismatched readiness record, and runtime
+drift. Its ready result remains `terminal_green=false`; run the ordinary
+candidate canary and approval path next. It neither changes the accepted
+record nor makes the candidate accepted.
+
+If a transition or restart fails after stopping the candidate, retry the same
+continuation after inspecting its status. It reuses durable setup progress and
+the verified local candidate image, then restarts and verifies the exact runtime.
 
 ## Activate replacement provider credentials
 
