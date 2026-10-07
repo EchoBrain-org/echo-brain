@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { itemMatches, leakMarkers, matching, satisfying, sectionCovered } from "./match.mjs";
+import { itemMatches, leakMarkers, matching, meetingIndex, satisfying, sectionCovered } from "./match.mjs";
 
 /**
  * Code checks for one saved run (spec section 5): what research found, read,
@@ -7,7 +7,7 @@ import { itemMatches, leakMarkers, matching, satisfying, sectionCovered } from "
  * stop and cost. Meaning-level checks belong to the judge.
  */
 export function codeChecks(testCase, run, dataset) {
-  const meetings = new Map(dataset.additions.meetings.map(meeting => [meeting.id, meeting]));
+  const meetings = meetingIndex(dataset.additions);
   const base = { case_id: testCase.id, split: testCase.split, trigger: testCase.trigger, trial: run.trial, budget: run.budget };
   if (run.outcome !== "completed" || run.result?.status !== "completed") {
     return { ...base, status: run.outcome === "rejected" ? "rejected_at_ingress" : "failed", error: run.error ?? run.result?.error ?? null, parts: [], leaks: [], stop: null, cost: null };
