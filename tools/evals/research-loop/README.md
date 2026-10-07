@@ -23,9 +23,18 @@ keys carry a relation and an owner per affected item (`world/README.md`).
 
 **Baselines across the research trigger contract.** Ask is byte-identical
 across that change, so an Ask baseline taken before or after it measures the
-same thing. Approved-record and Sweep baselines must be taken after it: their
-task text changed, and approved-record runs now return the impact card (a
-saved approved-record run without one is graded as failed).
+same thing. Grading changed, though: the judge's prompt now covers the impact
+card, and the summary's Ask-writer `gaps_reported` now averages Ask cases only
+(the card's gaps and Sweep's plan gaps have their own rows). Regrade an older
+Ask baseline with the current `grade` before comparing it. Approved-record and
+Sweep baselines must be taken after the change: their task text changed, and
+approved-record runs now return the impact card (a saved approved-record run
+without one is graded as failed).
+
+A case whose start request cannot be built (a meeting not bound, or a finding
+that cites only a transcript, which cannot start research in v1) is saved as a
+`case_not_startable` error and the run goes on; the report counts it in its
+first line as not started.
 
 Everything here is founder-run. The tool never writes to Jira, Confluence or
 ECHO; it only starts research runs on staging as the signed-in person and

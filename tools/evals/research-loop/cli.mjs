@@ -77,9 +77,13 @@ async function bindings(args) {
   process.stdout.write(`bindings.json written; meetings bound: ${Object.keys(meetings).join(", ") || "none"}${missing.length === 0 ? "" : `; not found: ${missing.join(", ")} (fill them in by hand)`}\n`);
 }
 
-async function runOne(client, testCase, request, budget, trial, model) {
+function runBase(testCase, budget, trial, model, started) {
+  return { schema_version: 1, kind: "echo-research-loop-eval-run-v1", case_id: testCase.id, split: testCase.split, state: testCase.state, trigger: testCase.trigger, budget, trial, model, started_at: new Date(started).toISOString() };
+}
+
+async function runOne(client, testCase, request, budget, trial, model, pollMs) {
   const started = Date.now();
-  const base = { schema_version: 1, kind: "echo-research-loop-eval-run-v1", case_id: testCase.id, split: testCase.split, state: testCase.state, trigger: testCase.trigger, budget, trial, model, started_at: new Date(started).toISOString() };
+  const base = runBase(testCase, budget, trial, model, started);
   let receipt;
   try { receipt = await client.startResearchEval(request); }
   catch (error) {
@@ -87,7 +91,7 @@ async function runOne(client, testCase, request, budget, trial, model) {
   }
   const deadline = started + pollDeadlineMs(budget);
   for (;;) {
-    await new Promise(resolve => setTimeout(resolve, 2_000));
+    await new Promise(resolve => setTimeout(resolve, pollMs));
     let result;
     try { result = await client.readResearchEval(receipt.run_id); }
     catch (error) { return { ...base, run_id: receipt.run_id, outcome: "error", error: { code: error?.code ?? "error", message: String(error?.message ?? error).slice(0, 300) }, elapsed_ms: Date.now() - started }; }
@@ -96,7 +100,7 @@ async function runOne(client, testCase, request, budget, trial, model) {
   }
 }
 
-async function run(args) {
+async function run(args, { client: given, poll_ms: pollMs = 2_000 } = {}) {
   if (args.run !== true) throw new Error("pass --run to start model-backed runs on staging");
   if (typeof args.model !== "string" || args.model.length === 0 || args.model !== args.model.trim()) throw new Error("--model is required to record the evaluated loop model");
   const model = args.model;
@@ -106,13 +110,16 @@ async function run(args) {
   const cases = selectCases(dataset, args.split, args.state, args.only).map(entry => substitutePerson(entry, bound.test_person));
   const trials = Number(args.trials ?? 3);
   if (!Number.isSafeInteger(trials) || trials < 1 || trials > 5) throw new Error("--trials must be 1 to 5");
-  const client = await personClient();
+  const client = given ?? await personClient();
   for (const testCase of cases) {
     const budgets = [testCase.budget, ...(args["background-diagnostic"] === true && testCase.trigger === "ask" && testCase.budget === "live" ? ["background"] : [])];
     for (const budget of budgets) {
       for (let trial = 1; trial <= (budget === testCase.budget ? trials : 1); trial += 1) {
-        const request = startRequest(testCase, bound, budget);
-        const saved = await runOne(client, testCase, request, budget, trial, model);
+        let request; let unstartable;
+        try { request = startRequest(testCase, bound, budget); } catch (error) { unstartable = error; }
+        // A case whose request cannot be built (an unbound or unstartable citation) is recorded and counted, and the run goes on.
+        const saved = unstartable === undefined ? await runOne(client, testCase, request, budget, trial, model, pollMs)
+          : { ...runBase(testCase, budget, trial, model, Date.now()), outcome: "error", error: { code: "case_not_startable", message: String(unstartable?.message ?? unstartable).slice(0, 300) }, elapsed_ms: 0 };
         writePrivateJson(out, `runs/${testCase.id}/${budget}-${trial}.json`, { ...saved, source_sha: sourceIdentity() });
         process.stdout.write(`${testCase.id} ${budget} #${trial}: ${saved.outcome}${saved.result?.research?.stop ? ` (${saved.result.research.stop.reason})` : ""}${saved.result?.rendered ? `, card ${saved.result.rendered.status}` : ""}\n`);
       }
@@ -188,7 +195,8 @@ function calibrate(args) {
   throw new Error("calibrate needs sheet or score");
 }
 
-export async function main(argv) {
+/** `dependencies` lets tests stand in for the signed-in person client and the polling interval. */
+export async function main(argv, dependencies = {}) {
   const args = options(argv);
   const command = args._[0];
   if (command === "validate") {
@@ -196,7 +204,7 @@ export async function main(argv) {
     if (problems.length > 0) throw new Error(`dataset problems:\n${problems.join("\n")}`);
     process.stdout.write("dataset is structurally valid\n");
   } else if (command === "bindings") await bindings(args);
-  else if (command === "run") await run(args);
+  else if (command === "run") await run(args, dependencies);
   else if (command === "grade") await grade(args);
   else if (command === "report") report(args);
   else if (command === "calibrate") calibrate(args);

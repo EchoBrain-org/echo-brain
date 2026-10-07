@@ -49,7 +49,7 @@ function t1CardRun() {
   const never = ticket("THERM-99", { id: "E99" });
   const card = impactCard([...items, never], [{ text: "The display shows two decimals.", citation_index: 0 }], [
     { citation_index: 1, says_now: "MRD-02 says one decimal.", relation: "conflicts" },
-    { citation_index: 2, says_now: "SW-22b rounds to one decimal.", relation: "conflicts" },
+    { citation_index: 2, says_now: "SW-22b rounds to one decimal.", relation: "confirms" },
     { citation_index: 3, says_now: "OD-REGISTER holds the rounding decision.", relation: "needs_updating", owner: "Zhen Ye" },
     { citation_index: 4, says_now: "SW-22 formats one decimal.", relation: "needs_updating", owner: "Mara Lindqvist" },
     { citation_index: 5, says_now: "ECHO-6 is another project's ticket.", relation: "confirms" },
@@ -72,8 +72,12 @@ test("approved-record keys give every affected item a relation and an owner, tak
   for (const entry of records) {
     assert.equal(entry.scope.kind, "record", `${entry.id}: the run reads where its record is`);
     assert.ok(entry.affected.length > 0 && entry.affected.length <= 20, entry.id);
-    for (const item of entry.affected) assert.ok(["confirms", "conflicts", "needs_updating"].includes(item.relation) && (item.owner === null || typeof item.owner === "string"), `${entry.id}/${item.id}`);
+    for (const item of entry.affected) assert.ok([item.relation].flat().every(value => ["confirms", "conflicts", "needs_updating"].includes(value)) && (item.owner === null || typeof item.owner === "string"), `${entry.id}/${item.id}`);
   }
+  // The record's own text decides: M2 keeps the ±0.1 °C accuracy, so the accuracy items confirm it; MRD-02 says one decimal, which M2 both contradicts and updates.
+  const t1Key = Object.fromEntries(records.find(entry => entry.id === "approved-record-t1-two-decimal-display").affected.map(item => [item.id, item.relation]));
+  for (const id of ["a8", "a9", "a10", "a11", "a12", "a13"]) assert.equal(t1Key[id], "confirms", id);
+  assert.deepEqual(t1Key.a1, ["conflicts", "needs_updating"]);
   // Owners come from item details: only the four tickets assigned to the test person have one.
   const owned = records.flatMap(entry => entry.affected.filter(item => item.owner !== null).flatMap(item => item.refs.map(ref => ref.ticket)));
   assert.deepEqual([...new Set(owned)].sort(), ["THERM-47", "THERM-54"]);
@@ -82,7 +86,9 @@ test("approved-record keys give every affected item a relation and an owner, tak
   assert.deepEqual(problems({}), []);
   assert.ok(problems({ affected: [] }).some(problem => problem.includes("affected items")));
   assert.ok(problems({ scope: { kind: "project", project: "THERM" } }).some(problem => problem.includes("record's scope")));
-  assert.ok(problems({ affected: [{ ...t1.affected[0], relation: "changes" }] }).some(problem => problem.includes("affected item is invalid")));
+  for (const relation of ["changes", [], ["conflicts"], ["conflicts", "conflicts"], ["conflicts", "changes"]]) {
+    assert.ok(problems({ affected: [{ ...t1.affected[0], relation }] }).some(problem => problem.includes("affected item is invalid")), JSON.stringify(relation));
+  }
   assert.ok(problems({ affected: [{ ...t1.affected[0], refs: [{ ticket: "THERM-99" }] }] }).some(problem => problem.includes("not evidence for any part")));
   assert.ok(datasetProblems({ ...dataset, cases: [{ ...caseById("bug-fix-dates-vs-dvt-review"), affected: t1.affected }] }).some(problem => problem.includes("only approved records")));
 });
@@ -158,8 +164,8 @@ test("start requests are envelopes the API and each trigger definition accept; a
   const { validatePersonResearchEvalStartRequestV1 } = await import("@echo-brain/organization-api");
   const { AGENTIC_TRIGGER_DEFINITIONS_V1 } = await import("@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1");
   for (const entry of dataset.cases) {
-    // Known gap, reported to the founder: this Sweep's last finding cites only the M5 transcript, and transcripts cannot start research in v1.
-    if (entry.id === "sweep-bug-412-and-gate") { assert.throws(() => startRequest(entry, bindings), /cannot start research/u); continue; }
+    // This Sweep's last finding cites only the M5 transcript, which cannot start research in v1; the runner records it as not started.
+    if (entry.id === "sweep-bug-412-and-gate") continue;
     const request = startRequest(substitutePerson(entry, "Zhen Ye"), bindings);
     assert.deepEqual(validatePersonResearchEvalStartRequestV1(request), request, entry.id);
     assert.equal(Object.hasOwn(request, "project_id"), entry.scope.kind === "project", entry.id);
@@ -188,7 +194,7 @@ test("impact cards are graded on listed items, relations, owners, and invented i
   const checks = codeChecks(testCase, run, dataset);
   assert.equal(checks.status, "completed");
   assert.equal(checks.card.expected, testCase.affected.length);
-  // THERM-2, THERM-18, THERM-54 and THERM-16 are key items; THERM-18's relation and THERM-16's owner are wrong.
+  // THERM-2, THERM-18, THERM-54 and THERM-16 are key items; THERM-18's relation (not in its accepted list) and THERM-16's owner are wrong.
   assert.deepEqual([checks.card.listed, checks.card.relations_correct, checks.card.owners_correct], [4, 3, 3]);
   assert.deepEqual(checks.card.invented.map(entry => entry.kind === "person" ? entry.name : entry.label).sort(), ["ECHO-6: Work item", "Mara Lindqvist", "THERM-99: Work item"]);
   const scores = runScores({ checks, judge: null });
@@ -201,6 +207,65 @@ test("impact cards are graded on listed items, relations, owners, and invented i
   // A completed approved-record run without its card delivered nothing to grade.
   const bare = completedRun(testCase, run.result.research.items);
   assert.deepEqual([codeChecks(testCase, bare, dataset).status, runScores({ checks: codeChecks(testCase, bare, dataset), judge: null }).card_items_listed], ["failed", 0]);
+});
+
+test("a card row is credited to the keyed section its chunk holds, not to the section the chunk before it started", () => {
+  const testCase = caseById("approved-record-t1-two-decimal-display");
+  // Verification plan 1212607: chunk s3 holds the TC-D-03 heading (key a13, confirms), chunk s4 the TC-D-06 heading (key a7, conflicts or needs_updating).
+  const chunk = (index, text) => ({ id: `E${index + 10}`, source: "pages", kind: "page", title: `Verification plan · section ${index}`, text,
+    citation: { kind: "page", tool_id: "confluence", external_scope_id: "cloud", page_id: "1212607", section_id: `s${index}`, version: "4", permalink: `https://echobrain.atlassian.net/wiki/x?s=${index}`, text_sha256: "sha256:0" },
+    read_in_full: true, opened: true, preloaded: false, cited_by_plan: true });
+  const s3 = chunk(3, "## TC-D-03 — 100 readings, ≥99 within spec\nAccuracy ±0.1 °C"); const s4 = chunk(4, "## TC-D-06 — Displayed value matches sensor value\nOne decimal");
+  const items = [record("M2", "decision", "E1"), s3, s4];
+  const graded = (affected, cited = items) => codeChecks(testCase, completedRun(testCase, items, undefined, impactCard(cited, [{ text: "Two decimals.", citation_index: 0 }], affected)), dataset).card;
+  const entry = (card, id) => card.affected.find(value => value.id === id);
+  const both = graded([{ citation_index: 1, says_now: "TC-D-03 checks ±0.1 °C.", relation: "confirms" }, { citation_index: 2, says_now: "TC-D-06 expects one decimal.", relation: "needs_updating" }]);
+  assert.deepEqual([entry(both, "a13"), entry(both, "a7")].map(value => [value.listed, value.relation_correct]), [[true, true], [true, true]]);
+  assert.deepEqual([both.listed, both.relations_correct], [2, 2]);
+  // A card listing only the TC-D-06 chunk lists TC-D-06, not TC-D-03 too.
+  const only = graded([{ citation_index: 1, says_now: "TC-D-06 expects one decimal.", relation: "needs_updating" }], [items[0], s4]);
+  assert.deepEqual([entry(only, "a13").listed, entry(only, "a7").listed, only.listed, only.relations_correct], [false, true, 1, 1]);
+  // A continuation chunk holding no keyed heading still carries the section before it.
+  const s5 = { ...chunk(5, "continues TC-D-06: expected one decimal"), id: "E15" };
+  const continued = codeChecks(testCase, completedRun(testCase, [...items, s5], undefined, impactCard([items[0], s5], [{ text: "Two decimals.", citation_index: 0 }], [{ citation_index: 1, says_now: "TC-D-06 expects one decimal.", relation: "conflicts" }])), dataset).card;
+  assert.deepEqual([entry(continued, "a7").listed, entry(continued, "a7").relation_correct, continued.listed], [true, true, 1]);
+});
+
+test("a case whose request cannot be built is recorded as not started and the run goes on", async () => {
+  const { main } = await import("../cli.mjs");
+  const { writePrivateJson, readJson, savedRunFiles } = await import("../lib/private-files.mjs");
+  const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-unstartable-")));
+  // M2 is not bound, so the approved-record case on M2 and the Sweep citing M2 cannot start; the other Sweep cites only a transcript.
+  const { M2: _unbound, ...meetingsBound } = bindings.meetings;
+  writePrivateJson(out, "bindings.json", { ...bindings, meetings: meetingsBound, test_person: "Zhen Ye" });
+  const askCase = caseById("bug-fix-dates-vs-dvt-review");
+  const card = t1CardRun();
+  const results = {
+    ask: completedRun(askCase, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [{ statements: [{}] }], citations: [{}] } }).result,
+    approved_record: card.run.result,
+  };
+  const started = [];
+  const client = {
+    async startResearchEval(request) { started.push(request); return { run_id: `run-${started.length}` }; },
+    async readResearchEval(runId) { return { ...results[started[Number(runId.slice(4)) - 1].trigger], schema_version: 1, kind: "echo-person-research-eval-result-v1", run_id: runId }; },
+  };
+  const common = ["run", "--run", "--model", "loop-a", "--split", "development", "--trials", "1", "--out", out];
+  await main([...common, "--state", "S0", "--only", "bug-fix-dates-vs-dvt-review,approved-record-t1-two-decimal-display,approved-record-t3-bug-412-likely-cause"], { client, poll_ms: 0 });
+  await main([...common, "--state", "S1"], { client, poll_ms: 0 });
+  // The run went on past each unstartable case: Ask and the M4 approved record started, nothing else did.
+  assert.deepEqual(started.map(request => request.trigger), ["ask", "approved_record"]);
+  const runs = new Map(savedRunFiles(out).map(entry => [entry.run.case_id, entry.run]));
+  assert.equal(runs.size, 5);
+  for (const id of ["approved-record-t1-two-decimal-display", "sweep-two-decimal-propagation", "sweep-bug-412-and-gate"]) {
+    assert.deepEqual([runs.get(id).outcome, runs.get(id).error.code, runs.get(id).model, typeof runs.get(id).source_sha], ["error", "case_not_startable", "loop-a", "string"], id);
+  }
+  assert.match(runs.get("sweep-bug-412-and-gate").error.message, /cannot start research/u);
+  assert.equal(runs.get("approved-record-t3-bug-412-likely-cause").outcome, "completed");
+  await main(["grade", "--no-judge", "--out", out]);
+  await main(["report", "--out", out]);
+  const report = readJson(join(out, "report.json"));
+  assert.deepEqual([report.summary.runs_not_started, report.summary.runs_failed], [3, 3]);
+  assert.match((await import("node:fs")).readFileSync(join(out, "report.md"), "utf8"), /Failed runs: 3, of which not started \(the case's request could not be built\): 3; rejected at ingress: 0\./u);
 });
 
 test("the judge sees the card as the answer, and its gap checks count for the card, not Ask's writer", () => {
@@ -236,9 +301,10 @@ test("reports print research-loop and renderer numbers in separate sections", ()
   assert.deepEqual([report.summary.cards, report.summary.cards_not_assessed], [2, 1]);
   const markdown = markdownReport({ split: "development", state: "S0", source_sha: "commit-a", model: "loop", world: "therm-v1", judge: null, graded_at: "2026-10-06T00:00:00.000Z" }, report);
   const [loop, renderers] = markdown.split("## Renderers");
-  assert.match(loop, /## Research loop/u);
-  assert.match(loop, /required items found/u);
-  assert.doesNotMatch(loop, /affected items listed|parts correct in the answer/u);
+  const [overall, loopOnly] = loop.split("## Research loop");
+  assert.match(overall, /\| Case \| Trigger \| Budget \| Runs \| Complete and supported \|/u);
+  assert.match(loopOnly, /required items found/u);
+  assert.doesNotMatch(loopOnly, /affected items listed|parts correct in the answer|Complete/u);
   assert.match(renderers, /\| Impact card \| affected items listed \| 25% \|/u);
   assert.match(renderers, /\| Impact card \| cards not assessed \(no-model fallback\) \| 1 of 2 \|/u);
   assert.match(renderers, /\| Ask writer \| parts correct in the answer \|/u);

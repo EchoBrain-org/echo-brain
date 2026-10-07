@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { itemMatches, leakMarkers, matching, satisfying } from "./match.mjs";
+import { itemMatches, leakMarkers, matching, satisfying, sectionCovered } from "./match.mjs";
 
 /**
  * Code checks for one saved run (spec section 5): what research found, read,
@@ -81,10 +81,15 @@ export function codeChecks(testCase, run, dataset) {
 
 /**
  * The impact card against its key (research trigger contract v1, section 6):
- * which key items it lists, with the key's relation and owner; and invented
- * items (not from research, or unconnected to the record in the key) or
- * people (not the owner in the details of the item they are attached to).
+ * which key items it lists, with one of the key's relations and its owner; and
+ * invented items (not from research, or unconnected to the record in the key)
+ * or people (not the owner in the details of the item they are attached to).
  * Gaps reported are the judge's.
+ *
+ * A row is credited to a key entry through an item holding that entry's own
+ * heading (a ticket is its own heading). Only when no row holds it does a
+ * continuation chunk count: the chunk after the heading, holding no keyed
+ * heading of its own. So a chunk is judged against the section it carries.
  */
 function cardChecks(testCase, card, items, meetings) {
   const itemOf = index => items.find(item => isDeepStrictEqual(item.citation, card.citations[index]?.citation));
@@ -100,12 +105,17 @@ function cardChecks(testCase, card, items, meetings) {
       ...card.people.map(person => person.name).filter(name => !rows.some(({ row, item }) => row.owner === name && item?.attributes?.owner === name)),
     ])].map(name => ({ kind: "person", name })),
   ];
+  const found = rows.filter(({ item }) => item !== undefined);
+  const holds = (item, ref) => itemMatches(item, ref, meetings) && sectionCovered(item, ref);
+  const keyedHeading = item => testCase.affected.some(entry => entry.refs.some(ref => ref.section !== undefined && holds(item, ref)));
   const affected = testCase.affected.map(entry => {
+    const heading = found.filter(({ item }) => entry.refs.some(ref => holds(item, ref)));
     const carriers = new Set(entry.refs.flatMap(ref => satisfying(items, ref, meetings)));
-    const listing = rows.filter(({ item }) => item !== undefined && carriers.has(item)).map(({ row }) => row);
+    const listing = (heading.length > 0 ? heading : found.filter(({ item }) => carriers.has(item) && !keyedHeading(item))).map(({ row }) => row);
+    const accepted = [entry.relation].flat();
     return {
       id: entry.id, listed: listing.length > 0,
-      relation_correct: listing.length > 0 && listing.every(row => row.relation === entry.relation),
+      relation_correct: listing.length > 0 && listing.every(row => accepted.includes(row.relation)),
       owner_correct: listing.length > 0 && listing.every(row => (row.owner ?? null) === entry.owner),
     };
   });

@@ -49,9 +49,15 @@ function refProblems(ref, meetings, where) {
 
 /**
  * An approved record's impact-card key: each affected item (a ticket, or one
- * part's sections of a page) with the relation and the owner the card should
- * show. Every item is evidence for one of the case's parts.
+ * part's sections of a page) with the relation the card should show (one
+ * value, or a short list of acceptable values) and the owner. Every item is
+ * evidence for one of the case's parts.
  */
+function relationValid(relation) {
+  if (typeof relation === "string") return RELATIONS.has(relation);
+  return Array.isArray(relation) && relation.length >= 2 && new Set(relation).size === relation.length && relation.every(value => RELATIONS.has(value));
+}
+
 function affectedProblems(entry, meetings, restricted) {
   const where = entry.id;
   const problems = [];
@@ -61,7 +67,7 @@ function affectedProblems(entry, meetings, restricted) {
   const ids = new Set();
   for (const item of entry.affected) {
     const at = `${where}/${item?.id}`;
-    if (typeof item?.id !== "string" || ids.has(item.id) || !RELATIONS.has(item.relation) || !(item.owner === null || (typeof item.owner === "string" && item.owner.trim() !== "")) ||
+    if (typeof item?.id !== "string" || ids.has(item.id) || !relationValid(item.relation) || !(item.owner === null || (typeof item.owner === "string" && item.owner.trim() !== "")) ||
         !Array.isArray(item.refs) || item.refs.length === 0) { problems.push(`${at}: affected item is invalid`); continue; }
     ids.add(item.id);
     for (const ref of item.refs) {

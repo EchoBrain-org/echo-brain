@@ -83,15 +83,22 @@ be reverted, but ECHO cannot read either of them.
 - A part's `evidence` lists every item in this world that supports it. Any
   other item that research reads counts as noise.
 - Approved-record cases add `affected`: the items the impact card should
-  list. Each is one ticket, or one part's sections of a page (any of them
-  counts), with the `relation` the card should give and the `owner` its
-  details carry. Both come from the case itself: every ticket and page section
-  in the evidence of a `conflict` part is `conflicts`, of a `change` part
-  `needs_updating`, and of a part that says the items agree `confirms`; an item
-  in several such parts takes the first. The owner is the Jira assignee from
-  `additions.json` (only THERM-47, 52, 53 and 54 have one) and `null` for every
-  other ticket and every page. Meeting items are not keyed: a card that lists
-  one the case cites is neither credited nor charged.
+  list, with the `relation` it should give and the `owner` their details carry.
+  - Which items: every ticket, and each part's sections of a page (any of them
+    counts), in the evidence of a `conflict` or `change` part or of a part that
+    says the items agree, each listed once. Meeting items are not keyed: a card
+    that lists one the case cites is neither credited nor charged.
+  - Relation: the record's own text (its `expected_records`) decides.
+    `confirms` when the item says what the record says or keeps (M2 keeps the
+    ±0.1 °C accuracy, so the accuracy items confirm it); `conflicts` when it
+    says something the record contradicts; `needs_updating` when the record
+    changes or settles something it describes. Anything the record
+    contradicts is also out of date, so such an item accepts either value,
+    written as a list; a list is used only where the record's text supports
+    both. A date the record puts at risk is the card's date at risk, not a
+    relation.
+  - Owner: the Jira assignee from `additions.json` (only THERM-47, 52, 53 and
+    54 have one), and `null` for every other ticket and every page.
 - `never_appears` lists the M6 items in every case. Any trace of them in a
   research result, the notes or an answer fails the run.
 - THERM items carry "SYNTHETIC MOCK" banners. An answer that reports a mock
