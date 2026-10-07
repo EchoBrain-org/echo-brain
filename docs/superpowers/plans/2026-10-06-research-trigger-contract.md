@@ -95,7 +95,8 @@
 
 **Files:**
 - Create: `packages/organization-authority-kernel/src/answer-composition/agentic-brief-v1.ts`
-- Modify: `agentic-research-v1.ts`, `agentic-ask-v1-model-protocol.ts`, the loop module
+- Create: `packages/organization-authority-kernel/src/answer-composition/agentic-research-loop-v1.ts` (the loop module: brief in, full bundle out; the request closure becomes the runner)
+- Modify: `agentic-research-v1.ts`, `agentic-ask-v1-model-protocol.ts`, `agentic-ask-v1.ts`
 - Test: `agentic-brief-v1.test.ts`, updated `agentic-research-v1.test.ts`
 
 **Interfaces:**
@@ -144,9 +145,36 @@
 - [ ] Step 2: The endpoint returns `{ rendered, research }` for triggers with a renderer and `{ research }` for Sweep.
 - [ ] Step 3: README: Ask baselines remain comparable across this change; approved-record and Sweep baselines must be taken after it. `npm run check` passes. Commit `feat(evals): grade renderers separately from research`.
 
+### Task 6.2: Remove phase scaffolding
+
+After Task 6.1 is green. Phases 1-5 recorded frozen baselines to prove each move changed nothing; afterwards they mostly duplicate the Ask golden replays and pin internal detail that later legitimate changes would trip over.
+
+- [ ] Delete the frozen baselines and the tests that only compare against them (`renderers/__snapshots__/ask-renderer-v1.writer.json`, `__snapshots__/agentic-evidence-bundle-v1.research.json`, `__snapshots__/agentic-release-v1.audit.json`, and any later equivalent). Keep both Ask golden fixtures, the impact-card golden, and behaviour tests, rewritten as direct assertions where they lean on a baseline.
+- [ ] Share the golden scenario helpers from one test-fixture module instead of copies.
+- [ ] Over-engineering pass on the new modules: option fields nothing passes, leftover re-exports, duplicated helpers, `researchBundle()` if nothing needs it.
+- [ ] Golden replays unchanged and `npm run check` passes. Commit `chore(research): remove phase scaffolding`.
+
 ## Review Focus
 
 - Phase 2: does any Ask path now fence a different number of times? The Granola fixture's desk call trace must not change.
 - Phase 3: does the renderer read anything the inline writer did not? Watch `touched` ordering and the `full`/`text` fallback filter.
 - Phase 4: `report` mode must not leak an unreadable item's title or citation beyond what the desk returned.
 - Phase 5: owners and people come only from item details, never from model text. No relation is ever phrased as an instruction to edit Jira or Confluence.
+
+## As built
+
+Where the shipped interfaces differ from the plan text above:
+
+- Gate: each call names `{ role, span }` (`AgenticModelCallV1`), not a role alone, and the gate reports each pre-call access check through `on_checked`.
+- Bundle: source notices stay in `coverage.notices`, not `server`; each item also carries the `source` selector the model saw.
+- The loop module `agentic-research-loop-v1.ts` was created by a pure move in phase 4a; no task in the plan created it.
+- Phases 4, 5 and 6 each shipped in two parts: 4a (move the loop) and 4b (briefs, definitions, envelope), 5a (approved-record trigger) and 5b (impact card), 6a (evaluation) and 6b (this cleanup).
+- Brief: a definition writes `brief(event)`, not `brief(event, opened_ids)`. A task names its starting items with `{{starting:N}}` slots and places the event's own text with `{{data:N}}` slots; the loop fills both in one pass once it has read the starting items, and the runner refuses a slot with nothing to fill it before any read.
+- Definitions also declare `scope` (`requested` or `record_project`), and a definition's brief always carries the limits of its `budget` label.
+- Endpoint scope comes from the record: an approved-record run reads its record's one readable project, or everything the approver can read when there is none, and its request names no scope.
+- Renderer contract: a renderer also takes `prompt_budget(system_prompt)` and an optional `on_context`, and returns `answer_sha256`, its answer's fingerprint. The release step fingerprints the whole result itself (no `'from_response'` mode), and renderer model calls reach the audit through the shared gate's stats under role `answer`.
+- `releaseAgenticResultV1` takes `result` and `answer_sha256` and returns the result it hands over.
+- `createAskRendererV1` takes no `answer_budget`; it reads `prompt_budget` from the render input instead.
+- `agentic-renderer-v1.ts` also exports a runtime helper, `callRendererModelV1`: a renderer's one gate call with its one repair, which makes no call when the gate has stopped or the call budget or time is spent.
+- `researchBundle()` was removed in 6b; tests read the full bundle through a renderer.
+- "No edits to the API validators" holds for research-only triggers: a trigger with a renderer adds its result type and validator to `organization-api` and the research-eval read response (the impact card added `rendered?: PersonImpactCardV1`); the endpoint's dispatch is service code.

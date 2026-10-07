@@ -1054,12 +1054,12 @@
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }, { "ticket": "ECHO-6" }, { "ticket": "ECHO-23" }]
     },
     {
-      "id": "check-t1-two-decimal-display",
-      "trigger": "check",
+      "id": "approved-record-t1-two-decimal-display",
+      "trigger": "approved_record",
       "state": "S0",
       "situation": 5,
       "kind": "cross-check",
-      "scope": { "kind": "project", "project": "THERM" },
+      "scope": { "kind": "record" },
       "budget": "background",
       "record": { "meeting": "M2" },
       "expected_outcome": "answerable",
@@ -1148,6 +1148,24 @@
           ]
         }
       ],
+      "affected": [
+        { "id": "a1", "refs": [{ "ticket": "THERM-2" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a2", "refs": [{ "page": "1212589", "section": "Market requirements and priority" }, { "page": "1212589", "section": "User journey" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a3", "refs": [{ "page": "1409025", "section": "System architecture" }, { "page": "1409025", "section": "Functional requirements" }, { "page": "1409025", "section": "Measurement behavior and edge cases" }, { "page": "1409025", "section": "Implementation breakdown" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a4", "refs": [{ "ticket": "THERM-16" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a5", "refs": [{ "ticket": "THERM-18" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a6", "refs": [{ "ticket": "THERM-40" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a7", "refs": [{ "page": "1212607", "section": "TC-D-06 — Displayed value matches sensor value" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a8", "refs": [{ "ticket": "THERM-1" }], "relation": "confirms", "owner": null },
+        { "id": "a9", "refs": [{ "ticket": "THERM-5" }], "relation": "confirms", "owner": null },
+        { "id": "a10", "refs": [{ "ticket": "THERM-37" }], "relation": "confirms", "owner": null },
+        { "id": "a11", "refs": [{ "ticket": "THERM-38" }], "relation": "confirms", "owner": null },
+        { "id": "a12", "refs": [{ "page": "1212589", "section": "Success measures" }], "relation": "confirms", "owner": null },
+        { "id": "a13", "refs": [{ "page": "1212607", "section": "TC-D-01 — Accuracy across 35–42 °C" }, { "page": "1212607", "section": "TC-D-03 — 100 readings, ≥99 within spec" }], "relation": "confirms", "owner": null },
+        { "id": "a14", "refs": [{ "page": "1474561", "section": "Decision register" }], "relation": "needs_updating", "owner": null },
+        { "id": "a15", "refs": [{ "page": "1409025", "section": "Questions that prevent a real approved baseline" }], "relation": "needs_updating", "owner": null },
+        { "id": "a16", "refs": [{ "ticket": "THERM-54" }], "relation": "needs_updating", "owner": "{{TEST_PERSON}}" }
+      ],
       "expected_needs": [
         "where display precision is specified (MRD, PRD)",
         "firmware formatting tickets",
@@ -1173,12 +1191,12 @@
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }]
     },
     {
-      "id": "check-t3-bug-412-likely-cause",
-      "trigger": "check",
+      "id": "approved-record-t3-bug-412-likely-cause",
+      "trigger": "approved_record",
       "state": "S0",
       "situation": 4,
       "kind": "cross-check",
-      "scope": { "kind": "project", "project": "THERM" },
+      "scope": { "kind": "record" },
       "budget": "background",
       "record": { "meeting": "M4" },
       "expected_outcome": "answerable",
@@ -1249,6 +1267,23 @@
           "requirement": "Tomas Okafor owns the fix candidate (2026-10-08); BUG-412 has no Jira assignee.",
           "evidence": [{ "meeting": "M4", "item": "action" }, { "ticket": "THERM-46" }]
         }
+      ],
+      "affected": [
+        { "id": "a1", "refs": [{ "ticket": "THERM-46" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a2", "refs": [{ "ticket": "THERM-9" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a3", "refs": [{ "ticket": "THERM-12" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a4", "refs": [{ "ticket": "THERM-47" }], "relation": ["conflicts", "needs_updating"], "owner": "{{TEST_PERSON}}" },
+        { "id": "a5", "refs": [{ "page": "1409042", "section": "BUG-412 walkthrough" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a6", "refs": [{ "page": "1409025", "section": "Seeded defect and retest" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a7", "refs": [{ "page": "1015989", "section": "Follow the failure thread" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a8", "refs": [{ "page": "1441793", "section": "DVT review — hold on accuracy" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a9", "refs": [{ "page": "1474561", "section": "Decision register" }, { "page": "1474561", "section": "Evidence classification" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a10", "refs": [{ "page": "1212589", "section": "Dependencies, risks and mitigations" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a11", "refs": [{ "page": "1409025", "section": "Release and change management" }], "relation": "conflicts", "owner": null },
+        { "id": "a12", "refs": [{ "ticket": "THERM-48" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a13", "refs": [{ "page": "1212607", "section": "DVT round 2 and regression policy" }], "relation": ["conflicts", "needs_updating"], "owner": null },
+        { "id": "a14", "refs": [{ "ticket": "THERM-5" }], "relation": "needs_updating", "owner": null },
+        { "id": "a15", "refs": [{ "ticket": "THERM-7" }], "relation": "needs_updating", "owner": null }
       ],
       "expected_needs": [
         "where the current BUG-412 cause hypothesis is recorded",

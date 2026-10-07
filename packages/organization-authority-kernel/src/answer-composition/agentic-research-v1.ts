@@ -1,7 +1,7 @@
 /**
- * The research loop's inputs, separate from any one consumer (research loop
- * evaluation v1). Ask is one trigger; Check and Sweep supply other goals and
- * starting evidence and run the same loop under a background budget.
+ * The research loop's types, separate from any one consumer (research loop
+ * evaluation v1). Every trigger hands the loop a brief (agentic-brief-v1.ts);
+ * Ask asks a question, every other trigger a task written from its definition.
  */
 
 /** Limits one trigger gives the research loop. */
@@ -20,36 +20,20 @@ export const AGENTIC_RESEARCH_LIVE_BUDGET_V1: AgenticResearchBudgetV1 = Object.f
   deadline_ms: 90_000, max_rounds: 10, max_model_calls: 24, writer_reserve_ms: 25_000,
 });
 
-/** Background triggers (Check, Sweep): starting values, tuned by the evaluation. */
+/** Background triggers: starting values, tuned by the evaluation. */
 export const AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1: AgenticResearchBudgetV1 = Object.freeze({
   deadline_ms: 300_000, max_rounds: 20, max_model_calls: 48, writer_reserve_ms: 25_000,
 });
 
-/** What starts research. A question comes from Ask; a record or findings from background triggers. */
-export type AgenticResearchTriggerV1 = "ask" | "check" | "sweep";
+/** The one place a budget profile's label becomes its limits: trigger definitions and the staging request's override both read it. */
+export const AGENTIC_RESEARCH_BUDGETS_V1: Readonly<Record<"live" | "background", AgenticResearchBudgetV1>> = Object.freeze({
+  live: AGENTIC_RESEARCH_LIVE_BUDGET_V1, background: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
+});
 
-/** An earlier finding a sweep rechecks: what was expected to change, and the items cited then. */
-export interface AgenticResearchFindingV1 {
-  readonly finding: string;
-  readonly expected: string;
-  /** Released citations from the earlier run; re-read fresh, never reused. */
-  readonly citations: readonly unknown[];
-}
-
+/** What research works on: a person's question (Ask), or a task ECHO wrote from its trigger's template. */
 export type AgenticResearchGoalV1 =
   | { readonly kind: "question"; readonly question: string }
-  | { readonly kind: "check_record"; readonly record: unknown }
-  | { readonly kind: "recheck_findings"; readonly findings: readonly AgenticResearchFindingV1[] };
-
-export interface AgenticResearchInputV1 {
-  readonly trigger: Exclude<AgenticResearchTriggerV1, "ask">;
-  readonly goal: Exclude<AgenticResearchGoalV1, { readonly kind: "question" }>;
-  readonly budget?: AgenticResearchBudgetV1;
-  readonly signal?: AbortSignal;
-}
-
-export const AGENTIC_RESEARCH_MAX_FINDINGS_V1 = 20;
-export const AGENTIC_RESEARCH_MAX_FINDING_CITATIONS_V1 = 12;
+  | { readonly kind: "task"; readonly task: string };
 
 export type AgenticResearchStopReasonV1 = "finished" | "empty_catalog" | "no_progress" | "step_limit" | "budget" | "unusable_step";
 
@@ -106,11 +90,15 @@ export interface AgenticResearchRoundV1 {
 export interface AgenticResearchResultV1 {
   readonly schema_version: 1;
   readonly kind: "echo-agentic-research-result-v1";
-  readonly trigger: AgenticResearchTriggerV1;
+  /** The trigger definition's name. */
+  readonly trigger: string;
+  /** The goal as research worked on it: a task with its starting ids filled in. */
   readonly goal: AgenticResearchGoalV1;
   readonly budget: AgenticResearchBudgetV1;
   readonly plan: readonly AgenticResearchPartV1[];
   readonly items: readonly AgenticResearchItemV1[];
+  /** Starting citations the brief marked `report` that could not be read; present only when there are any. */
+  readonly unreadable_starting?: readonly unknown[];
   readonly rounds: readonly AgenticResearchRoundV1[];
   readonly coverage: {
     readonly reads: readonly { readonly tool: string; readonly source: string; readonly returned_items: number; readonly truncated: boolean; readonly notice: boolean; readonly unavailable: boolean }[];

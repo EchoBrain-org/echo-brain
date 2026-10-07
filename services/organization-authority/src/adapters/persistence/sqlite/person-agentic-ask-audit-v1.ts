@@ -2,6 +2,7 @@ import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceCitationV1 } from '@e
 import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 import type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
+import { AGENTIC_TRIGGER_NAMES_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
 
 export interface AgenticAskAuditRequestContextV1 {
   readonly authority_id: string;
@@ -75,7 +76,7 @@ export class SqlitePersonAgenticAskAuditV1 {
       : { rounds: 10, model_calls: 24, receipts: 128, citations: 40 };
     if (
       entry.kind !== "echo-agentic-ask-audit-v1" ||
-      (entry.trigger !== undefined && entry.trigger !== "check" && entry.trigger !== "sweep") ||
+      (entry.trigger !== undefined && !AGENTIC_TRIGGER_NAMES_V1.includes(entry.trigger)) ||
       (entry.budget !== undefined && entry.budget !== "background") ||
       !["answered", "partial", "not_found", "off_scope", "cancelled", "timed_out"].includes(entry.outcome) ||
       !Array.isArray(entry.receipt_digests) || entry.receipt_digests.length > limits.receipts ||

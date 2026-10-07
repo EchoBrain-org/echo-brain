@@ -19,6 +19,8 @@ import { AgenticAskOutputErrorV1, cleanLine, repairPrompt } from "./agentic-ask-
 
 export const AGENTIC_ASK_MIN_STEP_MS_V1 = 4_000;
 export const AGENTIC_ASK_MIN_ANSWER_MS_V1 = 3_000;
+/** Time kept after the answer call for final revalidation and the audit. */
+export const AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 = 2_000;
 export const AGENTIC_MODEL_OUTPUT_TOKENS_V1 = Object.freeze({ step: 1_500, answer: 1_500 } as const);
 
 export type AgenticAskModelRoleV1 = "step" | "answer";
@@ -90,7 +92,8 @@ function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof AgenticAskDeadlineErrorV1 ? signal.reason : new DOMException("Ask cancelled", "AbortError");
 }
 export function raceAbort<T>(signal: AbortSignal, operation: Promise<T>): Promise<T> {
-  if (signal.aborted) return Promise.reject(abortReason(signal));
+  // An operation started after the abort is refused; its own later failure must not go unhandled.
+  if (signal.aborted) { operation.catch(() => undefined); return Promise.reject(abortReason(signal)); }
   return new Promise<T>((resolve, reject) => {
     const cancelled = () => reject(abortReason(signal));
     signal.addEventListener("abort", cancelled, { once: true });

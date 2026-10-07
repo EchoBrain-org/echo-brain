@@ -285,3 +285,13 @@ One commit per phase. The golden replay and `npm run check` pass after each.
   `services/organization-authority/src/composition/person-research-eval-v1.ts`.
 - Keep the kernel's architecture boundaries: renderers and trigger definitions
   are kernel answer-composition code; the service composes them.
+- "No edits to the API validators" (Acceptance) holds for a trigger with no
+  renderer, which needs no API change. A trigger with a renderer adds its
+  result type and validator to `organization-api` and to the research
+  evaluation's read response, as the impact card did
+  (`rendered?: PersonImpactCardV1`). The endpoint's dispatch to a renderer is
+  service code, not an API validator.
+- Approved-record scope fallbacks: one readable linked project scopes the run
+  to it; no project, several readable projects, or only unreadable linked
+  projects mean everything the approver can read (the desk is still
+  access-checked). Graders should not read wider results as a bug.

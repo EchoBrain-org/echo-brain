@@ -7,6 +7,11 @@ import { createHash } from "node:crypto";
  */
 const EMPTY_SHA256 = `sha256:${createHash("sha256").update("").digest("hex")}`;
 
+/** A case's start request cannot be built: a citation is not bound, or cannot start research. The runner records it and goes on. */
+export class CaseNotStartableError extends Error {
+  constructor(message) { super(message); this.name = "CaseNotStartableError"; }
+}
+
 /** Site, cloud id and THERM issue ids from the export's `source-data.json`. */
 export function exportBindings(sourceData, project = "THERM") {
   if (typeof sourceData?.site !== "string" || typeof sourceData?.cloudId !== "string") throw new Error("export source data has no site or cloud id");
@@ -20,7 +25,7 @@ export function exportBindings(sourceData, project = "THERM") {
 /** An earlier ticket citation; the reader re-reads it fresh, so its digest names no text. */
 export function ticketCitation(bindings, key) {
   const id = bindings.tickets[key];
-  if (id === undefined) throw new Error(`no Jira id bound for ${key}`);
+  if (id === undefined) throw new CaseNotStartableError(`no Jira id bound for ${key}`);
   return { kind: "ticket", tool_id: "jira", external_scope_id: bindings.cloud_id, ticket_id: id, permalink: `${bindings.site}/browse/${key}`, text_sha256: EMPTY_SHA256 };
 }
 
@@ -31,7 +36,7 @@ export function pageCitation(bindings, pageId) {
 
 export function meetingCitation(bindings, meetingId, item) {
   const citations = bindings.meetings?.[meetingId]?.[item];
-  if (!Array.isArray(citations) || citations.length === 0) throw new Error(`no ${item} citation bound for meeting ${meetingId}; run bindings after approving it, or fill it in by hand`);
+  if (!Array.isArray(citations) || citations.length === 0) throw new CaseNotStartableError(`no ${item} citation bound for meeting ${meetingId}; run bindings after approving it, or fill it in by hand`);
   return citations[0];
 }
 
@@ -40,7 +45,7 @@ export function citationFor(bindings, ref) {
   if (ref.ticket !== undefined) return ticketCitation(bindings, ref.ticket);
   if (ref.page !== undefined) return pageCitation(bindings, ref.page);
   if (ref.meeting !== undefined && ref.item !== "transcript") return meetingCitation(bindings, ref.meeting, ref.item);
-  throw new Error(`reference ${JSON.stringify(ref)} cannot start research`);
+  throw new CaseNotStartableError(`reference ${JSON.stringify(ref)} cannot start research`);
 }
 
 /**

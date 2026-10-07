@@ -30,11 +30,11 @@ export const JUDGE_SCHEMA = Object.freeze({
 
 export const JUDGE_SYSTEM = [
   "You grade one run of an organization-knowledge research loop against a written answer key. You are strict and literal.",
-  "Inputs: the case (question, approved record or earlier findings), the answer key, the research plan the loop wrote, research.read_items (every item research read in full, with its text), and, for Ask, answer.writer_items (any other text the writer was given) and the answer.",
+  "Inputs: the case (question, approved record or earlier findings), the answer key, the research plan the loop wrote, research.read_items (every item research read in full, with its text), and, for Ask, answer.writer_items (any other text the writer was given) and the answer. For an approved record, the answer is answer.card: the impact card written from the research (what was decided, affected items, couldn't-confirm notes, people).",
   "Rules:",
   "- needs: for each expected need, covered=true only if some plan need asks for the same fact in meaning. invented_needs: plan needs the case does not require.",
-  "- parts: established_by_research=true only if the text in research.read_items establishes the requirement (alternative wording is fine; matching words alone is not; writer_items do not count). For Ask, stated_in_answer says whether the answer states it, and answer_correct whether that statement is correct and supported by its citations. Use not_applicable when there is no answer.",
-  "- gaps: emit exactly one entry for every key gap in its order, copying its gap text exactly. reported=true only if the answer (or, without an answer, the plan) names that fact as not found or unconfirmed.",
+  "- parts: established_by_research=true only if the text in research.read_items establishes the requirement (alternative wording is fine; matching words alone is not; writer_items do not count). For Ask, stated_in_answer says whether the answer states it, and answer_correct whether that statement is correct and supported by its citations. Use not_applicable when there is no Ask answer (an impact card is not one).",
+  "- gaps: emit exactly one entry for every key gap in its order, copying its gap text exactly. reported=true only if the answer (an impact card's couldn't-confirm notes; without an answer, the plan) names that fact as not found or unconfirmed.",
   "- must_not: one entry per must-not rule, in the key's order, with violated=true if the answer or plan notes violate it.",
   "- unsupported_claims: count material answer claims not supported by the cited items. 0 without an answer.",
   "- false_abstention: true if the answer says something is not found or declines while the read items establish it.",
@@ -52,6 +52,7 @@ function clip(text) {
 export function judgeInput(testCase, run) {
   const research = run.result.research;
   const ask = run.result.ask ?? null;
+  const card = run.result.rendered ?? null;
   const view = item => ({
     id: item.id, kind: item.kind, title: item.title, ...(item.date === undefined ? {} : { date: item.date, date_kind: item.date_kind }),
     ...(item.attributes === undefined ? {} : { attributes: item.attributes }), text: clip(item.text),
@@ -59,7 +60,14 @@ export function judgeInput(testCase, run) {
   const read = research.items.filter(item => item.read_in_full).map(view);
   const writerIds = new Set(ask?.writer_evidence ?? []);
   const writerOnly = research.items.filter(item => writerIds.has(item.id) && !item.read_in_full && item.text !== undefined).map(view);
-  const answer = ask === null ? null : {
+  const cited = index => card.citations[index]?.label;
+  const answer = ask === null ? (card === null ? null : { card: {
+    status: card.status,
+    decided: card.decided.map(entry => ({ text: entry.text, cites: cited(entry.citation_index) })),
+    affected: card.affected.map(({ citation_index: index, ...row }) => ({ item: cited(index), ...row })),
+    unconfirmed: card.unconfirmed,
+    people: card.people.map(person => person.name),
+  } }) : {
     writer_items: writerOnly,
     outcome: ask.response.outcome,
     parts: ask.response.parts.map(part => ({

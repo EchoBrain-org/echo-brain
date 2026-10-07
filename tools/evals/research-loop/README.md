@@ -9,10 +9,32 @@ Three triggers run the same loop:
 
 - **Ask**: a typed question, live budget (90 s), graded on the research result
   and the answer.
-- **Check**: an approved meeting record, background budget (5 min), graded on
-  the research result.
+- **Approved record** (replaces Check): an approved meeting record, background
+  budget (5 min), graded on the research result and the impact card.
 - **Sweep**: earlier findings re-read after partial fixes (world state S1),
   background budget, graded on the research result and each finding's verdict.
+
+The report keeps the loop and the renderers apart. **Research loop**: every
+trigger, graded on its research result (needs, found, read, handed,
+established, verdicts). **Renderers**: Ask's writer on its answer, and the
+impact card on affected items listed, relations and owners correct (of the
+listed items), invented items or people, and gaps reported. Approved-record
+keys carry a relation and an owner per affected item (`world/README.md`).
+
+**Baselines across the research trigger contract.** Ask is byte-identical
+across that change, so an Ask baseline taken before or after it measures the
+same thing. Grading changed, though: the judge's prompt now covers the impact
+card, and the summary's Ask-writer `gaps_reported` now averages Ask cases only
+(the card's gaps and Sweep's plan gaps have their own rows). Regrade an older
+Ask baseline with the current `grade` before comparing it. Approved-record and
+Sweep baselines must be taken after the change: their task text changed, and
+approved-record runs now return the impact card (a saved approved-record run
+without one is graded as failed).
+
+A case whose start request cannot be built (a meeting not bound, or a finding
+that cites only a transcript, which cannot start research in v1) is saved as a
+`case_not_startable` error and the run goes on; the report counts it in its
+first line as not started.
 
 Everything here is founder-run. The tool never writes to Jira, Confluence or
 ECHO; it only starts research runs on staging as the signed-in person and
@@ -50,9 +72,11 @@ reads their results.
    ```
 
    If a meeting is reported as not found, add its approved-record citations to
-   `bindings.json` by hand.
-5. **Baseline at S0** (Ask and Check, three runs each, plus one background-budget
-   run of every live Ask):
+   `bindings.json` by hand. The search runs inside the THERM project, so a
+   meeting it cannot find may belong to no project (see "Approved-record
+   scope").
+5. **Baseline at S0** (Ask and approved record, three runs each, plus one
+   background-budget run of every live Ask):
 
    ```bash
    npm run eval:research-loop -- run --run --model <loop-model-id> --split development --state S0 --trials 3 --background-diagnostic --out ~/.local/state/echo-research-loop-eval-20261006
@@ -88,13 +112,30 @@ reads their results.
 Before any loop change, write down which report numbers it must raise and
 which must not get worse (spec section 5).
 
+## Approved-record scope
+
+An approved-record request names no project: the run reads where its record
+is. When the test person can read exactly one project the record belongs to,
+the run reads that project; when the record is in no project, in several, or
+only in projects they cannot read, it reads everything they can read (still
+access-checked). So if the THERM meeting records belong to no project on
+staging, approved-record runs search everything the test person can read, and
+wider results are not a bug. To check, run
+`echo-brain person list --project <THERM project id>`: M1 to M5 appear only if
+their records belong to THERM. Linking the records to THERM during seeding
+(choose THERM as each meeting's project when approving it) narrows the runs to
+THERM.
+
 ## Privacy
 
-Runs contain released text from Jira, Confluence and approved meetings. They
-are written only to `--out`, which must be an absolute directory outside this
-repository; directories are `0700` and files `0600`. The judge receives the
-answer key and the items research read, and nothing else. Delete the output
-directory when the evaluation is finished.
+Runs contain released text from Jira, Confluence and approved meetings. A
+saved run keeps the research result (the trimmed bundle) and Ask's answer or
+the impact card, never server records such as receipts or model-call
+fingerprints. Runs are written only to `--out`, which must be an absolute
+directory outside this repository; directories are `0700` and files `0600`.
+The judge receives the answer key, the items research read and the run's
+answer or card, and nothing else. Delete the output directory when the
+evaluation is finished.
 
 ## Limits to keep in mind
 

@@ -39,9 +39,9 @@ everywhere with that account's display name. This covers the Jira assignee, the
 meeting attendees, transcript lines, notes, expected records and the `must_not`
 text in the cases.
 
-- The same account runs every Ask, Check and Sweep. It must be a member of
-  the ECHO project `THERM` and approve M1 to M5. A Check acts as the person
-  who approved the record.
+- The same account runs every Ask, approved-record and Sweep case. It must be
+  a member of the ECHO project `THERM` and approve M1 to M5. An approved-record
+  run acts as the person who approved the record.
 - It must not be a member of `THERM Supplier Review`. Approve M6 from a
   second account that belongs to that project only.
 - Two actions mention `{{TEST_PERSON}}` but belong to Rafael Moreno (M3
@@ -61,7 +61,7 @@ text in the cases.
    because several keys depend on these dates. Before approving, edit each
    record to match `expected_records`. Share each transcript to its own
    project.
-4. Run the S0 cases (all Ask and Check cases).
+4. Run the S0 cases (all Ask and approved-record cases).
 5. For the Sweep cases only, apply `s1.apply`, run the Sweeps, then apply
    `s1.revert` and confirm that BUG-412 is In Progress and TRACE-01 is To Do,
    with no resolution on either.
@@ -82,6 +82,31 @@ be reverted, but ECHO cannot read either of them.
   `{ "page": "589865" }`.
 - A part's `evidence` lists every item in this world that supports it. Any
   other item that research reads counts as noise.
+- Approved-record cases add `affected`: the items the impact card should
+  list, with the `relation` it should give and the `owner` their details carry.
+  - Which items: every ticket, and each part's sections of a page (any of them
+    counts), in the evidence of a `conflict` or `change` part or of a part that
+    says the items agree, each listed once. Meeting items are not keyed: a card
+    that lists one the case cites is neither credited nor charged.
+  - Relation: the record's own text (its `expected_records`) decides.
+    `confirms` when the item says what the record says or keeps (M2 keeps the
+    ±0.1 °C accuracy, so the accuracy items confirm it); `conflicts` when it
+    says something the record contradicts; `needs_updating` when the record
+    changes or settles something it describes. A list of acceptable values is
+    used only where the record's text supports both:
+    - an item stating a fact the record replaces (one decimal, the SW-14c
+      hypothesis, a firmware-only fix) is contradicted and out of date, so it
+      accepts `conflicts` or `needs_updating`;
+    - an item stating a rule or plan the record goes against without
+      replacing it (the change-management order M4 skips) is `conflicts`
+      alone;
+    - an item the record agrees with and only adds to (an open decision M3
+      gives an owner and a date) accepts `confirms` or `needs_updating`.
+
+    A date the record puts at risk is the card's date at risk, not a
+    relation.
+  - Owner: the Jira assignee from `additions.json` (only THERM-47, 52, 53 and
+    54 have one), and `null` for every other ticket and every page.
 - `never_appears` lists the M6 items in every case. Any trace of them in a
   research result, the notes or an answer fails the run.
 - THERM items carry "SYNTHETIC MOCK" banners. An answer that reports a mock

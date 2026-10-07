@@ -11,6 +11,8 @@ export const CORE_RUNTIME_PHASES_V1 = [
   "search_reconciliation", "search_snapshot", "search_enrichment", "search_build",
   "search_validation", "search_publication", "related_projection", "model_call",
   "model_parse", "model_schema", "model_grounding", "ask_request", "http_request", "ask_planner", "ask_answer",
+  // A research trigger renderer's model call (research trigger contract v1), such as the impact card's.
+  "research_render",
   // One evidence-desk call each (search, open, list, revalidate), from Ask or the evidence doors.
   "evidence_search", "evidence_open", "evidence_list", "evidence_revalidate", "evidence_connection",
 ] as const;

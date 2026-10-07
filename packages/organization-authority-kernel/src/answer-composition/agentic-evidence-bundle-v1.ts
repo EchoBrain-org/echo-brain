@@ -1,4 +1,5 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
+import type { PersonAnswerCitationV6 } from "@echo-brain/organization-api";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../shared/evidence-desk-v2.js";
 import type { AgenticAskGenerationObservationV1 } from "./agentic-model-gate-v1.js";
 import type {
@@ -8,7 +9,6 @@ import type {
   AgenticResearchPartV1,
   AgenticResearchResultV1,
   AgenticResearchRoundV1,
-  AgenticResearchTriggerV1,
 } from "./agentic-research-v1.js";
 
 /**
@@ -40,14 +40,16 @@ export interface AgenticEvidenceBundleItemV1 {
 export interface AgenticEvidenceBundleV1 {
   readonly schema_version: 1;
   readonly kind: "echo-agentic-evidence-bundle-v1";
-  readonly trigger: AgenticResearchTriggerV1;
+  /** The trigger definition's name: a label the runner adds for the audit and the evaluation. The loop never sees it. */
+  readonly trigger: string;
+  /** The goal as research worked on it: a task with its starting ids filled in. */
   readonly goal: AgenticResearchGoalV1;
   readonly budget: AgenticResearchBudgetV1;
   /** The checklist: research notes, not proof. */
   readonly plan: readonly AgenticResearchPartV1[];
   /** Every item research came across, in short-id order. */
   readonly items: readonly AgenticEvidenceBundleItemV1[];
-  /** Starting items a trigger asked to report rather than fail on. Always empty until briefs carry that option. */
+  /** Starting citations the brief marked `report` that could not be read, in brief order. Nothing the desk refused is in `items`. */
   readonly unreadable_starting: readonly unknown[];
   readonly rounds: readonly AgenticResearchRoundV1[];
   readonly coverage: AgenticResearchResultV1["coverage"];
@@ -88,6 +90,11 @@ export function describeAgenticEvidenceItemV1(entry: { readonly short: string; r
   };
 }
 
+/** How a renderer's result cites an item: its citation, kind, title, visibility and the ref that opens it. */
+export function citationOfAgenticEvidenceItemV1(item: EvidenceDeskItemV2): PersonAnswerCitationV6 {
+  return Object.freeze({ citation: item.citation, kind: item.kind, label: item.label, visibility: item.visibility, ...(item.ref === undefined ? {} : { ref: item.ref }) });
+}
+
 /** The evaluation's view: released content only, no desk ids, refs, receipts or model-call records. */
 export function trimAgenticEvidenceBundleV1(bundle: AgenticEvidenceBundleV1): AgenticResearchResultV1 {
   const items: AgenticResearchItemV1[] = bundle.items.map(entry => {
@@ -102,7 +109,7 @@ export function trimAgenticEvidenceBundleV1(bundle: AgenticEvidenceBundleV1): Ag
   });
   return Object.freeze({
     schema_version: 1 as const, kind: "echo-agentic-research-result-v1" as const, trigger: bundle.trigger, goal: bundle.goal, budget: bundle.budget,
-    plan: bundle.plan, items: Object.freeze(items), rounds: bundle.rounds,
+    plan: bundle.plan, items: Object.freeze(items), ...(bundle.unreadable_starting.length === 0 ? {} : { unreadable_starting: bundle.unreadable_starting }), rounds: bundle.rounds,
     coverage: bundle.coverage, stop: bundle.stop, cost: bundle.cost,
   });
 }

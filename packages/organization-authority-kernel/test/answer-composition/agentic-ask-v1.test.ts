@@ -7,12 +7,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AGENTIC_ASK_ANSWER_RESERVE_MS_V1,
   AGENTIC_ASK_DEADLINE_MS_V1,
-  AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
   AGENTIC_ASK_MAX_MODEL_CALLS_V1,
   agenticAskContextBudgetBytesV1,
   createAgenticAskV1,
   type AgenticAskAuditEntryV1,
 } from "../../src/answer-composition/agentic-ask-v1.js";
+import { AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
+import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
 import type { StructuredGenerationInput, StructuredGenerationPort } from "../../src/answer-composition/structured-generation-v1.js";
 import type { EvidenceDeskItemV1, EvidenceDeskListInputV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from "../../src/shared/evidence-desk-v1.js";
 
@@ -1325,7 +1326,8 @@ describe("agentic Ask: failures never lose found evidence", () => {
     await started;
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    expect(audit.at(-1)).toMatchObject({ outcome: "cancelled", model_calls: 1, generations: [{ role: "step", finish_reason: null, usage: null }] });
+    // The witness binds the access check before the cancelled step call.
+    expect(audit.at(-1)).toMatchObject({ outcome: "cancelled", model_calls: 1, checked_at: checked, generations: [{ role: "step", finish_reason: null, usage: null }] });
   });
 });
 
@@ -1343,6 +1345,24 @@ describe("agentic Ask: small-scope preload", () => {
     expect(script.prompt(0).opened.map((value: { text: string }) => value.text)).toEqual(expect.arrayContaining(["Full text A.", "Full text B."]));
     expect(result.outcome).toBe("answered");
   });
+
+  it("starts no preload search once the caller has cancelled, and leaves no rejection unhandled", async () => {
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown) => { unhandled.push(reason); };
+    process.on("unhandledRejection", record);
+    try {
+      const evidence = desk({ inventory: [listedItem("a")] });
+      const audit: AgenticAskAuditEntryV1[] = [];
+      const controller = new AbortController();
+      controller.abort();
+      await expect(ask({ desk: evidence, model: scripted([]).model, audit, shortcut: true }).answer({ question: "When is launch?", signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
+      expect(evidence.search).not.toHaveBeenCalled();
+      expect(audit.at(-1)).toMatchObject({ outcome: "cancelled", model_calls: 0 });
+      // A desk call started after the cancel would reject after the request settled; wait a macrotask for it.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally { process.off("unhandledRejection", record); }
+  });
 });
 
 describe("agentic Ask: architecture", () => {
@@ -1352,15 +1372,37 @@ describe("agentic Ask: architecture", () => {
     return statSync(path).isDirectory() ? sources(path) : path.endsWith(".ts") ? [path] : [];
   });
   const named = (path: string) => relative(root, path).split("\\").join("/");
+  /** Every module a source names: `from "…"`, `import("…")` and side-effect `import "…"`. */
+  const imported = (source: string) => [...source.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["'`]([^"'`]+)["'`]/gu)].map(match => match[1]!);
 
-  it("keeps renderers to the bundle: no desk port and no search, open, list or openCitation", () => {
+  it("finds every import form", () => {
+    expect(imported(`import a from "./a.js";\nimport "./b.js";\nconst c = await import("./c.js");\nexport { d } from './d.js';`)).toEqual(["./a.js", "./b.js", "./c.js", "./d.js"]);
+  });
+
+  it("keeps renderers to the bundle: no desk port, runner or research module, and no search, open, list or openCitation", () => {
     const renderers = sources(join(root, "renderers"));
-    expect(renderers.map(named)).toContain("renderers/ask-renderer-v1.ts");
+    expect(renderers.map(named)).toEqual(expect.arrayContaining(["renderers/ask-renderer-v1.ts", "renderers/impact-card-renderer-v1.ts"]));
     for (const path of renderers) {
       const source = readFileSync(path, "utf8");
-      expect(source, named(path)).not.toMatch(/from\s+["'][^"']*evidence-desk[^"']*["']/u);
+      for (const specifier of imported(source)) expect(specifier, named(path)).not.toMatch(/evidence-desk|\/agentic-ask-v1\.js$|\/agentic-research(?:-loop)?-v1\.js$/u);
       expect(source, named(path)).not.toMatch(/\.\s*(?:search|open|list|openCitation)\s*\(/u);
     }
+  });
+
+  it("keeps the research loop trigger-blind: no renderer, trigger definition or trigger name, and the model only through the gate it is given", () => {
+    const source = readFileSync(join(root, "agentic-research-loop-v1.ts"), "utf8");
+    const imports = imported(source);
+    expect(imports.length).toBeGreaterThan(0);
+    for (const specifier of imports) {
+      // The runner imports the Ask renderer, so the loop never imports the runner either.
+      expect(specifier).not.toMatch(/renderer|\/agentic-trigger-definitions-v1\.js$|\/agentic-ask-v1\.js$|structured-generation/u);
+    }
+    // Every defined trigger, and the Check trigger the approved record replaced.
+    const names = [...AGENTIC_TRIGGER_DEFINITIONS_V1.map(definition => definition.name), "check"];
+    expect(names).toEqual(expect.arrayContaining(["ask", "approved_record", "sweep"]));
+    for (const name of names) expect(source).not.toMatch(new RegExp(`["'\`]${name}["'\`]`, "u"));
+    expect(source).not.toMatch(/\bcreateAgenticModelGateV1\b/u);
+    expect(source).toMatch(/\bgate\.withRepair\(/u);
   });
 
   it("calls the model only from the shared gate", () => {

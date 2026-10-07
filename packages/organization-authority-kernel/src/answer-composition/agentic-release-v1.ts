@@ -1,8 +1,7 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
-import type { PersonAnswerResponseV4, PersonAnswerResponseV5, PersonAnswerResponseV6 } from "@echo-brain/organization-api";
+import type { PersonAnswerResponseV4 } from "@echo-brain/organization-api";
 import type { StructuredGenerationUsageV1 } from "./structured-generation-v1.js";
 import { raceAbort, type AgenticAskGenerationObservationV1, type AgenticModelGateStatsV1 } from "./agentic-model-gate-v1.js";
-import type { AgenticResearchTriggerV1 } from "./agentic-research-v1.js";
 
 /**
  * The shared release step (research trigger contract v1, section 4): every
@@ -15,8 +14,8 @@ import type { AgenticResearchTriggerV1 } from "./agentic-research-v1.js";
 /** Content-free terminal witness. Route adapters bind identity and storage details. */
 export interface AgenticAskAuditEntryV1 {
   readonly kind: "echo-agentic-ask-audit-v1";
-  /** Present only for research-only triggers; an Ask audit omits it. */
-  readonly trigger?: Exclude<AgenticResearchTriggerV1, "ask">;
+  /** A research-only trigger definition's name; an Ask audit omits it. */
+  readonly trigger?: string;
   /** Present only when the request ran beyond the live budget (research evaluation). */
   readonly budget?: "background";
   readonly outcome: PersonAnswerResponseV4["outcome"] | "cancelled" | "timed_out";
@@ -42,7 +41,7 @@ export interface AgenticAskAuditPortV1 {
   append(entry: AgenticAskAuditEntryV1): Promise<unknown> | unknown;
 }
 
-/** What every audit record of one request carries, read when the record is written. */
+/** What every audit record of one request carries: taken when the release or terminal witness starts, the gate's stats when the record is written. */
 export interface AgenticAuditContextV1 {
   readonly audit: AgenticAskAuditPortV1;
   /** The provider binding the prompt fingerprint is bound to. */
@@ -50,7 +49,7 @@ export interface AgenticAuditContextV1 {
   /** The request's model gate; read when the record is written, after the final check. */
   readonly gate_stats: () => AgenticModelGateStatsV1;
   /** Research-only triggers name themselves; Ask writes no trigger. */
-  readonly trigger?: Exclude<AgenticResearchTriggerV1, "ask">;
+  readonly trigger?: string;
   /** The request ran beyond the live budget. */
   readonly background: boolean;
   /** Receipts of everything released, copied when the record is written. */
@@ -59,25 +58,16 @@ export interface AgenticAuditContextV1 {
   readonly fallbacks: number;
 }
 
-/** Fingerprints of the released result: its answer and the whole result. */
-export interface AgenticReleaseDigestsV1 {
-  readonly answer_sha256: Sha256Digest;
-  readonly response_sha256: Sha256Digest;
-}
-
-/** An Ask response, whose digests the release step derives itself. */
-export type AgenticReleasedAnswerV1 = PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6;
-
 export interface ReleaseAgenticResultV1Options<R> extends AgenticAuditContextV1 {
   /** The request's access-checked desk; only its cumulative revalidation is used. */
   readonly desk: { revalidate(input: { readonly signal: AbortSignal }): Promise<{ readonly checked_at: string }> };
   readonly outcome: PersonAnswerResponseV4["outcome"];
   readonly citation_count: number;
-  /** What is handed over once every check has passed. */
+  /** What is handed over once every check has passed; the audit binds its fingerprint. */
   readonly result: R;
-  /** Explicit digests, or `from_response` for an Ask response (its direct answer and parts, and the whole response). */
-  readonly digests: AgenticReleaseDigestsV1 | (R extends AgenticReleasedAnswerV1 ? "from_response" : never);
-  /** A second access check after the audit write (V5/V6 Ask and research-only runs; V4 Ask has none). */
+  /** The fingerprint of the result's answer, from its renderer. */
+  readonly answer_sha256: Sha256Digest;
+  /** A second access check after the audit write (V5/V6 Ask and every task brief; V4 Ask has none). */
   readonly fence_after_audit: boolean;
   /** The request's active signal (caller cancel, deadline or terminal stop). */
   readonly signal: AbortSignal;
@@ -92,7 +82,7 @@ export interface ReleaseAgenticResultV1Options<R> extends AgenticAuditContextV1 
   readonly on_stage?: (event: { readonly stage: "revalidation" | "audit"; readonly elapsed_ms: number }) => void;
 }
 
-function auditEntry(context: AgenticAuditContextV1, outcome: AgenticAskAuditEntryV1["outcome"], citations: number, checkedAt: string | null, digests: AgenticReleaseDigestsV1 | null): AgenticAskAuditEntryV1 {
+function auditEntry(context: AgenticAuditContextV1, outcome: AgenticAskAuditEntryV1["outcome"], citations: number, checkedAt: string | null, released: { readonly answer_sha256: Sha256Digest; readonly result: unknown } | null): AgenticAskAuditEntryV1 {
   const { calls, repairs, generations, invocation_digests: invocationDigests } = context.gate_stats();
   const aggregate = (field: keyof StructuredGenerationUsageV1): number | null => {
     const values = generations.map(entry => entry.usage?.[field]);
@@ -105,16 +95,12 @@ function auditEntry(context: AgenticAuditContextV1, outcome: AgenticAskAuditEntr
     ...(context.background ? { budget: "background" as const } : {}),
     outcome, receipt_digests: Object.freeze([...context.receipts]), rounds: context.rounds, model_calls: calls, repairs, fallbacks: context.fallbacks, citation_count: citations, checked_at: checkedAt,
     prompt_sha256: outcome === "cancelled" || outcome === "timed_out" ? null : canonicalSha256({ generation: context.generation_adapter_id, invocations: invocationDigests }),
-    answer_sha256: digests?.answer_sha256 ?? null,
-    response_sha256: digests?.response_sha256 ?? null,
+    answer_sha256: released?.answer_sha256 ?? null,
+    response_sha256: released === null ? null : canonicalSha256(released.result),
     generations: Object.freeze([...generations]),
     generation_usage: Object.freeze({ input_tokens: aggregate("input_tokens"), output_tokens: aggregate("output_tokens"), total_tokens: aggregate("total_tokens") }),
     finish_reason_counts: Object.freeze(finishReasonCounts),
   });
-}
-
-function responseDigests(response: AgenticReleasedAnswerV1): AgenticReleaseDigestsV1 {
-  return { answer_sha256: canonicalSha256({ direct: response.direct ?? null, parts: response.parts }), response_sha256: canonicalSha256(response) };
 }
 
 /** Final check, one audit record, the check after it, then the result. Any failure releases nothing. */
@@ -129,8 +115,7 @@ export async function releaseAgenticResultV1<R>(options: ReleaseAgenticResultV1O
   options.on_stage?.({ stage: "revalidation", elapsed_ms: elapsed(fenceStartedAt) });
   // 2. One content-free audit record for the whole request.
   const auditStartedAt = options.on_stage === undefined ? 0 : options.now();
-  const digests = options.digests === "from_response" ? responseDigests(options.result as AgenticReleasedAnswerV1) : options.digests;
-  await options.audit.append(auditEntry(options, options.outcome, options.citation_count, fenced.checked_at, digests));
+  await options.audit.append(auditEntry(options, options.outcome, options.citation_count, fenced.checked_at, options));
   options.on_audited();
   options.on_stage?.({ stage: "audit", elapsed_ms: elapsed(auditStartedAt) });
   // 3. A disconnect or membership change during the durable append still

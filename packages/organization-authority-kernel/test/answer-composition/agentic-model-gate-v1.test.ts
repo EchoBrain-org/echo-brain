@@ -1,6 +1,6 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
-import { createAgenticModelGateV1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
+import { createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, repairPrompt } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import type { StructuredGenerationInput, StructuredGenerationJsonSchema } from "../../src/answer-composition/structured-generation-v1.js";
@@ -97,5 +97,22 @@ describe("agentic model gate", () => {
     }, { observer: event => { events.push(event); } });
     expect(events.filter(event => !event.root && event.event === "started").map(event => event.stage)).toEqual(["ask_answer", "ask_planner"]);
     expect(gate.stats().generations.map(entry => entry.role)).toEqual(["step", "answer"]);
+  });
+
+  it("refuses an operation started after the abort without leaving its rejection unhandled", async () => {
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown) => { unhandled.push(reason); };
+    process.once("unhandledRejection", record);
+    try {
+      const controller = new AbortController();
+      controller.abort();
+      let reject!: (reason: Error) => void;
+      const late = new Promise<never>((_resolve, rejectLate) => { reject = rejectLate; });
+      await expect(raceAbort(controller.signal, late)).rejects.toMatchObject({ name: "AbortError" });
+      reject(new Error("late desk failure"));
+      // Give an unhandled rejection a macrotask to surface.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally { process.off("unhandledRejection", record); }
   });
 });
