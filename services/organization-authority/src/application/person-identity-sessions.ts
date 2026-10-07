@@ -44,7 +44,6 @@ import {
 import type {
   FrozenPersonSessionOidcConfiguration,
   OidcTenantConstraint,
-  PersonSessionHashPort,
   PersonSessionOidcConfiguration,
   PersonSessionOidcFailureReason,
   PersonSessionRandomPurpose,
@@ -1780,32 +1779,21 @@ export class PersonIdentitySessionApplication {
   }
 
   private digestUtf8(value: string): Sha256Digest {
-    return this.digestBytes(this.runtime.hash, Buffer.from(value, "utf8"));
+    const digest = this.runtime.hash.sha256(Buffer.from(value, "utf8"));
+    if (!(digest instanceof Uint8Array) || digest.length !== SHA256_BYTES) {
+      throw new Error("person session hash port returned an invalid digest");
+    }
+    return `sha256:${Buffer.from(digest).toString("hex")}`;
   }
 
   private digestCanonical(value: unknown): Sha256Digest {
-    return this.digestUtf8Unchecked(canonicalJson(value));
+    return this.digestUtf8(canonicalJson(value));
   }
 
   private expectedEmailSha256(expectedEmail: string): Sha256Digest {
     return this.digestCanonical(
       personLoginGrantExpectedEmailDigestInput(expectedEmail),
     );
-  }
-
-  private digestUtf8Unchecked(value: string): Sha256Digest {
-    return this.digestBytes(this.runtime.hash, Buffer.from(value, "utf8"));
-  }
-
-  private digestBytes(
-    hasher: PersonSessionHashPort,
-    value: Uint8Array,
-  ): Sha256Digest {
-    const digest = hasher.sha256(value);
-    if (!(digest instanceof Uint8Array) || digest.length !== SHA256_BYTES) {
-      throw new Error("person session hash port returned an invalid digest");
-    }
-    return `sha256:${Buffer.from(digest).toString("hex")}`;
   }
 
   private pkceChallenge(verifier: string): string {

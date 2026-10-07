@@ -5,7 +5,7 @@ import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organizatio
 import type { PersonSlackMessageCitationV1 } from '@echo-brain/organization-api';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { createHash } from 'node:crypto';
-import type { PersonSlackLiveRuntimeFactoryV1 } from '../../src/application/ports/person-slack-live-runtime-v1.js';
+import type { PersonLiveConnectorDefinitionV1 } from '../../src/application/ports/person-context-live-runtime-v1.js';
 import { fakeJiraCloudFetchV1, fakeJiraNangoV1 } from './fake-jira-v1.js';
 
 export const SLACK_TEXT = 'Launchscope Slack message: customer support is ready.';
@@ -31,7 +31,7 @@ export function crossSourceLiveFixture(actor: { readonly organization_id: string
     calls.push({ method });
     await beforeSlackResponse?.();
   });
-  const slackFactory: PersonSlackLiveRuntimeFactoryV1 = sessions => ({
+  const slackFactory: PersonLiveConnectorDefinitionV1['open'] = sessions => ({
     application: {
       async source(input) {
         const person = sessions.authenticateAccess({ access_token: input.access_token });
