@@ -10,6 +10,7 @@ export interface StagingSyntheticCanaryResultV1 {
 
 interface StagingCanaryRuntimeV1 {
   run_staging_synthetic_canary?: (
+    release_id: string,
     options?: Readonly<{ signal?: AbortSignal }>,
   ) => Promise<StagingSyntheticCanaryResultV1>;
 }
@@ -233,7 +234,8 @@ export async function openStagingSyntheticPrivateDmCanaryControlV1(
     response.once("close", abortIfUnfinished);
     try {
       const result = await raceOperationWithAbort(
-        runCanary({ signal: controller.signal }),
+        // The canary is bound to the release this runtime started with, never to the request.
+        runCanary(input.release_id, { signal: controller.signal }),
         controller.signal,
       );
       controller.signal.throwIfAborted();

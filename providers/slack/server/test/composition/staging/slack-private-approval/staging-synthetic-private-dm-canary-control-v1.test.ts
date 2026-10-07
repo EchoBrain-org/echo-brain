@@ -104,11 +104,12 @@ describe("staging synthetic private-DM canary control", () => {
     [{ kind: "not_staged", approval_id: "apr_private" }, { approval_outcome: "not_staged", approval_id: "apr_private" }],
     [{ kind: "not_actionable", approval_id: null }, { approval_outcome: "not_actionable" }],
   ] as const)("receipts the runtime's canary outcome %j for the startup release", async (outcome, fields) => {
+    const releases: string[] = [];
     const control = await openStagingSyntheticPrivateDmCanaryControlV1({
       authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
       authority_host: "authority-staging.echobrain.org",
       release_id: RELEASE_ID,
-      runtime: runtime(async () => outcome),
+      runtime: runtime(async (release) => { releases.push(release); return outcome; }),
       socket_path: await socketPath(),
     });
 
@@ -120,6 +121,8 @@ describe("staging synthetic private-DM canary control", () => {
       release_id: RELEASE_ID,
       ...fields,
     });
+    // The canary is bound to the release the runtime started with.
+    expect(releases).toEqual([RELEASE_ID]);
     await control.close();
   });
 
@@ -155,7 +158,7 @@ describe("staging synthetic private-DM canary control", () => {
       authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
       authority_host: "authority-staging.echobrain.org",
       release_id: RELEASE_ID,
-      runtime: runtime(async (options) => {
+      runtime: runtime(async (_release, options) => {
         observedSignal = options?.signal;
         return await new Promise((_, reject) => {
           options?.signal?.addEventListener(
@@ -182,7 +185,7 @@ describe("staging synthetic private-DM canary control", () => {
       authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
       authority_host: "authority-staging.echobrain.org",
       release_id: RELEASE_ID,
-      runtime: runtime(async (options) => {
+      runtime: runtime(async (_release, options) => {
         observedSignal = options?.signal;
         await new Promise<void>((resolve) => {
           options?.signal?.addEventListener("abort", () => resolve(), {
@@ -216,7 +219,7 @@ describe("staging synthetic private-DM canary control", () => {
       authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
       authority_host: "authority-staging.echobrain.org",
       release_id: RELEASE_ID,
-      runtime: runtime((options) => {
+      runtime: runtime((_release, options) => {
         options?.signal?.addEventListener("abort", observeAbort, {
           once: true,
         });
@@ -250,7 +253,7 @@ describe("staging synthetic private-DM canary control", () => {
       authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
       authority_host: "authority-staging.echobrain.org",
       release_id: RELEASE_ID,
-      runtime: runtime(async (options) => {
+      runtime: runtime(async (_release, options) => {
         observedSignal = options?.signal;
         markStarted();
         return await new Promise((_, reject) => {

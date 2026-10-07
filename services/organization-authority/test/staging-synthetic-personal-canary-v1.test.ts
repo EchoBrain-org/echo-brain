@@ -57,8 +57,9 @@ async function syntheticWorld(options: { readonly signals?: boolean } = {}) {
   return { db, organization_id, runtime, extracted: () => extracted };
 }
 
-const run = (world: Awaited<ReturnType<typeof syntheticWorld>>) =>
-  runStagingSyntheticPersonalCanaryV1({ database: world.db, runtime: world.runtime, signal: new AbortController().signal });
+const RELEASE = 'clean-v1-staging-canary-one';
+const run = (world: Awaited<ReturnType<typeof syntheticWorld>>, release_id = RELEASE) =>
+  runStagingSyntheticPersonalCanaryV1({ database: world.db, runtime: world.runtime, release_id, signal: new AbortController().signal });
 
 describe('staging synthetic personal canary', () => {
   it('stages the canary meeting as a proposal for the single active owner', async () => {
@@ -71,9 +72,10 @@ describe('staging synthetic personal canary', () => {
     expect(world.db.prepare("SELECT count(*) FROM authority_live_source_admission_v2 WHERE source_key = '1'").pluck().get()).toBe(0);
     expect(world.db.prepare('SELECT principal_id, membership_id FROM authority_live_source_admission_v2').get()).toEqual(OWNER);
     expect(world.db.prepare('SELECT state FROM authority_live_approval_outbox_v2 WHERE approval_id = ?').pluck().get(outcome.approval_id)).toBe('staged');
+    expect(world.db.prepare("SELECT json_extract(meeting_json, '$.title') FROM authority_live_source_candidates_v2").pluck().get()).toContain(RELEASE);
   });
 
-  it('reruns without a second proposal for the same canary revision', async () => {
+  it('reruns without a second proposal for the same release', async () => {
     const world = await syntheticWorld();
     const first = await run(world);
     const second = await run(world);
@@ -81,6 +83,30 @@ describe('staging synthetic personal canary', () => {
     expect(world.extracted()).toBe(1);
     expect(world.db.prepare('SELECT count(*) FROM authority_live_approval_outbox_v2').pluck().get()).toBe(1);
     expect(world.db.prepare('SELECT count(*) FROM authority_live_source_admission_v2').pluck().get()).toBe(1);
+  });
+
+  it('stages a new proposal for a new release and supersedes the undecided earlier canary', async () => {
+    const world = await syntheticWorld();
+    const first = await run(world);
+    const second = await run(world, 'clean-v1-staging-canary-two');
+    expect(second.kind).toBe('staged');
+    expect(second.approval_id).toMatch(/^apr_/);
+    expect(second.approval_id).not.toBe(first.approval_id);
+    expect(world.extracted()).toBe(2);
+    const state = world.db.prepare('SELECT state FROM authority_live_approval_outbox_v2 WHERE approval_id = ?').pluck();
+    expect(state.get(first.approval_id)).toBe('superseded');
+    expect(state.get(second.approval_id)).toBe('staged');
+    // Both releases share the one canary meeting id; each release is its own revision.
+    expect(world.db.prepare("SELECT DISTINCT json_extract(meeting_json, '$.provenance.external_id') FROM authority_live_source_candidates_v2").pluck().all()).toEqual(['synthetic-release-canary']);
+    // A rerun of the earlier release reports its stale proposal, not the current one.
+    await expect(run(world)).resolves.toEqual({ kind: 'not_staged', approval_id: first.approval_id });
+    expect(world.extracted()).toBe(2);
+  });
+
+  it('refuses a release id outside the deploy shape before queueing anything', async () => {
+    const world = await syntheticWorld();
+    await expect(run(world, 'release one')).rejects.toThrow('release id is invalid');
+    expect(world.db.prepare('SELECT count(*) FROM authority_live_source_admission_v2').pluck().get()).toBe(0);
   });
 
   it('reports a canary meeting without signals as not actionable', async () => {

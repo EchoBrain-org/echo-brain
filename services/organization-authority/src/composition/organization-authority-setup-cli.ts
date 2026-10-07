@@ -2,6 +2,8 @@ import {
   createStagingSyntheticPersonalMeetingProviderV1,
   readStagingSyntheticCheckpointV1,
   readStagingSyntheticMeetingFixturesV1,
+  stagingSyntheticCanaryMeetingV1,
+  stagingSyntheticCanaryReleaseV1,
   STAGING_SYNTHETIC_CANARY_MEETING_ID_V1,
   STAGING_SYNTHETIC_CUSTODIAN_ASSURANCE_V1,
   STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1,
@@ -79,6 +81,7 @@ const DEFAULT_ARTIFACT_REVISION = "clean-founder-v1";
 const STAGING_SYNTHETIC_CANARY_ORIGIN =
   "https://authority-staging.echobrain.org";
 const STAGING_SYNTHETIC_CANARY_HOST = "authority-staging.echobrain.org";
+const CLEAN_V1_RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 
 const USAGE = `usage:
   echo-organization-authority-setup bootstrap --state-dir <absolute-path> --organization-name <name> --owner-display-name <name> --owner-email <email> --authority-url <https-origin> --oidc-config <absolute-json-path> [--artifact-revision <revision>]
@@ -1145,7 +1148,7 @@ interface StagingSyntheticSourceState {
   /** Fixture meetings queued into the owner's synthetic source, still pending or already proposed. */
   readonly fixtures: ReadonlySet<string>;
   readonly fixture_pending: boolean;
-  readonly proposals: readonly { readonly meeting_id: string; readonly approval_id: string }[];
+  readonly proposals: readonly { readonly meeting_id: string; readonly revision: unknown; readonly approval_id: string }[];
 }
 
 /**
@@ -1179,7 +1182,8 @@ function readStagingSyntheticSource(
     ) as readonly { readonly semantic_input_sha256: string; readonly cursor: string }[];
   if (sources.length === 0) return undefined;
   const proposalsOf = authority.prepare(
-    `SELECT json_extract(candidate.meeting_json, '$.id') AS meeting_id, outbox.approval_id
+    `SELECT json_extract(candidate.meeting_json, '$.id') AS meeting_id,
+            json_extract(candidate.meeting_json, '$.provenance.canonical_revision') AS revision, outbox.approval_id
        FROM authority_live_source_candidates_v2 AS candidate
        JOIN authority_live_approval_outbox_v2 AS outbox
          ON outbox.candidate_id = candidate.candidate_id
@@ -1187,18 +1191,18 @@ function readStagingSyntheticSource(
         AND candidate.disposition = 'actionable'`,
   );
   const fixtures = new Set<string>();
-  const proposals: { meeting_id: string; approval_id: string }[] = [];
+  const proposals: { meeting_id: string; revision: unknown; approval_id: string }[] = [];
   let fixturePending = false;
   for (const source of sources) {
     for (const id of readStagingSyntheticCheckpointV1(source.cursor).manual) {
-      if (id === STAGING_SYNTHETIC_CANARY_MEETING_ID_V1) continue;
+      if (stagingSyntheticCanaryReleaseV1(id) !== undefined) continue;
       fixtures.add(id);
       fixturePending = true;
     }
-    for (const row of proposalsOf.all(source.semantic_input_sha256) as readonly { readonly meeting_id: unknown; readonly approval_id: string }[]) {
+    for (const row of proposalsOf.all(source.semantic_input_sha256) as readonly { readonly meeting_id: unknown; readonly revision: unknown; readonly approval_id: string }[]) {
       if (typeof row.meeting_id !== "string") continue;
       if (row.meeting_id !== STAGING_SYNTHETIC_CANARY_MEETING_ID_V1) fixtures.add(row.meeting_id);
-      proposals.push({ meeting_id: row.meeting_id, approval_id: row.approval_id });
+      proposals.push({ meeting_id: row.meeting_id, revision: row.revision, approval_id: row.approval_id });
     }
   }
   return Object.freeze({ fixtures, fixture_pending: fixturePending, proposals });
@@ -1207,8 +1211,8 @@ function readStagingSyntheticSource(
 /**
  * Durable synthetic-source evidence: the owner's proposals and the published
  * records that approved them. With fixture meetings, every one must be
- * approved and none still queued; otherwise the release canary must be. The
- * canary counts only when status runs on the exact staging host.
+ * approved and none still queued; otherwise the release canary must be. Only
+ * the canary revision for the release running on the exact staging host counts.
  */
 function stagingSyntheticSourceEvidence(
   manifest: OrganizationAuthoritySetupManifestV3,
@@ -1222,14 +1226,18 @@ function stagingSyntheticSourceEvidence(
       WHERE event_kind = 'approved' AND action = 'approve' AND approval_id = ?
       LIMIT 1`,
   );
-  const approvedMeetings = new Set(
-    source.proposals.filter((proposal) => approved.get(proposal.approval_id) !== undefined).map((proposal) => proposal.meeting_id),
-  );
+  const approvedProposals = source.proposals.filter((proposal) => approved.get(proposal.approval_id) !== undefined);
+  const approvedMeetings = new Set(approvedProposals.map((proposal) => proposal.meeting_id));
+  const releaseId = process.env.ECHO_CLEAN_RELEASE_ID;
+  const currentCanaryRevision =
+    process.env.ECHO_CLEAN_AUTHORITY_HOST === STAGING_SYNTHETIC_CANARY_HOST && releaseId !== undefined && CLEAN_V1_RELEASE_ID.test(releaseId)
+      ? stagingSyntheticCanaryMeetingV1(releaseId).provenance.canonical_revision
+      : undefined;
   return Object.freeze({
     fixture_mode: source.fixtures.size > 0,
     fixtures_approved: source.fixtures.size > 0 && !source.fixture_pending && [...source.fixtures].every((id) => approvedMeetings.has(id)),
-    canary_approved: process.env.ECHO_CLEAN_AUTHORITY_HOST === STAGING_SYNTHETIC_CANARY_HOST &&
-      approvedMeetings.has(STAGING_SYNTHETIC_CANARY_MEETING_ID_V1),
+    canary_approved: currentCanaryRevision !== undefined && approvedProposals.some((proposal) =>
+      proposal.meeting_id === STAGING_SYNTHETIC_CANARY_MEETING_ID_V1 && proposal.revision === currentCanaryRevision),
   });
 }
 

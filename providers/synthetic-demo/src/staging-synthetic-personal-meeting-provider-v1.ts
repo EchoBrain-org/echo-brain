@@ -21,12 +21,31 @@ const VERSION = "1.0.0";
 const NORMALIZER_VERSION = "staging-synthetic-meeting-v1";
 const CURSOR_PREFIX = "staging-synthetic-meeting-v1:";
 const MEETING_ID = /^[a-z0-9][a-z0-9-]{0,127}$/;
+/** The deploy scripts' release id shape. */
+const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
+const CANARY_ENTRY_PREFIX = `${STAGING_SYNTHETIC_CANARY_MEETING_ID_V1}@`;
 /** The meetings API bounds pending imports at 50; fixtures leave room for the canary. */
 const MAXIMUM_PENDING = 50;
 const MAXIMUM_FIXTURES = 40;
 const MAXIMUM_FIXTURE_BYTES = 256 * 1024;
 
 /** The personal checkpoint shape; this source has no folders and no baseline. */
+/**
+ * The queued entry for one release's canary. Every release shares the canary
+ * meeting id; the release names a new revision, so an undecided earlier
+ * canary is superseded by the ordinary lineage rule.
+ */
+export function stagingSyntheticCanaryEntryV1(releaseId: string): string {
+  if (!RELEASE_ID.test(releaseId)) throw new Error("staging synthetic canary release id is invalid");
+  return CANARY_ENTRY_PREFIX + releaseId;
+}
+
+/** The release a queued canary entry names, or undefined for any other entry. */
+export function stagingSyntheticCanaryReleaseV1(entry: string): string | undefined {
+  const releaseId = entry.startsWith(CANARY_ENTRY_PREFIX) ? entry.slice(CANARY_ENTRY_PREFIX.length) : undefined;
+  return releaseId !== undefined && RELEASE_ID.test(releaseId) ? releaseId : undefined;
+}
+
 export interface StagingSyntheticCheckpointV1 {
   readonly folder: string | null;
   readonly baseline: boolean;
@@ -48,7 +67,8 @@ export function readStagingSyntheticCheckpointV1(cursor: string): StagingSynthet
   if (Object.keys(row).sort().join(",") !== "baseline,folder,manual,revisions" || row.folder !== null || row.baseline !== false ||
       revisions === null || typeof revisions !== "object" || Array.isArray(revisions) || Object.keys(revisions).length !== 0 ||
       !Array.isArray(manual) || manual.length > MAXIMUM_PENDING ||
-      manual.some(id => typeof id !== "string" || !MEETING_ID.test(id)) || new Set(manual).size !== manual.length) invalidCursor();
+      manual.some(id => typeof id !== "string" || (!MEETING_ID.test(id) && stagingSyntheticCanaryReleaseV1(id) === undefined)) ||
+      new Set(manual).size !== manual.length) invalidCursor();
   return row as unknown as StagingSyntheticCheckpointV1;
 }
 
@@ -63,10 +83,14 @@ const CURSOR_POLICY: AdmittedMeetingSourceCursorPolicyV1 = Object.freeze({
   assert_live_cursor(cursor: string) { readStagingSyntheticCheckpointV1(cursor); },
 });
 
-/** The fixed release canary. Its revision follows its body, so a changed body is a new proposal. */
-function canaryMeeting(): MeetingDocument {
+/**
+ * One release's canary meeting. Its id and external id are fixed; its body
+ * names the release, so its revision changes per release and with the body.
+ */
+export function stagingSyntheticCanaryMeetingV1(releaseId: string): MeetingDocument {
+  stagingSyntheticCanaryEntryV1(releaseId);
   const body = {
-    title: "SYNTHETIC STAGING CANARY - Release approval check",
+    title: `SYNTHETIC STAGING CANARY ${releaseId} - Release approval check`,
     lifecycle: "completed" as const,
     capture: { state: "complete" as const, components: [
       { kind: "metadata" as const, state: "available" as const },
@@ -76,16 +100,17 @@ function canaryMeeting(): MeetingDocument {
     participants: [{ id: "staging-owner", display_name: "Staging canary owner", roles: ["organizer" as const] }],
     content: [
       { id: "synthetic-decision", kind: "note" as const, origin: "unknown" as const,
-        text: "Synthetic staging canary only. Decision: this release must verify owner approval of a staged meeting." },
+        text: `Synthetic staging canary only. Decision: release ${releaseId} must verify owner approval of a staged meeting.` },
       { id: "synthetic-action", kind: "note" as const, origin: "unknown" as const,
-        text: "Synthetic staging canary only. Action: approve this proposal and choose who can read it." },
+        text: `Synthetic staging canary only. Action: approve release ${releaseId} and choose who can read it.` },
       { id: "synthetic-rationale", kind: "note" as const, origin: "unknown" as const,
-        text: "Synthetic staging canary only. Rationale: exercise the release without creating a real meeting." },
+        text: `Synthetic staging canary only. Rationale: exercise release ${releaseId} without creating a real meeting.` },
       { id: "synthetic-transcript", kind: "transcript" as const, origin: "unknown" as const, speaker_participant_id: "staging-owner",
-        text: "Synthetic staging canary transcript. The staging owner confirms this release requires owner approval. This is synthetic and not a real meeting." },
+        text: `Synthetic staging canary transcript. The staging owner confirms release ${releaseId} requires owner approval. This is synthetic and not a real meeting.` },
     ],
     artifacts: [],
-    context: { labels: ["synthetic-staging-canary", "synthetic", "not-a-real-meeting"], metadata: { synthetic: true, purpose: "release-approval-rehearsal" } },
+    context: { labels: ["synthetic-staging-canary", "synthetic", "not-a-real-meeting"],
+      metadata: { synthetic: true, purpose: "release-approval-rehearsal", release_id: releaseId } },
   };
   return {
     schema_version: 1,
@@ -97,7 +122,7 @@ function canaryMeeting(): MeetingDocument {
       canonical_revision: canonicalSha256({ kind: "echo-staging-synthetic-canary-meeting-v1", body } as never),
       observed_at: "2026-10-07T00:00:00.000Z",
       normalizer_version: NORMALIZER_VERSION,
-      metadata: { synthetic: true, environment: "staging" },
+      metadata: { synthetic: true, environment: "staging", release_id: releaseId },
     },
   };
 }
@@ -133,7 +158,7 @@ function notes(meeting: MeetingDocument): string {
 }
 
 /**
- * The staging-only synthetic personal meeting provider: the fixed release
+ * The staging-only synthetic personal meeting provider: each release's
  * canary plus, when given, each fixture meeting. Its shape is the Authority's
  * `PersonMeetingProviderV1`; provider packages cannot import the service, so
  * the composition root checks it there.
@@ -144,8 +169,11 @@ export function createStagingSyntheticPersonalMeetingProviderV1(options: {
   let fixtures: Promise<readonly MeetingDocument[]> | undefined;
   const loadFixtures = () => options.fixtures_directory === undefined ? Promise.resolve([]) :
     (fixtures ??= readStagingSyntheticMeetingFixturesV1(options.fixtures_directory).catch((error: unknown) => { fixtures = undefined; throw error; }));
-  const meeting = async (id: string): Promise<MeetingDocument | undefined> =>
-    id === STAGING_SYNTHETIC_CANARY_MEETING_ID_V1 ? canaryMeeting() : (await loadFixtures()).find(fixture => fixture.id === id);
+  // A queued entry is a canary entry naming its release or a fixture id; the bare canary id is neither.
+  const meeting = async (entry: string): Promise<MeetingDocument | undefined> => {
+    const releaseId = stagingSyntheticCanaryReleaseV1(entry);
+    return releaseId !== undefined ? stagingSyntheticCanaryMeetingV1(releaseId) : (await loadFixtures()).find(fixture => fixture.id === entry);
+  };
   const connection_http: ProviderHttpApplicationV1 = Object.freeze({
     routes: [],
     async accept() { throw new AuthorityOperationError("not_found", "Synthetic meeting route unavailable"); },

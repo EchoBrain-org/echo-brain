@@ -41,6 +41,7 @@ import { readableSearchGenerationContractV1 } from "../src/composition/readable-
 import {
   readStagingSyntheticCheckpointV1,
   writeStagingSyntheticCheckpointV1,
+  stagingSyntheticCanaryMeetingV1,
   STAGING_SYNTHETIC_CANARY_MEETING_ID_V1,
   STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1,
 } from "@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1";
@@ -144,6 +145,8 @@ interface DurableCanaryFixtureOptions {
   readonly layer2_owner_tuple?: "owner" | "other";
   /** Adds the owner's staging synthetic source and an approved canary proposal for the fixture record. */
   readonly synthetic_canary?: "owner" | "granola";
+  /** The release whose canary revision that proposal carries. */
+  readonly synthetic_canary_release?: string;
 }
 
 function buildInputForCanary(
@@ -406,7 +409,8 @@ function installDurableCanaryFixture(
       const semantic = insertStagingSyntheticSource(authority, manifest, {
         adapter_id: options.synthetic_canary === "granola" ? "granola-person-mcp" : STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1,
       });
-      insertSyntheticProposal(authority, semantic, { index: 0, meeting_id: STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, approval_id: approvalId });
+      insertSyntheticProposal(authority, semantic, { index: 0, meeting_id: STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, approval_id: approvalId,
+        revision: stagingSyntheticCanaryMeetingV1(options.synthetic_canary_release ?? CURRENT_RELEASE).provenance.canonical_revision });
     }
   } finally {
     authority.close();
@@ -414,6 +418,7 @@ function installDurableCanaryFixture(
 }
 
 const SYNTHETIC_ISSUED_AT = "2026-08-23T00:00:00.000Z";
+const CURRENT_RELEASE = "clean-v1-staging-synthetic-canary";
 
 /** The owner's staging synthetic personal source, as setup finalize leaves it. */
 function insertStagingSyntheticSource(
@@ -468,10 +473,10 @@ function insertStagingSyntheticSource(
 function insertSyntheticProposal(
   authority: Database.Database,
   admissionSemantic: Sha256Digest,
-  input: { readonly index: number; readonly meeting_id: string; readonly approval_id: string },
+  input: { readonly index: number; readonly meeting_id: string; readonly approval_id: string; readonly revision?: string },
 ): void {
   const suffix = String(input.index);
-  const meeting = { schema_version: 1, id: input.meeting_id, title: `Synthetic meeting ${suffix}`, provenance: { external_id: input.meeting_id, canonical_revision: `revision-${suffix}` } };
+  const meeting = { schema_version: 1, id: input.meeting_id, title: `Synthetic meeting ${suffix}`, provenance: { external_id: input.meeting_id, canonical_revision: input.revision ?? `revision-${suffix}` } };
   const candidateId = `cnd_synthetic_${suffix}`;
   authority
     .prepare(
@@ -1825,8 +1830,9 @@ describe("Organization Authority setup coordinator", () => {
     },
   );
 
-  it("reports canary evidence once the synthetic canary proposal has an approved record, only on staging", async () => {
+  it("reports canary evidence once the current release's synthetic canary proposal has an approved record, only on staging", async () => {
     const originalHost = process.env.ECHO_CLEAN_AUTHORITY_HOST;
+    const originalReleaseId = process.env.ECHO_CLEAN_RELEASE_ID;
     const io = {
       stdout: () => undefined,
       stderr: () => undefined };
@@ -1834,7 +1840,7 @@ describe("Organization Authority setup coordinator", () => {
       ...readyStatusDependencies([]),
       read_setup_canary_evidence: undefined,
     };
-    const statusAfter = async (authorityUrl: string, synthetic: "owner" | "granola") => {
+    const statusAfter = async (authorityUrl: string, synthetic: "owner" | "granola", release = CURRENT_RELEASE) => {
       const state = stateDirectory(authorityUrl);
       expect(
         await runOrganizationAuthoritySetupCli(
@@ -1843,7 +1849,7 @@ describe("Organization Authority setup coordinator", () => {
           productionDependencies,
         ),
       ).toBe(0);
-      installDurableCanaryFixture(state, { source_admitted: false, synthetic_canary: synthetic });
+      installDurableCanaryFixture(state, { source_admitted: false, synthetic_canary: synthetic, synthetic_canary_release: release });
       let stdout = "";
       expect(
         await runOrganizationAuthoritySetupCli(
@@ -1856,10 +1862,16 @@ describe("Organization Authority setup coordinator", () => {
     };
     try {
       process.env.ECHO_CLEAN_AUTHORITY_HOST = "authority-staging.echobrain.org";
+      process.env.ECHO_CLEAN_RELEASE_ID = CURRENT_RELEASE;
       expect(await statusAfter(STAGING_ORIGIN, "owner")).toMatchObject({
         source_progress_observed: false,
         synthetic_staging_canary_observed: true,
         next_step: "complete",
+      });
+      // An approved canary from an earlier release is not evidence for the running one.
+      expect(await statusAfter(STAGING_ORIGIN, "owner", "clean-v1-staging-earlier-release")).toMatchObject({
+        synthetic_staging_canary_observed: false,
+        next_step: "ready_to_start",
       });
       // A canary-shaped proposal from another meeting tool is not synthetic evidence.
       expect(await statusAfter(STAGING_ORIGIN, "granola")).toMatchObject({
@@ -1870,6 +1882,12 @@ describe("Organization Authority setup coordinator", () => {
         synthetic_staging_canary_observed: false,
         next_step: "ready_to_start",
       });
+      delete process.env.ECHO_CLEAN_RELEASE_ID;
+      expect(await statusAfter(STAGING_ORIGIN, "owner")).toMatchObject({
+        synthetic_staging_canary_observed: false,
+        next_step: "ready_to_start",
+      });
+      process.env.ECHO_CLEAN_RELEASE_ID = CURRENT_RELEASE;
       delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
       expect(await statusAfter(STAGING_ORIGIN, "owner")).toMatchObject({
         synthetic_staging_canary_observed: false,
@@ -1879,6 +1897,9 @@ describe("Organization Authority setup coordinator", () => {
       if (originalHost === undefined)
         delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
       else process.env.ECHO_CLEAN_AUTHORITY_HOST = originalHost;
+      if (originalReleaseId === undefined)
+        delete process.env.ECHO_CLEAN_RELEASE_ID;
+      else process.env.ECHO_CLEAN_RELEASE_ID = originalReleaseId;
     }
   });
 });

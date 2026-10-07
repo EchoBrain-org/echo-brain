@@ -198,7 +198,7 @@ export async function openOrganizationAuthorityService(
         fixtures_directory: assertStagingSyntheticMeetingSourceSelectionV1({ authority_url: sharedConfig.authority_url, meetings_directory: staging_synthetic_meetings_directory }),
       })
     : undefined;
-  let stagingCanary: ((signal: AbortSignal) => ReturnType<typeof runStagingSyntheticPersonalCanaryV1>) | undefined;
+  let stagingCanary: ((release_id: string, signal: AbortSignal) => ReturnType<typeof runStagingSyntheticPersonalCanaryV1>) | undefined;
   const apiDependencies: OrganizationAuthorityApiRuntimeDependencies = {
     ...dependencies.api,
     person_http_runtime_factory: (sessions, resources) => {
@@ -209,7 +209,7 @@ export async function openOrganizationAuthorityService(
         const granola = openGranolaPersonLiveRuntimeV1({ state_directory: sharedConfig.state_directory, sessions, resources,
           processor: dependencies.person_meeting_processor ?? decisionProcessor, projectors: policyProjectors, nango_authorization: () => slack_nango.secret_key,
           ...(stagingSynthetic === undefined ? {} : { providers: [stagingSynthetic] }) });
-        if (stagingSynthetic !== undefined) stagingCanary = signal => runStagingSyntheticPersonalCanaryV1({ database: resources.database, runtime: granola, signal });
+        if (stagingSynthetic !== undefined) stagingCanary = (release_id, signal) => runStagingSyntheticPersonalCanaryV1({ database: resources.database, runtime: granola, release_id, signal });
         return { applications: [...(existing?.applications ?? []), ...granola.applications], processing: granola.processing,
           tools: async token => [...await (existing?.tools?.(token) ?? []), ...await granola.tools(token)],
           close() { granola.close(); existing?.close(); } };
@@ -265,9 +265,9 @@ export async function openOrganizationAuthorityService(
       record_input_codecs: RECORD_INPUT_CODECS,
       record_policy_fact_projectors: policyProjectors,
       ...(stagingSynthetic === undefined ? {} : {
-        run_staging_synthetic_canary: (signal: AbortSignal) => {
+        run_staging_synthetic_canary: (release_id: string, signal: AbortSignal) => {
           if (stagingCanary === undefined) throw new Error("staging synthetic canary requires the personal meeting runtime");
-          return stagingCanary(signal);
+          return stagingCanary(release_id, signal);
         },
       }),
     },

@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import {
-  readStagingSyntheticCheckpointV1, STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, STAGING_SYNTHETIC_TOOL_ID_V1,
+  readStagingSyntheticCheckpointV1, stagingSyntheticCanaryEntryV1, stagingSyntheticCanaryMeetingV1,
+  STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, STAGING_SYNTHETIC_TOOL_ID_V1,
 } from '@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1';
 import type { MeetingIntakePersonV1, MeetingIntakeSettingV1 } from '../../adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { queuePersonMeetingsV1, type createPersonMeetingRuntimeV1 } from '../person-meeting-runtime-v1.js';
@@ -27,35 +28,40 @@ export function queueStagingSyntheticMeetingsV1(
   return queuePersonMeetingsV1({ ...input, person: stagingSyntheticOwnerV1(input.database) });
 }
 
-function canaryQueued(database: Database.Database, sourceKey: string): boolean {
+function queued(database: Database.Database, sourceKey: string, entry: string): boolean {
   const row = database.prepare('SELECT cursor FROM authority_live_source_progress_v2 WHERE source_key = ?').get(sourceKey) as { cursor: string } | undefined;
   if (row === undefined) throw new Error('The staging synthetic source has no progress');
-  return readStagingSyntheticCheckpointV1(row.cursor).manual.includes(STAGING_SYNTHETIC_CANARY_MEETING_ID_V1);
+  return readStagingSyntheticCheckpointV1(row.cursor).manual.includes(entry);
 }
 
-/** Ensures the owner's synthetic source, queues the canary meeting, runs one processing pass, reports the proposal. */
+/**
+ * Ensures the owner's synthetic source, queues this release's canary meeting,
+ * runs processing passes, and reports the proposal for this release's revision.
+ */
 export async function runStagingSyntheticPersonalCanaryV1(input: {
   readonly database: Database.Database;
   readonly runtime: ReturnType<typeof createPersonMeetingRuntimeV1>;
+  readonly release_id: string;
   readonly signal: AbortSignal;
 }): Promise<StagingSyntheticCanaryOutcomeV1> {
   const { database, runtime, signal } = input;
   signal.throwIfAborted();
-  const setting = await runtime.queue({ person: stagingSyntheticOwnerV1(database), tool_id: STAGING_SYNTHETIC_TOOL_ID_V1,
-    meeting_ids: [STAGING_SYNTHETIC_CANARY_MEETING_ID_V1], signal });
+  const entry = stagingSyntheticCanaryEntryV1(input.release_id);
+  const revision = stagingSyntheticCanaryMeetingV1(input.release_id).provenance.canonical_revision;
+  const setting = await runtime.queue({ person: stagingSyntheticOwnerV1(database), tool_id: STAGING_SYNTHETIC_TOOL_ID_V1, meeting_ids: [entry], signal });
   // Passes are shared with other people's sources and earlier fixture imports, so allow a few.
-  for (let pass = 0; pass < MAXIMUM_PASSES && canaryQueued(database, setting.source_key); pass++) {
+  for (let pass = 0; pass < MAXIMUM_PASSES && queued(database, setting.source_key, entry); pass++) {
     await runtime.processing.pollAndStageAdmittedMeetings(signal);
   }
   signal.throwIfAborted();
-  if (canaryQueued(database, setting.source_key)) throw new Error('The staging synthetic canary meeting is still queued');
-  // A rerun of the same canary revision reuses its frozen proposal, so this row is stable.
+  if (queued(database, setting.source_key, entry)) throw new Error('The staging synthetic canary meeting is still queued');
+  // A rerun for the same release reuses its frozen proposal; a later release's canary supersedes it.
   const proposal = database.prepare(`SELECT candidate.disposition, outbox.approval_id, outbox.state
       FROM authority_live_source_candidates_v2 AS candidate
       JOIN authority_live_source_admission_v2 AS admission ON admission.semantic_input_sha256 = candidate.admission_semantic_input_sha256
       LEFT JOIN authority_live_approval_outbox_v2 AS outbox ON outbox.candidate_id = candidate.candidate_id
      WHERE admission.source_key = ? AND json_extract(candidate.meeting_json, '$.id') = ?
-     ORDER BY candidate.created_at DESC, candidate.candidate_id DESC LIMIT 1`).get(setting.source_key, STAGING_SYNTHETIC_CANARY_MEETING_ID_V1) as
+       AND json_extract(candidate.meeting_json, '$.provenance.canonical_revision') = ?`).get(setting.source_key, STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, revision) as
     { readonly disposition: string; readonly approval_id: string | null; readonly state: string | null } | undefined;
   if (proposal === undefined) throw new Error('The staging synthetic canary meeting was not processed');
   if (proposal.disposition !== 'actionable') return { kind: 'not_actionable', approval_id: null };

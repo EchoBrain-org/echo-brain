@@ -8,6 +8,9 @@ import {
   readStagingSyntheticCheckpointV1,
   readStagingSyntheticMeetingFixturesV1,
   STAGING_SYNTHETIC_CANARY_MEETING_ID_V1,
+  stagingSyntheticCanaryEntryV1,
+  stagingSyntheticCanaryMeetingV1,
+  stagingSyntheticCanaryReleaseV1,
   writeStagingSyntheticCheckpointV1,
 } from "../src/staging-synthetic-personal-meeting-provider-v1.js";
 
@@ -38,14 +41,31 @@ async function source(options: { readonly fixtures_directory?: string } = {}) {
 }
 
 describe("staging synthetic personal meeting provider", () => {
-  it("serves the queued canary under the stored source identity and drops it from the cursor", async () => {
+  it("serves a release's queued canary under the stored source identity and drops it from the cursor", async () => {
     const { adapter, identity } = await source();
-    const batch = await adapter.pull({ cursor: cursor([STAGING_SYNTHETIC_CANARY_MEETING_ID_V1]), limit: 1 });
+    const entry = stagingSyntheticCanaryEntryV1("clean-v1-release-one");
+    const batch = await adapter.pull({ cursor: cursor([entry]), limit: 1 });
     expect(batch.meetings).toHaveLength(1);
-    expect(batch.meetings[0]).toMatchObject({ id: STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, provenance: { source: identity } });
-    expect(batch.meetings[0]!.title).toContain("SYNTHETIC STAGING CANARY");
+    expect(batch.meetings[0]).toMatchObject({ id: STAGING_SYNTHETIC_CANARY_MEETING_ID_V1,
+      provenance: { source: identity, external_id: STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, canonical_revision: stagingSyntheticCanaryMeetingV1("clean-v1-release-one").provenance.canonical_revision } });
+    expect(batch.meetings[0]!.title).toBe("SYNTHETIC STAGING CANARY clean-v1-release-one - Release approval check");
     expect(readStagingSyntheticCheckpointV1(batch.next_cursor!).manual).toEqual([]);
     await expect(adapter.pull({ cursor: cursor([]), limit: 1 })).resolves.toEqual({ meetings: [] });
+  });
+
+  it("gives every release one canary meeting id with its own revision, and refuses anything else", async () => {
+    const one = stagingSyntheticCanaryMeetingV1("clean-v1-release-one"), two = stagingSyntheticCanaryMeetingV1("clean-v1-release-two");
+    expect(two.provenance.external_id).toBe(one.provenance.external_id);
+    expect(two.provenance.canonical_revision).not.toBe(one.provenance.canonical_revision);
+    expect(stagingSyntheticCanaryReleaseV1(stagingSyntheticCanaryEntryV1("clean-v1-release-two"))).toBe("clean-v1-release-two");
+    expect(stagingSyntheticCanaryReleaseV1(STAGING_SYNTHETIC_CANARY_MEETING_ID_V1)).toBeUndefined();
+    expect(() => stagingSyntheticCanaryEntryV1("release-two")).toThrow("release id is invalid");
+    expect(() => cursor([`${STAGING_SYNTHETIC_CANARY_MEETING_ID_V1}@release two`])).toThrow("cursor is invalid");
+    // The bare canary id names no release, so this runtime cannot serve it.
+    const { adapter, session } = await source();
+    await expect(adapter.pull({ cursor: cursor([STAGING_SYNTHETIC_CANARY_MEETING_ID_V1]), limit: 1 })).rejects.toThrow("not available to this runtime");
+    await expect(session.preview(STAGING_SYNTHETIC_CANARY_MEETING_ID_V1)).rejects.toMatchObject({ code: "not_found" });
+    await expect(session.preview(stagingSyntheticCanaryEntryV1("clean-v1-release-one"))).resolves.toMatchObject({ id: STAGING_SYNTHETIC_CANARY_MEETING_ID_V1 });
   });
 
   it("serves fixture meetings by id, previews them, and fails closed for a meeting this runtime cannot serve", async () => {

@@ -115,7 +115,7 @@ export interface OrganizationAuthorityRuntimeConfig {
    * Staging-selected release canary over the owner's synthetic personal source.
    * The runtime only serializes it with the worker.
    */
-  readonly run_staging_synthetic_canary?: (signal: AbortSignal) => Promise<StagingSyntheticCanaryOutcomeV1>;
+  readonly run_staging_synthetic_canary?: (release_id: string, signal: AbortSignal) => Promise<StagingSyntheticCanaryOutcomeV1>;
 }
 
 export interface OpenedOrganizationAuthorityRuntime
@@ -123,9 +123,10 @@ export interface OpenedOrganizationAuthorityRuntime
   readonly processing: "idle_until_finalize" | "active";
   /**
    * A staging-guarded rehearsal hook. It runs exclusively with the worker and
-   * stages the fixed canary meeting through the owner's synthetic personal source.
+   * stages the release's canary meeting through the owner's synthetic personal source.
    */
   readonly run_staging_synthetic_canary?: (
+    release_id: string,
     options?: Readonly<{ signal?: AbortSignal }>,
   ) => Promise<StagingSyntheticCanaryOutcomeV1>;
 }
@@ -136,8 +137,8 @@ function stagingSyntheticCanaryHook(
 ): Pick<OpenedOrganizationAuthorityRuntime, "run_staging_synthetic_canary"> {
   const run = config.run_staging_synthetic_canary;
   return run === undefined ? {} : {
-    run_staging_synthetic_canary: (options) => runtime.runExclusive((signal) =>
-      run(options?.signal === undefined ? signal : AbortSignal.any([signal, options.signal]))),
+    run_staging_synthetic_canary: (release_id, options) => runtime.runExclusive((signal) =>
+      run(release_id, options?.signal === undefined ? signal : AbortSignal.any([signal, options.signal]))),
   };
 }
 
