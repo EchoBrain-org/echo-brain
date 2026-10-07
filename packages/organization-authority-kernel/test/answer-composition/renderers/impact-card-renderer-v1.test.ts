@@ -108,7 +108,8 @@ const REPLY = {
   ],
 };
 const NOTES = [
-  "owner of the display spec",
+  // The checklist's "owner of the display spec": research's own words about an owner are counted, never shown.
+  "1 fact research looked for was not found.",
   "The tickets list was cut short at 25 items.",
   "Gate review 99 could not be read.",
   "The documents source could not be read.",
@@ -187,6 +188,18 @@ describe("impact card renderer", () => {
     expect((await alone({ bundle: retried, replies: [REPLY] }).render()).result.unconfirmed).toEqual(NOTES);
   });
 
+  it("shows only needs fit for a person: one suggesting an edit, claiming an owner or naming an evidence id is counted, never shown", async () => {
+    const needs = [
+      { need: "PRD sections that must be changed to two decimals", status: "not_found" as const, evidence: [] },
+      { need: "whether Mara owns PRD-D01", status: "open" as const, evidence: [] },
+      { need: "status of E5", status: "not_found" as const, evidence: [] },
+      { need: "the DVT test review date", status: "open" as const, evidence: [] },
+    ];
+    const checklist = { ...bundle(), plan: [{ ...bundle().plan[0]!, needs }], rounds: [], coverage: { reads: [], inventories: [], notices: [] } };
+    const rendered = await alone({ bundle: checklist, replies: [REPLY] }).render();
+    expect(rendered.result.unconfirmed).toEqual(["the DVT test review date", "3 facts research looked for were not found."]);
+  });
+
   it("falls back without a model: the cited items with their details and owners, not yet assessed, plus the notes", async () => {
     const run = alone({ replies: [{ wrong: true }, { still: "wrong" }] });
     const rendered = await run.render();
@@ -204,6 +217,16 @@ describe("impact card renderer", () => {
     });
     expect(rendered).toMatchObject({ cited: ["E3", "E4", "E6"], outcome: "partial", fallbacks: 1 });
     expect(validatePersonImpactCardV1(rendered.result)).toEqual(rendered.result);
+  });
+
+  it("falls back to the same card when the provider fails rather than the reply, and counts one fallback", async () => {
+    const refused = Object.assign(new Error("provider detail must stay private"), { diagnostic: { failure_class: "adapter_http", http_status: 401 } });
+    const run = alone({ replies: [refused] });
+    const rendered = await run.render();
+    // A permanent provider refusal is not repeated.
+    expect(run.inputs).toHaveLength(1);
+    expect(rendered).toMatchObject({ outcome: "partial", fallbacks: 1, result: { status: "not_assessed" } });
+    expect(rendered.result).toEqual((await alone({ replies: [{ wrong: true }, { still: "wrong" }] }).render()).result);
   });
 
   it("makes no model call when the time left cannot cover one, and still ends with an honest card", async () => {

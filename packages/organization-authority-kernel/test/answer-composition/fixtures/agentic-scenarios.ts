@@ -301,7 +301,7 @@ export const EMPTY_BUNDLE: AgenticEvidenceBundleV1 = {
   gathered_for: { scope: { kind: "global" }, checked_at: null }, server: { receipts: [], invocation_digests: [], generations: [] },
 };
 
-/** A renderer's gate: scripted replies in order and no desk; every access check and model call lands in `trace`. */
+/** A renderer's gate: scripted replies in order (an Error is thrown, as the provider's failure) and no desk; every access check and model call lands in `trace`. */
 export function scriptedGate(replies: readonly unknown[], budget: AgenticResearchBudgetV1, trace: string[]) {
   const inputs: StructuredGenerationInput[] = [];
   const gate = createAgenticModelGateV1({
@@ -311,6 +311,7 @@ export function scriptedGate(replies: readonly unknown[], budget: AgenticResearc
         trace.push("generate"); inputs.push(input);
         const reply = replies[inputs.length - 1];
         if (reply === undefined) throw new Error(`unscripted call ${inputs.length}`);
+        if (reply instanceof Error) throw reply;
         return reply;
       },
     },

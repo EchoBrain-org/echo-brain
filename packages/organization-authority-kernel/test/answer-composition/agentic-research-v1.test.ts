@@ -207,6 +207,33 @@ describe("task briefs with a renderer", () => {
     expect(audit[0]!.generations.map(entry => entry.role)).toEqual(["step", "step", "answer"]);
   });
 
+  it.each(["timed_out", "cancelled"] as const)("writes one %s witness and releases nothing when the card's model call is cut off", async outcome => {
+    vi.useFakeTimers();
+    try {
+      const decision = record("two-decimals", "Approved on Oct 8: show 0.01 °C on the display for MRD-02.");
+      const controller = new AbortController();
+      let checks = 0;
+      let entered!: () => void;
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      // Research finishes at once; the card's call never replies.
+      const h = harness((_input, index) => {
+        if (index === 0) return step([part("Part", [need("affected tickets", "not_found")])], [{ tool: "finish", args: {} }]);
+        entered(); return new Promise<never>(() => undefined);
+      }, { openCitation: async () => result([decision]), revalidate: async () => ({ checked_at: `2026-10-06T00:00:0${checks += 1}.000Z` }) });
+      const event = definition.parseEvent({ record: decision.citation });
+      const pending = h.research.renderWithResearch({ trigger: definition.name, brief: definition.brief(event), renderer: definition.renderer!, trigger_input: event, signal: controller.signal });
+      await started;
+      const rejected = expect(pending).rejects.toMatchObject({ name: outcome === "timed_out" ? "AgenticAskDeadlineErrorV1" : "AbortError" });
+      if (outcome === "timed_out") await vi.advanceTimersByTimeAsync(AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1.deadline_ms); else controller.abort();
+      await rejected;
+      // The witness binds the check before the card's call; no release check follows.
+      expect(checks).toBe(2);
+      expect(h.audit).toEqual([expect.objectContaining({
+        trigger: "approved_record", budget: "background", outcome, model_calls: 2, checked_at: "2026-10-06T00:00:02.000Z", prompt_sha256: null, answer_sha256: null, response_sha256: null,
+      })]);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("refuses a renderer for a question brief before any read", async () => {
     const h = harness([], {});
     await expect(h.research.renderWithResearch({ trigger: "ask", brief: { goal: { kind: "question", question: "Why?" }, starting: [], budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false } }, renderer: definition.renderer!, trigger_input: {} }))

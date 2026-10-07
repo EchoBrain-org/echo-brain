@@ -47,6 +47,8 @@ const SUGGESTED_EDIT: readonly RegExp[] = [
 ];
 /** A claim about who owns or is assigned something: owners come only from item details. */
 const OWNERSHIP_CLAIM = /\b(?:owners?|owns|owned|owning|(?:re)?assign\w*|responsible)\b/iu;
+/** A short evidence id such as E5: it means nothing to a person. */
+const EVIDENCE_ID = /\b[Ee]\d{1,4}\b/u;
 const STOPPED_NOTE = "Research stopped before it finished, so other items may be affected too.";
 
 export const IMPACT_CARD_PROMPT = [
@@ -132,9 +134,13 @@ function detailsOf(entry: Entry): string {
 /** Couldn't confirm: an early stop, needs research did not find, cut-short lists, items and sources it could not read, source notices. */
 function unconfirmedOf(bundle: AgenticEvidenceBundleV1): string[] {
   const byShort = new Map(bundle.items.map(entry => [entry.short, entry]));
+  // A need is the research model's own text: one that suggests an edit, claims an owner or names an evidence id is counted, never shown or repaired.
+  const needs = [...new Set(bundle.plan.flatMap(part => part.needs).filter(need => need.status !== "found").map(need => cleanLine(need.need, LIMITS.line_chars)))].filter(need => need.length > 0);
+  const shown = needs.filter(need => !SUGGESTED_EDIT.some(rule => rule.test(need)) && !OWNERSHIP_CLAIM.test(need) && !EVIDENCE_ID.test(need));
+  const hidden = needs.length - shown.length;
   const notes = [
     ...(bundle.stop.completed ? [] : [STOPPED_NOTE]),
-    ...bundle.plan.flatMap(part => part.needs).filter(need => need.status !== "found").map(need => need.need),
+    ...shown, ...(hidden === 0 ? [] : [hidden === 1 ? "1 fact research looked for was not found." : `${hidden} facts research looked for were not found.`]),
     ...bundle.coverage.inventories.filter(inventory => inventory.truncated === true || inventory.more === true).map(inventory => `The ${String(inventory.source)} list was cut short at ${String(inventory.shown_count)} items.`),
     // A desk refusal on an id research had seen and never read; a mistyped id is the model's error, not an unreadable item.
     ...bundle.rounds.flatMap(round => round.actions).flatMap(action => {
