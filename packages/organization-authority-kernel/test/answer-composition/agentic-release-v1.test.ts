@@ -6,7 +6,7 @@ import type { AgenticModelGateStatsV1 } from "../../src/answer-composition/agent
 import { auditAgenticTerminalV1, releaseAgenticResultV1 } from "../../src/answer-composition/agentic-release-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import type { EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
-import { need, part, replay, researchHarness, SCENARIOS, step } from "./fixtures/agentic-scenarios.js";
+import { checked as deskCheck, need, part, replay, researchHarness, SCENARIOS, step } from "./fixtures/agentic-scenarios.js";
 
 /** The release step on its own: a scripted desk and audit port, one trace of both. */
 function release(options: { readonly fence_after_audit: boolean; readonly on_append?: () => void; readonly fence?: (index: number) => Promise<{ readonly checked_at: string }> }) {
@@ -100,7 +100,8 @@ describe("release step: request terminals", () => {
     const h = researchHarness(() => { clock += 301_000; return step([part("Dashboard", [need("dashboard published", "open")])], [{ tool: "search", args: { query: "dashboard" } }]); }, {}, { now_ms: () => clock });
     const brief = { goal: { kind: "task" as const, task: "Recheck the dashboard." }, starting: [], budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false } };
     await expect(h.research.research({ trigger: "sweep", brief })).rejects.toMatchObject({ name: "AgenticAskDeadlineErrorV1" });
-    expect(h.audit).toEqual([expect.objectContaining({ trigger: "sweep", budget: "background", outcome: "timed_out", model_calls: 1, prompt_sha256: null, answer_sha256: null, response_sha256: null })]);
+    // The witness binds the access check before the late step call.
+    expect(h.audit).toEqual([expect.objectContaining({ trigger: "sweep", budget: "background", outcome: "timed_out", model_calls: 1, checked_at: deskCheck.checked_at, prompt_sha256: null, answer_sha256: null, response_sha256: null })]);
   });
 
   it("writes no second witness and checks access no more when Ask is cancelled during its audit write", async () => {

@@ -110,6 +110,9 @@ describe("research-only triggers", () => {
     expect(h.generate).toHaveBeenCalledTimes(2);
     expect(h.audit).toEqual([expect.objectContaining({ trigger: "approved_record", outcome: "not_found", rounds: 2, model_calls: 2 })]);
     expect(h.audit[0]!.response_sha256).toBe(canonicalSha256(JSON.parse(JSON.stringify(view))));
+    // A research-only answer is its checklist; the record binds the starting item it re-read.
+    expect(h.audit[0]!.answer_sha256).toBe(canonicalSha256({ trigger: "approved_record", plan: view.plan }));
+    expect(h.audit[0]!.receipt_digests).toContain(approved.receipt_sha256);
   });
 
   it("reads each starting item fresh, in brief order, and names each by its current id", async () => {

@@ -100,13 +100,19 @@ describe("agentic model gate", () => {
   });
 
   it("refuses an operation started after the abort without leaving its rejection unhandled", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    let reject!: (reason: Error) => void;
-    const late = new Promise<never>((_resolve, rejectLate) => { reject = rejectLate; });
-    await expect(raceAbort(controller.signal, late)).rejects.toMatchObject({ name: "AbortError" });
-    reject(new Error("late desk failure"));
-    // An unhandled rejection fails this run; give it a macrotask to surface.
-    await new Promise(resolve => setTimeout(resolve, 0));
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown) => { unhandled.push(reason); };
+    process.once("unhandledRejection", record);
+    try {
+      const controller = new AbortController();
+      controller.abort();
+      let reject!: (reason: Error) => void;
+      const late = new Promise<never>((_resolve, rejectLate) => { reject = rejectLate; });
+      await expect(raceAbort(controller.signal, late)).rejects.toMatchObject({ name: "AbortError" });
+      reject(new Error("late desk failure"));
+      // Give an unhandled rejection a macrotask to surface.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally { process.off("unhandledRejection", record); }
   });
 });

@@ -50,17 +50,18 @@ describe("Ask renderer", () => {
     expect(rendered).toMatchObject({ cited: ["E2", "E1"], outcome: "answered", fallbacks: 0, result: { writer_evidence: ["E1", "E2"] } });
   });
 
+  // The Ask golden replays this fallback as V4; here it is the V5 response.
   it("falls back only to items research read in full when the writer fails", async () => {
     const read = record("read", "Approved: ship the enclosure in October.");
     const previewed = record("previewed", "Approved: the enclosure vendor changed.");
     const run = alone({
       bundle: bundle([{ item: read, full: true, touched: 1 }, { item: previewed, full: false, touched: 3 }, { item: listed("listed"), full: false, touched: 2 }], ["E1"]),
-      replies: [{ wrong: true }, { still: "wrong" }], version: 4,
+      replies: [{ wrong: true }, { still: "wrong" }], version: 5,
     });
     const rendered = await run.render("What was decided?");
     // The writer reads the previewed passage too, but a failed writer's records stay limited to what research read.
     expect(rendered.result.writer_evidence).toEqual(["E1", "E2"]);
-    expect(rendered.result.response).toMatchObject({ outcome: "partial", parts: [{ status: "records_only", records: [{ text: read.text, citation_indexes: [0] }] }], citations: [{ citation: read.citation }] });
+    expect(rendered.result.response).toMatchObject({ schema_version: 5, kind: "echo-clean-person-answer-v5", outcome: "partial", parts: [{ status: "records_only", records: [{ text: read.text, citation_indexes: [0] }] }], citations: [{ citation: read.citation }] });
     expect(rendered.result.response.citations).toHaveLength(1);
     expect(rendered).toMatchObject({ cited: ["E1"], outcome: "partial", fallbacks: 1 });
     expect(run.trace).toEqual(["context:E1,E2", "revalidate", "generate", "revalidate", "generate"]);

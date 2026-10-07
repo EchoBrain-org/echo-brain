@@ -174,4 +174,6 @@ Where the shipped interfaces differ from the plan text above:
 - Endpoint scope comes from the record: an approved-record run reads its record's one readable project, or everything the approver can read when there is none, and its request names no scope.
 - Renderer contract: a renderer also takes `prompt_budget(system_prompt)` and an optional `on_context`, and returns `answer_sha256`, its answer's fingerprint. The release step fingerprints the whole result itself (no `'from_response'` mode), and renderer model calls reach the audit through the shared gate's stats under role `answer`.
 - `releaseAgenticResultV1` takes `result` and `answer_sha256` and returns the result it hands over.
+- `createAskRendererV1` takes no `answer_budget`; it reads `prompt_budget` from the render input instead.
+- `agentic-renderer-v1.ts` also exports a runtime helper, `callRendererModelV1`: a renderer's one gate call with its one repair, which makes no call when the gate has stopped or the call budget or time is spent.
 - `researchBundle()` was removed in 6b; tests read the full bundle through a renderer.

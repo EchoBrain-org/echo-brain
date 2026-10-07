@@ -1326,7 +1326,8 @@ describe("agentic Ask: failures never lose found evidence", () => {
     await started;
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    expect(audit.at(-1)).toMatchObject({ outcome: "cancelled", model_calls: 1, generations: [{ role: "step", finish_reason: null, usage: null }] });
+    // The witness binds the access check before the cancelled step call.
+    expect(audit.at(-1)).toMatchObject({ outcome: "cancelled", model_calls: 1, checked_at: checked, generations: [{ role: "step", finish_reason: null, usage: null }] });
   });
 });
 

@@ -4,7 +4,7 @@ import { createAgenticAskV1, createAgenticAskV3, createAgenticResearchV1, type A
 import type { AgenticEvidenceBundleV1 } from "../../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import { createAgenticModelGateV1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
 import { AGENTIC_RESEARCH_LIVE_BUDGET_V1, type AgenticResearchBudgetV1 } from "../../../src/answer-composition/agentic-research-v1.js";
-import type { StructuredGenerationInput } from "../../../src/answer-composition/structured-generation-v1.js";
+import type { StructuredGenerationInput, StructuredGenerationPort, StructuredGenerationUsageV1 } from "../../../src/answer-composition/structured-generation-v1.js";
 import type { EvidenceDeskItemV1, EvidenceDeskListInputV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from "../../../src/shared/evidence-desk-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../../src/shared/evidence-desk-v2.js";
 
@@ -28,7 +28,7 @@ export function listed(id: string, options: Partial<EvidenceDeskItemV1> = {}): E
   const { text: _text, ...item } = record(id, "unused", options);
   return Object.freeze(item);
 }
-export function ticket(key: string, body: string | undefined, status: string): EvidenceDeskItemV2 {
+function ticket(key: string, body: string | undefined, status: string): EvidenceDeskItemV2 {
   const citation = { kind: "ticket" as const, tool_id: "jira", external_scope_id: "cloud-one", ticket_id: key.replace(/\D/gu, ""), permalink: `https://tickets.example.test/browse/${key}`, text_sha256: sha256Digest(body ?? "") };
   return Object.freeze({
     id: `ticket_${key}_${body === undefined ? "listed" : "open"}`, citation, kind: "ticket" as const, label: `${key}: Fixture work item`,
@@ -36,7 +36,7 @@ export function ticket(key: string, body: string | undefined, status: string): E
     occurred_at: "2026-09-30", date_kind: "created" as const, receipt_sha256: canonicalSha256({ ticket: key, body: body ?? null }),
   });
 }
-export function page(id: string, body: string | undefined): EvidenceDeskItemV2 {
+function page(id: string, body: string | undefined): EvidenceDeskItemV2 {
   const citation = { kind: "page" as const, tool_id: "knowledge", external_scope_id: "site-one", page_id: id, section_id: "s1", version: "3", permalink: `https://knowledge.example.test/wiki/pages/${id}`, text_sha256: sha256Digest(body ?? "") };
   return Object.freeze({
     id: `page_${id}_${body === undefined ? "listed" : "open"}`, citation, kind: "page" as const, label: `Gate review ${id}`,
@@ -265,8 +265,13 @@ export async function replay(name: string, scenario: Scenario, hooks: { readonly
   return { response, inputs, audit };
 }
 
-/** A research core over a project-scoped desk with empty defaults: scripted model replies in order, and every audit record kept. */
-export function researchHarness(replies: readonly unknown[] | ((input: StructuredGenerationInput, index: number) => unknown), desk: Partial<EvidenceDeskPortV2> = {}, core: { readonly small_scope_shortcut?: true; readonly now_ms?: () => number } = {}) {
+/**
+ * A research core over a project-scoped desk with empty defaults: scripted model replies in order, and every audit record kept.
+ * With `usage`, the model also reports each call's token usage (call numbers start at 1).
+ */
+export function researchHarness(replies: readonly unknown[] | ((input: StructuredGenerationInput, index: number) => unknown), desk: Partial<EvidenceDeskPortV2> = {}, core: {
+  readonly small_scope_shortcut?: true; readonly now_ms?: () => number; readonly usage?: (call: number) => StructuredGenerationUsageV1;
+} = {}) {
   const inputs: StructuredGenerationInput[] = [];
   const audit: AgenticAskAuditEntryV1[] = [];
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
@@ -280,7 +285,11 @@ export function researchHarness(replies: readonly unknown[] | ((input: Structure
     scope: { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000001" }, live_sources: [],
     search: vi.fn(async () => result([])), open: async () => result([]), list: async () => result([]), revalidate: async () => checked, ...desk,
   };
-  const research = createAgenticResearchV1({ desk: port, model: { generate }, generation, audit: { append: entry => { audit.push(entry); } }, today: () => "2026-10-06", ...core });
+  const { usage, ...options } = core;
+  const model: StructuredGenerationPort = usage === undefined ? { generate } : {
+    generate, generate_with_observation: async input => ({ value: await generate(input), finish_reason: "stop", provider_latency_ms: null, usage: usage(inputs.length) }),
+  };
+  const research = createAgenticResearchV1({ desk: port, model, generation, audit: { append: entry => { audit.push(entry); } }, today: () => "2026-10-06", ...options });
   return { research, port, inputs, audit, generate, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, unknown> };
 }
 

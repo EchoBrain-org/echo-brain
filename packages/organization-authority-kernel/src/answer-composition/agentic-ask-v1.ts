@@ -53,16 +53,6 @@ export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./age
 export { AgenticAskDeadlineErrorV1 } from "./agentic-model-gate-v1.js";
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
 
-/**
- * Agentic Ask (RFC-0003): the research loop (agentic-research-loop-v1.ts:
- * three read tools, search, open and list, plus `finish`), then Ask's
- * renderer (renderers/ask-renderer-v1.ts): one answer call over the evidence
- * bundle and a code-owned layout. A task brief runs research only, or with
- * the renderer its trigger definition names. This file is the request runner:
- * request setup, the model gate, the renderer call, release and the terminal
- * audits.
- */
-
 /** Request-wide model-call budget, including retries and repairs. */
 export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
 /**
