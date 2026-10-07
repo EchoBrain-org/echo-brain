@@ -146,7 +146,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const records = fallback.map(entry => ({ text: entry.item.text!, citation_indexes: use([entry.short]), private: privateItem(entry.item) }));
         draft = records.length > 0
           ? { status: "records_only", statements: [], records, gap: RECORDS_GAP }
-          : { status: "not_found", statements: [], gap: gapText ?? (researchIncomplete || (answer === null && evidence.length > 0) ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP) };
+          : { status: "not_found", statements: [], gap: gapText ?? (incomplete ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP) };
       }
       const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
       const outcome = !anyEvidence ? (incomplete ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;

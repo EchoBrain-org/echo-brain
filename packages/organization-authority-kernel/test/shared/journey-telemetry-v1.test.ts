@@ -9,7 +9,6 @@ import {
   JOURNEY_FAILURE_CLASSES_V1,
   JOURNEY_LLM_FINISH_REASONS_V1,
   JOURNEY_LLM_USAGE_STATUSES_V1,
-  JOURNEY_METRIC_DIMENSION_KEYS_V1,
   JOURNEY_OUTCOMES_V1,
   JOURNEY_STAGES_V1,
   JOURNEY_WORKFLOWS_V1,
@@ -356,26 +355,12 @@ describe("journey telemetry v1", () => {
     ).toMatchObject({ environment: "test", release_sha: null, build_number: null });
   });
 
-  it("exports a finite metric-dimension allowlist without correlation identifiers", () => {
-    expect(JOURNEY_METRIC_DIMENSION_KEYS_V1).toEqual([
-      "environment",
-      "workflow",
-      "stage",
-      "outcome",
-      "failure_class",
-      "retryable",
-      "provider",
-      "model",
-    ]);
-  });
-
   it("freezes every validation allowlist so runtime mutation cannot admit new values", () => {
     const injected = "runtime-injected-value";
     const allowlists: readonly (readonly string[])[] = [
       JOURNEY_ENVIRONMENTS_V1,
       JOURNEY_WORKFLOWS_V1,
       JOURNEY_STAGES_V1,
-      JOURNEY_METRIC_DIMENSION_KEYS_V1,
       JOURNEY_EVENTS_V1,
       JOURNEY_OUTCOMES_V1,
       JOURNEY_FAILURE_CLASSES_V1,

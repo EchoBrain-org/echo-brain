@@ -251,6 +251,10 @@ function listDate(value: string, today: string): string | null {
   return isoDay(base);
 }
 type ListArgs = { readonly source: EvidenceDeskSourceV2; readonly kinds?: readonly EvidenceDeskKindV2[]; readonly status?: "open" | "done"; readonly owner?: string; readonly channel?: string; readonly since?: string; readonly until?: string; readonly notes: readonly string[] };
+/** One inventory per normalized selection: notes never start another, and owner matching ignores case. */
+function listKey({ notes: _notes, status, owner, ...request }: ListArgs): string {
+  return JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
+}
 function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<string, AgenticResearchSourceV1>, readSource: (value: string | undefined) => string | undefined): ListArgs | { readonly error: string } {
   const source = readSource(raw.source);
   if (source === undefined) return { error: `source must be ${[...sources.values()].map(value => value.selector).join(", ")}` };
@@ -358,9 +362,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   };
   /** The source selector the models see for an item. */
   const selectorOf = (item: EvidenceDeskItemV2): string => item.source_id === undefined ? evidenceDeskSourceV2(item) : sourcesById.get(item.source_id)?.selector ?? item.source_id;
-  const describe = (entry: Entry): Record<string, unknown> => describeAgenticEvidenceItemV1({ short: entry.short, source: selectorOf(entry.item), item: entry.item });
   // Tool results carry discovery metadata. Bodies appear once, in the budgeted scratchpad.
-  const listing = (entry: Entry): Record<string, unknown> => describe(entry);
+  const describe = (entry: Entry): Record<string, unknown> => describeAgenticEvidenceItemV1({ short: entry.short, source: selectorOf(entry.item), item: entry.item });
 
   // ---- tools ---------------------------------------------------------
   const search = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
@@ -379,7 +382,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const found = result.items.map(item => register(item));
       for (const entry of found) entry.query = query;
       searchHits += found.length;
-      return { tool: "search", query, ...(source === undefined ? {} : { source }), results: found.map(entry => listing(entry)), ...(found.length === 0 ? { note: "no matches" } : {}), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }) };
+      return { tool: "search", query, ...(source === undefined ? {} : { source }), results: found.map(entry => describe(entry)), ...(found.length === 0 ? { note: "no matches" } : {}), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }) };
     };
     return admit === undefined ? apply() : admit(apply);
   };
@@ -424,7 +427,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const metadata = result.items
         .filter(item => item.text === undefined && item.id !== entry.item.id)
         .map(item => register(item));
-      return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => listing(value)) }), ...(result.truncated ? { truncated: true } : {}), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
+      return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => describe(value)) }), ...(result.truncated ? { truncated: true } : {}), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
     };
     return admit === undefined ? apply() : admit(apply);
   };
@@ -432,7 +435,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const normalized = normalizeListArgs(args, requestDay, sourcesById, readSource);
     if ("error" in normalized) return { tool: "list", args, error: normalized.error };
     const { notes, status, owner, ...request } = normalized;
-    const key = JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
+    const key = listKey(normalized);
     let state = lists.get(key);
     if (state === undefined) {
       const stateArgs: StepArgs = Object.freeze({
@@ -485,7 +488,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       if (unfiltered && currentState.available && !more && !currentState.truncated && currentState.items.length === 0) exhaustivelyEmptySources.add(request.source);
       if (!before.fetched || before.shown !== currentState.shown || before.cursor !== currentState.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: currentState.available && !more && !currentState.truncated });
       const allNotes = [...notes, ...(currentState.note === undefined ? [] : [currentState.note]), ...(page.length === 0 ? ["nothing more to list"] : []), ...(!more && currentState.truncated ? ["more items exist than list can show; use search"] : [])];
-      return { tool: "list", source: request.source, ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), items: page.map(entry => listing(entry)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }) };
+      return { tool: "list", source: request.source, ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), items: page.map(entry => describe(entry)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }) };
     };
     return admit === undefined ? apply() : admit(apply);
   };
@@ -542,10 +545,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       let key: string | undefined;
       if (action.tool === 'list') {
         const normalized = normalizeListArgs(action.args, requestDay, sourcesById, readSource);
-        if (!('error' in normalized)) {
-          const { notes: _notes, status, owner, ...request } = normalized;
-          key = JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
-        }
+        if (!('error' in normalized)) key = listKey(normalized);
       }
       const previous = key === undefined ? undefined : listTasks.get(key);
       const task = (async () => {
@@ -612,8 +612,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   /** Exact released bodies first when opened or packet-sized; previews are always explicitly incomplete. */
   const scratchpad = (budget: number) => {
     const cited = citedShorts();
-    const openedEntries = [...entries.values()].filter(entry => entry.opened && entry.item.text !== undefined)
-      .sort((left, right) => Number(cited.has(right.short)) - Number(cited.has(left.short)) || right.touched - left.touched);
+    const citedThenRecent = (left: Entry, right: Entry) => Number(cited.has(right.short)) - Number(cited.has(left.short)) || right.touched - left.touched;
+    const openedEntries = [...entries.values()].filter(entry => entry.opened && entry.item.text !== undefined).sort(citedThenRecent);
     const shown: Record<string, unknown>[] = []; const shownIds = new Set<string>(); const read: Entry[] = []; let used = 0;
     for (const entry of openedEntries) {
       const value = { ...describe(entry), text: entry.item.text };
@@ -623,8 +623,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       shown.push(value); read.push(entry);
     }
     const seen: Record<string, unknown>[] = [];
-    const rest = [...entries.values()].filter(entry => !shownIds.has(entry.short))
-      .sort((left, right) => Number(cited.has(right.short)) - Number(cited.has(left.short)) || right.touched - left.touched);
+    const rest = [...entries.values()].filter(entry => !shownIds.has(entry.short)).sort(citedThenRecent);
     for (const entry of rest) {
       if (seen.length >= MAX_SEEN_ENTRIES) break;
       const text = entry.item.text;
