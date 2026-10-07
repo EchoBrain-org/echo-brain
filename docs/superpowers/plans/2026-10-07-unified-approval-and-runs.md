@@ -452,7 +452,7 @@ it('refuses a project the approver lost and writes nothing', async () => {
 });
 it('refuses someone other than the reviewer', async () => {
   const f = await approvalCoreFixture();
-  expect(() => f.core.decide('desktop', f.approve(), () => ({ ...f.session, actor: { ...f.session.actor, membership_id: 'mem_00000000-0000-4000-8000-000000000099' } }))).toThrow('not available');
+  expect(() => f.core.decide('desktop', f.approve(), () => ({ ...f.session, actor: { ...f.session.actor, membership_id: 'mem_00000000-0000-4000-8000-00000000009a' } }))).toThrow('not available');
 });
 it('validates owners and audience', async () => {
   const f = await approvalCoreFixture({ owners: { 'act-1': 'Rafael Moreno' } });
@@ -461,7 +461,7 @@ it('validates owners and audience', async () => {
     { owners: [{ signal_id: 'act-1', owner: 'A' }, { signal_id: 'act-1', owner: 'B' }] },
     { owners: [{ signal_id: 'act-1', owner: ' padded ' }] },
     { owners: [{ signal_id: 'act-1', owner: 'x'.repeat(121) }] },
-    { project_ids: Array.from({ length: 21 }, (_, i) => `prj_00000000-0000-4000-8000-${String(i).padStart(12, '0')}`) },
+    { project_ids: Array.from({ length: 21 }, (_, i) => `prj_00000000-0000-4000-8000-${i.toString(16).padStart(12, 'a')}`) },
   ]) expect(() => f.core.decide('desktop', f.approve(bad), () => f.session)).toThrow();
   expect(() => f.core.decide('desktop', f.reject({ project_ids: [f.projectA] }), () => f.session)).toThrow();
 });
