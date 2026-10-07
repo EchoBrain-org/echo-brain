@@ -69,7 +69,7 @@ describe('staging synthetic personal canary', () => {
     expect(outcome.approval_id).toMatch(/^apr_/);
     const source = world.db.prepare('SELECT source_adapter_id, source_custodian_assurance FROM authority_live_source_admission_v2').get();
     expect(source).toEqual({ source_adapter_id: 'staging-synthetic-meeting', source_custodian_assurance: 'staging_synthetic' });
-    expect(world.db.prepare("SELECT count(*) FROM authority_live_source_admission_v2 WHERE source_key = '1'").pluck().get()).toBe(0);
+    expect(world.db.prepare("SELECT count(*) FROM authority_live_source_admission_v2 WHERE source_key = ?").pluck().get('1')).toBe(0);
     expect(world.db.prepare('SELECT principal_id, membership_id FROM authority_live_source_admission_v2').get()).toEqual(OWNER);
     expect(world.db.prepare('SELECT state FROM authority_live_approval_outbox_v2 WHERE approval_id = ?').pluck().get(outcome.approval_id)).toBe('staged');
     expect(world.db.prepare("SELECT json_extract(meeting_json, '$.title') FROM authority_live_source_candidates_v2").pluck().get()).toContain(RELEASE);

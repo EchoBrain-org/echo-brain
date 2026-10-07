@@ -13,6 +13,9 @@ import type {
   MeetingDocument,
 } from "../../../src/core/index.js";
 export const FIXTURE_PROCESSOR_VERSION = '1.0.0';
+
+/** The fixture's personal source key; every processing state names the source it reads and writes. */
+export const FIXTURE_SOURCE_KEY = 'pms_fixture';
 const fixtureCursor = (cutoff: string) => 'fixture-source:v1:live:' + cutoff;
 export const fixtureCursorPolicy = {
  source_adapter_id: 'fixture-source',
@@ -125,12 +128,13 @@ export function database(path = ":memory:"): Database.Database {
          processor_configuration_sha256,
          processor_credential_reference_sha256, semantic_input_sha256,
          admitted_at
-       ) VALUES (1, 'org_test', 'prn_test', 'mem_test', 'owner',
+       ) VALUES (?, 'org_test', 'prn_test', 'mem_test', 'owner',
                  'fixture-source', '2.2.0', 'founder-fixture-source', '2.2.0', ?,
                  'provider_record_owner_observed', ?, ?, ?, ?,
                  'llm', 'founder-llm', ?, ?, ?, ?, ?)`,
     )
     .run(
+      FIXTURE_SOURCE_KEY,
       SHA,
       ADMITTED_AT,
       SHA,

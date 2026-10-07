@@ -156,8 +156,7 @@ if (mode === 'init') {
   process.stdout.write(JSON.stringify(await requestStagingSyntheticPrivateDmCanaryV1({ release_id: releaseId, socket_path: socket })) + '\n');
 } else if (mode === 'verify') {
   const { verifyAuthorityStateLineage } = await import(pathToFileURL(join(REPO, 'packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js')));
-  const { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } = await import(pathToFileURL(join(REPO, 'providers/openrouter/dist/verify-openrouter-decision-processor-admission-v1.js')));
-  verifyAuthorityStateLineage(state); verifyPersistedOpenRouterDecisionProcessorAdmissionV1(state);
+  verifyAuthorityStateLineage(state);
 } else if (mode === 'setup-status') {
   const { runOrganizationAuthoritySetupCli } = await product('composition/organization-authority-setup-cli.js');
   process.exitCode = await runOrganizationAuthoritySetupCli(['status', '--state-dir', state]);

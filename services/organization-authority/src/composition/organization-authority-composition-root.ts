@@ -1,6 +1,5 @@
 import { openGranolaPersonLiveRuntimeV1 } from './granola-person-live-runtime-v1.js';
 import { createPersonMeetingApprovalPolicyProjectorV1, projectPersonMeetingApproverV1 } from './person-meeting-approval-projection-v1.js';
-import { createStagingCanaryMeetingSourceBundleV1 } from "@echo-brain/provider-synthetic-demo/staging-canary-meeting-source-v1";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 import { composePersonExternalIdentityRuntimeBundlesV1 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, PERSON_MEETING_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
@@ -13,13 +12,10 @@ import { createPrivateSlackBlockApprovalPolicyProjectorV2, createPrivateSlackBlo
 import {
   openOrganizationAuthorityRuntime,
   type OrganizationAuthorityRuntimeConfig,
-  type OrganizationAuthorityRuntimeDependencies,
   type OpenedOrganizationAuthorityRuntime,
 } from "./organization-authority-runtime.js";
-import { createSyntheticDemoMeetingSourceBundleV1 } from "@echo-brain/provider-synthetic-demo/synthetic-demo-meeting-source-bundle-v1";
 import { createOpenRouterDecisionProcessorBundleV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
-import { createPrivateSlackApprovalWorkflowBundleV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-workflow-bundle-v1";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "@echo-brain/provider-slack-server/person-identity/slack-person-external-identity-runtime-bundle-v1";
 import { HttpNangoConnectionClientV1, type NangoConnectionClientV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/nango/nango-connection-client-v1";
 import { SlackWebAppManifestProviderV1, type SlackAppManifestProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1";
@@ -28,35 +24,26 @@ import { createSlackBotTokenSourceV1, type SlackBotTokenSourceV1 } from "@echo-b
 import { SlackConnectionHealthV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-connection-health-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { join } from "node:path";
-import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-interaction-protocol-v1";
 import { createStagingSyntheticPersonalMeetingProviderV1 } from "@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1";
 import { runStagingSyntheticPersonalCanaryV1 } from "./staging/staging-synthetic-personal-canary-v1.js";
-import type { PrivateSlackApprovalCardPosterV1 } from "@echo-brain/provider-slack-server/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { openJiraPersonLiveRuntimeV1, type JiraPersonLiveConfigurationV1, type JiraPersonLiveRuntimeSeamsV1 } from './jira-person-live-runtime-v1.js';
 import { openConfluencePersonLiveRuntimeV1, type ConfluencePersonLiveConfigurationV1, type ConfluencePersonLiveRuntimeSeamsV1 } from './confluence-person-live-runtime-v1.js';
 import type { PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { JIRA_LIVE_CONNECTOR_V1, CONFLUENCE_LIVE_CONNECTOR_V1 } from './person-live-connector-registry-v1.js';
 import type { OrganizationAuthorityApiRuntimeDependencies } from './organization-authority-api-runtime.js';
-import type { MeetingSourceBundleV1 } from '@echo-brain/organization-processing/ports/meeting-source-bundle-v1';
 import type { DecisionProcessorBundleV1 } from '@echo-brain/organization-processing/ports/decision-processor-bundle-v1';
 
 export interface OrganizationAuthorityServiceConfig
   extends Omit<
     OrganizationAuthorityRuntimeConfig,
-    | "meeting_source_bundle"
-    | "decision_processor_bundle"
-    | "approval_workflow_bundle"
     | "answer_composition_generation_bundle"
     | "record_policy_fact_projectors"
     | "record_input_codecs"
     | "run_staging_synthetic_canary"
   > {
-  /** Both fixture fields are required together and staging-origin guarded. */
+  /** Staging-origin guarded: fixture meetings the owner's synthetic personal source may queue. */
   readonly staging_synthetic_meetings_directory?: string;
-  readonly staging_synthetic_owner_email?: string;
-  /** Explicit generic test fixture; deployable CLI never supplies this seam. */
-  readonly synthetic_meeting_source_bundle?: MeetingSourceBundleV1;
   readonly openrouter_credential_file: string;
   /** Jira remains absent unless this explicit selection is supplied after release approval. */
   readonly jira_person_live?: JiraPersonLiveConfigurationV1;
@@ -69,34 +56,14 @@ export interface OrganizationAuthorityServiceConfig
     readonly secret_key: string;
     readonly integration_key: string;
   };
-  readonly on_private_approval_slack_rejection?: (event: {
-    readonly stage: PrivateSlackApprovalInteractionRejectionStageV1;
-  }) => void;
 }
 
-type OrganizationAuthorityServiceAdapterOverrides = NonNullable<
-  OrganizationAuthorityRuntimeDependencies["processing_adapter_overrides"]
-> & {
-  readonly private_approval_card_poster?: Pick<
-    PrivateSlackApprovalCardPosterV1,
-    | "openDirectMessage"
-    | "postMarker"
-    | "reconcileMarker"
-    | "publish"
-    | "tombstone"
-    | "renderTerminal"
-  >;
-};
-
-export interface OrganizationAuthorityServiceDependencies
-  extends Omit<OrganizationAuthorityRuntimeDependencies, "processing_adapter_overrides" | "api"> {
+export interface OrganizationAuthorityServiceDependencies {
+  /** Passed straight to the Authority API runtime, for example a local OIDC fake. */
   readonly api?: OrganizationAuthorityApiRuntimeDependencies;
-  readonly processing_adapter_overrides?: OrganizationAuthorityServiceAdapterOverrides;
   readonly jira_person_live_seams?: JiraPersonLiveRuntimeSeamsV1;
   /** Provider-only test seams; production reads every page through the asker's Nango grant. */
   readonly confluence_person_live_seams?: ConfluencePersonLiveRuntimeSeamsV1;
-  /** Synthetic-test seam. Deployable selection remains staging-origin guarded. */
-  readonly meeting_source_bundle?: MeetingSourceBundleV1;
   /** Provider-free test seam for the personal meeting runtime; the deployable service keeps OpenRouter. */
   readonly person_meeting_processor?: DecisionProcessorBundleV1;
   /** Test seams for Nango's and Slack's HTTP APIs. */
@@ -108,9 +75,9 @@ export interface OrganizationAuthorityServiceDependencies
 }
 
 /**
- * One Nango client, connection health and bot-token source serve both the
- * owner's in-app setup with the Person identity flows and the approval lane:
- * a token Slack rejects in one is marked for the other, and an install clears it.
+ * One Nango client, connection health and bot-token source serve the owner's
+ * in-app setup and the Person identity flows: a token Slack rejects is marked
+ * for every flow, and an install clears it.
  */
 function composeSlackV1(
   config: Pick<OrganizationAuthorityServiceConfig, "state_directory" | "authority_url" | "slack_nango">,
@@ -142,9 +109,10 @@ function composeSlackV1(
 }
 
 /**
- * The deployable service selects OpenRouter and Slack while meeting intake is optional.
- * Only staging synthetic infrastructure may select an organization-level meeting source;
- * the shared runtime and personal live connector registry remain provider-neutral.
+ * The deployable service selects OpenRouter and Slack identity. Meetings enter
+ * only through personal sources; on staging the owner's synthetic personal source
+ * also serves the release canary. The shared runtime and personal live connector
+ * registry remain provider-neutral.
  */
 export async function openOrganizationAuthorityService(
   config: OrganizationAuthorityServiceConfig,
@@ -152,41 +120,13 @@ export async function openOrganizationAuthorityService(
 ): Promise<OpenedOrganizationAuthorityRuntime> {
   const {
     staging_synthetic_meetings_directory,
-    staging_synthetic_owner_email,
-    synthetic_meeting_source_bundle,
     openrouter_credential_file,
     slack_nango,
     jira_person_live,
     confluence_person_live,
-    on_private_approval_slack_rejection,
     ...sharedConfig
   } = config;
   const slack = composeSlackV1({ ...sharedConfig, slack_nango }, dependencies.slack);
-  if (staging_synthetic_meetings_directory === undefined && staging_synthetic_owner_email !== undefined) {
-    throw new Error("staging synthetic meeting source owner requires a fixture selector");
-  }
-  const meetingSourceBundle = dependencies.meeting_source_bundle ?? synthetic_meeting_source_bundle ?? (staging_synthetic_meetings_directory === undefined
-    ? (config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 ? createStagingCanaryMeetingSourceBundleV1(config.authority_url) : undefined)
-    : await createSyntheticDemoMeetingSourceBundleV1({
-        meetings_directory: assertStagingSyntheticMeetingSourceSelectionV1({
-          authority_url: sharedConfig.authority_url,
-          meetings_directory: staging_synthetic_meetings_directory,
-        }),
-        owner_email: staging_synthetic_owner_email ?? (() => {
-          throw new Error("staging synthetic meeting source requires the admitted owner email");
-        })(),
-      }));
-  const sharedProcessingAdapterOverrides =
-    dependencies.processing_adapter_overrides === undefined
-      ? undefined
-      : {
-          ...(dependencies.processing_adapter_overrides.source === undefined
-            ? {}
-            : { source: dependencies.processing_adapter_overrides.source }),
-          ...(dependencies.processing_adapter_overrides.processor === undefined
-            ? {}
-            : { processor: dependencies.processing_adapter_overrides.processor }),
-        };
   const decisionProcessor = createOpenRouterDecisionProcessorBundleV1({ credential_file: openrouter_credential_file });
   const policyProjectors = createRecordPolicyFactProjectorRegistryV1([
     createPersonPolicyFactProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV1(),
@@ -241,23 +181,6 @@ export async function openOrganizationAuthorityService(
   return openOrganizationAuthorityRuntime(
     {
       ...sharedConfig,
-      ...(meetingSourceBundle === undefined ? {} : { meeting_source_bundle: meetingSourceBundle }),
-      decision_processor_bundle: decisionProcessor,
-      approval_workflow_bundle: createPrivateSlackApprovalWorkflowBundleV1({
-        state_directory: sharedConfig.state_directory,
-        bot_token_source: slack.bot_token_source,
-        connection_health: slack.connection_health,
-        ...(dependencies.processing_adapter_overrides?.private_approval_card_poster ===
-        undefined
-          ? {}
-          : {
-              poster:
-                dependencies.processing_adapter_overrides.private_approval_card_poster,
-            }),
-        ...(on_private_approval_slack_rejection === undefined
-          ? {}
-          : { on_rejection: on_private_approval_slack_rejection }),
-      }),
       answer_composition_generation_bundle:
         createOpenRouterAnswerCompositionGenerationBundleV1({
           credential_file: openrouter_credential_file,
@@ -271,12 +194,6 @@ export async function openOrganizationAuthorityService(
         },
       }),
     },
-    {
-      ...dependencies,
-      api: apiDependencies,
-      ...(sharedProcessingAdapterOverrides === undefined
-        ? {}
-        : { processing_adapter_overrides: sharedProcessingAdapterOverrides }),
-    },
+    { api: apiDependencies },
   );
 }

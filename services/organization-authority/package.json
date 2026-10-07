@@ -7,8 +7,7 @@
   "bin": {
     "echo-organization-authority-state-bootstrap": "dist/clean-reset-main.js",
     "echo-organization-authority-setup": "dist/clean-founder-main.js",
-    "echo-organization-authority-serve": "dist/clean-live-main.js",
-    "echo-synthetic-demo": "dist/synthetic-demo-main.js"
+    "echo-organization-authority-serve": "dist/clean-live-main.js"
   },
   "files": [
     "dist/**/*.js",

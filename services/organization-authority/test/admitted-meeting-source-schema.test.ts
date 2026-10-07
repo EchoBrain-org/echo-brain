@@ -11,6 +11,8 @@ const AUTHORITY_BASELINE_SHA256_V12 =
   "sha256:6a6442683fc29eb2221491d57f34cee81927d24d3db6b8f45c80e163d1aba47f";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-29T00:00:00.000Z";
+/** A personal source key; the admission table keys every source by its own text key. */
+const SOURCE_KEY = "pms_fixture";
 
 function openedCurrentDatabase() {
   const database = openAuthorityDatabase(":memory:");
@@ -60,14 +62,14 @@ function admitSyntheticSource(
         processor_configuration_sha256, processor_credential_reference_sha256,
         semantic_input_sha256, admitted_at
       ) VALUES (
-        1, 'org_1', 'prn_1', 'mem_1', 'owner',
+        ?, 'org_1', 'prn_1', 'mem_1', 'owner',
         'synthetic-meeting-fixture-v1', '1.0.0', 'synthetic-fixture',
         '1.0.0', ?, 'fixture_owner_declared', ?, ?,
         'fixture://cursor/zero', ?,
         'decision-processor', '1.0.0', 'processor', ?, ?, ?, ?
       )`,
     )
-    .run(DIGEST, NOW, DIGEST, NOW, DIGEST, DIGEST, DIGEST, NOW);
+    .run(SOURCE_KEY, DIGEST, NOW, DIGEST, NOW, DIGEST, DIGEST, DIGEST, NOW);
 }
 
 describe("Authority admitted meeting-source schema", () => {
@@ -84,9 +86,9 @@ describe("Authority admitted meeting-source schema", () => {
     const database = openedCurrentDatabase();
     try {
       seedOwner(database); admitSyntheticSource(database);
-      database.prepare('INSERT INTO authority_person_meeting_sources_v1 VALUES (?, ?, NULL, NULL, 0)').run('1', DIGEST);
-      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v1 SET settings_revision=2 WHERE source_key=?').run('1')).toThrow('ordered');
-      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v1 SET folder_id=?,settings_revision=1 WHERE source_key=?').run('folder', '1')).toThrow();
+      database.prepare('INSERT INTO authority_person_meeting_sources_v1 VALUES (?, ?, NULL, NULL, 0)').run(SOURCE_KEY, DIGEST);
+      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v1 SET settings_revision=2 WHERE source_key=?').run(SOURCE_KEY)).toThrow('ordered');
+      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v1 SET folder_id=?,settings_revision=1 WHERE source_key=?').run('folder', SOURCE_KEY)).toThrow();
       expect(database.prepare('SELECT settings_revision FROM authority_person_meeting_sources_v1').pluck().get()).toBe(0);
       expect((database.pragma('table_info(authority_person_meeting_approval_actions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['sequence', 'approval_id', 'command_id', 'body_json', 'receipt_json']);
     } finally { database.close(); }
@@ -138,24 +140,24 @@ describe("Authority admitted meeting-source schema", () => {
         .prepare(
           `INSERT INTO authority_live_source_progress_v2 (
             source_key, admission_semantic_input_sha256, cursor, cursor_version, updated_at
-          ) VALUES (1, ?, 'not-a-granola-prefix', 0, ?)`,
+          ) VALUES (?, ?, 'not-a-granola-prefix', 0, ?)`,
         )
-        .run(DIGEST, NOW);
+        .run(SOURCE_KEY, DIGEST, NOW);
       database
         .prepare(
           `UPDATE authority_live_source_progress_v2
            SET cursor = 'arbitrary-provider-cursor', cursor_version = 1, updated_at = ?
-           WHERE source_key = 1`,
+           WHERE source_key = ?`,
         )
-        .run(NOW);
+        .run(NOW, SOURCE_KEY);
       expect(() =>
         database
           .prepare(
             `UPDATE authority_live_source_progress_v2
              SET cursor = 'same-version', cursor_version = 1, updated_at = ?
-             WHERE source_key = 1`,
+             WHERE source_key = ?`,
           )
-          .run(NOW),
+          .run(NOW, SOURCE_KEY),
       ).toThrow(/ordered cursor advances/);
       expect(() =>
         database

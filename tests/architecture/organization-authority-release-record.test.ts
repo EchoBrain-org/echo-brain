@@ -20,7 +20,6 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { canonicalJsonForTest as canonical } from "../support/test-canonical-json.js";
 
-import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
@@ -51,10 +50,6 @@ const AUTHORITY_IMAGE_BUILD = join(REPO, "tools", "build-authority-image.mjs");
 const CURRENT_LINEAGE_VERIFIER = join(
   REPO,
   "packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js",
-);
-const OPENROUTER_ADMISSION_VERIFIER = join(
-  REPO,
-  "providers/openrouter/dist/verify-openrouter-decision-processor-admission-v1.js",
 );
 const roots: string[] = [];
 let isolatedUpdate: string | undefined;
@@ -343,56 +338,6 @@ function writeUnsupportedRootState(stateDirectory: string): void {
   // The old root marker must refuse before any database is opened or rewritten.
   renameSync(join(stateDirectory, "state-lineage-root.v2.json"),
     join(stateDirectory, "state-lineage-root.v1.json"));
-}
-
-function writeStateWithLegacyProcessorAdmission(
-  stateDirectory: string,
-): void {
-  const createdAt = "2026-08-22T00:00:00.000Z";
-  const initialized = bootstrapOrganizationAuthorityState({
-    state_directory: stateDirectory,
-    organization_display_name: "Legacy processor fixture",
-    owner_display_name: "Founder",
-    created_at: createdAt,
-    creating_artifact_revision: "legacy-processor-fixture",
-  });
-  const authority = openAuthorityDatabase(join(stateDirectory, "authority.sqlite"), {
-    fileMustExist: true,
-  });
-  try {
-    authority
-      .prepare(
-        `INSERT INTO authority_live_source_admission_v2 (
-          source_key, organization_id, principal_id, membership_id, membership_type,
-          source_adapter_id, source_adapter_version, source_adapter_instance_id,
-          normalizer_version, source_custodian_sha256,
-          source_custodian_assurance, source_custodian_observed_at,
-          source_credential_reference_sha256, initial_cursor, cutoff_at,
-          processor_adapter_id, processor_adapter_version, processor_instance_id,
-          processor_configuration_sha256, processor_credential_reference_sha256,
-          semantic_input_sha256, admitted_at
-        ) VALUES (
-          1, ?, ?, ?, 'owner', 'granola', '1.0.0', 'granola-1', '1.0.0', ?,
-          'owner_verified', ?, ?, 'granola:v1:live:zero', ?, 'llm',
-          '1.3.0+processing.legacy', 'llm-1', ?, ?, ?, ?
-        )`,
-      )
-      .run(
-        initialized.organization_id,
-        initialized.owner_principal_id,
-        initialized.owner_membership_id,
-        `sha256:${"a".repeat(64)}`,
-        createdAt,
-        `sha256:${"b".repeat(64)}`,
-        createdAt,
-        `sha256:${"c".repeat(64)}`,
-        `sha256:${"d".repeat(64)}`,
-        `sha256:${"e".repeat(64)}`,
-        createdAt,
-      );
-  } finally {
-    authority.close();
-  }
 }
 
 function writeRecord(value: unknown): string {
@@ -1630,7 +1575,6 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
           reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
         },
       },
-      verifyProcessor: false,
       inspectVerifier: true,
       diagnostics: ["candidate Authority image rejected persisted state lineage"],
     },
@@ -1638,7 +1582,6 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
       name: "rejects an unsupported root lineage before staging the current candidate and explains the pre-live rehearsal replacement path",
       prepareState: writeUnsupportedRootState,
       candidateOverrides: {},
-      verifyProcessor: false,
       inspectVerifier: false,
       diagnostics: [
         "candidate Authority image rejected persisted state lineage",
@@ -1647,21 +1590,9 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
         "state is never migrated",
       ],
     },
-    {
-      name: "rejects a legacy processor admission before staging or activating the candidate",
-      prepareState: writeStateWithLegacyProcessorAdmission,
-      candidateOverrides: {},
-      verifyProcessor: true,
-      inspectVerifier: false,
-      diagnostics: [
-        "Candidate OpenRouter processor differs from the immutable admitted processor commitment",
-        "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
-        "live state requires an explicit processor-admission migration",
-      ],
-    },
   ].map((scenario) => [scenario.name, scenario] as const))(
     "%s",
-    (_name, { prepareState, candidateOverrides, verifyProcessor, inspectVerifier, diagnostics }) => {
+    (_name, { prepareState, candidateOverrides, inspectVerifier, diagnostics }) => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-state-refusal-"));
     roots.push(root);
     const envFile = join(root, ".env.clean-v1");
@@ -1675,9 +1606,6 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     const profile = writeRuntimeProfile();
     const candidate = writeRecord(releaseWithRuntimeProfile(profile, candidateOverrides));
     prepareState(stateDirectory);
-    const processorVerification = verifyProcessor
-      ? `import { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } from "${OPENROUTER_ADMISSION_VERIFIER}"; verifyPersistedOpenRouterDecisionProcessorAdmissionV1(process.argv[1]);`
-      : "";
     mkdirSync(bin);
     writeFileSync(
       docker,
@@ -1690,7 +1618,7 @@ if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then
 fi
 if [[ "$1" == run ]]; then
   touch "${verifier}"
-  node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${CURRENT_LINEAGE_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]); ${processorVerification}' "${stateDirectory}"
+  node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${CURRENT_LINEAGE_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]);' "${stateDirectory}"
   exit $?
 fi
 if [[ "$1" == compose && ( "$*" == *" up "* || "$*" == *" restart "* ) ]]; then
@@ -1738,8 +1666,8 @@ fi
       expect(dockerCalls).toContain("--input-type=module -e");
       expect(dockerCalls).toContain("verify-authority-state-lineage.js");
       expect(dockerCalls).toContain('verifyAuthorityStateLineage("/echo-clean/state")');
-      expect(dockerCalls).toContain("verify-openrouter-decision-processor-admission-v1.js");
-      expect(dockerCalls).toContain('verifyPersistedOpenRouterDecisionProcessorAdmissionV1("/echo-clean/state")');
+      // Meetings enter only through personal sources, so no organization processor admission is verified.
+      expect(dockerCalls).not.toContain("verify-openrouter-decision-processor-admission-v1.js");
       expect(dockerCalls.indexOf("pull ")).toBeLessThan(dockerCalls.indexOf("run "));
     }
   });

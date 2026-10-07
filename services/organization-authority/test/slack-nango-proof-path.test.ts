@@ -1,23 +1,14 @@
-import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { syntheticDemoMeetingSourceIdentityV1, SYNTHETIC_DEMO_INITIAL_CURSOR_V1 } from "@echo-brain/provider-synthetic-demo/source/synthetic-demo-meeting-source-v1";
-import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
-import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-admission-commitment";
 import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH, organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts";
-import { openOrganizationControlDatabase, RESTRICTED_REVIEWER_PERSON_POLICY_ID } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
-import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
-import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
+import { openOrganizationControlDatabase } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
 import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
-import type { DecisionProcessorAdapter, MeetingDocument, MeetingSourceAdapter } from "@echo-brain/organization-processing/core";
-import { privateSlackApprovalBlockKitActionIdV1 } from "../../../providers/slack/server/src/private-approval/private-slack-approval-block-kit-card-v1.js";
-import { privateSlackApprovalBlockKitActionIdV2 } from "../../../providers/slack/server/src/private-approval/private-slack-approval-block-kit-card-v2.js";
 
 import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
@@ -96,8 +87,6 @@ function fakeSlack() {
   return { tokens, calls, handle,
     /** A person answers in the bot's DM thread. */
     reply: (channel: string, thread_ts: string, user: string, text: string) => messages.push({ type: "message", channel, ts: ts(), thread_ts, user, text, blocks: [] }),
-    /** Approval cards that still carry their buttons. */
-    waitingCards: () => messages.filter((message) => message.blocks.some((block) => block.type === "actions")),
   };
 }
 
@@ -161,73 +150,12 @@ class TestOidcProvider implements PersonSessionOidcAuthorizationProvider {
   }
 }
 
-/** One meeting per pull, up to the number released; the founder is each meeting's owner. */
-function meetingSource(identity: MeetingSourceAdapter["identity"]) {
-  let released = 0;
-  let delivered = 0;
-  const meeting = (index: number): MeetingDocument => ({
-    schema_version: 1, id: `synthetic-demo-source:proof:meeting-${index}`, title: `Proof meeting ${index}`,
-    provenance: { source: identity, external_id: `note-${index}`, canonical_revision: canonicalSha256({ note: index }), observed_at: NOW, normalizer_version: identity.version },
-    capture: { state: "complete", components: [] },
-    participants: [{ id: "founder", display_name: "Founder", identities: [{ kind: "email", value: OWNER_EMAIL }] }],
-    content: [{ id: `note-${index}`, kind: "note", text: `Decision ${index}: ship the Nango switch-over.` }],
-    artifacts: [], context: { owner_participant_id: "founder" },
-    extensions: {},
-  });
-  const source: MeetingSourceAdapter = {
-    identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: "healthy", checked_at: NOW }),
-    pull: async (request) => delivered < released
-      ? { meetings: [meeting(++delivered)], next_cursor: `synthetic-demo-source:customer-demo:1.0.0:v1:${String(delivered)}` }
-      : { meetings: [], next_cursor: request.cursor },
-  };
-  return { source, release: (count: number) => { released += count; } };
-}
-
-function decisionProcessor(identity: DecisionProcessorAdapter["identity"]): DecisionProcessorAdapter {
-  return {
-    identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: "healthy", checked_at: NOW }),
-    extract: async (meeting) => ({ schema_version: 1, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity, generated_at: NOW,
-      signals: [{ id: "decision", kind: "decision", status: "decided", text: meeting.content[0]!.text, subject: null, confidence: 1,
-        evidence: [{ meeting_id: meeting.id, block_id: meeting.content[0]!.id }] }] }),
-  };
-}
-
-/** The Slack click a reviewer makes: Approve with "Only me", signed with the app's signing secret. */
-function signedApproval(card: Message): { body: string; headers: Record<string, string> } {
-  const actions = card.blocks.find((block) => block.type === "actions")!;
-  const identity = JSON.parse(actions.elements[0].value) as { approval_id: string; schema_version?: number };
-  const approveId = identity.schema_version === 2 ? privateSlackApprovalBlockKitActionIdV2(identity, "approve") : privateSlackApprovalBlockKitActionIdV1(identity, "approve");
-  const approve = actions.elements.find((element: Record<string, unknown>) => element.action_id === approveId);
-  const values = Object.fromEntries(card.blocks.filter((block) => block.type === "input").map(({ block_id, element }) => [block_id, { [element.action_id]:
-    element.type === "static_select" ? { type: element.type, selected_option: element.options.find((option: { value: string }) => option.value === RESTRICTED_REVIEWER_PERSON_POLICY_ID) }
-      : element.type === "plain_text_input" ? { type: element.type, value: null } : { type: element.type, selected_options: [] } }]));
-  const payload = { type: "block_actions", user: { id: OWNER_SLACK, team_id: ECHO_BOT.team_id }, api_app_id: ECHO_BOT.app_id,
-    trigger_id: "1234567890.1234567890.abcdefghijklmnopqrstuvwxyzABCD",
-    container: { type: "message", channel_id: card.channel, message_ts: card.ts, is_ephemeral: false },
-    team: { id: ECHO_BOT.team_id, domain: "proof" }, enterprise: null, is_enterprise_install: false, channel: { id: card.channel, name: "directmessage" },
-    message: { type: "message", user: ECHO_BOT.bot_user_id, ts: card.ts, app_id: ECHO_BOT.app_id, bot_id: ECHO_BOT.bot_id, blocks: card.blocks },
-    state: { values }, actions: [{ type: "button", action_id: approve.action_id, block_id: actions.block_id, value: approve.value, action_ts: "1712345680.123456" }] };
-  const body = new URLSearchParams({ payload: JSON.stringify(payload) }).toString();
-  const timestamp = String(Math.floor(Date.now() / 1_000));
-  const signature = createHmac("sha256", APP.signing_secret).update(`v0:${timestamp}:${body}`).digest("hex");
-  return { body, headers: { "content-type": "application/x-www-form-urlencoded", "x-slack-request-timestamp": timestamp, "x-slack-signature": `v0=${signature}` } };
-}
-
 async function availablePort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as { port: number };
   await new Promise<void>((resolve) => server.close(() => resolve()));
   return port;
-}
-
-async function waitFor(condition: () => boolean, label: string, errors: readonly Error[]): Promise<void> {
-  for (let attempt = 0; attempt < 1_000; attempt += 1) {
-    if (errors[0] !== undefined) throw errors[0];
-    if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`timed out waiting for ${label}`);
 }
 
 function privateFile(path: string, value: string): string {
@@ -242,7 +170,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-it("sets up, connects, links, approves, reconnects and restarts Slack through Nango, refuses a different workspace or bot, and recovers a lost connection", async () => {
+it("sets up, connects, links, reconnects and restarts Slack through Nango, refuses a different workspace or bot, and recovers a lost connection", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-slack-nango-proof-")));
   chmodSync(root, 0o700);
   roots.push(root);
@@ -313,13 +241,7 @@ it("sets up, connects, links, approves, reconnects and restarts Slack through Na
       .resolves.toMatchObject({ status: 200, body: { provider_subject_id: slackUser, provider_tenant_id: ECHO_BOT.team_id } });
   };
   const control = openOrganizationControlDatabase(join(state, "integrations.sqlite"), { fileMustExist: true });
-  const record = openOrganizationRecordDatabase(join(state, "record-log.sqlite"), { fileMustExist: true });
-  const count = (database: typeof control, table: string) => (database.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
   const connectionState = () => control.prepare("SELECT connection_id, state_sha256, state_json FROM organization_tool_connection_current_state").all();
-  const approve = async (card: Message, records: number) => {
-    expect((await fetch(`${origin()}/v2/integrations/slack/interactions`, { method: "POST", ...signedApproval(card) })).status).toBe(200);
-    await waitFor(() => count(record, "organization_record_log") === records && !slack.waitingCards().includes(card), `approval ${records}`, errors);
-  };
   let owner = "";
   try {
     // 2. The owner signs in.
@@ -344,74 +266,14 @@ it("sets up, connects, links, approves, reconnects and restarts Slack through Na
     await linkSlack(employee, EMPLOYEE_SLACK);
     expect(await slackTool(employee)).toMatchObject({ personal_status: "linked", external_subject_id: EMPLOYEE_SLACK, organization_setup: null });
 
-    // Finalize: provider credentials are admitted and the Authority restarts with active processing.
-    await runtime.close();
-    const processorCommitment = createOpenRouterDecisionProcessorAdmissionCommitmentV1({ instance_id: "proof-llm", credential_reference: `file:${config.openrouter_credential_file}` });
-    const admissionDb = openAuthorityDatabase(join(state, "authority.sqlite"), { fileMustExist: true });
-    try { admissionDb.prepare(`INSERT INTO authority_live_source_admission_v2 (source_key, organization_id, principal_id, membership_id, membership_type, source_adapter_id, source_adapter_version, source_adapter_instance_id, normalizer_version, source_custodian_sha256, source_custodian_assurance, source_custodian_observed_at, source_credential_reference_sha256, initial_cursor, cutoff_at, processor_adapter_id, processor_adapter_version, processor_instance_id, processor_configuration_sha256, processor_credential_reference_sha256, semantic_input_sha256, admitted_at) VALUES (1, ?, ?, ?, 'owner', ?, ?, ?, ?, ?, 'synthetic_fixture_owner', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      initialized.organization_id, initialized.owner_principal_id, initialized.owner_membership_id, syntheticDemoMeetingSourceIdentityV1.adapter_id, syntheticDemoMeetingSourceIdentityV1.version, syntheticDemoMeetingSourceIdentityV1.instance_id, syntheticDemoMeetingSourceIdentityV1.version, canonicalSha256({ owner: OWNER_EMAIL }), NOW, canonicalSha256({ fixture: "slack-proof" }), SYNTHETIC_DEMO_INITIAL_CURSOR_V1, NOW, processorCommitment.adapter_id, processorCommitment.version, processorCommitment.instance_id, processorCommitment.configuration_sha256, processorCommitment.credential_reference_sha256, canonicalSha256({ fixture: "slack-proof-admission" }), NOW); } finally { admissionDb.close(); }
-    const admitted = { source: syntheticDemoMeetingSourceIdentityV1, processor: processorCommitment };
-    const meetings = meetingSource({ kind: "meeting-source", adapter_id: admitted.source.adapter_id, instance_id: admitted.source.instance_id, version: admitted.source.version });
-    // Search enrichment would call OpenRouter; it answers with no related decisions instead.
-    const answer_composition_generation = { structured_output: { generate: async () => ({ relationships: [] }) },
-      generation: { generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
-        answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } };
-    const active = async () => openOrganizationAuthorityService({ ...config, port: await availablePort(), synthetic_meeting_source_bundle: {
-      source_cursor_policy: { source_adapter_id: syntheticDemoMeetingSourceIdentityV1.adapter_id, assert_live_cursor(cursor) { expect(cursor).toMatch(/^synthetic-demo-source:customer-demo:1\.0\.0:v1:[0-9]+$/); } },
-      assert_admission_commitments(commitments) { expect(commitments.source.adapter_id).toBe(syntheticDemoMeetingSourceIdentityV1.adapter_id); }, create_source() { return meetings.source; },
-    } }, { api: { oidc_provider: oidcProvider, answer_composition_generation },
-      processing_adapter_overrides: { source: meetings.source, processor: decisionProcessor({ kind: "decision-processor", adapter_id: "llm",
-        instance_id: admitted.processor.instance_id, version: admitted.processor.version }) } });
-    runtime = await active();
-    expect(runtime.processing).toBe("active");
-
-    // 6-7. Two meetings produce two cards in the owner's DM, posted with the Nango token.
-    // The first is approved through the signed interaction route; the second waits.
-    meetings.release(2);
-    await waitFor(() => slack.waitingCards().length === 2, "two cards", errors);
-    const [first, second] = slack.waitingCards() as [Message, Message];
-    expect(first.channel).toBe(`D${OWNER_SLACK.slice(1)}`);
-    expect(new Set(slack.calls.filter((entry) => entry.method === "chat.postMessage").slice(-2).map((entry) => entry.token))).toEqual(new Set([TOKENS.first]));
-    await approve(first, 1);
-
-    // 8. The owner reconnects: Nango keeps the connection, Slack rotates the bot token and
+    // 6. The owner reconnects: Nango keeps the connection, Slack rotates the bot token and
     // Nango bumps updated_at. The connection state hash does not change.
     const before = connectionState();
     expect(await install(ECHO_BOT, TOKENS.rotated)).toMatchObject({ status: "complete", result: { kind: "reconnected", workspace_id: ECHO_BOT.team_id } });
     expect(nango.sessions[1]).toMatchObject({ reconnect_connection_id: "nango-proof-connection" });
     expect(connectionState()).toEqual(before);
 
-    // 9. The waiting card still approves, with no state_drift. Its terminal update meets Slack's
-    // rejection of the cached old token and succeeds on the one Nango refetches.
-    await approve(second, 2);
-    expect(count(control, "organization_private_approval_denied_action_receipts_v2")).toBe(0);
-    expect(slack.calls.filter((entry) => entry.method === "chat.update").slice(-2).map((entry) => entry.token)).toEqual([TOKENS.first, TOKENS.rotated]);
-
-    // A third card waits across the restart. The restart's history is real: three staged
-    // presentations (two decided, one waiting), each assigned under the unchanged connection state.
-    meetings.release(1);
-    await waitFor(() => slack.waitingCards().length === 1, "third card", errors);
-    const third = slack.waitingCards()[0]!;
-    await runtime.close();
-    const authority = openAuthorityDatabase(join(state, "authority.sqlite"), { fileMustExist: true });
-    try {
-      expect(authority.prepare("SELECT state, count(*) AS n FROM authority_live_approval_outbox_v2 GROUP BY state").all()).toEqual([{ state: "staged", n: 3 }]);
-      expect(count(authority, "authority_private_approval_terminal_receipts_v3")).toBe(2);
-      expect(authority.prepare("SELECT count(*) AS n FROM authority_private_approval_assignments_v3 WHERE connection_state_sha256 = ?")
-        .get((before[0] as { state_sha256: string }).state_sha256)).toEqual({ n: 3 });
-    } finally { authority.close(); }
-
-    // 10. Restart: the active lane checks every outstanding card against the current connection,
-    // loads, takes the third card's click, and posts a fourth card with the token it fetches from Nango.
-    runtime = await active();
-    expect(runtime.processing).toBe("active");
-    await approve(third, 3);
-    meetings.release(1);
-    await waitFor(() => slack.waitingCards().length === 1, "fourth card", errors);
-    expect(slack.calls.filter((entry) => entry.method === "chat.postMessage").at(-1)).toEqual({ method: "chat.postMessage", token: TOKENS.rotated });
-    expect(count(control, "organization_private_approval_denied_action_receipts_v2")).toBe(0);
-
-    // 11. A reconnect that lands in a different workspace is refused and ECHO writes nothing. Nango's
+    // 7. A reconnect that lands in a different workspace is refused and ECHO writes nothing. Nango's
     // connection now holds that workspace, so the owner sees needs_reinstall at once.
     const secrets = readdirSync(join(state, "secrets")).sort();
     const refused = await install({ ...ECHO_BOT, team_id: "T0OTHER", bot_id: "B0OTHER", bot_user_id: "U0OTHERBOT" }, TOKENS.other);
@@ -421,51 +283,34 @@ it("sets up, connects, links, approves, reconnects and restarts Slack through Na
     expect(await slackTool(owner)).toMatchObject({ personal_status: "linked", organization_setup: "needs_reinstall" });
     expect(errors).toEqual([]);
 
-    // 12. A reconnect that comes back with a different bot user is refused too; Slack revoked the old token.
+    // 8. A reconnect that comes back with a different bot user is refused too; Slack revoked the old token.
     expect(await install({ ...ECHO_BOT, bot_user_id: "U0NEWBOT" }, TOKENS.reinstalled)).toMatchObject({ status: "failed", failure_reason: "workspace_mismatch" });
     expect(await slackTool(owner)).toMatchObject({ organization_setup: "needs_reinstall" });
     expect(connectionState()).toEqual(before);
 
-    // 13. The owner reconnects to the original workspace and bot: the state hash is unchanged, and
-    // the next card's Slack call meets the revoked cached token and succeeds on the one Nango now holds.
+    // 9. The owner reconnects to the original workspace and bot: the state hash is unchanged.
     expect(await install(ECHO_BOT, TOKENS.recovered)).toMatchObject({ status: "complete", result: { kind: "reconnected", workspace_id: ECHO_BOT.team_id } });
     expect(connectionState()).toEqual(before);
     expect(await slackTool(owner)).toMatchObject({ organization_setup: "connected" });
-    meetings.release(1);
-    await waitFor(() => slack.waitingCards().length === 2, "fifth card", errors);
-    const fifth = slack.waitingCards()[1]!;
-    expect(slack.calls.filter((entry) => entry.method === "chat.postMessage").at(-1)).toEqual({ method: "chat.postMessage", token: TOKENS.recovered });
 
-    // 14. Nango loses the connection and its token is revoked. The owner approves the fifth card and
-    // its record is appended, but the card's update re-reads Nango, gets a 404, and the owner sees
-    // needs_reinstall. The update waits quietly; the worker reports no error.
+    // 10. Nango loses the connection and its token is revoked. The owner's next Install finds the
+    // connection gone and opens a connect session with its own attempt's tags. The new connection
+    // proves the same app, workspace and bot, so the bundle is pointed at it under the same handle
+    // and the state hash is unchanged.
     nango.lose();
-    expect((await fetch(`${origin()}/v2/integrations/slack/interactions`, { method: "POST", ...signedApproval(fifth) })).status).toBe(200);
-    await waitFor(() => count(record, "organization_record_log") === 4, "the fifth card's record", errors);
-    for (let poll = 0; poll < 500 && (await slackTool(owner)).organization_setup === "connected"; poll += 1) await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(await slackTool(owner)).toMatchObject({ organization_setup: "needs_reinstall" });
-    expect(slack.waitingCards()).toContain(fifth);
-
-    // 15. The owner's next Install finds the connection gone and opens a connect session with its own
-    // attempt's tags. The new connection proves the same app, workspace and bot, so the bundle is
-    // pointed at it under the same handle; the state hash is unchanged, and the fifth card's update
-    // succeeds with the new connection's token.
     expect(await install(ECHO_BOT, TOKENS.rebound)).toMatchObject({ status: "complete", result: { kind: "reconnected", workspace_id: ECHO_BOT.team_id } });
     expect(nango.sessions.at(-1)).toMatchObject({ reconnect_connection_id: null, tags: { echo_organization_id: initialized.organization_id } });
     expect(connectionState()).toEqual(before);
     expect(readdirSync(join(state, "secrets")).sort()).toEqual(secrets);
     expect(await slackTool(owner)).toMatchObject({ organization_setup: "connected" });
-    await waitFor(() => !slack.waitingCards().includes(fifth), "the fifth card's update", errors);
-    expect(slack.calls.filter((entry) => entry.method === "chat.update").at(-1)).toEqual({ method: "chat.update", token: TOKENS.rebound });
 
-    // 16. Restart: every outstanding card still belongs to the unchanged connection, and the fourth
-    // card, staged before the rebind, approves with the token read from the new Nango connection.
+    // 11. Restart: the setup and both identity links survive with the unchanged connection.
     await runtime.close();
-    runtime = await active();
+    runtime = await openOrganizationAuthorityService({ ...config, port: await availablePort() }, { api: { oidc_provider: oidcProvider } });
     expect(runtime.processing).toBe("active");
-    await approve(slack.waitingCards()[0]!, 5);
-    expect(slack.calls.filter((entry) => entry.method === "chat.update").at(-1)).toEqual({ method: "chat.update", token: TOKENS.rebound });
-    expect(count(control, "organization_private_approval_denied_action_receipts_v2")).toBe(0);
+    expect(await slackTool(owner)).toMatchObject({ personal_status: "linked", organization_setup: "connected" });
+    expect(await slackTool(employee)).toMatchObject({ personal_status: "linked", external_subject_id: EMPLOYEE_SLACK });
+    expect(connectionState()).toEqual(before);
     expect(errors).toEqual([]);
     for (const name of readdirSync(state).filter((file) => file.includes(".sqlite"))) {
       const bytes = readFileSync(join(state, name)).toString("latin1");
@@ -474,6 +319,5 @@ it("sets up, connects, links, approves, reconnects and restarts Slack through Na
   } finally {
     await runtime.close();
     control.close();
-    record.close();
   }
 });

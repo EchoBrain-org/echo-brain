@@ -5,33 +5,13 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    "./synthetic-demo-meeting-source-bundle-v1": {
-      "types": "./dist/synthetic-demo-meeting-source-bundle-v1.d.ts",
-      "import": "./dist/synthetic-demo-meeting-source-bundle-v1.js"
-    },
     "./source/synthetic-demo-meeting-source-v1": {
       "types": "./dist/source/synthetic-demo-meeting-source-v1.d.ts",
       "import": "./dist/source/synthetic-demo-meeting-source-v1.js"
     },
-    "./synthetic-demo-admitted-meeting-source-cursor-policy-v1": {
-      "types": "./dist/synthetic-demo-admitted-meeting-source-cursor-policy-v1.d.ts",
-      "import": "./dist/synthetic-demo-admitted-meeting-source-cursor-policy-v1.js"
-    },
     "./synthetic-demo-pre-slack-evaluator-v1": {
       "types": "./dist/synthetic-demo-pre-slack-evaluator-v1.d.ts",
       "import": "./dist/synthetic-demo-pre-slack-evaluator-v1.js"
-    },
-    "./synthetic-demo-meeting-source-admission": {
-      "types": "./dist/synthetic-demo-meeting-source-admission.d.ts",
-      "import": "./dist/synthetic-demo-meeting-source-admission.js"
-    },
-    "./synthetic-demo-setup-evidence-v1": {
-      "types": "./dist/synthetic-demo-setup-evidence-v1.d.ts",
-      "import": "./dist/synthetic-demo-setup-evidence-v1.js"
-    },
-    "./staging-canary-meeting-source-v1": {
-      "types": "./dist/staging-canary-meeting-source-v1.d.ts",
-      "import": "./dist/staging-canary-meeting-source-v1.js"
     },
     "./staging-synthetic-personal-meeting-provider-v1": {
       "types": "./dist/staging-synthetic-personal-meeting-provider-v1.d.ts",

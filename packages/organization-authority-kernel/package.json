@@ -37,10 +37,6 @@
       "types": "./dist/shared/telemetry-vocabulary-v1.d.ts",
       "import": "./dist/shared/telemetry-vocabulary-v1.js"
     },
-    "./shared/staging-synthetic-meeting-canary-envelope-v1": {
-      "types": "./dist/shared/staging-synthetic-meeting-canary-envelope-v1.d.ts",
-      "import": "./dist/shared/staging-synthetic-meeting-canary-envelope-v1.js"
-    },
     "./domain/errors": {
       "types": "./dist/domain/errors.d.ts",
       "import": "./dist/domain/errors.js"

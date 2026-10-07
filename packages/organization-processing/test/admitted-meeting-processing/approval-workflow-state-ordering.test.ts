@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { bindApprovalWorkflowStateV1 } from "../../src/admitted-meeting-processing/approval-workflow-state-v1.js";
 import { SqliteAuthorityMeetingProcessingStateV1 } from "../../src/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
-import { ADVANCED_AT, assertActionable, database, databases, decisions, fixtureCursorPolicy, meeting, REVIEW_POLICY } from "./fixtures/sqlite-meeting-state.js";
+import { ADVANCED_AT, assertActionable, database, databases, decisions, FIXTURE_SOURCE_KEY, fixtureCursorPolicy, meeting, REVIEW_POLICY } from "./fixtures/sqlite-meeting-state.js";
 
 it("serializes the two same-file authority handles and refuses cross-port calls inside either transaction", async () => {
   const root = mkdtempSync(join(tmpdir(), "echo-approval-order-"));
@@ -18,7 +18,7 @@ it("serializes the two same-file authority handles and refuses cross-port calls 
   // Do not spend five seconds reproducing the lock if a guard regresses.
   owner.pragma("busy_timeout = 0"); provider.pragma("busy_timeout = 0");
   try {
-    const source = new SqliteAuthorityMeetingProcessingStateV1(owner, fixtureCursorPolicy, "llm", () => ADVANCED_AT);
+    const source = new SqliteAuthorityMeetingProcessingStateV1(owner, fixtureCursorPolicy, "llm", () => ADVANCED_AT, FIXTURE_SOURCE_KEY);
     const candidate = await source.stageCandidate({ admission: await source.readAdmission(), meeting, decisions, review_policy: REVIEW_POLICY });
     assertActionable(candidate);
     const state = bindApprovalWorkflowStateV1(bindApprovalWorkflowStateV1(source, () => {

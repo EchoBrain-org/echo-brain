@@ -134,8 +134,6 @@ function readyStatusDependencies(
 }
 
 interface DurableCanaryFixtureOptions {
-  readonly cursor_version?: number;
-  readonly source_admitted?: boolean;
   readonly pointer_current?: boolean;
   readonly pointer_current_contract?: boolean;
   readonly pointer_uses_disabled_projector_contract?: boolean;
@@ -143,8 +141,11 @@ interface DurableCanaryFixtureOptions {
   readonly layer2_result_count?: number | null;
   readonly layer1_owner_tuple?: "owner" | "other";
   readonly layer2_owner_tuple?: "owner" | "other";
-  /** Adds the owner's staging synthetic source and an approved canary proposal for the fixture record. */
-  readonly synthetic_canary?: "owner" | "granola";
+  /**
+   * The owner's personal source holding the canary proposal the fixture record approves:
+   * the staging synthetic source (default), a source of another meeting tool, or none.
+   */
+  readonly synthetic_canary?: "owner" | "granola" | "none";
   /** The release whose canary revision that proposal carries. */
   readonly synthetic_canary_release?: string;
 }
@@ -300,7 +301,6 @@ function installDurableCanaryFixture(
   } finally {
     record.close();
   }
-  const sourceAdmitted = options.source_admitted ?? true;
   const built = buildReadableSearchGenerationV1(
     buildInputForCanary(
       state,
@@ -311,44 +311,6 @@ function installDurableCanaryFixture(
   );
   const authority = new Database(join(state, "authority.sqlite"));
   try {
-    const admissionSemanticSha256 = sha256Digest("founder-canary-admission");
-    if (sourceAdmitted) {
-      authority
-        .prepare(
-        `INSERT INTO authority_live_source_admission_v2
-         (source_key, organization_id, principal_id, membership_id, membership_type,
-          source_adapter_id, source_adapter_version, source_adapter_instance_id,
-          normalizer_version, source_custodian_sha256,
-          source_custodian_assurance, source_custodian_observed_at,
-          source_credential_reference_sha256, initial_cursor, cutoff_at,
-          processor_adapter_id, processor_instance_id, processor_adapter_version,
-          processor_configuration_sha256, processor_credential_reference_sha256,
-          semantic_input_sha256, admitted_at)
-         VALUES (1, ?, ?, ?, 'owner', 'granola', '2.2.0', 'founder-granola-v1', '2.2.0',
-                 ?, 'provider_record_owner_observed', ?, ?, 'granola:v1:live:admission', ?,
-                 'llm', 'founder-llm-v1', '1.3.0+processing.a', ?, ?, ?, ?)`,
-        )
-        .run(
-        manifest.organization_id,
-        manifest.owner_principal_id,
-        manifest.owner_membership_id,
-        sha256Digest("founder@example.com"),
-        issuedAt,
-        sha256Digest("source-credential"),
-        issuedAt,
-        sha256Digest("processor-configuration"),
-        sha256Digest("processor-credential"),
-        admissionSemanticSha256,
-          issuedAt,
-        );
-      authority
-        .prepare(
-        `INSERT INTO authority_live_source_progress_v2
-         (source_key, admission_semantic_input_sha256, cursor, cursor_version, updated_at)
-         VALUES (1, ?, 'granola:v1:live:canary', ?, ?)`,
-        )
-        .run(admissionSemanticSha256, options.cursor_version ?? 1, issuedAt);
-    }
     const pointerCurrent = options.pointer_current ?? true;
     const pointerContractCurrent = options.pointer_current_contract ?? true;
     authority
@@ -405,7 +367,7 @@ function installDurableCanaryFixture(
       options.layer2_owner_tuple,
       "2026-08-23T00:00:03.000Z",
     );
-    if (options.synthetic_canary !== undefined) {
+    if (options.synthetic_canary !== "none") {
       const semantic = insertStagingSyntheticSource(authority, manifest, {
         adapter_id: options.synthetic_canary === "granola" ? "granola-person-mcp" : STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1,
       });
@@ -1278,7 +1240,7 @@ describe("Organization Authority setup coordinator", () => {
     expect(JSON.parse(stdout)).toMatchObject({ source_mode: "staging_synthetic", source_admission_present: true });
     const authority = new Database(join(state, "authority.sqlite"), { readonly: true });
     try {
-      expect(authority.prepare("SELECT count(*) FROM authority_live_source_admission_v2 WHERE source_key = '1'").pluck().get()).toBe(0);
+      expect(authority.prepare("SELECT count(*) FROM authority_live_source_admission_v2 WHERE source_key = ?").pluck().get("1")).toBe(0);
       const sources = authority.prepare(
         `SELECT admission.source_adapter_id, admission.source_custodian_assurance, admission.principal_id, admission.membership_id, progress.cursor
            FROM authority_live_source_admission_v2 AS admission
@@ -1642,14 +1604,15 @@ describe("Organization Authority setup coordinator", () => {
   });
 
   it("reports only safe incomplete and complete one-note canary evidence", async () => {
-    const state = stateDirectory();
+    // Only staging proves a rehearsal; every other origin completes source-free.
+    const state = stateDirectory(STAGING_ORIGIN);
     const order: string[] = [];
     let canaryComplete = false;
     const deps = readyStatusDependencies(order, () => canaryComplete);
     const io = {
       stdout: () => undefined,
       stderr: () => undefined };
-    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, deps),).toBe(0);
+    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state, STAGING_ORIGIN), io, deps),).toBe(0);
 
     let incompleteOutput = "";
     expect(
@@ -1713,8 +1676,8 @@ describe("Organization Authority setup coordinator", () => {
   it.each([
     ["complete", {}, true, true, true, true, true],
     [
-      "expects the active projector contract without source admission",
-      { source_admitted: false },
+      "expects the active projector contract without the owner's synthetic source",
+      { synthetic_canary: "none" },
       false,
       true,
       true,
@@ -1722,7 +1685,7 @@ describe("Organization Authority setup coordinator", () => {
       true,
     ],
     [
-      "rejects a disabled projector contract after source admission",
+      "rejects a disabled projector contract",
       { pointer_uses_disabled_projector_contract: true },
       true,
       true,
@@ -1730,7 +1693,7 @@ describe("Organization Authority setup coordinator", () => {
       false,
       false,
     ],
-    ["requires a real source cursor advance", { cursor_version: 0 }, false, true, true, true, true,],
+    ["requires a synthetic proposal rather than another meeting tool's", { synthetic_canary: "granola" }, false, true, true, true, true],
     ["rejects a stale record-head pointer", { pointer_current: false }, true, true, false, false, false,],
     ["rejects a stale retrieval contract", { pointer_current_contract: false }, true, true, false, false, false,],
     ["requires a positive Layer 1 audit", { layer1_result_count: null }, true, true, true, false, true,],
@@ -1740,7 +1703,7 @@ describe("Organization Authority setup coordinator", () => {
     ["requires the owner tuple for Layer 1", { layer1_owner_tuple: "other" }, true, true, true, false, true,],
     ["requires the owner tuple for Layer 2", { layer2_owner_tuple: "other" }, true, true, true, true, false,],
   ] as const)(
-    "derives durable canary evidence from SQLite: %s",
+    "derives durable staging canary evidence from SQLite: %s",
     async (
       _name,
       fixtureOptions,
@@ -1750,42 +1713,72 @@ describe("Organization Authority setup coordinator", () => {
       layer1Read,
       layer2Read,
     ) => {
-      const state = stateDirectory();
-      const prereq = readyStatusDependencies([]);
-      const productionDependencies: OrganizationAuthoritySetupCliDependencies = {
-        ...prereq,
-        read_setup_canary_evidence: undefined,
-      };
-      const io = {
-        stdout: () => undefined,
-        stderr: () => undefined };
-      expect(
-        await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, productionDependencies,),
-      ).toBe(0);
-      installDurableCanaryFixture(state, fixtureOptions);
+      const originalHost = process.env.ECHO_CLEAN_AUTHORITY_HOST;
+      const originalReleaseId = process.env.ECHO_CLEAN_RELEASE_ID;
+      process.env.ECHO_CLEAN_AUTHORITY_HOST = "authority-staging.echobrain.org";
+      process.env.ECHO_CLEAN_RELEASE_ID = CURRENT_RELEASE;
+      try {
+        const state = stateDirectory(STAGING_ORIGIN);
+        const prereq = readyStatusDependencies([]);
+        const productionDependencies: OrganizationAuthoritySetupCliDependencies = {
+          ...prereq,
+          read_setup_canary_evidence: undefined,
+        };
+        const io = {
+          stdout: () => undefined,
+          stderr: () => undefined };
+        expect(
+          await runOrganizationAuthoritySetupCli(bootstrapArgs(state, STAGING_ORIGIN), io, productionDependencies,),
+        ).toBe(0);
+        installDurableCanaryFixture(state, fixtureOptions);
 
-      let stdout = "";
-      expect(
-        await runOrganizationAuthoritySetupCli(
-          ["status", "--state-dir", state],
-          { ...io, stdout: (value) => (stdout += value) },
-          productionDependencies,
-        ),
-      ).toBe(0);
-      const status = JSON.parse(stdout) as Record<string, unknown>;
-      expect(status).toMatchObject({
-        source_progress_observed: sourceProgress,
-        approved_record_present: approvedRecord,
-        active_generation_current: activeGeneration,
-        owner_layer1_read_after_head: layer1Read,
-        owner_layer2_read_after_generation: layer2Read,
-        next_step:
-          sourceProgress && approvedRecord && activeGeneration && layer1Read && layer2Read
-            ? "complete"
-            : "ready_to_start",
-      });
+        let stdout = "";
+        expect(
+          await runOrganizationAuthoritySetupCli(
+            ["status", "--state-dir", state],
+            { ...io, stdout: (value) => (stdout += value) },
+            productionDependencies,
+          ),
+        ).toBe(0);
+        const status = JSON.parse(stdout) as Record<string, unknown>;
+        expect(status).toMatchObject({
+          source_progress_observed: sourceProgress,
+          synthetic_staging_canary_observed: sourceProgress,
+          approved_record_present: approvedRecord,
+          active_generation_current: activeGeneration,
+          owner_layer1_read_after_head: layer1Read,
+          owner_layer2_read_after_generation: layer2Read,
+          next_step:
+            sourceProgress && approvedRecord && activeGeneration && layer1Read && layer2Read
+              ? "complete"
+              : "ready_to_start",
+        });
+      } finally {
+        if (originalHost === undefined) delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
+        else process.env.ECHO_CLEAN_AUTHORITY_HOST = originalHost;
+        if (originalReleaseId === undefined) delete process.env.ECHO_CLEAN_RELEASE_ID;
+        else process.env.ECHO_CLEAN_RELEASE_ID = originalReleaseId;
+      }
     },
   );
+
+  it("completes source-free outside staging even when no rehearsal evidence exists", async () => {
+    const state = stateDirectory();
+    const productionDependencies: OrganizationAuthoritySetupCliDependencies = {
+      ...readyStatusDependencies([]),
+      read_setup_canary_evidence: undefined,
+    };
+    const io = { stdout: () => undefined, stderr: () => undefined };
+    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, productionDependencies)).toBe(0);
+    for (const command of ["status", "resume"]) {
+      let stdout = "";
+      expect(await runOrganizationAuthoritySetupCli([command, "--state-dir", state], { ...io, stdout: (value) => (stdout += value) }, productionDependencies)).toBe(0);
+      expect(JSON.parse(stdout)).toMatchObject({
+        next_step: "complete", canary_status: "not_required",
+        source_progress_observed: false, synthetic_staging_canary_observed: false, approved_record_present: false,
+      });
+    }
+  });
 
   it.each([
     ["one of two fixture proposals approved", "one", "ready_to_start"],
@@ -1849,7 +1842,7 @@ describe("Organization Authority setup coordinator", () => {
           productionDependencies,
         ),
       ).toBe(0);
-      installDurableCanaryFixture(state, { source_admitted: false, synthetic_canary: synthetic, synthetic_canary_release: release });
+      installDurableCanaryFixture(state, { synthetic_canary: synthetic, synthetic_canary_release: release });
       let stdout = "";
       expect(
         await runOrganizationAuthoritySetupCli(
@@ -1864,7 +1857,7 @@ describe("Organization Authority setup coordinator", () => {
       process.env.ECHO_CLEAN_AUTHORITY_HOST = "authority-staging.echobrain.org";
       process.env.ECHO_CLEAN_RELEASE_ID = CURRENT_RELEASE;
       expect(await statusAfter(STAGING_ORIGIN, "owner")).toMatchObject({
-        source_progress_observed: false,
+        source_progress_observed: true,
         synthetic_staging_canary_observed: true,
         next_step: "complete",
       });
@@ -1875,12 +1868,15 @@ describe("Organization Authority setup coordinator", () => {
       });
       // A canary-shaped proposal from another meeting tool is not synthetic evidence.
       expect(await statusAfter(STAGING_ORIGIN, "granola")).toMatchObject({
+        source_progress_observed: false,
         synthetic_staging_canary_observed: false,
         next_step: "ready_to_start",
       });
+      // Outside staging the synthetic source is not evidence, and none is required.
       expect(await statusAfter("https://authority.example", "owner")).toMatchObject({
         synthetic_staging_canary_observed: false,
-        next_step: "ready_to_start",
+        canary_status: "not_required",
+        next_step: "complete",
       });
       delete process.env.ECHO_CLEAN_RELEASE_ID;
       expect(await statusAfter(STAGING_ORIGIN, "owner")).toMatchObject({

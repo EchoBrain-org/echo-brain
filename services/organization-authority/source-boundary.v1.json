@@ -10,7 +10,6 @@
     "services/organization-authority/src/clean-extraction-attempts-main.ts",
     "services/organization-authority/src/clean-reset-main.ts",
     "services/organization-authority/src/clean-live-main.ts",
-    "services/organization-authority/src/synthetic-demo-main.ts",
     "services/organization-authority/src/clean-founder-main.ts"
   ],
   "owned_source_paths": [
@@ -345,16 +344,6 @@
       "from": "services/organization-authority/src/clean-live-main.ts",
       "allowed_imports": [
         "services/organization-authority/src/composition/organization-authority-service-cli.ts"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "authority-synthetic-demo-entrypoint-calls-composition",
-      "from": "services/organization-authority/src/synthetic-demo-main.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/composition/synthetic-demo-organization-authority-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],

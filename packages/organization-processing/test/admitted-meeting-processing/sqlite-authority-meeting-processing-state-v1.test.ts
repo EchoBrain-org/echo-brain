@@ -10,7 +10,7 @@ import type {
   DecisionSet,
   MeetingDocument,
 } from "../../src/core/index.js";
-import { ADMITTED_AT, ADVANCED_AT, assertActionable, database, databases, decisions, FIXTURE_PROCESSOR_VERSION, fixtureCursorPolicy, meeting, NEXT_CUTOFF, nextCursor, REVIEW_POLICY, SHA, sourceCursor } from './fixtures/sqlite-meeting-state.js';
+import { ADMITTED_AT, ADVANCED_AT, assertActionable, database, databases, decisions, FIXTURE_PROCESSOR_VERSION, FIXTURE_SOURCE_KEY, fixtureCursorPolicy, meeting, NEXT_CUTOFF, nextCursor, REVIEW_POLICY, SHA, sourceCursor } from './fixtures/sqlite-meeting-state.js';
 afterEach(() => { for (const value of databases.splice(0)) value.close(); });
 
 function stateFixture() {
@@ -20,6 +20,7 @@ function stateFixture() {
     fixtureCursorPolicy,
     "llm",
     () => ADVANCED_AT,
+    FIXTURE_SOURCE_KEY,
   );
   return { value, state };
 }
@@ -55,7 +56,7 @@ describe("SQLite admitted meeting-processing state", () => {
   });
   it("fences source custody with current identity and owner membership inside the retaining transaction", async () => {
     const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(value, fixtureCursorPolicy, "llm");
+    const state = new SqliteAuthorityMeetingProcessingStateV1(value, fixtureCursorPolicy, "llm", undefined, FIXTURE_SOURCE_KEY);
     await state.readAdmission();
     const identity = meeting.provenance.source;
     expect(() => state.assertCurrentSourceAdmission(identity)).toThrow("custody transaction");
@@ -72,7 +73,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const state = new SqliteAuthorityMeetingProcessingStateV1(value, {
       source_adapter_id: "synthetic-fixture",
       assert_live_cursor: fixtureCursorPolicy.assert_live_cursor,
-    }, "llm");
+    }, "llm", undefined, FIXTURE_SOURCE_KEY);
 
     await expect(state.readAdmission()).rejects.toThrow(
       "admission adapter differs from its configured boundary",
@@ -85,6 +86,8 @@ describe("SQLite admitted meeting-processing state", () => {
       value,
       fixtureCursorPolicy,
       "synthetic-processor",
+      undefined,
+      FIXTURE_SOURCE_KEY,
     );
 
     await expect(state.readAdmission()).rejects.toThrow(
@@ -332,6 +335,7 @@ it.each(["approved", "rejected"] as const)(
       fixtureCursorPolicy,
       "llm",
       () => new Date(Date.parse(ADVANCED_AT) + tick++ * 1_000).toISOString(),
+      FIXTURE_SOURCE_KEY,
     );
     const current = await state.readAdmission();
     const forMeeting = (suffix: string): MeetingDocument => ({
@@ -1166,6 +1170,7 @@ it.each(["approved", "rejected"] as const)(
       fixtureCursorPolicy,
       "llm",
       () => now,
+      FIXTURE_SOURCE_KEY,
     );
     const current = await state.readAdmission();
     const candidate = await state.stageCandidate({

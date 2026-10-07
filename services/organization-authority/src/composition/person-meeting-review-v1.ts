@@ -44,7 +44,7 @@ export function personMeetingReviewTextV1(snapshotJson: string): string {
 }
 
 /** First-party presentation over the existing frozen candidate, outbox and signed append. */
-export async function createPersonMeetingReviewV1(database: Database.Database, context: ApprovalWorkflowContextV1, sourceKey = '1') {
+export async function createPersonMeetingReviewV1(database: Database.Database, context: ApprovalWorkflowContextV1, sourceKey: string) {
   const descriptor = await context.signer.inspect();
   const factories = { pinned_authority: verifyOrganizationAuthorityPin(descriptor, organizationAuthorityPinSha256(descriptor)),
     state_lineage_id: context.coordinates.state_lineage_id, sign: (message: Buffer, keyId: Sha256Digest) => context.signer.sign(message, keyId), codecs };

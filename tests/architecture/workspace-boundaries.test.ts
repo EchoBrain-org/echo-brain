@@ -1298,7 +1298,7 @@ describe("workspace source boundaries", () => {
     const cases = [
       ["packages/organization-api/src/direction-probe.ts", "../../../services/organization-authority/src/composition/organization-authority-setup-cli.js", "neutral module reaches bootstrap"],
       ["providers/openrouter/src/direction-probe.ts", "../../../services/organization-authority/src/composition/organization-authority-runtime.js", "provider imports the composing service"],
-      ["providers/openrouter/src/direction-probe.ts", "@echo-brain/provider-synthetic-demo/synthetic-demo-setup-evidence-v1", "cross-provider dependency"],
+      ["providers/openrouter/src/direction-probe.ts", "@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1", "cross-provider dependency"],
     ];
     for (const [path, target, failure] of cases) {
       const entry = join(fixture, path!);

@@ -1,41 +1,22 @@
 import { preparePersonHttpRuntimeV1 } from './organization-authority-api-runtime.js';
-import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { createPersonUpdateProcessingV1, type PersonUpdateProcessingBindingV1 } from './person-update-processing-v1.js';
 import { SqlitePersonUpdateEnrichmentWorkV2 } from '../adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
 import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../adapters/persistence/sqlite/project-upload-enrichment-v1.js';
-import { AdapterError } from '@echo-brain/organization-processing/core';
 import type { RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
-import { bindApprovalWorkflowStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
-import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
-import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   type RecordPolicyFactProjectorRegistryV1,
-  OrganizationRecordAppenderV4,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PersonSessionOidcConfiguration } from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
-import { AdmittedMeetingProcessingCycleV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
-import { openExtractionAttemptStoreV1 } from "@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1";
-import {
-  readAdmittedMeetingProcessingCommitmentsV1,
-} from "@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments";
-import { AuthorityMeetingProcessingRevokedError, SqliteAuthorityMeetingProcessingStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1";
-import type {
-  ApprovalWorkflowProcessingV1,
-  ApprovalWorkflowComponentsV1,
-  ApprovalWorkflowBundleV1,
-} from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
 import type {
   AnswerCompositionGenerationBindingV1,
   AnswerCompositionGenerationBundleV1,
 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
-import type { DecisionProcessorBundleV1 } from "@echo-brain/organization-processing/ports/decision-processor-bundle-v1";
-import type { MeetingSourceBundleV1 } from "@echo-brain/organization-processing/ports/meeting-source-bundle-v1";
 import {
   startOrganizationAuthorityServiceLifecycle,
   type OrganizationAuthorityProcessingCycleV1,
@@ -49,15 +30,6 @@ import {
 import type { OrganizationAuthorityApiRuntimeConfig } from "./organization-authority-api-runtime.js";
 import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
-import type { MeetingProcessingWorkerPhaseRunnerV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
-import {
-  openMeetingApprovalJourneyTelemetryV1,
-  type MeetingApprovalJourneyTelemetryConfigV1,
-} from "./meeting-approval-journey-telemetry-v1.js";
-import type {
-  MeetingApprovalJourneyStageAttemptV1,
-  MeetingApprovalJourneyTelemetryPortV1,
-} from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 
 /** The staging release canary's outcome; the deploy receipt reads `approval_outcome = kind` and `approval_id`. */
@@ -79,12 +51,6 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly agentic_ask_v1_small_scope_shortcut?: boolean;
   /** Staging-only research evaluation endpoint; ignored for any other Authority origin. */
   readonly staging_research_eval_v1?: true;
-  /** Explicit provider/source bundle. This generic root does not select one. */
-  readonly meeting_source_bundle?: MeetingSourceBundleV1;
-  /** Explicit decision-processor bundle. This generic root does not select one. */
-  readonly decision_processor_bundle: DecisionProcessorBundleV1;
-  /** Explicit approval/delivery bundle. This generic root does not select one. */
-  readonly approval_workflow_bundle: ApprovalWorkflowBundleV1;
   /** Explicit answer-composition bundle. This generic root does not select one. */
   readonly answer_composition_generation_bundle: AnswerCompositionGenerationBundleV1;
   /** Exact durable record-resolution protocols admitted into append and retrieval. */
@@ -100,17 +66,6 @@ export interface OrganizationAuthorityRuntimeConfig {
   /** Staging-only Ask telemetry; omitted from every production runtime. */
   readonly ask_journey_telemetry?:
     OrganizationAuthorityApiRuntimeDependencies["ask_journey_telemetry"];
-  /** Staging-only approval telemetry; omitted from every production runtime. */
-  readonly meeting_approval_journey_telemetry?: Omit<
-    MeetingApprovalJourneyTelemetryConfigV1,
-    "state_directory"
-  >;
-  /**
-   * Explicit staging composition proof. The deployable CLI supplies this only
-   * after its exact staging-authority-origin check; generic runtimes leave it
-   * absent even when a telemetry config was provided.
-   */
-  readonly staging_meeting_approval_journey_telemetry_enabled?: true;
   /**
    * Staging-selected release canary over the owner's synthetic personal source.
    * The runtime only serializes it with the worker.
@@ -120,6 +75,7 @@ export interface OrganizationAuthorityRuntimeConfig {
 
 export interface OpenedOrganizationAuthorityRuntime
   extends RunningOrganizationAuthorityServiceLifecycle {
+  /** Active once a personal meeting runtime is composed; meetings only enter through personal sources. */
   readonly processing: "idle_until_finalize" | "active";
   /**
    * A staging-guarded rehearsal hook. It runs exclusively with the worker and
@@ -142,13 +98,6 @@ function stagingSyntheticCanaryHook(
   };
 }
 
-type MeetingSourceAdapter = ConstructorParameters<
-  typeof AdmittedMeetingProcessingCycleV1
->[0]["source"];
-type DecisionProcessorAdapter = ConstructorParameters<
-  typeof AdmittedMeetingProcessingCycleV1
->[0]["processor"];
-
 function relatedAtomProjectorBinding(
   generation: AnswerCompositionGenerationBindingV1,
 ): ReadableSearchRelatedAtomProjectorBindingV1 {
@@ -163,112 +112,68 @@ function relatedAtomProjectorBinding(
 }
 /**
  * Narrow composition seams for deterministic local rehearsals. Production
- * callers leave this absent and retain the concrete provider adapters.
+ * callers leave this absent.
  */
 export interface OrganizationAuthorityRuntimeDependencies {
   /** Passed straight to the Authority API runtime, for example a local OIDC fake. */
   readonly api?: OrganizationAuthorityApiRuntimeDependencies;
-  /**
-   * Replaces the active post-finalize worker only. It is ignored before source
-   * admission, so stopped-state startup remains provider-free by default.
-   */
-  readonly active_processing?: OrganizationAuthorityProcessingCycleV1;
-  /** Optional provider-free substitutes for the concrete active adapters. */
-  readonly processing_adapter_overrides?: {
-    readonly source?: MeetingSourceAdapter;
-    readonly processor?: DecisionProcessorAdapter;
-  };
 }
 
 interface ReadableSearchReconcilerV1 {
   reconcile(signal: AbortSignal): Promise<unknown>;
 }
 
+/**
+ * The Authority's own worker phases: personal updates and search maintenance.
+ * Meeting intake and approvals belong to the personal meeting runtime, which
+ * the lifecycle runs beside this as its additional processing.
+ */
 class OrganizationAuthorityProcessingCoordinator
   implements OrganizationAuthorityProcessingCycleV1 {
   readonly hasFineGrainedSourceLifecycle = true;
   constructor(
-    private readonly source: AdmittedMeetingProcessingCycleV1 | undefined,
-    private readonly approvals: ApprovalWorkflowProcessingV1 | undefined,
     private readonly readableSearch: ReadableSearchReconcilerV1,
     private readonly updates: PersonUpdateProcessingBindingV1,
-    private readonly journeyTelemetry?: MeetingApprovalJourneyTelemetryPortV1,
   ) {}
 
-  setWorkerLifecycle(lifecycle: MeetingProcessingWorkerPhaseRunnerV1): void {
-    this.source?.setWorkerLifecycle(lifecycle);
+  recoverV4Appends(): Promise<void> {
+    return Promise.resolve();
   }
 
-  recoverV4Appends(signal: AbortSignal): Promise<void> {
-    return this.approvals?.recoverV4Appends(signal) ?? Promise.resolve();
+  pollAndStageAdmittedMeetings(signal: AbortSignal): Promise<void> {
+    return this.updates.runOnce(signal);
   }
 
-  async pollAndStageAdmittedMeetings(signal: AbortSignal): Promise<void> {
-    try { await this.source?.runOnce(signal); }
-    catch (error) {
-      if (signal.aborted || (!(error instanceof AdapterError) && !(error instanceof AuthorityMeetingProcessingRevokedError))) throw error;
-    }
-    signal.throwIfAborted();
-    await this.updates.runOnce(signal);
+  observeAndFinalizePendingApprovals(): Promise<void> {
+    return Promise.resolve();
   }
 
-  observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void> {
-    return this.approvals?.observeAndFinalizePendingApprovals(signal) ?? Promise.resolve();
-  }
-
-  appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void> {
-    return this.approvals?.appendFinalizedApprovalsToV4(signal) ?? Promise.resolve();
-  }
-
-  reconcileApprovalPresentations(signal: AbortSignal): ReturnType<NonNullable<ApprovalWorkflowProcessingV1["reconcileApprovalPresentations"]>> {
-    return this.approvals?.reconcileApprovalPresentations?.(signal) ?? Promise.resolve();
+  appendFinalizedApprovalsToV4(): Promise<void> {
+    return Promise.resolve();
   }
 
   async reconcileReadableSearchGeneration(signal: AbortSignal): ReturnType<OrganizationAuthorityProcessingCycleV1["reconcileReadableSearchGeneration"]> {
-    let attempts: readonly MeetingApprovalJourneyStageAttemptV1[] = [];
-    try {
-      attempts = this.journeyTelemetry?.beginAwaitingSearch() ?? [];
-    } catch {
-      // Search publication is authoritative; run-detail telemetry is not.
+    const result = await this.readableSearch.reconcile(signal);
+    signal.throwIfAborted();
+    if (
+      typeof result === "object" &&
+      result !== null &&
+      "status" in result &&
+      (result.status === "current" ||
+        result.status === "published" ||
+        result.status === "superseded")
+    ) {
+      return { status: result.status };
     }
-
-    try {
-      annotateCoreRuntimeV1({ linked_journey_ids: attempts.map((attempt) => attempt.journey_id) });
-      const result = await this.readableSearch.reconcile(signal);
-      signal.throwIfAborted();
-      if (
-        typeof result === "object" &&
-        result !== null &&
-        "status" in result &&
-        (result.status === "current" ||
-          result.status === "published" ||
-          result.status === "superseded")
-      ) {
-        try {
-          this.journeyTelemetry?.completeAwaitingSearch(attempts, result.status);
-        } catch {
-          // Search publication is authoritative; run-detail telemetry is not.
-        }
-        return { status: result.status };
-      } else {
-        throw new TypeError("unrecognized readable-search reconciliation result");
-      }
-    } catch (error) {
-      try {
-        this.journeyTelemetry?.failAwaitingSearch(attempts, error, signal.aborted);
-      } catch {
-        // Search publication is authoritative; run-detail telemetry is not.
-      }
-      throw error;
-    }
+    throw new TypeError("unrecognized readable-search reconciliation result");
   }
 }
 
 /**
- * Provider-neutral Organization Authority runtime composition. Before source
- * admission, API routes, Ask, personal updates and search maintenance remain
- * available. An explicit source bundle supplies the admitted source after
- * finalization; the remaining construction is shared by every meeting provider.
+ * Provider-neutral Organization Authority runtime composition. API routes,
+ * Ask, personal updates and search maintenance are always available. Meetings
+ * enter only through personal sources, whose runtime a caller composes through
+ * the Person HTTP runtime factory; without one, meeting processing stays idle.
  */
 export async function openOrganizationAuthorityRuntime(
   config: OrganizationAuthorityRuntimeConfig,
@@ -305,227 +210,22 @@ export async function openOrganizationAuthorityRuntime(
     join(config.state_directory, "authority.sqlite"),
     { fileMustExist: true },
   );
-  let preparedPerson: ReturnType<typeof preparePersonHttpRuntimeV1>;
-  let personalPublication: (() => void) | undefined;
-  function preparePersonal(record: import('better-sqlite3').Database): void {
-    preparedPerson = preparePersonHttpRuntimeV1(baseApiDependencies.person_http_runtime_factory, {
-      database: authority, record, coordinates: { authority_id: lineage.root.authority_id, organization_id: lineage.root.organization_id, state_lineage_id: lineage.root.state_lineage_id },
-      on_processing_queued: () => personalPublication?.(),
-    });
-  }
-  const personalApi = () => preparedPerson === undefined ? {} : { person_http_runtime_factory: preparedPerson.attach };
-  const sourceIsAdmitted =
-    authority
-      .prepare(
-        `SELECT 1
-           FROM authority_live_source_admission_v2
-          WHERE source_key = 1`,
-      )
-      .get() !== undefined;
-  if (!sourceIsAdmitted) {
-    const record = openOrganizationRecordDatabase(
-      join(config.state_directory, "record-log.sqlite"),
-      { fileMustExist: true },
-    );
-    try {
-      preparePersonal(record);
-      const signer = FileOrganizationAuthoritySigner.openExisting({
-        directory: join(config.state_directory, "keys"),
-        authority_id: lineage.root.authority_id,
-        organization_id: lineage.root.organization_id,
-      });
-      const answerGeneration =
-        dependencies.api?.answer_composition_generation ??
-        config.answer_composition_generation_bundle.load();
-      const relatedAtomProjector = relatedAtomProjectorBinding(answerGeneration);
-      const readableSearchContract = readableSearchGenerationContractV1({
-        related_atom_projector: relatedAtomProjector.profile,
-      });
-      const readableSearch = createReadableSearchGenerationReconcilerV1({
-        state_directory: config.state_directory,
-        root: lineage.root,
-        authority,
-        record,
-        signer,
-        policy_projectors: config.record_policy_fact_projectors,
-        record_input_codecs: config.record_input_codecs,
-        related_atom_projector: relatedAtomProjector,
-      });
-      const runtime = await startOrganizationAuthorityServiceLifecycle(
-        { api, worker_interval_ms: config.worker_interval_ms },
-        {
-          additional_processing: preparedPerson?.processing,
-          processing: new OrganizationAuthorityProcessingCoordinator(
-            undefined,
-            undefined,
-            readableSearch,
-            createPersonUpdateProcessingV1(
-              answerGeneration,
-              new SqlitePersonUpdateEnrichmentWorkV2(
-                authority,
-                new SqliteProjectUploadEnrichmentAuthorizationV1(authority),
-              ),
-            ),
-          ),
-          api: {
-            ...baseApiDependencies,
-            ...personalApi(),
-            answer_composition_generation: answerGeneration,
-            readable_search_retrieval_contract_sha256:
-              readableSearchContract.retrieval_contract_sha256,
-          },
-          on_worker_error: config.on_worker_error,
-          on_worker_telemetry: config.on_worker_telemetry,
-          ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
-        },
-      );
-      personalPublication = () => runtime.requestApprovalPublication();
-      return {
-        ...runtime,
-        ...stagingSyntheticCanaryHook(config, runtime),
-        processing: preparedPerson?.processing === undefined ? "idle_until_finalize" : "active",
-        close: async () => {
-          try { await runtime.close(); }
-          finally { preparedPerson?.close(); record.close(); authority.close(); }
-        },
-      };
-    } catch (error) {
-      preparedPerson?.close();
-      record.close();
-      authority.close();
-      throw error;
-    }
-  }
-  if (dependencies.active_processing !== undefined) {
-    authority.close();
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api, worker_interval_ms: config.worker_interval_ms },
-      {
-        processing: dependencies.active_processing,
-        api: baseApiDependencies,
-        on_worker_error: config.on_worker_error,
-        on_worker_telemetry: config.on_worker_telemetry,
-        ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
-      },
-    );
-    return { ...runtime, processing: "active" };
-  }
   const record = openOrganizationRecordDatabase(
     join(config.state_directory, "record-log.sqlite"),
     { fileMustExist: true },
   );
-  let openedApprovals: ApprovalWorkflowComponentsV1 | undefined;
-  let extractionAttempts: ReturnType<typeof openExtractionAttemptStoreV1> | undefined;
-  let meetingApprovalJourneyTelemetry:
-    | MeetingApprovalJourneyTelemetryPortV1
-    | undefined;
-  if (
-    config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 &&
-    config.staging_meeting_approval_journey_telemetry_enabled === true &&
-    config.meeting_approval_journey_telemetry !== undefined
-  ) {
-    try {
-      meetingApprovalJourneyTelemetry = openMeetingApprovalJourneyTelemetryV1({
-        ...config.meeting_approval_journey_telemetry,
-        state_directory: config.state_directory,
-      });
-    } catch {
-      try { config.meeting_approval_journey_telemetry.on_observation_failure?.({ emitter: "meeting_approval_observer", reason: "observation_callback_failure" }); } catch { /* observation only */ }
-      // Observability cannot prevent the Authority from starting.
-    }
-  }
+  let preparedPerson: ReturnType<typeof preparePersonHttpRuntimeV1>;
+  let personalPublication: (() => void) | undefined;
   try {
-    preparePersonal(record);
-    const meetingSourceBundle = config.meeting_source_bundle;
-    if (meetingSourceBundle === undefined) {
-      throw new Error("an admitted meeting source requires its provider bundle");
-    }
-    const sourceState = new SqliteAuthorityMeetingProcessingStateV1(
-      authority,
-      meetingSourceBundle.source_cursor_policy,
-      config.decision_processor_bundle.processor_adapter_id,
-    );
-    const commitments = readAdmittedMeetingProcessingCommitmentsV1(authority);
-    meetingSourceBundle.assert_admission_commitments(commitments);
-    config.decision_processor_bundle.assert_admission_commitments(commitments);
-    const admission = await sourceState.readAdmission();
-    const source =
-      dependencies.processing_adapter_overrides?.source ??
-      meetingSourceBundle.create_source(admission);
-    const processor =
-      dependencies.processing_adapter_overrides?.processor ??
-      config.decision_processor_bundle.create_processor(admission);
-    if (
-      source.identity.adapter_id !== admission.source.adapter_id ||
-      source.identity.instance_id !== admission.source.instance_id ||
-      source.identity.version !== admission.source.version ||
-      processor.identity.adapter_id !== admission.processor.adapter_id ||
-      processor.identity.instance_id !== admission.processor.instance_id ||
-      processor.identity.version !== admission.processor.version
-    ) {
-      throw new Error(
-        "processing adapters differ from their admitted configurations",
-      );
-    }
-    const coordinates = Object.freeze({
-      authority_id: lineage.root.authority_id,
-      organization_id: lineage.root.organization_id,
-      state_lineage_id: lineage.root.state_lineage_id,
+    preparedPerson = preparePersonHttpRuntimeV1(baseApiDependencies.person_http_runtime_factory, {
+      database: authority, record, coordinates: { authority_id: lineage.root.authority_id, organization_id: lineage.root.organization_id, state_lineage_id: lineage.root.state_lineage_id },
+      on_processing_queued: () => personalPublication?.(),
     });
-    extractionAttempts = openExtractionAttemptStoreV1(
-      join(config.state_directory, "extraction-attempts.sqlite"),
-      coordinates,
-    );
     const signer = FileOrganizationAuthoritySigner.openExisting({
       directory: join(config.state_directory, "keys"),
       authority_id: lineage.root.authority_id,
       organization_id: lineage.root.organization_id,
     });
-    // The approval surface is loaded before the worker exists, so its wake
-    // signal is bound late. Until the lifecycle starts it is a no-op; the
-    // periodic cycle still publishes anything queued in that window.
-    let requestApprovalPublication: (() => void) | undefined;
-    const recordAppend = new OrganizationRecordAppenderV4(record, coordinates, config.record_policy_fact_projectors);
-    const approvalContext = Object.freeze({
-      on_terminal_action_queued: () => requestApprovalPublication?.(),
-      state: bindApprovalWorkflowStateV1(sourceState, () => {
-        if (authority.inTransaction) throw new Error("approval state owner transaction must be idle");
-      }),
-      record_append: Object.freeze({ append: recordAppend.append.bind(recordAppend) }),
-      signer: Object.freeze({ inspect: signer.inspect.bind(signer), sign: signer.sign.bind(signer) }),
-      coordinates,
-      next_envelope_id: () => `env_${randomUUID()}`,
-      ...(meetingApprovalJourneyTelemetry === undefined
-        ? {}
-        : { journey_telemetry: meetingApprovalJourneyTelemetry }),
-    });
-    await config.approval_workflow_bundle.assert_existing_presentations_owned(
-      approvalContext,
-    );
-    const approvals = await config.approval_workflow_bundle.load(approvalContext);
-    openedApprovals = approvals;
-    const sourceCycle = new AdmittedMeetingProcessingCycleV1({
-      source,
-      source_ingestion: {
-        store: new SqliteSourceAdmissionStoreV1(authority, () => sourceState.assertCurrentSourceAdmission(source.identity)),
-        scope: {
-          organization_id: lineage.root.organization_id,
-          custody_ref: `organization:${lineage.root.organization_id}`,
-          access_policy_ref: `meeting-admission:${source.identity.adapter_id}:${source.identity.instance_id}`,
-          analysis_policy: 'automatic',
-        },
-      },
-      processor,
-      extraction_attempts: extractionAttempts,
-      state: sourceState,
-      stager: approvals.stager,
-      source_cursor_policy: meetingSourceBundle.source_cursor_policy,
-      ...(meetingApprovalJourneyTelemetry === undefined
-        ? {}
-        : { journey_telemetry: meetingApprovalJourneyTelemetry }),
-    });
-    // Bind once: answer composition and rebuild-time projection must use the
-    // same non-secret adapter/model selection for this running Authority.
     const answerGeneration =
       dependencies.api?.answer_composition_generation ??
       config.answer_composition_generation_bundle.load();
@@ -548,30 +248,21 @@ export async function openOrganizationAuthorityRuntime(
       {
         additional_processing: preparedPerson?.processing,
         processing: new OrganizationAuthorityProcessingCoordinator(
-          sourceCycle,
-          approvals.processing,
           readableSearch,
           createPersonUpdateProcessingV1(
             answerGeneration,
-            new SqlitePersonUpdateEnrichmentWorkV2(authority, new SqliteProjectUploadEnrichmentAuthorizationV1(authority)),
+            new SqlitePersonUpdateEnrichmentWorkV2(
+              authority,
+              new SqliteProjectUploadEnrichmentAuthorizationV1(authority),
+            ),
           ),
-          meetingApprovalJourneyTelemetry,
         ),
         api: {
           ...baseApiDependencies,
-          ...personalApi(),
+          ...(preparedPerson === undefined ? {} : { person_http_runtime_factory: preparedPerson.attach }),
           answer_composition_generation: answerGeneration,
           readable_search_retrieval_contract_sha256:
             readableSearchContract.retrieval_contract_sha256,
-          ...(dependencies.api?.private_approval_interaction_ingress !==
-          undefined
-            ? {}
-            : approvals.interaction_ingress === undefined
-              ? {}
-              : {
-                  private_approval_interaction_ingress:
-                    approvals.interaction_ingress,
-                }),
         },
         on_worker_error: config.on_worker_error,
         on_worker_telemetry: config.on_worker_telemetry,
@@ -579,36 +270,19 @@ export async function openOrganizationAuthorityRuntime(
       },
     );
     personalPublication = () => runtime.requestApprovalPublication();
-    requestApprovalPublication = personalPublication;
     return {
-      address: runtime.address,
-      processing: "active",
-      runExclusive: (operation) => runtime.runExclusive(operation),
-      drain: (signal) => runtime.drain(signal),
-      requestApprovalPublication,
+      ...runtime,
       ...stagingSyntheticCanaryHook(config, runtime),
+      processing: preparedPerson?.processing === undefined ? "idle_until_finalize" : "active",
       close: async () => {
-        try {
-          await runtime.close();
-        } finally {
-          try { openedApprovals?.close?.(); } finally {
-            meetingApprovalJourneyTelemetry?.close();
-            extractionAttempts?.close();
-            preparedPerson?.close();
-            record.close();
-            authority.close();
-          }
-        }
+        try { await runtime.close(); }
+        finally { preparedPerson?.close(); record.close(); authority.close(); }
       },
     };
   } catch (error) {
-    try { openedApprovals?.close?.(); } finally {
-      meetingApprovalJourneyTelemetry?.close();
-      extractionAttempts?.close();
-      preparedPerson?.close();
-      record.close();
-      authority.close();
-    }
+    preparedPerson?.close();
+    record.close();
+    authority.close();
     throw error;
   }
 }

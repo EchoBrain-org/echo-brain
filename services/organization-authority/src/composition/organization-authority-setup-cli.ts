@@ -1218,7 +1218,7 @@ function stagingSyntheticSourceEvidence(
   manifest: OrganizationAuthoritySetupManifestV3,
   authority: Database.Database,
   record: Database.Database,
-): { readonly fixture_mode: boolean; readonly fixtures_approved: boolean; readonly canary_approved: boolean } | undefined {
+): { readonly proposal_staged: boolean; readonly fixture_mode: boolean; readonly fixtures_approved: boolean; readonly canary_approved: boolean } | undefined {
   const source = readStagingSyntheticSource(manifest, authority);
   if (source === undefined) return undefined;
   const approved = record.prepare(
@@ -1234,6 +1234,7 @@ function stagingSyntheticSourceEvidence(
       ? stagingSyntheticCanaryMeetingV1(releaseId).provenance.canonical_revision
       : undefined;
   return Object.freeze({
+    proposal_staged: source.proposals.length > 0,
     fixture_mode: source.fixtures.size > 0,
     fixtures_approved: source.fixtures.size > 0 && !source.fixture_pending && [...source.fixtures].every((id) => approvedMeetings.has(id)),
     canary_approved: currentCanaryRevision !== undefined && approvedProposals.some((proposal) =>
@@ -1263,20 +1264,10 @@ function setupCanaryEvidence(
     });
     const initialHead = currentRecordHead(record);
     const initialPointer = activeGenerationPointer(authority);
-    const sourceProgressObserved = authority
-      .prepare(
-        `SELECT 1
-           FROM authority_live_source_progress_v2 AS progress
-           JOIN authority_live_source_admission_v2 AS admission
-             ON admission.source_key = 1
-            AND admission.semantic_input_sha256 =
-                progress.admission_semantic_input_sha256
-          WHERE progress.source_key = 1
-            AND progress.cursor_version > 0
-          LIMIT 1`,
-      )
-      .get() !== undefined;
+    // Meetings enter only through personal sources; on staging the owner's
+    // synthetic source is the one whose progress setup can prove.
     const synthetic = stagingSyntheticSourceEvidence(manifest, authority, record);
+    const sourceProgressObserved = synthetic?.proposal_staged ?? false;
     const syntheticStagingCanaryObserved = synthetic?.canary_approved ?? false;
     const approvedRecordPresent = record
       .prepare(
@@ -1315,9 +1306,8 @@ function setupCanaryEvidence(
       sameRecordHead(initialHead, currentRecordHead(record)) &&
       sameGenerationPointer(initialPointer, activeGenerationPointer(authority));
     if (!stable) return EMPTY_SETUP_CANARY_EVIDENCE;
-    const sourceEvidence = synthetic === undefined
-      ? sourceProgressObserved
-      : synthetic.fixture_mode ? synthetic.fixtures_approved : synthetic.canary_approved;
+    const sourceEvidence = synthetic !== undefined &&
+      (synthetic.fixture_mode ? synthetic.fixtures_approved : synthetic.canary_approved);
     const complete =
       sourceEvidence &&
       approvedRecordPresent &&
@@ -1557,7 +1547,7 @@ async function resume(
   });
   if (
     setupStep === "ready_to_start" &&
-    ((manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN && !sourceAdmissionPresent(full)) ||
+    (manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN ||
       readSetupCanaryEvidence(manifest, dependencies).complete)
   ) {
     status(input, io, dependencies);
@@ -1722,12 +1712,14 @@ function status(
   const canary = nextStep === "ready_to_start"
     ? readSetupCanaryEvidence(setup.manifest, dependencies)
     : EMPTY_SETUP_CANARY_EVIDENCE;
-  const ordinarySourceFree = nextStep === "ready_to_start" &&
-    setup.manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN && !sourceAdmissionPresent(full);
-  const terminalStep: OrganizationAuthoritySetupNextStep = canary.complete || ordinarySourceFree
+  // Outside staging no organization source exists to rehearse, so setup
+  // completes source-free; only staging proves its synthetic canary or fixtures.
+  const canaryNotRequired = nextStep === "ready_to_start" &&
+    setup.manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN;
+  const terminalStep: OrganizationAuthoritySetupNextStep = canary.complete || canaryNotRequired
     ? "complete"
     : nextStep;
-  const canaryStatus = ordinarySourceFree ? "not_required" : terminalStep === "complete"
+  const canaryStatus = canaryNotRequired ? "not_required" : terminalStep === "complete"
     ? "complete"
     : nextStep === "ready_to_start"
       ? "not_complete"

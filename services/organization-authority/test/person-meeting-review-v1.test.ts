@@ -12,7 +12,7 @@ describe('in-app meeting approval through the shared processing and record path'
       expect(f.db.prepare('SELECT count(*) FROM authority_person_meeting_approval_actions_v1').pluck().get()).toBe(1);
       observed = true;
       throw new Error('wake unavailable');
-    } });
+    } }, f.source_key);
     expect(review.resolve(f.request, () => f.actor).status).toBe('publishing');
     expect(observed).toBe(true);
     await review.processing.recoverV4Appends(new AbortController().signal);
@@ -23,7 +23,7 @@ describe('in-app meeting approval through the shared processing and record path'
     f.request = { ...f.request, share_transcript: share };
     expect(() => f.review.resolve(f.request, () => ({ ...f.actor, membership_id: 'mem_someone_else' }))).toThrow('not available');
     expect(f.review.resolve(f.request, () => f.actor).status).toBe('publishing');
-    const resumed = await createPersonMeetingReviewV1(f.db, f.context);
+    const resumed = await createPersonMeetingReviewV1(f.db, f.context, f.source_key);
     await resumed.processing.recoverV4Appends(new AbortController().signal);
     expect(resumed.resolve(f.request, () => f.actor).status).toBe('approved');
     await resumed.processing.recoverV4Appends(new AbortController().signal);
@@ -40,7 +40,7 @@ describe('in-app meeting approval through the shared processing and record path'
     const interrupted = await createPersonMeetingReviewV1(f.db, { ...f.context, record_append: { async append(input) {
       await f.context.record_append.append(input);
       throw new Error('interrupted after signed append');
-    } } });
+    } } }, f.source_key);
     interrupted.resolve(f.request, () => f.actor);
     await expect(interrupted.processing.recoverV4Appends(new AbortController().signal)).rejects.toThrow('interrupted');
     expect(f.db.prepare('SELECT receipt_json FROM authority_person_meeting_approval_actions_v1').pluck().get()).toBeNull();

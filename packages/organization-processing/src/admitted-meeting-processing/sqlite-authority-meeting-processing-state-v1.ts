@@ -38,12 +38,6 @@ import type {
   MeetingProcessingCandidateV1,
   AuthorityMeetingProcessingStateV1,
 } from "./meeting-processing-cycle-v1.js";
-import {
-  assertStagingSyntheticMeetingCanary,
-  isStagingSyntheticMeetingCanary,
-  stagingSyntheticMeetingCanaryCursor,
-  type StagingSyntheticMeetingCanaryInputV1,
-} from "./staging-synthetic-meeting-canary-v1.js";
 
 interface AdmissionRow {
   readonly source_adapter_id: string;
@@ -168,7 +162,8 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
      */
     expectedProcessorAdapterId: string,
     now: () => string = () => new Date().toISOString(),
-    private readonly sourceKey: string = '1',
+    /** The personal source this state reads and writes; every source names its own key. */
+    private readonly sourceKey: string,
     private readonly requireSourceCurrent: () => void = () => {},
   ) {
     if (expectedProcessorAdapterId.trim().length === 0) {
@@ -249,29 +244,6 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
   async stageCandidate(
     input: MeetingProcessingCandidateSnapshotInputV1,
   ): Promise<MeetingProcessingCandidateV1> {
-    return this.stageCandidateInternal(input);
-  }
-
-  /**
-   * The only non-provider intake path. It is intentionally a separate,
-   * conspicuously named operation so ordinary source processing cannot ever
-   * submit arbitrary meetings under the staging exception.
-   */
-  async stageSyntheticCanaryCandidate(
-    input: MeetingProcessingCandidateSnapshotInputV1,
-    canary: StagingSyntheticMeetingCanaryInputV1,
-  ): Promise<MeetingProcessingCandidateV1> {
-    assertStagingSyntheticMeetingCanary(input.meeting, canary);
-    return this.stageCandidateInternal(
-      input,
-      stagingSyntheticMeetingCanaryCursor(input.meeting, canary),
-    );
-  }
-
-  private async stageCandidateInternal(
-    input: MeetingProcessingCandidateSnapshotInputV1,
-    syntheticCanaryCursor?: string,
-  ): Promise<MeetingProcessingCandidateV1> {
     return this.database.transaction(() => {
       this.requireSourceCurrent();
       const admission = this.admission();
@@ -302,16 +274,12 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           "meeting-processing candidate differs from the current admitted source state",
         );
       }
-      if (syntheticCanaryCursor === undefined) {
-        assertCanonicalMeetingDocument(input.meeting, {
-          kind: "meeting-source",
-          adapter_id: current.source.adapter_id,
-          instance_id: current.source.instance_id,
-          version: current.source.version,
-        });
-      } else {
-        assertStagingSyntheticMeetingCanary(input.meeting);
-      }
+      assertCanonicalMeetingDocument(input.meeting, {
+        kind: "meeting-source",
+        adapter_id: current.source.adapter_id,
+        instance_id: current.source.instance_id,
+        version: current.source.version,
+      });
       assertCanonicalDecisionSet(input.decisions, input.meeting, {
         kind: "decision-processor",
         adapter_id: current.processor.adapter_id,
@@ -404,7 +372,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           input.review_policy.policy_consequence_text,
           input.review_policy.policy_consequence_sha256,
           disposition,
-          syntheticCanaryCursor ?? current.source.cursor,
+          current.source.cursor,
           canonicalSha256(input.meeting),
           meetingJson,
           canonicalSha256(input.decisions),
@@ -825,21 +793,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     ) {
       throw new Error("frozen candidate snapshot digest is invalid");
     }
-    const syntheticCanary = isStagingSyntheticMeetingCanary(
-      meeting,
-      row.source_cursor,
-    );
     const admission: AdmittedMeetingProcessingAdmissionV1 = {
       source: {
-        adapter_id: syntheticCanary
-          ? meeting.provenance.source.adapter_id
-          : row.source_adapter_id,
-        instance_id: syntheticCanary
-          ? meeting.provenance.source.instance_id
-          : row.source_instance_id,
-        version: syntheticCanary
-          ? meeting.provenance.source.version
-          : row.source_adapter_version,
+        adapter_id: row.source_adapter_id,
+        instance_id: row.source_instance_id,
+        version: row.source_adapter_version,
         cursor: row.source_cursor,
         cutoff_at: row.cutoff_at,
       },
@@ -850,24 +808,17 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
         configuration_sha256: row.processor_configuration_sha256,
       },
     };
-    if (syntheticCanary) {
-      assertStagingSyntheticMeetingCanary(meeting);
-      if (admission.processor.adapter_id !== this.expectedProcessorAdapterId) {
-        throw new Error("admission processor differs from its configured processor");
-      }
-    } else {
-      assertAdmissionSnapshot(
-        admission,
-        this.sourceCursorPolicy,
-        this.expectedProcessorAdapterId,
-      );
-      assertCanonicalMeetingDocument(meeting, {
-        kind: "meeting-source",
-        adapter_id: admission.source.adapter_id,
-        instance_id: admission.source.instance_id,
-        version: admission.source.version,
-      });
-    }
+    assertAdmissionSnapshot(
+      admission,
+      this.sourceCursorPolicy,
+      this.expectedProcessorAdapterId,
+    );
+    assertCanonicalMeetingDocument(meeting, {
+      kind: "meeting-source",
+      adapter_id: admission.source.adapter_id,
+      instance_id: admission.source.instance_id,
+      version: admission.source.version,
+    });
     assertCanonicalDecisionSet(decisions, meeting, {
       kind: "decision-processor",
       adapter_id: admission.processor.adapter_id,

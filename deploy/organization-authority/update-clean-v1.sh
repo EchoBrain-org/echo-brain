@@ -163,7 +163,7 @@ verify_candidate_state_lineage() {
     --security-opt no-new-privileges --user "$runtime_identity" --workdir /app \
     --entrypoint node \
     --mount "type=bind,src=$STATE_DIR,dst=/echo-clean/state,readonly" \
-    "$image" --input-type=module -e 'import { verifyAuthorityStateLineage } from "./packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js"; import { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } from "./providers/openrouter/dist/verify-openrouter-decision-processor-admission-v1.js"; verifyAuthorityStateLineage("/echo-clean/state"); verifyPersistedOpenRouterDecisionProcessorAdmissionV1("/echo-clean/state");' || \
+    "$image" --input-type=module -e 'import { verifyAuthorityStateLineage } from "./packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js"; verifyAuthorityStateLineage("/echo-clean/state");' || \
     fail 'candidate Authority image rejected persisted state lineage; state is never migrated, so with no live users use onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users for fresh state'
 }
 

@@ -6,7 +6,7 @@ import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organizatio
 import { bindApprovalWorkflowStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1';
 import { applyOrganizationRecordLogBaselineV4, OrganizationRecordAppenderV4, createRecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { testAuthority } from '../../../../packages/organization-protocol/test/fixtures/record-v4-fixture.js';
-import { database as sourceFixture, databases as fixtures, decisions as fixtureDecisions, fixtureCursorPolicy, meeting as fixtureMeeting, REVIEW_POLICY } from '../../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
+import { database as sourceFixture, databases as fixtures, decisions as fixtureDecisions, FIXTURE_SOURCE_KEY, fixtureCursorPolicy, meeting as fixtureMeeting, REVIEW_POLICY } from '../../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
 import type { ApprovalWorkflowContextV1 } from '@echo-brain/organization-processing/ports/approval-workflow-bundle-v1';
 import { createPersonMeetingReviewV1, type PersonMeetingReviewActionV1 } from '../../src/composition/person-meeting-review-v1.js';
 import { createPersonMeetingApprovalPolicyProjectorV1 } from '../../src/composition/person-meeting-approval-projection-v1.js';
@@ -21,7 +21,7 @@ export async function personMeetingReviewFixture(project = false): Promise<{
   db: Database.Database; record: Database.Database;
   actor: { organization_id: string; principal_id: string; membership_id: string; authorization_sha256: `sha256:${string}` };
   review: Awaited<ReturnType<typeof createPersonMeetingReviewV1>>;
-  request: PersonMeetingReviewActionV1; context: ApprovalWorkflowContextV1;
+  request: PersonMeetingReviewActionV1; context: ApprovalWorkflowContextV1; source_key: string;
 }> {
   const authority = testAuthority();
   const db = new Database(':memory:'); db.pragma('foreign_keys=ON'); opened.push(db); applyAuthorityBaselineV12(db);
@@ -36,7 +36,7 @@ export async function personMeetingReviewFixture(project = false): Promise<{
   const coordinates = { authority_id: authority.descriptor.authority_id, organization_id: actor.organization_id, state_lineage_id: 'lineage-test' };
   record.prepare('INSERT INTO organization_record_log_metadata VALUES (1,?,?,?,?)').run(coordinates.authority_id, coordinates.organization_id, coordinates.state_lineage_id, '2026-10-06T00:00:00.000Z');
   const append = new OrganizationRecordAppenderV4(record, coordinates, createRecordPolicyFactProjectorRegistryV1([createPersonMeetingApprovalPolicyProjectorV1()]));
-  const state = new SqliteAuthorityMeetingProcessingStateV1(db, fixtureCursorPolicy, 'llm');
+  const state = new SqliteAuthorityMeetingProcessingStateV1(db, fixtureCursorPolicy, 'llm', undefined, FIXTURE_SOURCE_KEY);
   const admission = await state.readAdmission();
   new SqliteSourceAdmissionStoreV1(db).admit({ source: meetingSourceEnvelopeV1(meeting), scope: { organization_id: actor.organization_id,
     custody_ref: `person:${actor.membership_id}`, access_policy_ref: `person:${actor.membership_id}`, analysis_policy: 'automatic' } });
@@ -45,10 +45,10 @@ export async function personMeetingReviewFixture(project = false): Promise<{
   const context = { coordinates, signer: { inspect: async () => authority.descriptor, sign: authority.sign },
     record_append: append, next_envelope_id: () => 'envelope-person-review',
     state: bindApprovalWorkflowStateV1(state, () => { if (db.inTransaction) throw new Error('Shared approval port called inside a transaction'); }) };
-  const review = await createPersonMeetingReviewV1(db, context);
+  const review = await createPersonMeetingReviewV1(db, context, FIXTURE_SOURCE_KEY);
   await review.stager.stage({ candidate, admission, meeting, decisions });
   const frozen = state.readFrozenCandidateForApproval(candidate.approval_id)!;
   const request = { command_id: 'review-test', approval_id: candidate.approval_id, snapshot_sha256: frozen.approved_snapshot_sha256! as `sha256:${string}`,
     action: 'approve' as const, project_id: project ? 'prj_00000000-0000-4000-8000-000000000005' : null, share_transcript: false };
-  return { db, record, actor, review, request, context };
+  return { db, record, actor, review, request, context, source_key: FIXTURE_SOURCE_KEY };
 }
