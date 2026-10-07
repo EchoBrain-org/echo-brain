@@ -215,13 +215,13 @@ function alone(input: { readonly bundle: AgenticEvidenceBundleV1; readonly repli
   });
   const renderer = createAskRendererV1({
     response_version: input.version, answer_prompt: input.answer_prompt,
-    answer_budget: agenticAskContextBudgetBytesV1(undefined, input.answer_prompt, AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer),
     source_catalog: input.header.source_catalog, scope: input.header.scope,
     context: { ...(input.header.asked_by === undefined ? {} : { asked_by: input.header.asked_by }), today: input.header.today },
     desk_scope: input.bundle.gathered_for.scope,
   });
   const render = (question: string) => renderer.render({
     bundle: input.bundle, trigger_input: { question }, gate, remaining: () => input.remaining ?? 30_000, signal: new AbortController().signal,
+    prompt_budget: system => agenticAskContextBudgetBytesV1(undefined, system, AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer),
     on_context: selected => { trace.push(`context:${selected.join(",")}`); },
   });
   return { render, trace, inputs };
@@ -243,6 +243,8 @@ describe("Ask renderer: the bundle alone", () => {
     expect(rendered.result.writer_evidence).toEqual(baseline.writer_evidence);
     expect(JSON.stringify(rendered.result.response)).toBe(JSON.stringify(baseline.response));
     expect(canonicalSha256(rendered.result.response)).toBe(baseline.audit.response_sha256);
+    // The fingerprints the release step audits.
+    expect(rendered.digests).toEqual({ answer_sha256: baseline.audit.answer_sha256, response_sha256: baseline.audit.response_sha256 });
     expect(rendered.outcome).toBe(baseline.audit.outcome);
     // Cited items are the response's citations, in order.
     expect(rendered.cited).toHaveLength(baseline.audit.citation_count);

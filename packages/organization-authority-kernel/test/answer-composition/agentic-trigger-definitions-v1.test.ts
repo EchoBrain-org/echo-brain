@@ -4,6 +4,7 @@ import { STEP_PROMPT, TASK_RULE_PROMPT } from "../../src/answer-composition/agen
 import { agenticStartingSlotV1, fillAgenticTaskV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_BUDGETS_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1, AGENTIC_TRIGGER_NAMES_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
+import { IMPACT_CARD_RENDERER_V1 } from "../../src/answer-composition/renderers/impact-card-renderer-v1.js";
 
 const record = { kind: "approved_record", atom_id: canonicalSha256("atom"), record_sha256: canonicalSha256("record"), policy_id: "organization-member-readable-person-v2" };
 const ticket = { kind: "ticket", tool_id: "jira", external_scope_id: "cloud-1", ticket_id: "10046", permalink: "https://therm.example.test/browse/THERM-46", text_sha256: canonicalSha256("ticket") };
@@ -32,6 +33,10 @@ describe("trigger definitions", () => {
     expect(definition("ask")).toMatchObject({ acts_as: "requester", scope: "requested" });
     expect(definition("sweep")).toMatchObject({ acts_as: "requester", scope: "requested" });
     expect(definition("approved_record")).toMatchObject({ acts_as: "approver", scope: "record_project" });
+    // The approved record renders an impact card; Ask's writer is composed by the runner, and Sweep is research only.
+    expect(definition("approved_record").renderer).toBe(IMPACT_CARD_RENDERER_V1);
+    expect(definition("ask").renderer).toBeUndefined();
+    expect(definition("sweep").renderer).toBeUndefined();
   });
 
   it("runs each brief on its definition's budget profile, from one label-to-budget table", () => {

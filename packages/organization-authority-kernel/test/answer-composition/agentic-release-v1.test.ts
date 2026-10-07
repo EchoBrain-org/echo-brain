@@ -209,10 +209,11 @@ function release(options: { readonly fence_after_audit: boolean; readonly on_app
     generation_adapter_id: "fixture", gate_stats: () => stats, background: false, receipts: [canonicalSha256({ receipt: 1 })], rounds: 3, fallbacks: 1,
   };
   const response: PersonAnswerResponseV4 = { schema_version: 4, kind: "echo-clean-person-answer-v4", scope: { kind: "global" }, outcome: "answered", parts: [{ question: "Q", status: "answered", statements: [] }], citations: [] };
+  const digests = { answer_sha256: canonicalSha256({ answer: "fixture" }), response_sha256: canonicalSha256({ response: "fixture" }) };
   const run = () => releaseAgenticResultV1({
     ...context,
     desk: { revalidate: () => { trace.push("revalidate"); fences += 1; return options.fence?.(fences) ?? Promise.resolve({ checked_at: `2026-10-06T00:00:0${fences}.000Z` }); } },
-    outcome: "answered", citation_count: 2, result: response, digests: "from_response",
+    outcome: "answered", citation_count: 2, result: response, digests,
     fence_after_audit: options.fence_after_audit, signal: controller.signal,
     assert_live: () => { if (controller.signal.aborted) throw new DOMException("Ask cancelled", "AbortError"); },
     on_checked: at => { checked.push(at); }, on_audited: () => { audited += 1; }, now: () => 0,
@@ -255,13 +256,13 @@ describe("release step", () => {
     expect(r.audited()).toBe(0);
   });
 
-  it("hashes the answer and the whole response when digests come from the response", async () => {
+  it("audits the fingerprints of the result it is given", async () => {
     const r = release({ fence_after_audit: false });
     await r.run();
     expect(r.entries[0]).toMatchObject({
       outcome: "answered", citation_count: 2, rounds: 3, model_calls: 2, repairs: 1, fallbacks: 1,
       prompt_sha256: canonicalSha256({ generation: "fixture", invocations: [canonicalSha256({ call: 1 }), canonicalSha256({ call: 2 })] }),
-      answer_sha256: canonicalSha256({ direct: null, parts: r.response.parts }), response_sha256: canonicalSha256(r.response),
+      answer_sha256: canonicalSha256({ answer: "fixture" }), response_sha256: canonicalSha256({ response: "fixture" }),
       generation_usage: { input_tokens: null, output_tokens: null, total_tokens: null }, finish_reason_counts: { stop: 1, length: 1 },
     });
     expect("trigger" in r.entries[0]! || "budget" in r.entries[0]!).toBe(false);

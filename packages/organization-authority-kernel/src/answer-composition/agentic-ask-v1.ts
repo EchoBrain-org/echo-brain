@@ -25,7 +25,7 @@ import {
   STEP_PROMPT,
   TASK_RULE_PROMPT,
 } from "./agentic-ask-v1-model-protocol.js";
-import type { AgenticBriefV1 } from "./agentic-brief-v1.js";
+import { agenticTaskSlotsFitV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
 import {
   AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
@@ -38,6 +38,7 @@ import {
   type AgenticAskModelRoleV1,
 } from "./agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPortV1, type AgenticAuditContextV1 } from "./agentic-release-v1.js";
+import type { AgenticRendererV1, AgenticRenderOutputV1 } from "./agentic-renderer-v1.js";
 import { createAgenticResearchLoopV1, type AgenticResearchCatalogEntryV1, type AgenticResearchCatalogV1, type AgenticResearchSourceV1 } from "./agentic-research-loop-v1.js";
 import { createAskRendererV1 } from "./renderers/ask-renderer-v1.js";
 import {
@@ -76,8 +77,10 @@ export {
  * Agentic Ask (RFC-0003): the research loop (agentic-research-loop-v1.ts:
  * three read tools, search, open and list, plus `finish`), then Ask's
  * renderer (renderers/ask-renderer-v1.ts): one answer call over the evidence
- * bundle and a code-owned layout. This file is the request runner: request
- * setup, the model gate, the renderer call, release and the terminal audits.
+ * bundle and a code-owned layout. A task brief runs research only, or with
+ * the renderer its trigger definition names. This file is the request runner:
+ * request setup, the model gate, the renderer call, release and the terminal
+ * audits.
  */
 export const AGENTIC_ASK_MAX_STEPS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_rounds;
 /** Request-wide model-call budget, including retries and repairs. */
@@ -139,6 +142,12 @@ export interface AgenticResearchInputV1 {
   readonly signal?: AbortSignal;
 }
 
+/** A task brief's run with its trigger definition's renderer, which receives the trigger's own input. */
+export interface AgenticRenderedResearchInputV1<In, Out> extends AgenticResearchInputV1 {
+  readonly renderer: AgenticRendererV1<In, Out>;
+  readonly trigger_input: In;
+}
+
 const FINISH_REASONS: readonly StructuredGenerationFinishReasonV1[] = ["stop", "length", "content_filter", "error", "other"];
 
 /** A directory name the prompts may carry: one trimmed line of 1 to 200 characters, or none. */
@@ -155,7 +164,20 @@ function runnableBrief(brief: AgenticBriefV1): AgenticBriefV1 | null {
   const goal = brief.goal;
   if (goal.kind === "question" ? questionText(goal.question) === null : goal.kind !== "task" || typeof goal.task !== "string" || goal.task.trim().length === 0 ||
       (goal.data !== undefined && !(Array.isArray(goal.data) && goal.data.every(value => typeof value === "string")))) return null;
-  return Array.isArray(brief.starting) && brief.starting.every(start => object(start.citation) !== null && (start.if_unreadable === "fail" || start.if_unreadable === "report")) ? brief : null;
+  if (!Array.isArray(brief.starting) || !brief.starting.every(start => object(start.citation) !== null && (start.if_unreadable === "fail" || start.if_unreadable === "report"))) return null;
+  // A task slot with nothing to fill it is a definition bug, refused before any audited read.
+  return goal.kind === "question" || agenticTaskSlotsFitV1(goal.task, brief.starting.length, goal.data?.length ?? 0) ? brief : null;
+}
+/** A research-only run releases its trimmed bundle; the outcome counts the checklist's found needs. */
+function researchOnlyOutput(bundle: AgenticEvidenceBundleV1, researched: AgenticResearchResultV1): AgenticRenderOutputV1<AgenticResearchResultV1> {
+  const incomplete = !bundle.stop.completed;
+  const needs = bundle.plan.flatMap(part => part.needs);
+  const found = needs.filter(value => value.status === "found").length;
+  return {
+    result: researched, cited: bundle.items.filter(item => item.cited_by_plan).map(item => item.short), fallbacks: 0,
+    outcome: found === 0 ? (incomplete ? "partial" : "not_found") : found === needs.length && !incomplete ? "answered" : "partial",
+    digests: { answer_sha256: canonicalSha256({ trigger: bundle.trigger, plan: researched.plan }), response_sha256: canonicalSha256(researched) },
+  };
 }
 /** Ask's brief: the person's question as asked, no starting evidence, and the small-scope preload. */
 function questionBrief(question: string, budget: AgenticResearchBudgetV1): AgenticBriefV1 {
@@ -198,6 +220,7 @@ export function createAgenticResearchV1(options: CreateAgenticAskV2Options) {
   return createAgenticAskCore(options, 6) as unknown as {
     answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }): Promise<AgenticAskWithResearchV1<PersonAnswerResponseV6>>;
     research(input: AgenticResearchInputV1): Promise<AgenticResearchResultV1>;
+    renderWithResearch<In, Out>(input: AgenticRenderedResearchInputV1<In, Out>): Promise<{ readonly rendered: Out; readonly research: AgenticResearchResultV1 }>;
     researchBundle(input: AgenticResearchInputV1): Promise<AgenticEvidenceBundleV1>;
   };
 }
@@ -247,16 +270,19 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   /** Every task-form goal adds the one shared task rule; Ask's question keeps its prompt exactly. */
   const taskPrompt = `${stepPrompt}\n\n${TASK_RULE_PROMPT}`;
   const taskBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, taskPrompt, OUTPUT_TOKENS.step);
-  const answerBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, answerPrompt, OUTPUT_TOKENS.answer);
+  /** What a renderer's user prompt may fill beside its system prompt. */
+  const promptBudget = (system: string) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, system, OUTPUT_TOKENS.answer);
   /**
    * One agentic request: shared session state (deadline, model-call budget,
-   * access fences, audit), the research loop, then Ask's renderer and the
-   * shared release step.
+   * access fences, audit), the research loop, then a renderer (Ask's for a
+   * question, the trigger's own for a task, or none) and the shared release step.
    */
-  type RequestOutput = { readonly response?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6; readonly bundle: AgenticEvidenceBundleV1; readonly research: AgenticResearchResultV1; readonly writer_evidence: readonly string[] };
-  const request = async (input: AgenticResearchInputV1): Promise<RequestOutput> => {
+  type RequestOutput = { readonly response?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6; readonly rendered?: unknown; readonly bundle: AgenticEvidenceBundleV1; readonly research: AgenticResearchResultV1; readonly writer_evidence: readonly string[] };
+  const request = async (input: AgenticResearchInputV1, render?: Pick<AgenticRenderedResearchInputV1<unknown, unknown>, "renderer" | "trigger_input">): Promise<RequestOutput> => {
       const brief = runnableBrief(input.brief);
       if (brief === null) throw new AgenticAskOutputErrorV1(input.brief.goal.kind === "question" ? "question is invalid" : "research goal is invalid");
+      // Ask's question has Ask's writer; only a task brief takes its trigger's renderer.
+      if (render !== undefined && brief.goal.kind === "question") throw new AgenticAskOutputErrorV1("research goal is invalid");
       const { goal, budget } = brief;
       const researchOnly = goal.kind !== "question";
       const beyondLive = budget.deadline_ms > AGENTIC_RESEARCH_LIVE_BUDGET_V1.deadline_ms || budget.max_rounds > AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_rounds || budget.max_model_calls > AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
@@ -361,20 +387,21 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         const bundle: AgenticEvidenceBundleV1 = Object.freeze({ schema_version, kind, trigger: input.trigger, ...gathered });
         const researched = trimAgenticEvidenceBundleV1(bundle);
         if (researchOnly) {
-          // Research-only triggers: no writer runs; the trimmed bundle goes through the shared release step.
+          // A task brief: its trigger's renderer, which reads only the bundle, or research only.
+          // Either result goes through the shared release step.
           phase = "final";
-          const researchIncomplete = !bundle.stop.completed;
-          const needs = bundle.plan.flatMap(part => part.needs);
-          const found = needs.filter(value => value.status === "found").length;
-          const outcome = found === 0 ? (researchIncomplete ? "partial" as const : "not_found" as const) : found === needs.length && !researchIncomplete ? "answered" as const : "partial" as const;
+          const output = render === undefined ? researchOnlyOutput(bundle, researched) : await render.renderer.render({
+            bundle, trigger_input: render.trigger_input, gate, signal: activeSignal, prompt_budget: promptBudget,
+            remaining: () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
+          });
+          writerFallbacks += output.fallbacks;
           await releaseAgenticResultV1({
-            ...auditContext(), desk, outcome, citation_count: bundle.items.filter(item => item.cited_by_plan).length, result: researched,
-            digests: { answer_sha256: canonicalSha256({ trigger: input.trigger, plan: researched.plan }), response_sha256: canonicalSha256(researched) },
+            ...auditContext(), desk, outcome: output.outcome, citation_count: output.cited.length, result: output.result, digests: output.digests,
             fence_after_audit: true, signal: activeSignal, assert_live: assertLive, now,
             on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
           });
           clearTimeout(deadlineTimer);
-          return Object.freeze({ bundle, research: researched, writer_evidence: Object.freeze([]) });
+          return Object.freeze({ ...(render === undefined ? {} : { rendered: output.result }), bundle, research: researched, writer_evidence: Object.freeze([]) });
         }
 
         // Research is over: its desk time is the journey's retrieval stage and its step calls the planner stage.
@@ -386,12 +413,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
 
         // ---- Ask's renderer: the writer and the layout read only the bundle ----
         const writer = createAskRendererV1({
-          response_version: responseVersion, answer_prompt: answerPrompt, answer_budget: answerBudget,
+          response_version: responseVersion, answer_prompt: answerPrompt,
           source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
         });
         const ticketsAmong = (shorts: readonly string[]) => shorts.filter(short => bundle.items.find(item => item.short === short)?.item.citation.kind === "ticket").length;
         const rendered = await writer.render({
-          bundle, trigger_input: { question: goal.question }, gate, signal: activeSignal,
+          bundle, trigger_input: { question: goal.question }, gate, signal: activeSignal, prompt_budget: promptBudget,
           // The release step keeps its reserve after the writer.
           remaining: () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
           on_context: selected => {
@@ -408,7 +435,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         phase = "final";
         // V5/V6 keep the access check after the audit write; V4 never had one.
         await releaseAgenticResultV1({
-          ...auditContext(), desk, outcome: rendered.outcome, citation_count: rendered.cited.length, result: validated, digests: "from_response",
+          ...auditContext(), desk, outcome: rendered.outcome, citation_count: rendered.cited.length, result: validated, digests: rendered.digests,
           fence_after_audit: tickets, signal: activeSignal, assert_live: assertLive, now,
           on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
           on_stage: event => report(event.stage === "revalidation"
@@ -449,6 +476,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     /** One trigger's brief: a task brief runs research only and its trimmed result is audited and returned. */
     async research(input: AgenticResearchInputV1): Promise<AgenticResearchResultV1> {
       return (await request(input)).research;
+    },
+    /** A task brief with its trigger's renderer: the released result, and the research it read (for the evaluation). */
+    async renderWithResearch<In, Out>(input: AgenticRenderedResearchInputV1<In, Out>): Promise<{ readonly rendered: Out; readonly research: AgenticResearchResultV1 }> {
+      const { renderer, trigger_input: triggerInput, ...run } = input;
+      const output = await request(run, { renderer: renderer as AgenticRendererV1<unknown, unknown>, trigger_input: triggerInput });
+      return Object.freeze({ rendered: output.rendered as Out, research: output.research });
     },
     /** The same run, returning the full server-side evidence bundle (renderers and tests). */
     async researchBundle(input: AgenticResearchInputV1): Promise<AgenticEvidenceBundleV1> {

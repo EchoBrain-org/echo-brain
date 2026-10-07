@@ -1,6 +1,7 @@
 import type { PersonAnswerResponseV4 } from "@echo-brain/organization-api";
 import type { AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
 import type { AgenticModelGateV1 } from "./agentic-model-gate-v1.js";
+import type { AgenticReleaseDigestsV1 } from "./agentic-release-v1.js";
 
 /**
  * A renderer (research trigger contract v1, section 3) turns the full
@@ -19,6 +20,8 @@ export interface AgenticRenderInputV1<In> {
   readonly gate: AgenticModelGateV1;
   /** Milliseconds the renderer may still spend. The runner has already set aside the release step's time. */
   readonly remaining: () => number;
+  /** Bytes a user prompt may fill beside `system_prompt` and an answer reply in the model's context window. */
+  readonly prompt_budget: (system_prompt: string) => number;
   /** The request's signal: aborted when the caller cancels or the deadline passes. */
   readonly signal: AbortSignal;
   /**
@@ -36,6 +39,8 @@ export interface AgenticRenderOutputV1<Out> {
   readonly outcome: PersonAnswerResponseV4["outcome"];
   /** Model failures the renderer recovered from with its no-model fallback. */
   readonly fallbacks: number;
+  /** Fingerprints of the result, which the release step's audit binds. */
+  readonly digests: AgenticReleaseDigestsV1;
 }
 
 export interface AgenticRendererV1<In, Out> {

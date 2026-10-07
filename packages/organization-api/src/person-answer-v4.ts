@@ -349,6 +349,8 @@ export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerReque
   return boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'mine') ? { mine: true as const } : {}) }, 'Ask request');
 }
 
+/** One V6 response citation, as the impact card (person-impact-card-v1.ts) cites items too. */
+export function validatePersonAnswerCitationV6(value: unknown): PersonAnswerCitationV6 { return answerCitation(value, 6); }
 export function validatePersonAnswerResponseV4(value: unknown): PersonAnswerResponseV4 { return answerResponse(value, 4) as PersonAnswerResponseV4; }
 export function validatePersonAnswerResponseV5(value: unknown): PersonAnswerResponseV5 { return answerResponse(value, 5) as PersonAnswerResponseV5; }
 export function validatePersonAnswerResponseV6(value: unknown): PersonAnswerResponseV6 { return answerResponse(value, 6) as PersonAnswerResponseV6; }

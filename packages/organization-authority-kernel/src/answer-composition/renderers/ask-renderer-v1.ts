@@ -1,3 +1,4 @@
+import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type {
   PersonAnswerPartV4,
   PersonAnswerResponseV4,
@@ -14,7 +15,7 @@ import {
   type Answer,
 } from "../agentic-ask-v1-model-protocol.js";
 import { compactAndValidateAgenticAskResponseV1 } from "../agentic-ask-v1-response.js";
-import { describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
+import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
 import { AGENTIC_ASK_MIN_ANSWER_MS_V1, isAbort, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
 import type { AgenticRendererV1, AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 
@@ -48,8 +49,6 @@ export interface CreateAskRendererV1Options {
   readonly response_version: 4 | 5 | 6;
   /** The writer's system prompt, with the live-source guidance when live sources are available. */
   readonly answer_prompt: string;
-  /** Bytes the writer's user prompt may fill in the model's context window. */
-  readonly answer_budget: number;
   /** The sources research could read, as the research model saw them. */
   readonly source_catalog: readonly Readonly<Record<string, unknown>>[];
   /** What the writer is told the desk reads. */
@@ -94,7 +93,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           notices: [...bundle.coverage.notices], omitted_evidence_items: bundle.items.filter(entry => entry.item.text !== undefined).length,
         },
       };
-      const writerBudget = Math.max(0, options.answer_budget - bytes(JSON.stringify({ ...answerContext, evidence: [] })));
+      const writerBudget = Math.max(0, input.prompt_budget(options.answer_prompt) - bytes(JSON.stringify({ ...answerContext, evidence: [] })));
       const cited = [...citedShorts()].map(short => entryOf(short)!);
       const evidence: Entry[] = []; let evidenceBytes = 0;
       const admit = (entry: Entry) => {
@@ -179,7 +178,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...(draft.gap === undefined ? {} : { gap: draft.gap }),
           ...(draft.records === undefined ? {} : { records: Object.freeze(draft.records.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))) }),
         })]),
-        citations: Object.freeze(anyEvidence ? used.map(entry => Object.freeze({ citation: entry.item.citation, kind: entry.item.kind, label: entry.item.label, visibility: entry.item.visibility, ...(entry.item.ref === undefined ? {} : { ref: entry.item.ref }) })) : []),
+        citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV1(entry.item)) : []),
         ...(bundle.coverage.notices.length === 0 ? {} : { notice: bundle.coverage.notices.join(" ") }),
       });
       const validated: AskResponse = responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
@@ -191,6 +190,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         cited: Object.freeze(used.slice(0, validated.citations.length).map(entry => entry.short)),
         outcome: validated.outcome,
         fallbacks,
+        // Ask's answer is its direct statement and parts.
+        digests: Object.freeze({ answer_sha256: canonicalSha256({ direct: validated.direct ?? null, parts: validated.parts }), response_sha256: canonicalSha256(validated) }),
       });
     },
   });

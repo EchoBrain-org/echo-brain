@@ -1,0 +1,530 @@
+{
+  "assessed_card": {
+    "calls": 4,
+    "prompt_sha256": "sha256:ee31736fc653590e58d209292e00641086763915655dab5a15216ea97bd70572",
+    "answer_sha256": "sha256:db9b589b99afdf4498a2079ccb085e63f3e56aab776d0cce1ce3f32431ac8fee",
+    "response_sha256": "sha256:ffdf10a5b3fc2870f388f82efa378d03e663314d0c3a135d871668631400b0a3",
+    "model_inputs_sha256": "sha256:7df1293a0a4bfe2413f81ce4a27ea0f05b97cda869efcad552e082de9d4c36cd",
+    "outcome": "answered",
+    "audit_sha256": "sha256:03323f52b9584b9aff0310d5601f9e8b5cf8ed5340c9d74c359d78a184c2034a",
+    "card": {
+      "decided": [
+        {
+          "text": "The display shows two decimals (0.01 °C) from DVT.",
+          "citation_index": 0
+        },
+        {
+          "text": "Mara updates the PRD display section by Oct 10.",
+          "citation_index": 1
+        }
+      ],
+      "affected": [
+        {
+          "citation_index": 2,
+          "says_now": "THERM-46 formats the reading with one decimal for the Oct 15 DVT build.",
+          "relation": "conflicts",
+          "owner": "Tobias Lund",
+          "date_at_risk": {
+            "date": "2026-10-15",
+            "milestone": "DVT build"
+          }
+        },
+        {
+          "citation_index": 3,
+          "says_now": "The PRD display section specifies one decimal (0.1 °C).",
+          "relation": "needs_updating"
+        },
+        {
+          "citation_index": 4,
+          "says_now": "TC-D-06 already checks for two decimals.",
+          "relation": "confirms"
+        }
+      ],
+      "unconfirmed": [],
+      "people": [
+        {
+          "name": "Tobias Lund",
+          "items": [
+            2
+          ]
+        }
+      ],
+      "status": "assessed",
+      "citations": [
+        {
+          "citation": {
+            "kind": "approved_record",
+            "atom_id": "sha256:855a7fe3300ca0494db16b470b543337b19d9180106ea089d62c6d9541ec3b10",
+            "record_sha256": "sha256:b7c03f519d036ad590ab54aa5a90ff1fa2efb775401bab3da6508f5e8dac3a8b",
+            "policy_id": "organization-member-readable-person-v2"
+          },
+          "kind": "decision",
+          "label": "Display review",
+          "visibility": "team"
+        },
+        {
+          "citation": {
+            "kind": "approved_record",
+            "atom_id": "sha256:95664be39d929dbe207baf7d9736e23e498389469d6d1e288876469877d51961",
+            "record_sha256": "sha256:b7c03f519d036ad590ab54aa5a90ff1fa2efb775401bab3da6508f5e8dac3a8b",
+            "policy_id": "organization-member-readable-person-v2"
+          },
+          "kind": "action",
+          "label": "Display review",
+          "visibility": "team"
+        },
+        {
+          "citation": {
+            "kind": "ticket",
+            "tool_id": "jira",
+            "external_scope_id": "cloud-one",
+            "ticket_id": "46",
+            "permalink": "https://tickets.example.test/browse/THERM-46",
+            "text_sha256": "sha256:b8af4250a313611eb53c6379499247e4029c84a5c54eb4f745e6e8b87f6ec554"
+          },
+          "kind": "ticket",
+          "label": "THERM-46: Display firmware",
+          "visibility": "only_me"
+        },
+        {
+          "citation": {
+            "kind": "page",
+            "tool_id": "knowledge",
+            "external_scope_id": "site-one",
+            "page_id": "1441793",
+            "section_id": "s1",
+            "version": "4",
+            "permalink": "https://knowledge.example.test/wiki/pages/1441793",
+            "text_sha256": "sha256:40e078953327fc3f2c770d4092a217237f5e18898289691aac397aea7fb255e3"
+          },
+          "kind": "page",
+          "label": "PRD: Display",
+          "visibility": "only_me"
+        },
+        {
+          "citation": {
+            "kind": "page",
+            "tool_id": "knowledge",
+            "external_scope_id": "site-one",
+            "page_id": "2001",
+            "section_id": "s1",
+            "version": "4",
+            "permalink": "https://knowledge.example.test/wiki/pages/2001",
+            "text_sha256": "sha256:6f53e5645ddb4f53ed0132c51101366f134b9a15e8a0f1d2e97a45f5f17ade81"
+          },
+          "kind": "page",
+          "label": "DVT test plan",
+          "visibility": "only_me"
+        }
+      ]
+    }
+  },
+  "coverage_notes": {
+    "calls": 4,
+    "prompt_sha256": "sha256:6dcdebcd71d6cd2ce865ad20fcddbad1fe8791711f5d71e03127eeee058e7cf6",
+    "answer_sha256": "sha256:db9b589b99afdf4498a2079ccb085e63f3e56aab776d0cce1ce3f32431ac8fee",
+    "response_sha256": "sha256:2d8e6104d02b3e90c24237ba6f5fc4c18ae7cb77039a23c60dc4a01ab471fc3c",
+    "model_inputs_sha256": "sha256:48024188fd66d3b4837f9b1d4c1d7981128cb9d72521dd80e0672864b25de8ef",
+    "outcome": "partial",
+    "audit_sha256": "sha256:0e24e7325bfb09c5d83cb280cb195d727bd4f1fe4e3f4296b88aa3e8a92b45ce",
+    "card": {
+      "decided": [
+        {
+          "text": "The display shows two decimals (0.01 °C) from DVT.",
+          "citation_index": 0
+        },
+        {
+          "text": "Mara updates the PRD display section by Oct 10.",
+          "citation_index": 1
+        }
+      ],
+      "affected": [
+        {
+          "citation_index": 2,
+          "says_now": "THERM-46 formats the reading with one decimal for the Oct 15 DVT build.",
+          "relation": "conflicts",
+          "owner": "Tobias Lund",
+          "date_at_risk": {
+            "date": "2026-10-15",
+            "milestone": "DVT build"
+          }
+        },
+        {
+          "citation_index": 3,
+          "says_now": "The PRD display section specifies one decimal (0.1 °C).",
+          "relation": "needs_updating"
+        },
+        {
+          "citation_index": 4,
+          "says_now": "TC-D-06 already checks for two decimals.",
+          "relation": "confirms"
+        }
+      ],
+      "unconfirmed": [
+        "The tickets list was cut short at 2 items.",
+        "Gate review notes could not be read."
+      ],
+      "people": [
+        {
+          "name": "Tobias Lund",
+          "items": [
+            2
+          ]
+        }
+      ],
+      "status": "assessed",
+      "citations": [
+        {
+          "citation": {
+            "kind": "approved_record",
+            "atom_id": "sha256:855a7fe3300ca0494db16b470b543337b19d9180106ea089d62c6d9541ec3b10",
+            "record_sha256": "sha256:b7c03f519d036ad590ab54aa5a90ff1fa2efb775401bab3da6508f5e8dac3a8b",
+            "policy_id": "organization-member-readable-person-v2"
+          },
+          "kind": "decision",
+          "label": "Display review",
+          "visibility": "team"
+        },
+        {
+          "citation": {
+            "kind": "approved_record",
+            "atom_id": "sha256:95664be39d929dbe207baf7d9736e23e498389469d6d1e288876469877d51961",
+            "record_sha256": "sha256:b7c03f519d036ad590ab54aa5a90ff1fa2efb775401bab3da6508f5e8dac3a8b",
+            "policy_id": "organization-member-readable-person-v2"
+          },
+          "kind": "action",
+          "label": "Display review",
+          "visibility": "team"
+        },
+        {
+          "citation": {
+            "kind": "ticket",
+            "tool_id": "jira",
+            "external_scope_id": "cloud-one",
+            "ticket_id": "46",
+            "permalink": "https://tickets.example.test/browse/THERM-46",
+            "text_sha256": "sha256:b8af4250a313611eb53c6379499247e4029c84a5c54eb4f745e6e8b87f6ec554"
+          },
+          "kind": "ticket",
+          "label": "THERM-46: Display firmware",
+          "visibility": "only_me"
+        },
+        {
+          "citation": {
+            "kind": "page",
+            "tool_id": "knowledge",
+            "external_scope_id": "site-one",
+            "page_id": "1441793",
+            "section_id": "s1",
+            "version": "4",
+            "permalink": "https://knowledge.example.test/wiki/pages/1441793",
+            "text_sha256": "sha256:40e078953327fc3f2c770d4092a217237f5e18898289691aac397aea7fb255e3"
+          },
+          "kind": "page",
+          "label": "PRD: Display",
+          "visibility": "only_me"
+        },
+        {
+          "citation": {
+            "kind": "page",
+            "tool_id": "knowledge",
+            "external_scope_id": "site-one",
+            "page_id": "2001",
+            "section_id": "s1",
+            "version": "4",
+            "permalink": "https://knowledge.example.test/wiki/pages/2001",
+            "text_sha256": "sha256:6f53e5645ddb4f53ed0132c51101366f134b9a15e8a0f1d2e97a45f5f17ade81"
+          },
+          "kind": "page",
+          "label": "DVT test plan",
+          "visibility": "only_me"
+        }
+      ]
+    }
+  },
+  "fallback_after_two_bad_replies": {
+    "calls": 5,
+    "prompt_sha256": "sha256:5d0dc32fb4f89d1e437274b0af610f3b287c8c71df2b2b561c2e8b17a2f0c9de",
+    "answer_sha256": "sha256:b85054662fef3e6f23cd4237b2477252cf1eb19ac1117234233a5d58c1efdd64",
+    "response_sha256": "sha256:977b0d7d7c610172143ce8b43cd7f51163c20c5ce2dbfd43505ea66f3993ac95",
+    "model_inputs_sha256": "sha256:4add19062b064be471c34baedf7c2ecae0d17ac508d76cd1ede1559fa04eca93",
+    "outcome": "partial",
+    "audit_sha256": "sha256:a9354c590d0dc2268055889ac15413b8cae2f5f1aa3ba0f53a5727e68816df91",
+    "card": {
+      "decided": [],
+      "affected": [
+        {
+          "citation_index": 0,
+          "says_now": "THERM-46: Display firmware; status In Progress; due 2026-10-15",
+          "owner": "Tobias Lund"
+        },
+        {
+          "citation_index": 1,
+          "says_now": "PRD: Display"
+        },
+        {
+          "citation_index": 2,
+          "says_now": "DVT test plan"
+        }
+      ],
+      "unconfirmed": [],
+      "people": [
+        {
+          "name": "Tobias Lund",
+          "items": [
+            0
+          ]
+        }
+      ],
+      "status": "not_assessed",
+      "citations": [
+        {
+          "citation": {
+            "kind": "ticket",
+            "tool_id": "jira",
+            "external_scope_id": "cloud-one",
+            "ticket_id": "46",
+            "permalink": "https://tickets.example.test/browse/THERM-46",
+            "text_sha256": "sha256:b8af4250a313611eb53c6379499247e4029c84a5c54eb4f745e6e8b87f6ec554"
+          },
+          "kind": "ticket",
+          "label": "THERM-46: Display firmware",
+          "visibility": "only_me"
+        },
+        {
+          "citation": {
+            "kind": "page",
+            "tool_id": "knowledge",
+            "external_scope_id": "site-one",
+            "page_id": "1441793",
+            "section_id": "s1",
+            "version": "4",
+            "permalink": "https://knowledge.example.test/wiki/pages/1441793",
+            "text_sha256": "sha256:40e078953327fc3f2c770d4092a217237f5e18898289691aac397aea7fb255e3"
+          },
+          "kind": "page",
+          "label": "PRD: Display",
+          "visibility": "only_me"
+        },
+        {
+          "citation": {
+            "kind": "page",
+            "tool_id": "knowledge",
+            "external_scope_id": "site-one",
+            "page_id": "2001",
+            "section_id": "s1",
+            "version": "4",
+            "permalink": "https://knowledge.example.test/wiki/pages/2001",
+            "text_sha256": "sha256:6f53e5645ddb4f53ed0132c51101366f134b9a15e8a0f1d2e97a45f5f17ade81"
+          },
+          "kind": "page",
+          "label": "DVT test plan",
+          "visibility": "only_me"
+        }
+      ]
+    }
+  },
+  "edit_instruction_repaired": {
+    "calls": 5,
+    "prompt_sha256": "sha256:d5cc525839c8ccb8259813d80ae6728e7b4d32f336c7bad79527576e0ee705ea",
+    "answer_sha256": "sha256:db9b589b99afdf4498a2079ccb085e63f3e56aab776d0cce1ce3f32431ac8fee",
+    "response_sha256": "sha256:ffdf10a5b3fc2870f388f82efa378d03e663314d0c3a135d871668631400b0a3",
+    "model_inputs_sha256": "sha256:1a43e8e8e52fc5d25954ef72735388bd3ee359e4ed9d8af89f61bb864fc4ad5c",
+    "outcome": "answered",
+    "audit_sha256": "sha256:220b2695be79abafde8b1e8169fc3122ed14e74bf623c4a5750ad9538ad92cd7",
+    "card": {
+      "decided": [
+        {
+          "text": "The display shows two decimals (0.01 °C) from DVT.",
+          "citation_index": 0
+        },
+        {
+          "text": "Mara updates the PRD display section by Oct 10.",
+          "citation_index": 1
+        }
+      ],
+      "affected": [
+        {
+          "citation_index": 2,
+          "says_now": "THERM-46 formats the reading with one decimal for the Oct 15 DVT build.",
+          "relation": "conflicts",
+          "owner": "Tobias Lund",
+          "date_at_risk": {
+            "date": "2026-10-15",
+            "milestone": "DVT build"
+          }
+        },
+        {
+          "citation_index": 3,
+          "says_now": "The PRD display section specifies one decimal (0.1 °C).",
+          "relation": "needs_updating"
+        },
+        {
+          "citation_index": 4,
+          "says_now": "TC-D-06 already checks for two decimals.",
+          "relation": "confirms"
+        }
+      ],
+      "unconfirmed": [],
+      "people": [
+        {
+          "name": "Tobias Lund",
+          "items": [
+            2
+          ]
+        }
+      ],
+      "status": "assessed",
+      "citations": [
+        {
+          "citation": {
+            "kind": "approved_record",
+            "atom_id": "sha256:855a7fe3300ca0494db16b470b543337b19d9180106ea089d62c6d9541ec3b10",
+            "record_sha256": "sha256:b7c03f519d036ad590ab54aa5a90ff1fa2efb775401bab3da6508f5e8dac3a8b",
+            "policy_id": "organization-member-readable-person-v2"
+          },
+          "kind": "decision",
+          "label": "Display review",
+          "visibility": "team"
+        },
+        {
+          "citation": {
+            "kind": "approved_record",
+            "atom_id": "sha256:95664be39d929dbe207baf7d9736e23e498389469d6d1e288876469877d51961",
+            "record_sha256": "sha256:b7c03f519d036ad590ab54aa5a90ff1fa2efb775401bab3da6508f5e8dac3a8b",
+            "policy_id": "organization-member-readable-person-v2"
+          },
+          "kind": "action",
+          "label": "Display review",
+          "visibility": "team"
+        },
+        {
+          "citation": {
+            "kind": "ticket",
+            "tool_id": "jira",
+            "external_scope_id": "cloud-one",
+            "ticket_id": "46",
+            "permalink": "https://tickets.example.test/browse/THERM-46",
+            "text_sha256": "sha256:b8af4250a313611eb53c6379499247e4029c84a5c54eb4f745e6e8b87f6ec554"
+          },
+          "kind": "ticket",
+          "label": "THERM-46: Display firmware",
+          "visibility": "only_me"
+        },
+        {
+          "citation": {
+            "kind": "page",
+            "tool_id": "knowledge",
+            "external_scope_id": "site-one",
+            "page_id": "1441793",
+            "section_id": "s1",
+            "version": "4",
+            "permalink": "https://knowledge.example.test/wiki/pages/1441793",
+            "text_sha256": "sha256:40e078953327fc3f2c770d4092a217237f5e18898289691aac397aea7fb255e3"
+          },
+          "kind": "page",
+          "label": "PRD: Display",
+          "visibility": "only_me"
+        },
+        {
+          "citation": {
+            "kind": "page",
+            "tool_id": "knowledge",
+            "external_scope_id": "site-one",
+            "page_id": "2001",
+            "section_id": "s1",
+            "version": "4",
+            "permalink": "https://knowledge.example.test/wiki/pages/2001",
+            "text_sha256": "sha256:6f53e5645ddb4f53ed0132c51101366f134b9a15e8a0f1d2e97a45f5f17ade81"
+          },
+          "kind": "page",
+          "label": "DVT test plan",
+          "visibility": "only_me"
+        }
+      ]
+    }
+  },
+  "research_stopped_on_budget": {
+    "calls": 3,
+    "prompt_sha256": "sha256:254a6432538f9928230ad7676a9f71d612e8c9dbf68fff7c872dc4eb40825284",
+    "answer_sha256": "sha256:e1885914740297414a87e948ae6ad926f7a107bc25e0b1cd9560e963c6ab2dcc",
+    "response_sha256": "sha256:8d9120f4c0daa425c4d57bfbd58403a34d7fd25cb11647b01edfe24f92e34b9b",
+    "model_inputs_sha256": "sha256:686812933303b6e2b4f04ee99d2429d1f5ae0aab55dda11a800853b14346cab6",
+    "outcome": "partial",
+    "audit_sha256": "sha256:2bcf4a69c720033b21cc999c21876568e056d5f00e4cc8ebf9d5f87247f4c10b",
+    "card": {
+      "decided": [
+        {
+          "text": "The display shows two decimals (0.01 °C) from DVT.",
+          "citation_index": 0
+        },
+        {
+          "text": "Mara updates the PRD display section by Oct 10.",
+          "citation_index": 1
+        }
+      ],
+      "affected": [
+        {
+          "citation_index": 2,
+          "says_now": "THERM-46 formats the reading with one decimal for the Oct 15 DVT build.",
+          "relation": "conflicts",
+          "owner": "Tobias Lund",
+          "date_at_risk": {
+            "date": "2026-10-15",
+            "milestone": "DVT build"
+          }
+        }
+      ],
+      "unconfirmed": [
+        "Research stopped before it finished, so other items may be affected too.",
+        "tickets the display decision affects"
+      ],
+      "people": [
+        {
+          "name": "Tobias Lund",
+          "items": [
+            2
+          ]
+        }
+      ],
+      "status": "assessed",
+      "citations": [
+        {
+          "citation": {
+            "kind": "approved_record",
+            "atom_id": "sha256:855a7fe3300ca0494db16b470b543337b19d9180106ea089d62c6d9541ec3b10",
+            "record_sha256": "sha256:b7c03f519d036ad590ab54aa5a90ff1fa2efb775401bab3da6508f5e8dac3a8b",
+            "policy_id": "organization-member-readable-person-v2"
+          },
+          "kind": "decision",
+          "label": "Display review",
+          "visibility": "team"
+        },
+        {
+          "citation": {
+            "kind": "approved_record",
+            "atom_id": "sha256:95664be39d929dbe207baf7d9736e23e498389469d6d1e288876469877d51961",
+            "record_sha256": "sha256:b7c03f519d036ad590ab54aa5a90ff1fa2efb775401bab3da6508f5e8dac3a8b",
+            "policy_id": "organization-member-readable-person-v2"
+          },
+          "kind": "action",
+          "label": "Display review",
+          "visibility": "team"
+        },
+        {
+          "citation": {
+            "kind": "ticket",
+            "tool_id": "jira",
+            "external_scope_id": "cloud-one",
+            "ticket_id": "46",
+            "permalink": "https://tickets.example.test/browse/THERM-46",
+            "text_sha256": "sha256:b8af4250a313611eb53c6379499247e4029c84a5c54eb4f745e6e8b87f6ec554"
+          },
+          "kind": "ticket",
+          "label": "THERM-46: Display firmware",
+          "visibility": "only_me"
+        }
+      ]
+    }
+  }
+}

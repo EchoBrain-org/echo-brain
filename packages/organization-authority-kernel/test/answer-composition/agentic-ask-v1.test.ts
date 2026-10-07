@@ -1380,7 +1380,7 @@ describe("agentic Ask: architecture", () => {
 
   it("keeps renderers to the bundle: no desk port, runner or research module, and no search, open, list or openCitation", () => {
     const renderers = sources(join(root, "renderers"));
-    expect(renderers.map(named)).toContain("renderers/ask-renderer-v1.ts");
+    expect(renderers.map(named)).toEqual(expect.arrayContaining(["renderers/ask-renderer-v1.ts", "renderers/impact-card-renderer-v1.ts"]));
     for (const path of renderers) {
       const source = readFileSync(path, "utf8");
       for (const specifier of imported(source)) expect(specifier, named(path)).not.toMatch(/evidence-desk|\/agentic-ask-v1\.js$|\/agentic-research(?:-loop)?-v1\.js$/u);

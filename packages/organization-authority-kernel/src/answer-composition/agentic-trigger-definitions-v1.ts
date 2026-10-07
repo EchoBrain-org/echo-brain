@@ -8,6 +8,7 @@ import { AuthorityOperationError } from "../domain/errors.js";
 import { agenticDataSlotV1, agenticStartingSlotV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import type { AgenticRendererV1 } from "./agentic-renderer-v1.js";
 import { AGENTIC_RESEARCH_BUDGETS_V1 } from "./agentic-research-v1.js";
+import { IMPACT_CARD_RENDERER_V1 } from "./renderers/impact-card-renderer-v1.js";
 
 /**
  * Trigger definitions (research trigger contract v1, section 1). Adding a
@@ -15,7 +16,7 @@ import { AGENTIC_RESEARCH_BUDGETS_V1 } from "./agentic-research-v1.js";
  * use) and its evaluation cases. The audit's and the staging API's lists of
  * allowed triggers come from this list; the loop never sees it.
  */
-export interface AgenticTriggerDefinitionV1<Event, In = unknown> {
+export interface AgenticTriggerDefinitionV1<Event> {
   /** A label for audit and evaluation; nothing branches on it. */
   readonly name: string;
   /** The trigger's event from its input, or an `invalid_request` error. */
@@ -29,9 +30,17 @@ export interface AgenticTriggerDefinitionV1<Event, In = unknown> {
   brief(event: Event): AgenticBriefV1;
   /** The budget profile its brief runs on; `brief` always carries this profile's limits. */
   readonly budget: keyof typeof AGENTIC_RESEARCH_BUDGETS_V1;
-  /** Turns the bundle into the trigger's result. Ask's writer is composed by the runner, which holds its prompts and response version. */
-  readonly renderer?: AgenticRendererV1<In, unknown>;
-  /** Whose access the run uses. */
+  /**
+   * Turns the bundle and the trigger's event into the trigger's result. Ask's
+   * writer is composed by the runner, which holds its prompts and response
+   * version; a research-only trigger has none.
+   */
+  readonly renderer?: AgenticRendererV1<Event, unknown>;
+  /**
+   * Whose access the run uses. In this round the staging evaluation endpoint
+   * stands in for the approver (whoever signs in); the product trigger must
+   * bind the real approver from the approval event.
+   */
   readonly acts_as: "requester" | "approver";
   /**
    * Where the run reads. `requested`: the scope the request names.
@@ -96,7 +105,7 @@ const ask = define<AskEventV1>({
 const APPROVED_RECORD_TASK = `A PM just approved record ${agenticStartingSlotV1(1)}. Find every ticket, PRD section and document in this project that it confirms, conflicts with or changes. For each, record what it says now, who owns it, and any date it affects.`;
 
 const approvedRecord = define<ApprovedRecordEventV1>({
-  name: "approved_record", budget: "background", acts_as: "approver", scope: "record_project", recipients: "actor_only",
+  name: "approved_record", budget: "background", acts_as: "approver", scope: "record_project", recipients: "actor_only", renderer: IMPACT_CARD_RENDERER_V1,
   parseEvent(input: unknown): ApprovedRecordEventV1 {
     const record = citation(fields(input, ["record"], "Approved record").record, "Approved record");
     if ((record as { readonly kind: unknown }).kind !== "approved_record") invalid("An approved-record run starts from an approved record citation");

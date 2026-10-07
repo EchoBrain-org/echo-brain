@@ -1,4 +1,5 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
+import type { PersonAnswerCitationV6 } from "@echo-brain/organization-api";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../shared/evidence-desk-v2.js";
 import type { AgenticAskGenerationObservationV1 } from "./agentic-model-gate-v1.js";
 import type {
@@ -87,6 +88,11 @@ export function describeAgenticEvidenceItemV1(entry: { readonly short: string; r
     ...(entry.item.occurred_at === undefined ? {} : { date: entry.item.occurred_at, date_kind: entry.item.date_kind ?? 'unspecified' }),
     ...(attributesOf(entry.item) === undefined ? {} : { attributes: attributesOf(entry.item) }),
   };
+}
+
+/** How a renderer's result cites an item: its citation, kind, title, visibility and the ref that opens it. */
+export function citationOfAgenticEvidenceItemV1(item: EvidenceDeskItemV2): PersonAnswerCitationV6 {
+  return Object.freeze({ citation: item.citation, kind: item.kind, label: item.label, visibility: item.visibility, ...(item.ref === undefined ? {} : { ref: item.ref }) });
 }
 
 /** The evaluation's view: released content only, no desk ids, refs, receipts or model-call records. */

@@ -10,6 +10,8 @@ import { agenticStartingSlotV1, type AgenticBriefV1 } from "../../src/answer-com
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
+import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
+import type { PersonImpactCardV1 } from "@echo-brain/organization-api";
 
 const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
 const checked = { checked_at: "2026-10-06T00:00:00.000Z" };
@@ -194,5 +196,53 @@ describe("research-only triggers", () => {
     expect(view.rounds).toHaveLength(AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1.max_rounds);
     expect(view.stop).toEqual({ reason: "step_limit", completed: false });
     expect(h.audit[0]).toMatchObject({ trigger: "approved_record", rounds: 20, model_calls: 20, outcome: "partial" });
+  });
+});
+
+describe("task briefs with a renderer", () => {
+  const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "approved_record")!;
+
+  it("renders the bundle with the trigger's renderer and releases its result through the shared release step", async () => {
+    const decision = record("two-decimals", "Approved on Oct 8: show 0.01 °C on the display for MRD-02.");
+    const ticket = { ...record("therm-46", "THERM-46: the firmware formats one decimal."), attributes: { status: "In Progress", owner: "Tobias Lund" } } as EvidenceDeskItemV2;
+    const trace: string[] = [];
+    const inputs: StructuredGenerationInput[] = [];
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const replies = [
+      step([{ need: "affected tickets", status: "open" }], [{ tool: "search", args: { query: "display decimals" } }]),
+      step([{ need: "affected tickets", status: "found", evidence: ["E2"] }], [{ tool: "finish" }]),
+      { decided: [{ id: "E1", text: "Show two decimals on the display." }], affected: [{ id: "E2", says_now: "The firmware formats one decimal.", relation: "conflicts", date_at_risk: "", milestone: "" }] },
+    ];
+    const port: EvidenceDeskPortV2 = {
+      scope: { kind: "global" }, live_sources: [],
+      search: async () => { trace.push("search"); return result([ticket]); }, open: async () => result([]), list: async () => result([]),
+      openCitation: async () => { trace.push("openCitation"); return result([decision]); },
+      revalidate: async () => { trace.push("revalidate"); return checked; },
+    };
+    const research = createAgenticResearchV1({
+      desk: port, generation, today: () => "2026-10-06", audit: { append: entry => { trace.push("append"); audit.push(entry); } },
+      model: { generate: async input => { trace.push(`generate:${inputs.length}`); inputs.push(input); return replies[inputs.length - 1]; } },
+    });
+    const event = definition.parseEvent({ record: decision.citation });
+    const output = await research.renderWithResearch({ trigger: definition.name, brief: definition.brief(event), renderer: definition.renderer!, trigger_input: event });
+    const card = output.rendered as PersonImpactCardV1;
+    expect(card).toMatchObject({ status: "assessed", decided: [{ citation_index: 0 }], affected: [{ citation_index: 1, relation: "conflicts", owner: "Tobias Lund" }], people: [{ name: "Tobias Lund", items: [1] }] });
+    expect(output.research).toMatchObject({ kind: "echo-agentic-research-result-v1", trigger: "approved_record", stop: { reason: "finished" } });
+    // Research's two steps, the renderer's one call, then release: final check, audit, check after the audit.
+    expect(trace).toEqual(["openCitation", "revalidate", "generate:0", "search", "revalidate", "generate:1", "revalidate", "generate:2", "revalidate", "append", "revalidate"]);
+    expect(JSON.parse(inputs[2]!.user_prompt)).toMatchObject({ task: expect.stringContaining("A PM just approved record E1.") });
+    expect(audit).toEqual([expect.objectContaining({
+      trigger: "approved_record", budget: "background", outcome: "answered", rounds: 2, model_calls: 3, fallbacks: 0, citation_count: 2,
+      answer_sha256: canonicalSha256({ decided: card.decided, affected: card.affected }), response_sha256: canonicalSha256(card),
+    })]);
+    expect(audit[0]!.generations.map(entry => entry.role)).toEqual(["step", "step", "answer"]);
+  });
+
+  it("refuses a renderer for a question brief before any read", async () => {
+    const h = harness([], {});
+    await expect(h.research.renderWithResearch({ trigger: "ask", brief: { goal: { kind: "question", question: "Why?" }, starting: [], budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false } }, renderer: definition.renderer!, trigger_input: {} }))
+      .rejects.toThrow("research goal is invalid");
+    expect(h.generate).not.toHaveBeenCalled();
+    expect(h.audit).toEqual([]);
   });
 });

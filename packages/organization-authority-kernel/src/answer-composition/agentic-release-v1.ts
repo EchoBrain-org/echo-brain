@@ -1,5 +1,5 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
-import type { PersonAnswerResponseV4, PersonAnswerResponseV5, PersonAnswerResponseV6 } from "@echo-brain/organization-api";
+import type { PersonAnswerResponseV4 } from "@echo-brain/organization-api";
 import type { StructuredGenerationUsageV1 } from "./structured-generation-v1.js";
 import { raceAbort, type AgenticAskGenerationObservationV1, type AgenticModelGateStatsV1 } from "./agentic-model-gate-v1.js";
 
@@ -64,9 +64,6 @@ export interface AgenticReleaseDigestsV1 {
   readonly response_sha256: Sha256Digest;
 }
 
-/** An Ask response, whose digests the release step derives itself. */
-export type AgenticReleasedAnswerV1 = PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6;
-
 export interface ReleaseAgenticResultV1Options<R> extends AgenticAuditContextV1 {
   /** The request's access-checked desk; only its cumulative revalidation is used. */
   readonly desk: { revalidate(input: { readonly signal: AbortSignal }): Promise<{ readonly checked_at: string }> };
@@ -74,9 +71,9 @@ export interface ReleaseAgenticResultV1Options<R> extends AgenticAuditContextV1 
   readonly citation_count: number;
   /** What is handed over once every check has passed. */
   readonly result: R;
-  /** Explicit digests, or `from_response` for an Ask response (its direct answer and parts, and the whole response). */
-  readonly digests: AgenticReleaseDigestsV1 | (R extends AgenticReleasedAnswerV1 ? "from_response" : never);
-  /** A second access check after the audit write (V5/V6 Ask and research-only runs; V4 Ask has none). */
+  /** The result's fingerprints, from its renderer. */
+  readonly digests: AgenticReleaseDigestsV1;
+  /** A second access check after the audit write (V5/V6 Ask and every task brief; V4 Ask has none). */
   readonly fence_after_audit: boolean;
   /** The request's active signal (caller cancel, deadline or terminal stop). */
   readonly signal: AbortSignal;
@@ -112,10 +109,6 @@ function auditEntry(context: AgenticAuditContextV1, outcome: AgenticAskAuditEntr
   });
 }
 
-function responseDigests(response: AgenticReleasedAnswerV1): AgenticReleaseDigestsV1 {
-  return { answer_sha256: canonicalSha256({ direct: response.direct ?? null, parts: response.parts }), response_sha256: canonicalSha256(response) };
-}
-
 /** Final check, one audit record, the check after it, then the result. Any failure releases nothing. */
 export async function releaseAgenticResultV1<R>(options: ReleaseAgenticResultV1Options<R>): Promise<R> {
   const { desk, signal, assert_live: assertLive } = options;
@@ -128,8 +121,7 @@ export async function releaseAgenticResultV1<R>(options: ReleaseAgenticResultV1O
   options.on_stage?.({ stage: "revalidation", elapsed_ms: elapsed(fenceStartedAt) });
   // 2. One content-free audit record for the whole request.
   const auditStartedAt = options.on_stage === undefined ? 0 : options.now();
-  const digests = options.digests === "from_response" ? responseDigests(options.result as AgenticReleasedAnswerV1) : options.digests;
-  await options.audit.append(auditEntry(options, options.outcome, options.citation_count, fenced.checked_at, digests));
+  await options.audit.append(auditEntry(options, options.outcome, options.citation_count, fenced.checked_at, options.digests));
   options.on_audited();
   options.on_stage?.({ stage: "audit", elapsed_ms: elapsed(auditStartedAt) });
   // 3. A disconnect or membership change during the durable append still

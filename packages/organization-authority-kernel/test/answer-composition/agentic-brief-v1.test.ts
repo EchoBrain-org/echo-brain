@@ -94,11 +94,18 @@ describe("brief: goals", () => {
     expect(bundle.goal).toEqual({ kind: "task", task: 'Recheck E1: "{{starting:1}} stays literal".' });
   });
 
-  it("stops a task whose slot has no starting item before any model call", async () => {
+  it("refuses a task whose slot has nothing to fill it before any read: a definition bug never reaches the desk or the model", async () => {
     const approved = record("approved");
-    const h = harness([], { openCitation: async () => result([approved]) });
-    await expect(h.research.research({ trigger: "sweep", brief: task(`Compare ${agenticStartingSlotV1(1)} with ${agenticStartingSlotV1(2)}.`, [{ citation: approved.citation, if_unreadable: "fail" }]) }))
-      .rejects.toThrow("has nothing to fill it");
+    const openCitation = vi.fn(async () => result([approved]));
+    const h = harness([], { openCitation });
+    const starting = [{ citation: approved.citation, if_unreadable: "fail" as const }];
+    for (const [text, data] of [
+      [`Compare ${agenticStartingSlotV1(1)} with ${agenticStartingSlotV1(2)}.`, undefined],
+      [`Check ${agenticStartingSlotV1(0)}.`, undefined],
+      [`Check ${agenticStartingSlotV1(1)}: ${agenticDataSlotV1(1)}.`, undefined],
+      [`Check ${agenticStartingSlotV1(1)}: ${agenticDataSlotV1(2)}.`, ['"one"']],
+    ] as const) await expect(h.research.research({ trigger: "sweep", brief: task(text, starting, undefined, data) }), text).rejects.toThrow("research goal is invalid");
+    expect(openCitation).not.toHaveBeenCalled();
     expect(h.generate).not.toHaveBeenCalled();
   });
 
