@@ -49,10 +49,9 @@ import { readableSearchGenerationContractV1 } from "./readable-search-generation
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { createPersonMeetingTranscriptReadRouteV1, createPersonSourceEvidenceRouteV1 } from "./person-source-evidence-route.js";
 import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
-import { createPersonAnswerV4Route } from './person-answer-v4-route.js';
-import { createPersonAnswerV5Route } from './person-answer-v5-route.js';
+import { createPersonLiveAnswerRouteV1 } from './person-live-answer-route-v1.js';
 import type { PersonLiveConnectorDefinitionV1, OpenedPersonLiveConnectorV1, PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
-import { personLiveConnectorDefinitionsV1, type LegacyPersonLiveConnectorsV1 } from './person-live-connector-registry-v1.js';
+import { personLiveConnectorDefinitionsV1 } from './person-live-connector-registry-v1.js';
 import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonOriginalItemsV1 } from "../adapters/persistence/sqlite/person-original-items-v1.js";
@@ -65,7 +64,6 @@ import type {
   OpenedPersonExternalIdentityRuntimeV1,
 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import type { AskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
-import type { PersonDocumentProcessingFailureObservationV1 } from './person-document-processing-v1.js';
 
 export interface OrganizationAuthorityApiRuntimeConfig {
   readonly state_directory: string;
@@ -95,7 +93,7 @@ export interface PersonHttpRuntimeV1 {
   tools?(token: string): Promise<readonly import('@echo-brain/organization-api').OrganizationPersonToolV4[]>;
   close(): void;
 }
-export interface OrganizationAuthorityApiRuntimeDependencies extends LegacyPersonLiveConnectorsV1 {
+export interface OrganizationAuthorityApiRuntimeDependencies {
   /** Selected HTTP capabilities independent of ticket retrieval or Ask. The selecting root owns their lifecycle. */
   readonly person_http_runtime_factory?: (authentication: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>, resources: PersonHttpRuntimeResourcesV1) => PersonHttpRuntimeV1;
   /** Selected capabilities; adding a provider does not add a runtime or Ask slot. */
@@ -122,8 +120,6 @@ export interface OrganizationAuthorityApiRuntimeDependencies extends LegacyPerso
   readonly answer_composition_generation?: AnswerCompositionGenerationBindingV1;
   /** Bound by the active rebuild runtime so serving accepts the same model profile. */
   readonly readable_search_retrieval_contract_sha256?: import("@echo-brain/federation-protocol").Sha256Digest;
-  /** Content-free document and retained-text worker failure observer. */
-  readonly person_source_failure?: (event: PersonDocumentProcessingFailureObservationV1) => void;
   /** Staging-only request-local Ask journey factory. */
   readonly ask_journey_telemetry?: AskJourneyTelemetryFactoryV1;
   /** Present only when the signed private-approval surface is active. */
@@ -330,7 +326,7 @@ export async function startOrganizationAuthorityApiRuntime(
       ...(await Promise.all(liveConnectors.map(({ runtime }) => runtime.tools?.(token) ?? []))).flat(),
     ];
     documentWorker = startPersonDocumentProcessingV1(documents,new SqlitePersonTextSourceInboxV1(database),{
-      on_failure: dependencies.person_source_failure ?? (event => console.error(JSON.stringify(event))),
+      on_failure: event => console.error(JSON.stringify(event)),
     });
     const answerOptions = dependencies.answer_composition_generation === undefined ? undefined : {
       authority_id: metadata.authority_id, organization_id: metadata.organization_id, state_lineage_id: lineage.root.state_lineage_id,
@@ -389,8 +385,8 @@ export async function startOrganizationAuthorityApiRuntime(
         }),
         // A response version is available with the model even when no external
         // source is configured. The request catalog still contains local context.
-        person_answer_v4: createPersonAnswerV4Route({ ...answerOptions, live_sources: liveSources }),
-        person_answer_v5: createPersonAnswerV5Route({ ...answerOptions, live_sources: liveSources }),
+        person_answer_v4: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 5),
+        person_answer_v5: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 6),
       }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
       person_documents: createPersonDocumentApplicationV1({

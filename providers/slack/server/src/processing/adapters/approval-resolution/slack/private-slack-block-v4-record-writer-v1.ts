@@ -1,6 +1,6 @@
 import { createRecordEnvelopeFactoryV4, createRecordReceiptFactoryV2, createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v1.js";
-import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3, PRIVATE_SLACK_BLOCK_APPROVAL_CONSEQUENCE_V2_KIND, PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND, PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND, privateSlackBlockApprovalConsequenceV2Sha256, buildPrivateSlackBlockApprovalRecordInputV2, buildPrivateSlackBlockApprovalRecordInputV3, type PrivateSlackBlockApprovalResolutionRefV2 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v2.js";
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3, PRIVATE_SLACK_BLOCK_APPROVAL_CONSEQUENCE_V2_KIND, PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND, PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND, privateSlackBlockApprovalConsequenceV2Sha256, validatePrivateSlackBlockApprovalRecordInputV2, validatePrivateSlackBlockApprovalRecordInputV3, type PrivateSlackBlockApprovalResolutionRefV2 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v2.js";
 const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3]);
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT, ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT, RESTRICTED_REVIEWER_PERSON_POLICY_ID, createOrganizationRecordEnvelopeV4, organizationAuthorityPinSha256, validateDecisionProcessorProvenanceV1, validateMeetingSourceProvenanceV1, verifyOrganizationAuthorityPin } from "@echo-brain/organization-protocol";
@@ -363,11 +363,11 @@ export class PrivateSlackBlockV4RecordWriterV1 {
     // A V3 resolution names confirmed owners by the action's place in the
     // frozen brief; the record names them by the approved signal ID.
     const human = resolution.schema_version === 3
-      ? buildPrivateSlackBlockApprovalRecordInputV3({
+      ? validatePrivateSlackBlockApprovalRecordInputV3({
           private_slack_block_approval_resolution_ref_v3: { ...refV2, schema_version: 3, kind: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND, action_owners: confirmedOwners(candidate, resolution.action_owners ?? []) },
           event,
         })
-      : buildPrivateSlackBlockApprovalRecordInputV2({ private_slack_block_approval_resolution_ref_v2: refV2, event });
+      : validatePrivateSlackBlockApprovalRecordInputV2({ private_slack_block_approval_resolution_ref_v2: refV2, event });
     const humanActRecordInput = "private_slack_block_approval_resolution_ref_v3" in human
       ? { private_slack_block_approval_resolution_ref_v3: human.private_slack_block_approval_resolution_ref_v3, event: human.event }
       : { private_slack_block_approval_resolution_ref_v2: human.private_slack_block_approval_resolution_ref_v2, event: human.event };

@@ -1,5 +1,6 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { isCanonicalUtcMillisTimestampV1 } from '../../../application/canonical-utc-timestamp-v1.js';
 
 export interface ProjectCursorScopeV1 {
   readonly operation: 'project_list' | 'project_list_v2' | 'members' | 'directory' | 'organization_directory' | 'feed' | 'search' | 'feed_v2' | 'search_v2';
@@ -17,10 +18,6 @@ const projectId = new RegExp(`^prj_${UUID}$`);
 const membershipId = new RegExp(`^mem_${UUID}$`);
 const contextId = /^ctx_[0-9a-f]{64}$/;
 function invalid(): never { throw new AuthorityOperationError('invalid_request', 'request failed'); }
-function timestamp(value: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
-    Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
-}
 function displayName(value: string): boolean {
   return value.trim().length > 0 && Buffer.byteLength(value, 'utf8') <= 200 &&
     !/[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(value);
@@ -28,14 +25,14 @@ function displayName(value: string): boolean {
 function position(fields: readonly string[], scope: ProjectCursorScopeV1): ProjectCursorPositionV1 {
   if (scope.operation === 'search' || scope.operation === 'search_v2') {
     if (fields.length !== 3 || !/^(0|[1-9][0-9]*)$/.test(fields[0]!) ||
-        !Number.isSafeInteger(Number(fields[0])) || !timestamp(fields[1]!) || !contextId.test(fields[2]!)) invalid();
+        !Number.isSafeInteger(Number(fields[0])) || !isCanonicalUtcMillisTimestampV1(fields[1]!) || !contextId.test(fields[2]!)) invalid();
     return [Number(fields[0]), fields[1]!, fields[2]!];
   }
   if (fields.length !== 2) invalid();
   const [first, second] = fields as [string, string];
   if (scope.operation === 'members' || scope.operation === 'directory' || scope.operation === 'organization_directory') {
     if (!displayName(first) || !membershipId.test(second)) invalid();
-  } else if (!timestamp(first) || !(scope.operation === 'project_list' || scope.operation === 'project_list_v2' ? projectId : contextId).test(second)) invalid();
+  } else if (!isCanonicalUtcMillisTimestampV1(first) || !(scope.operation === 'project_list' || scope.operation === 'project_list_v2' ? projectId : contextId).test(second)) invalid();
   return [first, second];
 }
 function binding(scope: ProjectCursorScopeV1): Buffer {

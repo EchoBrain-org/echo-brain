@@ -13,9 +13,6 @@ COPY packages/organization-retrieval/package.json ./packages/organization-retrie
 COPY packages/organization-authority-kernel/package.json ./packages/organization-authority-kernel/package.json
 COPY packages/organization-processing/package.json ./packages/organization-processing/package.json
 COPY providers/openrouter/package.json ./providers/openrouter/package.json
-COPY providers/anthropic/package.json ./providers/anthropic/package.json
-COPY providers/ollama/package.json ./providers/ollama/package.json
-COPY providers/openai/package.json ./providers/openai/package.json
 COPY providers/synthetic-demo/package.json ./providers/synthetic-demo/package.json
 COPY providers/slack/server/package.json ./providers/slack/server/package.json
 COPY providers/slack/client/package.json ./providers/slack/client/package.json

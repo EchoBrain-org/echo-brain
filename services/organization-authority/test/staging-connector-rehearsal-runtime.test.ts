@@ -171,14 +171,14 @@ it('returns a finite refusal for an already-aborted read without starting provid
   } finally { await fixture.opened.close(); }
 });
 
-it.each(['ticket_live_runtime_factory', 'page_live_runtime_factory', 'slack_live_runtime_factory', 'live_connectors', 'person_http_runtime_factory'] as const)('refuses %s under the staging diagnostic profile before opening state', async key => {
+it.each(['live_connectors', 'person_http_runtime_factory'] as const)('refuses %s under the staging diagnostic profile before opening state', async key => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
   const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
   const factory = vi.fn(() => ({ application: { async source() { return undefined; } },
     connection_http: { routes: [], async accept() { return { status: 200 as const, body: {} }; } }, close() {},
   }));
   const result = await openStagingConnectorRehearsalService(config(stateDirectory), selection(), {
-    api: key === 'live_connectors' ? { live_connectors: [{ ...JIRA_LIVE_CONNECTOR_V1, open: factory }] } : { [key]: factory },
+    api: key === 'live_connectors' ? { live_connectors: [{ ...JIRA_LIVE_CONNECTOR_V1, open: factory }] } : { person_http_runtime_factory: factory as never },
   }).then(async opened => { await opened.close(); return 'opened'; }, (error: unknown) => error);
   expect(result).toBeInstanceOf(Error);
   expect((result as Error).message).toBe('Staging connector rehearsal selection is invalid');

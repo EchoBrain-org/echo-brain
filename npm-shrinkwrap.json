@@ -20,9 +20,6 @@
         "packages/organization-authority-kernel",
         "packages/organization-processing",
         "providers/openrouter",
-        "providers/anthropic",
-        "providers/ollama",
-        "providers/openai",
         "providers/synthetic-demo",
         "providers/slack/server",
         "providers/slack/client",
@@ -88,10 +85,6 @@
       "resolved": "src/product/person-client",
       "link": true
     },
-    "node_modules/@echo-brain/provider-anthropic": {
-      "resolved": "providers/anthropic",
-      "link": true
-    },
     "node_modules/@echo-brain/provider-confluence": {
       "resolved": "providers/confluence",
       "link": true
@@ -110,14 +103,6 @@
     },
     "node_modules/@echo-brain/provider-jira-client": {
       "resolved": "providers/jira/client",
-      "link": true
-    },
-    "node_modules/@echo-brain/provider-ollama": {
-      "resolved": "providers/ollama",
-      "link": true
-    },
-    "node_modules/@echo-brain/provider-openai": {
-      "resolved": "providers/openai",
       "link": true
     },
     "node_modules/@echo-brain/provider-openrouter": {
@@ -4802,18 +4787,6 @@
         "npm": "10.9.4"
       }
     },
-    "providers/anthropic": {
-      "name": "@echo-brain/provider-anthropic",
-      "version": "0.0.0-dev.0",
-      "license": "MIT",
-      "dependencies": {
-        "@echo-brain/organization-processing": "0.0.0-dev.0"
-      },
-      "engines": {
-        "node": "22.22.1",
-        "npm": "10.9.4"
-      }
-    },
     "providers/confluence": {
       "name": "@echo-brain/provider-confluence",
       "version": "0.0.0-dev.0",
@@ -4878,30 +4851,6 @@
       "license": "MIT",
       "dependencies": {
         "@echo-brain/organization-api": "0.0.0-dev.0"
-      },
-      "engines": {
-        "node": "22.22.1",
-        "npm": "10.9.4"
-      }
-    },
-    "providers/ollama": {
-      "name": "@echo-brain/provider-ollama",
-      "version": "0.0.0-dev.0",
-      "license": "MIT",
-      "dependencies": {
-        "@echo-brain/organization-processing": "0.0.0-dev.0"
-      },
-      "engines": {
-        "node": "22.22.1",
-        "npm": "10.9.4"
-      }
-    },
-    "providers/openai": {
-      "name": "@echo-brain/provider-openai",
-      "version": "0.0.0-dev.0",
-      "license": "MIT",
-      "dependencies": {
-        "@echo-brain/organization-processing": "0.0.0-dev.0"
       },
       "engines": {
         "node": "22.22.1",

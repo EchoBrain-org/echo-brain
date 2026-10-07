@@ -1,15 +1,5 @@
 import { liveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import type { PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
-import type { PersonTicketLiveRuntimeFactoryV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
-import type { PersonPageLiveRuntimeFactoryV1 } from '../application/ports/person-page-live-runtime-v1.js';
-import type { PersonSlackLiveRuntimeFactoryV1 } from '../application/ports/person-slack-live-runtime-v1.js';
-
-/** Compatibility inputs; new providers register a definition instead of adding another slot. */
-export interface LegacyPersonLiveConnectorsV1 {
-  readonly ticket_live_runtime_factory?: PersonTicketLiveRuntimeFactoryV1;
-  readonly page_live_runtime_factory?: PersonPageLiveRuntimeFactoryV1;
-  readonly slack_live_runtime_factory?: PersonSlackLiveRuntimeFactoryV1;
-}
 
 export const LEGACY_TICKET_CONNECTOR_V1 = Object.freeze({
   descriptor: liveSourceDescriptorV2({ source: 'ticket' }),
@@ -33,15 +23,10 @@ export const CONFLUENCE_LIVE_CONNECTOR_V1 = Object.freeze({
 });
 
 /** One translation at the boundary; all lifecycle and request code consumes the registry. */
-export function personLiveConnectorDefinitionsV1(input: LegacyPersonLiveConnectorsV1 & {
+export function personLiveConnectorDefinitionsV1(input: {
   readonly live_connectors?: readonly PersonLiveConnectorDefinitionV1[];
 }): readonly PersonLiveConnectorDefinitionV1[] {
-  const entries: PersonLiveConnectorDefinitionV1[] = [
-    ...(input.live_connectors ?? []),
-    ...(input.ticket_live_runtime_factory === undefined ? [] : [{ ...LEGACY_TICKET_CONNECTOR_V1, open: input.ticket_live_runtime_factory }]),
-    ...(input.page_live_runtime_factory === undefined ? [] : [{ ...LEGACY_PAGE_CONNECTOR_V1, open: input.page_live_runtime_factory }]),
-    ...(input.slack_live_runtime_factory === undefined ? [] : [{ ...LEGACY_SLACK_CONNECTOR_V1, open: input.slack_live_runtime_factory }]),
-  ];
+  const entries = input.live_connectors ?? [];
   const routingNames = new Set(['meeting', 'meetings', 'document', 'documents']);
   return Object.freeze(entries.map(entry => {
     const { source_id, selector, kind } = entry.descriptor;

@@ -1,9 +1,5 @@
 import {
-  validatePersonToolCommandV1,
-  validatePersonToolAttemptV1,
   validatePersonToolConnectV1,
-  validatePersonToolAttemptStatusV1,
-  validatePersonToolStateV1,
   type PersonToolCommandV1 as PersonConfluenceCommandV1,
   type PersonToolAttemptV1 as PersonConfluenceAttemptV1,
   type PersonToolConnectV1 as PersonConfluenceConnectV1,
@@ -19,8 +15,4 @@ export const PERSON_CONFLUENCE_STATUS_PATH_V1 = "/v1/person/tools/confluence/sta
 export const PERSON_CONFLUENCE_CANCEL_PATH_V1 = "/v1/person/tools/confluence/cancel";
 export const PERSON_CONFLUENCE_DISCONNECT_PATH_V1 = "/v1/person/tools/confluence/disconnect";
 
-export const validatePersonConfluenceCommandV1 = (value: unknown): PersonConfluenceCommandV1 => validatePersonToolCommandV1(value, "Confluence");
-export const validatePersonConfluenceAttemptV1 = (value: unknown): PersonConfluenceAttemptV1 => validatePersonToolAttemptV1(value, "Confluence");
 export const validatePersonConfluenceConnectV1 = (value: unknown): PersonConfluenceConnectV1 => validatePersonToolConnectV1(value, "Confluence");
-export const validatePersonConfluenceAttemptStatusV1 = (value: unknown): PersonConfluenceAttemptStatusV1 => validatePersonToolAttemptStatusV1(value, "Confluence");
-export const validatePersonConfluenceStateV1 = (value: unknown, connected: boolean): PersonConfluenceConnectionStateV1 => validatePersonToolStateV1(value, connected, "Confluence");

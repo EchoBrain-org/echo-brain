@@ -47,6 +47,7 @@ import {
   type PersonOpenCursorBindingV1,
   type PersonOpenPositionV1,
 } from "./person-list-cursor-v1.js";
+import { isCanonicalUtcMillisTimestampV1 } from "../application/canonical-utc-timestamp-v1.js";
 
 /** One page of 25 plus the row that proves another page exists. */
 const COLLECT_LIMIT = PERSON_LIST_PAGE_SIZE_V1 + 1;
@@ -56,7 +57,6 @@ const IDS: Readonly<Record<PersonListSourceV1, RegExp>> = {
   document: /^doc_[0-9a-f]{64}$/,
   meeting: /^sha256:[0-9a-f]{64}$/,
 };
-const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const DONE: PersonListSourcePositionV1 = Object.freeze({ state: "done" });
 
 type StoreRow = PersonStoreNoteRowV1 | PersonStoreDocumentRowV1 | PersonStoreMeetingRowV1;
@@ -155,16 +155,12 @@ function compareRows(left: Ordered, right: Ordered): number {
   return leftRef < rightRef ? -1 : leftRef > rightRef ? 1 : 0;
 }
 
-function canonicalTime(value: unknown): value is string {
-  return typeof value === "string" && CANONICAL_TIME.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
-}
-
 /** A store page must be its own kind, strictly ordered, strictly after the cursor, and inside the scope. */
 function assertSource(kind: PersonListSourceV1, rows: readonly StoreRow[], after: PersonListSourcePositionV1, scope: PersonAnswerScopeV3): void {
   if (rows.length > COLLECT_LIMIT) invalidOutput();
   let previous: Ordered | undefined = after.state === "after" ? { kind: after.id.startsWith("cap_") ? "imported_meeting" : kind, id: after.id, added_at: after.added_at } : undefined;
   for (const row of rows) {
-    if ((row.kind !== kind && !(kind === "note" && row.kind === "imported_meeting")) || !IDS[kind].test(row.id) || !canonicalTime(row.added_at)) invalidOutput();
+    if ((row.kind !== kind && !(kind === "note" && row.kind === "imported_meeting")) || !IDS[kind].test(row.id) || !isCanonicalUtcMillisTimestampV1(row.added_at)) invalidOutput();
     if (previous !== undefined && compareRows(previous, row) >= 0) invalidOutput();
     if (scope.kind === "project" && !row.association_project_ids.includes(scope.project_id)) invalidOutput();
     previous = row;

@@ -19,7 +19,7 @@ import {
 import { basename, dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { readValidatedPersonClientReleaseArtifact, sha256File } from './release-artifact-validation.mjs';
-import { verifyUpdateBootstrap } from './verify-person-onboarding-kit.mjs';
+import { canonicalJson, verifyUpdateBootstrap } from './verify-person-onboarding-kit.mjs';
 
 const releaseDirectory = resolve(import.meta.dirname);
 const repository = resolve(releaseDirectory, '..', '..');
@@ -30,19 +30,6 @@ const macCliStarter = join(releaseDirectory, 'start-person-cli-kit-macos.sh');
 
 function fail(message) {
   throw new Error(`Person onboarding kit: ${message}`);
-}
-
-function canonicalJson(value) {
-  if (value === null) return 'null';
-  if (typeof value === 'string') return JSON.stringify(value);
-  if (typeof value === 'number') return JSON.stringify(value);
-  if (typeof value === 'boolean') return value ? 'true' : 'false';
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (typeof value !== 'object') fail('manifest contains an unsupported value');
-  return `{${Object.keys(value)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
-    .join(',')}}`;
 }
 
 function regularFile(path, description, executable = false) {

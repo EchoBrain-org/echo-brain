@@ -1,12 +1,10 @@
 import { normalizeAtlassianDocumentTextV1 } from '@echo-brain/provider-runtime/atlassian-document-text-v1';
 import { verifyAtlassianConnectionV1, type AtlassianConnectionCheckInputV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
-import { createHash } from 'node:crypto';
+import { sha256Digest } from '@echo-brain/federation-protocol';
 import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import type { PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { JIRA_PERSON_PROVIDER_V1, JIRA_ID, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraBoundText, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
-
-export const jiraTextDigest = (text: string): `sha256:${string}` => `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
 
 export function verifyJiraConnectionV1(transport: JiraCloudTransportV1, input: AtlassianConnectionCheckInputV1 = {}) {
   return verifyAtlassianConnectionV1(JIRA_PERSON_PROVIDER_V1, transport, input);
@@ -62,7 +60,7 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
   const due_at = fields.duedate === null ? undefined : jiraDay(fields.duedate);
   const content = input.inventory ? undefined : jiraBoundText(`${key}: ${fields.summary}\n\n${(fields.description === null ? '' : normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1).text.trim())}`.trim(), 3072);
   const citation: PersonTicketCitationV1 = Object.freeze({ kind: 'ticket', tool_id: 'jira', external_scope_id: input.cloudid,
-    ticket_id: id, permalink: `${input.origin}/browse/${key}`, text_sha256: jiraTextDigest(content?.text ?? '') });
+    ticket_id: id, permalink: `${input.origin}/browse/${key}`, text_sha256: sha256Digest(content?.text ?? '') });
   return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(),
     truncated: label.truncated || (content?.truncated ?? false),
     value: Object.freeze({ citation, label: label.text, visibility: 'only_me', occurred_at, date_kind: 'created',

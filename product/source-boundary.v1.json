@@ -20,12 +20,9 @@
   "adapter_architecture": {
     "ownership_version": 1,
     "provider_roots": [
-      "providers/anthropic",
       "providers/confluence",
       "providers/granola",
       "providers/jira",
-      "providers/ollama",
-      "providers/openai",
       "providers/openrouter",
       "providers/slack",
       "providers/synthetic-demo"

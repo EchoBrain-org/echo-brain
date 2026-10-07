@@ -196,7 +196,6 @@ function requireSelection(config: OrganizationAuthorityServiceConfig, selection:
       (config.jira_person_live !== undefined && (config.jira_person_live.enabled !== true ||
         config.jira_person_live.cloud_id !== profile.jira.cloud_id || config.jira_person_live.integration_id !== profile.jira.integration_key)) ||
       config.staging_synthetic_meetings_directory !== undefined || config.staging_synthetic_owner_email !== undefined ||
-      dependencies.api?.ticket_live_runtime_factory !== undefined || dependencies.api?.page_live_runtime_factory !== undefined || dependencies.api?.slack_live_runtime_factory !== undefined ||
       (dependencies.api?.live_connectors?.length ?? 0) !== 0 ||
       dependencies.api?.person_http_runtime_factory !== undefined) {
     throw new Error('Staging connector rehearsal selection is invalid');

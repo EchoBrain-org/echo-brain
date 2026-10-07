@@ -1,25 +1,31 @@
 import { describe, expect, it } from "vitest";
 import * as jira from "@echo-brain/provider-jira-client/organization-api/jira-person-connection-v1";
 import * as confluence from "@echo-brain/provider-confluence-client/organization-api/confluence-person-connection-v1";
+import {
+  validatePersonToolAttemptStatusV1,
+  validatePersonToolAttemptV1,
+  validatePersonToolCommandV1,
+  validatePersonToolStateV1,
+} from "@echo-brain/organization-api";
 
 const contracts = [
   { id: "jira", name: "Jira",
-    validatePersonCommandV1: jira.validatePersonJiraCommandV1,
-    validatePersonAttemptV1: jira.validatePersonJiraAttemptV1,
+    validatePersonCommandV1: (value: unknown) => validatePersonToolCommandV1(value, "Jira"),
+    validatePersonAttemptV1: (value: unknown) => validatePersonToolAttemptV1(value, "Jira"),
     validatePersonConnectV1: jira.validatePersonJiraConnectV1,
-    validatePersonAttemptStatusV1: jira.validatePersonJiraAttemptStatusV1,
-    validatePersonStateV1: jira.validatePersonJiraStateV1,
+    validatePersonAttemptStatusV1: (value: unknown) => validatePersonToolAttemptStatusV1(value, "Jira"),
+    validatePersonStateV1: (value: unknown, connected: boolean) => validatePersonToolStateV1(value, connected, "Jira"),
     connect_path: jira.PERSON_JIRA_CONNECT_PATH_V1,
     status_path: jira.PERSON_JIRA_STATUS_PATH_V1,
     cancel_path: jira.PERSON_JIRA_CANCEL_PATH_V1,
     disconnect_path: jira.PERSON_JIRA_DISCONNECT_PATH_V1,
   },
   { id: "confluence", name: "Confluence",
-    validatePersonCommandV1: confluence.validatePersonConfluenceCommandV1,
-    validatePersonAttemptV1: confluence.validatePersonConfluenceAttemptV1,
+    validatePersonCommandV1: (value: unknown) => validatePersonToolCommandV1(value, "Confluence"),
+    validatePersonAttemptV1: (value: unknown) => validatePersonToolAttemptV1(value, "Confluence"),
     validatePersonConnectV1: confluence.validatePersonConfluenceConnectV1,
-    validatePersonAttemptStatusV1: confluence.validatePersonConfluenceAttemptStatusV1,
-    validatePersonStateV1: confluence.validatePersonConfluenceStateV1,
+    validatePersonAttemptStatusV1: (value: unknown) => validatePersonToolAttemptStatusV1(value, "Confluence"),
+    validatePersonStateV1: (value: unknown, connected: boolean) => validatePersonToolStateV1(value, connected, "Confluence"),
     connect_path: confluence.PERSON_CONFLUENCE_CONNECT_PATH_V1,
     status_path: confluence.PERSON_CONFLUENCE_STATUS_PATH_V1,
     cancel_path: confluence.PERSON_CONFLUENCE_CANCEL_PATH_V1,

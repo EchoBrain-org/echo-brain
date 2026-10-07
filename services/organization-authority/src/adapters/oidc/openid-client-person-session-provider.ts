@@ -57,7 +57,6 @@ export type OpenIdClientAuthentication =
 export interface OpenIdClientPersonSessionProviderOptions {
   configuration: PersonSessionOidcConfiguration;
   client_authentication: OpenIdClientAuthentication;
-  request_timeout_seconds?: number;
   fetch?: openid.CustomFetch;
 }
 
@@ -153,11 +152,6 @@ export class OpenIdClientPersonSessionProvider
     if (typeof algorithm !== 'string' || algorithm.length === 0) {
       throw new Error('Person-session OIDC ID-token algorithm is invalid');
     }
-    const timeout =
-      options.request_timeout_seconds ?? DEFAULT_REQUEST_TIMEOUT_SECONDS;
-    if (!Number.isFinite(timeout) || timeout <= 0) {
-      throw new Error('Person-session OIDC request timeout is invalid');
-    }
 
     let authentication: openid.ClientAuth;
     if (options.client_authentication.method === 'none') {
@@ -182,7 +176,7 @@ export class OpenIdClientPersonSessionProvider
 
     const discoveryOptions: openid.DiscoveryRequestOptions = {
       execute: [openid.enableNonRepudiationChecks],
-      timeout,
+      timeout: DEFAULT_REQUEST_TIMEOUT_SECONDS,
     };
     if (options.fetch !== undefined) {
       discoveryOptions[openid.customFetch] = options.fetch;

@@ -1,4 +1,5 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { sha256Digest } from "@echo-brain/federation-protocol";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
@@ -272,10 +273,6 @@ function signature(value: unknown): string {
   return value;
 }
 
-function sha256(value: string | Uint8Array): `sha256:${string}` {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
-
 /**
  * Verifies Slack's v0 HMAC over the original bytes. This function returns an
  * opaque capability rather than the bytes, so callers cannot accidentally
@@ -318,8 +315,8 @@ export function verifyPrivateSlackApprovalRequestV1(
       body,
       request_timestamp: String(timestamp),
       signature_version: "v0",
-      signature_sha256: sha256(provided),
-      raw_body_sha256: sha256(body),
+      signature_sha256: sha256Digest(provided),
+      raw_body_sha256: sha256Digest(body),
     }),
   );
   return verified;
@@ -703,7 +700,7 @@ function providerActionKey(input: {
   readonly action_ts: string;
   readonly action_id: string;
 }): `sha256:${string}` {
-  return sha256(
+  return sha256Digest(
     [
       "echo-private-slack-provider-action-key-v1",
       input.api_app_id,

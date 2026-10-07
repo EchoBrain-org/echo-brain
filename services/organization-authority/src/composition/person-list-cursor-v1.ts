@@ -2,6 +2,7 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { PERSON_LIST_PAGE_SIZE_V1, type PersonAnswerScopeV3, type PersonOpenRefV1 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { frameCursorV1, unframeCursorV1 } from "../adapters/persistence/sqlite/project-context-cursor-v1.js";
+import { isCanonicalUtcMillisTimestampV1 } from "../application/canonical-utc-timestamp-v1.js";
 
 /**
  * Person list and open cursors (ADR-0024). Untrusted keysets, not MACs: a
@@ -13,7 +14,6 @@ import { frameCursorV1, unframeCursorV1 } from "../adapters/persistence/sqlite/p
 
 const LIST_VERSION = 2;
 const OPEN_VERSION = 3;
-const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const NUMBER = /^(0|[1-9][0-9]{0,7})$/;
 const IDS = {
   note: /^(?:ctx|cap)_[0-9a-f]{64}$/,
@@ -72,14 +72,10 @@ function openBinding(binding: PersonOpenCursorBindingV1): Buffer {
   });
 }
 
-function canonicalTime(value: string): boolean {
-  return CANONICAL_TIME.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
-}
-
 function sourcePosition(source: PersonListSourceV1, first: string, second: string): PersonListSourcePositionV1 {
   if (first === "" && second === "") return Object.freeze({ state: "start" });
   if (first === DONE && second === "") return Object.freeze({ state: "done" });
-  if (!canonicalTime(first) || !IDS[source].test(second)) invalid();
+  if (!isCanonicalUtcMillisTimestampV1(first) || !IDS[source].test(second)) invalid();
   return Object.freeze({ state: "after", added_at: first, id: second });
 }
 

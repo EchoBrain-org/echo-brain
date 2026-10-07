@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { randomUUID } from 'node:crypto';
+import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonPageCitationV1, type PersonPageCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
@@ -15,12 +15,11 @@ const MAX_REQUESTS = 160;
 const REVALIDATION_BATCH_SIZE = 50;
 const LIST_STATUSES = Object.freeze(['current', 'archived', 'deleted', 'trashed']);
 const STATUSES = Object.freeze([...LIST_STATUSES, 'draft', 'historical']);
-const EMPTY_DIGEST = textDigest('');
+const EMPTY_DIGEST = sha256Digest('');
 type Page = Readonly<{ id: string; space_id: string; title: string; version: string; status: string; occurred_at?: string; date_kind?: 'created' | 'version_created'; document?: string }>;
 type Item = Readonly<{ page: Page; section: string; offset: number; text?: string }>;
 type Cursor = Readonly<{ selection: string; path: string; query: Readonly<Record<string, string | readonly string[]>>; token: string }>;
 
-function textDigest(value: string): `sha256:${string}` { return `sha256:${createHash('sha256').update(value, 'utf8').digest('hex')}`; }
 function limit(value: number, maximum = 20): number {
   if (!Number.isInteger(value) || value < 1 || value > 50) confluenceFailure('invalid_request');
   return Math.min(value, maximum);
@@ -113,7 +112,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     if (handles.size >= MAX_HANDLES) confluenceFailure('unavailable');
     const citation = validatePersonPageCitationV1({ kind: 'page', tool_id: 'confluence', external_scope_id: cloud,
       page_id: item.page.id, section_id: item.section, version: item.page.version,
-      permalink: permalink(item.page), text_sha256: item.text === undefined ? EMPTY_DIGEST : textDigest(item.text) });
+      permalink: permalink(item.page), text_sha256: item.text === undefined ? EMPTY_DIGEST : sha256Digest(item.text) });
     const handle = `confluence_item_${randomUUID()}`;
     // Page bodies are never needed in a handle or audit. Keep only the released section in request memory.
     const { document: _document, ...page } = item.page;
@@ -243,12 +242,12 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     if (cited !== undefined && cited.version !== page.version) {
       // Section ids are ordinals, so an edit above the cited section shifts them.
       // Follow the cited text if it still exists; otherwise show the page from the top.
-      const moved = texts.findIndex(text => text.trim() !== '' && textDigest(text) === cited.text_sha256);
+      const moved = texts.findIndex(text => text.trim() !== '' && sha256Digest(text) === cited.text_sha256);
       if (moved >= 0) offset = moved;
       else { offset = 0; single = false; changed = true; }
     }
     if (offset >= texts.length) confluenceFailure(cited !== undefined ? 'not_found' : 'stale_access_state');
-    if (item.text !== undefined && textDigest(texts[offset]!) !== textDigest(item.text)) confluenceFailure('stale_access_state');
+    if (item.text !== undefined && sha256Digest(texts[offset]!) !== sha256Digest(item.text)) confluenceFailure('stale_access_state');
     if (single && cited !== undefined && texts[offset]!.trim() === '') confluenceFailure('not_found');
     const remaining = single ? 1 : texts.length - offset;
     if (remaining > 1 && maximum < 2) confluenceFailure('invalid_request');
@@ -361,7 +360,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
         const normalized = needsBody ? normalizeConfluencePageDocumentV1(page.document!) : undefined;
         for (const item of items) {
           if (!samePage(item.page, page)) confluenceFailure('stale_access_state');
-          if (item.text !== undefined && (normalized?.sections[item.offset] === undefined || textDigest(normalized.sections[item.offset]!) !== textDigest(item.text))) confluenceFailure('stale_access_state');
+          if (item.text !== undefined && (normalized?.sections[item.offset] === undefined || sha256Digest(normalized.sections[item.offset]!) !== sha256Digest(item.text))) confluenceFailure('stale_access_state');
         }
       });
       await verify(input.signal);
