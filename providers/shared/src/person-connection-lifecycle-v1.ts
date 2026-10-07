@@ -25,6 +25,8 @@ class PersonConnectionCompletionFailure extends Error {
 }
 
 function expiresAt(value: number): string { return new Date(value).toISOString(); }
+const credentialMaxAgeMs = 5 * 60_000;
+const credentialExpiryMarginMs = 60_000;
 function attemptResponse(value: PersonConnectionAttemptV1): PersonConnectionAttemptResponseV1 {
   return Object.freeze({ schema_version: 1 as const, attempt: value.attempt, expires_at: expiresAt(value.expires), status: value.status, failure_reason: value.failure_reason });
 }
@@ -61,22 +63,44 @@ export function createPersonConnectionLifecycleV1(options: {
   function tags(person: ConnectedPersonV1, attempt: string) { return { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: attempt }; }
   function authenticated(binding: PersonConnectorReadBindingV1, reference: string, expectedTags: Record<string, string>, current: () => void): PersonConnectionAuthenticatedFetchV1 {
     type Connection = Awaited<ReturnType<NangoPersonConnectionV1['connection']>>;
-    type Lookup = { promise: Promise<Connection>; controller: AbortController; waiters: number; settled: boolean };
+    type Lookup = { promise: Promise<Connection>; controller: AbortController; waiters: number; settled: boolean;
+      cache_until: number; usable_until: number; expires_at: number | undefined };
     // Each source/request or worker session owns a fresh transport. Keep the
     // verified credential here, never in the process-wide lifecycle or store.
     const expectedTagsHash = canonicalSha256(expectedTags);
     let lookup: Lookup | undefined;
-    async function connection(signal?: AbortSignal): Promise<{ credentials: Connection; lookup: Lookup }> {
+    const reusable = (selected: Lookup) => performance.now() < selected.cache_until &&
+      (selected.expires_at === undefined || Date.now() < selected.expires_at - credentialExpiryMarginMs);
+    function requireUsable(selected: Lookup) {
+      if (performance.now() >= selected.usable_until || (selected.expires_at !== undefined && Date.now() >= selected.expires_at)) {
+        if (lookup === selected) lookup = undefined;
+        failure('unavailable');
+      }
+    }
+    async function connection(signal?: AbortSignal): Promise<{ credentials: Connection; lookup: Lookup; cached: boolean }> {
       signal?.throwIfAborted();
+      if (lookup?.settled && !reusable(lookup)) lookup = undefined;
       if (lookup === undefined) {
         const controller = new AbortController();
-        const selected: Lookup = { controller, waiters: 0, settled: false,
+        const selected: Lookup = { controller, waiters: 0, settled: false, cache_until: 0, usable_until: 0, expires_at: undefined,
           promise: Promise.resolve().then(() => {
             controller.signal.throwIfAborted();
             return options.nango.connection(reference, controller.signal);
           }).then(value => {
             controller.signal.throwIfAborted();
             if (canonicalSha256(value.tags) !== expectedTagsHash) failure('unauthorized');
+            const received = performance.now();
+            const expiration = value.expires_at === undefined ? undefined : Date.parse(value.expires_at);
+            if (expiration !== undefined && !Number.isFinite(expiration)) failure('invalid_output');
+            selected.expires_at = expiration;
+            // Monotonic deadlines prevent clock rollback from extending reuse.
+            const tokenDeadline = expiration === undefined ? Infinity : received + expiration - Date.now();
+            selected.usable_until = Math.min(received + credentialMaxAgeMs, tokenDeadline);
+            selected.cache_until = Math.min(received + credentialMaxAgeMs, tokenDeadline - credentialExpiryMarginMs);
+            requireUsable(selected);
+            // A valid token already within the margin may serve this lookup's
+            // waiters once, but a later read must acquire fresh credentials.
+            if (!reusable(selected) && lookup === selected) lookup = undefined;
             return value;
           }).catch(error => {
             if (lookup === selected) lookup = undefined;
@@ -86,12 +110,13 @@ export function createPersonConnectionLifecycleV1(options: {
         lookup = selected;
       }
       const selected = lookup;
+      const cached = selected.settled;
       selected.waiters += 1;
       try {
         // Cancelling one parallel evidence read must not cancel other waiters.
         const credentials = await (signal === undefined ? selected.promise
           : abortableProviderOperationV1(() => selected.promise, signal));
-        return { credentials, lookup: selected };
+        return { credentials, lookup: selected, cached };
       } finally {
         selected.waiters -= 1;
         if (!selected.settled && selected.waiters === 0) {
@@ -107,14 +132,26 @@ export function createPersonConnectionLifecycleV1(options: {
       if (target.origin !== provider.credential_origin || target.username !== '' || target.password !== '' || target.hash !== '' ||
           !provider.credential_paths(binding.external_scope_id ?? '').some(path => path.endsWith('/') ? target.pathname.startsWith(path) : target.pathname === path) ||
           init.redirect !== 'error') failure('unauthorized');
-      const lease = await connection(init.signal ?? undefined);
-      const credentials = lease.credentials;
-      if (canonicalSha256(credentials.tags) !== expectedTagsHash) {
-        if (lookup === lease.lookup) lookup = undefined;
-        failure('unauthorized');
+      let lease: Awaited<ReturnType<typeof connection>> | undefined;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        lease = await connection(init.signal ?? undefined);
+        if (canonicalSha256(lease.credentials.tags) !== expectedTagsHash) {
+          if (lookup === lease.lookup) lookup = undefined;
+          failure('unauthorized');
+        }
+        current(); init.signal?.throwIfAborted();
+        if (lease.cached && !reusable(lease.lookup)) {
+          if (lookup === lease.lookup) lookup = undefined;
+          // One acquisition handoff covers a cached lease aging while awaited;
+          // it happens before provider I/O and never retries a provider read.
+          if (attempt === 0) continue;
+          failure('unavailable');
+        }
+        requireUsable(lease.lookup);
+        break;
       }
-      current(); init.signal?.throwIfAborted();
-      const headers = new Headers(init.headers); headers.set('Authorization', `Bearer ${credentials.access_token}`);
+      if (lease === undefined) failure('unavailable');
+      const headers = new Headers(init.headers); headers.set('Authorization', `Bearer ${lease.credentials.access_token}`);
       try {
         const response = await options.fetch(url, { ...init, headers });
         // Preserve the provider's denial; a later explicit read must fetch

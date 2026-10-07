@@ -83,6 +83,220 @@ describe('person connection lifecycle request credential reuse', () => {
     } finally { subject.database.close(); }
   });
 
+  it('renews an unknown-expiry credential after the five minute per-transport cache cap', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    vi.setSystemTime(new Date('2026-10-08T00:00:00.000Z'));
+    const subject = fixture();
+    try {
+      const session = subject.lifecycle.open(person, () => {});
+      subject.connection
+        .mockResolvedValueOnce({ tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt }, access_token: 'synthetic-first-token' })
+        .mockResolvedValueOnce({ tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt }, access_token: 'synthetic-renewed-token' });
+
+      await expect(session.transport.fetch(request, transportInit())).resolves.toBeInstanceOf(Response);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await expect(session.transport.fetch(request, transportInit())).resolves.toBeInstanceOf(Response);
+
+      expect(subject.connection).toHaveBeenCalledTimes(2);
+      expect(new Headers((subject.providerFetch.mock.calls[1]![1] as RequestInit).headers).get('authorization')).toBe('Bearer synthetic-renewed-token');
+    } finally {
+      subject.database.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses a near-expiry fresh credential once but immediately renews before a second provider read', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    vi.setSystemTime(new Date('2026-10-08T00:00:00.000Z'));
+    const subject = fixture();
+    try {
+      const session = subject.lifecycle.open(person, () => {});
+      subject.connection
+        .mockResolvedValueOnce({ tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt }, access_token: 'synthetic-near-expiry-token', expires_at: '2026-10-08T00:00:30.000Z' })
+        .mockResolvedValueOnce({ tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt }, access_token: 'synthetic-renewed-token', expires_at: '2026-10-08T01:00:00.000Z' });
+
+      await expect(session.transport.fetch(request, transportInit())).resolves.toBeInstanceOf(Response);
+      await expect(session.transport.fetch(request, transportInit())).resolves.toBeInstanceOf(Response);
+
+      expect(subject.connection).toHaveBeenCalledTimes(2);
+      expect(subject.providerFetch).toHaveBeenCalledTimes(2);
+      expect(new Headers((subject.providerFetch.mock.calls[0]![1] as RequestInit).headers).get('authorization')).toBe('Bearer synthetic-near-expiry-token');
+      expect(new Headers((subject.providerFetch.mock.calls[1]![1] as RequestInit).headers).get('authorization')).toBe('Bearer synthetic-renewed-token');
+    } finally {
+      subject.database.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('shares a fresh near-expiry credential with its original concurrent waiters before renewing later', async () => {
+    type Connection = Awaited<ReturnType<NangoPersonConnectionV1['connection']>>;
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    vi.setSystemTime(new Date('2026-10-08T00:00:00.000Z'));
+    const initial = deferred<Connection>();
+    const connection = vi.fn((_reference: string, _signal?: AbortSignal): Promise<Connection> => initial.promise);
+    const subject = fixture({ connection });
+    try {
+      const session = subject.lifecycle.open(person, () => {});
+      const first = session.transport.fetch(request, transportInit());
+      const second = session.transport.fetch(request, transportInit());
+      initial.resolve({
+        tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt },
+        access_token: 'synthetic-near-expiry-token', expires_at: '2026-10-08T00:00:30.000Z',
+      });
+
+      await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+      connection.mockResolvedValueOnce({
+        tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt },
+        access_token: 'synthetic-renewed-token', expires_at: '2026-10-08T01:00:00.000Z',
+      });
+      await expect(session.transport.fetch(request, transportInit())).resolves.toBeInstanceOf(Response);
+
+      expect(connection).toHaveBeenCalledTimes(2);
+      expect(subject.providerFetch).toHaveBeenCalledTimes(3);
+      expect(new Headers((subject.providerFetch.mock.calls[0]![1] as RequestInit).headers).get('authorization')).toBe('Bearer synthetic-near-expiry-token');
+      expect(new Headers((subject.providerFetch.mock.calls[1]![1] as RequestInit).headers).get('authorization')).toBe('Bearer synthetic-near-expiry-token');
+      expect(new Headers((subject.providerFetch.mock.calls[2]![1] as RequestInit).headers).get('authorization')).toBe('Bearer synthetic-renewed-token');
+    } finally {
+      subject.database.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('hands off a cached lease that ages while its resolved promise is awaited before provider I/O', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    vi.setSystemTime(new Date('2026-10-08T00:00:00.000Z'));
+    const subject = fixture();
+    try {
+      const session = subject.lifecycle.open(person, () => {});
+      subject.connection
+        .mockResolvedValueOnce({ tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt }, access_token: 'synthetic-old-token' })
+        .mockResolvedValueOnce({ tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt }, access_token: 'synthetic-renewed-token' });
+      await expect(session.transport.fetch(request, transportInit())).resolves.toBeInstanceOf(Response);
+
+      const agingRead = session.transport.fetch(request, transportInit());
+      await Promise.resolve();
+      vi.advanceTimersByTime(5 * 60_000);
+      await expect(agingRead).resolves.toBeInstanceOf(Response);
+
+      expect(subject.connection).toHaveBeenCalledTimes(2);
+      expect(subject.providerFetch).toHaveBeenCalledTimes(2);
+      expect(new Headers((subject.providerFetch.mock.calls[1]![1] as RequestInit).headers).get('authorization')).toBe('Bearer synthetic-renewed-token');
+    } finally {
+      subject.database.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let a wall-clock rollback extend reuse of a known-expiry credential', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    vi.setSystemTime(new Date('2026-10-08T00:00:00.000Z'));
+    const subject = fixture();
+    try {
+      const session = subject.lifecycle.open(person, () => {});
+      subject.connection
+        .mockResolvedValueOnce({ tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt }, access_token: 'synthetic-first-token', expires_at: '2026-10-08T00:02:00.000Z' })
+        .mockResolvedValueOnce({ tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt }, access_token: 'synthetic-renewed-token', expires_at: '2026-10-08T01:00:00.000Z' });
+
+      await expect(session.transport.fetch(request, transportInit())).resolves.toBeInstanceOf(Response);
+      await vi.advanceTimersByTimeAsync(61_000);
+      vi.setSystemTime(new Date('2026-10-07T23:00:00.000Z'));
+      await expect(session.transport.fetch(request, transportInit())).resolves.toBeInstanceOf(Response);
+
+      expect(subject.connection).toHaveBeenCalledTimes(2);
+      expect(new Headers((subject.providerFetch.mock.calls[1]![1] as RequestInit).headers).get('authorization')).toBe('Bearer synthetic-renewed-token');
+    } finally {
+      subject.database.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('shares one concurrent renewal after the cache-age cap', async () => {
+    type Connection = Awaited<ReturnType<NangoPersonConnectionV1['connection']>>;
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    vi.setSystemTime(new Date('2026-10-08T00:00:00.000Z'));
+    const renewal = deferred<Connection>();
+    const subject = fixture();
+    try {
+      const session = subject.lifecycle.open(person, () => {});
+      subject.connection
+        .mockResolvedValueOnce({ tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt }, access_token: 'synthetic-first-token' })
+        .mockImplementationOnce(() => renewal.promise);
+      await expect(session.transport.fetch(request, transportInit())).resolves.toBeInstanceOf(Response);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+      const first = session.transport.fetch(request, transportInit());
+      const second = session.transport.fetch(request, transportInit());
+      renewal.resolve({ tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt }, access_token: 'synthetic-renewed-token' });
+
+      await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+      expect(subject.connection).toHaveBeenCalledTimes(2);
+      expect(subject.providerFetch).toHaveBeenCalledTimes(3);
+      expect(new Headers((subject.providerFetch.mock.calls[1]![1] as RequestInit).headers).get('authorization')).toBe('Bearer synthetic-renewed-token');
+      expect(new Headers((subject.providerFetch.mock.calls[2]![1] as RequestInit).headers).get('authorization')).toBe('Bearer synthetic-renewed-token');
+    } finally {
+      subject.database.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuses an already-expired newly fetched credential before provider I/O', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    vi.setSystemTime(new Date('2026-10-08T00:00:00.000Z'));
+    const subject = fixture();
+    try {
+      const session = subject.lifecycle.open(person, () => {});
+      subject.connection.mockResolvedValueOnce({
+        tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt },
+        access_token: 'synthetic-expired-token', expires_at: '2026-10-07T23:59:59.999Z',
+      });
+
+      await expect(session.transport.fetch(request, transportInit())).rejects.toMatchObject({ code: 'unavailable' });
+      expect(subject.connection).toHaveBeenCalledTimes(1);
+      expect(subject.providerFetch).not.toHaveBeenCalled();
+    } finally {
+      subject.database.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let an old delayed 401 evict a credential renewed by the cache-age cap', async () => {
+    const firstProviderResponse = deferred<Response>();
+    const firstProviderRead = deferred<void>();
+    let providerReads = 0;
+    const providerFetch = vi.fn(async () => {
+      providerReads += 1;
+      if (providerReads === 1) {
+        firstProviderRead.resolve();
+        return firstProviderResponse.promise;
+      }
+      return new Response('{}');
+    });
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    vi.setSystemTime(new Date('2026-10-08T00:00:00.000Z'));
+    const subject = fixture({ fetch: providerFetch });
+    try {
+      const session = subject.lifecycle.open(person, () => {});
+      subject.connection
+        .mockResolvedValueOnce({ tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt }, access_token: 'synthetic-old-token' })
+        .mockResolvedValueOnce({ tags: { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: subject.stored.attempt }, access_token: 'synthetic-renewed-token' });
+
+      const slowOldRead = session.transport.fetch(request, transportInit());
+      await firstProviderRead.promise;
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await expect(session.transport.fetch(request, transportInit())).resolves.toBeInstanceOf(Response);
+      firstProviderResponse.resolve(new Response('{}', { status: 401 }));
+      await expect(slowOldRead).resolves.toMatchObject({ status: 401 });
+      await expect(session.transport.fetch(request, transportInit())).resolves.toBeInstanceOf(Response);
+
+      expect(subject.connection).toHaveBeenCalledTimes(2);
+      expect(new Headers((subject.providerFetch.mock.calls[1]![1] as RequestInit).headers).get('authorization')).toBe('Bearer synthetic-renewed-token');
+      expect(new Headers((subject.providerFetch.mock.calls[2]![1] as RequestInit).headers).get('authorization')).toBe('Bearer synthetic-renewed-token');
+    } finally {
+      subject.database.close();
+      vi.useRealTimers();
+    }
+  });
+
   it('lets an aborted caller leave a shared in-flight credential read usable by another caller', async () => {
     const lookup = deferred<{ readonly tags: Readonly<Record<string, string>>; readonly access_token: string }>();
     const connection = vi.fn(() => lookup.promise);
