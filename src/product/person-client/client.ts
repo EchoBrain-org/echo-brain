@@ -182,6 +182,24 @@ function validateEmployeeDisplayName(name: string): void {
   }
 }
 
+function invitationOutputPath(path: string): string {
+  try {
+    return preflightPersonOnboardingInvitationOutput(path);
+  } catch (error) {
+    throw new EmployeeMutationError(
+      "invitation_output_invalid",
+      "not_submitted",
+      (error as Error).message,
+    );
+  }
+}
+
+/** Preserve the public query error type before transport schema validation. */
+function validateAskInput(question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined): void {
+  validatePersonQueryText(question);
+  if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
+}
+
 function summary(
   stored: StoredPersonClientSessionV1,
 ): PersonClientSessionSummary {
@@ -657,23 +675,19 @@ export class PersonClient {
 
   /** Agentic Ask (RFC-0003), the only Ask since the one-shot routes were retired (ADR-0022). */
   async ask(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswer> {
-    // Preserve the public query error type before transport schema validation.
-    validatePersonQueryText(question);
-    if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
+    validateAskInput(question, scope);
     return this.withReadSession((authority, token) => authority.askV3(token, question, scope, signal));
   }
 
   /** Explicit opt-in to the versioned ticket-capable response. */
   async askWithTickets(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV5> {
-    validatePersonQueryText(question);
-    if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
+    validateAskInput(question, scope);
     return this.withReadSession((authority, token) => authority.askV4(token, question, scope, signal));
   }
 
   /** Uses all request-advertised live evidence sources. Falls back only when an older Authority has no V5 route. */
   async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV6 | PersonAnswerV5> {
-    validatePersonQueryText(question);
-    if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
+    validateAskInput(question, scope);
     return this.withReadSession(async (authority, token) => {
       try { return await authority.askV5(token, question, scope, signal); }
       catch (error) {
@@ -771,16 +785,7 @@ export class PersonClient {
         "Employee email must be a canonical lowercase mailbox",
       );
     }
-    let outputPath: string;
-    try {
-      outputPath = preflightPersonOnboardingInvitationOutput(input.output_path);
-    } catch (error) {
-      throw new EmployeeMutationError(
-        "invitation_output_invalid",
-        "not_submitted",
-        (error as Error).message,
-      );
-    }
+    const outputPath = invitationOutputPath(input.output_path);
     const stored = await this.employeeManagementSession();
     try {
       return await this.issueEmployeeInvitation(outputPath, input.email, "invite", () =>
@@ -804,16 +809,7 @@ export class PersonClient {
         "Employee email must be a canonical durable identity",
       );
     }
-    let outputPath: string;
-    try {
-      outputPath = preflightPersonOnboardingInvitationOutput(input.output_path);
-    } catch (error) {
-      throw new EmployeeMutationError(
-        "invitation_output_invalid",
-        "not_submitted",
-        (error as Error).message,
-      );
-    }
+    const outputPath = invitationOutputPath(input.output_path);
     const stored = await this.employeeManagementSession();
     try {
       return await this.issueEmployeeInvitation(
