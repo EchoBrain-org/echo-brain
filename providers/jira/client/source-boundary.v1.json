@@ -13,7 +13,6 @@
   "owned_source_paths": ["providers/jira/client/src/**"],
   "allowed_internal_paths": ["providers/jira/client/src/**"],
   "allowed_workspace_packages": [
-    "@echo-brain/federation-protocol",
     "@echo-brain/organization-api"
   ],
   "allowed_external_packages": [],
@@ -25,7 +24,6 @@
       "from": "providers/jira/client/src/**",
       "allowed_imports": ["providers/jira/client/src/**"],
       "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol",
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],

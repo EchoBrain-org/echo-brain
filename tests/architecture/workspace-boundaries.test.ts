@@ -472,19 +472,16 @@ describe("workspace source boundaries", () => {
         "@echo-brain/provider-runtime"
       ],
       "@echo-brain/provider-confluence-client": [
-        "@echo-brain/federation-protocol",
         "@echo-brain/organization-api"
       ],
       "@echo-brain/provider-jira": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-api",
         "@echo-brain/organization-authority-kernel",
-        "@echo-brain/organization-processing",
         "@echo-brain/provider-jira-client",
         "@echo-brain/provider-runtime"
       ],
       "@echo-brain/provider-jira-client": [
-        "@echo-brain/federation-protocol",
         "@echo-brain/organization-api"
       ]
     });;

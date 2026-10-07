@@ -10,7 +10,6 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../../../packages/organization-api" },
-    { "path": "../../../packages/federation-protocol" }
+    { "path": "../../../packages/organization-api" }
   ]
 }

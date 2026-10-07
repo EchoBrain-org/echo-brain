@@ -374,7 +374,6 @@
       "name": "authority-application-depends-inward",
       "from": "services/organization-authority/src/application/**",
       "allowed_imports": [
-        "services/organization-authority/src/domain/**",
         "services/organization-authority/src/application/**"
       ],
       "allowed_workspace_packages": [
@@ -393,7 +392,6 @@
       "name": "authority-file-adapters-implement-application-ports",
       "from": "services/organization-authority/src/adapters/files/**",
       "allowed_imports": [
-        "services/organization-authority/src/domain/**",
         "services/organization-authority/src/application/**",
         "services/organization-authority/src/adapters/**"
       ],
@@ -418,7 +416,6 @@
       "name": "authority-oidc-adapter-implements-person-session-port",
       "from": "services/organization-authority/src/adapters/oidc/**",
       "allowed_imports": [
-        "services/organization-authority/src/domain/**",
         "services/organization-authority/src/application/**",
         "services/organization-authority/src/adapters/**"
       ],
@@ -443,7 +440,6 @@
       "name": "authority-persistence-adapters-implement-application-ports",
       "from": "services/organization-authority/src/adapters/persistence/**",
       "allowed_imports": [
-        "services/organization-authority/src/domain/**",
         "services/organization-authority/src/application/**",
         "services/organization-authority/src/adapters/**"
       ],
@@ -469,7 +465,6 @@
       "name": "authority-system-adapters-implement-application-ports",
       "from": "services/organization-authority/src/adapters/system/**",
       "allowed_imports": [
-        "services/organization-authority/src/domain/**",
         "services/organization-authority/src/application/**",
         "services/organization-authority/src/adapters/**"
       ],
@@ -492,7 +487,6 @@
       "name": "authority-security-adapters-implement-application-ports",
       "from": "services/organization-authority/src/adapters/security/**",
       "allowed_imports": [
-        "services/organization-authority/src/domain/**",
         "services/organization-authority/src/application/**",
         "services/organization-authority/src/adapters/**"
       ],
@@ -515,10 +509,8 @@
       "name": "authority-presentation-calls-application",
       "from": "services/organization-authority/src/presentation/**",
       "allowed_imports": [
-        "services/organization-authority/src/domain/**",
         "services/organization-authority/src/application/**",
-        "services/organization-authority/src/presentation/**",
-        "services/organization-authority/src/shared/core-runtime-observation-v1.ts"
+        "services/organization-authority/src/presentation/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/organization-protocol",
@@ -541,26 +533,9 @@
       "allowed_imports": [
         "services/organization-authority/src/adapters/**",
         "services/organization-authority/src/application/**",
-        "services/organization-authority/src/answer-composition/**",
         "services/organization-authority/src/composition/**",
-        "services/organization-authority/src/domain/**",
-        "services/organization-authority/src/shared/staging-synthetic-meeting-canary-envelope-v1.ts",
         "services/organization-authority/src/presentation/**",
-        "services/organization-authority/src/state-lineage/**",
-        "services/organization-authority/src/shared/journey-telemetry-v1.ts",
-        "services/organization-authority/src/processing/adapters/decision-processors/llm/**",
-        "services/organization-authority/src/processing/adapters/approval-delivery/slack/**",
-        "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
-        "services/organization-authority/src/processing/adapters/meeting-sources/synthetic-demo/**",
-        "services/organization-authority/src/processing/core/contracts/adapter.ts",
-        "services/organization-authority/src/processing/core/contracts/**",
-        "services/organization-authority/src/processing/core/ports/adapters.ts",
-        "services/organization-authority/src/processing/core/processing/brief.ts",
-        "services/organization-authority/src/processing/admitted-meeting-processing/**",
-        "services/organization-authority/src/processing/adapters/approval-resolution/slack/**",
-        "services/organization-authority/src/quality/**",
-        "services/organization-authority/src/shared/core-runtime-observation-v1.ts",
-        "services/organization-authority/src/shared/telemetry-vocabulary-v1.ts"
+        "services/organization-authority/src/state-lineage/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -595,10 +570,7 @@
     {
       "name": "authority-state-lineage-initializer-is-write-scoped",
       "from": "services/organization-authority/src/state-lineage/authority-state-lineage-initializer.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/state-lineage/state-lineage-manifest-v1.ts",
-        "services/organization-authority/src/state-lineage/state-lineage-preopen-guard.ts"
-      ],
+      "allowed_imports": [],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-authority-kernel"
