@@ -4,27 +4,8 @@
     "kind": "echo-agentic-research-result-v1",
     "trigger": "sweep",
     "goal": {
-      "kind": "recheck_findings",
-      "findings": [
-        {
-          "finding": "Dashboard published",
-          "expected": "Published by September 11",
-          "citations": [
-            {
-              "kind": "approved_record",
-              "atom_id": "sha256:b08825787829a1c463b66265b7074c56494848206e6776253145f422328fe2fa",
-              "record_sha256": "sha256:5067de23b65408a661968ab9273e0506b9461bd452c8d352f2ce2bdb5490417d",
-              "policy_id": "organization-member-readable-person-v2"
-            },
-            {
-              "kind": "approved_record",
-              "atom_id": "sha256:5dfdd8d3c18dff2fbc204dea32d38c9b4d6a8c3b4dc4b8cc139b79b719048392",
-              "record_sha256": "sha256:700a2b02dbad883cf912004a30193a1730451491938ba753ee9077b777b1a3b1",
-              "policy_id": "organization-member-readable-person-v2"
-            }
-          ]
-        }
-      ]
+      "kind": "task",
+      "task": "Recheck the earlier findings below. Each says what was expected to change and lists the items cited then, already re-read now. Make each finding one part. Re-read the current items and find their current state, and any newer item about the same change.\nNever treat a finding as resolved without reading the current item. An item that could not be read is not evidence that anything changed.\nFindings:\n1. \"Dashboard published\" Expected: \"Published by September 11\". Cited then: E1, E2."
     },
     "budget": {
       "deadline_ms": 300000,

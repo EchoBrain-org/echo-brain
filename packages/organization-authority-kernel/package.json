@@ -81,6 +81,10 @@
       "types": "./dist/answer-composition/agentic-ask-v1.d.ts",
       "import": "./dist/answer-composition/agentic-ask-v1.js"
     },
+    "./answer-composition/agentic-trigger-definitions-v1": {
+      "types": "./dist/answer-composition/agentic-trigger-definitions-v1.d.ts",
+      "import": "./dist/answer-composition/agentic-trigger-definitions-v1.js"
+    },
     "./application/ports/authority-clock": {
       "types": "./dist/application/ports/authority-clock.d.ts",
       "import": "./dist/application/ports/authority-clock.js"

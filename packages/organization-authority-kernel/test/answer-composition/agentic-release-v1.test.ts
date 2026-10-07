@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { createAgenticAskV1, createAgenticAskV3, createAgenticResearchV1, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import type { AgenticModelGateStatsV1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1 } from "../../src/answer-composition/agentic-release-v1.js";
+import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import type { AnswerCompositionStageObservationV1 } from "../../src/answer-composition/structured-generation-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
@@ -14,6 +15,8 @@ import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } fro
  * `audit()` appended, at the same point in the desk call order. The baseline
  * was recorded from the untouched implementation at 98d6def (research trigger
  * contract v1, Task 2.1); never regenerate it from the code being verified.
+ * Task 4 re-recorded only the two Sweep entries, whose task text (and so their
+ * prompt fingerprints) changed; every Ask entry is unchanged.
  */
 const BASELINE = "./__snapshots__/agentic-release-v1.audit.json";
 const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
@@ -99,9 +102,10 @@ function harness(kind: Kind, replies: readonly unknown[], desk: Partial<Evidence
 
 const dashboard = record("dashboard", "Approved: publish the dashboard by September 11.");
 const owner = record("owner", "Approved: Jules owns the dashboard.");
-const sweepGoal = { kind: "recheck_findings" as const, findings: [
+const sweepTrigger = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "sweep")!;
+const sweep = { trigger: "sweep", brief: sweepTrigger.brief(sweepTrigger.parseEvent({ findings: [
   { finding: "Dashboard published", expected: "Published by September 11", citations: [dashboard.citation, owner.citation] },
-] };
+] })) };
 const sweepReplies = [
   step([{ need: "dashboard published", status: "open" }], [{ tool: "search", args: { query: "dashboard published" } }], "Dashboard"),
   step([{ need: "dashboard published", status: "found", evidence: ["E1", "E3"] }], [{ tool: "finish" }], "Dashboard"),
@@ -157,13 +161,13 @@ async function observeAll() {
   }
   {
     const h = harness("research", sweepReplies, sweepDesk);
-    const ending = await settle(() => (h.create() as ReturnType<typeof createAgenticResearchV1>).research({ trigger: "sweep", goal: sweepGoal }));
+    const ending = await settle(() => (h.create() as ReturnType<typeof createAgenticResearchV1>).research(sweep));
     observed.sweep = { ending, trace: h.trace, audit: h.audit };
   }
   {
     // The first step's reply lands after the five-minute background deadline.
     const h = harness("research", sweepReplies, sweepDesk, { model_ms: 301_000 });
-    const ending = await settle(() => (h.create() as ReturnType<typeof createAgenticResearchV1>).research({ trigger: "sweep", goal: sweepGoal }));
+    const ending = await settle(() => (h.create() as ReturnType<typeof createAgenticResearchV1>).research(sweep));
     observed.sweep_timed_out = { ending, trace: h.trace, audit: h.audit };
   }
   {

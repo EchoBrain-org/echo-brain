@@ -7,6 +7,7 @@ import {
   createAgenticResearchV1,
   type AgenticResearchResultV1,
 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { askerOf, scopeOf } from './person-answer-v3-route.js';
 import { bindPersonLiveEvidenceDeskV1, configuredPersonLiveSourcesV1, type CreatePersonLiveAnswerRouteOptionsV1 } from './person-live-answer-route-v1.js';
@@ -60,7 +61,8 @@ function failure(error: unknown): NonNullable<PersonResearchEvalReadResponseV1['
  * Staging-only research evaluation (research loop evaluation v1). Each person
  * may run one trigger at a time; its result lives only in this process's
  * memory until read once or until it expires. Nothing is written to disk,
- * telemetry or logs beyond the loop's existing content-free audit.
+ * telemetry or logs beyond the loop's existing content-free audit. The named
+ * trigger definition turns the request's input into a brief.
  */
 export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOptionsV1): PersonResearchEvalHttpApplicationV1 {
   const now = options.now ?? (() => Date.now());
@@ -79,11 +81,17 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
     async start(input) {
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
       const owner = ownerOf(authorization);
+      const request = input.request;
+      const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === request.trigger);
+      if (definition === undefined) throw new AuthorityOperationError('invalid_request', 'Research evaluation trigger is not known');
+      // The definition refuses an event it cannot run, before any run starts.
+      const defined = definition.brief(definition.parseEvent(request.input));
+      // Only a person's question reads their own additions alone; a task's starting items are shared evidence.
+      if (request.mine === true && defined.goal.kind !== 'question') throw new AuthorityOperationError('invalid_request', 'Research evaluation scope is invalid');
       purge();
       if ([...runs.values()].some(run => run.owner === owner && run.status === 'running')) {
         throw new AuthorityOperationError('conflict', 'A research run is already running for this person');
       }
-      const request = input.request;
       const scope = scopeOf(request);
       const runId = `rr_${randomUUID()}`;
       const run: Run = { owner, controller: new AbortController(), status: 'running', expires_at: Number.POSITIVE_INFINITY };
@@ -93,7 +101,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
         principal_id: authorization.principal_id, membership_id: authorization.membership_id,
         session_family_id: authorization.session_family_id, request_id: `research_${randomUUID()}`,
       };
-      const budget = request.budget === 'live' ? AGENTIC_RESEARCH_LIVE_BUDGET_V1 : AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1;
+      const brief = request.budget === undefined ? defined : { ...defined, budget: request.budget === 'live' ? AGENTIC_RESEARCH_LIVE_BUDGET_V1 : AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 };
       const signal = run.controller.signal;
       // The run outlives this request: it is bound to its own controller, not the caller's connection.
       void (async () => {
@@ -101,17 +109,16 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
           const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, signal }, context);
           run.revalidate = readSignal => desk.revalidate({ ...(readSignal === undefined ? {} : { signal: readSignal }) });
           const asker = askerOf(options, authorization);
-          // Ask runs exactly as served, including the optional small-scope preload.
+          // Runs exactly as served: the brief asks for the small-scope preload where the deployment allows it.
           const loop = createAgenticResearchV1({ desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
-            ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true && request.trigger === 'ask' ? { small_scope_shortcut: true } : {}) });
-          if (request.trigger === 'ask') {
-            const output = await loop.answerWithResearch({ question: request.question, budget, signal });
+            ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}) });
+          if (brief.goal.kind === 'question') {
+            // A question is Ask's: its writer answers it.
+            const output = await loop.answerWithResearch({ question: brief.goal.question, budget: brief.budget, signal });
             run.research = output.research;
             run.ask = Object.freeze({ writer_evidence: output.writer_evidence, response: output.response });
-          } else if (request.trigger === 'check') {
-            run.research = await loop.research({ trigger: 'check', goal: { kind: 'check_record', record: request.record }, budget, signal });
           } else {
-            run.research = await loop.research({ trigger: 'sweep', goal: { kind: 'recheck_findings', findings: request.findings }, budget, signal });
+            run.research = await loop.research({ trigger: definition.name, brief, signal });
           }
           run.status = 'completed';
         } catch (error) {

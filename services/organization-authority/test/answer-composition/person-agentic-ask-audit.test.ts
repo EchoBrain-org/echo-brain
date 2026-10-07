@@ -1,6 +1,7 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import { SqlitePersonAgenticAskAuditV1 } from "../../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
+import { AGENTIC_TRIGGER_NAMES_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
 import { applyAuthorityBaselineV11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
@@ -57,6 +58,27 @@ describe("agentic Ask audit", () => {
       const rows = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").all() as { body_json: string }[];
       expect(rows).toHaveLength(2);
       expect(rows.map(value => JSON.parse(value.body_json))).toEqual(expect.arrayContaining([expect.objectContaining({ trigger: "check" }), expect.objectContaining({ budget: "background", rounds: 20 })]));
+    } finally { database.close(); }
+  });
+
+  it("accepts every research-only trigger the definitions name, and no other", () => {
+    const database = openAuthorityDatabase(":memory:");
+    applyAuthorityBaselineV11(database);
+    try {
+      const store = new SqlitePersonAgenticAskAuditV1(database);
+      const entry = {
+        kind: "echo-agentic-ask-audit-v1" as const, outcome: "partial" as const, receipt_digests: [digest("receipt")],
+        rounds: 20, model_calls: 0, repairs: 0, fallbacks: 0, citation_count: 3,
+        checked_at: "2026-10-06T00:00:00.000Z", prompt_sha256: digest("prompt"), answer_sha256: digest("plan"), response_sha256: digest("result"),
+        generations: [], generation_usage: { input_tokens: null, output_tokens: null, total_tokens: null }, finish_reason_counts: {},
+      };
+      expect(AGENTIC_TRIGGER_NAMES_V1.length).toBeGreaterThan(0);
+      for (const [index, trigger] of AGENTIC_TRIGGER_NAMES_V1.entries()) store.forRequest({ ...requestContext, request_id: `named_${index}` }).append({ ...entry, trigger });
+      for (const trigger of ["ask", "drift", "", "CHECK"]) {
+        expect(() => store.forRequest({ ...requestContext, request_id: `other_${trigger}` }).append({ ...entry, trigger })).toThrow("Agentic Ask audit entry is invalid");
+      }
+      const rows = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").all() as { body_json: string }[];
+      expect(rows.map(value => JSON.parse(value.body_json).trigger as string).sort()).toEqual([...AGENTIC_TRIGGER_NAMES_V1].sort());
     } finally { database.close(); }
   });
 

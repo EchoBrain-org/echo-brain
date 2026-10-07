@@ -10,6 +10,7 @@ import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-s
 
 const record = { kind: 'approved_record' as const, atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'organization-member-readable-person-v2' as const };
 const member = (name: string) => ({ principal_id: `principal-${name}`, membership_id: `member-${name}`, session_family_id: `family-${name}` });
+const ask = (question: string) => ({ schema_version: 1 as const, trigger: 'ask', budget: 'live' as const, input: { question } });
 
 /** No records, no originals: research finishes as unusable and the writer is skipped, which is enough to exercise the registry. */
 function harness(options: { readonly generate?: (input: StructuredGenerationInput) => Promise<unknown>; readonly openRecord?: () => never; readonly small_scope_shortcut?: true } = {}) {
@@ -54,7 +55,7 @@ function harness(options: { readonly generate?: (input: StructuredGenerationInpu
 describe('staging research evaluation runs', () => {
   it('runs an Ask in the background and delivers its research result, readable again only briefly', async () => {
     const h = harness();
-    const receipt = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Why is DVT on hold?' } });
+    const receipt = await h.application.start({ access_token: 'token-a', request: ask('Why is DVT on hold?') });
     expect(receipt).toMatchObject({ kind: 'echo-person-research-eval-run-v1', status: 'running' });
     const result = await h.settled('token-a', receipt.run_id);
     expect(result).toMatchObject({ status: 'completed', research: { kind: 'echo-agentic-research-result-v1', trigger: 'ask', stop: { reason: 'unusable_step' } }, ask: { writer_evidence: [], response: { schema_version: 6 } } });
@@ -68,18 +69,18 @@ describe('staging research evaluation runs', () => {
 
   it('records a deadline as a timed_out failure and frees the person for another run', async () => {
     const h = harness({ generate: async () => { throw new AgenticAskDeadlineErrorV1(); } });
-    const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Too slow?' } });
+    const run = await h.application.start({ access_token: 'token-a', request: ask('Too slow?') });
     expect(await h.settled('token-a', run.run_id)).toMatchObject({ status: 'failed', error: { code: 'timed_out', message: 'The research run reached its deadline' } });
-    await expect(h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Again?' } })).resolves.toMatchObject({ status: 'running' });
+    await expect(h.application.start({ access_token: 'token-a', request: ask('Again?') })).resolves.toMatchObject({ status: 'running' });
   });
 
   it('refuses a second run while one is running for the same person, but not for another person', async () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const h = harness({ generate: async () => { await gate; return { parts: [{ question: 'Q', needs: [{ need: 'f', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }; } });
-    const first = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'ask', budget: 'live', question: 'First?' } });
-    await expect(h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Second?' } })).rejects.toMatchObject({ code: 'conflict' });
-    const other = await h.application.start({ access_token: 'token-b', request: { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Other?' } });
+    const first = await h.application.start({ access_token: 'token-a', request: ask('First?') });
+    await expect(h.application.start({ access_token: 'token-a', request: ask('Second?') })).rejects.toMatchObject({ code: 'conflict' });
+    const other = await h.application.start({ access_token: 'token-b', request: ask('Other?') });
     expect((await h.read('token-a', first.run_id)).status).toBe('running');
     release();
     expect((await h.settled('token-a', first.run_id)).status).toBe('completed');
@@ -88,7 +89,7 @@ describe('staging research evaluation runs', () => {
 
   it('rechecks access before releasing a finished result', async () => {
     const h = harness();
-    const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Still mine?' } });
+    const run = await h.application.start({ access_token: 'token-a', request: ask('Still mine?') });
     await vi.waitFor(() => expect(h.audits).toHaveLength(1));
     h.revoke();
     expect(await h.read('token-a', run.run_id)).toMatchObject({ status: 'failed', error: { code: 'unauthorized' } });
@@ -97,21 +98,21 @@ describe('staging research evaluation runs', () => {
 
   it('runs Ask with the served small-scope preload when it is configured', async () => {
     const h = harness({ small_scope_shortcut: true });
-    const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Small project?' } });
+    const run = await h.application.start({ access_token: 'token-a', request: ask('Small project?') });
     expect((await h.settled('token-a', run.run_id)).status).toBe('completed');
     expect(h.deskSearch).toHaveBeenCalledWith(expect.objectContaining({ inventory_mode: 'items' }));
   });
 
   it("never shows one person's run to another", async () => {
     const h = harness();
-    const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Mine?' } });
+    const run = await h.application.start({ access_token: 'token-a', request: ask('Mine?') });
     await expect(h.read('token-b', run.run_id)).rejects.toMatchObject({ code: 'not_found' });
     expect((await h.settled('token-a', run.run_id)).status).toBe('completed');
   });
 
   it('drops an unread result after it expires', async () => {
     const h = harness();
-    const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Later?' } });
+    const run = await h.application.start({ access_token: 'token-a', request: ask('Later?') });
     await vi.waitFor(() => expect(h.generate).toHaveBeenCalled());
     await new Promise(resolve => setTimeout(resolve, 20));
     h.advance(PERSON_RESEARCH_EVAL_RESULT_TTL_MS_V1 + 1);
@@ -120,15 +121,39 @@ describe('staging research evaluation runs', () => {
 
   it('reports a Check whose starting record is not readable as not_found, before any model call', async () => {
     const h = harness();
-    const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'check', budget: 'background', record } });
+    const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'check', budget: 'background', input: { record } } });
     expect(await h.settled('token-a', run.run_id)).toMatchObject({ status: 'failed', error: { code: 'not_found', message: 'Starting evidence is not available' } });
     expect(h.generate).not.toHaveBeenCalled();
+  });
+
+  it('runs a Sweep on its own background budget, listing a cited item it can no longer read and researching on', async () => {
+    const h = harness();
+    const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'sweep', input: { findings: [{ finding: 'Two decimals shipped', expected: 'Record updated', citations: [record] }] } } });
+    const result = await h.settled('token-a', run.run_id);
+    expect(result).toMatchObject({ status: 'completed', research: { trigger: 'sweep', unreadable_starting: [record], budget: { deadline_ms: 300_000 } } });
+    expect(h.generate).toHaveBeenCalled();
+    expect(h.audits).toEqual([expect.objectContaining({ trigger: 'sweep', budget: 'background' })]);
+  });
+
+  it('refuses an unknown trigger, input its definition rejects, and the mine scope beyond Ask, before any run starts', async () => {
+    const h = harness();
+    for (const request of [
+      { schema_version: 1 as const, trigger: 'drift', input: {} },
+      { schema_version: 1 as const, trigger: 'check', input: { record: { ...record, kind: 'ticket' } } },
+      { schema_version: 1 as const, trigger: 'sweep', input: { findings: [] } },
+      { schema_version: 1 as const, trigger: 'ask', input: { question: 'x '.repeat(130).trim() } },
+      { schema_version: 1 as const, trigger: 'check', mine: true as const, input: { record } },
+    ]) await expect(h.application.start({ access_token: 'token-a', request }), JSON.stringify(request)).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(h.generate).not.toHaveBeenCalled();
+    expect(h.audits).toEqual([]);
+    // Nothing was left running for the person.
+    await expect(h.application.start({ access_token: 'token-a', request: ask('Still free?') })).resolves.toMatchObject({ status: 'running' });
   });
 
   it('stops running research on close', async () => {
     const seen: AbortSignal[] = [];
     const h = harness({ generate: async input => { seen.push(input.signal!); return new Promise((_resolve, reject) => input.signal!.addEventListener('abort', () => reject(input.signal!.reason), { once: true })); } });
-    await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Long?' } });
+    await h.application.start({ access_token: 'token-a', request: ask('Long?') });
     await vi.waitFor(() => expect(seen).toHaveLength(1));
     h.application.close();
     expect(seen[0]!.aborted).toBe(true);

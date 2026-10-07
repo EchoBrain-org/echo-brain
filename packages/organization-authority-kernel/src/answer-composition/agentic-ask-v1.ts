@@ -22,13 +22,13 @@ import { annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js"
 import {
   ANSWER_PROMPT,
   AgenticAskOutputErrorV1,
-  CHECK_TASK_PROMPT,
   STEP_PROMPT,
-  SWEEP_TASK_PROMPT,
-  type StepSource,
+  TASK_RULE_PROMPT,
 } from "./agentic-ask-v1-model-protocol.js";
+import type { AgenticBriefV1 } from "./agentic-brief-v1.js";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
 import {
+  AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
   AGENTIC_MODEL_OUTPUT_TOKENS_V1 as OUTPUT_TOKENS,
   AgenticAskDeadlineErrorV1,
   abort,
@@ -38,19 +38,13 @@ import {
   type AgenticAskModelRoleV1,
 } from "./agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPortV1, type AgenticAuditContextV1 } from "./agentic-release-v1.js";
-import { AGENTIC_ASK_FINALIZE_RESERVE_MS_V1, createAgenticResearchLoopV1, type AgenticResearchSourceV1 } from "./agentic-research-loop-v1.js";
+import { createAgenticResearchLoopV1, type AgenticResearchCatalogEntryV1, type AgenticResearchCatalogV1, type AgenticResearchSourceV1 } from "./agentic-research-loop-v1.js";
 import { createAskRendererV1 } from "./renderers/ask-renderer-v1.js";
 import {
-  AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
   AGENTIC_RESEARCH_LIVE_BUDGET_V1,
-  AGENTIC_RESEARCH_MAX_FINDING_CITATIONS_V1,
-  AGENTIC_RESEARCH_MAX_FINDINGS_V1,
   type AgenticAskWithResearchV1,
   type AgenticResearchBudgetV1,
-  type AgenticResearchGoalV1,
-  type AgenticResearchInputV1,
   type AgenticResearchResultV1,
-  type AgenticResearchTriggerV1,
 } from "./agentic-research-v1.js";
 
 export {
@@ -58,13 +52,12 @@ export {
   AGENTIC_RESEARCH_LIVE_BUDGET_V1,
   type AgenticAskWithResearchV1,
   type AgenticResearchBudgetV1,
-  type AgenticResearchFindingV1,
   type AgenticResearchGoalV1,
-  type AgenticResearchInputV1,
   type AgenticResearchResultV1,
-  type AgenticResearchTriggerV1,
 } from "./agentic-research-v1.js";
+export type { AgenticBriefV1 } from "./agentic-brief-v1.js";
 export {
+  AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
   AGENTIC_ASK_MIN_ANSWER_MS_V1,
   AGENTIC_ASK_MIN_STEP_MS_V1,
   AgenticAskDeadlineErrorV1,
@@ -77,7 +70,6 @@ export {
   AGENTIC_ASK_MAX_PARTS_V1,
   AgenticAskOutputErrorV1,
 } from "./agentic-ask-v1-model-protocol.js";
-export { AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 } from "./agentic-research-loop-v1.js";
 
 /**
  * Agentic Ask (RFC-0003): the research loop (agentic-research-loop-v1.ts:
@@ -139,6 +131,13 @@ export interface CreateAgenticAskV1Options {
   readonly on_stage?: (event: AnswerCompositionStageObservationV1) => void;
 }
 
+/** One run: the brief, and the trigger definition's name as a label for the audit and the evaluation. */
+export interface AgenticResearchInputV1 {
+  readonly trigger: string;
+  readonly brief: AgenticBriefV1;
+  readonly signal?: AbortSignal;
+}
+
 const FINISH_REASONS: readonly StructuredGenerationFinishReasonV1[] = ["stop", "length", "content_filter", "error", "other"];
 
 /** A directory name the prompts may carry: one trimmed line of 1 to 200 characters, or none. */
@@ -150,14 +149,15 @@ function askerName(value: { readonly display_name: string } | undefined): string
 function questionText(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= 4_000 && value.trim() === value && value === value.normalize("NFC") && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) ? value : null;
 }
-/** A research goal the request can run, or null. Ask's question keeps its existing bounds. */
-function researchGoal(goal: AgenticResearchGoalV1): AgenticResearchGoalV1 | null {
-  if (goal.kind === "question") return questionText(goal.question) === null ? null : goal;
-  if (goal.kind === "check_record") return object(goal.record) === null ? null : goal;
-  if (goal.kind !== "recheck_findings" || !Array.isArray(goal.findings) || goal.findings.length === 0 || goal.findings.length > AGENTIC_RESEARCH_MAX_FINDINGS_V1) return null;
-  const line = (value: unknown) => typeof value === "string" && value.trim().length > 0 && Buffer.byteLength(value, "utf8") <= 1_000;
-  return goal.findings.every(finding => line(finding.finding) && line(finding.expected) && Array.isArray(finding.citations) && finding.citations.length > 0 &&
-    finding.citations.length <= AGENTIC_RESEARCH_MAX_FINDING_CITATIONS_V1 && finding.citations.every((citation: unknown) => object(citation) !== null)) ? goal : null;
+/** A brief the request can run, or null. Ask's question keeps its existing bounds; a task's definition bounds its own text. */
+function runnableBrief(brief: AgenticBriefV1): AgenticBriefV1 | null {
+  const goal = brief.goal;
+  if (goal.kind === "question" ? questionText(goal.question) === null : goal.kind !== "task" || typeof goal.task !== "string" || goal.task.trim().length === 0) return null;
+  return Array.isArray(brief.starting) && brief.starting.every(start => object(start.citation) !== null && (start.if_unreadable === "fail" || start.if_unreadable === "report")) ? brief : null;
+}
+/** Ask's brief: the person's question as asked, no starting evidence, and the small-scope preload. */
+function questionBrief(question: string, budget: AgenticResearchBudgetV1): AgenticBriefV1 {
+  return { goal: { kind: "question", question }, starting: [], budget, options: { small_scope_preload: true } };
 }
 /** What the model is told the desk reads. Adding a scope kind is a compile error here. */
 function scopeText(scope: EvidenceDeskPortV2["scope"]): string {
@@ -188,7 +188,10 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
 export function createAgenticAskV2(options: CreateAgenticAskV2Options) {
   return createAgenticAskCore(options, 5) as { answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV5> };
 }
-/** The research loop for every trigger, with Ask's V6 writer available beside research-only runs. */
+/**
+ * The research loop for every trigger, with Ask's V6 writer. A question brief
+ * is rendered by Ask's writer; a task brief is research only.
+ */
 export function createAgenticResearchV1(options: CreateAgenticAskV2Options) {
   return createAgenticAskCore(options, 6) as unknown as {
     answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }): Promise<AgenticAskWithResearchV1<PersonAnswerResponseV6>>;
@@ -218,7 +221,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     ...liveCatalog,
   ]);
   const sourcesById = new Map(researchSources.map(source => [source.source_id, source]));
-  const sourceCatalog: readonly { readonly source: StepSource; readonly description: string; readonly metadata_only_list?: boolean; readonly tool_id?: string; readonly requires_channel?: boolean; readonly default_since_days?: number }[] = Object.freeze(researchSources.map(({ source_id: _id, kinds: _kinds, selector, ...descriptor }) => Object.freeze({ ...descriptor, source: selector })));
+  const sourceCatalog: readonly AgenticResearchCatalogEntryV1[] = Object.freeze(researchSources.map(({ source_id: _id, kinds: _kinds, selector, ...descriptor }) => Object.freeze({ ...descriptor, source: selector })));
   const readSource = (value: string | undefined): string | undefined => {
     const key = value?.trim().toLowerCase();
     if (key === undefined) return undefined;
@@ -232,14 +235,16 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     const compatible = researchSources.filter(source => source.kinds.length === 1 && source.kinds[0] === kind);
     return compatible.length === 1 ? compatible[0]!.source_id : undefined;
   };
+  const catalog: AgenticResearchCatalogV1 = Object.freeze({ entries: sourceCatalog, by_id: sourcesById, resolve: readSource });
   /** Who is asking and today's date: context for "my", "this week" and "overdue". */
   const context = (day: string) => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: day });
   const liveGuidance = "Live sources report current tool context under the asker's connection. They are not approved meeting records. Use each source's selector and capabilities from source_catalog. Metadata-only search/list discovers items; open their request-owned ids before relying on their bodies. The server already applies scope and permissions. Never choose a tenant, account, connection or project mapping.";
   const stepPrompt = liveCatalog.length === 0 ? STEP_PROMPT : `${STEP_PROMPT}\n\n${liveGuidance}`;
   const answerPrompt = liveCatalog.length === 0 ? ANSWER_PROMPT : `${ANSWER_PROMPT}\n\n${liveGuidance}`;
   const stepBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, stepPrompt, OUTPUT_TOKENS.step);
-  /** Background triggers add one task paragraph; Ask keeps its prompt exactly. */
-  const taskPrompts = { check_record: `${stepPrompt}\n\n${CHECK_TASK_PROMPT}`, recheck_findings: `${stepPrompt}\n\n${SWEEP_TASK_PROMPT}` } as const;
+  /** Every task-form goal adds the one shared task rule; Ask's question keeps its prompt exactly. */
+  const taskPrompt = `${stepPrompt}\n\n${TASK_RULE_PROMPT}`;
+  const taskBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, taskPrompt, OUTPUT_TOKENS.step);
   const answerBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, answerPrompt, OUTPUT_TOKENS.answer);
   /**
    * One agentic request: shared session state (deadline, model-call budget,
@@ -247,13 +252,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
    * shared release step.
    */
   type RequestOutput = { readonly response?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6; readonly bundle: AgenticEvidenceBundleV1; readonly research: AgenticResearchResultV1; readonly writer_evidence: readonly string[] };
-  const request = async (input: { readonly goal: AgenticResearchGoalV1; readonly trigger: AgenticResearchTriggerV1; readonly signal?: AbortSignal }, budget: AgenticResearchBudgetV1): Promise<RequestOutput> => {
-      const goal = researchGoal(input.goal);
-      if (goal === null) throw new AgenticAskOutputErrorV1(input.goal.kind === "question" ? "question is invalid" : "research goal is invalid");
+  const request = async (input: AgenticResearchInputV1): Promise<RequestOutput> => {
+      const brief = runnableBrief(input.brief);
+      if (brief === null) throw new AgenticAskOutputErrorV1(input.brief.goal.kind === "question" ? "question is invalid" : "research goal is invalid");
+      const { goal, budget } = brief;
       const researchOnly = goal.kind !== "question";
       const beyondLive = budget.deadline_ms > AGENTIC_RESEARCH_LIVE_BUDGET_V1.deadline_ms || budget.max_rounds > AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_rounds || budget.max_model_calls > AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
-      const researchPrompt = goal.kind === "question" ? stepPrompt : taskPrompts[goal.kind];
-      const researchBudget = goal.kind === "question" ? stepBudget : agenticAskContextBudgetBytesV1(options.generation.context_tokens, researchPrompt, OUTPUT_TOKENS.step);
       const startedAt = now();
       const requestDay = today();
       const deadline = startedAt + budget.deadline_ms;
@@ -320,9 +324,9 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
 
       // ---- research: the loop owns its state; the runner reads its progress and its bundle ----
       const loop = createAgenticResearchLoopV1({
-        desk, goal, trigger: input.trigger, budget, prompt: researchPrompt, prompt_budget: researchBudget,
-        small_scope_preload: options.small_scope_shortcut === true && !researchOnly,
-        context: context(requestDay), scope, source_catalog: sourceCatalog, sources_by_id: sourcesById, read_source: readSource,
+        desk, brief: { ...brief, options: { small_scope_preload: options.small_scope_shortcut === true && brief.options.small_scope_preload } },
+        prompt: researchOnly ? taskPrompt : stepPrompt, prompt_budget: researchOnly ? taskBudget : stepBudget, step_span: "ask_planner",
+        context: context(requestDay), scope, catalog,
         now, remaining, signal: activeSignal, assert_live: assertLive,
         observed: () => ({ checked_at: checkedAt, model_ms: stepModelMs, desk_ms: deskMs }),
       });
@@ -344,13 +348,15 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         const { receipts, rounds, fallbacks } = loop.progress();
         return {
           audit: options.audit, generation_adapter_id: options.generation.generation_adapter_id, gate_stats: gate.stats,
-          ...(researchOnly ? { trigger: input.trigger as Exclude<AgenticResearchTriggerV1, "ask"> } : {}),
+          ...(researchOnly ? { trigger: input.trigger } : {}),
           background: beyondLive, receipts, rounds, fallbacks: fallbacks + writerFallbacks,
         };
       };
 
       try {
-        const bundle = await loop.run(gate);
+        // The loop never sees the trigger; its name is a label for the audit and the evaluation.
+        const { schema_version, kind, ...gathered } = await loop.run(gate);
+        const bundle: AgenticEvidenceBundleV1 = Object.freeze({ schema_version, kind, trigger: input.trigger, ...gathered });
         const researched = trimAgenticEvidenceBundleV1(bundle);
         if (researchOnly) {
           // Research-only triggers: no writer runs; the trimmed bundle goes through the shared release step.
@@ -428,22 +434,23 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         if (tickets) annotateCoreRuntimeV1({ counts: { ticket_retrieved_items: loop.progress().retrieved_tickets, ticket_context_items: ticketContextCount, ticket_citations: ticketCitationCount } });
       }
   };
+  const signalOf = (signal: AbortSignal | undefined) => signal === undefined ? {} : { signal };
   return Object.freeze({
     async answer(input: { readonly question: string; readonly signal?: AbortSignal }) {
-      return (await request({ goal: { kind: "question", question: input.question }, trigger: "ask", ...(input.signal === undefined ? {} : { signal: input.signal }) }, AGENTIC_RESEARCH_LIVE_BUDGET_V1)).response!;
+      return (await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) })).response!;
     },
     /** Ask plus its research result and writer input, for the research evaluation. */
     async answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }) {
-      const output = await request({ goal: { kind: "question", question: input.question }, trigger: "ask", ...(input.signal === undefined ? {} : { signal: input.signal }) }, input.budget ?? AGENTIC_RESEARCH_LIVE_BUDGET_V1);
+      const output = await request({ trigger: "ask", brief: questionBrief(input.question, input.budget ?? AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) });
       return Object.freeze({ response: output.response!, research: output.research, writer_evidence: output.writer_evidence });
     },
-    /** A research-only trigger (Check, Sweep): no writer; the result is audited and returned. */
+    /** One trigger's brief: a task brief runs research only and its trimmed result is audited and returned. */
     async research(input: AgenticResearchInputV1): Promise<AgenticResearchResultV1> {
-      return (await request({ goal: input.goal, trigger: input.trigger, ...(input.signal === undefined ? {} : { signal: input.signal }) }, input.budget ?? AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1)).research;
+      return (await request(input)).research;
     },
     /** The same run, returning the full server-side evidence bundle (renderers and tests). */
     async researchBundle(input: AgenticResearchInputV1): Promise<AgenticEvidenceBundleV1> {
-      return (await request({ goal: input.goal, trigger: input.trigger, ...(input.signal === undefined ? {} : { signal: input.signal }) }, input.budget ?? AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1)).bundle;
+      return (await request(input)).bundle;
     },
   });
 }

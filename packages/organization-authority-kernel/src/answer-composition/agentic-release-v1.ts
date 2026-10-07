@@ -2,7 +2,6 @@ import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-proto
 import type { PersonAnswerResponseV4, PersonAnswerResponseV5, PersonAnswerResponseV6 } from "@echo-brain/organization-api";
 import type { StructuredGenerationUsageV1 } from "./structured-generation-v1.js";
 import { raceAbort, type AgenticAskGenerationObservationV1, type AgenticModelGateStatsV1 } from "./agentic-model-gate-v1.js";
-import type { AgenticResearchTriggerV1 } from "./agentic-research-v1.js";
 
 /**
  * The shared release step (research trigger contract v1, section 4): every
@@ -15,8 +14,8 @@ import type { AgenticResearchTriggerV1 } from "./agentic-research-v1.js";
 /** Content-free terminal witness. Route adapters bind identity and storage details. */
 export interface AgenticAskAuditEntryV1 {
   readonly kind: "echo-agentic-ask-audit-v1";
-  /** Present only for research-only triggers; an Ask audit omits it. */
-  readonly trigger?: Exclude<AgenticResearchTriggerV1, "ask">;
+  /** A research-only trigger definition's name; an Ask audit omits it. */
+  readonly trigger?: string;
   /** Present only when the request ran beyond the live budget (research evaluation). */
   readonly budget?: "background";
   readonly outcome: PersonAnswerResponseV4["outcome"] | "cancelled" | "timed_out";
@@ -50,7 +49,7 @@ export interface AgenticAuditContextV1 {
   /** The request's model gate; read when the record is written, after the final check. */
   readonly gate_stats: () => AgenticModelGateStatsV1;
   /** Research-only triggers name themselves; Ask writes no trigger. */
-  readonly trigger?: Exclude<AgenticResearchTriggerV1, "ask">;
+  readonly trigger?: string;
   /** The request ran beyond the live budget. */
   readonly background: boolean;
   /** Receipts of everything released, copied when the record is written. */

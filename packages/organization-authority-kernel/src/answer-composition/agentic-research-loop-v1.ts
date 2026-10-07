@@ -26,8 +26,10 @@ import {
   type StepPart,
   type StepSource,
 } from "./agentic-ask-v1-model-protocol.js";
+import { fillAgenticTaskV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import { describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
 import {
+  AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
   AGENTIC_ASK_MIN_STEP_MS_V1,
   isAbort,
   object,
@@ -39,43 +41,38 @@ import {
 } from "./agentic-model-gate-v1.js";
 import type {
   AgenticResearchActionV1,
-  AgenticResearchBudgetV1,
   AgenticResearchGoalV1,
   AgenticResearchPartV1,
   AgenticResearchRoundV1,
-  AgenticResearchTriggerV1,
 } from "./agentic-research-v1.js";
 import { AuthorityOperationError } from "../domain/errors.js";
 
 /**
- * The research loop (research trigger contract v1): starting evidence read
- * fresh through the access-checked desk, the optional small-scope preload,
- * then planner rounds over three read tools (search, open, list) plus
- * `finish` until a stop rule fires. It returns the full evidence bundle. It
- * never answers, renders or releases, and it reaches the model only through
- * the request's gate. The model plans parts and the needs of each part; code
- * owns ids, paging, de-duplication and the stop rules.
+ * The research loop (research trigger contract v1): a brief in, the full
+ * evidence bundle out. Starting evidence is read fresh through the
+ * access-checked desk, then the optional small-scope preload, then planner
+ * rounds over three read tools (search, open, list) plus `finish` until a stop
+ * rule fires. It never answers, renders or releases, never learns which
+ * trigger wrote its brief, and reaches the model only through the request's
+ * gate. The model plans parts and the needs of each part; code owns ids,
+ * paging, de-duplication and the stop rules.
  */
 
-/** Time kept after the answer call for final revalidation and the audit. */
-export const AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 = 2_000;
 /** One research step's model call; a stalled host fails fast and research goes on. */
-export const AGENTIC_ASK_STEP_TIMEOUT_MS_V1 = 25_000;
-export const AGENTIC_ASK_SEARCH_LIMIT_V1 = 8;
-export const AGENTIC_ASK_LIST_PAGE_V1 = 25;
-export const AGENTIC_ASK_LIST_FETCH_V1 = 50;
-export const AGENTIC_ASK_PREVIEW_CHARS_V1 = 240;
+const STEP_TIMEOUT_MS = 25_000;
+const SEARCH_LIMIT = 8;
+const LIST_PAGE = 25;
+const LIST_FETCH = 50;
+const PREVIEW_CHARS = 240;
 /** Complete released packets admitted directly from search/list; larger bodies require open. */
-export const AGENTIC_ASK_PASSAGE_BYTES_V1 = 3 * 1024;
+const PASSAGE_BYTES = 3 * 1024;
 /** Context items an `open` may admit beyond its anchor (a Slack thread returns up to 20 replies). */
-export const AGENTIC_ASK_OPEN_EXTRA_ITEMS_V1 = 20;
+const OPEN_EXTRA_ITEMS = 20;
 /** Document passages on each side of an opened passage (desk maximum). */
-export const AGENTIC_ASK_OPEN_NEIGHBOURS_V1 = 2;
-export const AGENTIC_ASK_OPEN_BYTES_V1 = 24 * 1024;
-export const AGENTIC_ASK_SHORTCUT_ITEMS_V1 = 20;
+const OPEN_NEIGHBOURS = 2;
+const OPEN_BYTES = 24 * 1024;
+const SHORTCUT_ITEMS = 20;
 const MAX_SEEN_ENTRIES = 300;
-/** Research steps run in Ask's planner span; the audit records them as `step` calls. */
-const STEP_CALL: AgenticModelCallV1 = Object.freeze({ role: "step", span: "ask_planner" });
 
 /** One source research can read: the selector the model uses, the desk kinds behind it, and its list options. */
 export interface AgenticResearchSourceV1 {
@@ -89,26 +86,38 @@ export interface AgenticResearchSourceV1 {
   readonly default_since_days?: number;
 }
 
+/** One source as the research model sees it in `source_catalog`: its selector and capabilities, never its desk id or kinds. */
+export type AgenticResearchCatalogEntryV1 = {
+  readonly description: string;
+  readonly metadata_only_list?: boolean;
+  readonly tool_id?: string;
+  readonly requires_channel?: boolean;
+  readonly default_since_days?: number;
+  readonly source: StepSource;
+};
+
+/** The sources research can read: as the model sees them, by id, and how a model's source name resolves to an id. */
+export interface AgenticResearchCatalogV1 {
+  readonly entries: readonly AgenticResearchCatalogEntryV1[];
+  readonly by_id: ReadonlyMap<string, AgenticResearchSourceV1>;
+  readonly resolve: (value: string | undefined) => string | undefined;
+}
+
 export interface CreateAgenticResearchLoopV1Options {
   /** The request's access-checked desk; it binds the person and the scope. */
   readonly desk: EvidenceDeskPortV2;
-  readonly goal: AgenticResearchGoalV1;
-  /** Recorded on the bundle. */
-  readonly trigger: AgenticResearchTriggerV1;
-  readonly budget: AgenticResearchBudgetV1;
+  /** What to research: the goal, starting evidence, budget and options. */
+  readonly brief: AgenticBriefV1;
   /** The research step's system prompt, and the scratchpad bytes that fit beside it. */
   readonly prompt: string;
   readonly prompt_budget: number;
-  /** When the whole readable scope is small, open it all before round 1. */
-  readonly small_scope_preload: boolean;
+  /** The runtime span research steps run in; the audit records them as `step` calls. */
+  readonly step_span: AgenticModelCallV1["span"];
   /** Who is asking and today's date (also the base for relative list dates). */
   readonly context: { readonly asked_by?: string; readonly today: string };
   /** What the model is told the desk reads. */
   readonly scope: string;
-  /** The sources research can read: as the model sees them, by id, and how a model's source name resolves to an id. */
-  readonly source_catalog: readonly { readonly source: StepSource }[];
-  readonly sources_by_id: ReadonlyMap<string, AgenticResearchSourceV1>;
-  readonly read_source: (value: string | undefined) => string | undefined;
+  readonly catalog: AgenticResearchCatalogV1;
   readonly now: () => number;
   /** Milliseconds left before the request deadline. */
   readonly remaining: () => number;
@@ -138,8 +147,8 @@ export interface AgenticResearchLoopV1 {
   /** The request gate's per-call hooks: live items keep content out of runtime capture, and an admitted step call reads its scratchpad in full. */
   readonly gate_hooks: Pick<CreateAgenticModelGateV1Options, "content_sensitive" | "before_call">;
   progress(): AgenticResearchProgressV1;
-  /** Runs research once, calling the model only through `gate`, and returns everything it gathered. */
-  run(gate: AgenticModelGateV1): Promise<AgenticEvidenceBundleV1>;
+  /** Runs research once, calling the model only through `gate`, and returns everything it gathered. The runner adds the trigger's name. */
+  run(gate: AgenticModelGateV1): Promise<Omit<AgenticEvidenceBundleV1, "trigger">>;
 }
 
 /** One scratchpad entry. `short` is the only id a model ever sees. */
@@ -163,18 +172,6 @@ type OrderedAdmission = (apply: () => ToolResult) => Promise<ToolResult>;
 type NeedState = { readonly need: string; status: NeedStatus; evidence: readonly string[]; readonly observations_before: number };
 type PartState = { readonly question: string; notes: string; readonly needs: NeedState[] };
 type ListState = { args: StepArgs; items: EvidenceDeskItemV2[]; cursor: string | undefined; fetched: boolean; shown: number; truncated: boolean; available: boolean; note?: string };
-/** Text that stands in for the question where research needs one. */
-function goalText(goal: AgenticResearchGoalV1): string {
-  if (goal.kind === "question") return goal.question;
-  return goal.kind === "check_record" ? "Check the approved record against the project" : "Recheck earlier findings";
-}
-/** Starting citations, in order and without repeats. */
-function startingCitations(goal: AgenticResearchGoalV1): readonly unknown[] {
-  if (goal.kind === "question") return [];
-  const all = goal.kind === "check_record" ? [goal.record] : goal.findings.flatMap(finding => finding.citations);
-  const seen = new Set<string>();
-  return all.filter(citation => { const key = JSON.stringify(citation); if (seen.has(key)) return false; seen.add(key); return true; });
-}
 /** Identity of a cited object independent of the version or text released this time. */
 function citationIdentity(value: unknown): string {
   const citation = object(value) ?? {};
@@ -189,8 +186,13 @@ function toolRefusal(error: unknown): string | null {
   if (value.code === "invalid_request") return typeof value.message === "string" && value.message.length <= 200 ? value.message : "that request is not valid";
   return null;
 }
+/** The desk says the person cannot read this item now: deleted, or no longer visible to them. */
+function unreadableRefusal(error: unknown): boolean {
+  const value = object(error);
+  return value?.name === "AuthorityOperationError" && (value.code === "not_found" || value.code === "unauthorized");
+}
 function bytes(value: string | undefined): number { return value === undefined ? 0 : Buffer.byteLength(value, "utf8"); }
-function preview(text: string): string { return cleanLine(text, AGENTIC_ASK_PREVIEW_CHARS_V1); }
+function preview(text: string): string { return cleanLine(text, PREVIEW_CHARS); }
 /** Characters a query preview keeps before its first matched word. */
 const PREVIEW_LEAD_CHARS = 60;
 /**
@@ -210,7 +212,7 @@ function queryPreview(text: string, query: string | undefined): string {
   terms.forEach((term, index) => {
     for (const match of line.matchAll(new RegExp(`(?<![\\p{L}\\p{N}])${term}`, "giu"))) hits.push({ at: match.index, term: index });
   });
-  const width = AGENTIC_ASK_PREVIEW_CHARS_V1 - 1;
+  const width = PREVIEW_CHARS - 1;
   const matched = (start: number) => new Set(hits.filter(hit => hit.at >= start && hit.at < start + width).map(hit => hit.term)).size;
   let best = { start: 0, first: 0, count: matched(0) };
   for (const hit of [...hits].sort((left, right) => left.at - right.at)) {
@@ -222,7 +224,7 @@ function queryPreview(text: string, query: string | undefined): string {
   // Begin at a whole word: skip the word the lead cut into.
   const space = line.indexOf(" ", best.start);
   const start = line[best.start - 1] === " " ? best.start : space >= 0 && space < best.first ? space + 1 : best.first;
-  return cleanLine(`…${line.slice(start)}`, AGENTIC_ASK_PREVIEW_CHARS_V1);
+  return cleanLine(`…${line.slice(start)}`, PREVIEW_CHARS);
 }
 function needKey(value: string): string { return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim(); }
 
@@ -299,8 +301,12 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
  * through `progress()` and the bundle `run` returns.
  */
 export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1Options): AgenticResearchLoopV1 {
-  const { desk, goal, budget, context, scope, now, remaining, assert_live: assertLive, signal: activeSignal } = options;
-  const { prompt: researchPrompt, prompt_budget: researchBudget, source_catalog: sourceCatalog, sources_by_id: sourcesById, read_source: readSource } = options;
+  const { desk, brief, context, scope, now, remaining, assert_live: assertLive, signal: activeSignal } = options;
+  const { prompt: researchPrompt, prompt_budget: researchBudget } = options;
+  const { entries: sourceCatalog, by_id: sourcesById, resolve: readSource } = options.catalog;
+  const budget = brief.budget;
+  /** Research steps: the audit records them as `step` calls, in the span the runner names. */
+  const stepCall: AgenticModelCallV1 = Object.freeze({ role: "step", span: options.step_span });
   const requestDay = context.today;
   let fallbacks = 0; let steps = 0; let searchHits = 0;
   const receipts: Sha256Digest[] = [];
@@ -364,7 +370,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if (args.source !== undefined && source === undefined) return { tool: 'search', args, error: `source must be ${sourceCatalog.map(value => value.source).join(', ')}; omit it to search all available sources` };
     if (searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase())) return { tool: "search", query, ...(source === undefined ? {} : { source }), note: "already searched; results are in your scratchpad" };
     searchesRun.push({ query, ...(source === undefined ? {} : { source }) });
-    const result = await raceAbort(signal, desk.search({ query, ...(source === undefined ? {} : { source, kinds: sourcesById.get(source)!.kinds }), limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal }));
+    const result = await raceAbort(signal, desk.search({ query, ...(source === undefined ? {} : { source, kinds: sourcesById.get(source)!.kinds }), limit: SEARCH_LIMIT, signal }));
     const apply = () => {
       observe(result);
       cover('search', source, result);
@@ -392,7 +398,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const entry = entryOf(raw) ?? entryByTitle(raw);
     if (entry === undefined) return { tool: "open", args, error: "unknown id; pass an id such as E4 from your scratchpad" };
     let result: EvidenceDeskResultV2;
-    try { result = await raceAbort(signal, desk.open({ item: entry.item.id, neighbours: AGENTIC_ASK_OPEN_NEIGHBOURS_V1, signal })); }
+    try { result = await raceAbort(signal, desk.open({ item: entry.item.id, neighbours: OPEN_NEIGHBOURS, signal })); }
     catch (error) {
       const refusal = toolRefusal(error);
       if (refusal === null) throw error;
@@ -407,7 +413,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const admitted: Entry[] = [];
       let used = 0;
       for (const item of anchor === undefined ? others : [anchor, ...others]) {
-        if (admitted.length > AGENTIC_ASK_OPEN_EXTRA_ITEMS_V1 || (admitted.length > 0 && used + bytes(item.text) > AGENTIC_ASK_OPEN_BYTES_V1)) break;
+        if (admitted.length > OPEN_EXTRA_ITEMS || (admitted.length > 0 && used + bytes(item.text) > OPEN_BYTES)) break;
         const opened = register(item);
         if (!opened.full || !opened.opened) { retrievalProgress += 1; evidenceNovelty += 1; }
         opened.opened = true; used += bytes(item.text);
@@ -441,7 +447,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     let result: EvidenceDeskResultV2 | undefined;
     const before = { cursor: state.cursor, shown: state.shown, fetched: state.fetched };
     if (state.shown >= state.items.length && (!state.fetched || state.cursor !== undefined)) {
-      const deskInput: EvidenceDeskListInputV2 = { ...request, limit: AGENTIC_ASK_LIST_FETCH_V1, ...(state.cursor === undefined ? {} : { cursor: state.cursor }), signal };
+      const deskInput: EvidenceDeskListInputV2 = { ...request, limit: LIST_FETCH, ...(state.cursor === undefined ? {} : { cursor: state.cursor }), signal };
       try { result = await raceAbort(signal, desk.list(deskInput)); }
       catch (error) {
         const refusal = toolRefusal(error);
@@ -470,7 +476,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         if (owner !== undefined && currentState.items.length === 0 && result.items.length > 0) currentState.note = `no listed item records ${owner} as owner; owners shown are exact names from the records`;
       }
 
-      const page = currentState.items.slice(currentState.shown, currentState.shown + AGENTIC_ASK_LIST_PAGE_V1).map(item => register(item));
+      const page = currentState.items.slice(currentState.shown, currentState.shown + LIST_PAGE).map(item => register(item));
       currentState.shown += page.length;
       if (page.length > 0) retrievalProgress += 1;
       const more = currentState.shown < currentState.items.length || currentState.cursor !== undefined;
@@ -622,7 +628,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     for (const entry of rest) {
       if (seen.length >= MAX_SEEN_ENTRIES) break;
       const text = entry.item.text;
-      let value: Record<string, unknown> = text !== undefined && bytes(text) <= AGENTIC_ASK_PASSAGE_BYTES_V1
+      let value: Record<string, unknown> = text !== undefined && bytes(text) <= PASSAGE_BYTES
         ? { ...describe(entry), text, full: true }
         : { ...describe(entry), ...(text === undefined ? {} : { preview: queryPreview(text, entry.query), full: false }) };
       let cost = bytes(JSON.stringify(value)) + 1;
@@ -646,8 +652,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   // ---- research bookkeeping (never enters a prompt) ----------------------
   const rounds: AgenticResearchRoundV1[] = [];
   let stepRejections: string[] = [];
-  /** Short ids of the starting citations, in goal order. */
-  const startingShorts = new Map<string, string>();
+  /** Starting citations the brief marked `report` that could not be read. */
+  const unreadableStarting: unknown[] = [];
   const roundView = (tool: string, args: StepArgs, value: ToolResult | undefined): AgenticResearchActionV1 => {
     const listed = (key: string) => Array.isArray(value?.[key]) ? (value![key] as readonly Record<string, unknown>[]).map(row => String(row.id)) : [];
     const opened = Array.isArray(value?.opened) ? (value!.opened as readonly string[]) : [];
@@ -662,42 +668,55 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     rounds.push(Object.freeze({ round: rounds.length + 1, elapsed_ms: Math.max(0, Math.round(now() - startedAt)), plan: planView() as readonly AgenticResearchPartV1[], actions: Object.freeze([...actions]), rejected: Object.freeze([...stepRejections]) }));
     stepRejections = [];
   };
-  const goalFields = (): Record<string, unknown> => {
-    if (goal.kind === "question") return { question: goal.question };
-    if (goal.kind === "check_record") return { task: "check_record", record_id: startingShorts.get(JSON.stringify(goal.record)) ?? null };
-    return { task: "recheck_findings", findings: goal.findings.map(finding => ({ finding: finding.finding, expected: finding.expected,
-      cited: finding.citations.map(citation => startingShorts.get(JSON.stringify(citation))).filter((short): short is string => short !== undefined) })) };
-  };
+  /** The goal as the model sees it: a task gets its starting ids once they are read. */
+  let goal: AgenticResearchGoalV1 = brief.goal;
+  const goalFields = (): Record<string, unknown> => goal.kind === "question" ? { question: goal.question } : { task: goal.task };
 
   /** The research phase: optional preload, then the loop until a stop rule fires. */
   const research = async (gate: AgenticModelGateV1): Promise<void> => {
     // ---- starting evidence: read fresh through the access-checked desk ----
-    for (const citation of startingCitations(goal)) {
+    // Each starting item's id, in brief order; null when it could not be read.
+    const startingIds: (string | null)[] = [];
+    for (const { citation, if_unreadable: ifUnreadable } of brief.starting) {
       assertLive();
       if (desk.openCitation === undefined) throw new AuthorityOperationError("unavailable", "Starting evidence is unavailable");
-      const opened = await raceAbort(activeSignal, desk.openCitation({ citation, signal: activeSignal }));
+      let opened: EvidenceDeskResultV2;
+      try { opened = await raceAbort(activeSignal, desk.openCitation({ citation, signal: activeSignal })); }
+      catch (error) {
+        // A deleted or now-hidden item is news to a brief that asked to hear about it; nothing else about it is known.
+        if (ifUnreadable !== "report" || !unreadableRefusal(error)) throw error;
+        cover('open', undefined);
+        unreadableStarting.push(citation); startingIds.push(null);
+        continue;
+      }
       observe(opened);
       const readable = opened.items.filter(item => item.text !== undefined);
       const anchor = readable.find(item => citationIdentity(item.citation) === citationIdentity(citation)) ?? readable[0];
       cover('open', anchor === undefined ? undefined : evidenceDeskSourceV2(anchor), opened);
-      // Fail closed: research never runs without evidence its trigger names.
-      if (anchor === undefined) throw new AuthorityOperationError("not_found", "Starting evidence is not available");
+      if (anchor === undefined) {
+        // Fail closed unless the brief asked to report it: research never runs without evidence its brief names.
+        if (ifUnreadable !== "report") throw new AuthorityOperationError("not_found", "Starting evidence is not available");
+        for (const item of opened.items) register(item);
+        unreadableStarting.push(citation); startingIds.push(null);
+        continue;
+      }
       let used = 0;
       for (const item of [anchor, ...readable.filter(value => value !== anchor)]) {
-        if (item !== anchor && used + bytes(item.text) > AGENTIC_ASK_OPEN_BYTES_V1) break;
+        if (item !== anchor && used + bytes(item.text) > OPEN_BYTES) break;
         const entry = register(item); entry.opened = true; entry.preloaded = true; used += bytes(item.text);
-        if (item === anchor) startingShorts.set(JSON.stringify(citation), entry.short);
+        if (item === anchor) startingIds.push(entry.short);
       }
       for (const item of opened.items.filter(value => value.text === undefined)) register(item);
     }
+    if (goal.kind === "task") goal = Object.freeze({ kind: "task", task: fillAgenticTaskV1(goal.task, startingIds) });
 
     // ---- optional small-scope preload -----------------------------------
-    if (options.small_scope_preload) {
+    if (brief.options.small_scope_preload) {
       assertLive();
-      const inventory = await raceAbort(activeSignal, desk.search({ limit: AGENTIC_ASK_SHORTCUT_ITEMS_V1, inventory_mode: "items", signal: activeSignal }));
+      const inventory = await raceAbort(activeSignal, desk.search({ limit: SHORTCUT_ITEMS, inventory_mode: "items", signal: activeSignal }));
       observe(inventory);
       cover('search', undefined, inventory);
-      if (!inventory.truncated && inventory.items.length <= AGENTIC_ASK_SHORTCUT_ITEMS_V1) {
+      if (!inventory.truncated && inventory.items.length <= SHORTCUT_ITEMS) {
         let used = 0;
         for (const listed of inventory.items) {
           assertLive();
@@ -714,7 +733,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     // ---- research loop --------------------------------------------------
     let results: ToolResult[] = [];
     let idleSteps = 0;
-    const stepTimeout = () => Math.min(AGENTIC_ASK_STEP_TIMEOUT_MS_V1, remaining() - budget.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
+    const stepTimeout = () => Math.min(STEP_TIMEOUT_MS, remaining() - budget.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
     while (steps < budget.max_rounds) {
       assertLive();
       const roundStartedAt = now();
@@ -729,7 +748,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable);
       let step: Step;
       try {
-        step = await gate.withRepair(STEP_CALL, researchPrompt, user, stepSchema, stepTimeout, value => {
+        step = await gate.withRepair(stepCall, researchPrompt, user, stepSchema, stepTimeout, value => {
           const parsed = parseStep(value);
           if (parsed.actions.length === 0) throw new AgenticAskOutputErrorV1('actions must contain a read action or a valid finish');
           for (const action of parsed.actions) {
@@ -797,10 +816,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       idleSteps = progressed ? 0 : idleSteps + 1;
       if (idleSteps >= 2) { researchStop = 'no_progress'; break; }
     }
-    if (plan.length === 0) plan = [newPart({ question: partQuestion(goalText(goal)), needs: [], notes: "" })];
+    if (plan.length === 0) plan = [newPart({ question: partQuestion(goal.kind === "question" ? goal.question : goal.task), needs: [], notes: "" })];
   };
   /** Everything research gathered, as the server holds it; built once research stops. */
-  const evidenceBundle = (gate: AgenticModelGateV1, researchStartedAt: number): AgenticEvidenceBundleV1 => {
+  const evidenceBundle = (gate: AgenticModelGateV1, researchStartedAt: number): Omit<AgenticEvidenceBundleV1, "trigger"> => {
     const cited = citedShorts();
     const observed = options.observed();
     const { calls, repairs, generations, invocation_digests } = gate.stats();
@@ -814,8 +833,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       ...(entry.query === undefined ? {} : { query: entry.query }), cited_by_plan: cited.has(entry.short),
     }));
     return Object.freeze({
-      schema_version: 1 as const, kind: "echo-agentic-evidence-bundle-v1" as const, trigger: options.trigger, goal, budget,
-      plan: planView() as readonly AgenticResearchPartV1[], items: Object.freeze(items), unreadable_starting: Object.freeze([]), rounds: Object.freeze([...rounds]),
+      schema_version: 1 as const, kind: "echo-agentic-evidence-bundle-v1" as const, goal, budget,
+      plan: planView() as readonly AgenticResearchPartV1[], items: Object.freeze(items), unreadable_starting: Object.freeze([...unreadableStarting]), rounds: Object.freeze([...rounds]),
       coverage: Object.freeze({ reads: Object.freeze(readCoverage.map(read => Object.freeze({ ...read }))), inventories: Object.freeze(inventoryView().map(({ args, ...inventory }) => Object.freeze({ source: args.source, ...inventory }))), notices: Object.freeze([...notice]) }),
       stop: Object.freeze({ reason: researchStop, completed: !researchIncomplete }),
       cost: Object.freeze({ rounds: steps, model_calls: calls, repairs, fallbacks, input_tokens: usage("input_tokens"), output_tokens: usage("output_tokens"), total_tokens: usage("total_tokens"),

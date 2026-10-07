@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { createAgenticResearchV1, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { trimAgenticEvidenceBundleV1 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
+import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
 
@@ -10,7 +11,8 @@ import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } fro
  * The trimmed evidence bundle must stay today's research result. The snapshot
  * was recorded from the inline `researchResult()` before the bundle existed
  * (research trigger contract v1, Task 1.2); never regenerate it from the code
- * being verified.
+ * being verified. Task 4 re-recorded only the Sweep entry's goal, which is now
+ * the Sweep definition's task text; the Ask entry is unchanged.
  */
 const SNAPSHOT = "./__snapshots__/agentic-evidence-bundle-v1.research.json";
 const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
@@ -75,9 +77,10 @@ function sweepRun() {
     search: async () => result([listedOnly]),
   });
 }
-const sweepGoal = { kind: "recheck_findings" as const, findings: [
+const sweepTrigger = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "sweep")!;
+const sweep = { trigger: "sweep", brief: sweepTrigger.brief(sweepTrigger.parseEvent({ findings: [
   { finding: "Dashboard published", expected: "Published by September 11", citations: [anchor.citation, followUp.citation] },
-] };
+] })) };
 
 function askRun() {
   return harness([
@@ -89,19 +92,19 @@ function askRun() {
 
 describe("evidence bundle", () => {
   it("keeps today's research result for a Sweep and an Ask run", async () => {
-    const sweep = await sweepRun().research.research({ trigger: "sweep", goal: sweepGoal });
+    const swept = await sweepRun().research.research(sweep);
     const ask = (await askRun().research.answerWithResearch({ question: "When is the dashboard due?" })).research;
     // Compared, never written: an update run must not re-record the baseline from new code.
-    expect(`${JSON.stringify({ sweep, ask }, null, 2)}\n`).toBe(readFileSync(new URL(SNAPSHOT, import.meta.url), "utf8"));
+    expect(`${JSON.stringify({ sweep: swept, ask }, null, 2)}\n`).toBe(readFileSync(new URL(SNAPSHOT, import.meta.url), "utf8"));
   });
 
   it("trims the full bundle to exactly today's research result", async () => {
     const recorded = JSON.parse(readFileSync(new URL(SNAPSHOT, import.meta.url), "utf8")) as { readonly sweep: unknown };
     const run = sweepRun();
-    const bundle = await run.research.researchBundle({ trigger: "sweep", goal: sweepGoal });
+    const bundle = await run.research.researchBundle(sweep);
     const trimmed = trimAgenticEvidenceBundleV1(bundle);
     expect(JSON.parse(JSON.stringify(trimmed))).toEqual(recorded.sweep);
-    expect(trimmed).toEqual(await sweepRun().research.research({ trigger: "sweep", goal: sweepGoal }));
+    expect(trimmed).toEqual(await sweepRun().research.research(sweep));
     // The release step audits the trimmed bundle; it must hash the same as before.
     expect(run.audit[0]!.response_sha256).toBe(canonicalSha256(JSON.parse(JSON.stringify(trimmed))));
     const serialized = JSON.stringify(trimmed);
@@ -113,7 +116,7 @@ describe("evidence bundle", () => {
 
   it("keeps server records, desk items and who it was gathered for in the full bundle only", async () => {
     const run = sweepRun();
-    const bundle = await run.research.researchBundle({ trigger: "sweep", goal: sweepGoal });
+    const bundle = await run.research.researchBundle(sweep);
     expect(bundle.items.map(item => item.short)).toEqual(["E1", "E2", "E3", "E4", "E5"]);
     expect(bundle.items[0]).toMatchObject({ short: "E1", item: anchor, source: "meeting", full: true, opened: true, preloaded: true, cited_by_plan: true });
     expect(bundle.items[4]).toMatchObject({ short: "E5", item: listedOnly, full: false, opened: false, preloaded: false, query: "dashboard numbers", cited_by_plan: false });

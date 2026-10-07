@@ -9,6 +9,7 @@ import {
   createAgenticAskV3,
   createAgenticResearchV1,
   type AgenticAskAuditEntryV1,
+  type AgenticBriefV1,
 } from "../../../src/answer-composition/agentic-ask-v1.js";
 import { answerSchema, ANSWER_PROMPT } from "../../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import type { AgenticEvidenceBundleItemV1, AgenticEvidenceBundleV1 } from "../../../src/answer-composition/agentic-evidence-bundle-v1.js";
@@ -164,9 +165,8 @@ async function observe(name: string, scenario: Scenario) {
   const entry = ask.audit.at(-1)!;
   // The research core exposes the full bundle and the writer's evidence. With no
   // version-gated live source, research is the same for every response version.
-  const goal = { kind: "question" as const, question: scenario.question };
-  const bundle = await createAgenticResearchV1(harness(name, scenario).options)
-    .researchBundle({ trigger: "ask", goal, budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1 } as unknown as Parameters<ReturnType<typeof createAgenticResearchV1>["researchBundle"]>[0]);
+  const brief: AgenticBriefV1 = { goal: { kind: "question", question: scenario.question }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: true } };
+  const bundle = await createAgenticResearchV1(harness(name, scenario).options).researchBundle({ trigger: "ask", brief });
   const { writer_evidence } = await createAgenticResearchV1(harness(name, scenario).options).answerWithResearch({ question: scenario.question });
   return {
     version: scenario.version,

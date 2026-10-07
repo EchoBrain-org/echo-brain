@@ -19,6 +19,8 @@ import { AgenticAskOutputErrorV1, cleanLine, repairPrompt } from "./agentic-ask-
 
 export const AGENTIC_ASK_MIN_STEP_MS_V1 = 4_000;
 export const AGENTIC_ASK_MIN_ANSWER_MS_V1 = 3_000;
+/** Time kept after the answer call for final revalidation and the audit. */
+export const AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 = 2_000;
 export const AGENTIC_MODEL_OUTPUT_TOKENS_V1 = Object.freeze({ step: 1_500, answer: 1_500 } as const);
 
 export type AgenticAskModelRoleV1 = "step" | "answer";
