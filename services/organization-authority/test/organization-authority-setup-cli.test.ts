@@ -12,7 +12,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   canonicalSha256,
   canonicalJson,
@@ -40,14 +39,14 @@ import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlit
 import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
 import {
-  createStagingSyntheticMeetingCanaryV1,
-  createStagingSyntheticMeetingCanaryV2,
-} from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
+  readStagingSyntheticCheckpointV1,
+  writeStagingSyntheticCheckpointV1,
+  STAGING_SYNTHETIC_CANARY_MEETING_ID_V1,
+  STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1,
+} from "@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1";
 
 const temporaryDirectories: string[] = [];
-const syntheticFixtureDirectory = fileURLToPath(
-  new URL("../../../demo/meetings/", import.meta.url),
-);
+const STAGING_ORIGIN = "https://authority-staging.echobrain.org";
 
 afterEach(() => {
   for (const path of temporaryDirectories.splice(0)) {
@@ -96,8 +95,8 @@ function dependencies(order: string[],): OrganizationAuthoritySetupCliDependenci
         pkce_key_file: input.pkce_key_file,
       });
     },
-    admit_staging_synthetic_source: async (input) => {
-      order.push(`admit-synthetic:${input.meetings_directory}`);
+    queue_staging_synthetic_meetings: async (input) => {
+      order.push(`queue-synthetic:${input.meetings_directory ?? "canary"}`);
     },
   };
 }
@@ -143,10 +142,8 @@ interface DurableCanaryFixtureOptions {
   readonly layer2_result_count?: number | null;
   readonly layer1_owner_tuple?: "owner" | "other";
   readonly layer2_owner_tuple?: "owner" | "other";
-  readonly synthetic_staging_release_id?: string;
-  readonly synthetic_staging_canary_version?: 1 | 2;
-  readonly synthetic_staging_corruption?:
-    "partial" | "wrong_owner" | "wrong_digest" | "noncanonical" | "wrong_cursor";
+  /** Adds the owner's staging synthetic source and an approved canary proposal for the fixture record. */
+  readonly synthetic_canary?: "owner" | "granola";
 }
 
 function buildInputForCanary(
@@ -405,148 +402,153 @@ function installDurableCanaryFixture(
       options.layer2_owner_tuple,
       "2026-08-23T00:00:03.000Z",
     );
-  if (options.synthetic_staging_release_id !== undefined) {
-      const releaseId = options.synthetic_staging_release_id;
-      const canaryInput = {
-        canary_id: releaseId,
-        owner_email: "founder@example.com",
-        observed_at: issuedAt,
-      } as const;
-      const createCanary = options.synthetic_staging_canary_version === 2
-        ? createStagingSyntheticMeetingCanaryV2
-        : createStagingSyntheticMeetingCanaryV1;
-      const meeting = createCanary(canaryInput);
-      const storedMeeting =
-        options.synthetic_staging_corruption === "partial"
-          ? { ...meeting, content: [] }
-          : options.synthetic_staging_corruption === "wrong_owner"
-            ? createCanary({ ...canaryInput, owner_email: "other@example.com" })
-            : meeting;
-      const storedMeetingJson =
-        options.synthetic_staging_corruption === "noncanonical"
-          ? JSON.stringify(storedMeeting)
-          : canonicalJson(storedMeeting);
-      const storedMeetingSha256 =
-        options.synthetic_staging_corruption === "wrong_digest"
-          ? sha256Digest("wrong-staging-meeting-digest")
-          : sha256Digest(canonicalJson(storedMeeting));
-      const candidateId = "cnd_founder_staging_canary";
-      authority
-        .prepare(
-          `INSERT INTO authority_live_source_candidates_v2 (
-             candidate_id, candidate_semantic_sha256,
-             admission_semantic_input_sha256, review_lineage_id,
-             review_input_sha256, review_semantic_sha256,
-             review_policy_id, review_policy_contract_sha256,
-             review_policy_consequence_text,
-             review_policy_consequence_sha256, disposition, source_cursor,
-             meeting_sha256, meeting_json, decisions_sha256, decisions_json,
-             created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'actionable', ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          candidateId,
-          sha256Digest("staging-candidate"),
-          admissionSemanticSha256,
-          "rli_founder_staging_canary",
-          sha256Digest("staging-input"),
-          sha256Digest("staging-review"),
-          "restricted-reviewer-v1",
-          sha256Digest("staging-policy"),
-          "staging canary",
-          sha256Digest("staging-consequence"),
-          `synthetic-staging-canary:v${options.synthetic_staging_corruption === "wrong_cursor"
-            ? (options.synthetic_staging_canary_version === 2 ? 1 : 2)
-            : (options.synthetic_staging_canary_version ?? 1)}:${releaseId}`,
-          storedMeetingSha256,
-          storedMeetingJson,
-          sha256Digest("staging-decisions"),
-          canonicalJson({ schema_version: 1, signals: [] }),
-          issuedAt,
-        );
-      authority
-        .prepare(
-          `INSERT INTO authority_live_approval_outbox_v2
-             (candidate_id, approval_id, stage_command_id, state,
-              provider_message_ts, frozen_card_sha256, approved_snapshot_json,
-              approved_snapshot_sha256, post_started_at,
-              control_approval_sha256, updated_at)
-           VALUES (?, ?, ?, 'staged', ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          candidateId,
-          approvalId,
-          "pas_founder_staging_canary",
-          "123.456",
-          sha256Digest("staging-card"),
-          canonicalJson({ schema_version: 1, kind: "staging-card" }),
-          sha256Digest("staging-snapshot"),
-          issuedAt,
-          sha256Digest("staging-control-approval"),
-          issuedAt,
-        );
-    }} finally {
+    if (options.synthetic_canary !== undefined) {
+      const semantic = insertStagingSyntheticSource(authority, manifest, {
+        adapter_id: options.synthetic_canary === "granola" ? "granola-person-mcp" : STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1,
+      });
+      insertSyntheticProposal(authority, semantic, { index: 0, meeting_id: STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, approval_id: approvalId });
+    }
+  } finally {
     authority.close();
   }
 }
 
-type SyntheticFixtureApprovalShape =
-  | "one"
-  | "all"
-  | "duplicates"
-  | "unrelated";
+const SYNTHETIC_ISSUED_AT = "2026-08-23T00:00:00.000Z";
 
+/** The owner's staging synthetic personal source, as setup finalize leaves it. */
+function insertStagingSyntheticSource(
+  authority: Database.Database,
+  manifest: ReturnType<typeof readOrganizationAuthoritySetupManifest>,
+  input: { readonly adapter_id?: string; readonly pending?: readonly string[] } = {},
+): Sha256Digest {
+  const adapterId = input.adapter_id ?? STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1;
+  const sourceKey = `pms_${sha256Digest(`synthetic-source-${adapterId}`).slice(7)}`;
+  const semantic = sha256Digest(`synthetic-source-admission-${adapterId}`);
+  const cursor = writeStagingSyntheticCheckpointV1({ folder: null, baseline: false, revisions: {}, manual: input.pending ?? [] });
+  authority
+    .prepare(
+      `INSERT INTO authority_live_source_admission_v2
+       (source_key, organization_id, principal_id, membership_id, membership_type,
+        source_adapter_id, source_adapter_version, source_adapter_instance_id,
+        normalizer_version, source_custodian_sha256,
+        source_custodian_assurance, source_custodian_observed_at,
+        source_credential_reference_sha256, initial_cursor, cutoff_at,
+        processor_adapter_id, processor_instance_id, processor_adapter_version,
+        processor_configuration_sha256, processor_credential_reference_sha256,
+        semantic_input_sha256, admitted_at)
+       VALUES (?, ?, ?, ?, 'owner', ?, '1.0.0', 'staging-synthetic-fixture', '1.0.0',
+               ?, 'staging_synthetic', ?, ?, ?, ?, 'llm', 'personal-fixture', '1.0.0', ?, ?, ?, ?)`,
+    )
+    .run(
+      sourceKey,
+      manifest.organization_id,
+      manifest.owner_principal_id,
+      manifest.owner_membership_id,
+      adapterId,
+      sha256Digest("synthetic-custodian"),
+      SYNTHETIC_ISSUED_AT,
+      sha256Digest("synthetic-credential"),
+      cursor,
+      SYNTHETIC_ISSUED_AT,
+      sha256Digest("processor-configuration"),
+      sha256Digest("processor-credential"),
+      semantic,
+      SYNTHETIC_ISSUED_AT,
+    );
+  authority
+    .prepare("INSERT INTO authority_live_source_progress_v2 VALUES (?, ?, ?, 1, ?)")
+    .run(sourceKey, semantic, cursor, SYNTHETIC_ISSUED_AT);
+  authority
+    .prepare("INSERT INTO authority_person_meeting_sources_v1 VALUES (?, ?, NULL, NULL, 0)")
+    .run(sourceKey, sha256Digest("synthetic-person"));
+  return semantic;
+}
+
+/** One staged proposal for a meeting of that source. */
+function insertSyntheticProposal(
+  authority: Database.Database,
+  admissionSemantic: Sha256Digest,
+  input: { readonly index: number; readonly meeting_id: string; readonly approval_id: string },
+): void {
+  const suffix = String(input.index);
+  const meeting = { schema_version: 1, id: input.meeting_id, title: `Synthetic meeting ${suffix}`, provenance: { external_id: input.meeting_id, canonical_revision: `revision-${suffix}` } };
+  const candidateId = `cnd_synthetic_${suffix}`;
+  authority
+    .prepare(
+      `INSERT INTO authority_live_source_candidates_v2 (
+         candidate_id, candidate_semantic_sha256, admission_semantic_input_sha256,
+         review_lineage_id, review_input_sha256, review_semantic_sha256,
+         review_policy_id, review_policy_contract_sha256,
+         review_policy_consequence_text, review_policy_consequence_sha256,
+         disposition, source_cursor, meeting_sha256, meeting_json,
+         decisions_sha256, decisions_json, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'actionable', ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      candidateId,
+      sha256Digest(`synthetic-candidate-${suffix}`),
+      admissionSemantic,
+      `rli_synthetic_${suffix}`,
+      sha256Digest(`synthetic-input-${suffix}`),
+      sha256Digest(`synthetic-review-${suffix}`),
+      "restricted-reviewer-v1",
+      sha256Digest("synthetic-policy"),
+      "synthetic proposal",
+      sha256Digest("synthetic-consequence"),
+      `synthetic-cursor-${suffix}`,
+      canonicalSha256(meeting as never),
+      canonicalJson(meeting as never),
+      sha256Digest(`synthetic-decisions-${suffix}`),
+      canonicalJson({ schema_version: 1, signals: [], proposal: input.index }),
+      SYNTHETIC_ISSUED_AT,
+    );
+  authority
+    .prepare(
+      `INSERT INTO authority_live_approval_outbox_v2
+         (candidate_id, approval_id, stage_command_id, state,
+          provider_message_ts, frozen_card_sha256, approved_snapshot_json,
+          approved_snapshot_sha256, post_started_at,
+          control_approval_sha256, updated_at)
+       VALUES (?, ?, ?, 'staged', ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      candidateId,
+      input.approval_id,
+      `pas_synthetic_${suffix}`,
+      `echo:${input.approval_id}`,
+      sha256Digest(`synthetic-card-${suffix}`),
+      canonicalJson({ schema_version: 1, kind: "synthetic-card", proposal: input.index }),
+      sha256Digest(`synthetic-snapshot-${suffix}`),
+      SYNTHETIC_ISSUED_AT,
+      sha256Digest(`synthetic-control-${suffix}`),
+      SYNTHETIC_ISSUED_AT,
+    );
+}
+
+type SyntheticFixtureApprovalShape = "one" | "all" | "pending" | "canary";
+
+/**
+ * Two fixture meetings on the owner's synthetic source. Every shape but "all"
+ * leaves a fixture meeting without a published approval.
+ */
 function installSyntheticFixtureApprovalEvidence(
   state: string,
   shape: SyntheticFixtureApprovalShape,
 ): void {
   const manifest = readOrganizationAuthoritySetupManifest(state);
-  const issuedAt = "2026-08-23T00:00:00.000Z";
-  const meetingFiles = [
-    "01-revenue-signal-calibration.json",
-    "02-data-handling-review.json",
-    "03-implementation-capacity-triage.json",
-    "04-commercial-exception-review.json",
+  const proposals = [
+    { meeting_id: "fictional-roadmap-review", approval_id: "apr_synthetic_fixture_0", approved: true },
+    ...(shape === "pending" ? [] : [{ meeting_id: "fictional-budget-sync", approval_id: "apr_synthetic_fixture_1", approved: shape === "all" }]),
+    ...(shape === "canary" ? [{ meeting_id: STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, approval_id: "apr_synthetic_canary", approved: true }] : []),
   ];
-  const fixtureMeetings = meetingFiles.map((filename) =>
-    JSON.parse(readFileSync(join(syntheticFixtureDirectory, filename), "utf8")) as Record<string, unknown>,
-  );
-  const duplicateMeetings = Array.from({ length: 4 }, (_value, index) => {
-    const duplicate = JSON.parse(
-      canonicalJson(fixtureMeetings[0] as never),
-    ) as {
-      provenance: { metadata: Record<string, unknown> };
-    };
-    duplicate.provenance.metadata = {
-      ...duplicate.provenance.metadata,
-      duplicate_candidate: index,
-    };
-    return duplicate as Record<string, unknown>;
-  });
-  const meetings =
-    shape === "one"
-      ? fixtureMeetings.slice(0, 1)
-      : shape === "all"
-        ? fixtureMeetings
-        : shape === "duplicates"
-          ? duplicateMeetings
-          : fixtureMeetings.map((meeting, index) => ({
-              ...meeting,
-              id: `unrelated-synthetic-fixture-${String(index)}`,
-            }));
-  const approvalIds = meetings.map(
-    (_meeting, index) => `apr_synthetic_fixture_${String(index)}`,
-  );
+  const approved = proposals.filter((proposal) => proposal.approved);
   const record = new Database(join(state, "record-log.sqlite"));
   let head: { position: number; record_sha256: Sha256Digest } | undefined;
   try {
-    let predecessor: { position: number; record_sha256: Sha256Digest } | undefined;
-    for (const [index, approvalId] of approvalIds.entries()) {
+    for (const [index, proposal] of approved.entries()) {
       const position = index + 1;
       const recordSha256 = sha256Digest(`synthetic-fixture-record-${String(position)}`);
-      const semanticIdempotencyKey = sha256Digest(
-        `synthetic-fixture-semantic-${String(position)}`,
-      );
+      const semanticIdempotencyKey = sha256Digest(`synthetic-fixture-semantic-${String(position)}`);
       const envelopeId = `env_synthetic_fixture_${String(position)}`;
       const envelope = canonicalJson({
         body: {
@@ -558,9 +560,9 @@ function installSyntheticFixtureApprovalEvidence(
           envelope_id: envelopeId,
           event: { kind: "approved" },
           semantic_idempotency_key: semanticIdempotencyKey,
-          human_act_resolution_ref: { approval_id: approvalId, action: "approve" },
-          predecessor_position: predecessor?.position ?? null,
-          predecessor_record_sha256: predecessor?.record_sha256 ?? null,
+          human_act_resolution_ref: { approval_id: proposal.approval_id, action: "approve" },
+          predecessor_position: head?.position ?? null,
+          predecessor_record_sha256: head?.record_sha256 ?? null,
         },
         record_sha256: recordSha256,
       });
@@ -575,10 +577,10 @@ function installSyntheticFixtureApprovalEvidence(
         event_kind: "approved",
         record_position: position,
         record_sha256: recordSha256,
-        predecessor_record_sha256: predecessor?.record_sha256 ?? null,
+        predecessor_record_sha256: head?.record_sha256 ?? null,
         record_head_position: position,
         record_head_sha256: recordSha256,
-        issued_at: issuedAt,
+        issued_at: SYNTHETIC_ISSUED_AT,
       });
       record
         .prepare(
@@ -592,19 +594,18 @@ function installSyntheticFixtureApprovalEvidence(
         .run(
           position,
           envelopeId,
-          approvalId,
+          proposal.approval_id,
           semanticIdempotencyKey,
           envelope,
           sha256Digest(envelope),
-          predecessor?.position ?? null,
-          predecessor?.record_sha256 ?? null,
+          head?.position ?? null,
+          head?.record_sha256 ?? null,
           recordSha256,
           receipt,
-          issuedAt,
+          SYNTHETIC_ISSUED_AT,
         );
-      predecessor = { position, record_sha256: recordSha256 };
+      head = { position, record_sha256: recordSha256 };
     }
-    head = predecessor;
   } finally {
     record.close();
   }
@@ -614,43 +615,10 @@ function installSyntheticFixtureApprovalEvidence(
   );
   const authority = new Database(join(state, "authority.sqlite"));
   try {
-    const admissionSemanticSha256 = sha256Digest("synthetic-fixture-admission");
-    authority
-      .prepare(
-        `INSERT INTO authority_live_source_admission_v2
-         (source_key, organization_id, principal_id, membership_id, membership_type,
-          source_adapter_id, source_adapter_version, source_adapter_instance_id,
-          normalizer_version, source_custodian_sha256,
-          source_custodian_assurance, source_custodian_observed_at,
-          source_credential_reference_sha256, initial_cursor, cutoff_at,
-          processor_adapter_id, processor_instance_id, processor_adapter_version,
-          processor_configuration_sha256, processor_credential_reference_sha256,
-          semantic_input_sha256, admitted_at)
-         VALUES (1, ?, ?, ?, 'owner', 'synthetic-demo-source', '1.0.0', 'customer-demo',
-                 '1.0.0', ?, 'authority_initial_owner_identity', ?, ?,
-                 'synthetic-demo-source:customer-demo:1.0.0:v1:0', ?,
-                 'llm', 'founder-llm-v1', '1.0.0', ?, ?, ?, ?)`,
-      )
-      .run(
-        manifest.organization_id,
-        manifest.owner_principal_id,
-        manifest.owner_membership_id,
-        sha256Digest("founder@example.com"),
-        issuedAt,
-        sha256Digest("synthetic-fixture-corpus"),
-        issuedAt,
-        sha256Digest("processor-configuration"),
-        sha256Digest("processor-credential"),
-        admissionSemanticSha256,
-        issuedAt,
-      );
-    authority
-      .prepare(
-        `INSERT INTO authority_live_source_progress_v2
-         (source_key, admission_semantic_input_sha256, cursor, cursor_version, updated_at)
-         VALUES (1, ?, 'synthetic-demo-source:customer-demo:1.0.0:v1:4', 4, ?)`,
-      )
-      .run(admissionSemanticSha256, issuedAt);
+    const semantic = insertStagingSyntheticSource(authority, manifest, {
+      pending: shape === "pending" ? ["fictional-budget-sync"] : [],
+    });
+    for (const [index, proposal] of proposals.entries()) insertSyntheticProposal(authority, semantic, { index, ...proposal });
     authority
       .prepare(
         `INSERT INTO authority_readable_search_active_generation
@@ -668,61 +636,6 @@ function installSyntheticFixtureApprovalEvidence(
         head.record_sha256,
         "2026-08-23T00:00:01.000Z",
       );
-    for (const [index, meeting] of meetings.entries()) {
-      const meetingJson = canonicalJson(meeting as never);
-      const candidateId = `cnd_synthetic_fixture_${String(index)}`;
-      authority
-        .prepare(
-          `INSERT INTO authority_live_source_candidates_v2 (
-             candidate_id, candidate_semantic_sha256,
-             admission_semantic_input_sha256, review_lineage_id,
-             review_input_sha256, review_semantic_sha256,
-             review_policy_id, review_policy_contract_sha256,
-             review_policy_consequence_text, review_policy_consequence_sha256,
-             disposition, source_cursor, meeting_sha256, meeting_json,
-             decisions_sha256, decisions_json, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'actionable', ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          candidateId,
-          sha256Digest(`synthetic-candidate-${String(index)}`),
-          admissionSemanticSha256,
-          `rli_synthetic_fixture_${String(index)}`,
-          sha256Digest(`synthetic-input-${String(index)}`),
-          sha256Digest(`synthetic-review-${String(index)}`),
-          "restricted-reviewer-v1",
-          sha256Digest("synthetic-policy"),
-          "synthetic fixture",
-          sha256Digest("synthetic-consequence"),
-          `synthetic-demo-source:customer-demo:1.0.0:v1:${String(index)}`,
-          canonicalSha256(meeting as never),
-          meetingJson,
-          sha256Digest(`synthetic-decisions-${String(index)}`),
-          canonicalJson({ schema_version: 1, signals: [], fixture: index }),
-          issuedAt,
-        );
-      authority
-        .prepare(
-          `INSERT INTO authority_live_approval_outbox_v2
-             (candidate_id, approval_id, stage_command_id, state,
-              provider_message_ts, frozen_card_sha256, approved_snapshot_json,
-              approved_snapshot_sha256, post_started_at,
-              control_approval_sha256, updated_at)
-           VALUES (?, ?, ?, 'staged', ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          candidateId,
-          approvalIds[index]!,
-          `pas_synthetic_fixture_${String(index)}`,
-          `123.${String(index)}`,
-          sha256Digest(`synthetic-card-${String(index)}`),
-          canonicalJson({ schema_version: 1, kind: "synthetic-card" }),
-          sha256Digest(`synthetic-snapshot-${String(index)}`),
-          issuedAt,
-          sha256Digest(`synthetic-control-${String(index)}`),
-          issuedAt,
-        );
-    }
     const audit = new SqlitePersonRecordReadAuditV1(authority);
     for (const [mode, checkedAt] of [
       ["layer1", "2026-08-23T00:00:02.000Z"],
@@ -744,6 +657,32 @@ function installSyntheticFixtureApprovalEvidence(
   } finally {
     authority.close();
   }
+}
+
+/** Two fictional fixture meetings in a private temporary directory. */
+function fictionalFixtureDirectory(): string {
+  const directory = mkdtempSync(join(tmpdir(), "echo-synthetic-fixtures-"));
+  temporaryDirectories.push(directory);
+  const meeting = (id: string, title: string) => ({
+    schema_version: 1,
+    id,
+    title,
+    lifecycle: "completed",
+    provenance: {
+      source: { kind: "meeting-source", adapter_id: "fictional-fixtures", instance_id: "fixtures", version: "1.0.0" },
+      external_id: id,
+      canonical_revision: `${id}-r1`,
+      observed_at: "2026-10-01T00:00:00.000Z",
+      normalizer_version: "fictional-fixtures-v1",
+    },
+    capture: { state: "complete", components: [] },
+    participants: [],
+    content: [{ id: "note-1", kind: "note", text: `${title}: the team agreed on the next step.` }],
+    artifacts: [],
+  });
+  writeFileSync(join(directory, "01-roadmap-review.json"), JSON.stringify(meeting("fictional-roadmap-review", "Roadmap review")));
+  writeFileSync(join(directory, "02-budget-sync.json"), JSON.stringify(meeting("fictional-budget-sync", "Budget sync")));
+  return directory;
 }
 
 describe("Organization Authority setup coordinator", () => {
@@ -1176,7 +1115,7 @@ describe("Organization Authority setup coordinator", () => {
     expect(JSON.parse(stdout)).toMatchObject({ source_mode: "none", source_admission_present: false });
   });
 
-  it("admits the bounded fixture source only for the exact staging Authority", async () => {
+  it("queues fixture meetings only for the exact staging Authority", async () => {
     const state = stateDirectory("https://authority-staging.echobrain.org");
     const order: string[] = [];
     const deps = dependencies(order);
@@ -1210,7 +1149,7 @@ describe("Organization Authority setup coordinator", () => {
       },
     );
     expect(result).toBe(0);
-    expect(order).toEqual(["admit-synthetic:/echo-clean/meetings"]);
+    expect(order).toEqual(["queue-synthetic:/echo-clean/meetings"]);
 
     const productionState = stateDirectory();
     expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(productionState), io, deps)).toBe(0);
@@ -1240,7 +1179,7 @@ describe("Organization Authority setup coordinator", () => {
     expect(stderr).toContain("staging synthetic meeting source is allowed only");
   });
 
-  it("revalidates the immutable fixture admission on a synthetic finalize retry", async () => {
+  it("queues the fixture meetings again on a synthetic finalize retry", async () => {
     const state = stateDirectory("https://authority-staging.echobrain.org");
     const order: string[] = [];
     const io = { stdout: () => undefined, stderr: () => undefined };
@@ -1275,7 +1214,91 @@ describe("Organization Authority setup coordinator", () => {
         },
       ),
     ).toBe(0);
-    expect(order).toEqual(["admit-synthetic:/echo-clean/meetings"]);
+    expect(order).toEqual(["queue-synthetic:/echo-clean/meetings"]);
+  });
+
+  it("sets up the owner's synthetic source for the canary when staging finalize has no fixtures", async () => {
+    const state = stateDirectory(STAGING_ORIGIN);
+    const order: string[] = [];
+    const io = { stdout: () => undefined, stderr: () => undefined };
+    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state, STAGING_ORIGIN), io, dependencies(order))).toBe(0);
+    order.splice(0);
+    let stdout = "";
+    expect(
+      await runOrganizationAuthoritySetupCli(
+        ["finalize", "--state-dir", state],
+        { ...io, stdout: (value) => (stdout += value) },
+        {
+          ...dependencies(order),
+          read_setup_stage: () => CONNECTED_STAGE,
+          read_initial_owner_setup_status: () => ({
+            founder_oidc_bound: true,
+            founder_slack_link_active: true,
+            llm_credential_valid: true,
+            source_admission_present: false,
+          }),
+        },
+      ),
+    ).toBe(0);
+    expect(order).toEqual(["queue-synthetic:canary"]);
+    expect(JSON.parse(stdout)).toMatchObject({ source_mode: "staging_canary", source_admission_present: true, canary_status: "not_complete" });
+  });
+
+  it("finalize queues fixture meetings into the owner's synthetic source and admits no organization source", async () => {
+    const state = stateDirectory(STAGING_ORIGIN);
+    const { queue_staging_synthetic_meetings: _stub, ...real } = dependencies([]);
+    const io = { stdout: () => undefined, stderr: () => undefined };
+    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state, STAGING_ORIGIN), io, real)).toBe(0);
+    const manifest = readOrganizationAuthoritySetupManifest(state);
+    mkdirSync(dirname(manifest.llm_credential_file), { recursive: true, mode: 0o700 });
+    writeFileSync(manifest.llm_credential_file, "l".repeat(40), { mode: 0o600 });
+    chmodSync(manifest.llm_credential_file, 0o600);
+    let stdout = "";
+    expect(
+      await runOrganizationAuthoritySetupCli(
+        ["finalize", "--state-dir", state, "--staging-synthetic-meetings-dir", fictionalFixtureDirectory()],
+        { ...io, stdout: (value) => (stdout += value) },
+        {
+          ...real,
+          read_setup_stage: () => CONNECTED_STAGE,
+          read_initial_owner_setup_status: () => ({
+            founder_oidc_bound: true,
+            founder_slack_link_active: true,
+            llm_credential_valid: true,
+            source_admission_present: false,
+          }),
+        },
+      ),
+    ).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ source_mode: "staging_synthetic", source_admission_present: true });
+    const authority = new Database(join(state, "authority.sqlite"), { readonly: true });
+    try {
+      expect(authority.prepare("SELECT count(*) FROM authority_live_source_admission_v2 WHERE source_key = '1'").pluck().get()).toBe(0);
+      const sources = authority.prepare(
+        `SELECT admission.source_adapter_id, admission.source_custodian_assurance, admission.principal_id, admission.membership_id, progress.cursor
+           FROM authority_live_source_admission_v2 AS admission
+           JOIN authority_live_source_progress_v2 AS progress USING (source_key)`,
+      ).all() as { source_adapter_id: string; source_custodian_assurance: string; principal_id: string; membership_id: string; cursor: string }[];
+      expect(sources).toHaveLength(1);
+      expect(sources[0]).toMatchObject({
+        source_adapter_id: STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1,
+        source_custodian_assurance: "staging_synthetic",
+        principal_id: manifest.owner_principal_id,
+        membership_id: manifest.owner_membership_id,
+      });
+      expect(readStagingSyntheticCheckpointV1(sources[0]!.cursor).manual).toEqual(["fictional-roadmap-review", "fictional-budget-sync"]);
+    } finally {
+      authority.close();
+    }
+    stdout = "";
+    expect(
+      await runOrganizationAuthoritySetupCli(
+        ["status", "--state-dir", state],
+        { ...io, stdout: (value) => (stdout += value) },
+        { ...real, read_setup_stage: () => CONNECTED_STAGE },
+      ),
+    ).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ source_mode: "staging_synthetic", source_admission_present: true });
   });
 
   it("rejects a fixture selector outside finalization", async () => {
@@ -1760,14 +1783,14 @@ describe("Organization Authority setup coordinator", () => {
   );
 
   it.each([
-    ["one approved fixture", "one", "ready_to_start"],
-    ["all four approved fixtures", "all", "complete"],
-    ["four duplicate approvals", "duplicates", "ready_to_start"],
-    ["four unrelated approvals", "unrelated", "ready_to_start"],
+    ["one of two fixture proposals approved", "one", "ready_to_start"],
+    ["both fixture proposals approved", "all", "complete"],
+    ["a fixture import still pending", "pending", "ready_to_start"],
+    ["only the canary approved beside a fixture", "canary", "ready_to_start"],
   ] as const)(
-    "requires four distinct admitted fixture approvals before synthetic completion: %s",
+    "requires every synthetic fixture meeting approved before synthetic completion: %s",
     async (_name, shape, nextStep) => {
-      const state = stateDirectory("https://authority-staging.echobrain.org");
+      const state = stateDirectory(STAGING_ORIGIN);
       const io = {
         stdout: () => undefined,
         stderr: () => undefined };
@@ -1784,7 +1807,7 @@ describe("Organization Authority setup coordinator", () => {
       };
       expect(
         await runOrganizationAuthoritySetupCli(
-          bootstrapArgs(state, "https://authority-staging.echobrain.org"),
+          bootstrapArgs(state, STAGING_ORIGIN),
           io,
           dependencies,
         ),
@@ -1802,9 +1825,7 @@ describe("Organization Authority setup coordinator", () => {
     },
   );
 
-  it.each([1, 2] as const)("accepts an approved release-bound synthetic canary V%s only on staging", async (version) => {
-    const releaseId = "clean-v1-staging-synthetic-canary";
-    const originalReleaseId = process.env.ECHO_CLEAN_RELEASE_ID;
+  it("reports canary evidence once the synthetic canary proposal has an approved record, only on staging", async () => {
     const originalHost = process.env.ECHO_CLEAN_AUTHORITY_HOST;
     const io = {
       stdout: () => undefined,
@@ -1813,105 +1834,48 @@ describe("Organization Authority setup coordinator", () => {
       ...readyStatusDependencies([]),
       read_setup_canary_evidence: undefined,
     };
-    try {
-      process.env.ECHO_CLEAN_RELEASE_ID = releaseId;
-      process.env.ECHO_CLEAN_AUTHORITY_HOST = "authority-staging.echobrain.org";
-
-      const staging = stateDirectory("https://authority-staging.echobrain.org");
+    const statusAfter = async (authorityUrl: string, synthetic: "owner" | "granola") => {
+      const state = stateDirectory(authorityUrl);
       expect(
         await runOrganizationAuthoritySetupCli(
-          bootstrapArgs(staging, "https://authority-staging.echobrain.org"),
+          bootstrapArgs(state, authorityUrl),
           io,
           productionDependencies,
         ),
       ).toBe(0);
-      installDurableCanaryFixture(staging, {
-        cursor_version: 0,
-        synthetic_staging_release_id: releaseId,
-        synthetic_staging_canary_version: version,
-      });
-      let stagingOutput = "";
+      installDurableCanaryFixture(state, { source_admitted: false, synthetic_canary: synthetic });
+      let stdout = "";
       expect(
         await runOrganizationAuthoritySetupCli(
-          ["status", "--state-dir", staging],
-          { ...io, stdout: (value) => (stagingOutput += value) },
+          ["status", "--state-dir", state],
+          { ...io, stdout: (value) => (stdout += value) },
           productionDependencies,
         ),
       ).toBe(0);
-      expect(JSON.parse(stagingOutput)).toMatchObject({
+      return JSON.parse(stdout) as Record<string, unknown>;
+    };
+    try {
+      process.env.ECHO_CLEAN_AUTHORITY_HOST = "authority-staging.echobrain.org";
+      expect(await statusAfter(STAGING_ORIGIN, "owner")).toMatchObject({
         source_progress_observed: false,
         synthetic_staging_canary_observed: true,
         next_step: "complete",
       });
-
-      for (const corruption of [
-        "partial",
-        "wrong_owner",
-        "wrong_digest",
-        "noncanonical",
-        "wrong_cursor",
-      ] as const) {
-        const corrupt = stateDirectory(
-          "https://authority-staging.echobrain.org",
-        );
-        expect(
-          await runOrganizationAuthoritySetupCli(
-            bootstrapArgs(corrupt, "https://authority-staging.echobrain.org"),
-            io,
-            productionDependencies,
-          ),
-        ).toBe(0);
-        installDurableCanaryFixture(corrupt, {
-          cursor_version: 0,
-          synthetic_staging_release_id: releaseId,
-          synthetic_staging_canary_version: version,
-          synthetic_staging_corruption: corruption,
-        });
-        let corruptOutput = "";
-        expect(
-          await runOrganizationAuthoritySetupCli(
-            ["status", "--state-dir", corrupt],
-            { ...io, stdout: (value) => (corruptOutput += value) },
-            productionDependencies,
-          ),
-        ).toBe(0);
-        expect(JSON.parse(corruptOutput)).toMatchObject({
-          source_progress_observed: false,
-          synthetic_staging_canary_observed: false,
-          next_step: "ready_to_start",
-        });
-      }
-
-      const production = stateDirectory();
-      expect(
-        await runOrganizationAuthoritySetupCli(
-          bootstrapArgs(production),
-          io,
-          productionDependencies,
-        ),
-      ).toBe(0);
-      installDurableCanaryFixture(production, {
-        cursor_version: 0,
-        synthetic_staging_release_id: releaseId,
-        synthetic_staging_canary_version: version,
+      // A canary-shaped proposal from another meeting tool is not synthetic evidence.
+      expect(await statusAfter(STAGING_ORIGIN, "granola")).toMatchObject({
+        synthetic_staging_canary_observed: false,
+        next_step: "ready_to_start",
       });
-      let productionOutput = "";
-      expect(
-        await runOrganizationAuthoritySetupCli(
-          ["status", "--state-dir", production],
-          { ...io, stdout: (value) => (productionOutput += value) },
-          productionDependencies,
-        ),
-      ).toBe(0);
-      expect(JSON.parse(productionOutput)).toMatchObject({
-        source_progress_observed: false,
+      expect(await statusAfter("https://authority.example", "owner")).toMatchObject({
+        synthetic_staging_canary_observed: false,
+        next_step: "ready_to_start",
+      });
+      delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
+      expect(await statusAfter(STAGING_ORIGIN, "owner")).toMatchObject({
         synthetic_staging_canary_observed: false,
         next_step: "ready_to_start",
       });
     } finally {
-      if (originalReleaseId === undefined)
-        delete process.env.ECHO_CLEAN_RELEASE_ID;
-      else process.env.ECHO_CLEAN_RELEASE_ID = originalReleaseId;
       if (originalHost === undefined)
         delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
       else process.env.ECHO_CLEAN_AUTHORITY_HOST = originalHost;

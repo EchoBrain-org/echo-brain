@@ -5,13 +5,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openStagingSyntheticPrivateDmCanaryControlV1, STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1 } from "../../../../src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.js";
 import type { OpenedOrganizationAuthorityRuntime } from "../../../../../../../services/organization-authority/src/composition/organization-authority-runtime.js";
-import { createStagingSyntheticMeetingCanaryV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
 
 const RELEASE_ID = "clean-v1-staging-canary";
-const OWNER_EMAIL = "founder@example.com";
 const directories: string[] = [];
 type CanaryRun = NonNullable<
-  OpenedOrganizationAuthorityRuntime["run_staging_synthetic_private_dm_canary"]
+  OpenedOrganizationAuthorityRuntime["run_staging_synthetic_canary"]
 >;
 
 async function socketPath(): Promise<string> {
@@ -48,9 +46,9 @@ function runtime(
   runCanary: CanaryRun,
 ): Pick<
   OpenedOrganizationAuthorityRuntime,
-  "run_staging_synthetic_private_dm_canary"
+  "run_staging_synthetic_canary"
 > {
-  return { run_staging_synthetic_private_dm_canary: runCanary };
+  return { run_staging_synthetic_canary: runCanary };
 }
 
 afterEach(async () => {
@@ -71,13 +69,7 @@ describe("staging synthetic private-DM canary control", () => {
         authority_url: "https://authority.echobrain.org",
         authority_host: "authority.echobrain.org",
         release_id: RELEASE_ID,
-        owner_email: OWNER_EMAIL,
-        runtime: runtime(async () => ({
-          kind: "staged",
-          approval_id: "apr_test",
-          stage_id: "stage_test",
-          reused_frozen_extraction: false,
-        })),
+        runtime: runtime(async () => ({ kind: "staged", approval_id: "apr_test" })),
         socket_path: await socketPath(),
       }),
     ).rejects.toThrow("staging-only");
@@ -86,13 +78,7 @@ describe("staging synthetic private-DM canary control", () => {
         authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
         authority_host: "authority-staging.example.com",
         release_id: RELEASE_ID,
-        owner_email: OWNER_EMAIL,
-        runtime: runtime(async () => ({
-          kind: "staged",
-          approval_id: "apr_test",
-          stage_id: "stage_test",
-          reused_frozen_extraction: false,
-        })),
+        runtime: runtime(async () => ({ kind: "staged", approval_id: "apr_test" })),
         socket_path: await socketPath(),
       }),
     ).rejects.toThrow("host is invalid");
@@ -106,48 +92,24 @@ describe("staging synthetic private-DM canary control", () => {
         authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
         authority_host: "authority-staging.echobrain.org",
         release_id: RELEASE_ID,
-        owner_email: OWNER_EMAIL,
-        runtime: runtime(async () => ({
-          kind: "staged",
-          approval_id: "apr_test",
-          stage_id: "stage_test",
-          reused_frozen_extraction: false,
-        })),
+        runtime: runtime(async () => ({ kind: "staged", approval_id: "apr_test" })),
         socket_path: unsafe_path,
       }),
     ).rejects.toThrow("socket path is unsafe");
     expect((await lstat(unsafe_path)).isFile()).toBe(true);
   });
 
-  it("accepts the longest canonical clean-v1 release id as its canary id", () => {
-    const release_id = `clean-v1-${"a".repeat(64)}`;
-    expect(() =>
-      createStagingSyntheticMeetingCanaryV1({
-        canary_id: release_id,
-        owner_email: OWNER_EMAIL,
-        observed_at: "2026-08-30T12:00:00.000Z",
-      }),
-    ).not.toThrow();
-  });
-
-  it("derives its stable canary id and owner from admitted startup state, not the request", async () => {
-    const calls: unknown[] = [];
+  it.each([
+    [{ kind: "staged", approval_id: "apr_private" }, { approval_outcome: "staged", approval_id: "apr_private" }],
+    [{ kind: "not_staged", approval_id: "apr_private" }, { approval_outcome: "not_staged", approval_id: "apr_private" }],
+    [{ kind: "not_actionable", approval_id: null }, { approval_outcome: "not_actionable" }],
+  ] as const)("receipts the runtime's canary outcome %j for the startup release", async (outcome, fields) => {
     const control = await openStagingSyntheticPrivateDmCanaryControlV1({
       authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
       authority_host: "authority-staging.echobrain.org",
       release_id: RELEASE_ID,
-      owner_email: OWNER_EMAIL,
-      runtime: runtime(async (input) => {
-        calls.push(input);
-        return {
-          kind: "quarantined",
-          approval_id: "apr_private",
-          reason_code: "approval_package_unrepresentable",
-          reused_frozen_extraction: false,
-        };
-      }),
+      runtime: runtime(async () => outcome),
       socket_path: await socketPath(),
-      now: () => "2026-08-30T12:00:00.000Z",
     });
 
     const response = await post(control.socket_path);
@@ -156,36 +118,21 @@ describe("staging synthetic private-DM canary control", () => {
       schema_version: 1,
       kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
       release_id: RELEASE_ID,
-      approval_outcome: "quarantined",
-      approval_id: "apr_private",
+      ...fields,
     });
-    expect(response.body).not.toContain(OWNER_EMAIL);
-    expect(calls).toEqual([
-      {
-        canary_id: RELEASE_ID,
-        owner_email: OWNER_EMAIL,
-        observed_at: "2026-08-30T12:00:00.000Z",
-      },
-    ]);
     await control.close();
   });
 
-  it("sends duplicate requests through the same stable canary id and cleans up its private socket", async () => {
-    const ids: string[] = [];
+  it("serves duplicate requests and cleans up its private socket", async () => {
+    let runs = 0;
     const socket_path = await socketPath();
     const control = await openStagingSyntheticPrivateDmCanaryControlV1({
       authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
       authority_host: "authority-staging.echobrain.org",
       release_id: RELEASE_ID,
-      owner_email: OWNER_EMAIL,
-      runtime: runtime(async (input) => {
-        ids.push(input.canary_id);
-        return {
-          kind: "staged",
-          approval_id: "apr_test",
-          stage_id: "stage_test",
-          reused_frozen_extraction: ids.length > 1,
-        };
+      runtime: runtime(async () => {
+        runs += 1;
+        return { kind: "staged", approval_id: "apr_test" };
       }),
       socket_path,
     });
@@ -196,7 +143,8 @@ describe("staging synthetic private-DM canary control", () => {
       post(socket_path),
     ]);
     expect([first.status, second.status]).toEqual([200, 200]);
-    expect(ids).toEqual([RELEASE_ID, RELEASE_ID]);
+    expect(JSON.parse(first.body)).toEqual(JSON.parse(second.body));
+    expect(runs).toBe(2);
     await control.close();
     await expect(lstat(socket_path)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -207,8 +155,7 @@ describe("staging synthetic private-DM canary control", () => {
       authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
       authority_host: "authority-staging.echobrain.org",
       release_id: RELEASE_ID,
-      owner_email: OWNER_EMAIL,
-      runtime: runtime(async (_input, options) => {
+      runtime: runtime(async (options) => {
         observedSignal = options?.signal;
         return await new Promise((_, reject) => {
           options?.signal?.addEventListener(
@@ -235,20 +182,14 @@ describe("staging synthetic private-DM canary control", () => {
       authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
       authority_host: "authority-staging.echobrain.org",
       release_id: RELEASE_ID,
-      owner_email: OWNER_EMAIL,
-      runtime: runtime(async (_input, options) => {
+      runtime: runtime(async (options) => {
         observedSignal = options?.signal;
         await new Promise<void>((resolve) => {
           options?.signal?.addEventListener("abort", () => resolve(), {
             once: true,
           });
         });
-        return {
-          kind: "staged",
-          approval_id: "apr_late",
-          stage_id: "stage_late",
-          reused_frozen_extraction: false,
-        };
+        return { kind: "staged", approval_id: "apr_late" };
       }),
       socket_path: await socketPath(),
       operation_timeout_ms: 5,
@@ -275,20 +216,14 @@ describe("staging synthetic private-DM canary control", () => {
       authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
       authority_host: "authority-staging.echobrain.org",
       release_id: RELEASE_ID,
-      owner_email: OWNER_EMAIL,
-      runtime: runtime((_input, options) => {
+      runtime: runtime((options) => {
         options?.signal?.addEventListener("abort", observeAbort, {
           once: true,
         });
         queuedRun = preceding.then(() => {
           options?.signal?.throwIfAborted();
           sideEffects += 1;
-          return {
-            kind: "staged",
-            approval_id: "apr_queued",
-            stage_id: "stage_queued",
-            reused_frozen_extraction: false,
-          };
+          return { kind: "staged" as const, approval_id: "apr_queued" };
         });
         return queuedRun;
       }),
@@ -315,8 +250,7 @@ describe("staging synthetic private-DM canary control", () => {
       authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
       authority_host: "authority-staging.echobrain.org",
       release_id: RELEASE_ID,
-      owner_email: OWNER_EMAIL,
-      runtime: runtime(async (_input, options) => {
+      runtime: runtime(async (options) => {
         observedSignal = options?.signal;
         markStarted();
         return await new Promise((_, reject) => {

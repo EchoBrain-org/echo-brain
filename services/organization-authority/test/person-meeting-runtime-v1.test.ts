@@ -22,19 +22,22 @@ async function fixture(options: { readonly transcriptOnly?: boolean } = {}) {
   addMembership(f.db, { ...other, membership_type: 'employee' }, 'Other', 'other@example.test');
   let active = true, extracted = 0, duringPull: (() => void | Promise<void>) | undefined;
   const current = () => { if (!active) throw new Error('Disconnected'); };
-  const provider: PersonMeetingProviderV1 = {
-    id: 'granola', normalizer_version: '2.2.0', cursor: { read: readGranolaCheckpointV1, write: writeGranolaCheckpointV1, policy: GRANOLA_FOLDER_CURSOR_POLICY_V1 },
+  const sources: { readonly tool_id: string; readonly source_key: string }[] = [];
+  const fakeProvider = (tool_id: string, adapter_id: string): PersonMeetingProviderV1 => ({
+    id: tool_id, normalizer_version: '2.2.0', cursor: { read: readGranolaCheckpointV1, write: writeGranolaCheckpointV1,
+      policy: adapter_id === GRANOLA_FOLDER_CURSOR_POLICY_V1.source_adapter_id ? GRANOLA_FOLDER_CURSOR_POLICY_V1 : { source_adapter_id: adapter_id, assert_live_cursor(cursor) { readGranolaCheckpointV1(cursor); } } },
     connection_http: { routes: [], async accept() { throw new Error('unused'); } },
-    tool: () => ({ tool_id: 'granola', display_name: 'Granola', availability: 'enabled', personal_status: active ? 'linked' : 'revoked', external_scope_id: null, external_subject_id: null, organization_setup: null }),
+    tool: () => ({ tool_id, display_name: tool_id, availability: 'enabled', personal_status: active ? 'linked' : 'revoked', external_scope_id: null, external_subject_id: null, organization_setup: null }),
     async open(actor, guard) {
       guard(); current();
-      return { identity: { kind: 'meeting-source', adapter_id: 'granola-person-mcp', instance_id: `granola-${canonicalSha256(actor).slice(7)}`, version: '1.0.0' },
+      return { identity: { kind: 'meeting-source', adapter_id, instance_id: `${tool_id}-${canonicalSha256(actor).slice(7)}`, version: '1.0.0' },
         custodian: { actor }, email: 'fixture@example.test', workspace: 'Fixture', current() { guard(); current(); },
         async folders() { return [{ id: folder, title: 'ECHO', count: 0 }]; }, async browse() { return { meetings: [] }; },
         async preview(value) { return { id: value, title: 'Test meeting', notes: 'Ship pilot.', summary: '', truncated: false }; },
       };
     },
     source(setting, guard) {
+      sources.push({ tool_id, source_key: setting.source_key });
       const identity = { kind: 'meeting-source' as const, adapter_id: setting.source_adapter_id, instance_id: setting.source_adapter_instance_id, version: setting.source_adapter_version };
       return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
         requireCurrent() { guard(); current(); },
@@ -52,9 +55,10 @@ async function fixture(options: { readonly transcriptOnly?: boolean } = {}) {
         },
       };
     },
-  };
+  });
+  const provider = fakeProvider('granola', GRANOLA_FOLDER_CURSOR_POLICY_V1.source_adapter_id);
   const sessions = { authenticateAccess: ({ access_token }: { access_token: string }) => authorization({ ...(access_token === 'owner' ? person : other), membership_type: access_token === 'owner' ? 'owner' : 'employee' }) };
-  const create = () => createPersonMeetingRuntimeV1({ database: f.db, approval: f.context, provider,
+  const create = (providers: readonly PersonMeetingProviderV1[] = [provider]) => createPersonMeetingRuntimeV1({ database: f.db, approval: f.context, providers,
     sessions,
     processor: { processor_adapter_id: 'llm', current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }), assert_admission_commitments() {},
       create_processor(admission) { const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
@@ -64,8 +68,9 @@ async function fixture(options: { readonly transcriptOnly?: boolean } = {}) {
     },
     extraction_attempts: { reserve: () => ({ status: 'reserved', attempt: 1, claim_id: 'claim' }), complete() {} },
   });
-  const call = async <K extends PersonMeetingOperationV1['operation']>(runtime: ReturnType<typeof create>, op: PersonMeetingOperationV1 & { operation: K }, token = 'owner') => {
-    const response = await runtime.applications[1]!.accept({ route_id: 'personal-meetings', method: 'POST', path: '/v1/person/meetings', headers: { authorization: `Bearer ${token}` }, content_type: 'application/json', raw_body: Buffer.from(JSON.stringify({ schema_version: 1, tool_id: 'granola', ...op })) });
+  const call = async <K extends PersonMeetingOperationV1['operation']>(runtime: ReturnType<typeof create>, op: PersonMeetingOperationV1 & { operation: K }, token = 'owner', tool_id = 'granola') => {
+    const meetings = runtime.applications.find(application => application.routes.some(route => route.route_id === 'personal-meetings'))!;
+    const response = await meetings.accept({ route_id: 'personal-meetings', method: 'POST', path: '/v1/person/meetings', headers: { authorization: `Bearer ${token}` }, content_type: 'application/json', raw_body: Buffer.from(JSON.stringify({ schema_version: 1, tool_id, ...op })) });
     if (!('body' in response)) throw new Error('Expected JSON');
     return response.body as PersonMeetingResultsV1[K];
   };
@@ -74,9 +79,27 @@ async function fixture(options: { readonly transcriptOnly?: boolean } = {}) {
     f.db.prepare("INSERT INTO authority_projects_v1 VALUES (?,?,?,'active',?,?,?,'owner')").run(project, person.organization_id, 'ECHO', time, person.principal_id, person.membership_id);
     f.db.prepare("INSERT INTO authority_project_memberships_v1 VALUES (?,?,?,?,?,'owner','lead','active',?,NULL)").run('pgm_00000000-0000-4000-8000-000000000005', project, person.organization_id, person.principal_id, person.membership_id, time);
   };
-  return { ...f, person, other, sessions, create, call, grantProject, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; } };
+  return { ...f, person, other, sessions, create, call, grantProject, fakeProvider, sources, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; } };
 }
 describe('personal meeting intake uses the shared processing path', () => {
+  it('routes each stored source to the provider that owns its adapter id', async () => {
+    const f = await fixture(); f.grantProject();
+    const runtime = f.create([f.fakeProvider('granola', 'granola-person-mcp'), f.fakeProvider('notes', 'notes-person-mcp')]);
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    // A project keeps the fixed fake extraction distinct per processor instance.
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true }, 'owner', 'notes');
+    const granola = (await f.call(runtime, { operation: 'home' })).sources;
+    const notes = (await f.call(runtime, { operation: 'home' }, 'owner', 'notes')).sources;
+    expect(granola).toHaveLength(1); expect(notes).toHaveLength(1);
+    expect(granola[0]?.source_key).not.toBe(notes[0]?.source_key);
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    expect(new Set(f.sources.filter(call => call.tool_id === 'granola').map(call => call.source_key))).toEqual(new Set([granola[0]!.source_key]));
+    expect(new Set(f.sources.filter(call => call.tool_id === 'notes').map(call => call.source_key))).toEqual(new Set([notes[0]!.source_key]));
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(2);
+    await expect(f.call(runtime, { operation: 'home' }, 'owner', 'calendar')).rejects.toMatchObject({ code: 'not_found' });
+  });
+
   it('keeps two people importing the same meeting in independent private custody and review', async () => {
     const f = await fixture(), runtime = f.create();
     for (const token of ['owner', 'other']) await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true }, token);

@@ -14,7 +14,6 @@
     "providers/slack/server/src/private-approval/private-slack-approval-workflow-bundle-v1.ts",
     "providers/slack/server/src/person-identity/slack-person-external-identity-runtime-bundle-v1.ts",
     "providers/slack/server/src/private-approval/private-slack-approval-interaction-protocol-v1.ts",
-    "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.ts",
     "providers/slack/server/src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.ts",
     "providers/slack/server/src/organization-control-plane/application/slack-integration-contracts.ts",
     "providers/slack/server/src/organization-control-plane/application/slack-bot-token-source-v1.ts",

@@ -32,6 +32,10 @@
     "./staging-canary-meeting-source-v1": {
       "types": "./dist/staging-canary-meeting-source-v1.d.ts",
       "import": "./dist/staging-canary-meeting-source-v1.js"
+    },
+    "./staging-synthetic-personal-meeting-provider-v1": {
+      "types": "./dist/staging-synthetic-personal-meeting-provider-v1.d.ts",
+      "import": "./dist/staging-synthetic-personal-meeting-provider-v1.js"
     }
   },
   "files": [

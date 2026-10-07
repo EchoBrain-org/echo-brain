@@ -29,7 +29,8 @@ import { SlackConnectionHealthV1 } from "@echo-brain/provider-slack-server/organ
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { join } from "node:path";
 import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-interaction-protocol-v1";
-import { runStagingSyntheticPrivateDmCanaryV1 } from "@echo-brain/provider-slack-server/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1";
+import { createStagingSyntheticPersonalMeetingProviderV1 } from "@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1";
+import { runStagingSyntheticPersonalCanaryV1 } from "./staging/staging-synthetic-personal-canary-v1.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "@echo-brain/provider-slack-server/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { openJiraPersonLiveRuntimeV1, type JiraPersonLiveConfigurationV1, type JiraPersonLiveRuntimeSeamsV1 } from './jira-person-live-runtime-v1.js';
@@ -38,6 +39,7 @@ import type { PersonLiveConnectorDefinitionV1 } from '../application/ports/perso
 import { JIRA_LIVE_CONNECTOR_V1, CONFLUENCE_LIVE_CONNECTOR_V1 } from './person-live-connector-registry-v1.js';
 import type { OrganizationAuthorityApiRuntimeDependencies } from './organization-authority-api-runtime.js';
 import type { MeetingSourceBundleV1 } from '@echo-brain/organization-processing/ports/meeting-source-bundle-v1';
+import type { DecisionProcessorBundleV1 } from '@echo-brain/organization-processing/ports/decision-processor-bundle-v1';
 
 export interface OrganizationAuthorityServiceConfig
   extends Omit<
@@ -48,6 +50,7 @@ export interface OrganizationAuthorityServiceConfig
     | "answer_composition_generation_bundle"
     | "record_policy_fact_projectors"
     | "record_input_codecs"
+    | "run_staging_synthetic_canary"
   > {
   /** Both fixture fields are required together and staging-origin guarded. */
   readonly staging_synthetic_meetings_directory?: string;
@@ -94,6 +97,8 @@ export interface OrganizationAuthorityServiceDependencies
   readonly confluence_person_live_seams?: ConfluencePersonLiveRuntimeSeamsV1;
   /** Synthetic-test seam. Deployable selection remains staging-origin guarded. */
   readonly meeting_source_bundle?: MeetingSourceBundleV1;
+  /** Provider-free test seam for the personal meeting runtime; the deployable service keeps OpenRouter. */
+  readonly person_meeting_processor?: DecisionProcessorBundleV1;
   /** Test seams for Nango's and Slack's HTTP APIs. */
   readonly slack?: {
     readonly nango?: NangoConnectionClientV1;
@@ -187,6 +192,13 @@ export async function openOrganizationAuthorityService(
     createPersonPolicyFactProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV1(),
     createPrivateSlackBlockApprovalPolicyProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV3(), createPersonMeetingApprovalPolicyProjectorV1(),
   ]);
+  // Staging only: the owner's synthetic personal source carries the release canary and the fixture meetings.
+  const stagingSynthetic = config.authority_url === STAGING_AUTHORITY_ORIGIN_V1
+    ? createStagingSyntheticPersonalMeetingProviderV1(staging_synthetic_meetings_directory === undefined ? {} : {
+        fixtures_directory: assertStagingSyntheticMeetingSourceSelectionV1({ authority_url: sharedConfig.authority_url, meetings_directory: staging_synthetic_meetings_directory }),
+      })
+    : undefined;
+  let stagingCanary: ((signal: AbortSignal) => ReturnType<typeof runStagingSyntheticPersonalCanaryV1>) | undefined;
   const apiDependencies: OrganizationAuthorityApiRuntimeDependencies = {
     ...dependencies.api,
     person_http_runtime_factory: (sessions, resources) => {
@@ -195,7 +207,9 @@ export async function openOrganizationAuthorityService(
       try {
         if (existing?.processing !== undefined) throw new Error('Personal meeting processing is already selected');
         const granola = openGranolaPersonLiveRuntimeV1({ state_directory: sharedConfig.state_directory, sessions, resources,
-          processor: decisionProcessor, projectors: policyProjectors, nango_authorization: () => slack_nango.secret_key });
+          processor: dependencies.person_meeting_processor ?? decisionProcessor, projectors: policyProjectors, nango_authorization: () => slack_nango.secret_key,
+          ...(stagingSynthetic === undefined ? {} : { providers: [stagingSynthetic] }) });
+        if (stagingSynthetic !== undefined) stagingCanary = signal => runStagingSyntheticPersonalCanaryV1({ database: resources.database, runtime: granola, signal });
         return { applications: [...(existing?.applications ?? []), ...granola.applications], processing: granola.processing,
           tools: async token => [...await (existing?.tools?.(token) ?? []), ...await granola.tools(token)],
           close() { granola.close(); existing?.close(); } };
@@ -250,8 +264,12 @@ export async function openOrganizationAuthorityService(
         }),
       record_input_codecs: RECORD_INPUT_CODECS,
       record_policy_fact_projectors: policyProjectors,
-      run_staging_synthetic_private_dm_canary: (input) =>
-        runStagingSyntheticPrivateDmCanaryV1(input),
+      ...(stagingSynthetic === undefined ? {} : {
+        run_staging_synthetic_canary: (signal: AbortSignal) => {
+          if (stagingCanary === undefined) throw new Error("staging synthetic canary requires the personal meeting runtime");
+          return stagingCanary(signal);
+        },
+      }),
     },
     {
       ...dependencies,

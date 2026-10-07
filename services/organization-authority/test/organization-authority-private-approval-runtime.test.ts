@@ -1,4 +1,3 @@
-import { admitStagingCanaryMeetingSourceV1 } from "@echo-brain/provider-synthetic-demo/staging-canary-meeting-source-v1";
 import Database from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -569,11 +568,9 @@ async function admittedFixture(input: {
 
 async function activeFixture(input: {
   readonly seed_project?: boolean;
-  readonly canary_only?: boolean;
 } = {}) {
   const fixture = await admittedFixture({
     seed_private_slack_connection: true,
-    skip_source_admission: input.canary_only,
   });
   if (input.seed_project === true) {
     const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, "authority.sqlite"), { fileMustExist: true });
@@ -583,25 +580,11 @@ async function activeFixture(input: {
       authority.prepare(`INSERT INTO authority_project_memberships_v1 (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at,revoked_at) VALUES ('pgm_11111111-1111-4111-8111-111111111111',?,?,?,?,?,'lead','active',?,NULL)`).run(project_id, fixture.initialized.organization_id, fixture.initialized.owner_principal_id, fixture.initialized.owner_membership_id, "owner", NOW);
     } finally { authority.close(); }
   }
-  if (input.canary_only === true) {
-    await admitStagingCanaryMeetingSourceV1({
-      authority_url: "https://authority-staging.echobrain.org",
-      state_directory: fixture.initialized.state_directory,
-      processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({
-        instance_id: fixture.processorIdentity.instance_id,
-        credential_reference: `file:${fixture.config.openrouter_credential_file}`,
-      }),
-      now: () => NOW,
-    });
-  }
-  const config = input.canary_only === true
-    ? { ...fixture.config, synthetic_meeting_source_bundle: undefined, authority_url: "https://authority-staging.echobrain.org",
-        oidc: { ...fixture.config.oidc, redirect_uri: "https://authority-staging.echobrain.org/v2/session/oidc/callback" } }
-    : fixture.config;
-  const source = input.canary_only === true ? fakeSource(fixture.source.identity, 0) : fixture.source;
+  const config = fixture.config;
+  const source = fixture.source;
   const runtime = await openOrganizationAuthorityService(config, {
     processing_adapter_overrides: {
-      ...(input.canary_only === true ? {} : { source }),
+      source,
       processor: fakeProcessor(fixture.processorIdentity),
       private_approval_card_poster: fixture.poster,
     },
@@ -1552,81 +1535,6 @@ describe("Organization Authority runtime private approval lane", () => {
       expect(record.prepare("SELECT project_id FROM organization_record_project_association_v1").all()).toEqual([{ project_id: "prj_11111111-1111-4111-8111-111111111111" }]);
       expect(record.prepare("SELECT source_id,revision_id FROM organization_record_meeting_transcript_grant_v1").all()).toHaveLength(1);
     } finally { await fixture.runtime.close(); record.close(); }
-  });
-
-  it.each([false, true])("runs the single canary through custody, project approval and transcript release (share=%s)", async (shareTranscript) => {
-    const fixture = await activeFixture({ seed_project: true, canary_only: true });
-    const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, "authority.sqlite"), { fileMustExist: true });
-    const record = openOrganizationRecordDatabase(join(fixture.initialized.state_directory, "record-log.sqlite"), { fileMustExist: true });
-    const projectId = "prj_11111111-1111-4111-8111-111111111111";
-    const canary = { canary_id: "project-source-canary", owner_email: "founder@example.com", observed_at: NOW };
-    const progress = () => authority.prepare("SELECT cursor,cursor_version FROM authority_live_source_progress_v2").get();
-    try {
-      await waitFor(() => fixture.errors.length > 0 || progress() !== undefined, "canary infrastructure initialization");
-      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
-      expect(authority.prepare("SELECT count(*) AS count FROM authority_source_revisions_v1").get()).toEqual({ count: 0 });
-      const originalProgress = progress();
-      const result = await fixture.runtime.run_staging_synthetic_private_dm_canary!(canary);
-      expect(result).toMatchObject({ kind: "staged", reused_frozen_extraction: false });
-      expect(fixture.poster.published).toHaveLength(1);
-      expect(progress()).toEqual(originalProgress);
-      const card = fixture.poster.published[0]!;
-      expect(cardParts(card.card).schema_version).toBe(2);
-      const blocks = card.card.blocks as ReadonlyArray<Record<string, unknown>>;
-      const projectPicker = blocks.find(block => /-projects-v2$/.test(String(block.block_id)));
-      expect(projectPicker).toMatchObject({ element: { options: [{ value: projectId }] } });
-      const transcriptToggle = blocks.find(block => /-transcript-v2$/.test(String(block.block_id)));
-      expect(transcriptToggle).toBeDefined();
-      expect(transcriptToggle?.element).not.toHaveProperty("initial_options");
-      expect(record.prepare("SELECT count(*) AS count FROM organization_record_log").get()).toEqual({ count: 0 });
-      const source = authority.prepare(`
-        SELECT revision.source_id,revision.revision_id,('sha256:' || revision.revision_sha256) AS source_sha256,
-               contents.content_json
-          FROM authority_source_revisions_v1 revision
-          JOIN authority_source_contents_v1 contents USING (organization_id,source_id,revision_id)
-          JOIN authority_sources_v1 source USING (organization_id,source_id)
-         WHERE source.adapter_id = 'synthetic-staging-canary'
-      `).get() as { source_id: string; revision_id: string; source_sha256: string; content_json: string };
-      const retained = JSON.parse(source.content_json) as { content: ReadonlyArray<{ kind: string; text: string }> };
-      const transcript = retained.content.find(block => block.kind === "transcript")?.text;
-      expect(transcript).toContain("Synthetic staging canary transcript.");
-      const citation = { kind: "approved_meeting_transcript", approval_id: card.approval_id,
-        source_id: source.source_id, revision_id: source.revision_id, source_sha256: source.source_sha256 };
-      const readTranscript = () => fetch(`http://127.0.0.1:${fixture.runtime.address.port}/v1/person/meeting-transcripts/read`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${fixture.owner_access_token}`, "content-type": "application/json" },
-        body: JSON.stringify({ schema_version: 1, scope: { kind: "project", project_id: projectId }, citation }),
-      });
-      expect((await readTranscript()).status).toBe(401);
-      expect((await clickCard({ fixture, card, action: "approve", policy_id: "project-members-readable-person-v1",
-        project_ids: [projectId], share_transcript: shareTranscript })).status).toBe(200);
-      await waitFor(() => fixture.errors.length > 0 || (record.prepare("SELECT count(*) AS count FROM organization_record_log").get() as { count: number }).count === 1, "canary project record append");
-      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
-      expect(record.prepare("SELECT project_id FROM organization_record_project_members_readable_person_record_fact").all()).toEqual([{ project_id: projectId }]);
-      expect(record.prepare("SELECT project_id FROM organization_record_project_association_v1").all()).toEqual([{ project_id: projectId }]);
-      expect(record.prepare("SELECT source_id,revision_id,source_sha256 FROM organization_record_meeting_transcript_grant_v1").all()).toEqual(
-        shareTranscript ? [{ source_id: source.source_id, revision_id: source.revision_id, source_sha256: source.source_sha256 }] : [],
-      );
-      const released = await readTranscript();
-      expect(released.status).toBe(shareTranscript ? 200 : 401);
-      if (shareTranscript) expect(await released.json()).toMatchObject({ text: transcript, next_offset: null, citation });
-
-      const replay = await fixture.runtime.run_staging_synthetic_private_dm_canary!({ ...canary, observed_at: "2026-08-22T12:01:00.000Z" });
-      expect(replay).toMatchObject({ kind: "staged", reused_frozen_extraction: true, approval_id: card.approval_id });
-      expect(fixture.poster.published).toHaveLength(1);
-      expect(authority.prepare("SELECT count(*) AS count FROM authority_source_revisions_v1").get()).toEqual({ count: 1 });
-      expect(record.prepare("SELECT count(*) AS count FROM organization_record_log").get()).toEqual({ count: 1 });
-      expect(progress()).toEqual(originalProgress);
-      if (shareTranscript) {
-        authority.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?")
-          .run("2026-08-22T12:02:00.000Z", projectId);
-        expect((await readTranscript()).status).toBe(401);
-      }
-    } finally {
-      await fixture.runtime.close();
-      record.close();
-      authority.close();
-    }
   });
 
   it("uses Only me when approved and recovers a restart without reposting the private card", async () => {

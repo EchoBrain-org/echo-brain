@@ -7,6 +7,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import type { MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
 import type { AdmittedMeetingSourceCursorPolicyV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1';
 import type { DecisionProcessorBundleV1 } from '@echo-brain/organization-processing/ports/decision-processor-bundle-v1';
+import type { AdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments';
 import type { ApprovalWorkflowContextV1 } from '@echo-brain/organization-processing/ports/approval-workflow-bundle-v1';
 import type { ExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/extraction-attempt-store-v1';
 import { AdmittedMeetingProcessingCycleV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1';
@@ -22,6 +23,8 @@ import type { OrganizationAuthorityProcessingCycleV1 } from './organization-auth
 
 export interface PersonMeetingProviderV1 {
   readonly id: string; readonly normalizer_version: string;
+  /** The admission label for this provider's custodian; defaults to a person's own OAuth account. */
+  readonly custodian_assurance?: string;
   readonly connection_http: ProviderHttpApplicationV1;
   readonly cursor: PersonalMeetingCheckpointCodecV1 & { readonly policy: AdmittedMeetingSourceCursorPolicyV1 };
   tool(token: string): OrganizationPersonToolV4;
@@ -37,18 +40,61 @@ export interface PersonMeetingProviderV1 {
 export function meetingIntakePersonV1(value: MeetingIntakePersonV1): MeetingIntakePersonV1 {
   return { organization_id: value.organization_id, principal_id: value.principal_id, membership_id: value.membership_id };
 }
+type ProcessorCommitmentsV1 = (instance_id: string) => AdmittedMeetingProcessingCommitmentsV1['processor'] | undefined;
+/** The one source rule: a source per person, tool account and project, with a processor instance per person and project. */
+export function ensurePersonMeetingSourceV1(intake: SqlitePersonMeetingIntakeV1, input: {
+  readonly provider: Pick<PersonMeetingProviderV1, 'normalizer_version' | 'custodian_assurance'>; readonly person: MeetingIntakePersonV1; readonly project_id: string | null;
+  readonly session: { readonly identity: MeetingSourceAdapter['identity']; readonly custodian: unknown };
+  readonly commitments: ProcessorCommitmentsV1; readonly current: () => void;
+}): MeetingIntakeSettingV1 {
+  const person = meetingIntakePersonV1(input.person), project = input.project_id;
+  const identity = { ...input.session.identity, instance_id: `${input.session.identity.instance_id}-${canonicalSha256(project).slice(7, 31)}` };
+  const processor = input.commitments(`personal-${canonicalSha256({ person, project }).slice(7, 39)}`);
+  if (!processor) throw new AuthorityOperationError('unavailable', 'Meeting processing unavailable');
+  return intake.ensure({ person, project_id: project, identity, normalizer_version: input.provider.normalizer_version, custodian: input.session.custodian, processor, current: input.current,
+    ...(input.provider.custodian_assurance === undefined ? {} : { custodian_assurance: input.provider.custodian_assurance }) });
+}
+/** Queues meetings into a person's own source without an HTTP session (the staging canary and setup). */
+export async function queuePersonMeetingsV1(input: {
+  readonly database: Database.Database; readonly provider: PersonMeetingProviderV1; readonly person: MeetingIntakePersonV1;
+  readonly meeting_ids: readonly string[]; readonly commitments: ProcessorCommitmentsV1; readonly signal?: AbortSignal;
+}): Promise<MeetingIntakeSettingV1> {
+  const person = meetingIntakePersonV1(input.person), intake = new SqlitePersonMeetingIntakeV1(input.database, input.provider.cursor);
+  const current = () => { input.signal?.throwIfAborted(); intake.currentPerson(person); };
+  const session = await input.provider.open(person, current, input.signal);
+  for (const meeting of input.meeting_ids) await session.preview(meeting);
+  return input.database.transaction(() => {
+    session.current();
+    const setting = ensurePersonMeetingSourceV1(intake, { provider: input.provider, person, project_id: null, session, commitments: input.commitments, current });
+    for (const meeting of input.meeting_ids) intake.enqueue(setting, meeting, current);
+    return setting;
+  }).immediate();
+}
 /** One processing lane, shared custody/candidates/append, and a first-party review presentation. */
 export function createPersonMeetingRuntimeV1(options: {
   readonly database: Database.Database; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
-  readonly provider: PersonMeetingProviderV1; readonly processor: DecisionProcessorBundleV1;
+  /** One provider per tool; a stored source belongs to the provider whose cursor policy names its source adapter. */
+  readonly providers: readonly PersonMeetingProviderV1[]; readonly processor: DecisionProcessorBundleV1;
   readonly approval: Omit<ApprovalWorkflowContextV1, 'state'>; readonly extraction_attempts: ExtractionAttemptStoreV1;
 }) {
-  const { database: db, provider, processor } = options;
-  const intake = new SqlitePersonMeetingIntakeV1(db, provider.cursor);
+  const { database: db, providers, processor } = options;
+  if (providers.length === 0 || new Set(providers.map(p => p.id)).size !== providers.length || new Set(providers.map(p => p.cursor.policy.source_adapter_id)).size !== providers.length) {
+    throw new Error('Personal meeting providers need distinct tools and source adapters');
+  }
+  // Each provider decodes only its own checkpoints, so every source is read through its owner's intake.
+  const owners = new Map(providers.map(provider => [provider.cursor.policy.source_adapter_id, { provider, intake: new SqlitePersonMeetingIntakeV1(db, provider.cursor) }]));
+  const ownerOf = (sourceAdapterId: string) => {
+    const owner = owners.get(sourceAdapterId);
+    if (!owner) throw new AuthorityOperationError('not_found', 'Meeting tool unavailable');
+    return owner;
+  };
+  // Person, membership and settings reads do not decode a cursor; any provider's intake serves them.
+  const intake = ownerOf(providers[0]!.cursor.policy.source_adapter_id).intake;
   const authenticate = personToolAuthenticationV1(options.sessions);
   const observed = new Map<string, { checked_at: string; error: string | null; next: number }>();
   function settings(person: MeetingIntakePersonV1) { return canonicalSha256(intake.list(person).map(({ source_key, folder_id, project_id, settings_revision }) => ({ source_key, folder_id, project_id, settings_revision }))); }
   async function lane(setting: MeetingIntakeSettingV1) {
+    const { provider } = ownerOf(setting.source_adapter_id);
     // Pin the project grant's exact version as well as the person's active membership.
     // Approval recovery itself can proceed without an active provider/project grant.
     let grant: string | undefined;
@@ -72,15 +118,19 @@ export function createPersonMeetingRuntimeV1(options: {
       JOIN authority_live_approval_outbox_v2 o ON o.candidate_id=c.candidate_id
       JOIN authority_person_meeting_approval_actions_v1 h ON h.approval_id=o.approval_id
       WHERE h.receipt_json IS NULL AND json_extract(h.body_json,'$.request.action')='approve' ORDER BY s.source_key LIMIT 100`).all() as { source_key: string }[];
-    const all = intake.list();
-    for (const { source_key } of keys) { signal.throwIfAborted(); await (await lane(all.find(s => s.source_key === source_key)!)).review.processing.appendFinalizedApprovalsToV4(signal); }
+    // A source whose provider is not selected in this runtime keeps its finalized actions until it is.
+    const all = intake.list().filter(s => owners.has(s.source_adapter_id));
+    for (const { source_key } of keys) {
+      signal.throwIfAborted(); const setting = all.find(s => s.source_key === source_key);
+      if (setting) await (await lane(setting)).review.processing.appendFinalizedApprovalsToV4(signal);
+    }
   }
   let after = '';
   const processing: OrganizationAuthorityProcessingCycleV1 = {
     recoverV4Appends: publish, appendFinalizedApprovalsToV4: publish,
     async observeAndFinalizePendingApprovals() {}, async reconcileReadableSearchGeneration() {},
     async pollAndStageAdmittedMeetings(signal) {
-      const eligible = intake.list().filter(s => (s.folder_id !== null || intake.checkpoint(s.source_key).manual.length > 0) && (observed.get(s.source_key)?.next ?? 0) <= Date.now());
+      const eligible = intake.list().filter(s => owners.has(s.source_adapter_id) && (s.folder_id !== null || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0) && (observed.get(s.source_key)?.next ?? 0) <= Date.now());
       const setting = eligible.find(s => s.source_key > after) ?? eligible[0];
       if (!setting) return;
       after = setting.source_key;
@@ -89,19 +139,20 @@ export function createPersonMeetingRuntimeV1(options: {
         processor.assert_admission_commitments(readAdmittedMeetingProcessingCommitmentsV1(db, setting.source_key));
         const { source, state, review } = await lane(setting);
         const admission = await state.readAdmission();
+        const { provider, intake: sourceIntake } = ownerOf(setting.source_adapter_id);
         const outcome = await new AdmittedMeetingProcessingCycleV1({ source, state, processor: processor.create_processor(admission), extraction_attempts: options.extraction_attempts,
           source_cursor_policy: provider.cursor.policy, stager: review.stager,
           source_ingestion: { store: new SqliteSourceAdmissionStoreV1(db, () => {
             source.requireCurrent(); state.assertCurrentSourceAdmission(source.identity);
-            if (provider.cursor.write(intake.checkpoint(setting.source_key)) !== admission.source.cursor) throw new AuthorityOperationError('stale_access_state', 'Meeting intake changed during acquisition');
+            if (provider.cursor.write(sourceIntake.checkpoint(setting.source_key)) !== admission.source.cursor) throw new AuthorityOperationError('stale_access_state', 'Meeting intake changed during acquisition');
           }),
             scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
         }).runOnce(signal);
-        const queued = intake.checkpoint(setting.source_key).manual.length > 0 || (outcome.cursor_advanced && !outcome.kind.startsWith('empty'));
+        const queued = sourceIntake.checkpoint(setting.source_key).manual.length > 0 || (outcome.cursor_advanced && !outcome.kind.startsWith('empty'));
         observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() + (queued ? 0 : 300_000) });
       } catch (error) {
         signal.throwIfAborted();
-        const remaining = intake.checkpoint(setting.source_key);
+        const remaining = ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key);
         if (remaining.folder === null && remaining.manual.length === 0) { observed.delete(setting.source_key); return; }
         // Fixed, content-free status; one broken grant cannot starve another person's work.
         observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: 'Meeting intake needs attention. Check the connection, folder access, and project access.', next: Date.now() + 60_000 });
@@ -137,7 +188,8 @@ export function createPersonMeetingRuntimeV1(options: {
       let input;
       try { input = validatePersonMeetingRequestV1(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(request.raw_body))); }
       catch { throw new AuthorityOperationError('invalid_request', 'Invalid meeting request'); }
-      if (input.tool_id !== provider.id) throw new AuthorityOperationError('not_found', 'Meeting tool unavailable');
+      const provider = providers.find(p => p.id === input.tool_id);
+      if (!provider) throw new AuthorityOperationError('not_found', 'Meeting tool unavailable');
       const result = async (): Promise<unknown> => {
         if (input.operation === 'reviews' || input.operation === 'review_open' || input.operation === 'review') {
           const rows = reviewRows(person, input.operation === 'reviews' ? undefined : input.approval_id).filter(row => { try { intake.currentPerson(person, row.project_id); return true; } catch { return false; } });
@@ -157,12 +209,12 @@ export function createPersonMeetingRuntimeV1(options: {
         if (input.operation === 'cancel_import') {
           const setting = intake.list(person).find(s => s.source_key === input.source_key);
           if (!setting) throw new AuthorityOperationError('not_found', 'Meeting import unavailable');
-          intake.cancelImport(setting, input.meeting_id, current); observed.delete(setting.source_key); return { status: 'cancelled' };
+          ownerOf(setting.source_adapter_id).intake.cancelImport(setting, input.meeting_id, current); observed.delete(setting.source_key); return { status: 'cancelled' };
         }
         if (input.operation === 'watch' && input.folder_id === null) {
           current(); db.transaction(() => {
             if (settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
-            const old = intake.list(person).find(s => s.folder_id !== null); if (old) intake.watch(old, null, current);
+            const old = intake.list(person).find(s => s.folder_id !== null); if (old) ownerOf(old.source_adapter_id).intake.watch(old, null, current);
           }).immediate(); return { status: 'saved' };
         }
         const linked = provider.tool(token).personal_status === 'linked';
@@ -174,8 +226,8 @@ export function createPersonMeetingRuntimeV1(options: {
         if (input.operation === 'home') {
           const folders = session === null ? [] : await session.folders();
           return { connected: session !== null, email: session?.email ?? null, workspace: session?.workspace ?? null, folders, settings_sha256: settings(person),
-            sources: intake.list(person).map(s => ({ source_key: s.source_key, folder_id: s.folder_id, project_id: s.project_id,
-              baseline: intake.checkpoint(s.source_key).baseline, pending_imports: intake.checkpoint(s.source_key).manual,
+            sources: intake.list(person).filter(s => s.source_adapter_id === provider.cursor.policy.source_adapter_id).map(s => ({ source_key: s.source_key, folder_id: s.folder_id, project_id: s.project_id,
+              baseline: ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).baseline, pending_imports: ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual,
               checked_at: observed.get(s.source_key)?.checked_at ?? null, error: observed.get(s.source_key)?.error ?? null })) };
         }
         if (!session) throw new AuthorityOperationError('unauthorized', 'Connect your meeting account first');
@@ -187,7 +239,6 @@ export function createPersonMeetingRuntimeV1(options: {
           session.current(); current();
           if (intake.currentPerson(person, project).grant_sha256 !== grant) throw new AuthorityOperationError('stale_access_state', 'Meeting project access changed');
         };
-        const identity = { ...session.identity, instance_id: `${session.identity.instance_id}-${canonicalSha256(project).slice(7, 31)}` };
         // Validate folder access here; the existing worker builds its content
         // baseline from the durable pending cursor without holding this request.
         if (input.operation === 'watch') await session.browse(input.folder_id!);
@@ -195,11 +246,10 @@ export function createPersonMeetingRuntimeV1(options: {
         return db.transaction(() => {
           currentProject();
           if (input.operation === 'watch' && settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
-          const commitments = processor.current_commitments?.(`personal-${canonicalSha256({ person, project }).slice(7, 39)}`);
-          if (!commitments) throw new AuthorityOperationError('unavailable', 'Meeting processing unavailable');
-          const setting = intake.ensure({ person, project_id: project, identity, normalizer_version: provider.normalizer_version, custodian: session.custodian, processor: commitments, current: currentProject });
-          if (input.operation === 'watch') intake.watch(setting, input.folder_id, currentProject);
-          else intake.enqueue(setting, input.meeting_id, currentProject);
+          const providerIntake = ownerOf(provider.cursor.policy.source_adapter_id).intake;
+          const setting = ensurePersonMeetingSourceV1(providerIntake, { provider, person, project_id: project, session, commitments: id => processor.current_commitments?.(id), current: currentProject });
+          if (input.operation === 'watch') providerIntake.watch(setting, input.folder_id, currentProject);
+          else providerIntake.enqueue(setting, input.meeting_id, currentProject);
           observed.delete(setting.source_key);
           return { status: input.operation === 'watch' ? 'saved' : 'queued' };
         }).immediate();
@@ -208,5 +258,15 @@ export function createPersonMeetingRuntimeV1(options: {
       return { status: 200, body: validatePersonMeetingResultV1(input.operation, body) };
     },
   };
-  return { applications: [provider.connection_http, application], processing, tools: async (token: string) => [provider.tool(token)], close() {} };
+  /** Queues meetings for a person through one tool, without an HTTP session (the staging canary). */
+  async function queue(input: { readonly person: MeetingIntakePersonV1; readonly tool_id: string; readonly meeting_ids: readonly string[]; readonly signal?: AbortSignal }) {
+    const provider = providers.find(p => p.id === input.tool_id);
+    if (!provider) throw new AuthorityOperationError('not_found', 'Meeting tool unavailable');
+    const setting = await queuePersonMeetingsV1({ database: db, provider, person: input.person, meeting_ids: input.meeting_ids, commitments: id => processor.current_commitments?.(id),
+      ...(input.signal === undefined ? {} : { signal: input.signal }) });
+    observed.delete(setting.source_key);
+    return setting;
+  }
+  return { applications: [...providers.map(p => p.connection_http), application], processing, queue,
+    tools: async (token: string) => providers.map(p => p.tool(token)), close() {} };
 }

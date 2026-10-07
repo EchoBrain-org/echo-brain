@@ -209,7 +209,7 @@ function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
         output_path: input.output_path,
       });
     },
-    admit_staging_synthetic_source: async () => { throw new Error("ordinary onboarding has no organization meeting source"); },
+    queue_staging_synthetic_meetings: async () => { throw new Error("ordinary onboarding has no staging synthetic source"); },
   };
 }
 

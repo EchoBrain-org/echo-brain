@@ -3,7 +3,7 @@ import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/sou
 import { createPersonUpdateProcessingV1, type PersonUpdateProcessingBindingV1 } from './person-update-processing-v1.js';
 import { SqlitePersonUpdateEnrichmentWorkV2 } from '../adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
 import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../adapters/persistence/sqlite/project-upload-enrichment-v1.js';
-import { AdapterError, meetingFromSourceEnvelopeV1, type MeetingSourceContentV1, type SourceAdmissionBindingV1, type SourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
+import { AdapterError } from '@echo-brain/organization-processing/core';
 import type { RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import { bindApprovalWorkflowStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
@@ -21,7 +21,6 @@ import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel
 import type { PersonSessionOidcConfiguration } from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
 import { AdmittedMeetingProcessingCycleV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
 import { openExtractionAttemptStoreV1 } from "@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1";
-import type { ExtractionAttemptStoreV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/extraction-attempt-store-v1";
 import {
   readAdmittedMeetingProcessingCommitmentsV1,
 } from "@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments";
@@ -52,12 +51,6 @@ import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import type { MeetingProcessingWorkerPhaseRunnerV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
 import {
-  assertStagingSyntheticMeetingCanary,
-  stagingSyntheticMeetingCanarySourceIdentityV1,
-  type StagingSyntheticMeetingCanaryInputV1,
-  type StagingSyntheticMeetingCanaryResultV1,
-} from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
-import {
   openMeetingApprovalJourneyTelemetryV1,
   type MeetingApprovalJourneyTelemetryConfigV1,
 } from "./meeting-approval-journey-telemetry-v1.js";
@@ -66,6 +59,12 @@ import type {
   MeetingApprovalJourneyTelemetryPortV1,
 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
+
+/** The staging release canary's outcome; the deploy receipt reads `approval_outcome = kind` and `approval_id`. */
+export interface StagingSyntheticCanaryOutcomeV1 {
+  readonly kind: "staged" | "not_actionable" | "not_staged";
+  readonly approval_id: string | null;
+}
 
 export interface OrganizationAuthorityRuntimeConfig {
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
@@ -112,37 +111,34 @@ export interface OrganizationAuthorityRuntimeConfig {
    * absent even when a telemetry config was provided.
    */
   readonly staging_meeting_approval_journey_telemetry_enabled?: true;
-  /** Provider-selected staging runner; the neutral runtime only supplies admitted state. */
-  readonly run_staging_synthetic_private_dm_canary?: (
-    input: {
-      readonly authority_url: string;
-      readonly canary: StagingSyntheticMeetingCanaryInputV1;
-      readonly state: SqliteAuthorityMeetingProcessingStateV1;
-      readonly source_ingestion: SourceAdmissionBindingV1<MeetingSourceContentV1>;
-      readonly processor: DecisionProcessorAdapter;
-      readonly extraction_attempts: ExtractionAttemptStoreV1;
-      readonly stager: Awaited<ReturnType<ApprovalWorkflowBundleV1["load"]>>["stager"];
-      readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
-      readonly signal: AbortSignal;
-    },
-  ) => Promise<StagingSyntheticPrivateDmCanaryResultV1>;
+  /**
+   * Staging-selected release canary over the owner's synthetic personal source.
+   * The runtime only serializes it with the worker.
+   */
+  readonly run_staging_synthetic_canary?: (signal: AbortSignal) => Promise<StagingSyntheticCanaryOutcomeV1>;
 }
-
-export type StagingSyntheticPrivateDmCanaryResultV1 =
-  StagingSyntheticMeetingCanaryResultV1;
 
 export interface OpenedOrganizationAuthorityRuntime
   extends RunningOrganizationAuthorityServiceLifecycle {
   readonly processing: "idle_until_finalize" | "active";
   /**
-   * A staging-guarded rehearsal hook. It exists only after source admission and
-   * uses the same admitted processor and private approval stager as deployed
-   * intake; it never touches the provider cursor.
+   * A staging-guarded rehearsal hook. It runs exclusively with the worker and
+   * stages the fixed canary meeting through the owner's synthetic personal source.
    */
-  readonly run_staging_synthetic_private_dm_canary?: (
-    canary: StagingSyntheticMeetingCanaryInputV1,
+  readonly run_staging_synthetic_canary?: (
     options?: Readonly<{ signal?: AbortSignal }>,
-  ) => Promise<StagingSyntheticPrivateDmCanaryResultV1>;
+  ) => Promise<StagingSyntheticCanaryOutcomeV1>;
+}
+
+function stagingSyntheticCanaryHook(
+  config: Pick<OrganizationAuthorityRuntimeConfig, "run_staging_synthetic_canary">,
+  runtime: Pick<RunningOrganizationAuthorityServiceLifecycle, "runExclusive">,
+): Pick<OpenedOrganizationAuthorityRuntime, "run_staging_synthetic_canary"> {
+  const run = config.run_staging_synthetic_canary;
+  return run === undefined ? {} : {
+    run_staging_synthetic_canary: (options) => runtime.runExclusive((signal) =>
+      run(options?.signal === undefined ? signal : AbortSignal.any([signal, options.signal]))),
+  };
 }
 
 type MeetingSourceAdapter = ConstructorParameters<
@@ -385,6 +381,7 @@ export async function openOrganizationAuthorityRuntime(
       personalPublication = () => runtime.requestApprovalPublication();
       return {
         ...runtime,
+        ...stagingSyntheticCanaryHook(config, runtime),
         processing: preparedPerson?.processing === undefined ? "idle_until_finalize" : "active",
         close: async () => {
           try { await runtime.close(); }
@@ -588,46 +585,7 @@ export async function openOrganizationAuthorityRuntime(
       runExclusive: (operation) => runtime.runExclusive(operation),
       drain: (signal) => runtime.drain(signal),
       requestApprovalPublication,
-      ...(config.run_staging_synthetic_private_dm_canary === undefined
-        ? {}
-        : {
-            run_staging_synthetic_private_dm_canary: (canary, options) =>
-              runtime.runExclusive((signal) =>
-                config.run_staging_synthetic_private_dm_canary!({
-                  authority_url: config.authority_url,
-                  canary,
-                  state: sourceState,
-                  source_ingestion: {
-                    store: new SqliteSourceAdmissionStoreV1(authority, (retained) => {
-                      // The same current source/owner fence protects both paths.
-                      // Only this exact staging fixture may use the synthetic identity.
-                      sourceState.assertCurrentSourceAdmission(source.identity);
-                      const meeting = meetingFromSourceEnvelopeV1(retained as SourceEnvelopeV1<MeetingSourceContentV1>);
-                      assertStagingSyntheticMeetingCanary(meeting, {
-                        ...canary,
-                        observed_at: meeting.provenance.observed_at,
-                      });
-                    }),
-                    scope: {
-                      organization_id: lineage.root.organization_id,
-                      custody_ref: `organization:${lineage.root.organization_id}`,
-                      access_policy_ref: `meeting-admission:${stagingSyntheticMeetingCanarySourceIdentityV1.adapter_id}:${stagingSyntheticMeetingCanarySourceIdentityV1.instance_id}`,
-                      analysis_policy: "automatic",
-                    },
-                  },
-                  processor,
-                  extraction_attempts: extractionAttempts!,
-                  stager: approvals.stager,
-                  ...(meetingApprovalJourneyTelemetry === undefined
-                    ? {}
-                    : { journey_telemetry: meetingApprovalJourneyTelemetry }),
-                  signal:
-                    options?.signal === undefined
-                      ? signal
-                      : AbortSignal.any([signal, options.signal]),
-                }),
-              ),
-          }),
+      ...stagingSyntheticCanaryHook(config, runtime),
       close: async () => {
         try {
           await runtime.close();

@@ -36,7 +36,9 @@ export class SqlitePersonMeetingIntakeV1 {
     if (!row || row.settings_revision !== setting.settings_revision || row.folder_id !== setting.folder_id) throw new AuthorityOperationError('stale_access_state', 'Meeting intake settings changed');
   }
   ensure(input: { readonly person: MeetingIntakePersonV1; readonly project_id: string | null; readonly identity: SourceAdapterIdentityV1;
-    readonly normalizer_version: string; readonly custodian: unknown; readonly processor: AdmittedMeetingProcessingCommitmentsV1['processor']; readonly current: () => void }): MeetingIntakeSettingV1 {
+    readonly normalizer_version: string; readonly custodian: unknown; readonly processor: AdmittedMeetingProcessingCommitmentsV1['processor']; readonly current: () => void;
+    /** How the custodian was established; a person's own OAuth account unless the provider says otherwise. */
+    readonly custodian_assurance?: string }): MeetingIntakeSettingV1 {
     return this.db.transaction(() => {
       input.current();
       const { person, project_id, identity, processor } = input;
@@ -51,7 +53,7 @@ export class SqlitePersonMeetingIntakeV1 {
         source_adapter_id,source_adapter_version,source_adapter_instance_id,normalizer_version,source_custodian_sha256,source_custodian_assurance,source_custodian_observed_at,
         source_credential_reference_sha256,initial_cursor,cutoff_at,processor_adapter_id,processor_adapter_version,processor_instance_id,processor_configuration_sha256,processor_credential_reference_sha256,semantic_input_sha256,admitted_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(source_key, person.organization_id, person.principal_id, person.membership_id, member.membership_type,
-        identity.adapter_id, identity.version, identity.instance_id, input.normalizer_version, canonicalSha256(input.custodian), 'personal_oauth_email_workspace', now,
+        identity.adapter_id, identity.version, identity.instance_id, input.normalizer_version, canonicalSha256(input.custodian), input.custodian_assurance ?? 'personal_oauth_email_workspace', now,
         canonicalSha256({ person, tool: identity.adapter_id }), initial, now, processor.adapter_id, processor.version, processor.instance_id, processor.configuration_sha256, processor.credential_reference_sha256, semantic, now);
       this.db.prepare('INSERT INTO authority_live_source_progress_v2 VALUES(?,?,?,0,?)').run(source_key, semantic, initial, now);
       this.db.prepare('INSERT INTO authority_person_meeting_sources_v1 VALUES(?,?,?,NULL,0)').run(source_key, canonicalSha256(person), project_id);

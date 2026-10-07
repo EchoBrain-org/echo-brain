@@ -14,7 +14,7 @@ export interface SyntheticDemoOrganizationAuthorityServiceConfigV1
     | "answer_composition_generation_bundle"
     | "record_policy_fact_projectors"
     | "record_input_codecs"
-    | "run_staging_synthetic_private_dm_canary"
+    | "run_staging_synthetic_canary"
   > {
   /** A demo-only state directory. It is never a Granola service state directory. */
   readonly meetings_directory: string;

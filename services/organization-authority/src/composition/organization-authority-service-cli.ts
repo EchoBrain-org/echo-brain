@@ -371,12 +371,11 @@ export async function runOrganizationAuthorityServiceCli(
     const stagingCanaryControl =
       manifest.authority_url ===
         STAGING_AUTHORITY_ORIGIN_V1 &&
-      runtime.run_staging_synthetic_private_dm_canary !== undefined
+      runtime.run_staging_synthetic_canary !== undefined
         ? await openStagingSyntheticPrivateDmCanaryControlV1({
             authority_url: manifest.authority_url,
             authority_host: process.env.ECHO_CLEAN_AUTHORITY_HOST ?? "",
             release_id: process.env.ECHO_CLEAN_RELEASE_ID ?? "",
-            owner_email: manifest.owner_email,
             runtime,
           }).catch(async (error: unknown) => {
             await runtime.close();

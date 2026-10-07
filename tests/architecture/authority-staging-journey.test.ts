@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const REPO = resolve(import.meta.dirname, '../..');
 
 describe('connected offline staging journey', () => {
-  it('installs reviewed tooling and reaches a real durable card awaiting human approval', () => {
+  it('installs reviewed tooling and reaches a real durable proposal awaiting human approval', () => {
     const result = spawnSync(process.execPath, ['tests/fixtures/staging-release-journey.mjs'], {
       cwd: REPO,
       encoding: 'utf8',
@@ -14,7 +14,7 @@ describe('connected offline staging journey', () => {
     });
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stdout + '\n' + result.stderr).toBe(0);
-    expect(result.stdout).toContain('"result":"awaiting_human_slack_approval"');
+    expect(result.stdout).toContain('"result":"awaiting_human_approval"');
     expect(result.stdout).toContain('"simulated_boundaries":');
   }, 160_000);
 });

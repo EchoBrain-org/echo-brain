@@ -33,10 +33,6 @@
       "types": "./dist/private-approval/private-slack-approval-interaction-protocol-v1.d.ts",
       "import": "./dist/private-approval/private-slack-approval-interaction-protocol-v1.js"
     },
-    "./composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1": {
-      "types": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.d.ts",
-      "import": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.js"
-    },
     "./processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1": {
       "types": "./dist/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.d.ts",
       "import": "./dist/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js"

@@ -46,7 +46,8 @@
       "services/organization-authority/src/composition/jira-person-live-runtime-v1.ts",
       "services/organization-authority/src/composition/confluence-person-live-runtime-v1.ts",
       "services/organization-authority/src/composition/staging-connector-rehearsal-runtime.ts",
-      "services/organization-authority/src/composition/granola-person-live-runtime-v1.ts"
+      "services/organization-authority/src/composition/granola-person-live-runtime-v1.ts",
+      "services/organization-authority/src/composition/staging/staging-synthetic-personal-canary-v1.ts"
     ],
     "source_assemblies": [
       "deploy/organization-authority/journey-explorer-assembly.v1.json"

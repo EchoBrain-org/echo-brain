@@ -13,7 +13,7 @@ import { openExtractionAttemptStoreV1 } from '@echo-brain/organization-processin
 import { OrganizationRecordAppenderV4, type RecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import type { DecisionProcessorBundleV1 } from '@echo-brain/organization-processing/ports/decision-processor-bundle-v1';
 import { FileOrganizationAuthoritySigner } from '../adapters/security/file-organization-authority-signer.js';
-import { createPersonMeetingRuntimeV1, meetingIntakePersonV1 } from './person-meeting-runtime-v1.js';
+import { createPersonMeetingRuntimeV1, meetingIntakePersonV1, type PersonMeetingProviderV1 } from './person-meeting-runtime-v1.js';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import { assertPrivatePersonProviderDatabaseV1, bindPersonProviderStateV1 } from './person-provider-state-v1.js';
 import type { PersonHttpRuntimeResourcesV1 } from './organization-authority-api-runtime.js';
@@ -24,6 +24,8 @@ export function openGranolaPersonLiveRuntimeV1(options: {
   readonly state_directory: string; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
   readonly resources: PersonHttpRuntimeResourcesV1; readonly processor: DecisionProcessorBundleV1;
   readonly projectors: RecordPolicyFactProjectorRegistryV1; readonly nango_authorization: () => string;
+  /** Further personal meeting providers served beside Granola by the same processing and review runtime. */
+  readonly providers?: readonly PersonMeetingProviderV1[];
   readonly seams?: { readonly database?: Database.Database; readonly nango?: NangoPersonConnectionV1; readonly fetch?: typeof fetch };
 }) {
   const path = join(options.state_directory, 'granola-person-connections.sqlite'), owned = options.seams?.database === undefined;
@@ -43,7 +45,7 @@ export function openGranolaPersonLiveRuntimeV1(options: {
     const signer = FileOrganizationAuthoritySigner.openExisting({ directory: join(options.state_directory, 'keys'), ...coordinates });
     const runtime = createPersonMeetingRuntimeV1({ database, sessions: options.sessions, processor: options.processor, extraction_attempts: attempts,
       approval: { coordinates, signer, on_terminal_action_queued: options.resources.on_processing_queued, record_append: new OrganizationRecordAppenderV4(record, coordinates, options.projectors), next_envelope_id: () => `env_${randomUUID()}` },
-      provider: {
+      providers: [{
         id: 'granola', normalizer_version: GRANOLA_MEETING_NORMALIZER_VERSION_V1,
         connection_http: createPersonConnectionHttpApplicationV1(application, GRANOLA_PERSON_PROVIDER_V1),
         cursor: { read: readGranolaCheckpointV1, write: writeGranolaCheckpointV1, policy: GRANOLA_FOLDER_CURSOR_POLICY_V1 },
@@ -62,7 +64,7 @@ export function openGranolaPersonLiveRuntimeV1(options: {
         },
         source(setting, current) { return new GranolaFolderSourceV1({ kind: 'meeting-source', adapter_id: setting.source_adapter_id, version: setting.source_adapter_version, instance_id: setting.source_adapter_instance_id },
           setting.folder_id, signal => application.open(meetingIntakePersonV1(setting), current, signal), current); },
-      },
+      }, ...(options.providers ?? [])],
     });
     return { ...runtime, close() { runtime.close(); attempts?.close(); if (owned) connections.close(); } };
   } catch (error) { attempts?.close(); if (owned) connections.close(); throw error; }
