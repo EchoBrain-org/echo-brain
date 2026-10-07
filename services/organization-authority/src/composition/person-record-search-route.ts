@@ -257,11 +257,22 @@ export interface PersonEvidenceDeskRecordsV1 extends Pick<
   }): PersonRecordSearchBatchResultV1;
 }
 
+/** Where an approved record's research run reads (research trigger contract v1, section 5). */
+export interface PersonRecordProjectsV1 {
+  /**
+   * The record's projects this person can read now, as the person list shows
+   * them; empty for a record in none. A lookup, not a release: nothing is
+   * audited, and the run then opens the record through its own desk.
+   */
+  recordProjects(input: { readonly access_token: string; readonly record_sha256: Sha256Digest }): readonly ProjectIdV1[];
+}
+
 export type PersonRecordSearchRouteV1 =
   PersonRecordSearchHttpApplicationV1 &
     PersonRecordSearchBatchApplicationV1 &
     PersonEvidenceDeskRecordsV1 &
-    PersonMeetingItemsPortV1;
+    PersonMeetingItemsPortV1 &
+    PersonRecordProjectsV1;
 
 export interface CreatePersonRecordSearchRouteV1Options {
   readonly state_directory: string;
@@ -1435,6 +1446,14 @@ export function createPersonRecordSearchRouteV1(
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
       assertExpectedOrganization(authorization);
       admittedRecord(authorization, captureRecordProjectsV1(options.capture_projects, authorization), input.record_sha256);
+    },
+    recordProjects(input: Parameters<PersonRecordProjectsV1["recordProjects"]>[0]): readonly ProjectIdV1[] {
+      if (typeof input.record_sha256 !== "string" || !RECORD_SHA256.test(input.record_sha256)) itemNotFound();
+      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+      assertExpectedOrganization(authorization);
+      const projects = captureRecordProjectsV1(options.capture_projects, authorization);
+      const admitted = admittedRecord(authorization, projects, input.record_sha256);
+      return recordAssociations([{ record_position: admitted.position, record_sha256: admitted.record_sha256 }], projects.project_ids).get(admitted.record_sha256) ?? Object.freeze([]);
     },
     revalidateMeetingRelease(input: Parameters<PersonMeetingItemsPortV1["revalidateMeetingRelease"]>[0]): void {
       const witness = meetingReleases.get(input.release);

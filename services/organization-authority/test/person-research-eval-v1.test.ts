@@ -8,15 +8,35 @@ import { createPersonResearchEvalV1, PERSON_RESEARCH_EVAL_REREAD_MS_V1, PERSON_R
 import type { CreatePersonResearchEvalOptionsV1 } from '../src/composition/person-research-eval-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 
+// One deliberately broken definition beside the real ones: a question brief that also names starting evidence.
+vi.mock('@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1', async importOriginal => {
+  const real = await importOriginal<typeof import('@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1')>();
+  const ask = real.AGENTIC_TRIGGER_DEFINITIONS_V1.find(definition => definition.name === 'ask')!;
+  const started = { ...ask, name: 'ask_with_start', brief: (event: unknown) => ({ ...ask.brief(event), starting: [{ citation: { kind: 'approved_record' }, if_unreadable: 'fail' as const }] }) };
+  return { ...real, AGENTIC_TRIGGER_DEFINITIONS_V1: Object.freeze([...real.AGENTIC_TRIGGER_DEFINITIONS_V1, started]) };
+});
+
 const record = { kind: 'approved_record' as const, atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'organization-member-readable-person-v2' as const };
+const PROJECT = 'prj_00000000-0000-4000-8000-000000000001' as const;
+const OTHER_PROJECT = 'prj_00000000-0000-4000-8000-000000000002' as const;
 const member = (name: string) => ({ principal_id: `principal-${name}`, membership_id: `member-${name}`, session_family_id: `family-${name}` });
 const ask = (question: string) => ({ schema_version: 1 as const, trigger: 'ask', budget: 'live' as const, input: { question } });
+const approved = (extra: { readonly budget?: 'live' | 'background'; readonly project_id?: `prj_${string}`; readonly mine?: true } = {}) => ({ schema_version: 1 as const, trigger: 'approved_record', input: { record }, ...extra });
+/** The record route's open of `record`: one readable decision. */
+const openedRecord = () => ({
+  response: { schema_version: 2, kind: 'echo-person-record-search-v2', items: [] }, query_hit_counts: [],
+  release: { active_pointer: { generation_id: canonicalSha256('generation'), manifest_sha256: canonicalSha256('manifest'), retrieval_contract_sha256: canonicalSha256('contract'), record_head: { position: 1, record_sha256: record.record_sha256 } }, record_read_audit_row_sha256: canonicalSha256('record read') },
+  desk_items: [{ atom_id: record.atom_id, record_sha256: record.record_sha256, item_kind: 'decision', text: 'Approved: firmware shows two decimals.', policy_id: record.policy_id, record_position: 1, envelope_sha256: canonicalSha256('envelope'), atom_order: 0, audience_project_count: 1, label: 'Pricing review', visibility: 'project' }],
+});
 
 /** No records, no originals: research finishes as unusable and the writer is skipped, which is enough to exercise the registry. */
-function harness(options: { readonly generate?: (input: StructuredGenerationInput) => Promise<unknown>; readonly openRecord?: () => never; readonly small_scope_shortcut?: true } = {}) {
+function harness(options: { readonly generate?: (input: StructuredGenerationInput) => Promise<unknown>; readonly openRecord?: () => unknown; readonly recordProjects?: () => readonly string[]; readonly small_scope_shortcut?: true } = {}) {
   let clock = 1_000_000;
   let revoked = false;
   const deskSearch = vi.fn(() => ({ items: [], truncated: false, receipt: canonicalSha256('inventory') }));
+  const deskAuthorize = vi.fn((_input: { readonly access_token: string; readonly scope: unknown }) => { if (revoked) throw new AuthorityOperationError('unauthorized', 'grant revoked'); return { checked_at: '2026-10-06T00:00:00.000Z' }; });
+  const openDeskCitation = vi.fn(options.openRecord ?? (() => { throw new AuthorityOperationError('not_found', 'record is not readable'); }));
+  const recordProjects = vi.fn(options.recordProjects ?? (() => { throw new AuthorityOperationError('not_found', 'record is not readable'); }));
   const tokens = new Map([['token-a', member('a')], ['token-b', member('b')]]);
   const audits: unknown[] = [];
   const generate = vi.fn(options.generate ?? (async () => ({ parts: [{ question: 'Q', needs: [{ need: 'fact', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] })));
@@ -28,13 +48,15 @@ function harness(options: { readonly generate?: (input: StructuredGenerationInpu
       return value;
     } },
     originals: {
-      deskAuthorize: () => { if (revoked) throw new AuthorityOperationError('unauthorized', 'grant revoked'); return { checked_at: '2026-10-06T00:00:00.000Z' }; },
+      deskAuthorize,
       deskSearch,
       revalidateDeskRelease: () => ({ checked_at: '2026-10-06T00:00:00.000Z' }),
     },
     records: {
       initializeDesk: () => { throw new PersonRecordSearchIndexLagV1(); },
-      openDeskCitation: options.openRecord ?? (() => { throw new AuthorityOperationError('not_found', 'record is not readable'); }),
+      openDeskCitation,
+      recordProjects,
+      revalidateBatchRelease: () => ({ checked_at: '2026-10-06T00:00:00.000Z' }),
     },
     model: { generate },
     generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 },
@@ -49,7 +71,7 @@ function harness(options: { readonly generate?: (input: StructuredGenerationInpu
     await vi.waitFor(async () => { if (value.status === 'running') value = await read(token, run_id); expect(value.status).not.toBe('running'); });
     return value;
   };
-  return { application, generate, audits, read, settled, deskSearch, revoke: () => { revoked = true; }, advance: (ms: number) => { clock += ms; } };
+  return { application, generate, audits, read, settled, deskSearch, deskAuthorize, openDeskCitation, recordProjects, revoke: () => { revoked = true; }, advance: (ms: number) => { clock += ms; } };
 }
 
 describe('staging research evaluation runs', () => {
@@ -119,10 +141,38 @@ describe('staging research evaluation runs', () => {
     await expect(h.read('token-a', run.run_id)).rejects.toMatchObject({ code: 'not_found' });
   });
 
-  it('reports a Check whose starting record is not readable as not_found, before any model call', async () => {
+  it("runs an approved record as the person who started it, in the record's project, on the background budget", async () => {
+    const h = harness({ recordProjects: () => [PROJECT], openRecord: openedRecord });
+    const run = await h.application.start({ access_token: 'token-a', request: approved() });
+    const result = await h.settled('token-a', run.run_id);
+    expect(result).toMatchObject({ status: 'completed', research: { trigger: 'approved_record', budget: { deadline_ms: 300_000 }, items: [expect.objectContaining({ id: 'E1', text: 'Approved: firmware shows two decimals.' })] } });
+    expect(result).not.toHaveProperty('ask');
+    // The scope comes from the record, looked up with the person's own access before the desk exists.
+    expect(h.recordProjects).toHaveBeenCalledWith({ access_token: 'token-a', record_sha256: record.record_sha256 });
+    expect(h.recordProjects.mock.invocationCallOrder[0]).toBeLessThan(h.deskAuthorize.mock.invocationCallOrder[0]!);
+    expect(h.deskAuthorize).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'token-a', scope: { kind: 'project', project_id: PROJECT } }));
+    expect(h.openDeskCitation).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'token-a', atom_id: record.atom_id, project_id: PROJECT }));
+    expect(JSON.parse(h.generate.mock.calls[0]![0].user_prompt)).toMatchObject({ task: expect.stringMatching(/^A PM just approved record E1\. Find every ticket, PRD section and document in this project /u) });
+    expect(h.audits).toEqual([expect.objectContaining({ trigger: 'approved_record', budget: 'background' })]);
+  });
+
+  it('reads everything the approver can read for a record in no project, or in more than one', async () => {
+    for (const projects of [[], [PROJECT, OTHER_PROJECT]]) {
+      const h = harness({ recordProjects: () => projects, openRecord: openedRecord });
+      const run = await h.application.start({ access_token: 'token-a', request: approved({ budget: 'live' }) });
+      // The request's own budget still overrides the definition's profile.
+      expect(await h.settled('token-a', run.run_id), JSON.stringify(projects)).toMatchObject({ status: 'completed', research: { trigger: 'approved_record', budget: { deadline_ms: 90_000 } } });
+      expect(h.deskAuthorize).toHaveBeenCalledWith(expect.objectContaining({ scope: { kind: 'global' } }));
+      expect(h.openDeskCitation).toHaveBeenCalledWith(expect.not.objectContaining({ project_id: expect.anything() }));
+    }
+  });
+
+  it('reports an approved record the person cannot read as not_found, before any desk or model call', async () => {
     const h = harness();
-    const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'check', budget: 'background', input: { record } } });
+    const run = await h.application.start({ access_token: 'token-a', request: approved() });
     expect(await h.settled('token-a', run.run_id)).toMatchObject({ status: 'failed', error: { code: 'not_found', message: 'Starting evidence is not available' } });
+    expect(h.recordProjects).toHaveBeenCalledTimes(1);
+    expect(h.deskAuthorize).not.toHaveBeenCalled();
     expect(h.generate).not.toHaveBeenCalled();
   });
 
@@ -135,15 +185,20 @@ describe('staging research evaluation runs', () => {
     expect(h.audits).toEqual([expect.objectContaining({ trigger: 'sweep', budget: 'background' })]);
   });
 
-  it('refuses an unknown trigger, input its definition rejects, and the mine scope beyond Ask, before any run starts', async () => {
-    const h = harness();
+  it("refuses an unknown trigger, input its definition rejects, the mine scope beyond Ask, a scope for a record's run, and a question brief Ask's writer would not run as given, before any run starts", async () => {
+    const h = harness({ recordProjects: () => [PROJECT] });
     for (const request of [
       { schema_version: 1 as const, trigger: 'drift', input: {} },
-      { schema_version: 1 as const, trigger: 'check', input: { record: { ...record, kind: 'ticket' } } },
+      { schema_version: 1 as const, trigger: 'check', input: { record } },
+      { schema_version: 1 as const, trigger: 'approved_record', input: { record: { ...record, kind: 'ticket' } } },
       { schema_version: 1 as const, trigger: 'sweep', input: { findings: [] } },
       { schema_version: 1 as const, trigger: 'ask', input: { question: 'x '.repeat(130).trim() } },
-      { schema_version: 1 as const, trigger: 'check', mine: true as const, input: { record } },
+      { schema_version: 1 as const, trigger: 'sweep', mine: true as const, input: { findings: [{ finding: 'f', expected: 'e', citations: [record] }] } },
+      approved({ mine: true }),
+      approved({ project_id: PROJECT }),
+      { schema_version: 1 as const, trigger: 'ask_with_start', input: { question: 'Why?' } },
     ]) await expect(h.application.start({ access_token: 'token-a', request }), JSON.stringify(request)).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(h.recordProjects).not.toHaveBeenCalled();
     expect(h.generate).not.toHaveBeenCalled();
     expect(h.audits).toEqual([]);
     // Nothing was left running for the person.

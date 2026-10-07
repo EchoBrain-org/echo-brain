@@ -1396,9 +1396,9 @@ describe("agentic Ask: architecture", () => {
       // The runner imports the Ask renderer, so the loop never imports the runner either.
       expect(specifier).not.toMatch(/renderer|\/agentic-trigger-definitions-v1\.js$|\/agentic-ask-v1\.js$|structured-generation/u);
     }
-    // Every defined trigger, and the approved-record trigger the next phase adds.
-    const names = [...AGENTIC_TRIGGER_DEFINITIONS_V1.map(definition => definition.name), "approved_record"];
-    expect(names).toEqual(expect.arrayContaining(["ask", "check", "sweep"]));
+    // Every defined trigger, and the Check trigger the approved record replaced.
+    const names = [...AGENTIC_TRIGGER_DEFINITIONS_V1.map(definition => definition.name), "check"];
+    expect(names).toEqual(expect.arrayContaining(["ask", "approved_record", "sweep"]));
     for (const name of names) expect(source).not.toMatch(new RegExp(`["'\`]${name}["'\`]`, "u"));
     expect(source).not.toMatch(/\bcreateAgenticModelGateV1\b/u);
     expect(source).toMatch(/\bgate\.withRepair\(/u);

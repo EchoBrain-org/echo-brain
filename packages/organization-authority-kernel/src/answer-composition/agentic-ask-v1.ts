@@ -49,6 +49,7 @@ import {
 
 export {
   AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
+  AGENTIC_RESEARCH_BUDGETS_V1,
   AGENTIC_RESEARCH_LIVE_BUDGET_V1,
   type AgenticAskWithResearchV1,
   type AgenticResearchBudgetV1,
@@ -152,7 +153,8 @@ function questionText(value: unknown): string | null {
 /** A brief the request can run, or null. Ask's question keeps its existing bounds; a task's definition bounds its own text. */
 function runnableBrief(brief: AgenticBriefV1): AgenticBriefV1 | null {
   const goal = brief.goal;
-  if (goal.kind === "question" ? questionText(goal.question) === null : goal.kind !== "task" || typeof goal.task !== "string" || goal.task.trim().length === 0) return null;
+  if (goal.kind === "question" ? questionText(goal.question) === null : goal.kind !== "task" || typeof goal.task !== "string" || goal.task.trim().length === 0 ||
+      (goal.data !== undefined && !(Array.isArray(goal.data) && goal.data.every(value => typeof value === "string")))) return null;
   return Array.isArray(brief.starting) && brief.starting.every(start => object(start.citation) !== null && (start.if_unreadable === "fail" || start.if_unreadable === "report")) ? brief : null;
 }
 /** Ask's brief: the person's question as asked, no starting evidence, and the small-scope preload. */

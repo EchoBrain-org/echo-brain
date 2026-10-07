@@ -130,17 +130,17 @@ describe("research-only triggers", () => {
       step([{ need: "PRD display precision", status: "open" }], [{ tool: "search", args: { query: "display precision" } }, { tool: "search", args: { query: "decimal places" } }], "Two-decimal display"),
       step([{ need: "PRD display precision", status: "not_found" }], [{ tool: "finish" }], "Two-decimal display"),
     ], { openCitation });
-    const view = await h.research.research({ trigger: "check", brief: taskBrief(`Check the approved record ${agenticStartingSlotV1(1)}.`, [approved.citation]) });
+    const view = await h.research.research({ trigger: "approved_record", brief: taskBrief(`Check the approved record ${agenticStartingSlotV1(1)}.`, [approved.citation]) });
     expect(openCitation).toHaveBeenCalledWith(expect.objectContaining({ citation: approved.citation }));
     expect(h.inputs[0]!.system_prompt.endsWith(`\n\n${TASK_RULE_PROMPT}`)).toBe(true);
     const first = h.prompt(0);
     expect(first).toMatchObject({ task: "Check the approved record E1." });
     expect(first).not.toHaveProperty("question");
-    expect(view).toMatchObject({ trigger: "check", stop: { reason: "finished" }, budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 });
+    expect(view).toMatchObject({ trigger: "approved_record", stop: { reason: "finished" }, budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 });
     expect(view.items[0]).toMatchObject({ id: "E1", preloaded: true, opened: true, read_in_full: true });
     expect(view.items[1]).toMatchObject({ id: "E2", preloaded: true });
     expect(h.generate).toHaveBeenCalledTimes(2);
-    expect(h.audit).toEqual([expect.objectContaining({ trigger: "check", outcome: "not_found", rounds: 2, model_calls: 2 })]);
+    expect(h.audit).toEqual([expect.objectContaining({ trigger: "approved_record", outcome: "not_found", rounds: 2, model_calls: 2 })]);
     expect(h.audit[0]!.response_sha256).toBe(canonicalSha256(JSON.parse(JSON.stringify(view))));
   });
 
@@ -163,13 +163,13 @@ describe("research-only triggers", () => {
   it("fails closed before any model call when starting evidence is not readable", async () => {
     const approved = record("gone");
     const h = harness([], { openCitation: async () => { throw new AuthorityOperationError("not_found", "Evidence item is not available"); } });
-    await expect(h.research.research({ trigger: "check", brief: taskBrief(`Check ${agenticStartingSlotV1(1)}.`, [approved.citation]) })).rejects.toMatchObject({ code: "not_found" });
+    await expect(h.research.research({ trigger: "approved_record", brief: taskBrief(`Check ${agenticStartingSlotV1(1)}.`, [approved.citation]) })).rejects.toMatchObject({ code: "not_found" });
     expect(h.generate).not.toHaveBeenCalled();
   });
 
   it("refuses starting evidence on a desk that cannot open citations", async () => {
     const h = harness([], {});
-    await expect(h.research.research({ trigger: "check", brief: taskBrief(`Check ${agenticStartingSlotV1(1)}.`, [record("x").citation]) })).rejects.toMatchObject({ code: "unavailable" });
+    await expect(h.research.research({ trigger: "approved_record", brief: taskBrief(`Check ${agenticStartingSlotV1(1)}.`, [record("x").citation]) })).rejects.toMatchObject({ code: "unavailable" });
     expect(h.generate).not.toHaveBeenCalled();
   });
 
@@ -179,6 +179,7 @@ describe("research-only triggers", () => {
     await expect(h.research.research({ trigger: "sweep", brief: taskBrief(" ", [record("x").citation]) })).rejects.toThrow("research goal is invalid");
     await expect(h.research.research({ trigger: "sweep", brief: taskBrief("Recheck.", ["not a citation"]) })).rejects.toThrow("research goal is invalid");
     await expect(h.research.research({ trigger: "sweep", brief: { ...taskBrief("Recheck.", [record("x").citation]), starting: [{ citation: record("x").citation, if_unreadable: "skip" as never }] } })).rejects.toThrow("research goal is invalid");
+    await expect(h.research.research({ trigger: "sweep", brief: { ...taskBrief("Recheck.", [record("x").citation]), goal: { kind: "task", task: "Recheck.", data: [1 as never] } } })).rejects.toThrow("research goal is invalid");
     expect(openCitation).not.toHaveBeenCalled();
   });
 
@@ -189,9 +190,9 @@ describe("research-only triggers", () => {
       openCitation: async () => result([approved]),
       search: async () => result([record(`hit-${hit += 1}`)]),
     });
-    const view = await h.research.research({ trigger: "check", brief: taskBrief(`Check ${agenticStartingSlotV1(1)}.`, [approved.citation]) });
+    const view = await h.research.research({ trigger: "approved_record", brief: taskBrief(`Check ${agenticStartingSlotV1(1)}.`, [approved.citation]) });
     expect(view.rounds).toHaveLength(AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1.max_rounds);
     expect(view.stop).toEqual({ reason: "step_limit", completed: false });
-    expect(h.audit[0]).toMatchObject({ trigger: "check", rounds: 20, model_calls: 20, outcome: "partial" });
+    expect(h.audit[0]).toMatchObject({ trigger: "approved_record", rounds: 20, model_calls: 20, outcome: "partial" });
   });
 });

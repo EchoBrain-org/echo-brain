@@ -14,9 +14,17 @@ export interface AgenticBriefStartingItemV1 {
   readonly if_unreadable: "fail" | "report";
 }
 
+/**
+ * A person's question (Ask), passed through as asked, or a task ECHO wrote
+ * from its trigger's fixed template. The event's own text never joins the
+ * template: it travels in `data` and goes in by data slot.
+ */
+export type AgenticBriefGoalV1 =
+  | Extract<AgenticResearchGoalV1, { readonly kind: "question" }>
+  | { readonly kind: "task"; readonly task: string; readonly data?: readonly string[] };
+
 export interface AgenticBriefV1 {
-  /** A person's question (Ask), passed through as asked, or a task ECHO wrote from its trigger's template. */
-  readonly goal: AgenticResearchGoalV1;
+  readonly goal: AgenticBriefGoalV1;
   readonly starting: readonly AgenticBriefStartingItemV1[];
   /** The budget profile, including the time held back for the renderer. */
   readonly budget: AgenticResearchBudgetV1;
@@ -31,10 +39,22 @@ export function agenticStartingSlotV1(position: number): string {
   return `{{starting:${position}}}`;
 }
 
-/** The task as the model sees it: each starting slot holds its item's id, or says the item could not be read. */
-export function fillAgenticTaskV1(task: string, ids: readonly (string | null)[]): string {
-  return task.replace(/\{\{starting:(\d+)\}\}/gu, (slot, position: string) => {
-    const id = ids[Number(position) - 1];
-    return id === undefined ? slot : id ?? "an item that could not be read";
+/** How a task places its event's text `position` (1-based, in `goal.data`). */
+export function agenticDataSlotV1(position: number): string {
+  return `{{data:${position}}}`;
+}
+
+/**
+ * The task as the model sees it. One pass over the fixed template: each
+ * starting slot gets its item's id (or says the item could not be read), each
+ * data slot its event text. What a slot receives is never read again, so event
+ * text cannot act as template. A slot with nothing to fill it is a definition
+ * bug and stops the run.
+ */
+export function fillAgenticTaskV1(task: string, ids: readonly (string | null)[], data: readonly string[] = []): string {
+  return task.replace(/\{\{(starting|data):(\d+)\}\}/gu, (slot, kind: string, position: string) => {
+    const value = (kind === "starting" ? ids : data)[Number(position) - 1];
+    if (value === undefined) throw new Error(`Task slot ${slot} has nothing to fill it`);
+    return value ?? "an item that could not be read";
   });
 }

@@ -47,9 +47,9 @@ describe("agentic Ask audit", () => {
         checked_at: "2026-10-06T00:00:00.000Z", prompt_sha256: digest("prompt"), answer_sha256: digest("plan"), response_sha256: digest("result"),
         generations: [], generation_usage: { input_tokens: null, output_tokens: null, total_tokens: null }, finish_reason_counts: {},
       };
-      store.forRequest(requestContext).append({ ...entry, trigger: "check" });
+      store.forRequest(requestContext).append({ ...entry, trigger: "approved_record" });
       const row = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").get() as { body_json: string };
-      expect(JSON.parse(row.body_json)).toMatchObject({ trigger: "check", rounds: 20, outcome: "partial" });
+      expect(JSON.parse(row.body_json)).toMatchObject({ trigger: "approved_record", rounds: 20, outcome: "partial" });
       expect(() => store.forRequest({ ...requestContext, request_id: "ask_2" }).append(entry)).toThrow("Agentic Ask audit entry is invalid");
       expect(() => store.forRequest({ ...requestContext, request_id: "ask_3" }).append({ ...entry, trigger: "ask" as never })).toThrow("Agentic Ask audit entry is invalid");
       // A background-budget Ask (the evaluation's diagnostic) carries its budget instead of a trigger.
@@ -57,7 +57,7 @@ describe("agentic Ask audit", () => {
       expect(() => store.forRequest({ ...requestContext, request_id: "ask_5" }).append({ ...entry, budget: "huge" as never })).toThrow("Agentic Ask audit entry is invalid");
       const rows = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").all() as { body_json: string }[];
       expect(rows).toHaveLength(2);
-      expect(rows.map(value => JSON.parse(value.body_json))).toEqual(expect.arrayContaining([expect.objectContaining({ trigger: "check" }), expect.objectContaining({ budget: "background", rounds: 20 })]));
+      expect(rows.map(value => JSON.parse(value.body_json))).toEqual(expect.arrayContaining([expect.objectContaining({ trigger: "approved_record" }), expect.objectContaining({ budget: "background", rounds: 20 })]));
     } finally { database.close(); }
   });
 
@@ -72,9 +72,10 @@ describe("agentic Ask audit", () => {
         checked_at: "2026-10-06T00:00:00.000Z", prompt_sha256: digest("prompt"), answer_sha256: digest("plan"), response_sha256: digest("result"),
         generations: [], generation_usage: { input_tokens: null, output_tokens: null, total_tokens: null }, finish_reason_counts: {},
       };
-      expect(AGENTIC_TRIGGER_NAMES_V1.length).toBeGreaterThan(0);
+      // The list is the definitions': the approved record replaced Check, so a new row may no longer say check.
+      expect(AGENTIC_TRIGGER_NAMES_V1).toContain("approved_record");
       for (const [index, trigger] of AGENTIC_TRIGGER_NAMES_V1.entries()) store.forRequest({ ...requestContext, request_id: `named_${index}` }).append({ ...entry, trigger });
-      for (const trigger of ["ask", "drift", "", "CHECK"]) {
+      for (const trigger of ["check", "ask", "drift", "", "APPROVED_RECORD"]) {
         expect(() => store.forRequest({ ...requestContext, request_id: `other_${trigger}` }).append({ ...entry, trigger })).toThrow("Agentic Ask audit entry is invalid");
       }
       const rows = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").all() as { body_json: string }[];

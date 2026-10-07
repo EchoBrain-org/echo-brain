@@ -42,7 +42,7 @@ import { createRecordProjectAuthorizationV1 } from "../src/composition/person-re
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { addMembership } from "./fixtures/project-context-sqlite.js";
-import { SHARED, meetingWorld } from "./fixtures/person-meeting-world.js";
+import { OWNER, SHARED, UNJOINED, meetingWorld } from "./fixtures/person-meeting-world.js";
 
 import { independentRecordCoverageFixture, rolloutCoverageFixture } from "./retrieval-coverage-fixture.js";
 
@@ -1897,6 +1897,33 @@ describe("Person Layer 2 route: mine narrows to the caller's own approvals (ADR-
       expect(() => route.openDeskCitation({ ...cite(own), mine: true, project_id: SHARED })).toThrow(invalid);
       // Without the approver projectors mine is unavailable, never global.
       expect(() => w.route({ record_approver: undefined }).searchBatch({ access_token: "emp_a", queries: ["Decision"], mine: true })).toThrow(expect.objectContaining({ code: "unavailable" }));
+    } finally { w.close(); }
+  });
+});
+
+describe("Person Layer 2 route: an approved record's projects (research trigger contract v1)", () => {
+  it("names only the record's projects the reader can read now, after the exact Layer 1 admission, and audits nothing", async () => {
+    const w = await meetingWorld();
+    try {
+      const route = w.route();
+      const projects = (token: string, name: string) => route.recordProjects({ access_token: token, record_sha256: w.digest(name) });
+      const audited = () => (w.authority.prepare("SELECT count(*) AS count FROM authority_person_read_decision_audit_v2").get() as { readonly count: number }).count;
+      const before = audited();
+      expect(projects("owner", "r4")).toEqual([SHARED]);
+      expect(projects("emp_a", "r4")).toEqual([SHARED]);
+      // r3 is also in a project the owner never joined; that project's id never leaves the route.
+      expect(projects("owner", "r3")).toEqual([SHARED]);
+      // A team record is in no project.
+      expect(projects("owner", "r1")).toEqual([]);
+      w.grant(UNJOINED, OWNER);
+      expect(projects("owner", "r3")).toEqual([SHARED, UNJOINED]);
+      const notFound = expect.objectContaining({ code: "not_found" });
+      // No grant on r4's project, and no such record, are the same miss.
+      expect(() => projects("emp_c", "r4")).toThrow(notFound);
+      expect(() => route.recordProjects({ access_token: "owner", record_sha256: "sha256:nope" as Sha256Digest })).toThrow(notFound);
+      expect(() => route.recordProjects({ access_token: "owner", record_sha256: canonicalSha256("missing") })).toThrow(notFound);
+      expect(() => route.recordProjects({ access_token: "nobody", record_sha256: w.digest("r4") })).toThrow(expect.objectContaining({ code: "unauthorized" }));
+      expect(audited()).toBe(before);
     } finally { w.close(); }
   });
 });

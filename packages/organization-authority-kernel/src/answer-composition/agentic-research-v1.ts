@@ -25,6 +25,11 @@ export const AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1: AgenticResearchBudgetV1 = Ob
   deadline_ms: 300_000, max_rounds: 20, max_model_calls: 48, writer_reserve_ms: 25_000,
 });
 
+/** The one place a budget profile's label becomes its limits: trigger definitions and the staging request's override both read it. */
+export const AGENTIC_RESEARCH_BUDGETS_V1: Readonly<Record<"live" | "background", AgenticResearchBudgetV1>> = Object.freeze({
+  live: AGENTIC_RESEARCH_LIVE_BUDGET_V1, background: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
+});
+
 /** What research works on: a person's question (Ask), or a task ECHO wrote from its trigger's template. */
 export type AgenticResearchGoalV1 =
   | { readonly kind: "question"; readonly question: string }

@@ -7,7 +7,7 @@ import {
   type AgenticAskAuditEntryV1,
 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { STEP_PROMPT, TASK_RULE_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
-import { agenticStartingSlotV1, fillAgenticTaskV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
+import { agenticDataSlotV1, agenticStartingSlotV1, fillAgenticTaskV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
@@ -43,13 +43,27 @@ function harness(replies: readonly unknown[], desk: Partial<EvidenceDeskPortV2>,
   return { research, port, inputs, audit, generate, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, unknown> };
 }
 
-const task = (text: string, starting: AgenticBriefV1["starting"], options: AgenticBriefV1["options"] = { small_scope_preload: false }): AgenticBriefV1 =>
-  ({ goal: { kind: "task", task: text }, starting, budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options });
+const task = (text: string, starting: AgenticBriefV1["starting"], options: AgenticBriefV1["options"] = { small_scope_preload: false }, data?: readonly string[]): AgenticBriefV1 =>
+  ({ goal: { kind: "task", task: text, ...(data === undefined ? {} : { data }) }, starting, budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options });
 
 describe("brief: task slots", () => {
   it("fills each starting slot with its item's id, or says the item could not be read", () => {
     const text = `Compare ${agenticStartingSlotV1(1)} with ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`;
     expect(fillAgenticTaskV1(text, ["E1", null, "E4"])).toBe("Compare E1 with an item that could not be read and E4.");
+  });
+
+  it("places event data in its slots without reading it as template", () => {
+    const text = `Finding ${agenticDataSlotV1(1)} cites ${agenticStartingSlotV1(1)}; expected ${agenticDataSlotV1(2)}.`;
+    expect(fillAgenticTaskV1(text, ["E1"], [`"Ship ${agenticStartingSlotV1(1)} first"`, `"${agenticDataSlotV1(1)}"`]))
+      .toBe('Finding "Ship {{starting:1}} first" cites E1; expected "{{data:1}}".');
+  });
+
+  it("fails closed on a slot with nothing to fill it: a definition bug never reaches the model", () => {
+    for (const [text, data] of [
+      [`Compare ${agenticStartingSlotV1(1)} with ${agenticStartingSlotV1(2)}.`, []],
+      [`Check ${agenticStartingSlotV1(0)}.`, []],
+      [`Check ${agenticStartingSlotV1(1)}: ${agenticDataSlotV1(2)}.`, ["one"]],
+    ] as const) expect(() => fillAgenticTaskV1(text, ["E1"], data), text).toThrow("has nothing to fill it");
   });
 });
 
@@ -69,6 +83,23 @@ describe("brief: goals", () => {
     expect(h.prompt(0)).toMatchObject({ task: "Record E1 changed; recheck E2." });
     expect(h.prompt(0)).not.toHaveProperty("question");
     expect(bundle).toMatchObject({ trigger: "sweep", goal: { kind: "task", task: "Record E1 changed; recheck E2." }, budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, unreadable_starting: [] });
+  });
+
+  it("places the brief's data after its template is fixed, and records the goal without it", async () => {
+    const approved = record("approved", "Approved: show two decimals.");
+    const h = harness([finish(["E1"])], { openCitation: async () => result([approved]) });
+    const brief = task(`Recheck ${agenticStartingSlotV1(1)}: ${agenticDataSlotV1(1)}.`, [{ citation: approved.citation, if_unreadable: "fail" }], undefined, [`"${agenticStartingSlotV1(1)} stays literal"`]);
+    const bundle = await h.research.researchBundle({ trigger: "sweep", brief });
+    expect(h.prompt(0)).toMatchObject({ task: 'Recheck E1: "{{starting:1}} stays literal".' });
+    expect(bundle.goal).toEqual({ kind: "task", task: 'Recheck E1: "{{starting:1}} stays literal".' });
+  });
+
+  it("stops a task whose slot has no starting item before any model call", async () => {
+    const approved = record("approved");
+    const h = harness([], { openCitation: async () => result([approved]) });
+    await expect(h.research.research({ trigger: "sweep", brief: task(`Compare ${agenticStartingSlotV1(1)} with ${agenticStartingSlotV1(2)}.`, [{ citation: approved.citation, if_unreadable: "fail" }]) }))
+      .rejects.toThrow("has nothing to fill it");
+    expect(h.generate).not.toHaveBeenCalled();
   });
 
   it("sends a question goal exactly as Ask does: the step prompt alone and the question first", async () => {

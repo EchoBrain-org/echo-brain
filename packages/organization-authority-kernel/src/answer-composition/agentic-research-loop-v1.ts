@@ -668,7 +668,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     rounds.push(Object.freeze({ round: rounds.length + 1, elapsed_ms: Math.max(0, Math.round(now() - startedAt)), plan: planView() as readonly AgenticResearchPartV1[], actions: Object.freeze([...actions]), rejected: Object.freeze([...stepRejections]) }));
     stepRejections = [];
   };
-  /** The goal as the model sees it: a task gets its starting ids once they are read. */
+  /** The goal as the model sees it: a task's slots are filled once its starting items are read. */
   let goal: AgenticResearchGoalV1 = brief.goal;
   const goalFields = (): Record<string, unknown> => goal.kind === "question" ? { question: goal.question } : { task: goal.task };
 
@@ -708,7 +708,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       }
       for (const item of opened.items.filter(value => value.text === undefined)) register(item);
     }
-    if (goal.kind === "task") goal = Object.freeze({ kind: "task", task: fillAgenticTaskV1(goal.task, startingIds) });
+    if (brief.goal.kind === "task") goal = Object.freeze({ kind: "task", task: fillAgenticTaskV1(brief.goal.task, startingIds, brief.goal.data) });
 
     // ---- optional small-scope preload -----------------------------------
     if (brief.options.small_scope_preload) {

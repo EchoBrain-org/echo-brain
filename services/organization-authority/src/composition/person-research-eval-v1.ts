@@ -1,16 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import type { PersonResearchEvalReadResponseV1 } from '@echo-brain/organization-api';
 import {
-  AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
-  AGENTIC_RESEARCH_LIVE_BUDGET_V1,
+  AGENTIC_RESEARCH_BUDGETS_V1,
   AgenticAskDeadlineErrorV1,
   createAgenticResearchV1,
   type AgenticResearchResultV1,
 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import type { PersonAskScopeV2 } from '../application/ports/person-original-context-retrieval-v1.js';
 import { askerOf, scopeOf } from './person-answer-v3-route.js';
 import { bindPersonLiveEvidenceDeskV1, configuredPersonLiveSourcesV1, type CreatePersonLiveAnswerRouteOptionsV1 } from './person-live-answer-route-v1.js';
+import type { PersonRecordProjectsV1 } from './person-record-search-route.js';
 import type { PersonResearchEvalHttpApplicationV1 } from '../presentation/person-research-eval-http-application.js';
 
 export type { PersonResearchEvalHttpApplicationV1 } from '../presentation/person-research-eval-http-application.js';
@@ -22,6 +23,8 @@ export const PERSON_RESEARCH_EVAL_REREAD_MS_V1 = 60_000;
 const PURGE_INTERVAL_MS = 60_000;
 
 export interface CreatePersonResearchEvalOptionsV1 extends CreatePersonLiveAnswerRouteOptionsV1 {
+  /** The desk's records, plus where an approved record's run reads. */
+  readonly records: CreatePersonLiveAnswerRouteOptionsV1['records'] & PersonRecordProjectsV1;
   /** Wall clock for result expiry; tests pin it. */
   readonly now?: () => number;
 }
@@ -50,6 +53,14 @@ const FAILURE_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
   unavailable: 'The research run could not be completed',
   timed_out: 'The research run reached its deadline',
 });
+
+/** An approved record's project when it is in exactly one the person can read; otherwise everything they can read. */
+function recordScope(records: PersonRecordProjectsV1, access_token: string, citation: unknown): PersonAskScopeV2 {
+  const record = citation as { readonly kind?: unknown; readonly record_sha256?: unknown } | undefined;
+  if (record?.kind !== 'approved_record' || typeof record.record_sha256 !== 'string') throw new AuthorityOperationError('invalid_request', 'Research evaluation record is invalid');
+  const projects = records.recordProjects({ access_token, record_sha256: record.record_sha256 as `sha256:${string}` });
+  return projects.length === 1 ? Object.freeze({ kind: 'project' as const, project_id: projects[0]! }) : Object.freeze({ kind: 'global' as const });
+}
 
 function failure(error: unknown): NonNullable<PersonResearchEvalReadResponseV1['error']> {
   const code = error instanceof AgenticAskDeadlineErrorV1 ? 'timed_out'
@@ -86,13 +97,18 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       if (definition === undefined) throw new AuthorityOperationError('invalid_request', 'Research evaluation trigger is not known');
       // The definition refuses an event it cannot run, before any run starts.
       const defined = definition.brief(definition.parseEvent(request.input));
+      // Ask's writer runs Ask's own brief, rebuilt from the question: anything more in a question brief would be dropped, so it is refused.
+      if (defined.goal.kind === 'question' && (defined.starting.length > 0 || !defined.options.small_scope_preload)) throw new AuthorityOperationError('invalid_request', 'Research evaluation brief is invalid');
       // Only a person's question reads their own additions alone; a task's starting items are shared evidence.
-      if (request.mine === true && defined.goal.kind !== 'question') throw new AuthorityOperationError('invalid_request', 'Research evaluation scope is invalid');
+      // A record's run reads where the record is, so its request names no scope.
+      if ((request.mine === true && defined.goal.kind !== 'question') || (definition.scope === 'record_project' && (request.mine === true || request.project_id !== undefined))) {
+        throw new AuthorityOperationError('invalid_request', 'Research evaluation scope is invalid');
+      }
       purge();
       if ([...runs.values()].some(run => run.owner === owner && run.status === 'running')) {
         throw new AuthorityOperationError('conflict', 'A research run is already running for this person');
       }
-      const scope = scopeOf(request);
+      const requested = definition.scope === 'requested' ? scopeOf(request) : undefined;
       const runId = `rr_${randomUUID()}`;
       const run: Run = { owner, controller: new AbortController(), status: 'running', expires_at: Number.POSITIVE_INFINITY };
       runs.set(runId, run);
@@ -101,11 +117,13 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
         principal_id: authorization.principal_id, membership_id: authorization.membership_id,
         session_family_id: authorization.session_family_id, request_id: `research_${randomUUID()}`,
       };
-      const brief = request.budget === undefined ? defined : { ...defined, budget: request.budget === 'live' ? AGENTIC_RESEARCH_LIVE_BUDGET_V1 : AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 };
+      const brief = request.budget === undefined ? defined : { ...defined, budget: AGENTIC_RESEARCH_BUDGETS_V1[request.budget] };
       const signal = run.controller.signal;
       // The run outlives this request: it is bound to its own controller, not the caller's connection.
       void (async () => {
         try {
+          // The record's scope is looked up with the person's own access before the desk exists; an unreadable record stops here.
+          const scope = requested ?? recordScope(options.records, input.access_token, brief.starting[0]?.citation);
           const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, signal }, context);
           run.revalidate = readSignal => desk.revalidate({ ...(readSignal === undefined ? {} : { signal: readSignal }) });
           const asker = askerOf(options, authorization);

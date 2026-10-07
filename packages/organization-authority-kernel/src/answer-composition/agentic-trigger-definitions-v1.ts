@@ -5,9 +5,9 @@ import {
   validatePersonTicketCitationV1,
 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "../domain/errors.js";
-import { agenticStartingSlotV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
+import { agenticDataSlotV1, agenticStartingSlotV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import type { AgenticRendererV1 } from "./agentic-renderer-v1.js";
-import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "./agentic-research-v1.js";
+import { AGENTIC_RESEARCH_BUDGETS_V1 } from "./agentic-research-v1.js";
 
 /**
  * Trigger definitions (research trigger contract v1, section 1). Adding a
@@ -23,21 +23,33 @@ export interface AgenticTriggerDefinitionV1<Event, In = unknown> {
   /**
    * The event's brief. A task names its starting items by slot
    * (`agenticStartingSlotV1`) because their ids exist only once the loop has
-   * read them; the loop fills them in.
+   * read them, and places the event's own text by data slot
+   * (`agenticDataSlotV1`); the loop fills both in one pass.
    */
   brief(event: Event): AgenticBriefV1;
-  /** The budget profile its brief runs on. */
-  readonly budget: "live" | "background";
+  /** The budget profile its brief runs on; `brief` always carries this profile's limits. */
+  readonly budget: keyof typeof AGENTIC_RESEARCH_BUDGETS_V1;
   /** Turns the bundle into the trigger's result. Ask's writer is composed by the runner, which holds its prompts and response version. */
   readonly renderer?: AgenticRendererV1<In, unknown>;
   /** Whose access the run uses. */
   readonly acts_as: "requester" | "approver";
+  /**
+   * Where the run reads. `requested`: the scope the request names.
+   * `record_project`: the project of its first starting item, an approved
+   * record, or everything the actor can read when the record is in none.
+   */
+  readonly scope: "requested" | "record_project";
   /** Who may receive the result: in this round only the person the run acted as. */
   readonly recipients: "actor_only";
 }
 
 const MAX_FINDINGS = 20;
 const MAX_FINDING_CITATIONS = 12;
+
+/** Freezes a definition and gives its brief the budget its label names, so the two can never disagree. */
+function define<Event>(definition: Omit<AgenticTriggerDefinitionV1<Event>, "brief"> & { brief(event: Event): Omit<AgenticBriefV1, "budget"> }): AgenticTriggerDefinitionV1<Event> {
+  return Object.freeze({ ...definition, brief: (event: Event): AgenticBriefV1 => ({ ...definition.brief(event), budget: AGENTIC_RESEARCH_BUDGETS_V1[definition.budget] }) });
+}
 
 function invalid(message: string): never {
   throw new AuthorityOperationError("invalid_request", message);
@@ -66,39 +78,33 @@ function citation(value: unknown, label: string): unknown {
 }
 
 interface AskEventV1 { readonly question: string }
-interface CheckEventV1 { readonly record: unknown }
+interface ApprovedRecordEventV1 { readonly record: unknown }
 interface SweepEventV1 { readonly findings: readonly { readonly finding: string; readonly expected: string; readonly citations: readonly unknown[] }[] }
 
-const ask: AgenticTriggerDefinitionV1<AskEventV1> = Object.freeze({
-  name: "ask", budget: "live", acts_as: "requester", recipients: "actor_only",
+const ask = define<AskEventV1>({
+  name: "ask", budget: "live", acts_as: "requester", scope: "requested", recipients: "actor_only",
   parseEvent(input: unknown): AskEventV1 {
     const event = fields(input, ["question"], "Ask");
     // The product's question limits, so the evaluation sees what people see.
     try { return Object.freeze({ question: validatePersonQueryText(event.question) }); }
     catch (error) { return invalid(error instanceof Error ? error.message : "Ask question is invalid"); }
   },
-  brief: (event: AskEventV1): AgenticBriefV1 => ({
-    goal: { kind: "question", question: event.question }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: true },
-  }),
+  brief: (event: AskEventV1) => ({ goal: { kind: "question", question: event.question }, starting: [], options: { small_scope_preload: true } }),
 });
 
-/** Check: research starts from an approved record, not a person's question (research loop evaluation v1). */
-const CHECK_TASK = [
-  `An approved record is already read: ${agenticStartingSlotV1(1)}. Split it into its decisions, requirements and actions, one part each. For each, find what in the project agrees with it, conflicts with it, or must change: other approved decisions, tickets, pages and documents. For each, find the owner and any date it puts at risk against a stated milestone.`,
-  "Record what each source says with its ids and dates. Do not decide whether a conflict is acceptable.",
-].join("\n");
+/** The approved record (spec section 5; replaces Check): research starts from a record a person just approved. */
+const APPROVED_RECORD_TASK = `A PM just approved record ${agenticStartingSlotV1(1)}. Find every ticket, PRD section and document in this project that it confirms, conflicts with or changes. For each, record what it says now, who owns it, and any date it affects.`;
 
-const check: AgenticTriggerDefinitionV1<CheckEventV1> = Object.freeze({
-  name: "check", budget: "background", acts_as: "requester", recipients: "actor_only",
-  parseEvent(input: unknown): CheckEventV1 {
-    const record = citation(fields(input, ["record"], "Check").record, "Check record");
-    if ((record as { readonly kind: unknown }).kind !== "approved_record") invalid("A Check starts from an approved record citation");
+const approvedRecord = define<ApprovedRecordEventV1>({
+  name: "approved_record", budget: "background", acts_as: "approver", scope: "record_project", recipients: "actor_only",
+  parseEvent(input: unknown): ApprovedRecordEventV1 {
+    const record = citation(fields(input, ["record"], "Approved record").record, "Approved record");
+    if ((record as { readonly kind: unknown }).kind !== "approved_record") invalid("An approved-record run starts from an approved record citation");
     return Object.freeze({ record });
   },
   // The record is the whole point: research never runs without it.
-  brief: (event: CheckEventV1): AgenticBriefV1 => ({
-    goal: { kind: "task", task: CHECK_TASK }, starting: [{ citation: event.record, if_unreadable: "fail" }],
-    budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false },
+  brief: (event: ApprovedRecordEventV1) => ({
+    goal: { kind: "task", task: APPROVED_RECORD_TASK }, starting: [{ citation: event.record, if_unreadable: "fail" }], options: { small_scope_preload: false },
   }),
 });
 
@@ -109,8 +115,8 @@ const SWEEP_TASK = [
   "Findings:",
 ].join("\n");
 
-const sweep: AgenticTriggerDefinitionV1<SweepEventV1> = Object.freeze({
-  name: "sweep", budget: "background", acts_as: "requester", recipients: "actor_only",
+const sweep = define<SweepEventV1>({
+  name: "sweep", budget: "background", acts_as: "requester", scope: "requested", recipients: "actor_only",
   parseEvent(input: unknown): SweepEventV1 {
     const findings = fields(input, ["findings"], "Sweep").findings;
     if (!Array.isArray(findings) || findings.length === 0 || findings.length > MAX_FINDINGS) invalid(`Sweep needs 1 to ${MAX_FINDINGS} findings`);
@@ -124,7 +130,7 @@ const sweep: AgenticTriggerDefinitionV1<SweepEventV1> = Object.freeze({
     })) });
   },
   // A deleted or now-hidden item is news, so an unreadable one is reported, not fatal. Each cited item is read once.
-  brief: (event: SweepEventV1): AgenticBriefV1 => {
+  brief: (event: SweepEventV1) => {
     const starting: unknown[] = [];
     const positions = new Map<string, number>();
     const slot = (value: unknown): string => {
@@ -132,16 +138,19 @@ const sweep: AgenticTriggerDefinitionV1<SweepEventV1> = Object.freeze({
       if (!positions.has(key)) { starting.push(value); positions.set(key, starting.length); }
       return agenticStartingSlotV1(positions.get(key)!);
     };
+    // The caller's own words go in by data slot, never into the template.
+    const data: string[] = [];
+    const text = (value: string): string => { data.push(JSON.stringify(value)); return agenticDataSlotV1(data.length); };
     const lines = event.findings.map((finding, index) =>
-      `${index + 1}. ${JSON.stringify(finding.finding)} Expected: ${JSON.stringify(finding.expected)}. Cited then: ${finding.citations.map(slot).join(", ")}.`);
+      `${index + 1}. ${text(finding.finding)} Expected: ${text(finding.expected)}. Cited then: ${finding.citations.map(slot).join(", ")}.`);
     return {
-      goal: { kind: "task", task: [SWEEP_TASK, ...lines].join("\n") }, starting: starting.map(value => ({ citation: value, if_unreadable: "report" })),
-      budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false },
+      goal: { kind: "task", task: [SWEEP_TASK, ...lines].join("\n"), data }, starting: starting.map(value => ({ citation: value, if_unreadable: "report" })),
+      options: { small_scope_preload: false },
     };
   },
 });
 
-export const AGENTIC_TRIGGER_DEFINITIONS_V1: readonly AgenticTriggerDefinitionV1<unknown>[] = Object.freeze([ask, check, sweep]);
+export const AGENTIC_TRIGGER_DEFINITIONS_V1: readonly AgenticTriggerDefinitionV1<unknown>[] = Object.freeze([ask, approvedRecord, sweep]);
 
 /** The triggers an audit record may name: every definition but Ask, whose audit records carry no trigger. */
 export const AGENTIC_TRIGGER_NAMES_V1: readonly string[] = Object.freeze(AGENTIC_TRIGGER_DEFINITIONS_V1.filter(definition => definition !== ask).map(definition => definition.name));
