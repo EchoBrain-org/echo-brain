@@ -1,0 +1,465 @@
+{
+  "ask_v6": {
+    "ending": "released:answered",
+    "trace": [
+      "revalidate:2026-10-06T00:00:01.000Z",
+      "generate:1",
+      "list",
+      "search",
+      "revalidate:2026-10-06T00:00:02.000Z",
+      "generate:2",
+      "open",
+      "open",
+      "revalidate:2026-10-06T00:00:03.000Z",
+      "generate:3",
+      "stage:retrieval:succeeded:28",
+      "stage:planner:succeeded:3000",
+      "stage:context:succeeded:0",
+      "revalidate:2026-10-06T00:00:04.000Z",
+      "generate:4",
+      "stage:answer:succeeded:1000",
+      "revalidate:2026-10-06T00:00:05.000Z",
+      "stage:revalidation:succeeded:0",
+      "append:answered",
+      "stage:audit:succeeded:0",
+      "revalidate:2026-10-06T00:00:06.000Z"
+    ],
+    "audit": [
+      {
+        "kind": "echo-agentic-ask-audit-v1",
+        "outcome": "answered",
+        "receipt_digests": [
+          "sha256:9a43e23bcc2eaa80c8245377a8a23e4910ade8a1e32e86e9594f633a0badd1b7",
+          "sha256:1369c00429d8800aa9f41e96df7f9df6fe67dc10cd5f5c845ea8f323457da915",
+          "sha256:0b88fbe2dcd5d1247aaf82c5ab7d0b5101a463b4c3d9f60677f54b3dc29dff67",
+          "sha256:f7d72560726b1f27d9ea365d4c66cfa39e91206e3e50da0102a96d39bed51594",
+          "sha256:2fb476df57affe3e4949c268a1bcedadb59152a782119dffe2a5bbf8929b94e7",
+          "sha256:e3a0761982b4c2ce4e6d158e5e47d6cccd68fffa52fa0c8c9d643dcf3d1f3d5d",
+          "sha256:cb4317c2ba3ef7e508643ffb7a0ba393be6c00ac2d22ad6f4911fd2201e25c16",
+          "sha256:2215626d0ecf8293cac918e74442236ad075103e62dd9a46c22a5ca78d98f884"
+        ],
+        "rounds": 3,
+        "model_calls": 4,
+        "repairs": 0,
+        "fallbacks": 0,
+        "citation_count": 2,
+        "checked_at": "2026-10-06T00:00:05.000Z",
+        "prompt_sha256": "sha256:a4a7771fc7700bf0ae28d7cc4f78b91240a389b23b9544ccb9320c219fa5549b",
+        "answer_sha256": "sha256:db000c1bb2cf29f1ecb84445a0d2e77a8c293bc8c923ecea58100843056a115d",
+        "response_sha256": "sha256:d2f0f997433290b0baaf311db87301a3feff50c319a58397ce09dd97396a9917",
+        "generations": [
+          {
+            "role": "step",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 100,
+              "output_tokens": 10,
+              "total_tokens": 110,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          },
+          {
+            "role": "step",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 200,
+              "output_tokens": 10,
+              "total_tokens": 210,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          },
+          {
+            "role": "step",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 300,
+              "output_tokens": 10,
+              "total_tokens": 310,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          },
+          {
+            "role": "answer",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 400,
+              "output_tokens": 10,
+              "total_tokens": 410,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          }
+        ],
+        "generation_usage": {
+          "input_tokens": 1000,
+          "output_tokens": 40,
+          "total_tokens": 1040
+        },
+        "finish_reason_counts": {
+          "stop": 4
+        }
+      }
+    ]
+  },
+  "ask_v4": {
+    "ending": "released:answered",
+    "trace": [
+      "revalidate:2026-10-06T00:00:01.000Z",
+      "generate:1",
+      "search",
+      "revalidate:2026-10-06T00:00:02.000Z",
+      "generate:2",
+      "stage:retrieval:succeeded:7",
+      "stage:planner:succeeded:2000",
+      "stage:context:succeeded:0",
+      "revalidate:2026-10-06T00:00:03.000Z",
+      "generate:3",
+      "stage:answer:succeeded:1000",
+      "revalidate:2026-10-06T00:00:04.000Z",
+      "stage:revalidation:succeeded:0",
+      "append:answered",
+      "stage:audit:succeeded:0"
+    ],
+    "audit": [
+      {
+        "kind": "echo-agentic-ask-audit-v1",
+        "outcome": "answered",
+        "receipt_digests": [
+          "sha256:2c4dc98c61a1c68481a2e1250d3764d2d63e508ad488dac2c770de5388a6db40",
+          "sha256:e45359a5af84bdb40c1d28dce78e808a2f40036102a3af2be2af96dc4b935a67"
+        ],
+        "rounds": 2,
+        "model_calls": 3,
+        "repairs": 0,
+        "fallbacks": 0,
+        "citation_count": 1,
+        "checked_at": "2026-10-06T00:00:04.000Z",
+        "prompt_sha256": "sha256:5ec72fe8505b3b18462aa29cce7864bfda86f9dcde73af7c4e5f0a507a31eec6",
+        "answer_sha256": "sha256:ae699830efa62def4e9b31826325b33dde6bd99e423c7dfa19ccab79a0fe8e9f",
+        "response_sha256": "sha256:44d982f9d387cecc33af3f641cef4a4e4b96a03900274855353191642e62ae5a",
+        "generations": [
+          {
+            "role": "step",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 100,
+              "output_tokens": 10,
+              "total_tokens": 110,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          },
+          {
+            "role": "step",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 200,
+              "output_tokens": 10,
+              "total_tokens": 210,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          },
+          {
+            "role": "answer",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 300,
+              "output_tokens": 10,
+              "total_tokens": 310,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          }
+        ],
+        "generation_usage": {
+          "input_tokens": 600,
+          "output_tokens": 30,
+          "total_tokens": 630
+        },
+        "finish_reason_counts": {
+          "stop": 3
+        }
+      }
+    ]
+  },
+  "sweep": {
+    "ending": "released:echo-agentic-research-result-v1",
+    "trace": [
+      "openCitation",
+      "openCitation",
+      "revalidate:2026-10-06T00:00:01.000Z",
+      "generate:1",
+      "search",
+      "revalidate:2026-10-06T00:00:02.000Z",
+      "generate:2",
+      "revalidate:2026-10-06T00:00:03.000Z",
+      "append:answered",
+      "revalidate:2026-10-06T00:00:04.000Z"
+    ],
+    "audit": [
+      {
+        "kind": "echo-agentic-ask-audit-v1",
+        "trigger": "sweep",
+        "budget": "background",
+        "outcome": "answered",
+        "receipt_digests": [
+          "sha256:2c4dc98c61a1c68481a2e1250d3764d2d63e508ad488dac2c770de5388a6db40",
+          "sha256:e45359a5af84bdb40c1d28dce78e808a2f40036102a3af2be2af96dc4b935a67",
+          "sha256:c13298a760aef3caa421cf9c73a00e75ce304039a56a86cb7ad572144bdf30f5",
+          "sha256:f1e6046ed9155e9c0df6f3543e3f0c76e459d5a0e413fdae453960f7e31c0d0c",
+          "sha256:e3b6260e92ecb338f78fb7e4ab87472cede0c366b8fcdffb550a726d8fc09aee",
+          "sha256:e9121930fbdc08aed18c0cff076eb5083c316fcfa10e5d3cc5f53abbaca72971"
+        ],
+        "rounds": 2,
+        "model_calls": 2,
+        "repairs": 0,
+        "fallbacks": 0,
+        "citation_count": 2,
+        "checked_at": "2026-10-06T00:00:03.000Z",
+        "prompt_sha256": "sha256:19aba2a0abe750f78f4d6425a9ab2c975225d86121d5d54360a8c708c7fe5293",
+        "answer_sha256": "sha256:13d6a2e3fa4be112843a3bd9fb2c34a8e7cd83e2587d038418799980105be815",
+        "response_sha256": "sha256:8604b6cd3eea77368cc81754f10ee89100b41c32f7947ee3f1febbc1f6cd6403",
+        "generations": [
+          {
+            "role": "step",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 100,
+              "output_tokens": 10,
+              "total_tokens": 110,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          },
+          {
+            "role": "step",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 200,
+              "output_tokens": 10,
+              "total_tokens": 210,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          }
+        ],
+        "generation_usage": {
+          "input_tokens": 300,
+          "output_tokens": 20,
+          "total_tokens": 320
+        },
+        "finish_reason_counts": {
+          "stop": 2
+        }
+      }
+    ]
+  },
+  "sweep_timed_out": {
+    "ending": "rejected:AgenticAskDeadlineErrorV1",
+    "trace": [
+      "openCitation",
+      "openCitation",
+      "revalidate:2026-10-06T00:00:01.000Z",
+      "generate:1",
+      "append:timed_out"
+    ],
+    "audit": [
+      {
+        "kind": "echo-agentic-ask-audit-v1",
+        "trigger": "sweep",
+        "budget": "background",
+        "outcome": "timed_out",
+        "receipt_digests": [
+          "sha256:2c4dc98c61a1c68481a2e1250d3764d2d63e508ad488dac2c770de5388a6db40",
+          "sha256:e45359a5af84bdb40c1d28dce78e808a2f40036102a3af2be2af96dc4b935a67",
+          "sha256:c13298a760aef3caa421cf9c73a00e75ce304039a56a86cb7ad572144bdf30f5",
+          "sha256:f1e6046ed9155e9c0df6f3543e3f0c76e459d5a0e413fdae453960f7e31c0d0c"
+        ],
+        "rounds": 1,
+        "model_calls": 1,
+        "repairs": 0,
+        "fallbacks": 0,
+        "citation_count": 0,
+        "checked_at": "2026-10-06T00:00:01.000Z",
+        "prompt_sha256": null,
+        "answer_sha256": null,
+        "response_sha256": null,
+        "generations": [
+          {
+            "role": "step",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 100,
+              "output_tokens": 10,
+              "total_tokens": 110,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          }
+        ],
+        "generation_usage": {
+          "input_tokens": 100,
+          "output_tokens": 10,
+          "total_tokens": 110
+        },
+        "finish_reason_counts": {
+          "stop": 1
+        }
+      }
+    ]
+  },
+  "ask_cancelled_in_research": {
+    "ending": "rejected:AbortError",
+    "trace": [
+      "revalidate:2026-10-06T00:00:01.000Z",
+      "generate:1",
+      "search",
+      "append:cancelled"
+    ],
+    "audit": [
+      {
+        "kind": "echo-agentic-ask-audit-v1",
+        "outcome": "cancelled",
+        "receipt_digests": [],
+        "rounds": 1,
+        "model_calls": 1,
+        "repairs": 0,
+        "fallbacks": 0,
+        "citation_count": 0,
+        "checked_at": "2026-10-06T00:00:01.000Z",
+        "prompt_sha256": null,
+        "answer_sha256": null,
+        "response_sha256": null,
+        "generations": [
+          {
+            "role": "step",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 100,
+              "output_tokens": 10,
+              "total_tokens": 110,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          }
+        ],
+        "generation_usage": {
+          "input_tokens": 100,
+          "output_tokens": 10,
+          "total_tokens": 110
+        },
+        "finish_reason_counts": {
+          "stop": 1
+        }
+      }
+    ]
+  },
+  "ask_v6_cancelled_during_append": {
+    "ending": "rejected:AbortError",
+    "trace": [
+      "revalidate:2026-10-06T00:00:01.000Z",
+      "generate:1",
+      "list",
+      "search",
+      "revalidate:2026-10-06T00:00:02.000Z",
+      "generate:2",
+      "open",
+      "open",
+      "revalidate:2026-10-06T00:00:03.000Z",
+      "generate:3",
+      "stage:retrieval:succeeded:28",
+      "stage:planner:succeeded:3000",
+      "stage:context:succeeded:0",
+      "revalidate:2026-10-06T00:00:04.000Z",
+      "generate:4",
+      "stage:answer:succeeded:1000",
+      "revalidate:2026-10-06T00:00:05.000Z",
+      "stage:revalidation:succeeded:0",
+      "append:answered",
+      "stage:audit:succeeded:0"
+    ],
+    "audit": [
+      {
+        "kind": "echo-agentic-ask-audit-v1",
+        "outcome": "answered",
+        "receipt_digests": [
+          "sha256:9a43e23bcc2eaa80c8245377a8a23e4910ade8a1e32e86e9594f633a0badd1b7",
+          "sha256:1369c00429d8800aa9f41e96df7f9df6fe67dc10cd5f5c845ea8f323457da915",
+          "sha256:0b88fbe2dcd5d1247aaf82c5ab7d0b5101a463b4c3d9f60677f54b3dc29dff67",
+          "sha256:f7d72560726b1f27d9ea365d4c66cfa39e91206e3e50da0102a96d39bed51594",
+          "sha256:2fb476df57affe3e4949c268a1bcedadb59152a782119dffe2a5bbf8929b94e7",
+          "sha256:e3a0761982b4c2ce4e6d158e5e47d6cccd68fffa52fa0c8c9d643dcf3d1f3d5d",
+          "sha256:cb4317c2ba3ef7e508643ffb7a0ba393be6c00ac2d22ad6f4911fd2201e25c16",
+          "sha256:2215626d0ecf8293cac918e74442236ad075103e62dd9a46c22a5ca78d98f884"
+        ],
+        "rounds": 3,
+        "model_calls": 4,
+        "repairs": 0,
+        "fallbacks": 0,
+        "citation_count": 2,
+        "checked_at": "2026-10-06T00:00:05.000Z",
+        "prompt_sha256": "sha256:a4a7771fc7700bf0ae28d7cc4f78b91240a389b23b9544ccb9320c219fa5549b",
+        "answer_sha256": "sha256:db000c1bb2cf29f1ecb84445a0d2e77a8c293bc8c923ecea58100843056a115d",
+        "response_sha256": "sha256:d2f0f997433290b0baaf311db87301a3feff50c319a58397ce09dd97396a9917",
+        "generations": [
+          {
+            "role": "step",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 100,
+              "output_tokens": 10,
+              "total_tokens": 110,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          },
+          {
+            "role": "step",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 200,
+              "output_tokens": 10,
+              "total_tokens": 210,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          },
+          {
+            "role": "step",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 300,
+              "output_tokens": 10,
+              "total_tokens": 310,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          },
+          {
+            "role": "answer",
+            "finish_reason": "stop",
+            "usage": {
+              "input_tokens": 400,
+              "output_tokens": 10,
+              "total_tokens": 410,
+              "cached_input_tokens": null,
+              "reasoning_tokens": null
+            }
+          }
+        ],
+        "generation_usage": {
+          "input_tokens": 1000,
+          "output_tokens": 40,
+          "total_tokens": 1040
+        },
+        "finish_reason_counts": {
+          "stop": 4
+        }
+      }
+    ]
+  }
+}
