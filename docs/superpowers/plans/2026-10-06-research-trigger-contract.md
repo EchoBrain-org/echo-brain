@@ -177,3 +177,4 @@ Where the shipped interfaces differ from the plan text above:
 - `createAskRendererV1` takes no `answer_budget`; it reads `prompt_budget` from the render input instead.
 - `agentic-renderer-v1.ts` also exports a runtime helper, `callRendererModelV1`: a renderer's one gate call with its one repair, which makes no call when the gate has stopped or the call budget or time is spent.
 - `researchBundle()` was removed in 6b; tests read the full bundle through a renderer.
+- "No edits to the API validators" holds for research-only triggers: a trigger with a renderer adds its result type and validator to `organization-api` and the research-eval read response (the impact card added `rendered?: PersonImpactCardV1`); the endpoint's dispatch is service code.

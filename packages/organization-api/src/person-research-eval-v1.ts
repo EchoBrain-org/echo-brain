@@ -89,7 +89,8 @@ function jsonValue(value: unknown, depth: number): void {
 
 export function validatePersonResearchEvalStartRequestV1(value: unknown): PersonResearchEvalStartRequestV1 {
   const request = asEnumerableRecord(value, 'Research evaluation start request');
-  // Ask's legacy form (one release, until the evaluation runner sends the envelope): `question` beside the trigger.
+  // Ask's legacy form, `question` beside the trigger: kept for one release so pre-envelope runners keep working.
+  // Remove it once the staging evaluation runner sends the `input` envelope.
   const legacy = Object.hasOwn(request, 'question');
   exactKeys(request, ['schema_version', 'trigger', legacy ? 'question' : 'input'], ['budget', 'project_id', 'mine'], 'Research evaluation start request');
   if (request.schema_version !== 1) fail('Research evaluation start request version is invalid');
