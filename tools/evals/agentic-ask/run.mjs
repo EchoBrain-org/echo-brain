@@ -8,7 +8,7 @@
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -159,12 +159,12 @@ function routeDiagnosticAdapter(credentialFile, requestedRoute, observedProvider
 
 function codeIdentity() {
   const git = (args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim();
+  // Every built answer-composition module (loop, gate, release, bundle, brief, definitions, renderers), listed so new modules are fingerprinted too.
+  const composition = "packages/organization-authority-kernel/dist/answer-composition";
   const files = [
     "tools/evals/agentic-ask/run.mjs",
     "tools/evals/agentic-ask/fixtures.mjs",
-    "packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1.js",
-    "packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js",
-    "packages/organization-authority-kernel/dist/answer-composition/agentic-ask-research-state-v1.js",
+    ...readdirSync(join(ROOT, composition), { recursive: true }).filter((file) => file.endsWith(".js")).sort().map((file) => `${composition}/${file}`),
     "packages/organization-authority-kernel/dist/adapters/security/private-file-credentials.js",
     "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
     "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
