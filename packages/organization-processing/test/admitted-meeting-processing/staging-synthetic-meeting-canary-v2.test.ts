@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   assertStagingSyntheticMeetingCanary,
   assertStagingSyntheticMeetingCanaryV1,
-  assertStagingSyntheticMeetingCanaryV2,
   createStagingSyntheticMeetingCanaryV1,
   createStagingSyntheticMeetingCanaryV2,
   isStagingSyntheticMeetingCanary,
@@ -22,12 +21,8 @@ describe("staging synthetic meeting canary V2", () => {
     const v2 = createStagingSyntheticMeetingCanaryV2(input);
 
     assertStagingSyntheticMeetingCanaryV1(v1, input);
-    assertStagingSyntheticMeetingCanaryV2(v2, input);
     expect(() => assertStagingSyntheticMeetingCanaryV1(v2, input)).toThrow(
       "fixed staging synthetic canary",
-    );
-    expect(() => assertStagingSyntheticMeetingCanaryV2(v1, input)).toThrow(
-      "fixed staging synthetic canary V2",
     );
 
     assertStagingSyntheticMeetingCanary(v1, input);
@@ -55,9 +50,6 @@ describe("staging synthetic meeting canary V2", () => {
     provenance.provenance.canonical_revision = `sha256:${"a".repeat(64)}`;
 
     for (const tampered of [transcript, provenance]) {
-      expect(() => assertStagingSyntheticMeetingCanaryV2(tampered, input)).toThrow(
-        "fixed staging synthetic canary V2",
-      );
       expect(() => assertStagingSyntheticMeetingCanary(tampered, input)).toThrow(
         "fixed staging synthetic canary",
       );

@@ -8,7 +8,6 @@ import {
   createStagingSyntheticMeetingCanaryEnvelopeV2,
   describeStagingSyntheticMeetingCanaryEnvelope,
   isStagingSyntheticMeetingCanaryEnvelopeV1,
-  isStagingSyntheticMeetingCanaryEnvelopeV2,
   stagingSyntheticMeetingCanaryInputFromEnvelopeV1,
   stagingSyntheticMeetingCanarySourceIdentityV1 as envelopeSourceIdentity,
   type StagingSyntheticMeetingCanaryInputV1,
@@ -101,23 +100,6 @@ export function createStagingSyntheticMeetingCanaryV2(
     stagingSyntheticMeetingCanarySourceIdentityV1,
   );
   return Object.freeze(meeting);
-}
-
-export function assertStagingSyntheticMeetingCanaryV2(
-  meeting: MeetingDocument,
-  expectedInput?: StagingSyntheticMeetingCanaryInputV2,
-): void {
-  try {
-    assertCanonicalMeetingDocument(
-      meeting,
-      stagingSyntheticMeetingCanarySourceIdentityV1,
-    );
-    if (!isStagingSyntheticMeetingCanaryEnvelopeV2(meeting, expectedInput)) {
-      throw new Error("staging synthetic canary differs from its fixed envelope");
-    }
-  } catch {
-    throw new Error("meeting is not the fixed staging synthetic canary V2");
-  }
 }
 
 /** Accepts either complete versioned canary envelope, and nothing else. */

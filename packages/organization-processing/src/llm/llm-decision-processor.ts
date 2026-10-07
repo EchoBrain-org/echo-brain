@@ -402,6 +402,18 @@ function extractionGroundingFailure(
   );
 }
 
+function allowlistedFailureStage(
+  error: unknown,
+  prefix: string,
+  stages: ReadonlySet<string>,
+): string | undefined {
+  if (!(error instanceof AdapterError)) return undefined;
+  const stage = error.message.startsWith(prefix)
+    ? error.message.slice(prefix.length)
+    : '';
+  return stages.has(stage) ? stage : undefined;
+}
+
 /**
  * Returns only an allowlisted structural parser stage. It deliberately never
  * includes model-provided values, source text, or credential material.
@@ -409,26 +421,22 @@ function extractionGroundingFailure(
 export function extractionSchemaFailureStage(
   error: unknown,
 ): ExtractionSchemaFailureStage | undefined {
-  if (!(error instanceof AdapterError)) return undefined;
-  const stage = error.message.startsWith(EXTRACTION_SCHEMA_FAILURE_PREFIX)
-    ? error.message.slice(EXTRACTION_SCHEMA_FAILURE_PREFIX.length)
-    : '';
-  return EXTRACTION_SCHEMA_FAILURE_STAGE_SET.has(stage)
-    ? (stage as ExtractionSchemaFailureStage)
-    : undefined;
+  return allowlistedFailureStage(
+    error,
+    EXTRACTION_SCHEMA_FAILURE_PREFIX,
+    EXTRACTION_SCHEMA_FAILURE_STAGE_SET,
+  ) as ExtractionSchemaFailureStage | undefined;
 }
 
 /** Returns only an allowlisted grounding check, never the rejected value. */
 export function extractionGroundingFailureStage(
   error: unknown,
 ): ExtractionGroundingFailureStage | undefined {
-  if (!(error instanceof AdapterError)) return undefined;
-  const stage = error.message.startsWith(EXTRACTION_GROUNDING_FAILURE_PREFIX)
-    ? error.message.slice(EXTRACTION_GROUNDING_FAILURE_PREFIX.length)
-    : '';
-  return EXTRACTION_GROUNDING_FAILURE_STAGE_SET.has(stage)
-    ? (stage as ExtractionGroundingFailureStage)
-    : undefined;
+  return allowlistedFailureStage(
+    error,
+    EXTRACTION_GROUNDING_FAILURE_PREFIX,
+    EXTRACTION_GROUNDING_FAILURE_STAGE_SET,
+  ) as ExtractionGroundingFailureStage | undefined;
 }
 
 function hasExactFields(
@@ -669,6 +677,19 @@ function isBeforeMeetingDateAnchor(
   return anchorDate !== null && dueDate !== null && dueDate < anchorDate;
 }
 
+function finishReason(
+  stopReason: string | undefined,
+): DecisionExtractionGenerationObservation['finish_reason'] {
+  return stopReason === 'stop' ||
+    stopReason === 'length' ||
+    stopReason === 'content_filter' ||
+    stopReason === 'error'
+    ? stopReason
+    : typeof stopReason === 'string'
+      ? 'other'
+      : null;
+}
+
 function configuredMaxOutputTokens(config: AdapterConfig): number {
   const value = config.settings['max_output_tokens'];
   return typeof value === 'number' ? value : DEFAULT_MAX_OUTPUT_TOKENS;
@@ -733,19 +754,13 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
   }
 
   private providerElapsedMs(startedAt: number | null): number {
-    let endedAt: number | null;
-    try {
-      const value = this.nowMs();
-      endedAt = Number.isFinite(value) ? value : null;
-    } catch {
-      endedAt = null;
-    }
+    const endedAt = this.providerClockMs();
     if (startedAt === null || endedAt === null) return 0;
     const elapsed = Math.max(0, Math.round(endedAt - startedAt));
     return Number.isSafeInteger(elapsed) ? elapsed : 0;
   }
 
-  private providerStartedAt(): number | null {
+  private providerClockMs(): number | null {
     try {
       const value = this.nowMs();
       return Number.isFinite(value) ? value : null;
@@ -884,7 +899,7 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
     }
     captureCoreRuntimeContentV1("meeting_input", meeting);
     const renderedMeeting = renderMeeting(meeting);
-    const startedAt = this.providerStartedAt();
+    const startedAt = this.providerClockMs();
     let response: StructuredGenerationResult;
     try {
       response = await observeCoreRuntimeV1("model_call", async () => {
@@ -909,15 +924,6 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         error instanceof StructuredGenerationAttemptError
           ? error.observation
           : undefined;
-      const finishReason =
-        observation?.stopReason === 'stop' ||
-        observation?.stopReason === 'length' ||
-        observation?.stopReason === 'content_filter' ||
-        observation?.stopReason === 'error'
-          ? observation.stopReason
-          : typeof observation?.stopReason === 'string'
-            ? 'other'
-            : null;
       this.observeGeneration(context, {
         outcome: 'failed',
         provider: this.client.provider,
@@ -928,19 +934,10 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         total_tokens: observation?.totalTokens ?? null,
         cached_input_tokens: observation?.cachedInputTokens ?? null,
         reasoning_tokens: observation?.reasoningTokens ?? null,
-        finish_reason: finishReason,
+        finish_reason: finishReason(observation?.stopReason),
       });
       throw error;
     }
-    const finishReason =
-      response.stopReason === 'stop' ||
-      response.stopReason === 'length' ||
-      response.stopReason === 'content_filter' ||
-      response.stopReason === 'error'
-        ? response.stopReason
-        : typeof response.stopReason === 'string'
-          ? 'other'
-          : null;
     this.observeGeneration(context, {
       outcome: 'succeeded',
       provider: this.client.provider,
@@ -951,7 +948,7 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
       total_tokens: response.totalTokens ?? null,
       cached_input_tokens: response.cachedInputTokens ?? null,
       reasoning_tokens: response.reasoningTokens ?? null,
-      finish_reason: finishReason,
+      finish_reason: finishReason(response.stopReason),
     });
     assertNotCancelled(operation?.signal, 'extraction');
 
