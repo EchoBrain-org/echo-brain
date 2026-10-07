@@ -226,7 +226,6 @@ const SEGMENTS_DIRECTORY = "segments";
 const STAGING_DIRECTORY = /^\.staging-[0-9a-f]{32}$/;
 const MANIFEST_TABLE = "echo_state_lineage_manifest";
 const PLANES: readonly Plane[] = ["facts", "content", "lexical"];
-const digest = (value: string): Sha256Digest => sha256Digest(value);
 function validDigest(
   value: unknown,
   label: string,
@@ -282,6 +281,10 @@ function projectAssociations(atom: ReadableSearchAtomV1): readonly string[] {
 }
 function ensurePrivateDirectory(path: string, label: string): void {
   if (!existsSync(path)) mkdirSync(path, { recursive: true, mode: 0o700 });
+  checkPrivateDirectory(path, label);
+}
+/** Shared by the builder's initializer and the reader's read-only check. */
+function checkPrivateDirectory(path: string, label: string): void {
   const state = lstatSync(path);
   const uid = process.getuid?.();
   if (
@@ -313,14 +316,10 @@ function assertWithin(path: string, parent: string, label: string): void {
 function writePrivateFile(path: string, value: string): void {
   writeFileSync(path, value, { encoding: "utf8", mode: 0o600, flag: "wx" });
   chmodSync(path, 0o600);
-  const descriptor = openSync(path, "r");
-  try {
-    fsyncSync(descriptor);
-  } finally {
-    closeSync(descriptor);
-  }
+  fsyncPath(path);
 }
-function syncDirectory(path: string): void {
+/** Flushes a written file or a directory entry change to disk. */
+function fsyncPath(path: string): void {
   const descriptor = openSync(path, "r");
   try {
     fsyncSync(descriptor);
@@ -401,7 +400,7 @@ function assertAtom(
     [atom.authorization_proof_sha256, "authorization_proof_sha256"],
   ] as const)
     validDigest(value, label);
-  if (digest(atom.text) !== atom.text_sha256)
+  if (sha256Digest(atom.text) !== atom.text_sha256)
     throw new Error("readable-search engine atom text does not bind text_sha256");
   const branch = policyBranch(atom);
   const expected =
@@ -447,6 +446,30 @@ function segmentIdentity(
       audience_project_ids,
     }),
   };
+}
+/** The policy segment one atom belongs to. */
+function atomSegmentId(
+  lineage: ReadableSearchLineageV1,
+  atom: ReadableSearchAtomV1,
+): Sha256Digest {
+  return segmentIdentity(
+    lineage,
+    atom.policy_id,
+    atom.policy_contract_sha256,
+    atom.reviewer_principal_id,
+    atom.reviewer_membership_id,
+    projectAudience(atom),
+  ).segment_id;
+}
+/** Canonical related-pair order: left atom, then right atom, in byte order. */
+function compareRelatedPairs(
+  left: ReadableSearchRelatedAtomPairV1,
+  right: ReadableSearchRelatedAtomPairV1,
+): number {
+  return (
+    Buffer.compare(Buffer.from(left.left_atom_id), Buffer.from(right.left_atom_id)) ||
+    Buffer.compare(Buffer.from(left.right_atom_id), Buffer.from(right.right_atom_id))
+  );
 }
 function contentBinding(atom: ReadableSearchAtomV1): Sha256Digest {
   return canonicalSha256({
@@ -505,7 +528,7 @@ function stampLineageManifest(
       `${plane} lineage schema digest does not match frozen baseline`,
     );
   if (
-    digest(metadata.manifest_json) !== metadata.manifest_sha256 ||
+    sha256Digest(metadata.manifest_json) !== metadata.manifest_sha256 ||
     canonicalJson(JSON.parse(metadata.manifest_json) as never) !==
       metadata.manifest_json
   )
@@ -615,22 +638,8 @@ function relatedPairsBySegment(
       throw new Error("related atom pair has a dangling atom");
     if (left.record_sha256 === right.record_sha256)
       throw new Error("related atom pair must cross source records");
-    const leftSegment = segmentIdentity(
-      input.lineage,
-      left.policy_id,
-      left.policy_contract_sha256,
-      left.reviewer_principal_id,
-      left.reviewer_membership_id,
-      projectAudience(left),
-    ).segment_id;
-    const rightSegment = segmentIdentity(
-      input.lineage,
-      right.policy_id,
-      right.policy_contract_sha256,
-      right.reviewer_principal_id,
-      right.reviewer_membership_id,
-      projectAudience(right),
-    ).segment_id;
+    const leftSegment = atomSegmentId(input.lineage, left);
+    const rightSegment = atomSegmentId(input.lineage, right);
     if (leftSegment !== rightSegment)
       throw new Error("related atom pair crosses policy segments");
     const identity = `${pair.left_atom_id}:${pair.right_atom_id}`;
@@ -640,12 +649,7 @@ function relatedPairsBySegment(
     if (segmentPairs === undefined) result.set(leftSegment, [pair]);
     else segmentPairs.push(pair);
   }
-  for (const segmentPairs of result.values())
-    segmentPairs.sort(
-      (left, right) =>
-        Buffer.compare(Buffer.from(left.left_atom_id), Buffer.from(right.left_atom_id)) ||
-        Buffer.compare(Buffer.from(left.right_atom_id), Buffer.from(right.right_atom_id)),
-    );
+  for (const segmentPairs of result.values()) segmentPairs.sort(compareRelatedPairs);
   return result;
 }
 function buildSegment(
@@ -851,7 +855,7 @@ function buildSegment(
       const path = join(directory, `${plane}.sqlite`);
       if (existsSync(path)) chmodSync(path, 0o600);
     }
-    syncDirectory(directory);
+    fsyncPath(directory);
   }
 }
 function inputRoot(
@@ -863,11 +867,7 @@ function inputRoot(
       left.atom_order - right.atom_order ||
       Buffer.compare(Buffer.from(left.atom_id), Buffer.from(right.atom_id)),
   );
-  const related_atom_pairs = [...(input.related_atom_pairs ?? [])].sort(
-    (left, right) =>
-      Buffer.compare(Buffer.from(left.left_atom_id), Buffer.from(right.left_atom_id)) ||
-      Buffer.compare(Buffer.from(left.right_atom_id), Buffer.from(right.right_atom_id)),
-  );
+  const related_atom_pairs = [...(input.related_atom_pairs ?? [])].sort(compareRelatedPairs);
   return canonicalSha256({
     schema_version: 1,
     kind: "clean-readable-search-input-root-v1",
@@ -904,16 +904,7 @@ function assertWithinAdmissionBudget(
       throw new Error(
         "readable-search generation exceeds maximum_atom_text_utf8_bytes",
       );
-    segments.add(
-      segmentIdentity(
-        input.lineage,
-        atom.policy_id,
-        atom.policy_contract_sha256,
-        atom.reviewer_principal_id,
-        atom.reviewer_membership_id,
-        projectAudience(atom),
-      ).segment_id,
-    );
+    segments.add(atomSegmentId(input.lineage, atom));
     postings += analyzeReadableSearchDocument(atom.text, atom.item_kind).size;
     if (postings > budget.maximum_postings)
       throw new Error("readable-search generation exceeds maximum_postings");
@@ -1006,7 +997,7 @@ export function buildReadableSearchGenerationV1(
       "readable-search engine staging segments directory",
     );
     const groups = new Map<
-      string,
+      Sha256Digest,
       {
         policy_id: ReadableSearchPolicyIdV1;
         policy_contract_sha256: Sha256Digest;
@@ -1034,17 +1025,10 @@ export function buildReadableSearchGenerationV1(
       atoms: [],
     });
     for (const atom of input.atoms) {
-      const identity = segmentIdentity(
-        input.lineage,
-        atom.policy_id,
-        atom.policy_contract_sha256,
-        atom.reviewer_principal_id,
-        atom.reviewer_membership_id,
-        projectAudience(atom),
-      );
-      const group = groups.get(identity.segment_id);
+      const segmentId = atomSegmentId(input.lineage, atom);
+      const group = groups.get(segmentId);
       if (group === undefined)
-        groups.set(identity.segment_id, {
+        groups.set(segmentId, {
           policy_id: atom.policy_id,
           policy_contract_sha256: atom.policy_contract_sha256,
           reviewer_principal_id: atom.reviewer_principal_id,
@@ -1054,31 +1038,11 @@ export function buildReadableSearchGenerationV1(
         });
       else group.atoms.push(atom);
     }
-    const groupsOrdered = [...groups.values()].sort((left, right) =>
-      Buffer.compare(
-        Buffer.from(
-          segmentIdentity(
-            input.lineage,
-            left.policy_id,
-            left.policy_contract_sha256,
-            left.reviewer_principal_id,
-            left.reviewer_membership_id,
-            left.audience_project_ids,
-          ).segment_id,
-        ),
-        Buffer.from(
-          segmentIdentity(
-            input.lineage,
-            right.policy_id,
-            right.policy_contract_sha256,
-            right.reviewer_principal_id,
-            right.reviewer_membership_id,
-            right.audience_project_ids,
-          ).segment_id,
-        ),
-      ),
+    // Each group is keyed by the segment identity of its own policy tuple.
+    const groupsOrdered = [...groups].sort(([left], [right]) =>
+      Buffer.compare(Buffer.from(left), Buffer.from(right)),
     );
-    const segments = groupsOrdered.map((group) =>
+    const segments = groupsOrdered.map(([segmentId, group]) =>
       buildSegment(
         staging,
         input.lineage,
@@ -1089,16 +1053,7 @@ export function buildReadableSearchGenerationV1(
         group.reviewer_membership_id,
         group.audience_project_ids,
         group.atoms,
-        relatedAtomPairs.get(
-          segmentIdentity(
-            input.lineage,
-            group.policy_id,
-            group.policy_contract_sha256,
-            group.reviewer_principal_id,
-            group.reviewer_membership_id,
-            group.audience_project_ids,
-          ).segment_id,
-        ) ?? [],
+        relatedAtomPairs.get(segmentId) ?? [],
       ),
     );
     const roots = generationRoots(segments);
@@ -1148,7 +1103,7 @@ export function buildReadableSearchGenerationV1(
       }),
     };
     writePrivateFile(join(staging, "manifest.json"), canonicalJson(manifest));
-    syncDirectory(staging);
+    fsyncPath(staging);
     const finalDirectory = join(generations, manifest.generation_id);
     if (existsSync(finalDirectory)) {
       assertWithin(
@@ -1167,14 +1122,10 @@ export function buildReadableSearchGenerationV1(
           "existing readable-search generation differs under the same identity",
         );
       rmSync(staging, { recursive: true, force: true });
-      return {
-        generation_directory: finalDirectory,
-        manifest,
-        manifest_sha256: canonicalSha256(manifest),
-      };
+    } else {
+      renameSync(staging, finalDirectory);
+      fsyncPath(generations);
     }
-    renameSync(staging, finalDirectory);
-    syncDirectory(generations);
     return {
       generation_directory: finalDirectory,
       manifest,
@@ -1461,6 +1412,12 @@ function readerProjectIds(reader: ReadableSearchReaderV1): readonly string[] {
     throw new Error("reader project_ids must be sorted and unique");
   return Object.freeze(ids);
 }
+/** The reader tuple every search, list, read and expansion validates first. */
+function assertReader(reader: ReadableSearchReaderV1): void {
+  text(reader.principal_id, "reader principal_id");
+  text(reader.membership_id, "reader membership_id");
+  readerProjectIds(reader);
+}
 /** A record digest set derived by Authority (mine); it can only narrow what the reader was admitted to. */
 function readerRecordNarrowing(
   value: readonly Sha256Digest[] | undefined,
@@ -1630,16 +1587,7 @@ function assertCanonicalAbsoluteDirectory(path: string, label: string): void {
 /** Read-only counterpart to the builder's directory initializer. */
 function assertPrivateDirectory(path: string, label: string): void {
   if (!existsSync(path)) throw new Error(`${label} is missing`);
-  const state = lstatSync(path);
-  const uid = process.getuid?.();
-  if (
-    state.isSymbolicLink() ||
-    !state.isDirectory() ||
-    (uid !== undefined && state.uid !== uid) ||
-    (state.mode & 0o777) !== 0o700 ||
-    resolve(path) !== path
-  )
-    throw new Error(`${label} must be a current-user 0700 canonical directory`);
+  checkPrivateDirectory(path, label);
 }
 
 function readCanonicalPrivateJson(path: string, label: string): unknown {
@@ -1882,7 +1830,7 @@ function validateReadableSearchPlaneLineage(
     { manifest_json: string; manifest_sha256: Sha256Digest } | undefined;
   if (
     lineage === undefined ||
-    digest(lineage.manifest_json) !== lineage.manifest_sha256 ||
+    sha256Digest(lineage.manifest_json) !== lineage.manifest_sha256 ||
     canonicalJson(JSON.parse(lineage.manifest_json) as never) !==
       lineage.manifest_json
   )
@@ -1987,7 +1935,7 @@ function readAndValidateReadableSearchSegment(
   assertSegmentManifest(segmentValue);
   const segment = segmentValue;
   if (
-    digest(segmentSource) !== entry.segment_manifest_sha256 ||
+    sha256Digest(segmentSource) !== entry.segment_manifest_sha256 ||
     segment.segment_id !== entry.segment_id ||
     segment.facts_root !== entry.facts_root ||
     segment.content_root !== entry.content_root ||
@@ -2081,6 +2029,7 @@ function readAndValidateReadableSearchSegment(
     for (const fact of facts) {
       const item = contentByAtom.get(fact.atom_id);
       const document = documentByAtom.get(fact.atom_id);
+      const isProjectFact = fact.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1;
       if (
         item === undefined ||
         document === undefined ||
@@ -2091,15 +2040,16 @@ function readAndValidateReadableSearchSegment(
         fact.policy_contract_sha256 !== segment.policy_contract_sha256 ||
         fact.reviewer_principal_id !== segment.reviewer_principal_id ||
         fact.reviewer_membership_id !== segment.reviewer_membership_id ||
-        canonicalJson(canonicalProjectIds(JSON.parse(fact.audience_project_ids_json), "fact audience_project_ids", fact.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1)) !== canonicalJson(segment.audience_project_ids ?? []) ||
-        canonicalProjectIds(JSON.parse(fact.association_project_ids_json), "fact association_project_ids", fact.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1).length !== (fact.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 ? canonicalProjectIds(JSON.parse(fact.association_project_ids_json), "fact association_project_ids", true).length : 0) ||
+        canonicalJson(canonicalProjectIds(JSON.parse(fact.audience_project_ids_json), "fact audience_project_ids", isProjectFact)) !== canonicalJson(segment.audience_project_ids ?? []) ||
+        // Associations are validated for every fact; only a project fact may carry them.
+        (canonicalProjectIds(JSON.parse(fact.association_project_ids_json), "fact association_project_ids", isProjectFact).length > 0 && !isProjectFact) ||
         item.log_position !== fact.log_position ||
         item.record_hash !== fact.record_hash ||
         item.atom_order !== fact.atom_order ||
         item.item_kind !== fact.item_kind ||
         document.log_position !== fact.log_position ||
         document.atom_order !== fact.atom_order ||
-        item.text_sha256 !== digest(item.text) ||
+        item.text_sha256 !== sha256Digest(item.text) ||
         item.content_binding_sha256 !== fact.content_binding_sha256 ||
         item.provenance_binding_sha256 !== fact.provenance_binding_sha256 ||
         document.content_binding_sha256 !== fact.content_binding_sha256 ||
@@ -2153,9 +2103,7 @@ function validateAndWarmReadableSearchGenerationV1(
   validDigest(active.manifest_sha256, "active manifest_sha256");
   validDigest(active.retrieval_contract_sha256, "active retrieval contract");
   assertExactHead(active.exact_head, "active exact_head");
-  text(input.reader.principal_id, "reader principal_id");
-  text(input.reader.membership_id, "reader membership_id");
-  readerProjectIds(input.reader);
+  assertReader(input.reader);
   const limit = input.limit ?? 10;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
     throw new Error(
@@ -2194,7 +2142,7 @@ function validateAndWarmReadableSearchGenerationV1(
   assertReadableSearchGenerationManifest(manifestValue);
   const manifest = manifestValue;
   if (
-    digest(manifestSource) !== active.manifest_sha256 ||
+    sha256Digest(manifestSource) !== active.manifest_sha256 ||
     manifest.generation_id !== active.generation_id ||
     manifest.retrieval_contract_sha256 !== active.retrieval_contract_sha256 ||
     !sameExactHead(manifest.exact_head, active.exact_head)
@@ -2320,9 +2268,7 @@ export function warmReadableSearchActiveGenerationV1(input: {
 export function expandReadableSearchRelatedAtomsV1(
   input: ExpandReadableSearchRelatedAtomsV1Input,
 ): ReadableSearchResultV1 {
-  text(input.reader.principal_id, "reader principal_id");
-  text(input.reader.membership_id, "reader membership_id");
-  readerProjectIds(input.reader);
+  assertReader(input.reader);
   const records = readerRecordNarrowing(input.record_sha256s);
   if (
     !Array.isArray(input.anchor_atom_ids) ||
@@ -2433,9 +2379,7 @@ export function expandReadableSearchRelatedAtomsV1(
 export function searchReadableSearchGenerationV1(
   input: SearchReadableSearchGenerationV1Input,
 ): ReadableSearchResultV1 {
-  text(input.reader.principal_id, "reader principal_id");
-  text(input.reader.membership_id, "reader membership_id");
-  readerProjectIds(input.reader);
+  assertReader(input.reader);
   const records = readerRecordNarrowing(input.record_sha256s);
   const limit = input.limit ?? 10;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
@@ -2473,9 +2417,7 @@ export function searchReadableSearchGenerationV1(
 export function listReadableSearchGenerationV1(
   input: ListReadableSearchGenerationV1Input,
 ): ReadableSearchResultV1 {
-  text(input.reader.principal_id, "reader principal_id");
-  text(input.reader.membership_id, "reader membership_id");
-  readerProjectIds(input.reader);
+  assertReader(input.reader);
   const records = readerRecordNarrowing(input.record_sha256s);
   const limit = input.limit ?? 50;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)
@@ -2515,9 +2457,7 @@ export function listReadableSearchGenerationV1(
 export function listReadableSearchGenerationRecordsV1(
   input: ListReadableSearchGenerationRecordsV1Input,
 ): ReadableSearchGenerationRecordsV1 {
-  text(input.reader.principal_id, "reader principal_id");
-  text(input.reader.membership_id, "reader membership_id");
-  readerProjectIds(input.reader);
+  assertReader(input.reader);
   const records = readerRecordNarrowing(input.record_sha256s);
   const handle = activeGenerationHandle(input.active_generation);
   const admitted = scopedSegments(
@@ -2565,9 +2505,7 @@ export function listReadableSearchGenerationRecordsV1(
 export function readReadableSearchGenerationAtomsV1(
   input: ReadReadableSearchGenerationAtomsV1Input,
 ): ReadableSearchResultV1 {
-  text(input.reader.principal_id, "reader principal_id");
-  text(input.reader.membership_id, "reader membership_id");
-  readerProjectIds(input.reader);
+  assertReader(input.reader);
   const records = readerRecordNarrowing(input.record_sha256s);
   if (!Array.isArray(input.atom_ids) || input.atom_ids.length < 1 || input.atom_ids.length > 10 || new Set(input.atom_ids).size !== input.atom_ids.length) throw new Error("readable-search atom read requires one through ten unique atoms");
   for (const atomId of input.atom_ids) validDigest(atomId, "readable-search atom id");
