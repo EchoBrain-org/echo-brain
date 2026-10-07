@@ -68,15 +68,18 @@ function isWithin(path, root) {
   return path === root || path.startsWith(`${root}/`);
 }
 
-function moduleReferences(path, source) {
-  const sourceFile = ts.createSourceFile(
+function parseSourceFile(path, source) {
+  return ts.createSourceFile(
     path,
     source,
     ts.ScriptTarget.Latest,
     true,
     path.endsWith('.tsx') || path.endsWith('.jsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
-  return collectModuleReferences(sourceFile, { includeTypeQueries: true });
+}
+
+function moduleReferences(path, source) {
+  return collectModuleReferences(parseSourceFile(path, source), { includeTypeQueries: true });
 }
 
 function resolveRelative(tree, importer, spec) {
@@ -162,13 +165,7 @@ function isExactSourcePath(path, sourceRoot) {
 function exportedSymbols(tree, path) {
   const source = textFile(tree, path);
   if (source === null) return new Set();
-  const sourceFile = ts.createSourceFile(
-    path,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    path.endsWith('.tsx') || path.endsWith('.jsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-  );
+  const sourceFile = parseSourceFile(path, source);
   const symbols = new Set();
   const hasExportModifier = (statement) =>
     statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ?? false;
@@ -563,7 +560,7 @@ function checkWorkspaceBoundaries(tree, errors) {
       manifest.allowed_node_builtins.map((name) => name.replace(/^node:/, '')),
     );
     const forbiddenRoots = manifest.forbidden_repository_roots ?? [];
-    const layerRules = manifest.layer_rules ?? [];
+    const layerRules = manifest.layer_rules;
     const dependencies = runtimeDependencies(packageJson ?? {});
 
     for (const dependency of allowedWorkspacePackages) {
@@ -688,7 +685,7 @@ function checkWorkspaceBoundaries(tree, errors) {
             errors.push(`${manifest.name}: edge leaves allowed source boundary: ${path} -> ${resolved}`);
           }
           for (const rule of matchingLayerRules) {
-            if (!(rule.allowed_imports ?? []).some((pattern) => matchesGlob(resolved, pattern))) {
+            if (!rule.allowed_imports.some((pattern) => matchesGlob(resolved, pattern))) {
               errors.push(`${manifest.name}: layer rule '${rule.name}' rejects edge: ${path} -> ${resolved}`);
             }
           }
@@ -703,7 +700,7 @@ function checkWorkspaceBoundaries(tree, errors) {
             errors.push(`${manifest.name}: Node builtin ${specifier} is not boundary-allowlisted in ${path}`);
           }
           for (const rule of matchingLayerRules) {
-            const layerBuiltins = (rule.allowed_node_builtins ?? []).map((name) =>
+            const layerBuiltins = rule.allowed_node_builtins.map((name) =>
               name.replace(/^node:/, ''),
             );
             if (!layerBuiltins.includes(builtin)) {
@@ -728,7 +725,7 @@ function checkWorkspaceBoundaries(tree, errors) {
             errors.push(`${manifest.name}: workspace deep import is not exported: ${specifier} in ${path}`);
           }
           for (const rule of matchingLayerRules) {
-            if (!(rule.allowed_workspace_packages ?? []).includes(importedPackage)) {
+            if (!rule.allowed_workspace_packages.includes(importedPackage)) {
               errors.push(
                 `${manifest.name}: layer rule '${rule.name}' rejects workspace import ${importedPackage} in ${path}`,
               );
@@ -742,7 +739,7 @@ function checkWorkspaceBoundaries(tree, errors) {
             errors.push(`${manifest.name}: external import ${importedPackage} is not a declared dependency`);
           }
           for (const rule of matchingLayerRules) {
-            if (!(rule.allowed_external_packages ?? []).includes(importedPackage)) {
+            if (!rule.allowed_external_packages.includes(importedPackage)) {
               errors.push(
                 `${manifest.name}: layer rule '${rule.name}' rejects external import ${importedPackage} in ${path}`,
               );
@@ -763,7 +760,7 @@ function checkWorkspaceBoundaries(tree, errors) {
           .map((component) => ({ name: component.name, path: component.path }))
           .sort((left, right) => left.name.localeCompare(right.name)),
         allowed_workspace_packages: [...manifest.allowed_workspace_packages].sort(),
-        layer_rules: (manifest.layer_rules ?? []).map((rule) => rule.name).sort(),
+        layer_rules: manifest.layer_rules.map((rule) => rule.name).sort(),
       }))
       .sort((left, right) => left.name.localeCompare(right.name)),
   };
