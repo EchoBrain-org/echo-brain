@@ -14,7 +14,7 @@ import {
   reservePersonOnboardingInvitationTarget,
   writePersonOnboardingInvitation,
 } from "../adapters/files/private-person-onboarding-invitation.js";
-import { verifyOrganizationAuthorityApiLineage } from "./organization-authority-api-runtime.js";
+import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 
 // This on-disk name is part of the installed-state layout and remains stable.
 export const PERSON_SESSION_PKCE_KEY_FILENAME = "person-session-pkce-sealing-key";
@@ -29,7 +29,7 @@ export interface InitializedPersonSessionCredentials {
 export function initializePersonSessionCredentials(input: {
   readonly state_directory: string;
 }): InitializedPersonSessionCredentials {
-  verifyOrganizationAuthorityApiLineage(input.state_directory);
+  verifyAuthorityStateLineage(input.state_directory);
   const directory = join(input.state_directory, "credentials");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const path = join(directory, PERSON_SESSION_PKCE_KEY_FILENAME);
@@ -62,6 +62,32 @@ export interface ReissueLegacyPersonOnboardingInvitationInput
   readonly principal_id: string;
 }
 
+/** Issues login grants only; this stopped-state application never redeems an OIDC code. */
+function stoppedStateSessions(
+  database: ReturnType<typeof openAuthorityDatabase>,
+  input: Pick<IssuePersonOnboardingInvitationInput, "oidc" | "pkce_sealing_key">,
+): PersonIdentitySessionApplication {
+  const crypto = new NodePersonSessionCrypto(input.pkce_sealing_key);
+  return new PersonIdentitySessionApplication(
+    new SqlitePersonSessionRepository(database),
+    input.oidc,
+    {
+      clock: new SystemAuthorityClock(),
+      random: crypto,
+      hash: crypto,
+      pkce_sealer: crypto,
+      oidc_provider: {
+        async redeemAuthorizationCode() {
+          return {
+            kind: "terminal_failure",
+            diagnostic_stage: "configuration",
+          };
+        },
+      },
+    },
+  );
+}
+
 /**
  * A stopped-state, organization-owner invitation operation. It has no administrator
  * bearer token and keeps the one-time grant out of stdout and command flags.
@@ -72,7 +98,7 @@ export function issuePersonOnboardingInvitation(
   readonly output_path: string;
   readonly expires_at: string;
 } {
-  verifyOrganizationAuthorityApiLineage(input.state_directory);
+  verifyAuthorityStateLineage(input.state_directory);
   const reservation = reservePersonOnboardingInvitationTarget({
     output_path: input.output_path,
     authority_url: input.authority_url,
@@ -83,25 +109,7 @@ export function issuePersonOnboardingInvitation(
       join(input.state_directory, "authority.sqlite"),
       { fileMustExist: true },
     );
-    const crypto = new NodePersonSessionCrypto(input.pkce_sealing_key);
-    const sessions = new PersonIdentitySessionApplication(
-      new SqlitePersonSessionRepository(database),
-      input.oidc,
-      {
-        clock: new SystemAuthorityClock(),
-        random: crypto,
-        hash: crypto,
-        pkce_sealer: crypto,
-        oidc_provider: {
-          async redeemAuthorizationCode() {
-            return {
-              kind: "terminal_failure",
-              diagnostic_stage: "configuration",
-            };
-          },
-        },
-      },
-    );
+    const sessions = stoppedStateSessions(database, input);
     const issued = sessions.issueBootstrapLoginGrant({
       target_membership_id: input.membership_id,
       expected_issuer: input.oidc.issuer,
@@ -142,7 +150,7 @@ export function reissueLegacyPersonOnboardingInvitation(
   ) {
     throw new Error("legacy Person onboarding identity is invalid");
   }
-  verifyOrganizationAuthorityApiLineage(input.state_directory);
+  verifyAuthorityStateLineage(input.state_directory);
   const reservation = reservePersonOnboardingInvitationTarget({
     output_path: input.output_path,
     authority_url: input.authority_url,
@@ -153,25 +161,7 @@ export function reissueLegacyPersonOnboardingInvitation(
       join(input.state_directory, "authority.sqlite"),
       { fileMustExist: true },
     );
-    const crypto = new NodePersonSessionCrypto(input.pkce_sealing_key);
-    const sessions = new PersonIdentitySessionApplication(
-      new SqlitePersonSessionRepository(database),
-      input.oidc,
-      {
-        clock: new SystemAuthorityClock(),
-        random: crypto,
-        hash: crypto,
-        pkce_sealer: crypto,
-        oidc_provider: {
-          async redeemAuthorizationCode() {
-            return {
-              kind: "terminal_failure",
-              diagnostic_stage: "configuration",
-            };
-          },
-        },
-      },
-    );
+    const sessions = stoppedStateSessions(database, input);
     const historicOwnerGrant = database
       .prepare(
         `SELECT 1 FROM authority_person_login_grants

@@ -9,7 +9,8 @@ import { createConfluencePersonConnectionV1, type ConfluencePersonConnectionV1 }
 import Database from 'better-sqlite3';
 import { chmodSync } from 'node:fs';
 import { join } from 'node:path';
-import { assertPrivateConfluencePersonLiveDatabaseV1, bindConfluencePersonLiveStateV1 } from './confluence-person-live-state-v1.js';
+import { bindConfluencePersonLiveStateV1 } from './confluence-person-live-state-v1.js';
+import { assertPrivatePersonProviderDatabaseV1 } from './person-provider-state-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
 
@@ -46,7 +47,7 @@ export function openConfluencePersonLiveRuntimeV1(options: {
   if (options.configuration.enabled !== true) throw new Error('Confluence live evidence is not enabled');
   const owned = options.seams?.database === undefined;
   const databasePath = join(options.state_directory, 'confluence-person-connections.sqlite');
-  if (owned) assertPrivateConfluencePersonLiveDatabaseV1(databasePath);
+  if (owned) assertPrivatePersonProviderDatabaseV1(databasePath);
   const database = options.seams?.database ?? new Database(databasePath);
   try {
     if (owned) chmodSync(databasePath, 0o600);

@@ -14,11 +14,6 @@ export interface CreatePersonLiveAnswerRouteOptionsV1 extends Omit<CreatePersonA
   readonly live_sources?: readonly PersonLiveConnectorSourceV1[];
 }
 
-/** Every live source this route was composed with. */
-export function configuredPersonLiveSourcesV1(options: CreatePersonLiveAnswerRouteOptionsV1): readonly PersonLiveConnectorSourceV1[] {
-  return options.live_sources ?? [];
-}
-
 export interface PersonLiveRequestContextV1 {
   readonly authority_id: string;
   readonly organization_id: string;
@@ -64,7 +59,7 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
 export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1, response_version: 6): PersonAnswerV5HttpApplication;
 /** One authenticated request pipeline; version adapters only select compatible evidence/output. */
 export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1, response_version: 5 | 6) {
-  const compatible = configuredPersonLiveSourcesV1(options).filter(source => source.minimum_response_version <= response_version);
+  const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= response_version);
   return Object.freeze({
     async ask(input: Parameters<PersonAnswerV5HttpApplication['ask']>[0]) {
       const scope = scopeOf(input.request);

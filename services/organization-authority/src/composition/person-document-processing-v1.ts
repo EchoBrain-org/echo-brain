@@ -72,8 +72,8 @@ export class PersonDocumentProcessingV1 {
 
 /** Start with the API, including when no answer/enrichment model is configured. */
 export function startPersonDocumentProcessingV1(repository: ExtractionRepository, texts?:PersonTextSourceInboxV1, options:PersonDocumentProcessingOptionsV1={}): { wake(): void; close(): Promise<void> } {
-  const report=(event:PersonDocumentProcessingFailureObservationV1):void=>{try{options.on_failure?.(event);}catch{}};
-  const worker = new PersonDocumentProcessingV1(repository,extractDocument,texts,{on_failure:report});
+  // The worker already isolates observer failures.
+  const worker = new PersonDocumentProcessingV1(repository,extractDocument,texts,options);
   const abort = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running = Promise.resolve();

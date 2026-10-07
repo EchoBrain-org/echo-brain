@@ -6,8 +6,7 @@ import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../adapters/persis
 import { AdapterError, meetingFromSourceEnvelopeV1, type MeetingSourceContentV1, type SourceAdmissionBindingV1, type SourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
 import type { RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import { bindApprovalWorkflowStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
-import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
-import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { annotateCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
@@ -47,8 +46,7 @@ import {
   readableSearchGenerationContractV1,
   type ReadableSearchRelatedAtomProjectorBindingV1,
 } from "./readable-search-generation-composition.js";
-import type { OrganizationAuthorityApiRuntimeConfig } from "./organization-authority-api-runtime.js";
-import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
+import type { OrganizationAuthorityApiRuntimeConfig, OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import type { MeetingProcessingWorkerPhaseRunnerV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
 import {
@@ -317,6 +315,28 @@ export async function openOrganizationAuthorityRuntime(
     });
   }
   const personalApi = () => preparedPerson === undefined ? {} : { person_http_runtime_factory: preparedPerson.attach };
+  // Bind once: answer composition and rebuild-time projection must use the
+  // same non-secret adapter/model selection for this running Authority.
+  function bindAnswerGenerationAndSearch(record: import('better-sqlite3').Database, signer: FileOrganizationAuthoritySigner) {
+    const answerGeneration =
+      dependencies.api?.answer_composition_generation ??
+      config.answer_composition_generation_bundle.load();
+    const relatedAtomProjector = relatedAtomProjectorBinding(answerGeneration);
+    const readableSearchContract = readableSearchGenerationContractV1({
+      related_atom_projector: relatedAtomProjector.profile,
+    });
+    const readableSearch = createReadableSearchGenerationReconcilerV1({
+      state_directory: config.state_directory,
+      root: lineage.root,
+      authority,
+      record,
+      signer,
+      policy_projectors: config.record_policy_fact_projectors,
+      record_input_codecs: config.record_input_codecs,
+      related_atom_projector: relatedAtomProjector,
+    });
+    return { answerGeneration, readableSearchContract, readableSearch };
+  }
   const sourceIsAdmitted =
     authority
       .prepare(
@@ -337,23 +357,7 @@ export async function openOrganizationAuthorityRuntime(
         authority_id: lineage.root.authority_id,
         organization_id: lineage.root.organization_id,
       });
-      const answerGeneration =
-        dependencies.api?.answer_composition_generation ??
-        config.answer_composition_generation_bundle.load();
-      const relatedAtomProjector = relatedAtomProjectorBinding(answerGeneration);
-      const readableSearchContract = readableSearchGenerationContractV1({
-        related_atom_projector: relatedAtomProjector.profile,
-      });
-      const readableSearch = createReadableSearchGenerationReconcilerV1({
-        state_directory: config.state_directory,
-        root: lineage.root,
-        authority,
-        record,
-        signer,
-        policy_projectors: config.record_policy_fact_projectors,
-        record_input_codecs: config.record_input_codecs,
-        related_atom_projector: relatedAtomProjector,
-      });
+      const { answerGeneration, readableSearchContract, readableSearch } = bindAnswerGenerationAndSearch(record, signer);
       const runtime = await startOrganizationAuthorityServiceLifecycle(
         { api, worker_interval_ms: config.worker_interval_ms },
         {
@@ -526,25 +530,7 @@ export async function openOrganizationAuthorityRuntime(
         ? {}
         : { journey_telemetry: meetingApprovalJourneyTelemetry }),
     });
-    // Bind once: answer composition and rebuild-time projection must use the
-    // same non-secret adapter/model selection for this running Authority.
-    const answerGeneration =
-      dependencies.api?.answer_composition_generation ??
-      config.answer_composition_generation_bundle.load();
-    const relatedAtomProjector = relatedAtomProjectorBinding(answerGeneration);
-    const readableSearchContract = readableSearchGenerationContractV1({
-      related_atom_projector: relatedAtomProjector.profile,
-    });
-    const readableSearch = createReadableSearchGenerationReconcilerV1({
-      state_directory: config.state_directory,
-      root: lineage.root,
-      authority,
-      record,
-      signer,
-      policy_projectors: config.record_policy_fact_projectors,
-      record_input_codecs: config.record_input_codecs,
-      related_atom_projector: relatedAtomProjector,
-    });
+    const { answerGeneration, readableSearchContract, readableSearch } = bindAnswerGenerationAndSearch(record, signer);
     const runtime = await startOrganizationAuthorityServiceLifecycle(
       { api, worker_interval_ms: config.worker_interval_ms },
       {

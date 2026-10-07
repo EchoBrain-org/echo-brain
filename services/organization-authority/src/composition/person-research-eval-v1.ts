@@ -10,7 +10,7 @@ import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authori
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAskScopeV2 } from '../application/ports/person-original-context-retrieval-v1.js';
 import { askerOf, scopeOf } from './person-answer-v3-route.js';
-import { bindPersonLiveEvidenceDeskV1, configuredPersonLiveSourcesV1, type CreatePersonLiveAnswerRouteOptionsV1 } from './person-live-answer-route-v1.js';
+import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1 } from './person-live-answer-route-v1.js';
 import type { PersonRecordProjectsV1 } from './person-record-search-route.js';
 import type { PersonResearchEvalHttpApplicationV1 } from '../presentation/person-research-eval-http-application.js';
 
@@ -80,7 +80,7 @@ function failure(error: unknown): NonNullable<PersonResearchEvalReadResponseV1['
  */
 export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOptionsV1): PersonResearchEvalHttpApplicationV1 {
   const now = options.now ?? (() => Date.now());
-  const compatible = configuredPersonLiveSourcesV1(options).filter(source => source.minimum_response_version <= 6);
+  const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= 6);
   const runs = new Map<string, Run>();
   const purge = () => {
     const current = now();

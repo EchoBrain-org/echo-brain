@@ -44,6 +44,7 @@ import type Database from "better-sqlite3";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import {
   ReadableSearchGenerationReconcilerV1,
+  readReadableSearchRecordHeadV1,
   type ReadableSearchRecordHeadV1,
 } from "./readable-search-generation-reconciler.js";
 import {
@@ -431,22 +432,6 @@ export async function projectSnapshotRelatedAtomsV1(input: {
   });
 }
 
-function recordHead(database: Database.Database): ReadableSearchRecordHeadV1 {
-  const row = database
-    .prepare(
-      `SELECT position, record_sha256
-         FROM organization_record_log
-        ORDER BY position DESC
-        LIMIT 1`,
-    )
-    .get() as
-    | { readonly position: number; readonly record_sha256: Sha256Digest }
-    | undefined;
-  return row === undefined
-    ? Object.freeze({ position: 0, record_sha256: null })
-    : Object.freeze({ ...row });
-}
-
 function lineagePlane(
   root: StateLineageRootManifestV2,
   role: Extract<
@@ -541,7 +526,7 @@ export function createReadableSearchGenerationReconcilerV1(input: {
     authority: input.authority,
     organization_id: input.root.organization_id,
     retrieval_contract_sha256: contract.retrieval_contract_sha256,
-    read_record_head: () => recordHead(input.record),
+    read_record_head: () => readReadableSearchRecordHeadV1(input.record),
     capture_snapshot: (): ReconciliationSnapshotV1 => {
       const sourceSnapshot = snapshotPort.snapshot({
         authority_id: input.root.authority_id,

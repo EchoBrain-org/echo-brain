@@ -93,10 +93,6 @@ export function readPersonOidcConfiguration(path: string): {
   };
 }
 
-function privateReference(path: string): string {
-  return `file:${path}`;
-}
-
 export function assertPersonAuthorityCallback(
   origin: string,
   configuration: PersonSessionOidcConfiguration,
@@ -142,7 +138,7 @@ export async function runOrganizationAuthorityPersonAdministrationCli(
       state_directory: required(parsed, "--state-dir"),
       oidc: configured.configuration,
       pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(
-        privateReference(required(parsed, "--pkce-key-file")),
+        `file:${required(parsed, "--pkce-key-file")}`,
       ),
       membership_id: required(parsed, "--membership-id"),
       expected_email: required(parsed, "--expected-email"),
