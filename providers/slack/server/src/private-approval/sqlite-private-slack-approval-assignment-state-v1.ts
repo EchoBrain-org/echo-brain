@@ -881,14 +881,13 @@ export class SqlitePrivateSlackApprovalAssignmentStateV1 {
     row: AssignmentRow,
     resolution: PrivateApprovalResolution,
   ): PrivateApprovalCandidateCommitmentV1 {
-    const commitment: PrivateApprovalCandidateCommitmentV1 = Object.freeze({
+    return Object.freeze({
       approval_id: resolution.approval_id,
       candidate_id: row.candidate_id,
       candidate_sha256: resolution.candidate_sha256,
       frozen_card_sha256: resolution.frozen_card_sha256,
       approved_snapshot_sha256: resolution.approved_snapshot_sha256,
     });
-    return commitment;
   }
 
   private revalidateRow(

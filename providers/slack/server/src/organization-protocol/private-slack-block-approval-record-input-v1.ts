@@ -54,7 +54,6 @@ const APPROVED_EVENT_KEYS = [
 ] as const;
 const REJECTED_EVENT_KEYS = ["kind"] as const;
 const INPUT_KEYS = ["private_slack_block_approval_resolution_ref", "event"] as const;
-const BUILD_INPUT_KEYS = ["private_slack_block_approval_resolution_ref", "event"] as const;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const EXTERNAL_IDENTITY_LINK_ID = /^clm_[A-Za-z0-9][A-Za-z0-9._:-]{0,251}$/;
 const SLACK_HUMAN_SUBJECT = /^[UW][A-Z0-9]{2,255}$/;
@@ -299,7 +298,7 @@ export function validatePrivateSlackBlockApprovalRecordInputV1(value: unknown): 
 export function buildPrivateSlackBlockApprovalRecordInputV1(value: BuildPrivateSlackBlockApprovalRecordInputV1): ValidatedPrivateSlackBlockApprovalRecordInputV1 {
   const input = exactObject(
     value,
-    BUILD_INPUT_KEYS,
+    INPUT_KEYS,
     "Private Slack block approval record input v1 build input",
   );
   return validatePrivateSlackBlockApprovalRecordInputV1({
