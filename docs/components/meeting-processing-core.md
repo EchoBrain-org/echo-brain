@@ -11,6 +11,7 @@ created_at: 2026-08-13
 reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
+  - ADR-0031
   - ADR-0030
   - ADR-0001
   - ADR-0003
