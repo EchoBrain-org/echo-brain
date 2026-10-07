@@ -9,8 +9,8 @@ import {
 } from "@echo-brain/organization-api";
 import { AgenticAskOutputErrorV1, cleanId, cleanLine, stripEvidenceIds } from "../agentic-ask-v1-model-protocol.js";
 import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
-import { AGENTIC_ASK_MIN_ANSWER_MS_V1, isAbort, object, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
-import type { AgenticRendererV1, AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
+import { object, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
+import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 import type { StructuredGenerationJsonSchema } from "../structured-generation-v1.js";
 
 /**
@@ -136,10 +136,10 @@ function unconfirmedOf(bundle: AgenticEvidenceBundleV1): string[] {
     ...(bundle.stop.completed ? [] : [STOPPED_NOTE]),
     ...bundle.plan.flatMap(part => part.needs).filter(need => need.status !== "found").map(need => need.need),
     ...bundle.coverage.inventories.filter(inventory => inventory.truncated === true || inventory.more === true).map(inventory => `The ${String(inventory.source)} list was cut short at ${String(inventory.shown_count)} items.`),
-    // A desk refusal on an id research had seen; a mistyped id is the model's error, not an unreadable item.
+    // A desk refusal on an id research had seen and never read; a mistyped id is the model's error, not an unreadable item.
     ...bundle.rounds.flatMap(round => round.actions).flatMap(action => {
       const entry = action.tool === "open" && action.result.error !== undefined ? byShort.get(cleanId(action.args.id) ?? "") : undefined;
-      return entry === undefined ? [] : [`${entry.item.label} could not be read.`];
+      return entry === undefined || entry.opened ? [] : [`${entry.item.label} could not be read.`];
     }),
     ...bundle.coverage.reads.filter(read => read.unavailable && read.tool !== "open").map(read => `The ${read.source} source could not be read.`),
     ...bundle.coverage.notices,
@@ -149,7 +149,7 @@ function unconfirmedOf(bundle: AgenticEvidenceBundleV1): string[] {
 
 export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1, PersonImpactCardV1> = Object.freeze({
   async render(input: AgenticRenderInputV1<ImpactCardTriggerInputV1>) {
-    const { bundle, gate, signal } = input;
+    const { bundle } = input;
     const recordSha256 = object(input.trigger_input.record)?.record_sha256;
     const inRecord = (entry: Entry) => entry.item.citation.kind === "approved_record" && entry.item.citation.record_sha256 === recordSha256;
     const others = bundle.items.filter(entry => !inRecord(entry));
@@ -171,17 +171,8 @@ export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1
     ])].filter(fits);
     input.on_context?.(Object.freeze([...record, ...items].map(entry => entry.short)));
 
-    let draft: Draft | null = null;
-    let fallbacks = 0;
-    if (!gate.stats().stopped && record.length > 0 && input.remaining() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && gate.stats().calls < bundle.budget.max_model_calls) {
-      const user = { task, record: record.map(view), items: items.map(view) };
-      try { draft = await gate.withRepair(RENDER_CALL, IMPACT_CARD_PROMPT, user, IMPACT_CARD_SCHEMA, input.remaining, parseCard); }
-      catch (error) {
-        // The request's signal is aborted exactly when the caller cancelled or the deadline passed.
-        if (isAbort(error, signal) || !(error instanceof AgenticAskOutputErrorV1)) throw error;
-        fallbacks += 1;
-      }
-    }
+    const written = record.length === 0 ? null : await callRendererModelV1(input, RENDER_CALL, IMPACT_CARD_PROMPT, { task, record: record.map(view), items: items.map(view) }, IMPACT_CARD_SCHEMA, parseCard);
+    const draft = written?.value ?? null;
 
     // ---- layout (code, not model) ---------------------------------------
     const used: Entry[] = [];
@@ -222,8 +213,8 @@ export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1
     const outcome = card.decided.length + card.affected.length === 0 ? (incomplete ? "partial" as const : "not_found" as const)
       : !incomplete && card.unconfirmed.length === 0 ? "answered" as const : "partial" as const;
     return Object.freeze({
-      result: card, cited: Object.freeze(used.map(entry => entry.short)), outcome, fallbacks,
-      digests: Object.freeze({ answer_sha256: canonicalSha256({ decided: card.decided, affected: card.affected }), response_sha256: canonicalSha256(card) }),
+      result: card, cited: Object.freeze(used.map(entry => entry.short)), outcome, fallbacks: written?.value === null ? 1 : 0,
+      answer_sha256: canonicalSha256({ decided: card.decided, affected: card.affected }),
     });
   },
 });

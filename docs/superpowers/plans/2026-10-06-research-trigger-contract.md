@@ -160,3 +160,18 @@ After Task 6.1 is green. Phases 1-5 recorded frozen baselines to prove each move
 - Phase 3: does the renderer read anything the inline writer did not? Watch `touched` ordering and the `full`/`text` fallback filter.
 - Phase 4: `report` mode must not leak an unreadable item's title or citation beyond what the desk returned.
 - Phase 5: owners and people come only from item details, never from model text. No relation is ever phrased as an instruction to edit Jira or Confluence.
+
+## As built
+
+Where the shipped interfaces differ from the plan text above:
+
+- Gate: each call names `{ role, span }` (`AgenticModelCallV1`), not a role alone, and the gate reports each pre-call access check through `on_checked`.
+- Bundle: source notices stay in `coverage.notices`, not `server`; each item also carries the `source` selector the model saw.
+- The loop module `agentic-research-loop-v1.ts` was created by a pure move in phase 4a; no task in the plan created it.
+- Phases 4, 5 and 6 each shipped in two parts: 4a (move the loop) and 4b (briefs, definitions, envelope), 5a (approved-record trigger) and 5b (impact card), 6a (evaluation) and 6b (this cleanup).
+- Brief: a definition writes `brief(event)`, not `brief(event, opened_ids)`. A task names its starting items with `{{starting:N}}` slots and places the event's own text with `{{data:N}}` slots; the loop fills both in one pass once it has read the starting items, and the runner refuses a slot with nothing to fill it before any read.
+- Definitions also declare `scope` (`requested` or `record_project`), and a definition's brief always carries the limits of its `budget` label.
+- Endpoint scope comes from the record: an approved-record run reads its record's one readable project, or everything the approver can read when there is none, and its request names no scope.
+- Renderer contract: a renderer also takes `prompt_budget(system_prompt)` and an optional `on_context`, and returns `answer_sha256`, its answer's fingerprint. The release step fingerprints the whole result itself (no `'from_response'` mode), and renderer model calls reach the audit through the shared gate's stats under role `answer`.
+- `releaseAgenticResultV1` takes `result` and `answer_sha256` and returns the result it hands over.
+- `researchBundle()` was removed in 6b; tests read the full bundle through a renderer.

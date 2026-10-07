@@ -1,21 +1,20 @@
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { validatePersonImpactCardV1 } from "@echo-brain/organization-api";
 import { describe, expect, it } from "vitest";
-import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, agenticAskContextBudgetBytesV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
+import { agenticAskContextBudgetBytesV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
+import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../../src/answer-composition/agentic-research-v1.js";
 import type { AgenticEvidenceBundleItemV1, AgenticEvidenceBundleV1 } from "../../../src/answer-composition/agentic-evidence-bundle-v1.js";
-import { AGENTIC_MODEL_OUTPUT_TOKENS_V1, createAgenticModelGateV1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
+import { AGENTIC_MODEL_OUTPUT_TOKENS_V1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
 import { IMPACT_CARD_PROMPT, IMPACT_CARD_RENDERER_V1 } from "../../../src/answer-composition/renderers/impact-card-renderer-v1.js";
-import type { StructuredGenerationInput } from "../../../src/answer-composition/structured-generation-v1.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../../src/shared/core-runtime-observation-v1.js";
 import type { EvidenceDeskItemV2 } from "../../../src/shared/evidence-desk-v2.js";
+import { EMPTY_BUNDLE, scriptedGate } from "../fixtures/agentic-scenarios.js";
 
 /**
  * The impact card renderer on its own (research trigger contract v1, section
  * 5): a hand-built bundle, a gate over scripted replies, and no desk. One
  * model call writes the summaries and relations; code builds the rest.
  */
-const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
-const checked = { checked_at: "2026-10-06T00:00:00.000Z" };
 const RECORD = canonicalSha256({ record: "gate-review" });
 const recordCitation = { kind: "approved_record" as const, atom_id: canonicalSha256({ atom: "decision" }), record_sha256: RECORD, policy_id: "organization-member-readable-person-v2" as const };
 
@@ -59,14 +58,14 @@ function bundle(options: { readonly cited?: readonly string[]; readonly complete
     full: item.text !== undefined, opened: item.text !== undefined, preloaded: index < 2, touched: index + 1, cited_by_plan: cited.includes(`E${index + 1}`),
   }));
   const value: AgenticEvidenceBundleV1 = {
-    schema_version: 1, kind: "echo-agentic-evidence-bundle-v1", trigger: "approved_record",
+    ...EMPTY_BUNDLE, trigger: "approved_record",
     goal: { kind: "task", task: "A PM just approved record E1. Find every ticket, PRD section and document in this project that it confirms, conflicts with or changes. For each, record what it says now, who owns it, and any date it affects." },
     budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
     plan: [{ part: 1, question: "What does E1 affect?", notes: "", needs: [
       { need: "THERM-46 state", status: "found", evidence: ["E3"] }, { need: "PRD display section", status: "found", evidence: ["E4"] },
       { need: "owner of the display spec", status: "not_found", evidence: [] }, { need: "the display plan action", status: "found", evidence: ["E6", "E1"] },
     ] }],
-    items, unreadable_starting: [],
+    items,
     rounds: [{ round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [
       { tool: "open", args: { id: "E7" }, result: { items: [], opened: [], error: "that item is not available" } },
       { tool: "open", args: { id: "E77" }, result: { items: [], opened: [], error: "unknown id; pass an id such as E4 from your scratchpad" } },
@@ -77,8 +76,6 @@ function bundle(options: { readonly cited?: readonly string[]; readonly complete
       notices: ["Knowledge search returns at most 50 pages."],
     },
     stop: { reason: options.completed === false ? "budget" : "finished", completed: options.completed !== false },
-    cost: { rounds: 4, model_calls: 4, repairs: 0, fallbacks: 0, input_tokens: null, output_tokens: null, total_tokens: null, model_ms: 0, desk_ms: 0, elapsed_ms: 0 },
-    gathered_for: { scope: { kind: "global" }, checked_at: null }, server: { receipts: [], invocation_digests: [], generations: [] },
   };
   return Object.freeze(value);
 }
@@ -86,22 +83,8 @@ function bundle(options: { readonly cited?: readonly string[]; readonly complete
 /** The renderer alone: a bundle, a gate over scripted replies, and the approved-record event. */
 function alone(input: { readonly bundle?: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly remaining?: number; readonly prompt_budget?: number }) {
   const trace: string[] = [];
-  const inputs: StructuredGenerationInput[] = [];
   const value = input.bundle ?? bundle();
-  const gate = createAgenticModelGateV1({
-    generation,
-    model: {
-      generate: async (model: StructuredGenerationInput) => {
-        trace.push("generate"); inputs.push(model);
-        const reply = input.replies[inputs.length - 1];
-        if (reply === undefined) throw new Error(`unscripted call ${inputs.length}`);
-        return reply;
-      },
-    },
-    desk_revalidate: async () => { trace.push("revalidate"); return checked; }, on_checked: () => undefined,
-    budget: value.budget, now: () => 0, deadline: value.budget.deadline_ms,
-    signal: new AbortController().signal, is_deadline_expired: () => false, content_sensitive: () => false,
-  });
+  const { gate, inputs } = scriptedGate(input.replies, value.budget, trace);
   const render = () => IMPACT_CARD_RENDERER_V1.render({
     bundle: value, trigger_input: { record: recordCitation }, gate, remaining: () => input.remaining ?? 30_000, signal: new AbortController().signal,
     prompt_budget: system => input.prompt_budget ?? agenticAskContextBudgetBytesV1(undefined, system, AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer),
@@ -184,7 +167,7 @@ describe("impact card renderer", () => {
     });
     expect(validatePersonImpactCardV1(card)).toEqual(card);
     expect(rendered).toMatchObject({ cited: ["E1", "E2", "E3", "E4", "E5", "E6"], outcome: "partial", fallbacks: 0 });
-    expect(rendered.digests).toEqual({ answer_sha256: canonicalSha256({ decided: card.decided, affected: card.affected }), response_sha256: canonicalSha256(card) });
+    expect(rendered.answer_sha256).toBe(canonicalSha256({ decided: card.decided, affected: card.affected }));
   });
 
   it("is answered only when research finished and nothing is left unconfirmed", async () => {
@@ -195,6 +178,13 @@ describe("impact card renderer", () => {
     const stopped = await alone({ bundle: { ...quiet, stop: { reason: "budget", completed: false } }, replies: [REPLY] }).render();
     expect(stopped.result.unconfirmed).toEqual(["Research stopped before it finished, so other items may be affected too."]);
     expect(stopped.outcome).toBe("partial");
+  });
+
+  it("never says an item research went on to read could not be read", async () => {
+    const value = bundle();
+    const refusedFirst = { tool: "open", args: { id: "E3" }, result: { items: [], opened: [], error: "that item is not available" } };
+    const retried = { ...value, rounds: [{ ...value.rounds[0]!, actions: [refusedFirst, ...value.rounds[0]!.actions] }] };
+    expect((await alone({ bundle: retried, replies: [REPLY] }).render()).result.unconfirmed).toEqual(NOTES);
   });
 
   it("falls back without a model: the cited items with their details and owners, not yet assessed, plus the notes", async () => {

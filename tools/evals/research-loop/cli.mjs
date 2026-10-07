@@ -87,7 +87,7 @@ async function runOne(client, testCase, request, budget, trial, model, pollMs) {
   let receipt;
   try { receipt = await client.startResearchEval(request); }
   catch (error) {
-    return { ...base, outcome: rejectedAtIngress(error) ? "rejected" : "error", error: { code: error?.code ?? error?.name ?? "error", message: String(error?.message ?? error).slice(0, 300) }, elapsed_ms: Date.now() - started };
+    return { ...base, outcome: rejectedAtIngress(testCase, error) ? "rejected" : "error", error: { code: error?.code ?? error?.name ?? "error", message: String(error?.message ?? error).slice(0, 300) }, elapsed_ms: Date.now() - started };
   }
   const deadline = started + pollDeadlineMs(budget);
   for (;;) {

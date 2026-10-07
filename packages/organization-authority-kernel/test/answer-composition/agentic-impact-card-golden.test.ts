@@ -5,7 +5,8 @@ import { createAgenticResearchV1, type AgenticAskAuditEntryV1 } from "../../src/
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
-import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
+import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
+import { checked, generation, result } from "./fixtures/agentic-scenarios.js";
 
 /**
  * Impact card replay (research trigger contract v1, section 5). Scripted desk
@@ -19,8 +20,6 @@ import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskPortV2, E
  * this switch never touches the Ask fixtures.
  */
 const FIXTURE = new URL("./agentic-impact-card-golden.v1.json", import.meta.url);
-const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
-const checked = { checked_at: "2026-10-06T00:00:00.000Z" };
 const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "approved_record")!;
 
 const RECORD = canonicalSha256({ record: "display-review" });
@@ -55,8 +54,6 @@ const TICKET_DONE = ticket("THERM-31", undefined, { status: "Done", owner: "Ana 
 const PRD = page("1441793", "PRD: Display", "Display: the reading shows one decimal (0.1 °C).");
 const TEST_PLAN = page("2001", "DVT test plan", "TC-D-06: check the display shows two decimals.");
 const GATE = page("99", "Gate review notes", undefined);
-const result = (items: readonly EvidenceDeskItemV2[], extra: Partial<EvidenceDeskResultV2> = {}): EvidenceDeskResultV2 =>
-  ({ items, truncated: false, receipt_digests: [canonicalSha256({ desk: items.map(item => item.id) })], ...extra });
 
 const LIVE_SOURCES: EvidenceDeskPortV2["live_sources"] = [
   { source_id: "jira", kind: "ticket", selector: "tickets", description: "Live work items.", metadata_only_list: true, tool_id: "jira" },

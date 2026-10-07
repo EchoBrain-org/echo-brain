@@ -7,12 +7,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AGENTIC_ASK_ANSWER_RESERVE_MS_V1,
   AGENTIC_ASK_DEADLINE_MS_V1,
-  AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
   AGENTIC_ASK_MAX_MODEL_CALLS_V1,
   agenticAskContextBudgetBytesV1,
   createAgenticAskV1,
   type AgenticAskAuditEntryV1,
 } from "../../src/answer-composition/agentic-ask-v1.js";
+import { AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
 import type { StructuredGenerationInput, StructuredGenerationPort } from "../../src/answer-composition/structured-generation-v1.js";
 import type { EvidenceDeskItemV1, EvidenceDeskListInputV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from "../../src/shared/evidence-desk-v1.js";

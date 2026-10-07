@@ -19,9 +19,12 @@ function triggerInput(testCase, bindings) {
   })) };
 }
 
-/** A start the client or the Authority refused as invalid, such as an overlong question: rejected at ingress, as in the product. */
-export function rejectedAtIngress(error) {
-  return error?.name === "PersonQueryInputError" || error?.name === "OrganizationApiValidationError" || error?.code === "invalid_request";
+/**
+ * An Ask question the Authority refused as invalid, such as an overlong one: rejected at ingress, as in the product.
+ * Only a question has a product ingress limit; any other refusal is the runner's or the bindings' error.
+ */
+export function rejectedAtIngress(testCase, error) {
+  return testCase.trigger === "ask" && error?.code === "invalid_request";
 }
 
 /** The trimmed bundle's fields (`AgenticResearchResultV1`); anything else in a read, such as server records, is never saved. */

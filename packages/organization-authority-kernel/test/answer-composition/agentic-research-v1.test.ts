@@ -1,29 +1,16 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it, vi } from "vitest";
-import {
-  AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
-  createAgenticResearchV1,
-  type AgenticAskAuditEntryV1,
-} from "../../src/answer-composition/agentic-ask-v1.js";
+import { createAgenticResearchV1, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { TASK_RULE_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticStartingSlotV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
+import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
-import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
+import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
 import type { PersonImpactCardV1 } from "@echo-brain/organization-api";
+import { checked, generation, researchHarness as harness, listed, need, part, record, result, step } from "./fixtures/agentic-scenarios.js";
 
-const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
-const checked = { checked_at: "2026-10-06T00:00:00.000Z" };
-
-function record(id: string, text: string | undefined = `Approved: ${id} was decided.`): EvidenceDeskItemV2 {
-  return Object.freeze({
-    id: `desk_${canonicalSha256({ id }).slice(7)}`,
-    citation: { kind: "approved_record" as const, atom_id: canonicalSha256({ id }), record_sha256: canonicalSha256({ id, record: true }), policy_id: "organization-member-readable-person-v2" as const },
-    kind: "decision" as const, ...(text === undefined ? {} : { text }), label: `Meeting ${id}`, visibility: "team" as const,
-    occurred_at: "2026-10-05", receipt_sha256: canonicalSha256({ receipt: id }),
-  });
-}
 function importedMeeting(id: string, text: string): EvidenceDeskItemV2 {
   return Object.freeze({
     id: `desk_${canonicalSha256({ imported: id }).slice(7)}`,
@@ -40,37 +27,16 @@ function importedMeeting(id: string, text: string): EvidenceDeskItemV2 {
     receipt_sha256: canonicalSha256({ imported: id, receipt: true }),
   });
 }
-const result = (items: readonly EvidenceDeskItemV2[]): EvidenceDeskResultV2 => ({ items, truncated: false, receipt_digests: [canonicalSha256({ desk: items.map(item => item.id) })] });
-const step = (needs: readonly { need: string; status: string; evidence?: readonly string[] }[], actions: readonly { tool: string; args?: Record<string, string> }[], question = "Part") =>
-  ({ parts: [{ question, notes: "", needs: needs.map(need => ({ evidence: [], ...need })) }], actions: actions.map(action => ({ args: {}, ...action })) });
-
-function harness(replies: readonly unknown[] | ((input: StructuredGenerationInput, index: number) => unknown), desk: Partial<EvidenceDeskPortV2>) {
-  const inputs: StructuredGenerationInput[] = [];
-  const audit: AgenticAskAuditEntryV1[] = [];
-  const generate = vi.fn(async (input: StructuredGenerationInput) => {
-    inputs.push(input);
-    const index = inputs.length - 1;
-    const reply = typeof replies === "function" ? replies(input, index) : replies[index];
-    if (reply === undefined) throw new Error(`unscripted call ${index + 1}`);
-    return reply;
-  });
-  const port: EvidenceDeskPortV2 = {
-    scope: { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000001" } as EvidenceDeskPortV2["scope"], live_sources: [],
-    search: async () => result([]), open: async () => result([]), list: async () => result([]), revalidate: async () => checked, ...desk,
-  };
-  const research = createAgenticResearchV1({ desk: port, model: { generate }, generation, audit: { append: entry => { audit.push(entry); } }, today: () => "2026-10-06" });
-  return { research, inputs, audit, generate, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, unknown> };
-}
 
 describe("research result beside Ask", () => {
   it("returns rounds, item flags, stop, cost and the writer input without desk ids, refs or receipts", async () => {
-    const listed = { ...record("dvt"), text: undefined } as EvidenceDeskItemV2;
+    const listedDvt = listed("dvt");
     const { research } = harness([
-      step([{ need: "DVT start", status: "open" }], [{ tool: "search", args: { query: "DVT start" } }]),
-      step([{ need: "DVT start", status: "open" }], [{ tool: "open", args: { id: "E1" } }]),
-      step([{ need: "DVT start", status: "found", evidence: ["E1"] }], [{ tool: "finish" }]),
+      step([part("Part", [need("DVT start", "open")])], [{ tool: "search", args: { query: "DVT start" } }]),
+      step([part("Part", [need("DVT start", "open")])], [{ tool: "open", args: { id: "E1" } }]),
+      step([part("Part", [need("DVT start", "found", ["E1"])])], [{ tool: "finish", args: {} }]),
       { sentences: [{ text: "DVT starts October 12.", evidence: ["E1"] }], not_found: [] },
-    ], { search: async () => result([listed]), open: async () => result([record("dvt", "Approved: DVT starts October 12.")]) });
+    ], { search: async () => result([listedDvt]), open: async () => result([record("dvt", "Approved: DVT starts October 12.")]) });
     const output = await research.answerWithResearch({ question: "When does DVT start?" });
     expect(output.response.outcome).toBe("answered");
     expect(output.writer_evidence).toEqual(["E1"]);
@@ -82,16 +48,16 @@ describe("research result beside Ask", () => {
     expect(view.items).toEqual([expect.objectContaining({ id: "E1", read_in_full: true, opened: true, preloaded: false, cited_by_plan: true, text: "Approved: DVT starts October 12." })]);
     expect(view.cost).toMatchObject({ rounds: 3, model_calls: 3, repairs: 0, fallbacks: 0 });
     const serialized = JSON.stringify(view);
-    expect(serialized).not.toContain(listed.id);
+    expect(serialized).not.toContain(listedDvt.id);
     expect(view.items.every(item => !("ref" in item) && !("receipt_sha256" in item))).toBe(true);
-    expect(serialized).not.toContain(listed.receipt_sha256);
+    expect(serialized).not.toContain(listedDvt.receipt_sha256);
   });
 
   it("records rejected replies on the round that follows them", async () => {
     const { research } = harness([
       { not: "a step" },
-      step([{ need: "battery reserve", status: "open" }], [{ tool: "search", args: { query: "battery" } }]),
-      step([{ need: "battery reserve", status: "found", evidence: ["E1"] }], [{ tool: "finish" }]),
+      step([part("Part", [need("battery reserve", "open")])], [{ tool: "search", args: { query: "battery" } }]),
+      step([part("Part", [need("battery reserve", "found", ["E1"])])], [{ tool: "finish", args: {} }]),
       { sentences: [{ text: "A 20% reserve was approved.", evidence: ["E1"] }], not_found: [] },
     ], { search: async () => result([record("battery", "Approved: 20% reserve.")]) });
     const { research: view } = await research.answerWithResearch({ question: "What battery reserve was approved?" });
@@ -103,8 +69,8 @@ describe("research result beside Ask", () => {
   it("keeps a personal imported meeting distinct from approved decisions through Ask research and writing", async () => {
     const imported = importedMeeting("cohort", "Imported notes: ship the cohort on Friday.");
     const h = harness([
-      step([{ need: "cohort ship date", status: "open" }], [{ tool: "search", args: { source: "meetings", query: "cohort ship" } }]),
-      step([{ need: "cohort ship date", status: "found", evidence: ["E1"] }], [{ tool: "finish" }]),
+      step([part("Part", [need("cohort ship date", "open")])], [{ tool: "search", args: { source: "meetings", query: "cohort ship" } }]),
+      step([part("Part", [need("cohort ship date", "found", ["E1"])])], [{ tool: "finish", args: {} }]),
       { sentences: [{ text: "The imported notes say the cohort ships Friday.", evidence: ["E1"] }], not_found: [] },
     ], { search: async () => result([imported]) });
 
@@ -129,14 +95,14 @@ describe("research-only triggers", () => {
     const approved = record("two-decimals", "Approved on Oct 8: show 0.01 °C on the display for MRD-02.");
     const openCitation = vi.fn(async () => result([approved, record("rationale", "Rationale: the customer needs two decimals.")]));
     const h = harness([
-      step([{ need: "PRD display precision", status: "open" }], [{ tool: "search", args: { query: "display precision" } }, { tool: "search", args: { query: "decimal places" } }], "Two-decimal display"),
-      step([{ need: "PRD display precision", status: "not_found" }], [{ tool: "finish" }], "Two-decimal display"),
+      step([part("Two-decimal display", [need("PRD display precision", "open")])], [{ tool: "search", args: { query: "display precision" } }, { tool: "search", args: { query: "decimal places" } }]),
+      step([part("Two-decimal display", [need("PRD display precision", "not_found")])], [{ tool: "finish", args: {} }]),
     ], { openCitation });
-    const view = await h.research.research({ trigger: "approved_record", brief: taskBrief(`Check the approved record ${agenticStartingSlotV1(1)}.`, [approved.citation]) });
+    const view = await h.research.research({ trigger: "approved_record", brief: taskBrief(`Find what approved record ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(openCitation).toHaveBeenCalledWith(expect.objectContaining({ citation: approved.citation }));
     expect(h.inputs[0]!.system_prompt.endsWith(`\n\n${TASK_RULE_PROMPT}`)).toBe(true);
     const first = h.prompt(0);
-    expect(first).toMatchObject({ task: "Check the approved record E1." });
+    expect(first).toMatchObject({ task: "Find what approved record E1 affects." });
     expect(first).not.toHaveProperty("question");
     expect(view).toMatchObject({ trigger: "approved_record", stop: { reason: "finished" }, budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 });
     expect(view.items[0]).toMatchObject({ id: "E1", preloaded: true, opened: true, read_in_full: true });
@@ -151,7 +117,7 @@ describe("research-only triggers", () => {
     const ticketTwo = record("tc-d-06", "TC-D-06 still expects one decimal.");
     const openCitation = vi.fn(async (input: { readonly citation: unknown }) => result([JSON.stringify(input.citation) === JSON.stringify(ticketOne.citation) ? ticketOne : ticketTwo]));
     const h = harness([
-      step([{ need: "SW-22b state", status: "found", evidence: ["E1"] }, { need: "TC-D-06 state", status: "found", evidence: ["E2"] }], [{ tool: "finish" }], "Two decimals landed?"),
+      step([part("Two decimals landed?", [need("SW-22b state", "found", ["E1"]), need("TC-D-06 state", "found", ["E2"])])], [{ tool: "finish", args: {} }]),
     ], { openCitation });
     const view = await h.research.research({ trigger: "sweep", brief: taskBrief(
       `Recheck: firmware cited ${agenticStartingSlotV1(1)}; the test case cited ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(1)}.`,
@@ -165,13 +131,13 @@ describe("research-only triggers", () => {
   it("fails closed before any model call when starting evidence is not readable", async () => {
     const approved = record("gone");
     const h = harness([], { openCitation: async () => { throw new AuthorityOperationError("not_found", "Evidence item is not available"); } });
-    await expect(h.research.research({ trigger: "approved_record", brief: taskBrief(`Check ${agenticStartingSlotV1(1)}.`, [approved.citation]) })).rejects.toMatchObject({ code: "not_found" });
+    await expect(h.research.research({ trigger: "approved_record", brief: taskBrief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) })).rejects.toMatchObject({ code: "not_found" });
     expect(h.generate).not.toHaveBeenCalled();
   });
 
   it("refuses starting evidence on a desk that cannot open citations", async () => {
     const h = harness([], {});
-    await expect(h.research.research({ trigger: "approved_record", brief: taskBrief(`Check ${agenticStartingSlotV1(1)}.`, [record("x").citation]) })).rejects.toMatchObject({ code: "unavailable" });
+    await expect(h.research.research({ trigger: "approved_record", brief: taskBrief(`Find what ${agenticStartingSlotV1(1)} affects.`, [record("x").citation]) })).rejects.toMatchObject({ code: "unavailable" });
     expect(h.generate).not.toHaveBeenCalled();
   });
 
@@ -188,11 +154,11 @@ describe("research-only triggers", () => {
   it("runs up to the background round limit", async () => {
     const approved = record("anchor", "Approved: anchor.");
     let hit = 0;
-    const h = harness((_input, index) => step([{ need: "everything", status: "open" }], [{ tool: "search", args: { query: `query ${index}` } }]), {
+    const h = harness((_input, index) => step([part("Part", [need("everything", "open")])], [{ tool: "search", args: { query: `query ${index}` } }]), {
       openCitation: async () => result([approved]),
       search: async () => result([record(`hit-${hit += 1}`)]),
     });
-    const view = await h.research.research({ trigger: "approved_record", brief: taskBrief(`Check ${agenticStartingSlotV1(1)}.`, [approved.citation]) });
+    const view = await h.research.research({ trigger: "approved_record", brief: taskBrief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(view.rounds).toHaveLength(AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1.max_rounds);
     expect(view.stop).toEqual({ reason: "step_limit", completed: false });
     expect(h.audit[0]).toMatchObject({ trigger: "approved_record", rounds: 20, model_calls: 20, outcome: "partial" });
@@ -209,8 +175,8 @@ describe("task briefs with a renderer", () => {
     const inputs: StructuredGenerationInput[] = [];
     const audit: AgenticAskAuditEntryV1[] = [];
     const replies = [
-      step([{ need: "affected tickets", status: "open" }], [{ tool: "search", args: { query: "display decimals" } }]),
-      step([{ need: "affected tickets", status: "found", evidence: ["E2"] }], [{ tool: "finish" }]),
+      step([part("Part", [need("affected tickets", "open")])], [{ tool: "search", args: { query: "display decimals" } }]),
+      step([part("Part", [need("affected tickets", "found", ["E2"])])], [{ tool: "finish", args: {} }]),
       { decided: [{ id: "E1", text: "Show two decimals on the display." }], affected: [{ id: "E2", says_now: "The firmware formats one decimal.", relation: "conflicts", date_at_risk: "", milestone: "" }] },
     ];
     const port: EvidenceDeskPortV2 = {

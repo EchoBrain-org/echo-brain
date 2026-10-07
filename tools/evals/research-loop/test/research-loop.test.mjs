@@ -84,9 +84,22 @@ test("approved-record keys give every affected item a relation and an owner, tak
   // M3 agrees the regression scope and gate authority are open and gives them owners and dates the registers lack.
   const t2Key = Object.fromEntries(records.find(entry => entry.id === "approved-record-t2-dvt-review-decisions").affected.map(item => [item.id, item.relation]));
   for (const id of ["a12", "a13", "a14", "a15", "a16", "a17"]) assert.deepEqual(t2Key[id], ["confirms", "needs_updating"], id);
-  // Owners come from item details: only the four tickets assigned to the test person have one.
-  const owned = records.flatMap(entry => entry.affected.filter(item => item.owner !== null).flatMap(item => item.refs.map(ref => ref.ticket)));
-  assert.deepEqual([...new Set(owned)].sort(), ["THERM-47", "THERM-54"]);
+  // The keyed items and their owners follow from the parts and the Jira assignees (world/README.md, "Reading the keys"): recompute them.
+  const assignees = Object.fromEntries(dataset.additions.jira_updates.filter(update => update.set.assignee !== undefined).map(update => [update.key, update.set.assignee]));
+  for (const entry of records) {
+    const keyed = []; const seen = new Set();
+    for (const part of entry.parts.filter(value => value.type === "conflict" || value.type === "change" || /\bagree/u.test(value.requirement))) {
+      const pages = new Map();
+      for (const ref of part.evidence) {
+        if (ref.meeting !== undefined || seen.has(JSON.stringify(ref))) continue;
+        seen.add(JSON.stringify(ref));
+        if (ref.ticket !== undefined) keyed.push({ refs: [ref], owner: assignees[ref.ticket] ?? null });
+        else if (pages.has(ref.page)) pages.get(ref.page).refs.push(ref);
+        else { pages.set(ref.page, { refs: [ref], owner: null }); keyed.push(pages.get(ref.page)); }
+      }
+    }
+    assert.deepEqual(entry.affected.map(({ relation: _relation, ...item }) => item), keyed.map((item, index) => ({ id: `a${index + 1}`, ...item })), entry.id);
+  }
   const t1 = records.find(entry => entry.id === "approved-record-t1-two-decimal-display");
   const problems = changed => datasetProblems({ ...dataset, cases: [{ ...t1, ...changed }] });
   assert.deepEqual(problems({}), []);
@@ -181,9 +194,13 @@ test("start requests are envelopes the API and each trigger definition accept; a
     if (entry.id === "overlong-dvt-schedule-check") assert.throws(() => definition.parseEvent(request.input), { code: "invalid_request" });
     else assert.doesNotThrow(() => definition.parseEvent(request.input), entry.id);
   }
-  assert.equal(rejectedAtIngress({ name: "PersonAuthorityClientError", code: "invalid_request" }), true);
-  assert.equal(rejectedAtIngress({ name: "OrganizationApiValidationError" }), true);
-  assert.equal(rejectedAtIngress({ name: "PersonAuthorityClientError", code: "unavailable" }), false);
+  // Only an Ask question has a product ingress limit; any other refusal is the runner's or the bindings' error.
+  const overlong = caseById("overlong-dvt-schedule-check");
+  const refused = { name: "PersonAuthorityClientError", code: "invalid_request" };
+  assert.equal(rejectedAtIngress(overlong, refused), true);
+  assert.equal(rejectedAtIngress(caseById("approved-record-t1-two-decimal-display"), refused), false);
+  assert.equal(rejectedAtIngress(overlong, { name: "OrganizationApiValidationError" }), false);
+  assert.equal(rejectedAtIngress(overlong, { name: "PersonAuthorityClientError", code: "unavailable" }), false);
 });
 
 test("a saved impact-card run keeps the card and the trimmed bundle, never server records", () => {

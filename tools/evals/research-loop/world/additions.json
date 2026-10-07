@@ -80,7 +80,7 @@
       "page_id": "1441793",
       "section": "DVT review — hold on accuracy",
       "append_text": "DVT gate review date: 2026-10-23. Inputs expected at the review: the DVT-R2 result summary, BUG-412 closure evidence, TRACE-01 confirmation and the named gate approval.",
-      "why": "The only place the DVT gate review date is stated (situations 1 and 3, Check T2). Append as a new paragraph at the end of the section, after 'Round 2 is planned, not passed...'. The page version rises from 3; record the new version in the seed log."
+      "why": "The only place the DVT gate review date is stated (situations 1 and 3, approved-record T2). Append as a new paragraph at the end of the section, after 'Round 2 is planned, not passed...'. The page version rises from 3; record the new version in the seed log."
     }
   ],
   "meetings": [
@@ -170,7 +170,7 @@
           "role": "Clinical operations lead, Kestrel Valley Care (pilot customer)"
         }
       ],
-      "purpose": "T1. Customer meeting that APPROVES a two-decimal display (0.01 °C) for MRD-02; approver Mara Lindqvist, 2026-09-30. Source of the Check T1 case and the two-decimal Sweep.",
+      "purpose": "T1. Customer meeting that APPROVES a two-decimal display (0.01 °C) for MRD-02; approver Mara Lindqvist, 2026-09-30. Source of the approved-record T1 case and the two-decimal Sweep.",
       "notes_markdown": "# Kestrel Valley Care pilot review — MRD-02 display (2026-09-30)\n\n## Decision\n- APPROVED by Mara Lindqvist (Product lead): MRD-02 display changes from one decimal to two decimals (0.01 °C), at Kestrel Valley Care's request. The ±0.1 °C accuracy requirement is unchanged.\n\n## Why\n- Kestrel Valley Care's nurses compare readings with a reference that shows two decimals; one decimal causes repeated re-checks.\n- The second decimal is display resolution only.\n\n## Actions\n- {{TEST_PERSON}}: update MRD-02 and the PRD display requirement (PRD-D01), due 2026-10-07.\n- Jonas Becker: update SW-22b number formatting, due 2026-10-09.\n- Rafael Moreno: update TC-D-06 expected results and plan the rerun, due 2026-10-09.",
       "transcript": [
         "{{TEST_PERSON}}: Thanks for joining. The main item today is how the reading shows on the device screen.",
@@ -318,7 +318,7 @@
           "role": "QA lead"
         }
       ],
-      "purpose": "T3. Failure review that decides BUG-412's LIKELY cause (sensor self-heating under load) and the fix owner role (Hardware) while TRACE-01 stays open. Source of the Check T3 case. Second trap: the TRACE-01 confirmation action mentions the test person but is owned by Rafael Moreno.",
+      "purpose": "T3. Failure review that decides BUG-412's LIKELY cause (sensor self-heating under load) and the fix owner role (Hardware) while TRACE-01 stays open. Source of the approved-record T3 case. Second trap: the TRACE-01 confirmation action mentions the test person but is owned by Rafael Moreno.",
       "notes_markdown": "# BUG-412 failure review (2026-10-05)\n\n## Decisions\n- Likely cause of BUG-412: sensor self-heating under load (backlight and radio on). Filter dropout (SW-14c) deprioritized, not ruled out. Not a confirmed root cause.\n- Hardware owns the BUG-412 fix (HW-11 board layout); Firmware supports with sample-accounting logs.\n- TRACE-01 stays open until QA confirms the MRD-01 link and the fix owner is recorded in Jira.\n\n## Why\n- The failing TC-D-03 rerun accepted 100 of 100 samples, so dropped samples do not explain the offset.\n- The offset appears only with backlight and radio on and rises over about two minutes; the regulator sits next to the sensor.\n\n## Actions\n- Tomas Okafor: propose the board thermal fix and name the candidate board revision, due 2026-10-08.\n- Jonas Becker: add sample-accounting logging to the next firmware build, due 2026-10-12.\n- Rafael Moreno: confirm whether TC-D-03 traces to MRD-01 and send the confirmation to {{TEST_PERSON}} for TRACE-01, due 2026-10-12.",
       "transcript": [
         "Tomas Okafor: Goal today is a likely cause for BUG-412 and a fix owner. Not a confirmed root cause.",

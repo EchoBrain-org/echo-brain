@@ -5,19 +5,11 @@ import type {
   PersonAnswerResponseV5,
   PersonAnswerResponseV6,
 } from "@echo-brain/organization-api";
-import {
-  AgenticAskOutputErrorV1,
-  answerSchema,
-  cleanId,
-  cleanLine,
-  parseAnswer,
-  partQuestion,
-  type Answer,
-} from "../agentic-ask-v1-model-protocol.js";
+import { answerSchema, cleanId, cleanLine, parseAnswer, partQuestion } from "../agentic-ask-v1-model-protocol.js";
 import { compactAndValidateAgenticAskResponseV1 } from "../agentic-ask-v1-response.js";
 import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
-import { AGENTIC_ASK_MIN_ANSWER_MS_V1, isAbort, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
-import type { AgenticRendererV1, AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
+import type { AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
+import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 
 /**
  * Ask's renderer: one writer call reads the question against released
@@ -69,7 +61,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
   const tickets = responseVersion >= 5;
   return Object.freeze({
     async render(input: AgenticRenderInputV1<AskRendererInputV1>) {
-      const { bundle, gate, signal } = input;
+      const { bundle } = input;
       const askedQuestion = input.trigger_input.question;
       const researchIncomplete = !bundle.stop.completed;
       const byShort = new Map(bundle.items.map(entry => [entry.short, entry]));
@@ -78,9 +70,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         return id === null ? undefined : byShort.get(id);
       };
       const describe = describeAgenticEvidenceItemV1;
-      const citable = (short: string): boolean => entryOf(short)?.full === true;
-      const citedShorts = () => new Set(bundle.plan.flatMap(part => part.needs.flatMap(need => need.evidence)).filter(citable));
-      let fallbacks = 0;
 
       // ---- final answer ---------------------------------------------------
       const answerContext = {
@@ -94,7 +83,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         },
       };
       const writerBudget = Math.max(0, input.prompt_budget(options.answer_prompt) - bytes(JSON.stringify({ ...answerContext, evidence: [] })));
-      const cited = [...citedShorts()].map(short => entryOf(short)!);
+      // What the plan cites and research read in full, in the plan's order.
+      const cited = [...new Set(bundle.plan.flatMap(part => part.needs.flatMap(need => need.evidence)))].map(short => entryOf(short)).filter((entry): entry is Entry => entry?.cited_by_plan === true);
       const evidence: Entry[] = []; let evidenceBytes = 0;
       const admit = (entry: Entry) => {
         const cost = bytes(JSON.stringify({ ...describe(entry), text: entry.item.text })) + 1;
@@ -111,24 +101,14 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const allowed = new Set(evidence.map(entry => entry.short));
       input.on_context?.(Object.freeze(evidence.map(entry => entry.short)));
 
-      let answer: Answer | null = null;
-      let writerEvidence: readonly string[] = [];
-      const answerTimeout = () => input.remaining();
-      if (!gate.stats().stopped && evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && gate.stats().calls < bundle.budget.max_model_calls) {
-        writerEvidence = Object.freeze(evidence.map(entry => entry.short));
-        const user = {
-          ...answerContext,
-          // Working hypotheses are not user requirements or evidence. The
-          // writer assesses the original question against released text.
-          evidence: evidence.map(entry => ({ ...describe(entry), text: entry.item.text })),
-        };
-        try { answer = await gate.withRepair(WRITER_CALL, options.answer_prompt, user, answerSchema, answerTimeout, parseAnswer); }
-        catch (error) {
-          // The request's signal is aborted exactly when the caller cancelled or the deadline passed.
-          if (isAbort(error, signal) || !(error instanceof AgenticAskOutputErrorV1)) throw error;
-          fallbacks += 1;
-        }
-      }
+      const written = evidence.length === 0 ? null : await callRendererModelV1(input, WRITER_CALL, options.answer_prompt, {
+        ...answerContext,
+        // Working hypotheses are not user requirements or evidence. The
+        // writer assesses the original question against released text.
+        evidence: evidence.map(entry => ({ ...describe(entry), text: entry.item.text })),
+      }, answerSchema, parseAnswer);
+      const answer = written?.value ?? null;
+      const writerEvidence: readonly string[] = written === null ? [] : Object.freeze(evidence.map(entry => entry.short));
 
       // ---- layout (code, not model): one part, read as one paragraph ------
       const used: Entry[] = [];
@@ -189,9 +169,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // are always the first ones of `used`.
         cited: Object.freeze(used.slice(0, validated.citations.length).map(entry => entry.short)),
         outcome: validated.outcome,
-        fallbacks,
+        fallbacks: written?.value === null ? 1 : 0,
         // Ask's answer is its direct statement and parts.
-        digests: Object.freeze({ answer_sha256: canonicalSha256({ direct: validated.direct ?? null, parts: validated.parts }), response_sha256: canonicalSha256(validated) }),
+        answer_sha256: canonicalSha256({ direct: validated.direct ?? null, parts: validated.parts }),
       });
     },
   });

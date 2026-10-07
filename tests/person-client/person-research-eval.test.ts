@@ -6,7 +6,7 @@ const json = (value: unknown) => new Response(JSON.stringify(value), { headers: 
 
 describe('staging research evaluation client calls', () => {
   it('starts a run and reads a large completed result on the research routes', async () => {
-    const research = { schema_version: 1, kind: 'echo-agentic-research-result-v1', trigger: 'check', plan: [], rounds: [], items: [{ id: 'E1', text: 'x'.repeat(200_000) }] };
+    const research = { schema_version: 1, kind: 'echo-agentic-research-result-v1', trigger: 'approved_record', plan: [], rounds: [], items: [{ id: 'E1', text: 'x'.repeat(200_000) }] };
     const fetch = vi.fn<typeof globalThis.fetch>()
       .mockResolvedValueOnce(json({ schema_version: 1, kind: 'echo-person-research-eval-run-v1', run_id: runId, status: 'running' }))
       .mockResolvedValueOnce(json({ schema_version: 1, kind: 'echo-person-research-eval-result-v1', run_id: runId, status: 'completed', research }));
@@ -29,7 +29,7 @@ describe('staging research evaluation client calls', () => {
   it('refuses an invalid start request before sending it', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     const client = new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch });
-    await expect(client.startResearchEval('bearer', { schema_version: 1, trigger: 'check', budget: 'live', record: { kind: 'ticket' } } as never)).rejects.toThrow();
+    await expect(client.startResearchEval('bearer', { schema_version: 1, trigger: 'approved_record', budget: 'live', record: { kind: 'ticket' } } as never)).rejects.toThrow();
     expect(fetch).not.toHaveBeenCalled();
   });
 });

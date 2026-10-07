@@ -48,30 +48,10 @@ import {
   type AgenticResearchResultV1,
 } from "./agentic-research-v1.js";
 
-export {
-  AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
-  AGENTIC_RESEARCH_BUDGETS_V1,
-  AGENTIC_RESEARCH_LIVE_BUDGET_V1,
-  type AgenticAskWithResearchV1,
-  type AgenticResearchBudgetV1,
-  type AgenticResearchGoalV1,
-  type AgenticResearchResultV1,
-} from "./agentic-research-v1.js";
-export type { AgenticBriefV1 } from "./agentic-brief-v1.js";
-export {
-  AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
-  AGENTIC_ASK_MIN_ANSWER_MS_V1,
-  AGENTIC_ASK_MIN_STEP_MS_V1,
-  AgenticAskDeadlineErrorV1,
-  type AgenticAskGenerationObservationV1,
-  type AgenticAskModelRoleV1,
-} from "./agentic-model-gate-v1.js";
+// Other workspaces reach these through this entry point.
+export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./agentic-research-v1.js";
+export { AgenticAskDeadlineErrorV1 } from "./agentic-model-gate-v1.js";
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
-export {
-  AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1,
-  AGENTIC_ASK_MAX_PARTS_V1,
-  AgenticAskOutputErrorV1,
-} from "./agentic-ask-v1-model-protocol.js";
 
 /**
  * Agentic Ask (RFC-0003): the research loop (agentic-research-loop-v1.ts:
@@ -82,7 +62,7 @@ export {
  * request setup, the model gate, the renderer call, release and the terminal
  * audits.
  */
-export const AGENTIC_ASK_MAX_STEPS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_rounds;
+
 /** Request-wide model-call budget, including retries and repairs. */
 export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
 /**
@@ -96,7 +76,7 @@ export const AGENTIC_ASK_DEADLINE_MS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.deadli
 /** Time kept for the final answer call; research never starts inside it. */
 export const AGENTIC_ASK_ANSWER_RESERVE_MS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.writer_reserve_ms;
 /** Context window assumed when the generation profile does not state one. */
-export const AGENTIC_ASK_DEFAULT_CONTEXT_TOKENS_V1 = 32_768;
+const AGENTIC_ASK_DEFAULT_CONTEXT_TOKENS_V1 = 32_768;
 /** Conservative bytes per token for prompt budgeting. */
 const BYTES_PER_TOKEN = 3;
 /** Share of the context window left unused as a safety margin. */
@@ -161,12 +141,13 @@ function questionText(value: unknown): string | null {
 }
 /** A brief the request can run, or null. Ask's question keeps its existing bounds; a task's definition bounds its own text. */
 function runnableBrief(brief: AgenticBriefV1): AgenticBriefV1 | null {
-  const goal = brief.goal;
-  if (goal.kind === "question" ? questionText(goal.question) === null : goal.kind !== "task" || typeof goal.task !== "string" || goal.task.trim().length === 0 ||
-      (goal.data !== undefined && !(Array.isArray(goal.data) && goal.data.every(value => typeof value === "string")))) return null;
-  if (!Array.isArray(brief.starting) || !brief.starting.every(start => object(start.citation) !== null && (start.if_unreadable === "fail" || start.if_unreadable === "report"))) return null;
+  const { goal, starting } = brief;
+  if (!Array.isArray(starting) || !starting.every(start => object(start.citation) !== null && (start.if_unreadable === "fail" || start.if_unreadable === "report"))) return null;
+  if (goal.kind === "question") return questionText(goal.question) === null ? null : brief;
+  const data = goal.data === undefined ? [] : goal.data;
+  if (goal.kind !== "task" || typeof goal.task !== "string" || goal.task.trim().length === 0 || !Array.isArray(data) || !data.every(value => typeof value === "string")) return null;
   // A task slot with nothing to fill it is a definition bug, refused before any audited read.
-  return goal.kind === "question" || agenticTaskSlotsFitV1(goal.task, brief.starting.length, goal.data?.length ?? 0) ? brief : null;
+  return agenticTaskSlotsFitV1(goal.task, starting.length, data.length) ? brief : null;
 }
 /** A research-only run releases its trimmed bundle; the outcome counts the checklist's found needs. */
 function researchOnlyOutput(bundle: AgenticEvidenceBundleV1, researched: AgenticResearchResultV1): AgenticRenderOutputV1<AgenticResearchResultV1> {
@@ -176,7 +157,7 @@ function researchOnlyOutput(bundle: AgenticEvidenceBundleV1, researched: Agentic
   return {
     result: researched, cited: bundle.items.filter(item => item.cited_by_plan).map(item => item.short), fallbacks: 0,
     outcome: found === 0 ? (incomplete ? "partial" : "not_found") : found === needs.length && !incomplete ? "answered" : "partial",
-    digests: { answer_sha256: canonicalSha256({ trigger: bundle.trigger, plan: researched.plan }), response_sha256: canonicalSha256(researched) },
+    answer_sha256: canonicalSha256({ trigger: bundle.trigger, plan: researched.plan }),
   };
 }
 /** Ask's brief: the person's question as asked, no starting evidence, and the small-scope preload. */
@@ -221,7 +202,6 @@ export function createAgenticResearchV1(options: CreateAgenticAskV2Options) {
     answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }): Promise<AgenticAskWithResearchV1<PersonAnswerResponseV6>>;
     research(input: AgenticResearchInputV1): Promise<AgenticResearchResultV1>;
     renderWithResearch<In, Out>(input: AgenticRenderedResearchInputV1<In, Out>): Promise<{ readonly rendered: Out; readonly research: AgenticResearchResultV1 }>;
-    researchBundle(input: AgenticResearchInputV1): Promise<AgenticEvidenceBundleV1>;
   };
 }
 /** V3 core keeps V5 strict and emits V6 only when a live page source is selected. */
@@ -277,7 +257,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
    * access fences, audit), the research loop, then a renderer (Ask's for a
    * question, the trigger's own for a task, or none) and the shared release step.
    */
-  type RequestOutput = { readonly response?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6; readonly rendered?: unknown; readonly bundle: AgenticEvidenceBundleV1; readonly research: AgenticResearchResultV1; readonly writer_evidence: readonly string[] };
+  type RequestOutput = { readonly response?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6; readonly rendered?: unknown; readonly research: AgenticResearchResultV1; readonly writer_evidence: readonly string[] };
   const request = async (input: AgenticResearchInputV1, render?: Pick<AgenticRenderedResearchInputV1<unknown, unknown>, "renderer" | "trigger_input">): Promise<RequestOutput> => {
       const brief = runnableBrief(input.brief);
       if (brief === null) throw new AgenticAskOutputErrorV1(input.brief.goal.kind === "question" ? "question is invalid" : "research goal is invalid");
@@ -371,7 +351,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         },
         ...loop.gate_hooks,
       });
-      /** What every audit record of this request carries, read at the moment it is written. */
+      /** What every audit record of this request carries, taken when its release or terminal witness starts. */
       const auditContext = (): AgenticAuditContextV1 => {
         const { receipts, rounds, fallbacks } = loop.progress();
         return {
@@ -395,13 +375,13 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
             remaining: () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
           });
           writerFallbacks += output.fallbacks;
-          await releaseAgenticResultV1({
-            ...auditContext(), desk, outcome: output.outcome, citation_count: output.cited.length, result: output.result, digests: output.digests,
+          const released = await releaseAgenticResultV1({
+            ...auditContext(), desk, outcome: output.outcome, citation_count: output.cited.length, result: output.result, answer_sha256: output.answer_sha256,
             fence_after_audit: true, signal: activeSignal, assert_live: assertLive, now,
             on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
           });
           clearTimeout(deadlineTimer);
-          return Object.freeze({ ...(render === undefined ? {} : { rendered: output.result }), bundle, research: researched, writer_evidence: Object.freeze([]) });
+          return Object.freeze({ ...(render === undefined ? {} : { rendered: released }), research: researched, writer_evidence: Object.freeze([]) });
         }
 
         // Research is over: its desk time is the journey's retrieval stage and its step calls the planner stage.
@@ -428,14 +408,13 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           },
         });
         writerFallbacks += rendered.fallbacks;
-        const validated = rendered.result.response;
         // A failed answer call still ends in a response (records or not found); its span keeps the failure.
         const answerUsage = usageOf("answer", answerModelMs);
         report(answerUsage === null ? { stage: "answer", event: "skipped", elapsed_ms: 0 } : { stage: "answer", event: "succeeded", elapsed_ms: answerModelMs, generation_usage: answerUsage, retrieval: { citation_count: rendered.cited.length } });
         phase = "final";
         // V5/V6 keep the access check after the audit write; V4 never had one.
-        await releaseAgenticResultV1({
-          ...auditContext(), desk, outcome: rendered.outcome, citation_count: rendered.cited.length, result: validated, digests: rendered.digests,
+        const response = await releaseAgenticResultV1({
+          ...auditContext(), desk, outcome: rendered.outcome, citation_count: rendered.cited.length, result: rendered.result.response, answer_sha256: rendered.answer_sha256,
           fence_after_audit: tickets, signal: activeSignal, assert_live: assertLive, now,
           on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
           on_stage: event => report(event.stage === "revalidation"
@@ -443,8 +422,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
             : { stage: "audit", event: "succeeded", elapsed_ms: event.elapsed_ms, retrieval: { citation_count: rendered.cited.length } }),
         });
         clearTimeout(deadlineTimer);
-        ticketCitationCount = validated.citations.filter(value => value.citation.kind === "ticket").length;
-        return Object.freeze({ response: validated, bundle, research: researched, writer_evidence: rendered.result.writer_evidence });
+        ticketCitationCount = response.citations.filter(value => value.citation.kind === "ticket").length;
+        return Object.freeze({ response, research: researched, writer_evidence: rendered.result.writer_evidence });
       } catch (error) {
         clearTimeout(deadlineTimer);
         if (deadlineExpired || error instanceof AgenticAskDeadlineErrorV1) {
@@ -482,10 +461,6 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       const { renderer, trigger_input: triggerInput, ...run } = input;
       const output = await request(run, { renderer: renderer as AgenticRendererV1<unknown, unknown>, trigger_input: triggerInput });
       return Object.freeze({ rendered: output.rendered as Out, research: output.research });
-    },
-    /** The same run, returning the full server-side evidence bundle (renderers and tests). */
-    async researchBundle(input: AgenticResearchInputV1): Promise<AgenticEvidenceBundleV1> {
-      return (await request(input)).bundle;
     },
   });
 }

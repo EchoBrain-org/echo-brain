@@ -92,7 +92,8 @@ function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof AgenticAskDeadlineErrorV1 ? signal.reason : new DOMException("Ask cancelled", "AbortError");
 }
 export function raceAbort<T>(signal: AbortSignal, operation: Promise<T>): Promise<T> {
-  if (signal.aborted) return Promise.reject(abortReason(signal));
+  // An operation started after the abort is refused; its own later failure must not go unhandled.
+  if (signal.aborted) { operation.catch(() => undefined); return Promise.reject(abortReason(signal)); }
   return new Promise<T>((resolve, reject) => {
     const cancelled = () => reject(abortReason(signal));
     signal.addEventListener("abort", cancelled, { once: true });
