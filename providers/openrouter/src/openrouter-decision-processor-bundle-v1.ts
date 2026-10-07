@@ -3,28 +3,10 @@ import {
   createOpenRouterDecisionProcessor,
   openrouterProcessingVersion,
 } from "./llm/openrouter-decision-processor.js";
-import type { AdapterConfig } from "@echo-brain/organization-processing/core/contracts/adapter";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
 import type { AdmittedMeetingProcessingCommitmentsV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments";
 import { assertOpenRouterDecisionProcessorRuntimeCommitmentsV1, fixedOpenRouterDecisionProcessorConfigV1, OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1, openRouterDecisionProcessorConfigurationSha256V1, openRouterDecisionProcessorCredentialReferenceSha256V1 } from "./openrouter-decision-processor-config-v1.js";
 import type { DecisionProcessorBundleV1 } from "@echo-brain/organization-processing/ports/decision-processor-bundle-v1";
-
-function assertProcessorConfig(
-  adapter: {
-    validateConfig(config: AdapterConfig): {
-      ok: boolean;
-      errors: readonly string[];
-    };
-  },
-  config: AdapterConfig,
-): void {
-  const validation = adapter.validateConfig(config);
-  if (!validation.ok) {
-    throw new Error(
-      `OpenRouter decision-processor configuration is invalid: ${validation.errors.join("; ")}`,
-    );
-  }
-}
 
 /**
  * Contains the fixed V1 OpenRouter construction path. The shared runtime
@@ -75,7 +57,12 @@ export function createOpenRouterDecisionProcessorBundleV1(input: {
         credentialResolver: (reference) =>
           reference === credentialReference ? credential : undefined,
       });
-      assertProcessorConfig(processor, config);
+      const validation = processor.validateConfig(config);
+      if (!validation.ok) {
+        throw new Error(
+          `OpenRouter decision-processor configuration is invalid: ${validation.errors.join("; ")}`,
+        );
+      }
       if (
         processor.identity.adapter_id !== admission.processor.adapter_id ||
         processor.identity.instance_id !== admission.processor.instance_id ||

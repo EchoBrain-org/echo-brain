@@ -167,6 +167,16 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     return { selected, token, tokens, ids };
   }
 
+  /** The exact read enforces current issue security and the project pin. */
+  function openIssue(id: string, signal?: AbortSignal): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
+    return safe(async () => {
+      const origin = await verifyConnection(signal);
+      const selected = await issue(id, origin, false, signal);
+      await verifyConnection(signal);
+      return Object.freeze({ items: remember([selected]), truncated: selected.truncated });
+    }, signal);
+  }
+
   await safe(() => verifyConnection(options.signal), options.signal);
 
   return Object.freeze({
@@ -190,25 +200,14 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       limit(input.limit);
       const id = handles.get(input.handle);
       if (id === undefined) jiraFailure('not_found');
-      return safe(async () => {
-        const origin = await verifyConnection(input.signal);
-        const selected = await issue(id, origin, false, input.signal);
-        await verifyConnection(input.signal);
-        return Object.freeze({ items: remember([selected]), truncated: selected.truncated });
-      }, input.signal);
+      return openIssue(id, input.signal);
     },
     async openCitation(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       limit(input.limit);
       let citation: PersonTicketCitationV1;
       try { citation = validatePersonTicketCitationV1(input.citation); } catch { jiraFailure('invalid_request'); }
       if (citation.tool_id !== binding.tool_id || citation.external_scope_id !== cloudid || !JIRA_ID.test(citation.ticket_id)) jiraFailure('unauthorized');
-      return safe(async () => {
-        const origin = await verifyConnection(input.signal);
-        // The exact read enforces current issue security and the project pin.
-        const selected = await issue(citation.ticket_id, origin, false, input.signal);
-        await verifyConnection(input.signal);
-        return Object.freeze({ items: remember([selected]), truncated: selected.truncated });
-      }, input.signal);
+      return openIssue(citation.ticket_id, input.signal);
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       const maximum = Math.min(limit(input.limit), 20);

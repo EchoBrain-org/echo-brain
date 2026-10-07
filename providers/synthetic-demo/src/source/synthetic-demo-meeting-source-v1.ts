@@ -85,11 +85,8 @@ export function isSyntheticDemoFixtureMeetingV1(
 
 function decodeOffset(cursor: string | undefined): number {
   if (cursor === undefined) return 0;
-  if (!cursor.startsWith(SYNTHETIC_DEMO_CURSOR_PREFIX)) {
-    throw new AdapterError("invalid_config", "synthetic-demo cursor is invalid", false);
-  }
   const encodedOffset = cursor.slice(SYNTHETIC_DEMO_CURSOR_PREFIX.length);
-  if (!/^[0-4]$/.test(encodedOffset)) {
+  if (!cursor.startsWith(SYNTHETIC_DEMO_CURSOR_PREFIX) || !/^[0-4]$/.test(encodedOffset)) {
     throw new AdapterError("invalid_config", "synthetic-demo cursor is invalid", false);
   }
   return Number(encodedOffset);
