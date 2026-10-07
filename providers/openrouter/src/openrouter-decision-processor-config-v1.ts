@@ -1,6 +1,5 @@
 import { openrouterProcessingVersion } from "./llm/openrouter-decision-processor.js";
 import {
-  LLM_DECISION_PROCESSOR_ADAPTER_VERSION,
   LLM_DECISION_PROCESSOR_PROMPT_VERSION,
   LLM_DECISION_PROCESSOR_SCHEMA_VERSION,
 } from "@echo-brain/organization-processing/llm/llm-decision-processor";
@@ -10,8 +9,6 @@ import {
 } from "@echo-brain/federation-protocol";
 import type { AdapterConfig } from "@echo-brain/organization-processing/core/contracts/adapter";
 
-export const OPENROUTER_DECISION_PROCESSOR_ADAPTER_VERSION_V1 =
-  LLM_DECISION_PROCESSOR_ADAPTER_VERSION;
 export const OPENROUTER_DECISION_PROCESSOR_PROMPT_VERSION_V1 =
   LLM_DECISION_PROCESSOR_PROMPT_VERSION;
 export const OPENROUTER_DECISION_PROCESSOR_SCHEMA_VERSION_V1 =

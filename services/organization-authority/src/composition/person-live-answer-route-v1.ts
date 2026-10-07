@@ -1,33 +1,22 @@
-import type { PersonPageCitationV1, PersonSlackMessageCitationV1, PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { AgenticAskDeadlineErrorV1, createAgenticAskV2, createAgenticAskV3 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { randomUUID } from 'node:crypto';
-import type { PersonContextLiveApplicationV1, PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
+import type { PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import type { PersonAnswerV4HttpApplication } from '../presentation/person-answer-v4-http-application.js';
 import type { PersonAnswerV5HttpApplication } from '../presentation/person-answer-v5-http-application.js';
 import { askerOf, scopeOf, type CreatePersonAnswerV3RouteOptions } from './person-answer-v3-route.js';
 import { createPersonEvidenceDeskV1 } from './person-evidence-desk-v1.js';
 import { createRegisteredPersonLiveEvidenceDeskV2, type RegisteredPersonLiveEvidenceSourceV2 } from './person-live-evidence-desk-v2.js';
 import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-v1.js';
-import { LEGACY_TICKET_CONNECTOR_V1, LEGACY_PAGE_CONNECTOR_V1, LEGACY_SLACK_CONNECTOR_V1 } from './person-live-connector-registry-v1.js';
 
 export interface CreatePersonLiveAnswerRouteOptionsV1 extends Omit<CreatePersonAnswerV3RouteOptions, 'ask_journey_telemetry'> {
   readonly live_sources?: readonly PersonLiveConnectorSourceV1[];
-  /** Legacy route-construction inputs; new sources use live_sources. */
-  readonly ticket_for?: PersonContextLiveApplicationV1<PersonTicketCitationV1>['source'];
-  readonly page_for?: PersonContextLiveApplicationV1<PersonPageCitationV1>['source'];
-  readonly slack_live_for?: PersonContextLiveApplicationV1<PersonSlackMessageCitationV1>['source'];
 }
 
-/** Every live source this route was composed with, legacy construction included. */
+/** Every live source this route was composed with. */
 export function configuredPersonLiveSourcesV1(options: CreatePersonLiveAnswerRouteOptionsV1): readonly PersonLiveConnectorSourceV1[] {
-  return [
-    ...(options.live_sources ?? []),
-    ...(options.ticket_for === undefined ? [] : [{ ...LEGACY_TICKET_CONNECTOR_V1, application: { source: options.ticket_for } }]),
-    ...(options.page_for === undefined ? [] : [{ ...LEGACY_PAGE_CONNECTOR_V1, application: { source: options.page_for } }]),
-    ...(options.slack_live_for === undefined ? [] : [{ ...LEGACY_SLACK_CONNECTOR_V1, application: { source: options.slack_live_for } }]),
-  ];
+  return options.live_sources ?? [];
 }
 
 export interface PersonLiveRequestContextV1 {

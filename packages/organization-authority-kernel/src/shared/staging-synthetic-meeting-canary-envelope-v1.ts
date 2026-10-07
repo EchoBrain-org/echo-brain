@@ -308,15 +308,6 @@ export function createStagingSyntheticMeetingCanaryEnvelopeV2(
   });
 }
 
-export function stagingSyntheticMeetingCanaryInputFromEnvelopeV2(
-  value: unknown,
-): StagingSyntheticMeetingCanaryInputV2 | undefined {
-  const input = stagingSyntheticMeetingCanaryInputFromEnvelopeV1(value);
-  return input !== undefined && isStagingSyntheticMeetingCanaryEnvelopeV2(value, input)
-    ? input
-    : undefined;
-}
-
 export function isStagingSyntheticMeetingCanaryEnvelopeV2(
   value: unknown,
   expectedInput?: StagingSyntheticMeetingCanaryInputV2,

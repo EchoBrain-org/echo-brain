@@ -18,6 +18,7 @@ import {
   formatStagingJourneyLivenessMetricV1,
   type StagingApprovedSearchBacklogObserverV1,
 } from "./staging-journey-metrics-v1.js";
+import { isCanonicalUtcTimestampV1 } from "../../../application/canonical-utc-timestamp-v1.js";
 
 export const STAGING_JOURNEY_TELEMETRY_LIVENESS_SCHEMA_VERSION_V1 = 1 as const;
 export const STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1 =
@@ -113,12 +114,6 @@ export interface StagingJourneyTelemetryTransportV1 {
 }
 
 const GIT_COMMIT_SHA = /^[0-9a-f]{40}$/;
-
-function isCanonicalUtcTimestamp(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
-}
 
 function isValidIdentity(
   identity: StagingJourneyTelemetryIdentityV1,
@@ -221,7 +216,7 @@ export function createStagingJourneyTelemetryTransportV1(
     if (closed) return;
     try {
       const observedAt = now();
-      if (!isCanonicalUtcTimestamp(observedAt)) return;
+      if (!isCanonicalUtcTimestampV1(observedAt)) return;
       const liveness = {
         schema_version: STAGING_JOURNEY_TELEMETRY_LIVENESS_SCHEMA_VERSION_V1,
         kind: STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1,

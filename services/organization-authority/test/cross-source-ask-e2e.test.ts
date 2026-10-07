@@ -13,6 +13,7 @@ import { bootstrapOrganizationAuthorityState } from '../src/composition/organiza
 import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from '../src/composition/person-onboarding-service.js';
 import { startOrganizationAuthorityApiRuntime } from '../src/composition/organization-authority-api-runtime.js';
 import { openJiraPersonLiveRuntimeV1 } from '../src/composition/jira-person-live-runtime-v1.js';
+import { LEGACY_SLACK_CONNECTOR_V1, LEGACY_TICKET_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
 import type { PersonLiveConnectorDefinitionV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
 import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
@@ -58,7 +59,7 @@ it('selects the Slack live runtime for authenticated Ask without inventing a dis
   const close = vi.fn();
   const slack_live_runtime_factory = vi.fn(() => ({ application: { source }, close }));
   const generate = vi.fn(async () => ({ parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }));
-  const dependencies = { oidc_provider: f.oidc, slack_live_runtime_factory, answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } } };
+  const dependencies = { oidc_provider: f.oidc, live_connectors: [{ ...LEGACY_SLACK_CONNECTOR_V1, open: slack_live_runtime_factory }], answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } } };
   const runtime = await startOrganizationAuthorityApiRuntime(f.config, dependencies);
   try {
     const origin = `http://127.0.0.1:${runtime.address.port}`;
@@ -196,9 +197,11 @@ async function allSourceFixture() {
   });
   const runtime = await startOrganizationAuthorityApiRuntime(f.config, {
     oidc_provider: f.oidc,
-    ticket_live_runtime_factory: sessions => openJiraPersonLiveRuntimeV1({ state_directory: f.initialized.state_directory, sessions,
-      configuration: { enabled: true, cloud_id: FIXTURE_JIRA_CLOUD_V1, integration_id: 'jira', nango_authorization: () => 'synthetic-only-nango-authorization' }, seams: { nango: live.jira.nango, fetch: live.jiraFetch } }),
-    slack_live_runtime_factory: live.slackFactory,
+    live_connectors: [
+      { ...LEGACY_TICKET_CONNECTOR_V1, open: sessions => openJiraPersonLiveRuntimeV1({ state_directory: f.initialized.state_directory, sessions,
+        configuration: { enabled: true, cloud_id: FIXTURE_JIRA_CLOUD_V1, integration_id: 'jira', nango_authorization: () => 'synthetic-only-nango-authorization' }, seams: { nango: live.jira.nango, fetch: live.jiraFetch } }) },
+      { ...LEGACY_SLACK_CONNECTOR_V1, open: live.slackFactory },
+    ],
     answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 25_000 } },
   });
   const origin = `http://127.0.0.1:${runtime.address.port}`;

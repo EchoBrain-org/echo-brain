@@ -18,7 +18,6 @@
     "providers/confluence/client/src/**"
   ],
   "allowed_workspace_packages": [
-    "@echo-brain/federation-protocol",
     "@echo-brain/organization-api"
   ],
   "allowed_external_packages": [],
@@ -32,7 +31,6 @@
         "providers/confluence/client/src/**"
       ],
       "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol",
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],

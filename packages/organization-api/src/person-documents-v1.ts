@@ -10,7 +10,6 @@ export const PERSON_DOCUMENT_MAX_ORIGINAL_BYTES = 25 * 1024 * 1024;
 export const PERSON_DOCUMENT_TRANSFER_DEADLINE_MS = 10 * 60 * 1000;
 /** Maximum interval without request or response socket progress during transfer. */
 export const PERSON_DOCUMENT_TRANSFER_IDLE_TIMEOUT_MS = 60 * 1000;
-export const PERSON_DOCUMENT_TEXT_PAGE_MAX_BYTES = 8 * 1024;
 export const PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES = 2 * 1024 * 1024;
 export const PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES = 3 * 1024;
 export type PersonDocumentMediaTypeV1 = 'text/plain' | 'text/markdown' | 'application/pdf' | 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';

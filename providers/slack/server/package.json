@@ -5,10 +5,6 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    "./organization-control-plane/persistence/sqlite-slack-active-connection-v1": {
-      "types": "./dist/organization-control-plane/persistence/sqlite-slack-active-connection-v1.d.ts",
-      "import": "./dist/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js"
-    },
     "./organization-protocol/private-slack-block-approval-record-input-v1": {
       "types": "./dist/organization-protocol/private-slack-block-approval-record-input-v1.d.ts",
       "import": "./dist/organization-protocol/private-slack-block-approval-record-input-v1.js"

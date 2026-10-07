@@ -364,18 +364,6 @@ export function atomsAtHead(corpus, exactHead) {
   return Object.freeze(atoms);
 }
 
-export function headForPosition(corpus, position) {
-  if (!Number.isInteger(position) || position < 0 || position > corpus.atoms.length) {
-    throw new Error("head position is outside corpus");
-  }
-  const atoms = corpus.atoms.filter((atom) => atom.log_position <= position);
-  return Object.freeze({
-    lineage_id: corpus.lineage_id,
-    position,
-    hash: digest(atoms.map((atom) => atom.record_hash)),
-  });
-}
-
 export function assertCorpusShape(corpus) {
   const expected = milestoneShape(corpus.milestone);
   if (corpus.atoms.length !== expected.atoms) throw new Error("corpus atom count differs from milestone");

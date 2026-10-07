@@ -62,9 +62,6 @@ The shared implementation packages are `packages/organization-processing` and
 
 | Workspace | Scope |
 | --- | --- |
-| `providers/openai` | OpenAI transport and processor factory |
-| `providers/anthropic` | Anthropic transport and processor factory |
-| `providers/ollama` | Ollama transport and processor factory |
 | `providers/openrouter` | OpenRouter processing, generation and model vocabulary |
 | `providers/granola` | Transport-free Granola meeting normalization retained for the personal integration |
 | `providers/jira` | Person-bound Jira Nango connection store and HTTP application, gated live reader and context source; [authentication and support boundary](../../providers/jira/README.md) |

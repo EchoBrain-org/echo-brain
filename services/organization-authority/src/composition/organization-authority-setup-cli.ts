@@ -8,7 +8,7 @@ import { admitStagingCanaryMeetingSourceV1, stagingCanaryMeetingSourceIdentityV1
  */
 import { captureCommand } from '@echo-brain/organization-authority-kernel/composition/capture-stopped-state-command';
 import { plannedSlackConnectionIsActiveV1, readInitialOwnerSlackSetupStatusV1 } from '@echo-brain/provider-slack-server/setup/initial-owner-slack-setup-v1';
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   closeSync,
   constants,
@@ -32,6 +32,7 @@ import {
   canonicalJson,
   canonicalSha256,
   federationId,
+  sha256Digest,
 } from "@echo-brain/federation-protocol";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 
@@ -706,10 +707,6 @@ function validPkceKeyPresent(path: string): boolean {
   }
 }
 
-function sha256Secret(value: string): `sha256:${string}` {
-  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
-}
-
 function usableInitialOwnerInvitation(
   manifest: OrganizationAuthoritySetupManifestV3,
 ): boolean {
@@ -772,7 +769,7 @@ function usableInitialOwnerInvitation(
             AND consumed_at IS NULL AND invalidated_at IS NULL AND expires_at > ?
           LIMIT 1`,
       ).get(
-        sha256Secret(invitation.login_grant),
+        sha256Digest(invitation.login_grant),
         manifest.organization_id,
         manifest.owner_principal_id,
         manifest.owner_membership_id,

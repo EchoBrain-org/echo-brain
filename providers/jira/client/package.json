@@ -29,7 +29,6 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@echo-brain/federation-protocol": "0.0.0-dev.0",
     "@echo-brain/organization-api": "0.0.0-dev.0"
   },
   "engines": {

@@ -30,6 +30,7 @@ import {
   personUnknownScopeV1,
 } from "./person-original-access-v1.js";
 import { assertPersonTextCustodyV1, type PersonTextCustodyRowV1 } from "./person-text-source-v1.js";
+import { isCanonicalUtcMillisTimestampV1 } from "../../../application/canonical-utc-timestamp-v1.js";
 
 /** One page of 25 plus the row that proves another page exists. */
 const MAXIMUM_COLLECT = 26;
@@ -40,7 +41,6 @@ const MAXIMUM_OPEN_CANONICAL_BYTES = 20 * 1024;
 const MAXIMUM_ORDINAL = 65_535;
 const NOTE_ID = /^(?:ctx|cap)_[0-9a-f]{64}$/;
 const DOCUMENT_ID = /^doc_[0-9a-f]{64}$/;
-const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const GLOBAL: PersonAskScopeV2 = Object.freeze({ kind: "global" });
 const NOT_QUARANTINED = "NOT EXISTS (SELECT 1 FROM authority_person_text_source_failures_v1 f WHERE f.organization_id=u.organization_id AND f.api_version=u.api_version AND f.context_id=u.context_id)";
 
@@ -87,13 +87,9 @@ function unavailable(): never {
   throw new AuthorityOperationError("unavailable", "person items are unavailable");
 }
 
-function canonicalTime(value: unknown): value is string {
-  return typeof value === "string" && CANONICAL_TIME.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
-}
-
 function position(value: PersonItemPositionV1 | null | undefined, id: RegExp): PersonItemPositionV1 | null {
   if (value === null) return null;
-  if (value === undefined || typeof value !== "object" || !canonicalTime(value.added_at) || typeof value.id !== "string" || !id.test(value.id)) invalid();
+  if (value === undefined || typeof value !== "object" || !isCanonicalUtcMillisTimestampV1(value.added_at) || typeof value.id !== "string" || !id.test(value.id)) invalid();
   return Object.freeze({ added_at: value.added_at, id: value.id });
 }
 
@@ -284,7 +280,7 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
     for (const row of rows) {
       // A retained note that no longer binds its accepted request stops the list; the inbox quarantines it.
       try { assertPersonTextCustodyV1(row); } catch { unavailable(); }
-      if (!canonicalTime(row.received_at) || !NOTE_ID.test(row.context_id)) unavailable();
+      if (!isCanonicalUtcMillisTimestampV1(row.received_at) || !NOTE_ID.test(row.context_id)) unavailable();
     }
     const projects = this.associations("authority_project_context_associations_v1", "context_id", actor, rows.map((row) => row.context_id), grants);
     const notes = rows.map((row) => Object.freeze({
@@ -314,7 +310,7 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
       WHERE d.organization_id=? AND ${acl.sql} ${scoped.sql} ${tail.sql}`)
       .all(actor.organization_id, ...acl.args, ...scoped.args, ...tail.args) as DocumentCustodyRow[];
     // The keyset compares stored text, so a non-canonical time would misorder the list.
-    for (const row of rows) if (!canonicalTime(row.received_at) || !DOCUMENT_ID.test(row.document_id)) unavailable();
+    for (const row of rows) if (!isCanonicalUtcMillisTimestampV1(row.received_at) || !DOCUMENT_ID.test(row.document_id)) unavailable();
     const projects = this.associations("authority_person_document_associations_v1", "document_id", actor, rows.map((row) => row.document_id), grants);
     return Object.freeze(rows.map((row) => Object.freeze({
       row: Object.freeze({

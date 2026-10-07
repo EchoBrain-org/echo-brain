@@ -9,7 +9,6 @@ import { canonicalJson, readCleanV1Release } from './clean-v1-release.mjs';
 import { parseUpdateConfig, parseUpdateManifest, updateDigest, verifyUpdateEnvelope, UPDATE_ARTIFACT_LIMIT, UPDATE_METADATA_LIMIT } from '../src/product/person-client/dist/client-update-contract.js';
 import { extractClientUpdateKit, validateClientUpdateRelease } from '../src/product/person-client/dist/client-update-kit.js';
 
-const KIT_FILES = ['Start-ECHO.sh', 'node', 'release.json', 'kit-manifest.v1.json', 'person-client.tgz', 'build-identity.v1.json', 'verify-person-onboarding-kit.mjs', 'clean-v1-release.mjs'];
 const KIT_TARGETS = {
   linux: {
     platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'cli-kit',

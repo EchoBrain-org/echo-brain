@@ -10,7 +10,6 @@ import {
   isStagingSyntheticMeetingCanaryEnvelopeV1,
   isStagingSyntheticMeetingCanaryEnvelopeV2,
   stagingSyntheticMeetingCanaryInputFromEnvelopeV1,
-  stagingSyntheticMeetingCanaryInputFromEnvelopeV2,
   stagingSyntheticMeetingCanarySourceIdentityV1 as envelopeSourceIdentity,
   type StagingSyntheticMeetingCanaryInputV1,
   type StagingSyntheticMeetingCanaryInputV2,
@@ -118,19 +117,6 @@ export function assertStagingSyntheticMeetingCanaryV2(
     }
   } catch {
     throw new Error("meeting is not the fixed staging synthetic canary V2");
-  }
-}
-
-export function isStagingSyntheticMeetingCanaryV2(
-  meeting: MeetingDocument,
-  cursor: string,
-): boolean {
-  try {
-    assertStagingSyntheticMeetingCanaryV2(meeting);
-    const input = stagingSyntheticMeetingCanaryInputFromEnvelopeV2(meeting);
-    return input !== undefined && cursor === `synthetic-staging-canary:v2:${input.canary_id}`;
-  } catch {
-    return false;
   }
 }
 

@@ -204,7 +204,7 @@ export function providerStatusError(
   );
 }
 
-export async function requestProviderJson(
+async function requestProviderJson(
   profile: LlmTransportProfile,
   url: string,
   init: RequestInit,

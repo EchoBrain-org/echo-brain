@@ -1,6 +1,6 @@
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { type PersonSourceReadScopeV1 } from './person-answer-v3.js';
-import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
+import { validateProjectIdV1 } from './project-context-v1.js';
 import {
   asEnumerableRecord as object,
   assertDigest,
@@ -95,4 +95,3 @@ export function validatePersonMeetingTranscriptV1(value: unknown): PersonMeeting
   return result;
 }
 
-export type PersonMeetingTranscriptProjectScopeV1 = { readonly kind: 'project'; readonly project_id: ProjectIdV1 };

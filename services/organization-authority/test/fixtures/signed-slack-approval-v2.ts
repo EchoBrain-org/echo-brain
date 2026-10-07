@@ -34,8 +34,8 @@ import {
   PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3,
   PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND,
   PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND,
-  buildPrivateSlackBlockApprovalRecordInputV2,
-  buildPrivateSlackBlockApprovalRecordInputV3,
+  validatePrivateSlackBlockApprovalRecordInputV2,
+  validatePrivateSlackBlockApprovalRecordInputV3,
   privateSlackBlockApprovalConsequenceV2Sha256,
 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v2";
 import { projectPrivateSlackBlockApprovalApproverV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
@@ -167,11 +167,11 @@ export async function approveSignedSlackV2(
     : { kind: "rejected" as const };
   const built = input.action_owners === undefined
     ? (() => {
-      const value = buildPrivateSlackBlockApprovalRecordInputV2({ private_slack_block_approval_resolution_ref_v2: ref, event });
+      const value = validatePrivateSlackBlockApprovalRecordInputV2({ private_slack_block_approval_resolution_ref_v2: ref, event });
       return { key: value.semantic_idempotency_key, record: { private_slack_block_approval_resolution_ref_v2: value.private_slack_block_approval_resolution_ref_v2, event: value.event } };
     })()
     : (() => {
-      const value = buildPrivateSlackBlockApprovalRecordInputV3({
+      const value = validatePrivateSlackBlockApprovalRecordInputV3({
         private_slack_block_approval_resolution_ref_v3: { ...ref, schema_version: 3, kind: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND, action_owners: input.action_owners! },
         event,
       });

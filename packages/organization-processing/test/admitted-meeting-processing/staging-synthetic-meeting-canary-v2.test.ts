@@ -7,7 +7,6 @@ import {
   createStagingSyntheticMeetingCanaryV2,
   isStagingSyntheticMeetingCanary,
   isStagingSyntheticMeetingCanaryV1,
-  isStagingSyntheticMeetingCanaryV2,
   stagingSyntheticMeetingCanaryCursor,
 } from "../../src/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
 
@@ -46,7 +45,6 @@ describe("staging synthetic meeting canary V2", () => {
       isStagingSyntheticMeetingCanary(v2, "synthetic-staging-canary:v2:private-dm"),
     ).toBe(true);
     expect(isStagingSyntheticMeetingCanaryV1(v1, "synthetic-staging-canary:v1:private-dm")).toBe(true);
-    expect(isStagingSyntheticMeetingCanaryV2(v2, "synthetic-staging-canary:v2:private-dm")).toBe(true);
   });
 
   it("rejects any transcript or provenance change from the V2 fixed envelope", () => {

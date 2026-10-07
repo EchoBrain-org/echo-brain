@@ -27,8 +27,8 @@ The metric components are:
 | --- | --- |
 | `metrics.v4.json`, `verify-contract.mjs` | Pin the core-only contract and verify its formulas; `metrics.v2.json` and `metrics.v3.json` are frozen predecessors. |
 | `corpus-v1.mjs` | Generate provider-free history templates and logical postings. |
-| `oracle-v1.mjs` | Independently check ranking (BM25 fixed-point, ADR-0011), observed heads, content, policy ownership and the complete index. |
-| `grading.mjs` | Score every offered operation for diagnostics; failed work is infinite latency. It cannot award a milestone. |
+| `oracle-v1.mjs` | Independently reimplement ranking (BM25 fixed-point, ADR-0011) and build held-out query plans for the oracle/engine agreement test. |
+| `grading.mjs` | Nearest-rank p95 used by the ranking diagnostic; failed work counts as infinite latency. |
 | `retrieval-quality.mjs` | Measure target recall and rank through the real search engine, using the existing corpus generator. |
 | `search-generation-fixture.mjs` | Build, warm and clean up one real generation for the ranking benchmark and oracle agreement test. |
 
@@ -66,9 +66,8 @@ The frozen V4 definition names the test's original location under
 `tools/evals/retrieval-quality/test/`; it now lives at
 `test/oracle-engine-agreement.test.mjs`. The V4 rules and pins are unchanged.
 
-`grading.mjs` is diagnostic arithmetic only. Its measurement result is never a
-qualification or milestone result: the actual run-integrity verifier and
-milestone protocol remain unimplemented.
+No measurement scorer, run-integrity verifier or milestone protocol is
+implemented; nothing here can issue a qualification or milestone result.
 
 No core latency improvement, M1 pass or usable N/history limit has been
 established. The earlier provider

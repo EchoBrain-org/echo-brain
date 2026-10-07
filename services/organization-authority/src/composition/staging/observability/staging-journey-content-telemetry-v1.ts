@@ -1,4 +1,5 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
+import { isCanonicalUtcTimestampV1 } from "../../../application/canonical-utc-timestamp-v1.js";
 
 export const STAGING_JOURNEY_CONTENT_KIND_V1 =
   "echo-authority-journey-content-v1" as const;
@@ -46,12 +47,6 @@ const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const GIT_COMMIT_SHA = /^[0-9a-f]{40}$/;
 
-function isCanonicalUtcTimestamp(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
-}
-
 function formatContentIdentity(input: Pick<StagingJourneyContentRecordInputV1,
   "journey_id" | "sequence" | "observed_at" | "release_sha" | "build_number"
 >) {
@@ -60,7 +55,7 @@ function formatContentIdentity(input: Pick<StagingJourneyContentRecordInputV1,
     !UUID_V4.test(input.journey_id) ||
     !Number.isSafeInteger(input.sequence) ||
     input.sequence < 1 ||
-    !isCanonicalUtcTimestamp(input.observed_at) ||
+    !isCanonicalUtcTimestampV1(input.observed_at) ||
     typeof input.release_sha !== "string" ||
     !GIT_COMMIT_SHA.test(input.release_sha) ||
     !Number.isSafeInteger(input.build_number) ||

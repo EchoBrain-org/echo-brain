@@ -12,7 +12,7 @@ function fail(message) {
   throw new Error(`ECHO onboarding kit: ${message}`);
 }
 
-function canonicalJson(value) {
+export function canonicalJson(value) {
   if (value === null) return 'null';
   if (typeof value === 'string') return JSON.stringify(value);
   if (typeof value === 'number') return JSON.stringify(value);

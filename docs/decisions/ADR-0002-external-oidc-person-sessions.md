@@ -26,7 +26,7 @@ updates:
 [ADR-0001](ADR-0001-organization-operated-server-core.md) moves processing
 to the organization-operated Authority and requires the thin client to act as
 a Person, not as an enrolled installation. The
-[server-core migration plan](../product/2026-08-17-server-core-migration-plan-v3.md)
+2026-08-17 server-core migration plan v3 (removed 2026-10-06; see git history)
 leaves one Phase-2 choice open: self-host identity and recovery, or delegate
 primary authentication to an external identity provider.
 
@@ -466,7 +466,7 @@ Phase 2 is not complete while any of these blockers remains:
   methods therefore remain live.
 
 The source facts for this disposition are the
-[machine-boundary audit](../product/2026-08-16-machine-boundary-audit.md), the
+2026-08-16 machine-boundary audit (removed 2026-10-06; see git history), the
 [Authority repository port](https://github.com/EchoBrain-org/echo-brain/blob/862419bbe6abccc66e9ac07dd8f14abe2e3c3653/services/organization-authority/src/application/ports/authority-repository.ts),
 the historical Authority migration ledger, record log schema, and control-plane
 schema recorded by this ADR. Those executable migrations were retired by the

@@ -22,7 +22,6 @@
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-api",
     "@echo-brain/organization-authority-kernel",
-    "@echo-brain/organization-processing",
     "@echo-brain/provider-jira-client",
     "@echo-brain/provider-runtime"
   ],
@@ -44,7 +43,6 @@
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-api",
         "@echo-brain/organization-authority-kernel",
-        "@echo-brain/organization-processing",
         "@echo-brain/provider-jira-client",
         "@echo-brain/provider-runtime"
       ],

@@ -424,15 +424,6 @@ describe("workspace source boundaries", () => {
         "@echo-brain/organization-authority-kernel",
         "@echo-brain/organization-processing"
       ],
-      "@echo-brain/provider-anthropic": [
-        "@echo-brain/organization-processing"
-      ],
-      "@echo-brain/provider-ollama": [
-        "@echo-brain/organization-processing"
-      ],
-      "@echo-brain/provider-openai": [
-        "@echo-brain/organization-processing"
-      ],
       "@echo-brain/provider-synthetic-demo": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-authority-kernel",
@@ -472,19 +463,16 @@ describe("workspace source boundaries", () => {
         "@echo-brain/provider-runtime"
       ],
       "@echo-brain/provider-confluence-client": [
-        "@echo-brain/federation-protocol",
         "@echo-brain/organization-api"
       ],
       "@echo-brain/provider-jira": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-api",
         "@echo-brain/organization-authority-kernel",
-        "@echo-brain/organization-processing",
         "@echo-brain/provider-jira-client",
         "@echo-brain/provider-runtime"
       ],
       "@echo-brain/provider-jira-client": [
-        "@echo-brain/federation-protocol",
         "@echo-brain/organization-api"
       ]
     });;
@@ -1216,15 +1204,15 @@ describe("workspace source boundaries", () => {
   it("checks whole modules for named, type, namespace, side-effect and re-export edges", () => {
     const fixture = fixtureRepository();
     const entry = join(fixture, "packages/federation-protocol/src/provider-probe.ts");
-    const target = "@echo-brain/provider-openai/llm/openai-client";
+    const target = "@echo-brain/provider-openrouter/llm/openrouter-decision-processor";
     for (const source of [
-      `import { OpenAiClient as Client } from '${target}'; export { Client };`,
-      `import type { OpenAiClient } from '${target}'; export type Client = OpenAiClient;`,
+      `import { createOpenRouterDecisionProcessor as Client } from '${target}'; export { Client };`,
+      `import type { createOpenRouterDecisionProcessor } from '${target}'; export type Client = typeof createOpenRouterDecisionProcessor;`,
       `import * as adapter from '${target}'; export { adapter };`,
       `import '${target}';`,
-      `export { OpenAiClient } from '${target}';`,
+      `export { createOpenRouterDecisionProcessor } from '${target}';`,
       `export * from '${target}';`,
-      `export type Client = import('${target}').OpenAiClient;`,
+      `export type Client = typeof import('${target}').createOpenRouterDecisionProcessor;`,
       `export const load = () => import('${target}');`,
     ]) {
       writeFileSync(entry, source);
@@ -1299,7 +1287,7 @@ describe("workspace source boundaries", () => {
   it("does not hide provider exports behind an unused name in a shared barrel", () => {
     const fixture = fixtureRepository();
     const barrel = join(fixture, "packages/organization-api/src/index.ts");
-    writeFileSync(barrel, readFileSync(barrel, "utf8") + "\nexport { OpenAiClient } from '@echo-brain/provider-openai/llm/openai-client';\n");
+    writeFileSync(barrel, readFileSync(barrel, "utf8") + "\nexport { createOpenRouterDecisionProcessor } from '@echo-brain/provider-openrouter/llm/openrouter-decision-processor';\n");
     const result = runBoundary(fixture);
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain("neutral module reaches provider: packages/organization-api/src/index.ts");
@@ -1309,8 +1297,8 @@ describe("workspace source boundaries", () => {
     const fixture = fixtureRepository();
     const cases = [
       ["packages/organization-api/src/direction-probe.ts", "../../../services/organization-authority/src/composition/organization-authority-setup-cli.js", "neutral module reaches bootstrap"],
-      ["providers/openai/src/direction-probe.ts", "../../../services/organization-authority/src/composition/organization-authority-runtime.js", "provider imports the composing service"],
-      ["providers/openai/src/direction-probe.ts", "@echo-brain/provider-anthropic/llm/anthropic-client", "cross-provider dependency"],
+      ["providers/openrouter/src/direction-probe.ts", "../../../services/organization-authority/src/composition/organization-authority-runtime.js", "provider imports the composing service"],
+      ["providers/openrouter/src/direction-probe.ts", "@echo-brain/provider-synthetic-demo/synthetic-demo-setup-evidence-v1", "cross-provider dependency"],
     ];
     for (const [path, target, failure] of cases) {
       const entry = join(fixture, path!);
@@ -1327,7 +1315,7 @@ describe("workspace source boundaries", () => {
     const fixture = fixtureRepository();
     const hidden = join(fixture, "packages/federation-protocol/src/test");
     mkdirSync(hidden);
-    writeFileSync(join(hidden, "bridge.ts"), "import '@echo-brain/provider-openai/llm/openai-client';\n");
+    writeFileSync(join(hidden, "bridge.ts"), "import '@echo-brain/provider-openrouter/llm/openrouter-decision-processor';\n");
     expect(runBoundary(fixture).stdout).toContain("neutral module reaches provider");
     rmSync(hidden, { recursive: true });
     const orphan = join(fixture, "packages/unregistered/src");
@@ -1377,9 +1365,9 @@ describe("workspace source boundaries", () => {
     writeFixtureJson(fixture, path, product);
     expect(runBoundary(fixture).stdout).toContain("bootstrap entrypoint must name a composing source module");
     (product.adapter_architecture.bootstrap_entrypoints as string[]).pop(); writeFixtureJson(fixture, path, product);
-    const packagePath = "providers/openai/package.json";
+    const packagePath = "providers/openrouter/package.json";
     const pkg = readFixtureJson<{ exports: Record<string, Record<string, string>> }>(fixture, packagePath);
-    pkg.exports["./llm/openai-client"]!.node = "./dist/another-entry.js";
+    pkg.exports["./llm/openrouter-decision-processor"]!.node = "./dist/another-entry.js";
     writeFixtureJson(fixture, packagePath, pkg);
     expect(runBoundary(fixture).stdout).toContain("requires an explicit workspace export");
   });
