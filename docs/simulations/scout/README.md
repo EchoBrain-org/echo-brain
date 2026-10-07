@@ -12,7 +12,7 @@ SCOUT is a fictional AI-assisted indoor courier robot used to exercise coordinat
 
 Use the full v0.1 pair for the document-capable kickoff. The 11,284-byte PRD exceeds the 8,192-byte text-note limit, so add it as a file: the document path accepts UTF-8 text/Markdown, PDF and Word `.docx` originals up to 25 MiB. That path is implemented but has not yet been accepted on this Mac or Authority. Complete the document upload acceptance checks before following the kickoff steps below.
 
-The [MRD v0.2](SCOUT-MRD-v0.2.md) and [PRD v0.2](SCOUT-PRD-v0.2.md) are condensed alternatives prepared for the old limit. They retain the scope and requirement IDs, but are not a substitute for proving full-document support. Record the actual chosen version consistently if using them for an interim rehearsal.
+The [PRD v0.2](SCOUT-PRD-v0.2.md) is a condensed alternative prepared for the old limit. It retains the scope and requirement IDs, but is not a substitute for proving full-document support. Its companion MRD v0.2 was removed; retrieval tests use it to check version-mismatch detection against MRD v0.1.
 
 ## Start in the ECHO desktop app on this Mac
 

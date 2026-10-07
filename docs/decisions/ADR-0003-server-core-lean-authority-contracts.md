@@ -28,7 +28,7 @@ updates:
 
 This ADR was proposed and was superseded before acceptance. It records the
 decision that would have closed D1, D2, D3, D4, and D6 of the
-[server-core lean-down plan](../product/2026-08-20-server-core-migration-lean-down-plan-v4.md),
+2026-08-20 server-core lean-down plan v4 (removed 2026-10-06; see git history),
 but it never accepted that decision.
 
 The normative candidate is

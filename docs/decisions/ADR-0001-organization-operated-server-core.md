@@ -70,7 +70,7 @@ than assumptions:
   to lead with; sources trend org-tenant.
 
 Options weighed (full table and reasoning in
-[server-core migration plan v3](../product/2026-08-17-server-core-migration-plan-v3.md)):
+the 2026-08-17 server-core migration plan v3 (removed 2026-10-06; see git history)):
 
 | Option | Processing | Custody operator | Deletes |
 | --- | --- | --- | --- |
@@ -189,7 +189,7 @@ gates phase 5 quantitatively.
 ## Migration, rollback, and evidence
 
 The phased path, with per-phase entry, exit, kill, and hold criteria, is
-[server-core migration plan v3](../product/2026-08-17-server-core-migration-plan-v3.md).
+the 2026-08-17 server-core migration plan v3 (removed 2026-10-06; see git history).
 Phase 0 ends with this ADR; phase 1 is authorized on its acceptance.
 
 **Evidence.** An isolated, test-gated spike executed the mechanical half of

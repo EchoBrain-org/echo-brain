@@ -257,8 +257,8 @@ the trusted server context and remains covered by these cases.
   proposes the exact replacement contracts that would enforce the full chain.
 - [ADR-0006](../decisions/ADR-0006-permission-aware-clean-v1-completion.md)
   accepts the clean V1 enforcement scope; this invariant remains partial outside that scope.
-- The [Phase 0 closure ledger](../product/2026-08-20-server-core-migration-phase-0-closure.md)
+- The 2026-08-20 Phase 0 closure ledger (removed 2026-10-06; see git history)
   owns the stage-by-stage identity-edge inventory and deletion gates.
-- The [Phase 0 test-contract inventory](../product/2026-08-20-server-core-migration-phase-0-test-contract-inventory.md)
+- The 2026-08-20 Phase 0 test-contract inventory (removed 2026-10-06; see git history)
   names the missing end-to-end and mutation proof. No current qualification
   report is proof of the final lineage.

@@ -11,8 +11,8 @@ Tests live beside the narrowest active component they exercise:
   and response behavior.
 - `project-context-*` suites and `project-context-integration/` cover project
   storage, application commands, HTTP transport and the synthetic harness.
-- The top-level `authority-*` suites cover baselines, state lineage and the
-  offline copiers.
+- The top-level `authority-state-lineage-initializer` suite covers baselines
+  and state-lineage initialization.
 
 Use `npm run test:authority` for the workspace. The provider-neutral
 processing core and the durable meeting-processing cycle are tested in

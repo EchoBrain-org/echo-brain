@@ -29,7 +29,7 @@ governs implementation. The proposal below is retained unchanged.
 
 This RFC is the coordinated Phase-0 candidate for decisions D1, D2, D3, D4,
 and D6 in the
-[server-core lean-down plan](../product/2026-08-20-server-core-migration-lean-down-plan-v4.md).
+2026-08-20 server-core lean-down plan v4 (removed 2026-10-06; see git history).
 It is a proposal, not an accepted decision, implementation claim, deletion
 authorization, cutover authorization, or qualification report.
 
@@ -41,7 +41,7 @@ requires a new digest and a new disposition. Only an accepted ADR may put these
 contracts in force.
 
 The pending
-[server-core actor amendment v1](../product/2026-08-18-organization-permission-constitution-server-core-amendment-proposal.md)
+2026-08-18 server-core actor amendment v1 proposal (removed 2026-10-06; see git history)
 is not accepted by this RFC. RFC-0001 proposes a complete v2 replacement so
 that service read authority and record-write authority are both explicit.
 Constitution v1 and all installation-bearing policy, envelope, receipt, and

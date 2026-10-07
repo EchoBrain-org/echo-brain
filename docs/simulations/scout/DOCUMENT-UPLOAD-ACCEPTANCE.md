@@ -6,9 +6,9 @@ The PM must be able to upload ordinary project documents without shortening thei
 
 ## Source artifacts
 
-Use the full [MRD v0.1](SCOUT-MRD-v0.1.md) and [PRD v0.1](SCOUT-PRD-v0.1.md) as regression inputs, as well as the current [MRD v0.2](SCOUT-MRD-v0.2.md) and [PRD v0.2](SCOUT-PRD-v0.2.md). The original v0.1 PRD exceeds 8 KiB and must not require shortening or splitting. Any PDF or DOCX export must preserve the source version, requirement IDs and planning qualifications.
+Use the full [MRD v0.1](SCOUT-MRD-v0.1.md) and [PRD v0.1](SCOUT-PRD-v0.1.md) as regression inputs, as well as the condensed [PRD v0.2](SCOUT-PRD-v0.2.md). The original v0.1 PRD exceeds 8 KiB and must not require shortening or splitting. Any PDF or DOCX export must preserve the source version, requirement IDs and planning qualifications.
 
-The v0.2 files were condensed for the earlier text-only path; their smaller size is not evidence that larger documents are supported.
+The v0.2 PRD was condensed for the earlier text-only path; its smaller size is not evidence that larger documents are supported.
 
 ## Acceptance matrix
 
