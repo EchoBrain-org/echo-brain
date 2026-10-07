@@ -1,6 +1,6 @@
--- Authority baseline V11: independent personal meeting-source progress,
+-- Authority baseline V12: independent personal meeting-source progress,
 -- plus project context, raw Person uploads, and optional search enrichment.
--- Fresh initialization only; no V10-to-V11 transition or backfill exists, and
+-- Fresh initialization only; no V11-to-V12 transition or backfill exists, and
 -- this file is never an in-place upgrade.
 
 CREATE TABLE authority_metadata (
@@ -2162,7 +2162,7 @@ BEGIN
    WHERE organization_id = OLD.organization_id;
 END;
 
-PRAGMA user_version = 11;
+PRAGMA user_version = 12;
 
 -- A malformed legacy retained note must not pin the source-admission worker.
 -- The disposition carries no title, body, request ID or exception text.

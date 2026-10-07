@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { applyAuthorityBaselineV11 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { applyAuthorityBaselineV12 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { bindApprovalWorkflowStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1';
 import { applyOrganizationRecordLogBaselineV4, OrganizationRecordAppenderV4, createRecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
@@ -24,7 +24,7 @@ export async function personMeetingReviewFixture(project = false): Promise<{
   request: PersonMeetingReviewActionV1; context: ApprovalWorkflowContextV1;
 }> {
   const authority = testAuthority();
-  const db = new Database(':memory:'); db.pragma('foreign_keys=ON'); opened.push(db); applyAuthorityBaselineV11(db);
+  const db = new Database(':memory:'); db.pragma('foreign_keys=ON'); opened.push(db); applyAuthorityBaselineV12(db);
   const old = sourceFixture();
   const actor = { organization_id: authority.descriptor.organization_id, principal_id: 'prn_00000000-0000-4000-8000-000000000003', membership_id: 'mem_00000000-0000-4000-8000-000000000004', authorization_sha256: canonicalSha256('session proof') };
   const substitutions: Record<string, string> = { org_test: actor.organization_id, oau_test: authority.descriptor.authority_id, prn_test: actor.principal_id, mem_test: actor.membership_id };

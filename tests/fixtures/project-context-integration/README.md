@@ -3,7 +3,7 @@
 `scenario.ts` supplies only invented people and original text. Alice belongs to
 Alpha and Beta, Bob to Alpha, Carol to Beta, and Dana initially to neither.
 The harness generates opaque project/context identifiers through the real
-repository and commits its state to a disposable temporary V11 database.
+repository and commits its state to a disposable temporary V12 database.
 
 Run from the repository root:
 

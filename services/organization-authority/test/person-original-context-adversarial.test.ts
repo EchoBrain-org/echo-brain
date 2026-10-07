@@ -34,7 +34,7 @@ function fixture() {
   const database = new Database(":memory:");
   databases.push(database);
   database.pragma("foreign_keys=ON");
-  database.exec(readFileSync(new URL("../../../packages/organization-authority-kernel/baselines/authority-baseline-v11.sql", import.meta.url), "utf8"));
+  database.exec(readFileSync(new URL("../../../packages/organization-authority-kernel/baselines/authority-baseline-v12.sql", import.meta.url), "utf8"));
   database.prepare(`INSERT INTO authority_metadata
     (singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at)
     VALUES (1,'oau_original_context',?,'Original context fixture','{}',?,?)`).run(OWNER.organization_id, PROJECT_CONTEXT_NOW, PROJECT_CONTEXT_NOW);

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { PrivateSlackDmApprovalStagerV1 } from "../../src/private-approval/private-slack-dm-approval-stager-v1.js";
 import type { ApprovalWorkflowStageInputV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
 import { meetingSourceEnvelopeV1, sourceContentSha256V1 } from "@echo-brain/organization-processing/core";
-import { applyAuthorityBaselineV11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV12 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { SqlitePrivateSlackApprovalAssignmentStateV1 } from "../../src/private-approval/sqlite-private-slack-approval-assignment-state-v1.js";
 
@@ -32,7 +32,7 @@ const input = {
 describe("private Slack DM approval stager V2", () => {
   it("fails closed before provider I/O when a real meeting has no retained source revision", async () => {
     const database = openAuthorityDatabase(":memory:");
-    applyAuthorityBaselineV11(database);
+    applyAuthorityBaselineV12(database);
     const prepareApprovalPost = vi.fn();
     const poster = {
       openDirectMessage: vi.fn(), postMarker: vi.fn(), reconcileMarker: vi.fn(),
@@ -70,7 +70,7 @@ describe("private Slack DM approval stager V2", () => {
       control_approval_sha256: null, superseded_by_candidate_id: null, superseded_at: null, tombstoned_at: null,
     } as any;
     const authorityDatabase = openAuthorityDatabase(":memory:");
-    applyAuthorityBaselineV11(authorityDatabase);
+    applyAuthorityBaselineV12(authorityDatabase);
     authorityDatabase.pragma("foreign_keys = OFF");
     const source = meetingSourceEnvelopeV1(input.meeting);
     authorityDatabase.prepare(`INSERT INTO authority_metadata (singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES (1,'oau_1','org_1','Org','{}',?,?)`).run(NOW, NOW);
