@@ -612,6 +612,61 @@ fields jsonParse(@message) as e
 | display e.sequence, e.diagnostic.phase, e.event, e.diagnostic.result, e.elapsed_ms, e.diagnostic.counts.included_count, e.diagnostic.counts.ticket_retrieved_items, e.diagnostic.counts.ticket_context_items, e.diagnostic.counts.ticket_citations
 ```
 
+#### Identify which upstream rate-limited a live read
+
+New shared-transport releases add nested `http_request` spans beneath live
+evidence operations. Each span records a finite `upstream_service` (`nango`,
+`jira`, `confluence`, `granola`, or `other`) and `upstream_operation`. The
+`http_status` count is present only when that boundary received an HTTP
+response. If a Nango credential lookup fails before the Jira or Confluence
+request is sent, the outer provider span can fail without an HTTP status;
+the nested Nango span identifies the responding service.
+For these nested spans, `succeeded` means an HTTP response arrived; it can
+still carry `http_status: 429`. The surrounding evidence operation reports
+the rejected application outcome. Inspect the HTTP status for attribution.
+Nested HTTP spans remain in the journey log and Explorer timeline; EMF
+request counts and latency continue to describe only the root HTTP request.
+
+The safe projection also retains bounded numeric `upstream_retry_after_seconds`,
+`upstream_rate_limit`, `upstream_rate_remaining`, and
+`upstream_rate_reset_unix_seconds` when the corresponding non-beta headers are
+valid. A documented Atlassian `RateLimit-Reason` becomes the finite
+`upstream_rate_limit_reason` category (`burst`, `global_quota`, `tenant_quota`,
+`per_issue_write`, or `other`). Missing or invalid headers remain unknown.
+An unrecognized reason is `other`; its original text is never retained.
+
+For the exact failed request, use the bounded incident window and journey UUID:
+
+```text
+fields jsonParse(@message) as e
+| filter e.kind = "echo-authority-journey-stage-v1"
+| filter e.journey_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+| filter e.event != "started" and ispresent(e.diagnostic.upstream_service)
+| sort e.sequence asc
+| display e.sequence, e.diagnostic.upstream_service, e.diagnostic.upstream_operation, e.event, e.diagnostic.counts.http_status, e.diagnostic.upstream_rate_limit_reason, e.diagnostic.counts.upstream_retry_after_seconds, e.diagnostic.counts.upstream_rate_limit, e.diagnostic.counts.upstream_rate_remaining, e.diagnostic.counts.upstream_rate_reset_unix_seconds
+```
+
+Attribute a rejection to the service whose span actually received `429`.
+Use its reported limit/reason and retry delay to distinguish request bursts
+from quota exhaustion. The public [Nango request limiter](https://github.com/NangoHQ/nango/blob/master/packages/server/lib/middleware/ratelimit.middleware.ts)
+returns `429` with the three `X-RateLimit-*` headers and `Retry-After`.
+A Nango `429` without those headers identifies its HTTP boundary, but does
+not establish which hosted component rejected the request. Use the exact
+timestamp and operation in Nango's request logs for that remaining ambiguity.
+The published
+[Nango rate-limit contract](https://nango.dev/docs/reference/backend/backend-sdk/node#rate-limits)
+and [Atlassian rate-limit contract](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/)
+describe the response signals; do not substitute their default quotas for
+the live service's actual headers.
+
+These spans retain no URLs, connection IDs, tokens, raw header values,
+request bodies, or response bodies. Rejection bodies remain unread. No
+automatic retry or retrieval behavior changes are introduced. Historical
+events without upstream fields cannot retrospectively distinguish Nango
+from an Atlassian response. The server diagnostics require a release through
+the existing operator lane; regenerating the Explorer template alone does
+not instrument the live Authority.
+
 #### Opt-in development content and transport completeness
 
 `ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true` extends Ask capture to meeting

@@ -1644,6 +1644,20 @@ describe("core observation Explorer round trip", () => {
     });
   });
 
+  it("preserves bounded upstream rate-limit attribution and rejects arbitrary diagnostic metadata", async () => {
+    const diagnostic = JSON.stringify({ operation_id: id, span_id: "22222222-2222-4222-8222-222222222222", parent_span_id: null, phase: "http_request", purpose: "http_request", root: true, linked_journey_ids: [], counts: { upstream_retry_after_seconds: 30, upstream_rate_remaining: 0 }, result: "rate_limited", generation: null, upstream_service: "nango", upstream_operation: "connection_read", upstream_rate_limit_reason: "burst", private_header: "Bearer private" });
+    const startedEvent = event({ schema_version: 2, workflow: "core_runtime", stage: "core_operation", event: "started", outcome: null, elapsed_ms: 0, diagnostic_json: diagnostic, observed_at: "2026-09-02T11:58:59.000Z" });
+    const stageEvent = event({ schema_version: 2, sequence: 2, workflow: "core_runtime", stage: "core_operation", event: "failed", outcome: null, failure_class: "rate_limited", retryable: true, elapsed_ms: 1, diagnostic_json: diagnostic });
+    const client = new Client([{ queryId: "q" }, { status: "Complete", results: [startedEvent, stageEvent] }]);
+    await expect(handler(client)({ operation: "detail", journey_id: id })).resolves.toMatchObject({
+      stages: expect.arrayContaining([expect.objectContaining({ diagnostic: expect.objectContaining({ upstream_service: "nango", upstream_operation: "connection_read", upstream_rate_limit_reason: "burst", counts: expect.objectContaining({ upstream_retry_after_seconds: 30, upstream_rate_remaining: 0 }) }) })]),
+    });
+    const invalid = JSON.stringify({ operation_id: id, span_id: "22222222-2222-4222-8222-222222222222", parent_span_id: null, phase: "http_request", purpose: "http_request", root: true, linked_journey_ids: [], counts: {}, result: null, generation: null, upstream_service: "https://private.example" });
+    const invalidEvent = event({ schema_version: 2, workflow: "core_runtime", stage: "core_operation", event: "started", outcome: null, elapsed_ms: 0, diagnostic_json: invalid });
+    const invalidClient = new Client([{ queryId: "q" }, { status: "Complete", results: [invalidEvent] }]);
+    await expect(handler(invalidClient)({ operation: "detail", journey_id: id })).resolves.toEqual({ error: "journey_explorer_unavailable" });
+  });
+
   it.each((["ticket", "slack", "page"] as const).flatMap(source =>
     (["evidence_connection", "evidence_list", "evidence_open"] as const).map(phase => ({ source, phase })),
   ))("preserves the $source source on real transported $phase observations", async ({ source, phase }) => {

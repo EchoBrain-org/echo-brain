@@ -1,5 +1,5 @@
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../../../../tests/support/telemetry-fixture-vocabulary-v1.js";
-import { currentCoreRuntimeDetailV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { annotateCoreRuntimeV1, currentCoreRuntimeDetailV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -13,6 +13,7 @@ import {
   formatJourneyTelemetryMetricsV1,
   STAGING_JOURNEY_METRICS_NAMESPACE_V1,
 } from "../../../../src/composition/staging/observability/staging-journey-metrics-v1.js";
+import { createStagingJourneyTelemetryTransportV1 } from "../../../../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
 
 const JOURNEY_ID = "1b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
 const RELEASE_SHA = "a".repeat(40);
@@ -58,6 +59,49 @@ function metric(record: Record<string, unknown>, name: string): unknown {
 }
 
 describe("staging journey EMF metrics v1", () => {
+  it("keeps child HTTP diagnostics in logs without changing ingress metrics", async () => {
+    const lines: string[] = [];
+    const transport = createStagingJourneyTelemetryTransportV1(
+      { release_sha: RELEASE_SHA, build_number: 123 },
+      { write: (line) => { lines.push(line); }, now: () => OBSERVED_AT },
+      { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
+    );
+    observeCoreRuntimeSyncV1("http_request", () => {
+      observeCoreRuntimeSyncV1("http_request", () => {
+        annotateCoreRuntimeV1({
+          upstream_service: "nango",
+          upstream_operation: "connection_read",
+          counts: { http_status: 429, upstream_retry_after_seconds: 41 },
+        });
+      });
+      annotateCoreRuntimeV1({ counts: { http_status: 200 } });
+    }, transport.core_runtime);
+    // Journey observer delivery is intentionally deferred outside control flow.
+    await Promise.resolve();
+    transport.close();
+
+    const records = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    const events = records.filter((record) => record.kind === "echo-authority-journey-stage-v1") as unknown as JourneyTelemetryEventV1[];
+    const roots = events.filter((event) => event.diagnostic?.root);
+    const children = events.filter((event) => !event.diagnostic?.root);
+    expect(roots.map((event) => event.event)).toEqual(["started", "succeeded"]);
+    expect(children.map((event) => event.event)).toEqual(["started", "succeeded"]);
+    expect(children[1]?.diagnostic).toMatchObject({
+      upstream_service: "nango",
+      upstream_operation: "connection_read",
+      counts: { http_status: 429, upstream_retry_after_seconds: 41 },
+    });
+    expect(children.flatMap((event) => formatJourneyTelemetryMetricsV1(event, TELEMETRY_FIXTURE_VOCABULARY_V1))).toEqual([]);
+    const metrics = records.filter((record) => record._aws !== undefined);
+    expect(metrics).toEqual(roots.flatMap((event) => formatJourneyTelemetryMetricsV1(event, TELEMETRY_FIXTURE_VOCABULARY_V1)));
+    expect(metrics).toHaveLength(2);
+    expect(metrics[0]).toMatchObject({ workflow: "core_runtime", stage: "http_request", StageStarted: 1 });
+    expect(metrics[1]).toMatchObject({
+      workflow: "core_runtime", stage: "http_request", StageSucceeded: 1,
+      StageClosedLatencyMs: roots[1]!.elapsed_ms,
+    });
+  });
+
   it("keeps shared-build references in the existing meeting funnel without multiplying build latency", () => {
     const event = observeCoreRuntimeSyncV1("search_publication", () => createJourneyTelemetryEventV1({
       journey_id: JOURNEY_ID, sequence: 1, observed_at: OBSERVED_AT,
