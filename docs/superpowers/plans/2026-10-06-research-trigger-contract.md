@@ -95,7 +95,8 @@
 
 **Files:**
 - Create: `packages/organization-authority-kernel/src/answer-composition/agentic-brief-v1.ts`
-- Modify: `agentic-research-v1.ts`, `agentic-ask-v1-model-protocol.ts`, the loop module
+- Create: `packages/organization-authority-kernel/src/answer-composition/agentic-research-loop-v1.ts` (the loop module: brief in, full bundle out; the request closure becomes the runner)
+- Modify: `agentic-research-v1.ts`, `agentic-ask-v1-model-protocol.ts`, `agentic-ask-v1.ts`
 - Test: `agentic-brief-v1.test.ts`, updated `agentic-research-v1.test.ts`
 
 **Interfaces:**
@@ -143,6 +144,15 @@
 - [ ] Step 1: Failing tests: requests use the envelope. Check cases become `approved_record`, and their answer keys gain `relation` and `owner` per affected item. Card grading counts listed items, correct relations, correct owners, invented items or people, and reported gaps. The report prints loop and renderer numbers in separate sections. A saved run for an impact card contains the card and the trimmed bundle only.
 - [ ] Step 2: The endpoint returns `{ rendered, research }` for triggers with a renderer and `{ research }` for Sweep.
 - [ ] Step 3: README: Ask baselines remain comparable across this change; approved-record and Sweep baselines must be taken after it. `npm run check` passes. Commit `feat(evals): grade renderers separately from research`.
+
+### Task 6.2: Remove phase scaffolding
+
+After Task 6.1 is green. Phases 1-5 recorded frozen baselines to prove each move changed nothing; afterwards they mostly duplicate the Ask golden replays and pin internal detail that later legitimate changes would trip over.
+
+- [ ] Delete the frozen baselines and the tests that only compare against them (`renderers/__snapshots__/ask-renderer-v1.writer.json`, `__snapshots__/agentic-evidence-bundle-v1.research.json`, `__snapshots__/agentic-release-v1.audit.json`, and any later equivalent). Keep both Ask golden fixtures, the impact-card golden, and behaviour tests, rewritten as direct assertions where they lean on a baseline.
+- [ ] Share the golden scenario helpers from one test-fixture module instead of copies.
+- [ ] Over-engineering pass on the new modules: option fields nothing passes, leftover re-exports, duplicated helpers, `researchBundle()` if nothing needs it.
+- [ ] Golden replays unchanged and `npm run check` passes. Commit `chore(research): remove phase scaffolding`.
 
 ## Review Focus
 
