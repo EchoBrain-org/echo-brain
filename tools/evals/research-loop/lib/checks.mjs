@@ -87,7 +87,9 @@ export function codeChecks(testCase, run, dataset) {
  * Gaps reported are the judge's.
  *
  * A row is credited to a key entry through an item holding that entry's own
- * heading (a ticket is its own heading). Only when no row holds it does a
+ * heading (a ticket is its own heading). An item holding several keyed
+ * headings is credited to those whose relation the row gives, or, giving
+ * none, to the first of them as wrong. Only when no row is credited does a
  * continuation chunk count: the chunk after the heading, holding no keyed
  * heading of its own. So a chunk is judged against the section it carries.
  */
@@ -106,16 +108,20 @@ function cardChecks(testCase, card, items, meetings) {
     ])].map(name => ({ kind: "person", name })),
   ];
   const found = rows.filter(({ item }) => item !== undefined);
-  const holds = (item, ref) => itemMatches(item, ref, meetings) && sectionCovered(item, ref);
-  const keyedHeading = item => testCase.affected.some(entry => entry.refs.some(ref => ref.section !== undefined && holds(item, ref)));
+  const accepts = (entry, relation) => [entry.relation].flat().includes(relation);
+  const held = item => testCase.affected.filter(entry => entry.refs.some(ref => itemMatches(item, ref, meetings) && sectionCovered(item, ref)));
+  const credited = new Map(found.map(value => {
+    const entries = held(value.item);
+    const fitting = entries.filter(entry => accepts(entry, value.row.relation));
+    return [value, entries.length <= 1 ? entries : fitting.length > 0 ? fitting : entries.slice(0, 1)];
+  }));
   const affected = testCase.affected.map(entry => {
-    const heading = found.filter(({ item }) => entry.refs.some(ref => holds(item, ref)));
+    const heading = found.filter(value => credited.get(value).includes(entry));
     const carriers = new Set(entry.refs.flatMap(ref => satisfying(items, ref, meetings)));
-    const listing = (heading.length > 0 ? heading : found.filter(({ item }) => carriers.has(item) && !keyedHeading(item))).map(({ row }) => row);
-    const accepted = [entry.relation].flat();
+    const listing = (heading.length > 0 ? heading : found.filter(({ item }) => carriers.has(item) && held(item).length === 0)).map(({ row }) => row);
     return {
       id: entry.id, listed: listing.length > 0,
-      relation_correct: listing.length > 0 && listing.every(row => accepted.includes(row.relation)),
+      relation_correct: listing.length > 0 && listing.every(row => accepts(entry, row.relation)),
       owner_correct: listing.length > 0 && listing.every(row => (row.owner ?? null) === entry.owner),
     };
   });

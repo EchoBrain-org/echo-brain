@@ -78,6 +78,12 @@ test("approved-record keys give every affected item a relation and an owner, tak
   const t1Key = Object.fromEntries(records.find(entry => entry.id === "approved-record-t1-two-decimal-display").affected.map(item => [item.id, item.relation]));
   for (const id of ["a8", "a9", "a10", "a11", "a12", "a13"]) assert.equal(t1Key[id], "confirms", id);
   assert.deepEqual(t1Key.a1, ["conflicts", "needs_updating"]);
+  // TRACE-01 states the demoted SW-14c hypothesis and must record the fix owner; the change-management rule M4 goes against is not replaced.
+  const t3Key = Object.fromEntries(records.find(entry => entry.id === "approved-record-t3-bug-412-likely-cause").affected.map(item => [item.id, item.relation]));
+  assert.deepEqual([t3Key.a4, t3Key.a11], [["conflicts", "needs_updating"], "conflicts"]);
+  // M3 agrees the regression scope and gate authority are open and gives them owners and dates the registers lack.
+  const t2Key = Object.fromEntries(records.find(entry => entry.id === "approved-record-t2-dvt-review-decisions").affected.map(item => [item.id, item.relation]));
+  for (const id of ["a12", "a13", "a14", "a15", "a16", "a17"]) assert.deepEqual(t2Key[id], ["confirms", "needs_updating"], id);
   // Owners come from item details: only the four tickets assigned to the test person have one.
   const owned = records.flatMap(entry => entry.affected.filter(item => item.owner !== null).flatMap(item => item.refs.map(ref => ref.ticket)));
   assert.deepEqual([...new Set(owned)].sort(), ["THERM-47", "THERM-54"]);
@@ -231,6 +237,24 @@ test("a card row is credited to the keyed section its chunk holds, not to the se
   assert.deepEqual([entry(continued, "a7").listed, entry(continued, "a7").relation_correct, continued.listed], [true, true, 1]);
 });
 
+test("a chunk holding several keyed headings is credited only to the sections whose relation it gives", () => {
+  const testCase = caseById("approved-record-t1-two-decimal-display");
+  // One chunk holds both the TC-D-03 heading (a13, confirms) and the TC-D-06 heading (a7, conflicts or needs_updating).
+  const shared = { id: "E13", source: "pages", kind: "page", title: "Verification plan · section 3", text: "## TC-D-03 — 100 readings, ≥99 within spec\n…\n## TC-D-06 — Displayed value matches sensor value\nOne decimal",
+    citation: { kind: "page", tool_id: "confluence", external_scope_id: "cloud", page_id: "1212607", section_id: "s3", version: "4", permalink: "https://echobrain.atlassian.net/wiki/x?s=3", text_sha256: "sha256:0" },
+    read_in_full: true, opened: true, preloaded: false, cited_by_plan: true };
+  const items = [record("M2", "decision", "E1"), shared];
+  const graded = (key, relation) => codeChecks(key, completedRun(key, items, undefined, impactCard(items, [{ text: "Two decimals.", citation_index: 0 }], [{ citation_index: 1, says_now: "The plan's display test.", relation }])), dataset).card;
+  const state = card => ["a13", "a7"].map(id => card.affected.find(value => value.id === id)).map(value => [value.listed, value.relation_correct]);
+  assert.deepEqual(state(graded(testCase, "confirms")), [[true, true], [false, false]]);
+  assert.deepEqual(state(graded(testCase, "needs_updating")), [[false, false], [true, true]]);
+  for (const relation of ["confirms", "needs_updating"]) assert.equal(graded(testCase, relation).relations_correct, graded(testCase, relation).listed, relation);
+  // A relation neither section accepts is credited, as wrong, to the first of them in key order only.
+  const strict = { ...testCase, affected: testCase.affected.map(value => value.id === "a7" ? { ...value, relation: "needs_updating" } : value) };
+  assert.deepEqual(state(graded(strict, "conflicts")), [[false, false], [true, false]]);
+  assert.equal(graded(strict, "conflicts").listed, 1);
+});
+
 test("a case whose request cannot be built is recorded as not started and the run goes on", async () => {
   const { main } = await import("../cli.mjs");
   const { writePrivateJson, readJson, savedRunFiles } = await import("../lib/private-files.mjs");
@@ -266,6 +290,18 @@ test("a case whose request cannot be built is recorded as not started and the ru
   const report = readJson(join(out, "report.json"));
   assert.deepEqual([report.summary.runs_not_started, report.summary.runs_failed], [3, 3]);
   assert.match((await import("node:fs")).readFileSync(join(out, "report.md"), "utf8"), /Failed runs: 3, of which not started \(the case's request could not be built\): 3; rejected at ingress: 0\./u);
+});
+
+test("a runner error that is not an unbound or unstartable citation still stops the run", async () => {
+  const { main } = await import("../cli.mjs");
+  const { writePrivateJson, savedRunFiles } = await import("../lib/private-files.mjs");
+  const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-broken-")));
+  // Broken bindings (no tickets map) are a bug to fix, not a case to skip.
+  const { tickets: _missing, ...broken } = bindings;
+  writePrivateJson(out, "bindings.json", { ...broken, test_person: "Zhen Ye" });
+  const client = { async startResearchEval() { throw new Error("must not start"); }, async readResearchEval() { throw new Error("must not read"); } };
+  await assert.rejects(main(["run", "--run", "--model", "loop-a", "--split", "development", "--state", "S1", "--trials", "1", "--out", out], { client, poll_ms: 0 }), TypeError);
+  assert.throws(() => savedRunFiles(out), /ENOENT/u, "no run row was written");
 });
 
 test("the judge sees the card as the answer, and its gap checks count for the card, not Ask's writer", () => {

@@ -1272,7 +1272,7 @@
         { "id": "a1", "refs": [{ "ticket": "THERM-46" }], "relation": ["conflicts", "needs_updating"], "owner": null },
         { "id": "a2", "refs": [{ "ticket": "THERM-9" }], "relation": ["conflicts", "needs_updating"], "owner": null },
         { "id": "a3", "refs": [{ "ticket": "THERM-12" }], "relation": ["conflicts", "needs_updating"], "owner": null },
-        { "id": "a4", "refs": [{ "ticket": "THERM-47" }], "relation": "confirms", "owner": "{{TEST_PERSON}}" },
+        { "id": "a4", "refs": [{ "ticket": "THERM-47" }], "relation": ["conflicts", "needs_updating"], "owner": "{{TEST_PERSON}}" },
         { "id": "a5", "refs": [{ "page": "1409042", "section": "BUG-412 walkthrough" }], "relation": ["conflicts", "needs_updating"], "owner": null },
         { "id": "a6", "refs": [{ "page": "1409025", "section": "Seeded defect and retest" }], "relation": ["conflicts", "needs_updating"], "owner": null },
         { "id": "a7", "refs": [{ "page": "1015989", "section": "Follow the failure thread" }], "relation": ["conflicts", "needs_updating"], "owner": null },

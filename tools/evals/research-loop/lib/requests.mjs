@@ -1,4 +1,4 @@
-import { citationFor, meetingCitation } from "./bindings.mjs";
+import { CaseNotStartableError, citationFor, meetingCitation } from "./bindings.mjs";
 
 /**
  * The staging start request for one case (organization API
@@ -7,7 +7,7 @@ import { citationFor, meetingCitation } from "./bindings.mjs";
  */
 export function startRequest(testCase, bindings, budget = testCase.budget) {
   const scope = testCase.scope?.kind === "project" ? { project_id: bindings.project_id } : {};
-  if (testCase.scope?.kind === "project" && typeof bindings.project_id !== "string") throw new Error("bindings need the THERM project id");
+  if (testCase.scope?.kind === "project" && typeof bindings.project_id !== "string") throw new CaseNotStartableError("bindings need the THERM project id");
   return { schema_version: 1, trigger: testCase.trigger, input: triggerInput(testCase, bindings), budget, ...scope };
 }
 

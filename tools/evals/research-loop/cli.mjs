@@ -6,7 +6,7 @@ import { join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { datasetProblems, loadDataset, substitutePerson } from "./lib/dataset.mjs";
-import { discoverMeetings, exportBindings } from "./lib/bindings.mjs";
+import { CaseNotStartableError, discoverMeetings, exportBindings } from "./lib/bindings.mjs";
 import { pollDeadlineMs, rejectedAtIngress, savedResult, startRequest } from "./lib/requests.mjs";
 import { codeChecks } from "./lib/checks.mjs";
 import { createOpenRouterJudge, judgeInput, parseJudge } from "./lib/judge.mjs";
@@ -116,8 +116,8 @@ async function run(args, { client: given, poll_ms: pollMs = 2_000 } = {}) {
     for (const budget of budgets) {
       for (let trial = 1; trial <= (budget === testCase.budget ? trials : 1); trial += 1) {
         let request; let unstartable;
-        try { request = startRequest(testCase, bound, budget); } catch (error) { unstartable = error; }
-        // A case whose request cannot be built (an unbound or unstartable citation) is recorded and counted, and the run goes on.
+        // A case whose request cannot be built (an unbound or unstartable citation) is recorded and counted, and the run goes on; any other error stops it.
+        try { request = startRequest(testCase, bound, budget); } catch (error) { if (!(error instanceof CaseNotStartableError)) throw error; unstartable = error; }
         const saved = unstartable === undefined ? await runOne(client, testCase, request, budget, trial, model, pollMs)
           : { ...runBase(testCase, budget, trial, model, Date.now()), outcome: "error", error: { code: "case_not_startable", message: String(unstartable?.message ?? unstartable).slice(0, 300) }, elapsed_ms: 0 };
         writePrivateJson(out, `runs/${testCase.id}/${budget}-${trial}.json`, { ...saved, source_sha: sourceIdentity() });
