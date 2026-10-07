@@ -240,6 +240,11 @@ export function createAskJourneyTelemetryFactoryV1(input: {
   const nowMs = input.now_ms ?? (() => performance.now());
   const plannerModel = requiredModel(input.planner_model, vocabulary);
   const answerModel = requiredModel(input.answer_model, vocabulary);
+  /** Only the planner and answer stages call a model. */
+  const stageLlmUsage = (event: AnswerCompositionStageObservationV1): JourneyLlmUsageInputV1 | null => {
+    const model = event.stage === "planner" ? plannerModel : event.stage === "answer" ? answerModel : null;
+    return model === null ? null : llmUsage(event.generation_usage, model, event.elapsed_ms, vocabulary);
+  };
 
   return Object.freeze({
     start(): AskJourneyTelemetryRecorderV1 {
@@ -363,22 +368,7 @@ export function createAskJourneyTelemetryFactoryV1(input: {
           if (event.event === "failed") {
             const failure = compositionFailure(event);
             lastFailure = failure;
-            const observedLlmUsage =
-              event.stage === "planner"
-                ? llmUsage(
-                    event.generation_usage,
-                    plannerModel,
-                    event.elapsed_ms,
-                    vocabulary,
-                  )
-                : event.stage === "answer"
-                  ? llmUsage(
-                      event.generation_usage,
-                      answerModel,
-                      event.elapsed_ms,
-                      vocabulary,
-                    )
-                  : null;
+            const observedLlmUsage = stageLlmUsage(event);
             emit(stage, {
               event: "failed",
               failure_class: failure.failure_class,
@@ -391,22 +381,7 @@ export function createAskJourneyTelemetryFactoryV1(input: {
             return;
           }
           rememberCounters(event.retrieval);
-          const observedLlmUsage =
-            event.stage === "planner"
-              ? llmUsage(
-                  event.generation_usage,
-                  plannerModel,
-                  event.elapsed_ms,
-                  vocabulary,
-                )
-              : event.stage === "answer"
-                ? llmUsage(
-                    event.generation_usage,
-                    answerModel,
-                    event.elapsed_ms,
-                    vocabulary,
-                  )
-                : null;
+          const observedLlmUsage = stageLlmUsage(event);
           emit(stage, {
             event: "succeeded",
             elapsed_ms: event.elapsed_ms,
