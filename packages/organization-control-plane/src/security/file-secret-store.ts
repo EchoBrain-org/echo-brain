@@ -27,15 +27,42 @@ import {
 const MAXIMUM_SECRET_BYTES = 16 * 1024;
 const SECRET_HANDLE_PATTERN = /^sch_[0-9a-f-]{36}$/;
 const SECRET_FILE_PATTERN = /^(sch_[0-9a-f-]{36})\.secret$/;
+const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 
 function fsyncDirectory(path: string): void {
-  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
-  const descriptor = openSync(path, fsConstants.O_RDONLY | noFollow);
+  const descriptor = openSync(path, fsConstants.O_RDONLY | NO_FOLLOW);
   try {
     fsyncSync(descriptor);
   } finally {
     closeSync(descriptor);
   }
+}
+
+/**
+ * Exclusively creates a 0600 file and syncs `contents` into it. Write, sync,
+ * and close failures are returned rather than thrown so the caller can remove
+ * the partial file and report every failure together.
+ */
+function writeNewPrivateFile(path: string, contents: string): unknown[] {
+  const descriptor = openSync(
+    path,
+    fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | NO_FOLLOW,
+    0o600,
+  );
+  const failures: unknown[] = [];
+  try {
+    writeFileSync(descriptor, contents, 'utf8');
+    fsyncSync(descriptor);
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    try {
+      closeSync(descriptor);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  return failures;
 }
 
 function assertPrivateDirectory(path: string): void {
@@ -124,28 +151,7 @@ export class FileOrganizationSecretStore implements OrganizationSecretStore {
       secret_handle_id: `sch_${randomUUID()}`,
     };
     const path = this.path(reference);
-    const noFollow = fsConstants.O_NOFOLLOW ?? 0;
-    const descriptor = openSync(
-      path,
-      fsConstants.O_CREAT |
-        fsConstants.O_EXCL |
-        fsConstants.O_WRONLY |
-        noFollow,
-      0o600,
-    );
-    const failures: unknown[] = [];
-    try {
-      writeFileSync(descriptor, normalized, 'utf8');
-      fsyncSync(descriptor);
-    } catch (error) {
-      failures.push(error);
-    } finally {
-      try {
-        closeSync(descriptor);
-      } catch (error) {
-        failures.push(error);
-      }
-    }
+    const failures = writeNewPrivateFile(path, normalized);
     if (failures.length === 0) {
       try {
         // fsync(file) persists bytes; fsync(directory) persists the new name.
@@ -175,8 +181,7 @@ export class FileOrganizationSecretStore implements OrganizationSecretStore {
   read(reference: OrganizationSecretReference): string {
     const path = this.path(reference);
     const state = assertPrivateSecretFile(path);
-    const noFollow = fsConstants.O_NOFOLLOW ?? 0;
-    const descriptor = openSync(path, fsConstants.O_RDONLY | noFollow);
+    const descriptor = openSync(path, fsConstants.O_RDONLY | NO_FOLLOW);
     try {
       const opened = fstatSync(descriptor);
       if (opened.dev !== state.dev || opened.ino !== state.ino) {
@@ -208,28 +213,7 @@ export class FileOrganizationSecretStore implements OrganizationSecretStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
-    const noFollow = fsConstants.O_NOFOLLOW ?? 0;
-    const descriptor = openSync(
-      temporary,
-      fsConstants.O_CREAT |
-        fsConstants.O_EXCL |
-        fsConstants.O_WRONLY |
-        noFollow,
-      0o600,
-    );
-    const failures: unknown[] = [];
-    try {
-      writeFileSync(descriptor, normalized, 'utf8');
-      fsyncSync(descriptor);
-    } catch (error) {
-      failures.push(error);
-    } finally {
-      try {
-        closeSync(descriptor);
-      } catch (error) {
-        failures.push(error);
-      }
-    }
+    const failures = writeNewPrivateFile(temporary, normalized);
     if (failures.length === 0) {
       try {
         renameSync(temporary, path);
