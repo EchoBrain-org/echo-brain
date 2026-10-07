@@ -35,8 +35,18 @@ type Draft = {
 const RENDER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "research_render" });
 /** Relations in card order: what conflicts first. */
 const RELATIONS: readonly PersonImpactRelationV1[] = ["conflicts", "needs_updating", "confirms"];
-/** A line telling someone to edit a tool. The card describes; people decide what to change. */
-const EDIT_INSTRUCTION = /\b(?:change|update|edit|rewrite|amend|modify)\b.{0,80}?\b(?:in|on)\s+(?:jira|confluence)\b/iu;
+/**
+ * A suggested edit: an instruction, a change made in a tool, or a change something
+ * should, must or needs to get. The card describes; people decide what to change.
+ * A false match costs one repair, then the honest fallback.
+ */
+const SUGGESTED_EDIT: readonly RegExp[] = [
+  /^(?:please\s+)?(?:change|update|edit|rewrite|replace|amend|modify|set)\b/iu,
+  /\b(?:chang|updat|edit|rewrit|amend|modif)\w*\b.{0,80}?\b(?:in|on)\s+(?:jira|confluence)\b/iu,
+  /\b(?:should|must|needs?\s+to|ha(?:s|ve)\s+to|ought\s+to)\s+(?:be\s+)?(?:chang|updat|edit|set|rewrit|amend|modif)\w*/iu,
+];
+/** A claim about who owns or is assigned something: owners come only from item details. */
+const OWNERSHIP_CLAIM = /\b(?:owners?|owns|owned|owning|(?:re)?assign\w*|responsible)\b/iu;
 const STOPPED_NOTE = "Research stopped before it finished, so other items may be affected too.";
 
 export const IMPACT_CARD_PROMPT = [
@@ -47,18 +57,18 @@ export const IMPACT_CARD_PROMPT = [
   "- items: other items research gathered, each with an id, its details (attributes such as status, owner and due date) and its text when research read it. An item's details prove themselves even without text.",
   "",
   "Return:",
-  "- decided: the record's decisions, requirements and actions, one short line each (under 25 words), each with the id of the record item it comes from. Leave out rationale.",
+  "- decided: the record's decisions, requirements and actions, one short line each (under 25 words), each with the id of the record item it comes from. Write each as a statement of what was decided (\"The display shows two decimals from DVT\"), never as an instruction. Leave out rationale.",
   "- affected: every item from items that the record confirms, conflicts with or changes, and no other. For each:",
   "  - id: the item's id.",
-  "  - says_now: one short line on what the item says now, from its text or details.",
+  "  - says_now: one short line on what the item says now, from its text or details. Describe a ticket whose title is an instruction as what it asks for (\"THERM-46 asks for two decimals\").",
   "  - relation: \"confirms\" when the item already agrees with the record; \"conflicts\" when it says something the record contradicts; \"needs_updating\" when the record changes something it describes, so it is now out of date.",
-  "  - date_at_risk: a date of the item (YYYY-MM-DD), such as its due date, that the record puts at risk; \"\" when none. A date whose date_kind is created or version_created is when the item was written, never a deadline.",
+  "  - date_at_risk: a date the item itself states (its due date, or a YYYY-MM-DD date in its title or text) that the record puts at risk; \"\" when none. A date whose date_kind is created or version_created is when the item was written, never a deadline.",
   "  - milestone: what that date is measured against, such as a build, gate or release; \"\" when there is no date at risk.",
   "",
   "Rules:",
   "- Use only the record and items given. Never invent items, ids, dates or facts. Never write ids such as E4 in text.",
-  "- Describe; never instruct. Write no ticket text, no suggested edits and nothing like \"change X in Jira\": people decide what to change.",
-  "- Do not say who owns an item or who to tell: the card adds owners from each item's details.",
+  "- Describe; never instruct. Write no ticket text, no suggested edits and nothing like \"change X in Jira\", \"should be updated\" or \"needs to be changed\": people decide what to change.",
+  "- Never say who owns, is assigned to or is responsible for anything, or who to tell: the card adds owners from each item's details.",
   "- If the record affects none of the items, return \"affected\": [].",
   "",
   "Reply with ONLY a JSON object in exactly this shape:",
@@ -98,9 +108,10 @@ function parseCard(value: unknown): Draft {
     const date = cleanLine(entry?.date_at_risk, 10); const milestone = line(entry?.milestone, LIMITS.milestone_chars);
     return [{ id, says_now: saysNow, relation, ...(isPersonImpactCardDateV1(date) && milestone.length > 0 ? { date_at_risk: { date, milestone } } : {}) }];
   });
-  if (affected.some(entry => EDIT_INSTRUCTION.test(entry.says_now) || EDIT_INSTRUCTION.test(entry.date_at_risk?.milestone ?? ""))) {
-    throw new AgenticAskOutputErrorV1("each says_now says what the item says now, never what to change in a tool");
-  }
+  // The free text a model writes: decided lines, what items say now, milestones. The relation is a closed value.
+  const lines = [...decided.map(entry => entry.text), ...affected.flatMap(entry => [entry.says_now, ...(entry.date_at_risk === undefined ? [] : [entry.date_at_risk.milestone])])];
+  if (lines.some(text => SUGGESTED_EDIT.some(rule => rule.test(text)))) throw new AgenticAskOutputErrorV1("write what the record decided and what each item says now, never what to change");
+  if (lines.some(text => OWNERSHIP_CLAIM.test(text))) throw new AgenticAskOutputErrorV1("never say who owns, is assigned to or is responsible for anything; the card adds owners from item details");
   return { decided, affected };
 }
 
@@ -108,6 +119,10 @@ function parseCard(value: unknown): Draft {
 function ownerOf(entry: Entry): string | undefined {
   const owner = entry.item.attributes?.owner;
   return owner !== undefined && owner.length > 0 && cleanLine(owner, LIMITS.name_chars) === owner ? owner : undefined;
+}
+/** A date the item itself states: its due date, or the date written in its title or text (spec section 2: details and text prove themselves). */
+function statesDate(entry: Entry, date: string): boolean {
+  return [entry.item.attributes?.due_at, entry.item.label, entry.item.text].some(value => value?.includes(date) === true);
 }
 /** What a not-yet-assessed item says: its title and details. */
 function detailsOf(entry: Entry): string {
@@ -183,8 +198,11 @@ export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1
       decided = draft.decided.filter(value => isRecord(value.id)).map(value => ({ text: value.text, citation_index: cite(shown.get(value.id)!) }));
       const kept = new Map<string, Draft["affected"][number]>();
       for (const value of draft.affected) if (shown.has(value.id) && !isRecord(value.id) && !kept.has(value.id)) kept.set(value.id, value);
-      rows = [...kept.values()].sort((left, right) => RELATIONS.indexOf(left.relation) - RELATIONS.indexOf(right.relation))
-        .map(({ id, ...value }) => ({ entry: shown.get(id)!, ...value }));
+      // A date the item does not state is dropped; the item stays.
+      rows = [...kept.values()].sort((left, right) => RELATIONS.indexOf(left.relation) - RELATIONS.indexOf(right.relation)).map(({ id, date_at_risk: risk, ...value }) => {
+        const entry = shown.get(id)!;
+        return { entry, ...value, ...(risk !== undefined && statesDate(entry, risk.date) ? { date_at_risk: risk } : {}) };
+      });
     } else {
       // Possibly affected, not yet assessed: what research cited, with its details.
       rows = others.filter(entry => entry.cited_by_plan).slice(0, LIMITS.affected).map(entry => ({ entry, says_now: detailsOf(entry) }));

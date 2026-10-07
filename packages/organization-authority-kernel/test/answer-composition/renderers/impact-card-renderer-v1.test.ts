@@ -49,7 +49,7 @@ const ITEMS: readonly EvidenceDeskItemV2[] = [
   ticket("THERM-47", undefined, { status: "To Do", owner: "Tobias Lund" }),
   recordItem("other-action", "Send the display plan to Zhen.", { kind: "action", label: "Planning sync action" }, canonicalSha256({ record: "planning-sync" })),
   page("99", "Gate review 99", undefined),
-  page("2001", "Test plan", "TC-D-06 expects one decimal."),
+  page("2001", "Test plan", "TC-D-06 expects one decimal; the test review is on 2026-10-20."),
 ];
 
 function bundle(options: { readonly cited?: readonly string[]; readonly completed?: boolean; readonly items?: readonly EvidenceDeskItemV2[] } = {}): AgenticEvidenceBundleV1 {
@@ -118,7 +118,7 @@ const REPLY = {
   ],
   affected: [
     affected("E4", "The PRD display section specifies one decimal.", "needs_updating"),
-    affected("E3", "THERM-46 formats one decimal; Zhen Ye said he owns it.", "conflicts", "2026-10-15", "DVT gate"),
+    affected("E3", "THERM-46 formats one decimal, as Zhen Ye noted in review.", "conflicts", "2026-10-15", "DVT gate"),
     affected("E5", "THERM-47 is still to do.", "confirms"),
     affected("E6", "The planning sync asks for the display plan to go to Zhen.", "confirms"),
     affected("E1", "The record itself.", "confirms"), affected("E42", "An invented ticket.", "conflicts"), affected("E3", "A repeat.", "confirms"),
@@ -172,7 +172,7 @@ describe("impact card renderer", () => {
       status: "assessed",
       decided: [{ text: "Show two decimals on the display from DVT.", citation_index: 0 }, { text: "Mara updates the PRD display section by Oct 10.", citation_index: 1 }],
       affected: [
-        { citation_index: 2, says_now: "THERM-46 formats one decimal; Zhen Ye said he owns it.", relation: "conflicts", owner: "Tobias Lund", date_at_risk: { date: "2026-10-15", milestone: "DVT gate" } },
+        { citation_index: 2, says_now: "THERM-46 formats one decimal, as Zhen Ye noted in review.", relation: "conflicts", owner: "Tobias Lund", date_at_risk: { date: "2026-10-15", milestone: "DVT gate" } },
         { citation_index: 3, says_now: "The PRD display section specifies one decimal.", relation: "needs_updating" },
         { citation_index: 4, says_now: "THERM-47 is still to do.", relation: "confirms", owner: "Tobias Lund" },
         { citation_index: 5, says_now: "The planning sync asks for the display plan to go to Zhen.", relation: "confirms" },
@@ -225,16 +225,73 @@ describe("impact card renderer", () => {
     expect(nothing).toMatchObject({ cited: [], outcome: "partial", result: { status: "not_assessed", affected: [], people: [], citations: [] } });
   });
 
-  it("asks once more when a line tells someone to edit a tool, and never releases it", async () => {
-    const edit = { ...REPLY, affected: [affected("E3", "Change the display precision in Jira to two decimals.", "needs_updating")] };
+  // A suggested edit, in any phrasing: the card never tells anyone what to change in a tool (spec section 5).
+  it.each([
+    ["an instruction naming the tool", "says_now", "Change the display precision in Jira to two decimals."],
+    ["a passive need naming the tool", "says_now", "The PRD display section needs to be updated in Confluence to two decimals."],
+    ["a modal naming the tool", "says_now", "THERM-46 should be changed in Jira to format two decimals."],
+    ["an inflected verb naming the tool", "says_now", "Updating THERM-46 in Jira is needed."],
+    ["an instruction naming no tool", "says_now", "Edit the PRD to say 0.01 °C."],
+    ["a decided line written as an instruction", "decided", "Update the PRD display section by Oct 10."],
+  ] as const)("sends back %s once, and never releases it", async (_label, field, text) => {
+    const edit = field === "decided"
+      ? { ...REPLY, decided: [{ id: "E2", text }] }
+      : { ...REPLY, affected: [affected("E3", text, "needs_updating")] };
     const run = alone({ replies: [edit, REPLY] });
     const rendered = await run.render();
     expect(run.inputs).toHaveLength(2);
-    expect(run.inputs[1]!.system_prompt).toContain("says what the item says now, never what to change");
+    expect(run.inputs[1]!.system_prompt).toContain("never what to change");
     expect(rendered.result.status).toBe("assessed");
-    expect(JSON.stringify(rendered.result)).not.toContain("in Jira");
+    expect(JSON.stringify(rendered.result)).not.toContain(text);
     const twice = await alone({ replies: [edit, edit] }).render();
     expect(twice).toMatchObject({ fallbacks: 1, result: { status: "not_assessed" } });
+    expect(JSON.stringify(twice.result)).not.toContain(text);
+  });
+
+  it("sends back a line that says who owns or is assigned an item: owners come only from item details", async () => {
+    for (const edit of [
+      { ...REPLY, affected: [affected("E3", "THERM-46 formats one decimal; Zhen Ye said he owns it.", "conflicts")] },
+      { ...REPLY, affected: [affected("E4", "The PRD display section is assigned to Ana Ruiz.", "needs_updating")] },
+      { ...REPLY, decided: [{ id: "E2", text: "Mara Quinn is responsible for the PRD display section." }] },
+    ]) {
+      const run = alone({ replies: [edit, REPLY] });
+      const rendered = await run.render();
+      expect(run.inputs).toHaveLength(2);
+      expect(run.inputs[1]!.system_prompt).toContain("never say who owns, is assigned to or is responsible for anything");
+      expect(JSON.stringify(rendered.result)).not.toMatch(/Zhen Ye said|Ana Ruiz|responsible/u);
+    }
+  });
+
+  it("keeps ordinary summaries, the needs_updating relation and names a summary quotes, with one call", async () => {
+    const run = alone({ replies: [{ decided: REPLY.decided, affected: [
+      affected("E3", "THERM-46 formats one decimal, as Zhen Ye noted in review.", "needs_updating"),
+      affected("E4", "The PRD display section specifies one decimal and was last revised for EVT.", "needs_updating"),
+    ] }] });
+    const rendered = await run.render();
+    expect(run.inputs).toHaveLength(1);
+    expect(rendered.result.affected.map(value => [value.says_now, value.relation])).toEqual([
+      ["THERM-46 formats one decimal, as Zhen Ye noted in review.", "needs_updating"],
+      ["The PRD display section specifies one decimal and was last revised for EVT.", "needs_updating"],
+    ]);
+    expect(rendered.result.people).toEqual([{ name: "Tobias Lund", items: [2] }]);
+  });
+
+  it("keeps a date at risk only when the item itself states it: its due date, or the date in its title or text", async () => {
+    const rendered = await alone({ replies: [{ decided: REPLY.decided, affected: [
+      affected("E3", "THERM-46 formats one decimal.", "conflicts", "2026-10-15", "DVT gate"),
+      affected("E4", "The PRD display section specifies one decimal.", "needs_updating", "2026-11-01", "PRD sign-off"),
+      affected("E8", "TC-D-06 expects one decimal.", "needs_updating", "2026-10-20", "Test review"),
+      affected("E5", "THERM-47 is still to do.", "confirms", "2026-10-15", "DVT gate"),
+    ] }] }).render();
+    expect(rendered.result.affected.map(value => [value.says_now.slice(0, 8), value.date_at_risk ?? null])).toEqual([
+      // THERM-46's due date.
+      ["THERM-46", { date: "2026-10-15", milestone: "DVT gate" }],
+      // A date the PRD never states, and THERM-47's, which has no due date: dropped, the item kept.
+      ["The PRD ", null],
+      // A date the test plan's text states.
+      ["TC-D-06 ", { date: "2026-10-20", milestone: "Test review" }],
+      ["THERM-47", null],
+    ]);
   });
 
   it("shows the model only what fits its prompt budget, and cites nothing it did not show", async () => {
