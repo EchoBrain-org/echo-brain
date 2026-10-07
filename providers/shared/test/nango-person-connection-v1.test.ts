@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createNangoPersonConnectionV1 } from '../src/nango-person-connection-v1.js';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonProviderFailureCodeV1 } from '../src/person-provider-v1.js';
 
 describe.each(['jira', 'confluence'] as const)('%s Nango HTTP custody', product => {
@@ -26,6 +27,17 @@ function fixture() {
     f.fetch.mockResolvedValueOnce(new Response('private provider body', { status: 429, headers: { 'Retry-After': '41' } }));
     await expect(f.nango.connection('reference-fixture')).rejects.toMatchObject({ code: 'rate_limited', message: failureMessage });
     expect(f.fetch).toHaveBeenCalledTimes(1);
+  });
+  it('attributes a Nango connection 429 without reading its response body', async () => {
+    const f = fixture(); const events: CoreRuntimeObservationV1[] = [];
+    const response = new Response('private Nango rejection body', { status: 429, headers: { 'Retry-After': '41', 'X-RateLimit-Remaining': '0' } });
+    const readers = [vi.spyOn(response, 'text'), vi.spyOn(response, 'json'), vi.spyOn(response.body!, 'getReader')];
+    f.fetch.mockResolvedValueOnce(response);
+    await expect(observeCoreRuntimeV1('ask_request', () => f.nango.connection('reference-fixture'), { observer: event => { events.push(event); } })).rejects.toMatchObject({ code: 'rate_limited' });
+    expect(events.filter(event => event.event === 'succeeded' && event.phase === 'http_request')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ upstream_service: 'nango', upstream_operation: 'connection_read', counts: expect.objectContaining({ http_status: 429, upstream_retry_after_seconds: 41, upstream_rate_remaining: 0 }) }),
+    ]));
+    for (const reader of readers) expect(reader).not.toHaveBeenCalled();
   });
   it('limits fresh Connect sessions to the selected product and server tags/read scopes and never requests a refresh token', async () => {
     const f = fixture(); f.fetch.mockResolvedValueOnce(json({ data: { connect_link: 'https://connect.nango.dev/fixture-consent' } }));

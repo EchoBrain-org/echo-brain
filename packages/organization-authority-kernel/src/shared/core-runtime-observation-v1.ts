@@ -27,9 +27,14 @@ export const CORE_RUNTIME_COUNT_KEYS_V1 = [
   // Items an evidence call returned, by source; transcript_items is the shared-transcript subset of document_items.
   "meeting_items", "document_items", "transcript_items", "slack_items",
   "ticket_retrieved_items", "ticket_context_items", "ticket_citations",
+  // Bounded rate-limit hints copied from an upstream response, never response headers or text.
+  "upstream_retry_after_seconds", "upstream_rate_limit", "upstream_rate_remaining", "upstream_rate_reset_unix_seconds",
 ] as const;
 export type CoreRuntimeCountsV1 = Partial<Record<(typeof CORE_RUNTIME_COUNT_KEYS_V1)[number], number | null>>;
 export const CORE_RUNTIME_RESULTS_V1 = ["current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure", "verified", "unlinked", "not_configured", "out_of_scope", "empty", "returned", "answered", "partial", "not_found", "off_scope"] as const;
+export const CORE_RUNTIME_UPSTREAM_SERVICES_V1 = ["nango", "jira", "confluence", "granola", "other"] as const;
+export const CORE_RUNTIME_UPSTREAM_OPERATIONS_V1 = ["connection_read", "connection_list", "connect_session", "connection_delete", "provider_read"] as const;
+export const CORE_RUNTIME_UPSTREAM_RATE_LIMIT_REASONS_V1 = ["burst", "global_quota", "tenant_quota", "per_issue_write", "other"] as const;
 export interface CoreRuntimeDetailV1 {
   readonly operation_id: string;
   readonly span_id: string;
@@ -41,6 +46,10 @@ export interface CoreRuntimeDetailV1 {
   readonly counts: CoreRuntimeCountsV1;
   readonly result: (typeof CORE_RUNTIME_RESULTS_V1)[number] | null;
   readonly evidence_source?: "ticket" | "slack" | "page";
+  /** Optional finite attribution for an upstream connector request. */
+  readonly upstream_service?: (typeof CORE_RUNTIME_UPSTREAM_SERVICES_V1)[number];
+  readonly upstream_operation?: (typeof CORE_RUNTIME_UPSTREAM_OPERATIONS_V1)[number];
+  readonly upstream_rate_limit_reason?: (typeof CORE_RUNTIME_UPSTREAM_RATE_LIMIT_REASONS_V1)[number];
   readonly generation: string | null;
   readonly source_revision: string | null;
   readonly cursor: string | null;
@@ -84,12 +93,12 @@ export function coreRuntimeIdentityV1(domain: string, value: string): string {
 function safe(action: () => void | Promise<void>): void {
   try { void Promise.resolve(action()).catch(() => undefined); } catch { /* observation only */ }
 }
-export function annotateCoreRuntimeV1(input: { counts?: CoreRuntimeCountsV1; result?: CoreRuntimeDetailV1["result"]; generation?: string; linked_journey_ids?: readonly string[] } & Partial<Pick<CoreRuntimeDetailV1, "source_revision" | "cursor" | "action" | "provider" | "model" | "finish_reason" | "provider_request" | "evidence_source">>): void {
+export function annotateCoreRuntimeV1(input: { counts?: CoreRuntimeCountsV1; result?: CoreRuntimeDetailV1["result"]; generation?: string; linked_journey_ids?: readonly string[] } & Partial<Pick<CoreRuntimeDetailV1, "source_revision" | "cursor" | "action" | "provider" | "model" | "finish_reason" | "provider_request" | "evidence_source" | "upstream_service" | "upstream_operation" | "upstream_rate_limit_reason">>): void {
   const current = context.getStore();
   if (!current) return;
   safe(() => {
     Object.assign(current.detail.counts, input.counts);
-    for (const key of ["source_revision", "cursor", "action", "provider", "model", "finish_reason", "provider_request", "evidence_source"] as const) { if (input[key] !== undefined) Object.assign(current.detail, { [key]: input[key] }); }
+    for (const key of ["source_revision", "cursor", "action", "provider", "model", "finish_reason", "provider_request", "evidence_source", "upstream_service", "upstream_operation", "upstream_rate_limit_reason"] as const) { if (input[key] !== undefined) Object.assign(current.detail, { [key]: input[key] }); }
     if (input.result !== undefined) Object.assign(current.detail, { result: input.result });
     if (input.generation !== undefined) Object.assign(current.detail, { generation: input.generation });
     if (input.linked_journey_ids !== undefined) Object.assign(current.detail, { linked_journey_ids: [...new Set([...current.detail.linked_journey_ids, ...input.linked_journey_ids])] });
@@ -174,6 +183,9 @@ export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1, vocabul
       !Array.isArray(input.linked_journey_ids) || input.linked_journey_ids.length > 1000 || input.linked_journey_ids.some((id) => !uuid.test(id)) ||
       (input.result !== null && !CORE_RUNTIME_RESULTS_V1.includes(input.result)) ||
       (input.evidence_source !== undefined && input.evidence_source !== "ticket" && input.evidence_source !== "slack" && input.evidence_source !== "page") ||
+      (input.upstream_service !== undefined && !CORE_RUNTIME_UPSTREAM_SERVICES_V1.includes(input.upstream_service)) ||
+      (input.upstream_operation !== undefined && !CORE_RUNTIME_UPSTREAM_OPERATIONS_V1.includes(input.upstream_operation)) ||
+      (input.upstream_rate_limit_reason !== undefined && !CORE_RUNTIME_UPSTREAM_RATE_LIMIT_REASONS_V1.includes(input.upstream_rate_limit_reason)) ||
       (input.generation !== null && !/^sha256:[0-9a-f]{64}$/.test(input.generation))) throw new TypeError("invalid core runtime observation");
   const counts: CoreRuntimeCountsV1 = {};
   for (const key of CORE_RUNTIME_COUNT_KEYS_V1) {
@@ -186,6 +198,9 @@ export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1, vocabul
     phase: input.phase, purpose: input.purpose, root: input.root, linked_journey_ids: Object.freeze([...input.linked_journey_ids]), counts: Object.freeze(counts),
     result: input.result, generation: input.generation,
     ...(input.evidence_source === undefined ? {} : { evidence_source: input.evidence_source }),
+    ...(input.upstream_service === undefined ? {} : { upstream_service: input.upstream_service }),
+    ...(input.upstream_operation === undefined ? {} : { upstream_operation: input.upstream_operation }),
+    ...(input.upstream_rate_limit_reason === undefined ? {} : { upstream_rate_limit_reason: input.upstream_rate_limit_reason }),
     source_revision: opaque(input.source_revision), cursor: opaque(input.cursor), action: opaque(input.action), provider_request: opaque(input.provider_request),
     provider: finite(input.provider, admitted.providers), model: finite(input.model, admitted.models),
     finish_reason: finite(input.finish_reason, ["stop", "length", "content_filter", "completed", "other"]), resource_scope: "process_overlap", sqlite_lock_time: "unavailable", disk_io_latency: "unavailable", event_loop_delay: input.event_loop_delay === "process_sample" ? "process_sample" : "unavailable" });

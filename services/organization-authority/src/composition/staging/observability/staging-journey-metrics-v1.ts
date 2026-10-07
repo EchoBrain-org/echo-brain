@@ -134,6 +134,11 @@ export function formatJourneyTelemetryMetricsV1(
 ): readonly StagingJourneyMetricRecordV1[] {
   const event = normalizedStagingEvent(input, vocabulary);
   if (event === null) return Object.freeze([]);
+  // Connector exchanges are diagnostic children of the ingress request. Keep
+  // them in journey logs without multiplying the existing ingress metrics.
+  if (event.workflow === "core_runtime" && event.diagnostic?.phase === "http_request" && !event.diagnostic.root) {
+    return Object.freeze([]);
+  }
   const timestamp = canonicalTimestamp(event.observed_at);
   if (timestamp === null) return Object.freeze([]);
 

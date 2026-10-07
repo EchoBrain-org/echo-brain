@@ -1,4 +1,5 @@
 import { abortableProviderOperationV1, BoundedJsonResponseErrorV1, disposeProviderResponseV1, readBoundedJsonResponseV1 } from './bounded-json-response-v1.js';
+import { observeProviderHttpRequestV1, providerUpstreamServiceV1 } from './provider-http-diagnostics-v1.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
@@ -38,11 +39,13 @@ export function createPersonProviderJsonTransportV1<Input extends { readonly sig
       let response: Response | undefined;
       try {
         current();
-        response = await abortableProviderOperationV1(() => fetchAuthenticated(selected.url.href, {
-          method: selected.method ?? 'GET', redirect: 'error', signal,
-          headers: { Accept: responseFormat?.accept ?? 'application/json', ...(selected.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-          ...(selected.body === undefined ? {} : { body: JSON.stringify(selected.body) }),
-        }), signal, disposeProviderResponseV1);
+        response = await observeProviderHttpRequestV1({ upstream_service: providerUpstreamServiceV1(binding.tool_id), upstream_operation: 'provider_read' }, () =>
+          abortableProviderOperationV1(() => fetchAuthenticated(selected.url.href, {
+            method: selected.method ?? 'GET', redirect: 'error', signal,
+            headers: { Accept: responseFormat?.accept ?? 'application/json', ...(selected.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+            ...(selected.body === undefined ? {} : { body: JSON.stringify(selected.body) }),
+          }), signal, disposeProviderResponseV1),
+        );
         signal.throwIfAborted();
         if (response.redirected || response.url !== '' && response.url !== selected.url.href) failure('invalid_output');
         if (response.status !== 200) {
