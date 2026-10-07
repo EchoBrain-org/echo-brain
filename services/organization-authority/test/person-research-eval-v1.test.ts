@@ -81,6 +81,7 @@ describe('staging research evaluation runs', () => {
     expect(receipt).toMatchObject({ kind: 'echo-person-research-eval-run-v1', status: 'running' });
     const result = await h.settled('token-a', receipt.run_id);
     expect(result).toMatchObject({ status: 'completed', research: { kind: 'echo-agentic-research-result-v1', trigger: 'ask', stop: { reason: 'unusable_step' } }, ask: { writer_evidence: [], response: { schema_version: 6 } } });
+    expect(result).not.toHaveProperty('rendered');
     expect((await h.read('token-a', receipt.run_id)).status).toBe('completed');
     h.advance(PERSON_RESEARCH_EVAL_REREAD_MS_V1 + 1);
     await expect(h.read('token-a', receipt.run_id)).rejects.toMatchObject({ code: 'not_found' });
@@ -156,6 +157,23 @@ describe('staging research evaluation runs', () => {
     expect(h.audits).toEqual([expect.objectContaining({ trigger: 'approved_record', budget: 'background' })]);
   });
 
+  it("returns an approved record's rendered impact card with the trimmed bundle it was written from", async () => {
+    const card = { decided: [{ id: 'E1', text: 'The display shows two decimals.' }], affected: [] };
+    const step = { parts: [{ question: 'Q', needs: [{ need: 'fact', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
+    const h = harness({ recordProjects: () => [PROJECT], openRecord: openedRecord, generate: async input => input.system_prompt.startsWith('You write the content of an impact card') ? card : step });
+    const run = await h.application.start({ access_token: 'token-a', request: approved() });
+    const result = await h.settled('token-a', run.run_id);
+    expect(result).toMatchObject({
+      status: 'completed', research: { kind: 'echo-agentic-research-result-v1', trigger: 'approved_record' },
+      rendered: { status: 'assessed', decided: [{ text: 'The display shows two decimals.', citation_index: 0 }], affected: [], people: [], citations: [{ citation: { kind: 'approved_record', atom_id: record.atom_id } }] },
+    });
+    expect(result).not.toHaveProperty('ask');
+    // The evaluation's view: the trimmed bundle, never the server records.
+    expect(result.research).not.toHaveProperty('server');
+    expect(result.research).not.toHaveProperty('gathered_for');
+    expect(h.audits).toEqual([expect.objectContaining({ trigger: 'approved_record', outcome: 'partial' })]);
+  });
+
   it('reads everything the approver can read for a record in no project, or in more than one', async () => {
     for (const projects of [[], [PROJECT, OTHER_PROJECT]]) {
       const h = harness({ recordProjects: () => projects, openRecord: openedRecord });
@@ -181,6 +199,8 @@ describe('staging research evaluation runs', () => {
     const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'sweep', input: { findings: [{ finding: 'Two decimals shipped', expected: 'Record updated', citations: [record] }] } } });
     const result = await h.settled('token-a', run.run_id);
     expect(result).toMatchObject({ status: 'completed', research: { trigger: 'sweep', unreadable_starting: [record], budget: { deadline_ms: 300_000 } } });
+    // Sweep has no renderer: research only.
+    expect(result).not.toHaveProperty('rendered');
     expect(h.generate).toHaveBeenCalled();
     expect(h.audits).toEqual([expect.objectContaining({ trigger: 'sweep', budget: 'background' })]);
   });

@@ -7,7 +7,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { datasetProblems, loadDataset, substitutePerson } from "./lib/dataset.mjs";
 import { discoverMeetings, exportBindings } from "./lib/bindings.mjs";
-import { pollDeadlineMs, startRequest } from "./lib/requests.mjs";
+import { pollDeadlineMs, rejectedAtIngress, savedResult, startRequest } from "./lib/requests.mjs";
 import { codeChecks } from "./lib/checks.mjs";
 import { createOpenRouterJudge, judgeInput, parseJudge } from "./lib/judge.mjs";
 import { aggregate, markdownReport, withholdJudgeMetrics } from "./lib/report.mjs";
@@ -83,8 +83,7 @@ async function runOne(client, testCase, request, budget, trial, model) {
   let receipt;
   try { receipt = await client.startResearchEval(request); }
   catch (error) {
-    const rejected = error?.name === "PersonQueryInputError" || error?.name === "OrganizationApiValidationError";
-    return { ...base, outcome: rejected ? "rejected" : "error", error: { code: error?.code ?? error?.name ?? "error", message: String(error?.message ?? error).slice(0, 300) }, elapsed_ms: Date.now() - started };
+    return { ...base, outcome: rejectedAtIngress(error) ? "rejected" : "error", error: { code: error?.code ?? error?.name ?? "error", message: String(error?.message ?? error).slice(0, 300) }, elapsed_ms: Date.now() - started };
   }
   const deadline = started + pollDeadlineMs(budget);
   for (;;) {
@@ -92,7 +91,7 @@ async function runOne(client, testCase, request, budget, trial, model) {
     let result;
     try { result = await client.readResearchEval(receipt.run_id); }
     catch (error) { return { ...base, run_id: receipt.run_id, outcome: "error", error: { code: error?.code ?? "error", message: String(error?.message ?? error).slice(0, 300) }, elapsed_ms: Date.now() - started }; }
-    if (result.status !== "running") return { ...base, run_id: receipt.run_id, outcome: result.status, result, elapsed_ms: Date.now() - started };
+    if (result.status !== "running") return { ...base, run_id: receipt.run_id, outcome: result.status, result: savedResult(result), elapsed_ms: Date.now() - started };
     if (Date.now() > deadline) return { ...base, run_id: receipt.run_id, outcome: "error", error: { code: "poll_timeout", message: "The run did not finish before the polling deadline" }, elapsed_ms: Date.now() - started };
   }
 }
@@ -115,7 +114,7 @@ async function run(args) {
         const request = startRequest(testCase, bound, budget);
         const saved = await runOne(client, testCase, request, budget, trial, model);
         writePrivateJson(out, `runs/${testCase.id}/${budget}-${trial}.json`, { ...saved, source_sha: sourceIdentity() });
-        process.stdout.write(`${testCase.id} ${budget} #${trial}: ${saved.outcome}${saved.result?.research?.stop ? ` (${saved.result.research.stop.reason})` : ""}\n`);
+        process.stdout.write(`${testCase.id} ${budget} #${trial}: ${saved.outcome}${saved.result?.research?.stop ? ` (${saved.result.research.stop.reason})` : ""}${saved.result?.rendered ? `, card ${saved.result.rendered.status}` : ""}\n`);
       }
     }
   }

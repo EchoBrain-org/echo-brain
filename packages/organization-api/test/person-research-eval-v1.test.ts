@@ -78,4 +78,24 @@ describe('research evaluation receipts and results', () => {
       { schema_version: 1, kind: 'echo-person-research-eval-result-v1', run_id: runId, status: 'completed', research: { ...research, trigger: 'Not A Name' } },
     ]) expect(() => validatePersonResearchEvalReadResponseV1(value)).toThrow();
   });
+
+  it('carries a rendered impact card beside the research of a task, and Ask output beside the research of a question', () => {
+    const base = { schema_version: 1, kind: 'echo-person-research-eval-result-v1', run_id: runId };
+    const task = { schema_version: 1, kind: 'echo-agentic-research-result-v1', trigger: 'approved_record', goal: { kind: 'task', task: 'A PM just approved record E1.' }, items: [], rounds: [], plan: [] };
+    const question = { ...task, trigger: 'ask', goal: { kind: 'question', question: 'Why is DVT on hold?' } };
+    const card = {
+      decided: [{ text: 'The display shows two decimals.', citation_index: 0 }], affected: [], unconfirmed: ['owner of the PRD display section'], people: [], status: 'assessed',
+      citations: [{ citation: record, kind: 'decision', label: 'Pilot review: display precision', visibility: 'team' }],
+    };
+    expect(validatePersonResearchEvalReadResponseV1({ ...base, status: 'completed', research: task, rendered: card })).toEqual({ ...base, status: 'completed', research: task, rendered: card });
+    // The goal's form, not a trigger name, decides which output fits: a question has Ask's writer, a task its trigger's renderer.
+    expect(() => validatePersonResearchEvalReadResponseV1({ ...base, status: 'completed', research: { ...task, trigger: 'ask' }, ask: { writer_evidence: [], response: {} } })).toThrow(/question result/u);
+    for (const value of [
+      { ...base, status: 'running', rendered: card },
+      { ...base, status: 'completed', research: question, rendered: card },
+      { ...base, status: 'completed', research: { ...task, goal: undefined }, rendered: card },
+      { ...base, status: 'completed', research: task, rendered: { ...card, status: 'maybe' } },
+      { ...base, status: 'completed', research: task, rendered: { ...card, affected: [{ citation_index: 0, says_now: 'Change THERM-46 in Jira.', relation: 'conflicts' }] } },
+    ]) expect(() => validatePersonResearchEvalReadResponseV1(value), JSON.stringify(value).slice(0, 120)).toThrow();
+  });
 });

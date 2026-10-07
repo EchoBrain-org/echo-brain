@@ -285,3 +285,7 @@ One commit per phase. The golden replay and `npm run check` pass after each.
   `services/organization-authority/src/composition/person-research-eval-v1.ts`.
 - Keep the kernel's architecture boundaries: renderers and trigger definitions
   are kernel answer-composition code; the service composes them.
+- Approved-record scope fallbacks: one readable linked project scopes the run
+  to it; no project, several readable projects, or only unreadable linked
+  projects mean everything the approver can read (the desk is still
+  access-checked). Graders should not read wider results as a bug.

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { PersonResearchEvalReadResponseV1 } from '@echo-brain/organization-api';
+import { validatePersonImpactCardV1, type PersonResearchEvalReadResponseV1 } from '@echo-brain/organization-api';
 import {
   AGENTIC_RESEARCH_BUDGETS_V1,
   AgenticAskDeadlineErrorV1,
@@ -38,6 +38,7 @@ type Run = {
   revalidate?: (signal?: AbortSignal) => Promise<unknown>;
   research?: AgenticResearchResultV1;
   ask?: NonNullable<PersonResearchEvalReadResponseV1['ask']>;
+  rendered?: NonNullable<PersonResearchEvalReadResponseV1['rendered']>;
   error?: NonNullable<PersonResearchEvalReadResponseV1['error']>;
 };
 
@@ -73,7 +74,9 @@ function failure(error: unknown): NonNullable<PersonResearchEvalReadResponseV1['
  * may run one trigger at a time; its result lives only in this process's
  * memory until read once or until it expires. Nothing is written to disk,
  * telemetry or logs beyond the loop's existing content-free audit. The named
- * trigger definition turns the request's input into a brief.
+ * trigger definition turns the request's input into a brief. A result carries
+ * the trimmed bundle, plus Ask's answer for a question or the rendered result
+ * of a trigger with a renderer.
  */
 export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOptionsV1): PersonResearchEvalHttpApplicationV1 {
   const now = options.now ?? (() => Date.now());
@@ -96,7 +99,8 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === request.trigger);
       if (definition === undefined) throw new AuthorityOperationError('invalid_request', 'Research evaluation trigger is not known');
       // The definition refuses an event it cannot run, before any run starts.
-      const defined = definition.brief(definition.parseEvent(request.input));
+      const event = definition.parseEvent(request.input);
+      const defined = definition.brief(event);
       // Ask's writer runs Ask's own brief, rebuilt from the question: anything more in a question brief would be dropped, so it is refused.
       if (defined.goal.kind === 'question' && (defined.starting.length > 0 || !defined.options.small_scope_preload)) throw new AuthorityOperationError('invalid_request', 'Research evaluation brief is invalid');
       // Only a person's question reads their own additions alone; a task's starting items are shared evidence.
@@ -135,6 +139,11 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
             const output = await loop.answerWithResearch({ question: brief.goal.question, budget: brief.budget, signal });
             run.research = output.research;
             run.ask = Object.freeze({ writer_evidence: output.writer_evidence, response: output.response });
+          } else if (definition.renderer !== undefined) {
+            // A task with a renderer: its result (the impact card, the one renderer a definition carries) and the trimmed bundle it was written from.
+            const output = await loop.renderWithResearch({ trigger: definition.name, brief, renderer: definition.renderer, trigger_input: event, signal });
+            run.research = output.research;
+            run.rendered = validatePersonImpactCardV1(output.rendered);
           } else {
             run.research = await loop.research({ trigger: definition.name, brief, signal });
           }
@@ -165,7 +174,8 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
         const fenced = failure(error);
         return Object.freeze({ ...base, status: 'failed' as const, error: fenced.code === 'unavailable' ? Object.freeze({ code: 'stale_access_state', message: FAILURE_MESSAGES.stale_access_state! }) : fenced });
       }
-      return Object.freeze({ ...base, status: 'completed' as const, research: JSON.parse(JSON.stringify(run.research)) as Readonly<Record<string, unknown>>, ...(run.ask === undefined ? {} : { ask: run.ask }) });
+      return Object.freeze({ ...base, status: 'completed' as const, research: JSON.parse(JSON.stringify(run.research)) as Readonly<Record<string, unknown>>,
+        ...(run.ask === undefined ? {} : { ask: run.ask }), ...(run.rendered === undefined ? {} : { rendered: run.rendered }) });
     },
     close() {
       clearInterval(sweeper);

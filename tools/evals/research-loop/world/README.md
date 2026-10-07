@@ -39,9 +39,9 @@ everywhere with that account's display name. This covers the Jira assignee, the
 meeting attendees, transcript lines, notes, expected records and the `must_not`
 text in the cases.
 
-- The same account runs every Ask, Check and Sweep. It must be a member of
-  the ECHO project `THERM` and approve M1 to M5. A Check acts as the person
-  who approved the record.
+- The same account runs every Ask, approved-record and Sweep case. It must be
+  a member of the ECHO project `THERM` and approve M1 to M5. An approved-record
+  run acts as the person who approved the record.
 - It must not be a member of `THERM Supplier Review`. Approve M6 from a
   second account that belongs to that project only.
 - Two actions mention `{{TEST_PERSON}}` but belong to Rafael Moreno (M3
@@ -61,7 +61,7 @@ text in the cases.
    because several keys depend on these dates. Before approving, edit each
    record to match `expected_records`. Share each transcript to its own
    project.
-4. Run the S0 cases (all Ask and Check cases).
+4. Run the S0 cases (all Ask and approved-record cases).
 5. For the Sweep cases only, apply `s1.apply`, run the Sweeps, then apply
    `s1.revert` and confirm that BUG-412 is In Progress and TRACE-01 is To Do,
    with no resolution on either.
@@ -82,6 +82,16 @@ be reverted, but ECHO cannot read either of them.
   `{ "page": "589865" }`.
 - A part's `evidence` lists every item in this world that supports it. Any
   other item that research reads counts as noise.
+- Approved-record cases add `affected`: the items the impact card should
+  list. Each is one ticket, or one part's sections of a page (any of them
+  counts), with the `relation` the card should give and the `owner` its
+  details carry. Both come from the case itself: every ticket and page section
+  in the evidence of a `conflict` part is `conflicts`, of a `change` part
+  `needs_updating`, and of a part that says the items agree `confirms`; an item
+  in several such parts takes the first. The owner is the Jira assignee from
+  `additions.json` (only THERM-47, 52, 53 and 54 have one) and `null` for every
+  other ticket and every page. Meeting items are not keyed: a card that lists
+  one the case cites is neither credited nor charged.
 - `never_appears` lists the M6 items in every case. Any trace of them in a
   research result, the notes or an answer fails the run.
 - THERM items carry "SYNTHETIC MOCK" banners. An answer that reports a mock

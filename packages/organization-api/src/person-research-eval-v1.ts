@@ -1,5 +1,6 @@
 import { validatePersonAnswerResponseV6 } from './person-answer-v4.js';
 import type { PersonAnswerResponseV6 } from './person-answer-v6.js';
+import { validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
 import { validatePersonQueryText } from './person-query.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import { asEnumerableRecord, fail, MAX_ORGANIZATION_API_BODY_BYTES, utf8ByteLength } from './validation.js';
@@ -48,10 +49,12 @@ export interface PersonResearchEvalReadResponseV1 {
   readonly kind: 'echo-person-research-eval-result-v1';
   readonly run_id: string;
   readonly status: PersonResearchEvalStatusV1;
-  /** The loop's research result (eval view); present once completed. */
+  /** The loop's research result (eval view, the trimmed bundle); present once completed. */
   readonly research?: Readonly<Record<string, unknown>>;
-  /** Ask only: the writer's input ids and the V6 answer. */
+  /** A question's output: the writer's input ids and the V6 answer. */
   readonly ask?: { readonly writer_evidence: readonly string[]; readonly response: PersonAnswerResponseV6 };
+  /** A task's output when its trigger has a renderer: the impact card. A research-only trigger has none. */
+  readonly rendered?: PersonImpactCardV1;
   readonly error?: { readonly code: string; readonly message: string };
 }
 
@@ -121,25 +124,33 @@ export function validatePersonResearchEvalReadRequestV1(value: unknown): PersonR
 
 export function validatePersonResearchEvalReadResponseV1(value: unknown): PersonResearchEvalReadResponseV1 {
   const input = asEnumerableRecord(value, 'Research evaluation result');
-  exactKeys(input, ['schema_version', 'kind', 'run_id', 'status'], ['research', 'ask', 'error'], 'Research evaluation result');
+  exactKeys(input, ['schema_version', 'kind', 'run_id', 'status'], ['research', 'ask', 'rendered', 'error'], 'Research evaluation result');
   if (input.schema_version !== 1 || input.kind !== 'echo-person-research-eval-result-v1') fail('Research evaluation result is invalid');
   const status = input.status;
   if (status !== 'running' && status !== 'completed' && status !== 'failed') fail('Research evaluation status is invalid');
   if ((status === 'completed') !== Object.hasOwn(input, 'research') || (status === 'failed') !== Object.hasOwn(input, 'error') ||
-      (Object.hasOwn(input, 'ask') && status !== 'completed')) fail('Research evaluation result does not match its status');
+      ((Object.hasOwn(input, 'ask') || Object.hasOwn(input, 'rendered')) && status !== 'completed')) fail('Research evaluation result does not match its status');
   let research: Readonly<Record<string, unknown>> | undefined;
   if (input.research !== undefined) {
     research = asEnumerableRecord(input.research, 'Research result');
     if (research.schema_version !== 1 || research.kind !== 'echo-agentic-research-result-v1' || typeof research.trigger !== 'string' || !TRIGGER.test(research.trigger) ||
         !Array.isArray(research.items) || !Array.isArray(research.rounds) || !Array.isArray(research.plan)) fail('Research result is invalid');
   }
+  // The goal's form decides which output fits: a question has Ask's writer, a task its trigger's renderer (or none).
+  const goal = research?.goal;
+  const goalKind = typeof goal === 'object' && goal !== null ? (goal as { readonly kind?: unknown }).kind : undefined;
   let ask: PersonResearchEvalReadResponseV1['ask'];
   if (input.ask !== undefined) {
     const value = asEnumerableRecord(input.ask, 'Research evaluation Ask output');
     exactKeys(value, ['writer_evidence', 'response'], [], 'Research evaluation Ask output');
     if (!Array.isArray(value.writer_evidence) || !value.writer_evidence.every(id => typeof id === 'string' && /^E\d{1,4}$/.test(id))) fail('Research evaluation writer evidence is invalid');
-    if (research?.trigger !== 'ask') fail('Research evaluation Ask output needs an Ask result');
+    if (goalKind !== 'question') fail('Research evaluation Ask output needs a question result');
     ask = Object.freeze({ writer_evidence: Object.freeze([...value.writer_evidence as string[]]), response: validatePersonAnswerResponseV6(value.response) });
+  }
+  let rendered: PersonImpactCardV1 | undefined;
+  if (input.rendered !== undefined) {
+    if (goalKind !== 'task') fail('Research evaluation rendered result needs a task result');
+    rendered = validatePersonImpactCardV1(input.rendered);
   }
   let error: PersonResearchEvalReadResponseV1['error'];
   if (input.error !== undefined) {
@@ -150,6 +161,6 @@ export function validatePersonResearchEvalReadResponseV1(value: unknown): Person
   }
   return Object.freeze({
     schema_version: 1, kind: 'echo-person-research-eval-result-v1', run_id: runId(input.run_id), status,
-    ...(research === undefined ? {} : { research }), ...(ask === undefined ? {} : { ask }), ...(error === undefined ? {} : { error }),
+    ...(research === undefined ? {} : { research }), ...(ask === undefined ? {} : { ask }), ...(rendered === undefined ? {} : { rendered }), ...(error === undefined ? {} : { error }),
   });
 }

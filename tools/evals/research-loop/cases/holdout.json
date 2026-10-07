@@ -455,12 +455,12 @@
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }, { "ticket": "ECHO-5" }, { "ticket": "ECHO-17" }]
     },
     {
-      "id": "check-t2-dvt-review-decisions",
-      "trigger": "check",
+      "id": "approved-record-t2-dvt-review-decisions",
+      "trigger": "approved_record",
       "state": "S0",
       "situation": 1,
       "kind": "cross-check",
-      "scope": { "kind": "project", "project": "THERM" },
+      "scope": { "kind": "record" },
       "budget": "background",
       "record": { "meeting": "M3" },
       "expected_outcome": "answerable",
@@ -559,6 +559,25 @@
             { "ticket": "THERM-48" }
           ]
         }
+      ],
+      "affected": [
+        { "id": "a1", "refs": [{ "ticket": "THERM-50" }], "relation": "confirms", "owner": null },
+        { "id": "a2", "refs": [{ "ticket": "THERM-46" }], "relation": "confirms", "owner": null },
+        { "id": "a3", "refs": [{ "ticket": "THERM-4" }], "relation": "confirms", "owner": null },
+        { "id": "a4", "refs": [{ "ticket": "THERM-1" }], "relation": "confirms", "owner": null },
+        { "id": "a5", "refs": [{ "page": "1441793", "section": "Gate policy" }, { "page": "1441793", "section": "DVT review — hold on accuracy" }], "relation": "confirms", "owner": null },
+        { "id": "a6", "refs": [{ "page": "1015989", "section": "Current illustrative scenario" }, { "page": "1015989", "section": "Board and ownership conventions" }], "relation": "confirms", "owner": null },
+        { "id": "a7", "refs": [{ "page": "1212607", "section": "Coverage summary" }], "relation": "confirms", "owner": null },
+        { "id": "a8", "refs": [{ "page": "1409025", "section": "Verification and gate acceptance" }], "relation": "confirms", "owner": null },
+        { "id": "a9", "refs": [{ "page": "1409042", "section": "BUG-412 walkthrough" }], "relation": "confirms", "owner": null },
+        { "id": "a10", "refs": [{ "page": "1212589", "section": "Delivery and gate strategy" }], "relation": "confirms", "owner": null },
+        { "id": "a11", "refs": [{ "ticket": "THERM-48" }], "relation": "confirms", "owner": null },
+        { "id": "a12", "refs": [{ "ticket": "THERM-54" }], "relation": "needs_updating", "owner": "{{TEST_PERSON}}" },
+        { "id": "a13", "refs": [{ "page": "1474561", "section": "Decision register" }], "relation": "needs_updating", "owner": null },
+        { "id": "a14", "refs": [{ "page": "1212607", "section": "DVT round 2 and regression policy" }], "relation": "needs_updating", "owner": null },
+        { "id": "a15", "refs": [{ "page": "1212589", "section": "Dependencies, risks and mitigations" }, { "page": "1212589", "section": "Open decisions" }], "relation": "needs_updating", "owner": null },
+        { "id": "a16", "refs": [{ "page": "1409025", "section": "Questions that prevent a real approved baseline" }], "relation": "needs_updating", "owner": null },
+        { "id": "a17", "refs": [{ "page": "1015989", "section": "Reviews and outstanding decisions" }], "relation": "needs_updating", "owner": null }
       ],
       "expected_needs": [
         "GATE-DVT status in Jira and Confluence",
