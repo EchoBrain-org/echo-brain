@@ -1,5 +1,5 @@
 import { normalizeAtlassianDocumentTextV1 } from '@echo-brain/provider-runtime/atlassian-document-text-v1';
-import { atlassianSiteOriginV1, verifyAtlassianConnectionV1, type AtlassianConnectionCheckInputV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
+import { verifyAtlassianConnectionV1, type AtlassianConnectionCheckInputV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
 import { createHash } from 'node:crypto';
 import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import type { PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
@@ -7,8 +7,6 @@ import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { JIRA_PERSON_PROVIDER_V1, JIRA_ID, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraBoundText, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
 export const jiraTextDigest = (text: string): `sha256:${string}` => `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
-
-export function jiraSiteOrigin(value: unknown): string { return atlassianSiteOriginV1(JIRA_PERSON_PROVIDER_V1, value); }
 
 export function verifyJiraConnectionV1(transport: JiraCloudTransportV1, input: AtlassianConnectionCheckInputV1 = {}) {
   return verifyAtlassianConnectionV1(JIRA_PERSON_PROVIDER_V1, transport, input);

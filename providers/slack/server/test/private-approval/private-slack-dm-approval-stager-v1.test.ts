@@ -1,7 +1,7 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { StagedPrivateApprovalPendingV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 import { describe, expect, it, vi } from "vitest";
-import { PrivateSlackDmApprovalStagerV1, projectPrivateSlackApprovalCardV1 } from "../../src/private-approval/private-slack-dm-approval-stager-v1.js";
+import { PrivateSlackDmApprovalStagerV1 } from "../../src/private-approval/private-slack-dm-approval-stager-v1.js";
 import type { ApprovalWorkflowStageInputV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
 import type { SqliteAuthorityMeetingProcessingStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1";
 
@@ -247,15 +247,6 @@ describe("private Slack DM approval stager V1", () => {
       '"due_at":"2026-09-01T00:00:00.000Z"',
     );
     expect(JSON.stringify(publishedCard.blocks.slice(actionsIndex))).toContain("Approve");
-    // Replay compiles a brf_replay brief; staging uses the candidate brief ID.
-    // Neither identifier changes the complete frozen presentation bytes.
-    expect(
-      JSON.stringify(projectPrivateSlackApprovalCardV1({
-        approval_id: "apr_1",
-        meeting: reviewedInput.meeting,
-        decisions: reviewedInput.decisions,
-      })),
-    ).toBe(JSON.stringify(publishedCard));
   });
 
   it("durably quarantines an approval package that cannot fit before provider I/O", async () => {

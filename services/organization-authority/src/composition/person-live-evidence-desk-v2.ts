@@ -1,6 +1,6 @@
-import { validatePersonEvidenceOpenRequestV1, type PersonAnswerCitationV3, type PersonPageCitationV1, type PersonSlackMessageCitationV1 } from '@echo-brain/organization-api';
+import { validatePersonEvidenceOpenRequestV1, type PersonAnswerCitationV3 } from '@echo-brain/organization-api';
 import type { EvidenceDeskKindV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
-import { liveSourceDescriptorV2, type PersonLiveSourceDescriptorV2, type EvidenceDeskPortV2, type EvidenceDeskResultV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
+import { type PersonLiveSourceDescriptorV2, type EvidenceDeskPortV2, type EvidenceDeskResultV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
@@ -14,16 +14,6 @@ export interface RegisteredPersonLiveEvidenceSourceV2 {
   readonly source: PersonLiveEvidenceSourceV1;
   /** Provider composition has already applied this exact request's scope. */
   readonly scope: { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string };
-}
-
-/** Compatibility construction only; all sources use the registered dispatcher below. */
-export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?: PersonLiveEvidenceSourceV1, slack?: PersonLiveEvidenceSourceV1<PersonSlackMessageCitationV1>, ticketProjectId?: string, page?: PersonLiveEvidenceSourceV1<PersonPageCitationV1>, pageProjectId?: string): EvidenceDeskPortV2 {
-  const registrations: RegisteredPersonLiveEvidenceSourceV2[] = [];
-  for (const [source, kind, project] of [[ticket, 'ticket', ticketProjectId], [page, 'page', pageProjectId], [slack, 'slack', undefined]] as const) {
-    if (source === undefined) continue;
-    registrations.push({ source, descriptor: liveSourceDescriptorV2({ source: kind, tool_id: source.tool_id }), scope: project === undefined ? { kind: 'global' } : { kind: 'project', project_id: project } });
-  }
-  return createRegisteredPersonLiveEvidenceDeskV2(base, registrations);
 }
 
 /** Request-owned dispatch by source identity; content kind never selects one provider. */

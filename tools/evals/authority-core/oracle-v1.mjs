@@ -6,7 +6,6 @@ import {
   analyzeDocument,
   analyzeQuery,
   atomsAtHead,
-  headForPosition,
   logicalPostings,
   seededRandom,
 } from "./corpus-v1.mjs";
@@ -114,76 +113,6 @@ export function searchAtHead({ corpus, exactHead, reader, query, limit = 10 }) {
     authorized_candidate_count: candidates.length,
     items: Object.freeze(candidates.slice(0, limit).map(itemForResult)),
   });
-}
-
-function resultIdentity(item) {
-  return `${item.atom_id}\u0000${item.record_hash}\u0000${item.policy_id}\u0000${item.content_digest}`;
-}
-
-function sameHeadIdentity(left, right) {
-  return left?.lineage_id === right?.lineage_id &&
-    left?.position === right?.position &&
-    left?.hash === right?.hash;
-}
-
-function assertSameItems(expected, actual) {
-  if (!Array.isArray(actual) || actual.length !== expected.length) {
-    throw new Error("search result does not contain the entire expected top-k");
-  }
-  for (let index = 0; index < expected.length; index += 1) {
-    if (resultIdentity(expected[index]) !== resultIdentity(actual[index]) ||
-        actual[index].text !== expected[index].text ||
-        sha256(actual[index].text) !== expected[index].text_digest) {
-      throw new Error(`search result differs at rank ${index + 1}`);
-    }
-  }
-}
-
-/**
- * Verify one direct-search response against an independent active-head ledger.
- * The runner records one same-lineage active pointer at offer and one when it
- * releases the response. A result must bind the release observation; when no
- * publication intervened that is the offer head, otherwise it is the newer
- * release head. A response at any older head is a failure even when its
- * ranking is otherwise correct. Thus no start/end snapshot oracle exists.
- */
-export function assertDirectSearchResponse({
-  corpus,
-  reader,
-  query,
-  offer_head: offerHead,
-  response,
-  independently_observed_active_heads: observedHeads,
-  release_head: releaseHead,
-  current_person_release_fence: personFence,
-}) {
-  if (!response || !response.exact_head || !Array.isArray(observedHeads) || !releaseHead || !personFence) {
-    throw new Error("response, offer/release observed heads, and a current Person release fence are required");
-  }
-  const observedOffer = observedHeads.find((head) => sameHeadIdentity(head, offerHead));
-  if (observedOffer === undefined) throw new Error("offer head was not independently observed as active");
-  const observedRelease = observedHeads.find((head) => sameHeadIdentity(head, releaseHead));
-  if (observedRelease === undefined) throw new Error("release head was not independently observed as active");
-  if (observedRelease.lineage_id !== observedOffer.lineage_id) {
-    throw new Error("release head belongs to a different record lineage than the offer head");
-  }
-  if (observedRelease.position < observedOffer.position) {
-    throw new Error("release head is older than the independently observed offer head");
-  }
-  if (!sameHeadIdentity(response.exact_head, observedRelease)) {
-    throw new Error("response does not bind the independently observed active release head");
-  }
-  if (!response.release_fence || !sameHeadIdentity(response.release_fence.exact_record_head, observedRelease)) {
-    throw new Error("response was not released under its independently observed exact record head");
-  }
-  if (response.release_fence.principal_id !== reader.principal_id ||
-      response.release_fence.membership_id !== reader.membership_id ||
-      response.release_fence.current_person_version !== personFence.current_person_version) {
-    throw new Error("response does not meet the current Person release fence");
-  }
-  const expected = searchAtHead({ corpus, exactHead: observedRelease, reader, query, limit: 10 });
-  assertSameItems(expected.items, response.items);
-  return expected;
 }
 
 function candidateCountFor(corpus, head, reader, query) {
@@ -309,73 +238,4 @@ export function buildQueryPlan({ corpus, reader, count = 100, seed = "queries", 
     built.push(Object.freeze({ kind: "negative", query, candidate_count: 0 }));
   }
   return Object.freeze(built.slice(0, count));
-}
-
-/** Compare every logical fact and posting; no candidate-supplied root is trusted. */
-export function assertCompleteLogicalIndex({ corpus, exact_head: exactHead, actual }) {
-  if (!actual || !Array.isArray(actual.facts) || !Array.isArray(actual.postings)) {
-    throw new Error("actual decoded facts and postings are required");
-  }
-  const atoms = atomsAtHead(corpus, exactHead);
-  const expectedFacts = atoms.map((atom) => ({
-    atom_id: atom.atom_id,
-    record_hash: atom.record_hash,
-    policy_id: atom.policy_id,
-    content_digest: atom.content_digest,
-    reviewer_principal_id: atom.reviewer_principal_id,
-    reviewer_membership_id: atom.reviewer_membership_id,
-    text: atom.text,
-    log_position: atom.log_position,
-    atom_order: atom.atom_order,
-    item_kind: atom.item_kind,
-  })).sort((left, right) => left.atom_id.localeCompare(right.atom_id, "en"));
-  const actualFacts = actual.facts.map((fact) => ({
-    atom_id: fact.atom_id,
-    record_hash: fact.record_hash,
-    policy_id: fact.policy_id,
-    content_digest: fact.content_digest,
-    reviewer_principal_id: fact.reviewer_principal_id,
-    reviewer_membership_id: fact.reviewer_membership_id,
-    text: fact.text,
-    log_position: fact.log_position,
-    atom_order: fact.atom_order,
-    item_kind: fact.item_kind,
-  })).sort((left, right) => left.atom_id.localeCompare(right.atom_id, "en"));
-  if (JSON.stringify(actualFacts) !== JSON.stringify(expectedFacts)) {
-    throw new Error("decoded index facts differ from independently derived approved facts");
-  }
-  const expectedPostings = logicalPostings(atoms);
-  const actualPostings = actual.postings.map((posting) => ({
-    term: posting.term,
-    atom_id: posting.atom_id,
-    term_frequency: posting.term_frequency,
-  })).sort((left, right) =>
-    left.term.localeCompare(right.term, "en") || left.atom_id.localeCompare(right.atom_id, "en") || left.term_frequency - right.term_frequency,
-  );
-  if (JSON.stringify(actualPostings) !== JSON.stringify(expectedPostings)) {
-    throw new Error("decoded index postings differ from the complete independent logical posting multiset");
-  }
-  return Object.freeze({ facts: expectedFacts.length, postings: expectedPostings.length });
-}
-
-/** Test utility for producing a response-like object from an independently chosen head. */
-export function oracleResponse({
-  corpus,
-  reader,
-  query,
-  head_position = corpus.exact_head.position,
-  current_person_version = "oracle-person-v1",
-}) {
-  const exactHead = headForPosition(corpus, head_position);
-  const expected = searchAtHead({ corpus, exactHead, reader, query });
-  return Object.freeze({
-    exact_head: exactHead,
-    items: expected.items,
-    release_fence: Object.freeze({
-      exact_record_head: exactHead,
-      principal_id: reader.principal_id,
-      membership_id: reader.membership_id,
-      current_person_version,
-    }),
-  });
 }

@@ -59,8 +59,6 @@ export const JOURNEY_METRIC_DIMENSION_KEYS_V1 = Object.freeze([
   "provider",
   "model",
 ] as const);
-export type JourneyMetricDimensionKeyV1 =
-  (typeof JOURNEY_METRIC_DIMENSION_KEYS_V1)[number];
 
 export const JOURNEY_EVENTS_V1 = Object.freeze([
   "started",
@@ -420,13 +418,6 @@ function normalizeRetrieval(
 /** Returns null rather than exposing malformed or non-telemetry IDs. */
 export function parseJourneyIdV1(value: string): JourneyIdV1 | null {
   return typeof value === "string" && UUID_V4.test(value) ? (value as JourneyIdV1) : null;
-}
-
-/** Returns true only for finite, low-cardinality metric-dimension keys. */
-export function isJourneyMetricDimensionKeyV1(
-  value: unknown,
-): value is JourneyMetricDimensionKeyV1 {
-  return includes(JOURNEY_METRIC_DIMENSION_KEYS_V1, value);
 }
 
 /** Strict constructor. The fail-open API below catches its errors for product code. */

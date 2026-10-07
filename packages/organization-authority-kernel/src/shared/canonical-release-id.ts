@@ -16,14 +16,6 @@ export function isCanonicalReleaseId(value: string): boolean {
   return CANONICAL_RELEASE_ID.test(value);
 }
 
-/** Repeated IDs are ambiguous even when every occurrence is identical. */
-export function extractSingleCanonicalReleaseId(
-  value: string,
-): string | undefined {
-  const matches = canonicalReleaseIds(value);
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
 export function containsCanonicalReleaseId(
   value: string,
   releaseId: string,

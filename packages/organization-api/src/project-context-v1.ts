@@ -77,7 +77,6 @@ export interface ProjectSettingsReceiptV1 {
   readonly received_at: string;
   readonly state: 'applied';
 }
-export type ProjectMutationOperationV1 = 'member_set' | 'member_remove' | 'associate' | 'dissociate';
 export type ProjectMutationReceiptV1 =
   | { readonly schema_version: 1; readonly kind: 'echo-project-mutation-receipt-v1'; readonly request_id: string; readonly project_id: ProjectIdV1; readonly operation: 'member_set' | 'member_remove'; readonly membership_id: string; readonly received_at: string; readonly state: 'applied' }
   | { readonly schema_version: 1; readonly kind: 'echo-project-mutation-receipt-v1'; readonly request_id: string; readonly project_id: ProjectIdV1; readonly operation: 'associate' | 'dissociate'; readonly context_id: string; readonly received_at: string; readonly state: 'applied' };

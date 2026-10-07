@@ -67,25 +67,6 @@ export interface PrivateApprovalPolicyBindingV2 {
   readonly transcript_source: PrivateApprovalTranscriptSourceV1;
 }
 
-/** Exact human choice document hashed into every V2 project/transcript consequence. */
-export interface PrivateApprovalPolicyConsequenceV2 {
-  readonly schema_version: 2;
-  readonly kind: "echo-private-slack-block-approval-consequence-v2";
-  readonly policy_id: PersonApprovalPolicyIdV2;
-  readonly audience_project_ids: readonly string[];
-  readonly association_project_ids: readonly string[];
-  readonly share_transcript: boolean;
-  readonly transcript_source: PrivateApprovalTranscriptSourceV1;
-}
-
-export interface PrivateApprovalResolutionOutcomeV2 {
-  readonly command_id: string;
-  readonly approval_id: string;
-  readonly action: PrivateApprovalActionV1;
-  readonly comment: string | null;
-  readonly canonical_record_policy: PrivateApprovalPolicyBindingV2 | null;
-}
-
 function projectIds(value: unknown, label: string, requireAtLeastOne: boolean): readonly string[] {
   if (!Array.isArray(value) || value.length > PRIVATE_APPROVAL_PROJECT_SELECTION_MAX ||
       (requireAtLeastOne && value.length === 0)) {

@@ -98,17 +98,6 @@ interface PrivateCardAndSnapshotV2 {
   readonly transcript_source: PrivateApprovalTranscriptSourceV1;
 }
 
-/**
- * Read-only input for replaying the frozen Slack review projection.  This is
- * intentionally narrower than staging: it has no reviewer, connection, or
- * persistence authority.
- */
-export interface PrivateSlackApprovalCardProjectionInputV1 {
-  readonly approval_id: string;
-  readonly meeting: ApprovalWorkflowStageInputV1["meeting"];
-  readonly decisions: ApprovalWorkflowStageInputV1["decisions"];
-}
-
 const MAX_TITLE = 150;
 
 function legacyMeetingTitle(value: unknown): string {
@@ -230,22 +219,6 @@ function ownerProposals(brief: CompiledDecisionBrief): readonly PrivateSlackAppr
 
 function isCardLimitError(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith("private approval Block Kit card ");
-}
-
-/**
- * Projects the same complete approval card used by staging without performing
- * any I/O. `undefined` means the exact DecisionSet cannot be safely rendered
- * within the card's frozen limits.
- */
-export function projectPrivateSlackApprovalCardV1(
-  input: PrivateSlackApprovalCardProjectionInputV1,
-): ReturnType<typeof buildPrivateSlackApprovalBlockKitCardV1> | undefined {
-  const brief = compileDecisionBrief(
-    "brf_replay",
-    input.meeting,
-    input.decisions,
-  );
-  return projectCompiledCardV1(input.approval_id, input.meeting.title, brief);
 }
 
 function projectCompiledCardV1(

@@ -145,10 +145,6 @@ function isStringArray(value) {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
-function isRepositoryPathPattern(path) {
-  return typeof path === 'string' && isRepositoryPath(path.replaceAll('*', 'provider'));
-}
-
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

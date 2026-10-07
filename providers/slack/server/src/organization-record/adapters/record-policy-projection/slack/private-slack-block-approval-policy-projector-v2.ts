@@ -13,8 +13,6 @@ import {
   validatePrivateSlackBlockApprovalRecordInputV3,
 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v2.js";
 
-export const PRIVATE_SLACK_BLOCK_APPROVAL_AUTHORIZATION_WITNESS_V2_KIND =
-  "echo-private-slack-block-approval-authorization-witness-v2" as const;
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 
 function fail(detail: string): never { throw new Error(`private Slack approval policy projector v2 ${detail}`); }

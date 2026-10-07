@@ -4,7 +4,6 @@ import {
   createJourneyIdV1,
   createJourneyTelemetryEventV1,
   createJourneyTelemetryV1,
-  isJourneyMetricDimensionKeyV1,
   JOURNEY_ENVIRONMENTS_V1,
   JOURNEY_EVENTS_V1,
   JOURNEY_FAILURE_CLASSES_V1,
@@ -368,20 +367,6 @@ describe("journey telemetry v1", () => {
       "provider",
       "model",
     ]);
-    for (const allowed of JOURNEY_METRIC_DIMENSION_KEYS_V1) {
-      expect(isJourneyMetricDimensionKeyV1(allowed)).toBe(true);
-    }
-    for (const forbidden of [
-      "journey_id",
-      "request_id",
-      "user_id",
-      "person_id",
-      "meeting_id",
-      "candidate_id",
-      "approval_id",
-    ]) {
-      expect(isJourneyMetricDimensionKeyV1(forbidden)).toBe(false);
-    }
   });
 
   it("freezes every validation allowlist so runtime mutation cannot admit new values", () => {
@@ -473,7 +458,6 @@ describe("journey telemetry v1", () => {
         },
       }),
     ).toThrow("usage_status");
-    expect(isJourneyMetricDimensionKeyV1(injected)).toBe(false);
   });
 
   it("enforces stage-compatible outcomes and keeps intermediate stages outcome-free", () => {

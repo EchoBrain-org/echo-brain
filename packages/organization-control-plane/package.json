@@ -40,10 +40,6 @@
     "./canonical/canonical-json": {
       "types": "./dist/canonical/canonical-json.d.ts",
       "import": "./dist/canonical/canonical-json.js"
-    },
-    "./persistence/verified-organization-control-state-v1": {
-      "types": "./dist/persistence/verified-organization-control-state-v1.d.ts",
-      "import": "./dist/persistence/verified-organization-control-state-v1.js"
     }
   },
   "files": [

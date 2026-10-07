@@ -1,6 +1,6 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
-import { OPENROUTER_DECISION_PROCESSOR_ADAPTER_VERSION_V1, OPENROUTER_DECISION_PROCESSOR_MODEL_V1, OPENROUTER_DECISION_PROCESSOR_PROMPT_VERSION_V1, OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1, OPENROUTER_DECISION_PROCESSOR_SCHEMA_VERSION_V1, assertOpenRouterDecisionProcessorConfigurationCommitmentV1, assertOpenRouterDecisionProcessorRuntimeCommitmentsV1, fixedOpenRouterDecisionProcessorConfigV1, openRouterDecisionProcessorConfigurationSha256V1, openRouterDecisionProcessorCredentialReferenceSha256V1 } from "../src/openrouter-decision-processor-config-v1.js";
+import { OPENROUTER_DECISION_PROCESSOR_MODEL_V1, OPENROUTER_DECISION_PROCESSOR_PROMPT_VERSION_V1, OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1, OPENROUTER_DECISION_PROCESSOR_SCHEMA_VERSION_V1, assertOpenRouterDecisionProcessorConfigurationCommitmentV1, assertOpenRouterDecisionProcessorRuntimeCommitmentsV1, fixedOpenRouterDecisionProcessorConfigV1, openRouterDecisionProcessorConfigurationSha256V1, openRouterDecisionProcessorCredentialReferenceSha256V1 } from "../src/openrouter-decision-processor-config-v1.js";
 import {
   LLM_DECISION_PROCESSOR_ADAPTER_VERSION,
   LLM_DECISION_PROCESSOR_PROMPT_VERSION,
@@ -11,16 +11,13 @@ describe("fixed OpenRouter processor runtime commitments", () => {
   const reference = "file:/private/openrouter-token";
 
   it("commits the exported LLM adapter, prompt, and schema versions", () => {
-    expect(OPENROUTER_DECISION_PROCESSOR_ADAPTER_VERSION_V1).toBe(
-      LLM_DECISION_PROCESSOR_ADAPTER_VERSION,
-    );
     expect(OPENROUTER_DECISION_PROCESSOR_PROMPT_VERSION_V1).toBe(
       LLM_DECISION_PROCESSOR_PROMPT_VERSION,
     );
     expect(OPENROUTER_DECISION_PROCESSOR_SCHEMA_VERSION_V1).toBe(
       LLM_DECISION_PROCESSOR_SCHEMA_VERSION,
     );
-    expect(OPENROUTER_DECISION_PROCESSOR_ADAPTER_VERSION_V1).toBe("1.9.0");
+    expect(LLM_DECISION_PROCESSOR_ADAPTER_VERSION).toBe("1.9.0");
     expect(OPENROUTER_DECISION_PROCESSOR_PROMPT_VERSION_V1).toBe(
       "decision-extraction-v10",
     );

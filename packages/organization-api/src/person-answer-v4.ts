@@ -29,8 +29,6 @@ export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 = 64 * 1024;
 export const PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 = 3 * 1024;
 export const PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 = 64 * 1024;
 export const PERSON_EVIDENCE_LABEL_MAX_BYTES_V1 = 1024;
-/** The final response ceiling remains authoritative, including citation metadata. */
-export const PERSON_ANSWER_FALLBACK_TOTAL_MAX_BYTES_V4 = PERSON_ANSWER_RESPONSE_MAX_BYTES_V4;
 
 export type PersonEvidenceKindV1 = 'imported_meeting' | 'decision' | 'action' | 'rationale' | 'note' | 'document_passage' | 'slack_message';
 export type PersonEvidenceVisibilityV1 = 'only_me' | 'team' | 'project' | 'projects' | 'approver_only';

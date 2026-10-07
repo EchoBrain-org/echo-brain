@@ -30,10 +30,6 @@
       "import": "./dist/openrouter-telemetry-vocabulary-v1.js"
     },
     "./assets/telemetry-vocabulary.v1.json": "./assets/telemetry-vocabulary.v1.json",
-    "./llm/openrouter-client": {
-      "types": "./dist/llm/openrouter-client.d.ts",
-      "import": "./dist/llm/openrouter-client.js"
-    },
     "./verify-openrouter-decision-processor-admission-v1": {
       "types": "./dist/verify-openrouter-decision-processor-admission-v1.d.ts",
       "import": "./dist/verify-openrouter-decision-processor-admission-v1.js"

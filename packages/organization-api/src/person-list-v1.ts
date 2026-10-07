@@ -33,7 +33,6 @@ export const PERSON_OPEN_ATOMS_BUDGET_BYTES_V1 = 32 * 1024;
 export const PERSON_OPEN_ATOM_PART_MAX_BYTES_V1 = 3 * 1024;
 export const PERSON_OPEN_DOCUMENT_CHUNKS_MAX_V1 = 8;
 export const PERSON_OPEN_PARTICIPANTS_MAX_V1 = 32;
-export const PERSON_CURSOR_MAX_CHARACTERS_V1 = 512;
 export const PERSON_LIST_NOTICE_MEETINGS_UNAVAILABLE_V1 = 'meetings_unavailable';
 
 export type PersonItemKindV1 = 'imported_meeting' | 'note' | 'document' | 'meeting';
