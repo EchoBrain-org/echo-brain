@@ -1343,6 +1343,16 @@ describe("agentic Ask: small-scope preload", () => {
     expect(script.prompt(0).opened.map((value: { text: string }) => value.text)).toEqual(expect.arrayContaining(["Full text A.", "Full text B."]));
     expect(result.outcome).toBe("answered");
   });
+
+  it("starts no preload search once the caller has cancelled", async () => {
+    const evidence = desk({ inventory: [listedItem("a")] });
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const controller = new AbortController();
+    controller.abort();
+    await expect(ask({ desk: evidence, model: scripted([]).model, audit, shortcut: true }).answer({ question: "When is launch?", signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
+    expect(evidence.search).not.toHaveBeenCalled();
+    expect(audit.at(-1)).toMatchObject({ outcome: "cancelled", model_calls: 0 });
+  });
 });
 
 describe("agentic Ask: architecture", () => {
@@ -1361,6 +1371,18 @@ describe("agentic Ask: architecture", () => {
       expect(source, named(path)).not.toMatch(/from\s+["'][^"']*evidence-desk[^"']*["']/u);
       expect(source, named(path)).not.toMatch(/\.\s*(?:search|open|list|openCitation)\s*\(/u);
     }
+  });
+
+  it("keeps the research loop to its inputs: no renderer or trigger definition, and the model only through the gate it is given", () => {
+    const source = readFileSync(join(root, "agentic-research-loop-v1.ts"), "utf8");
+    const imports = [...source.matchAll(/from\s+["']([^"']+)["']/gu)].map(match => match[1]!);
+    expect(imports.length).toBeGreaterThan(0);
+    for (const specifier of imports) {
+      // The runner imports the Ask renderer, so the loop never imports the runner either.
+      expect(specifier).not.toMatch(/renderer|trigger-definition|agentic-ask-v1\.js$|structured-generation/u);
+    }
+    expect(source).not.toMatch(/\bcreateAgenticModelGateV1\b/u);
+    expect(source).toMatch(/\bgate\.withRepair\(/u);
   });
 
   it("calls the model only from the shared gate", () => {
