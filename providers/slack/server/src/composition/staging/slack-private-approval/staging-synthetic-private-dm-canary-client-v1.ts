@@ -37,6 +37,11 @@ function isApprovalOutcome(value: unknown): value is ApprovalOutcome {
   return OUTCOMES.some((outcome) => outcome === value);
 }
 
+function hasExactKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(record);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
+
 function parseReceipt(
   body: string,
   expectedReleaseId: string,
@@ -60,18 +65,7 @@ function parseReceipt(
     invalidReceipt();
   }
   if (receipt.approval_outcome === "not_actionable") {
-    if (
-      Object.keys(receipt).length !== 4 ||
-      Object.keys(receipt).some(
-        (key) =>
-          !new Set([
-            "schema_version",
-            "kind",
-            "release_id",
-            "approval_outcome",
-          ]).has(key),
-      )
-    ) {
+    if (!hasExactKeys(receipt, ["schema_version", "kind", "release_id", "approval_outcome"])) {
       invalidReceipt();
     }
     return Object.freeze({
@@ -82,17 +76,7 @@ function parseReceipt(
     });
   }
   if (
-    Object.keys(receipt).length !== 5 ||
-    Object.keys(receipt).some(
-      (key) =>
-        !new Set([
-          "schema_version",
-          "kind",
-          "release_id",
-          "approval_outcome",
-          "approval_id",
-        ]).has(key),
-    ) ||
+    !hasExactKeys(receipt, ["schema_version", "kind", "release_id", "approval_outcome", "approval_id"]) ||
     typeof receipt.approval_id !== "string" ||
     !APPROVAL_ID.test(receipt.approval_id)
   ) {
