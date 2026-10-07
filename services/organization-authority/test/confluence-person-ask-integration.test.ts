@@ -87,7 +87,7 @@ it('catalogs, connects, maps, cites, and disconnects Confluence page evidence th
     expect(await post('/v1/person/tools/confluence/project/read', mappingRead)).toMatchObject({ status: 200, body: { mapping: null, revision: null } });
     const mapped = await post('/v1/person/tools/confluence/project/set', { ...mappingRead, request_id: randomUUID(), expected_revision: null, space_ids: ['123'] });
     expect(mapped).toMatchObject({ status: 200, body: { mapping: { cloud_id: CLOUD, space_ids: ['123'] } } });
-    generate.mockClear(); confluenceFetch.mockClear();
+    generate.mockClear(); confluenceFetch.mockClear(); vi.mocked(confluence.nango.connection).mockClear();
     const answer = await post('/v5/person/ask', { schema_version: 3, question: 'What did we decide for the release?', project_id });
     expect(answer.status).toBe(200);
     expect(validatePersonAnswerResponseV6(answer.body)).toMatchObject({ schema_version: 6, outcome: 'answered', scope: { kind: 'project', project_id }, citations: [expect.objectContaining({ kind: 'page', citation: expect.objectContaining({ page_id: '100', external_scope_id: CLOUD, permalink: `${SITE}/wiki/pages/viewpage.action?pageId=100` }) })] });
@@ -95,6 +95,19 @@ it('catalogs, connects, maps, cites, and disconnects Confluence page evidence th
       const request = new URL(String(url));
       return request.pathname.endsWith('/api/v2/pages') && request.searchParams.get('space-id') === '123';
     })).toBe(true);
+    // One Ask creates one request-owned Confluence reader. Its discovery,
+    // open, verification, and citation revalidation all share that reader's
+    // credential lookup; the next Ask must create a fresh one.
+    expect(vi.mocked(confluence.nango.connection)).toHaveBeenCalledTimes(1);
+    expect(confluenceFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/oauth/token/accessible-resources').length).toBeGreaterThan(1);
+    expect(confluenceFetch.mock.calls.filter(([url]) => {
+      const request = new URL(String(url));
+      return request.pathname.endsWith('/api/v2/pages') && request.searchParams.has('id');
+    }).length).toBeGreaterThan(0);
+    generate.mockClear(); confluenceFetch.mockClear(); vi.mocked(confluence.nango.connection).mockClear();
+    const fresh = await post('/v5/person/ask', { schema_version: 3, question: 'What did we decide for the release?', project_id });
+    expect(fresh.status).toBe(200);
+    expect(vi.mocked(confluence.nango.connection)).toHaveBeenCalledTimes(1);
     expect((await post('/v1/person/tools/confluence/disconnect', { schema_version: 1 })).status).toBe(200);
     expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'confluence', personal_status: 'revoked', external_subject_id: null })]));
   } finally { await runtime.close(); }

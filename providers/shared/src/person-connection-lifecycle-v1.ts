@@ -5,6 +5,7 @@ import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-auth
 import type { PersonConnectionStoreV1, PersonConnectionAttemptFailureV1, PersonConnectionAttemptV1, ConnectedPersonV1 } from './person-connection-store-v1.js';
 import type { NangoPersonConnectionV1 } from './nango-person-connection-v1.js';
 import type { PersonProviderV1 } from './person-provider-v1.js';
+import { abortableProviderOperationV1 } from './bounded-json-response-v1.js';
 
 export interface PersonConnectionAuthorizationV1 extends ConnectedPersonV1 { readonly authorization_sha256: Sha256Digest }
 export interface PersonConnectionAuthenticatedFetchV1 {
@@ -59,6 +60,46 @@ export function createPersonConnectionLifecycleV1(options: {
   }
   function tags(person: ConnectedPersonV1, attempt: string) { return { organization_id: person.organization_id, end_user_id: person.principal_id, echo_membership: person.membership_id, echo_attempt: attempt }; }
   function authenticated(binding: PersonConnectorReadBindingV1, reference: string, expectedTags: Record<string, string>, current: () => void): PersonConnectionAuthenticatedFetchV1 {
+    type Connection = Awaited<ReturnType<NangoPersonConnectionV1['connection']>>;
+    type Lookup = { promise: Promise<Connection>; controller: AbortController; waiters: number; settled: boolean };
+    // Each source/request or worker session owns a fresh transport. Keep the
+    // verified credential here, never in the process-wide lifecycle or store.
+    const expectedTagsHash = canonicalSha256(expectedTags);
+    let lookup: Lookup | undefined;
+    async function connection(signal?: AbortSignal): Promise<{ credentials: Connection; lookup: Lookup }> {
+      signal?.throwIfAborted();
+      if (lookup === undefined) {
+        const controller = new AbortController();
+        const selected: Lookup = { controller, waiters: 0, settled: false,
+          promise: Promise.resolve().then(() => {
+            controller.signal.throwIfAborted();
+            return options.nango.connection(reference, controller.signal);
+          }).then(value => {
+            controller.signal.throwIfAborted();
+            if (canonicalSha256(value.tags) !== expectedTagsHash) failure('unauthorized');
+            return value;
+          }).catch(error => {
+            if (lookup === selected) lookup = undefined;
+            throw error;
+          }).finally(() => { selected.settled = true; }),
+        };
+        lookup = selected;
+      }
+      const selected = lookup;
+      selected.waiters += 1;
+      try {
+        // Cancelling one parallel evidence read must not cancel other waiters.
+        const credentials = await (signal === undefined ? selected.promise
+          : abortableProviderOperationV1(() => selected.promise, signal));
+        return { credentials, lookup: selected };
+      } finally {
+        selected.waiters -= 1;
+        if (!selected.settled && selected.waiters === 0) {
+          if (lookup === selected) lookup = undefined;
+          selected.controller.abort();
+        }
+      }
+    }
     return Object.freeze<PersonConnectionAuthenticatedFetchV1>({ binding, async fetch(url, init) {
       current(); init.signal?.throwIfAborted();
       // Defensive allowlist BEFORE obtaining or attaching a credential, even if a future caller bypasses the transport.
@@ -66,12 +107,19 @@ export function createPersonConnectionLifecycleV1(options: {
       if (target.origin !== provider.credential_origin || target.username !== '' || target.password !== '' || target.hash !== '' ||
           !provider.credential_paths(binding.external_scope_id ?? '').some(path => path.endsWith('/') ? target.pathname.startsWith(path) : target.pathname === path) ||
           init.redirect !== 'error') failure('unauthorized');
-      const connection = await options.nango.connection(reference, init.signal ?? undefined);
-      if (canonicalSha256(connection.tags) !== canonicalSha256(expectedTags)) failure('unauthorized');
+      const lease = await connection(init.signal ?? undefined);
+      const credentials = lease.credentials;
+      if (canonicalSha256(credentials.tags) !== expectedTagsHash) {
+        if (lookup === lease.lookup) lookup = undefined;
+        failure('unauthorized');
+      }
       current(); init.signal?.throwIfAborted();
-      const headers = new Headers(init.headers); headers.set('Authorization', `Bearer ${connection.access_token}`);
+      const headers = new Headers(init.headers); headers.set('Authorization', `Bearer ${credentials.access_token}`);
       try {
         const response = await options.fetch(url, { ...init, headers });
+        // Preserve the provider's denial; a later explicit read must fetch
+        // fresh credentials rather than reuse a rejected token. Never retry I/O.
+        if ((response.status === 401 || response.status === 403) && lookup === lease.lookup) lookup = undefined;
         try { current(); init.signal?.throwIfAborted(); } catch (error) { await response.body?.cancel().catch(() => {}); throw error; }
         return response;
       } catch { init.signal?.throwIfAborted(); failure('unavailable'); }
