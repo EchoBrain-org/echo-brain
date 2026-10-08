@@ -68,3 +68,5 @@ export * from './person-tool-connection-v1.js';
 export * from './person-tool-connection-client-v1.js';
 
 export * from './person-meetings-v1.js';
+
+export * from './person-runs-v1.js';

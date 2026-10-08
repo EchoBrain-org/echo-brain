@@ -12,6 +12,7 @@ import {
   PERSON_LIST_TEXT_MAX_BYTES_V1,
   PERSON_OPEN_ATOMS_BUDGET_BYTES_V1,
   PERSON_OPEN_ATOMS_MAX_V1,
+  type PersonAnswerCitationV3,
   type PersonOpenMeetingAtomV1,
   type ProjectIdV1,
 } from "@echo-brain/organization-api";
@@ -267,12 +268,26 @@ export interface PersonRecordProjectsV1 {
   recordProjects(input: { readonly access_token: string; readonly record_sha256: Sha256Digest }): readonly ProjectIdV1[];
 }
 
+/** Where an approved record's research run starts (runs store v1, section 3). */
+export interface PersonRecordAnchorV1 {
+  /**
+   * The record's first atom in the active readable-search generation, as the
+   * approved-record citation the desk opens and the approved-record trigger
+   * takes as its event. `PersonRecordSearchIndexLagV1` while the generation
+   * has not caught up with the record log, `not_found` when this reader
+   * cannot read the record. A lookup, not a release: nothing is audited, and
+   * the run then opens the record through its own desk.
+   */
+  recordAnchor(input: { readonly access_token: string; readonly record_sha256: Sha256Digest }): Extract<PersonAnswerCitationV3, { readonly kind: "approved_record" }>;
+}
+
 export type PersonRecordSearchRouteV1 =
   PersonRecordSearchHttpApplicationV1 &
     PersonRecordSearchBatchApplicationV1 &
     PersonEvidenceDeskRecordsV1 &
     PersonMeetingItemsPortV1 &
-    PersonRecordProjectsV1;
+    PersonRecordProjectsV1 &
+    PersonRecordAnchorV1;
 
 export interface CreatePersonRecordSearchRouteV1Options {
   readonly state_directory: string;
@@ -1446,6 +1461,40 @@ export function createPersonRecordSearchRouteV1(
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
       assertExpectedOrganization(authorization);
       admittedRecord(authorization, captureRecordProjectsV1(options.capture_projects, authorization), input.record_sha256);
+    },
+    recordAnchor(input: Parameters<PersonRecordAnchorV1["recordAnchor"]>[0]): ReturnType<PersonRecordAnchorV1["recordAnchor"]> {
+      if (typeof input.record_sha256 !== "string" || !RECORD_SHA256.test(input.record_sha256)) itemNotFound();
+      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+      assertExpectedOrganization(authorization);
+      const projects = captureRecordProjectsV1(options.capture_projects, authorization);
+      // The exact Layer 1 read first: a record this reader cannot read is not_found, indexed or not,
+      // so index lag never tells a reader that a record exists.
+      admittedRecord(authorization, projects, input.record_sha256);
+      // The anchor is read at the log's head, as the desk opens it: a generation behind the log is index lag.
+      const head = recordHead(options.record);
+      const pointer = activeGeneration(options.authority);
+      if (pointer === null) indexLagUnavailable();
+      if (pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256) unavailable();
+      if (!sameHead(pointer, head)) {
+        if (isVerifiedIndexLag(options.record, pointer, head, options)) indexLagUnavailable();
+        unavailable();
+      }
+      let listed: ReadableSearchResultV1;
+      try {
+        listed = listReadableSearchGenerationV1({
+          state_directory: options.state_directory,
+          active_generation: activeGenerationAt(pointer),
+          reader: readerOf(authorization, projects),
+          record_sha256s: [input.record_sha256], limit: 1,
+        });
+      } catch (error) { if (isUnavailableGenerationError(error)) unavailable(); throw error; }
+      if (!hasExpectedGenerationIdentity({ result: listed, pointer, authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id })) unavailable();
+      // Atoms of one record come in their order in the record, so the first is the record's first atom.
+      const first = listed.items[0];
+      if (first === undefined || first.record_sha256 !== input.record_sha256) throw new AuthorityOperationError("not_found", "record evidence is not available");
+      const released = options.sessions.authenticateAccess({ access_token: input.access_token });
+      if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) throw new AuthorityOperationError("unauthorized", "person authentication failed");
+      return Object.freeze({ kind: "approved_record" as const, atom_id: first.atom_id, record_sha256: first.record_sha256, policy_id: first.policy_id });
     },
     recordProjects(input: Parameters<PersonRecordProjectsV1["recordProjects"]>[0]): readonly ProjectIdV1[] {
       if (typeof input.record_sha256 !== "string" || !RECORD_SHA256.test(input.record_sha256)) itemNotFound();
