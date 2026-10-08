@@ -57,17 +57,25 @@ interface LabelScreen {
  * that). A blank title matches nothing.
  */
 function screenFor(labels: readonly string[]): LabelScreen {
-  const parts = new Map<string, string>();
+  const parts = new Map<string, { readonly length: number; readonly needsTrailingBoundary: boolean }>();
   for (const raw of labels) {
     const label = raw.normalize("NFC").replace(/\s+/gu, " ").trim();
     if (label.length === 0) continue;
-    for (const part of [label, [...label].slice(0, LABEL_PREFIX_CHARS).join("").trim()]) {
-      parts.set(part.split(" ").map(word => word.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("\\s+"), part);
+    const characters = [...label];
+    const variants = characters.length > LABEL_PREFIX_CHARS
+      ? [{ value: label, needsTrailingBoundary: true }, { value: characters.slice(0, LABEL_PREFIX_CHARS).join("").trim(), needsTrailingBoundary: false }]
+      : [{ value: label, needsTrailingBoundary: true }];
+    for (const variant of variants) {
+      const pattern = variant.value.split(" ").map(word => word.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("\\s+");
+      parts.set(`${variant.needsTrailingBoundary ? 'full:' : 'prefix:'}${pattern}`, { length: characters.length, needsTrailingBoundary: variant.needsTrailingBoundary });
     }
   }
   if (parts.size === 0) return { names: () => false, scrub: line => line };
   // A longer title is tried first, so a whole title wins over its own prefix.
-  const source = [...parts].sort((left, right) => [...right[1]].length - [...left[1]].length).map(([pattern]) => `(?<![\\p{L}\\p{N}])${pattern}(?![\\p{L}\\p{N}])`).join("|");
+  const source = [...parts].sort((left, right) => right[1].length - left[1].length).map(([key, variant]) => {
+    const pattern = key.slice(key.indexOf(':') + 1);
+    return `(?<![\\p{L}\\p{N}])${pattern}${variant.needsTrailingBoundary ? '(?![\\p{L}\\p{N}])' : ''}`;
+  }).join("|");
   const find = new RegExp(source, "iu");
   const every = new RegExp(source, "giu");
   return {
