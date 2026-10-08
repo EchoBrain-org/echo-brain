@@ -662,8 +662,10 @@ export class AdmittedMeetingProcessingCycleV1 {
       // The candidate/outbox is already durable and stays queued. Preserve a
       // visible failure, but release source intake so one proposal defect
       // cannot cork every later meeting; reconcile retries the freeze.
+      // A failed advance leaves the import queued for the next cycle; the
+      // freeze failure stays the error this cycle reports.
       if (signal?.aborted !== true) {
-        await this.advanceAfterStageFailure(admission, nextCursor);
+        await this.advanceAfterStageFailure(admission, nextCursor).catch(() => undefined);
       }
       throw error;
     }

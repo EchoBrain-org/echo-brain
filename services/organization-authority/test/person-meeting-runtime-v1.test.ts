@@ -515,24 +515,44 @@ describe('personal meeting intake uses the shared processing path', () => {
     const [source] = (await f.call(runtime, { operation: 'home' })).sources;
     expect(JSON.parse(f.outbox(source!.source_key)[0]!.suggested_projects_json!)).toEqual([project, projectB].sort());
   });
-  it('freezes the same projects when the first freeze fails and reconcile re-freezes', async () => {
+  it('shows a failed first freeze on its source and re-freezes it on a later tick with no new import', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject();
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     refusal.next = 1;
     try { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); } finally { refusal.next = 0; }
     const [source] = (await f.call(runtime, { operation: 'home' })).sources;
     // The cursor advanced past the import (it cannot cork intake) and recorded its project choice.
-    expect(source).toMatchObject({ pending_imports: [] });
+    expect(source).toMatchObject({ pending_imports: [], error: expect.stringContaining('needs attention') });
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project]);
     expect(f.outbox(source!.source_key)).toEqual([expect.objectContaining({ state: 'queued', suggested_projects_json: null })]);
-    // The next cycle of that source (here another import) reconciles the queued proposal.
-    const next = f.create();
-    await f.call(next, { operation: 'import', meeting_id: '00000000-0000-4000-8000-000000000009', project_id: null, retain: true });
-    await f.processUntilIdle(next);
-    const [first, second] = f.outbox(source!.source_key);
-    expect(first).toMatchObject({ state: 'staged' });
-    expect(JSON.parse(first!.suggested_projects_json!)).toEqual([project]);
-    expect(JSON.parse(second!.suggested_projects_json!)).toEqual([]);
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([]);
+    // The retry waits out the source's backoff; it needs no new import and no provider access.
+    f.disconnect();
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    expect(f.outbox(source!.source_key)[0]).toMatchObject({ state: 'queued' });
+    const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+    try { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); } finally { later.mockRestore(); }
+    const [frozen] = f.outbox(source!.source_key);
+    expect(frozen).toMatchObject({ state: 'staged' });
+    expect(JSON.parse(frozen!.suggested_projects_json!)).toEqual([project]);
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ error: null });
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([expect.objectContaining({ approval_id: frozen!.approval_id, project_id: project })]);
+    // A frozen source with nothing to import drops out of the poll.
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    expect(f.extracted()).toBe(1);
+  });
+  it('keeps a repeated freeze failure visible on its source', async () => {
+    const f = await fixture(), runtime = f.create(); f.grantProject();
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    refusal.next = 2;
+    try {
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+      const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+      try { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); } finally { later.mockRestore(); }
+    } finally { refusal.next = 0; }
+    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect(source).toMatchObject({ pending_imports: [], error: expect.stringContaining('needs attention') });
+    expect(f.outbox(source!.source_key)).toEqual([expect.objectContaining({ state: 'queued', suggested_projects_json: null })]);
   });
   it('keeps the frozen suggestions when the note is saved to another project after staging', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB); f.join(projectB, 'reader-b');

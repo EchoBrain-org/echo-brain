@@ -919,6 +919,23 @@ describe("admitted meeting-processing cycle", () => {
     expect(state.advances).toHaveLength(1);
   });
 
+  it("reports the freeze failure when the advance after it also fails", async () => {
+    const state = new FailingCursorAdvanceState(admission());
+    const cycle = liveCycle({
+      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
+      processor: processor(),
+      state,
+      stager: {
+        stage: async () => { throw new Error("proposal freeze refused"); },
+        reconcilePendingDeliveries: async () => {},
+        reconcileSuperseded: async () => {},
+      },
+    });
+
+    await expect(cycle.runOnce()).rejects.toThrow("proposal freeze refused");
+    expect(state.candidates).toHaveLength(1);
+  });
+
   it("keeps a durable staged item visible when the Authority cursor fence drifts", async () => {
     const state = new FakeState(admission(), "state_drift");
     const cycle = liveCycle({

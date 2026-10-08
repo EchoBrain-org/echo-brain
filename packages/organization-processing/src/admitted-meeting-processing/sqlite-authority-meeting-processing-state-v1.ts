@@ -890,6 +890,17 @@ function suggestedProjectIdsFrom(json: string | null): readonly string[] | null 
  * first. `source_key` scopes to one source; `source_adapter_ids` (when given)
  * keeps only sources of the configured adapters.
  */
+// Queued, never-frozen proposals that are their lineage's head and whose reviewer is still an active member.
+const PENDING_APPROVALS_FROM_V1 = `FROM authority_live_approval_outbox_v2 AS outbox
+         JOIN authority_live_source_candidates_v2 AS candidate ON candidate.candidate_id = outbox.candidate_id
+         JOIN authority_live_source_review_lineage_heads_v2 AS head ON head.candidate_id = candidate.candidate_id
+         JOIN authority_live_source_admission_v2 AS admission ON admission.semantic_input_sha256 = candidate.admission_semantic_input_sha256
+         JOIN authority_memberships AS membership ON membership.membership_id = admission.membership_id
+          AND membership.organization_id = admission.organization_id AND membership.principal_id = admission.principal_id
+          AND membership.membership_type = admission.membership_type AND membership.status = 'active'
+        WHERE outbox.state = 'queued' AND candidate.disposition = 'actionable'
+          AND (? IS NULL OR admission.source_adapter_id IN (SELECT value FROM json_each(?)))`;
+
 function pendingApprovalIdsV1(database: Database.Database, options: {
   readonly source_key?: string | undefined;
   readonly source_adapter_ids?: readonly string[] | undefined;
@@ -900,15 +911,7 @@ function pendingApprovalIdsV1(database: Database.Database, options: {
   return database
     .prepare(
       `SELECT outbox.approval_id
-         FROM authority_live_approval_outbox_v2 AS outbox
-         JOIN authority_live_source_candidates_v2 AS candidate ON candidate.candidate_id = outbox.candidate_id
-         JOIN authority_live_source_review_lineage_heads_v2 AS head ON head.candidate_id = candidate.candidate_id
-         JOIN authority_live_source_admission_v2 AS admission ON admission.semantic_input_sha256 = candidate.admission_semantic_input_sha256
-         JOIN authority_memberships AS membership ON membership.membership_id = admission.membership_id
-          AND membership.organization_id = admission.organization_id AND membership.principal_id = admission.principal_id
-          AND membership.membership_type = admission.membership_type AND membership.status = 'active'
-        WHERE outbox.state = 'queued' AND candidate.disposition = 'actionable'
-          AND (? IS NULL OR admission.source_adapter_id IN (SELECT value FROM json_each(?)))
+         ${PENDING_APPROVALS_FROM_V1}
           AND (? IS NULL OR admission.source_key = ?)
         ORDER BY candidate.created_at ASC, candidate.candidate_id ASC
         LIMIT ?`,
@@ -963,6 +966,19 @@ export class SqliteApprovalWorkflowStateV1 implements ApprovalWorkflowStateV1 {
       if (candidate === undefined) throw new Error("pending approval delivery is absent");
       return candidate;
     });
+  }
+
+  /**
+   * Sources of configured adapters that hold a pending proposal (the same rows
+   * listPendingApprovalDeliveries returns), sorted. One cheap read, so a runtime
+   * can retry a failed freeze for a source that has no other work.
+   */
+  listPendingApprovalSourceKeys(): readonly string[] {
+    const adapters = JSON.stringify([...this.policies.keys()]);
+    return this.database
+      .prepare(`SELECT DISTINCT admission.source_key ${PENDING_APPROVALS_FROM_V1} ORDER BY admission.source_key`)
+      .pluck()
+      .all(adapters, adapters) as string[];
   }
 
   readCandidateByApprovalId(approvalId: string): ApprovalWorkflowOutboxV1 | undefined {

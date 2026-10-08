@@ -97,9 +97,10 @@ export function createPersonMeetingRuntimeV1(options: {
   const authenticate = personToolAuthenticationV1(options.sessions);
   const observed = new Map<string, { checked_at: string; error: string | null; next: number }>();
   // One approval core per runtime: routes, cycles and the publisher all read and decide through it.
-  const approvalState = bindApprovalWorkflowStateV1(new SqliteApprovalWorkflowStateV1(db, {
+  const workflowState = new SqliteApprovalWorkflowStateV1(db, {
     source_cursor_policies: providers.map(p => p.cursor.policy), processor_adapter_id: processor.processor_adapter_id,
-  }), () => { if (db.inTransaction) throw new Error('Approval state transaction must be idle'); });
+  });
+  const approvalState = bindApprovalWorkflowStateV1(workflowState, () => { if (db.inTransaction) throw new Error('Approval state transaction must be idle'); });
   let core: Promise<ApprovalCoreV1> | undefined;
   const approvals = (): Promise<ApprovalCoreV1> => core ??= createApprovalCoreV1(db, { ...options.approval, state: approvalState }, {
     ...options.approval_core,
@@ -132,12 +133,21 @@ export function createPersonMeetingRuntimeV1(options: {
     recoverV4Appends: publish, appendFinalizedApprovalsToV4: publish,
     async observeAndFinalizePendingApprovals() {}, async reconcileReadableSearchGeneration() {},
     async pollAndStageAdmittedMeetings(signal) {
-      const eligible = intake.list().filter(s => owners.has(s.source_adapter_id) && (s.folder_id !== null || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0) && (observed.get(s.source_key)?.next ?? 0) <= Date.now());
+      // A source with an unfrozen proposal stays eligible until its freeze succeeds, even with nothing left to import.
+      const unfrozen = new Set(workflowState.listPendingApprovalSourceKeys());
+      const eligible = intake.list().filter(s => owners.has(s.source_adapter_id) && (s.folder_id !== null || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0 || unfrozen.has(s.source_key)) && (observed.get(s.source_key)?.next ?? 0) <= Date.now());
       const setting = eligible.find(s => s.source_key > after) ?? eligible[0];
       if (!setting) return;
       after = setting.source_key;
       try {
         intake.requireCurrent(setting);
+        if (setting.folder_id === null && ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key).manual.length === 0) {
+          // Only a failed freeze is left: retry it from the stored extraction, without the provider.
+          await (await approvals()).stagerForSource(setting.source_key).reconcilePendingDeliveries({ signal });
+          // More than one reconcile page left keeps the source eligible at once; a frozen source drops out.
+          observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() });
+          return;
+        }
         processor.assert_admission_commitments(readAdmittedMeetingProcessingCommitmentsV1(db, setting.source_key));
         const { source, state } = await lane(setting);
         const stager = (await approvals()).stagerForSource(setting.source_key);
@@ -158,7 +168,8 @@ export function createPersonMeetingRuntimeV1(options: {
       } catch (error) {
         signal.throwIfAborted();
         const remaining = ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key);
-        if (remaining.folder === null && remaining.manual.length === 0) { observed.delete(setting.source_key); return; }
+        // Nothing left to retry: the import queue is empty and every proposal of this source is frozen.
+        if (remaining.folder === null && remaining.manual.length === 0 && !workflowState.listPendingApprovalSourceKeys().includes(setting.source_key)) { observed.delete(setting.source_key); return; }
         // Fixed, content-free status; one broken grant cannot starve another person's work.
         observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: 'Meeting intake needs attention. Check the connection, folder access, and project access.', next: Date.now() + 60_000 });
         if (!(error instanceof AuthorityOperationError) && !(error instanceof Error)) throw error;
