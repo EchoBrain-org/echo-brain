@@ -448,4 +448,18 @@ describe("private Slack approval card poster V1", () => {
     });
     expect(requests).toBe(2);
   });
+
+  it("keeps an accepted-but-unknown marker uncertain when recovery is rate limited", async () => {
+    let requests = 0;
+    const poster = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
+      fetchImpl: async () => {
+        requests += 1;
+        return new Response("", { status: 429, headers: { "retry-after": "60" } });
+      },
+    });
+    const recovery = { approval_id: "apr_123", dm_channel_id: "D123", post_started_at: "2026-08-28T00:00:00.000Z", reconciliation_started_at: "2026-08-28T00:20:00.000Z" };
+    await expect(poster.reconcileMarker(recovery)).resolves.toEqual({ kind: "uncertain" });
+    await expect(poster.reconcileMarker(recovery)).resolves.toEqual({ kind: "uncertain" });
+    expect(requests).toBe(1);
+  });
 });

@@ -94,6 +94,7 @@ type PresentationRow = {
   readonly dm_channel_id: string | null;
   readonly delivery: Delivery;
   readonly marker_state: MarkerState | null;
+  readonly marker_started_at: string | null;
   readonly message_ts: string | null;
   readonly card_sha256: string | null;
   readonly shows: "open" | "approved" | "rejected" | "superseded";
@@ -170,11 +171,11 @@ export function createSlackApprovalPresenterV1(options: {
   const now = options.now ?? (() => new Date());
   const database = options.database;
   const actionableRows = database.prepare(`
-    SELECT p.approval_id,p.target_json,p.dm_channel_id,p.delivery,p.marker_state,p.message_ts,p.card_sha256,p.shows,p.attempts,p.retry_at,p.created_at
+    SELECT p.approval_id,p.target_json,p.dm_channel_id,p.delivery,p.marker_state,p.marker_started_at,p.message_ts,p.card_sha256,p.shows,p.attempts,p.retry_at,p.created_at
     FROM authority_approval_presentations_v1 p
     JOIN authority_live_approval_outbox_v2 o ON o.approval_id=p.approval_id
     LEFT JOIN authority_approval_decisions_v1 d ON d.approval_id=p.approval_id
-    WHERE p.surface='slack' AND (
+    WHERE p.surface='slack' AND (p.retry_at IS NULL OR p.retry_at<=?) AND (
       p.delivery IN ('opening','posting') OR
       (p.delivery='posted' AND (
         p.card_sha256 IS NULL OR
@@ -190,22 +191,22 @@ export function createSlackApprovalPresenterV1(options: {
     LEFT JOIN authority_approval_decisions_v1 d ON d.approval_id=o.approval_id
     WHERE o.state='staged' AND d.approval_id IS NULL AND NOT EXISTS(
       SELECT 1 FROM authority_approval_presentations_v1 p WHERE p.approval_id=o.approval_id AND p.surface='slack'
-    ) ORDER BY o.updated_at LIMIT 25
+    ) ORDER BY o.updated_at
   `).pluck();
   const claim = database.prepare(`INSERT INTO authority_approval_presentations_v1
-    (approval_id,surface,target_json,dm_channel_id,delivery,marker_state,message_ts,card_sha256,shows,attempts,retry_at,created_at,updated_at)
-    VALUES (?,'slack',?,NULL,'opening',NULL,NULL,NULL,'open',0,NULL,?,?) ON CONFLICT(approval_id,surface) DO NOTHING`);
+    (approval_id,surface,target_json,dm_channel_id,delivery,marker_state,marker_started_at,message_ts,card_sha256,shows,attempts,retry_at,created_at,updated_at)
+    VALUES (?,'slack',?,NULL,'opening',NULL,NULL,NULL,NULL,'open',0,NULL,?,?) ON CONFLICT(approval_id,surface) DO NOTHING`);
   const persistChannel = database.prepare(`UPDATE authority_approval_presentations_v1
-    SET dm_channel_id=?,delivery='posting',marker_state='not_started',updated_at=?
+    SET dm_channel_id=?,delivery='posting',marker_state='not_started',marker_started_at=NULL,updated_at=?
     WHERE approval_id=? AND surface='slack' AND delivery='opening' AND dm_channel_id IS NULL`);
   const beginMarker = database.prepare(`UPDATE authority_approval_presentations_v1
-    SET marker_state='in_flight',updated_at=?
+    SET marker_state='in_flight',marker_started_at=?,updated_at=?
     WHERE approval_id=? AND surface='slack' AND delivery='posting' AND marker_state='not_started'`);
   const resetMarker = database.prepare(`UPDATE authority_approval_presentations_v1
-    SET marker_state='not_started',updated_at=?
+    SET marker_state='not_started',marker_started_at=NULL,updated_at=?
     WHERE approval_id=? AND surface='slack' AND delivery='posting' AND marker_state='in_flight'`);
   const persistMarker = database.prepare(`UPDATE authority_approval_presentations_v1
-    SET delivery='posted',marker_state=NULL,message_ts=?,updated_at=?
+    SET delivery='posted',marker_state=NULL,marker_started_at=NULL,message_ts=?,updated_at=?
     WHERE approval_id=? AND surface='slack' AND delivery='posting' AND marker_state='in_flight'`);
   const persistCard = database.prepare(`UPDATE authority_approval_presentations_v1
     SET shows=?,card_sha256=?,retry_at=NULL,updated_at=? WHERE approval_id=? AND surface='slack' AND delivery='posted'`);
@@ -239,6 +240,9 @@ export function createSlackApprovalPresenterV1(options: {
     async reconcile(signal: AbortSignal): Promise<"rendered" | "idle" | "uncertain"> {
       let changed = false;
       let uncertain = false;
+      // Target resolution is local control-plane work. Scan rowless candidates
+      // completely so permanently unlinked reviewers cannot occupy a page;
+      // actual Slack calls remain bounded by actionableRows' 25-row limit.
       for (const approvalId of candidateIds.all() as string[]) {
         const proposal = options.core.proposal(approvalId);
         const target = proposal !== undefined && proposal.reviewer_active && proposal.status === "pending" ? options.target(proposal.reviewer) : null;
@@ -246,8 +250,7 @@ export function createSlackApprovalPresenterV1(options: {
         const timestamp = asIso(now());
         if (claim.run(approvalId, canonicalJson(target as unknown as JsonValue), timestamp, timestamp).changes === 1) changed = true;
       }
-      for (const row of actionableRows.all() as PresentationRow[]) {
-        if (row.retry_at !== null && new Date(row.retry_at) > now()) continue;
+      for (const row of actionableRows.all(asIso(now())) as PresentationRow[]) {
         const target = JSON.parse(row.target_json) as SlackApprovalTargetV1;
         if (!options.targetCurrent(target)) { backoff(row, true); continue; }
         const proposal = options.core.proposal(row.approval_id);
@@ -270,8 +273,9 @@ export function createSlackApprovalPresenterV1(options: {
         if (row.delivery === "posting") {
           if (row.dm_channel_id === null || row.marker_state === null) throw new Error("posting presentation has incomplete marker state");
           if (row.marker_state === "not_started") {
-            if (beginMarker.run(asIso(now()), row.approval_id).changes !== 1) continue;
-            const inFlight = { ...row, marker_state: "in_flight" as const };
+            const markerStartedAt = asIso(now());
+            if (beginMarker.run(markerStartedAt, markerStartedAt, row.approval_id).changes !== 1) continue;
+            const inFlight = { ...row, marker_state: "in_flight" as const, marker_started_at: markerStartedAt };
             try {
               const posted = await provider(target).postMarker({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id }, signal);
               if (!options.targetCurrent(target)) { backoff(inFlight); uncertain = true; continue; }
@@ -287,7 +291,8 @@ export function createSlackApprovalPresenterV1(options: {
             }
           } else {
             try {
-              const reconciled = await provider(target).reconcileMarker({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id, post_started_at: row.created_at, reconciliation_started_at: asIso(now()) }, signal);
+              if (row.marker_started_at === null) throw new Error("in-flight marker has no durable start time");
+              const reconciled = await provider(target).reconcileMarker({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id, post_started_at: row.marker_started_at, reconciliation_started_at: asIso(now()) }, signal);
               if (!options.targetCurrent(target)) { backoff(row); uncertain = true; continue; }
               if (reconciled.kind === "posted") {
                 if (persistMarker.run(reconciled.provider_message_ts, asIso(now()), row.approval_id).changes !== 1) { uncertain = true; continue; }

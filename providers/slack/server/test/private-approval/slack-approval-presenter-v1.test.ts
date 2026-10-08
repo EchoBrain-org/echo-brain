@@ -16,21 +16,23 @@ function fixture() {
   const db = new Database(':memory:'); databases.push(db);
   db.exec(`CREATE TABLE authority_live_approval_outbox_v2(approval_id TEXT PRIMARY KEY,state TEXT,updated_at TEXT);
     CREATE TABLE authority_approval_decisions_v1(approval_id TEXT PRIMARY KEY,action TEXT);
-    CREATE TABLE authority_approval_presentations_v1(approval_id TEXT,surface TEXT,target_json TEXT,dm_channel_id TEXT,delivery TEXT,marker_state TEXT,message_ts TEXT,card_sha256 TEXT,shows TEXT,attempts INTEGER,retry_at TEXT,created_at TEXT,updated_at TEXT,PRIMARY KEY(approval_id,surface));`);
+    CREATE TABLE authority_approval_presentations_v1(approval_id TEXT,surface TEXT,target_json TEXT,dm_channel_id TEXT,delivery TEXT,marker_state TEXT,marker_started_at TEXT,message_ts TEXT,card_sha256 TEXT,shows TEXT,attempts INTEGER,retry_at TEXT,created_at TEXT,updated_at TEXT,PRIMARY KEY(approval_id,surface));`);
   const calls: string[] = [], outcomes: Record<string, Outcome[]> = { open: ['opened'], post: ['posted'], reconcile: ['posted'], publish: ['done'] };
   const views = new Map<string, ReturnType<typeof proposal>>();
   let projects: { project_id: string; name: string }[] = [];
   let owners: { signal_id: string; action: string; proposed: string }[] = [];
   let linked = true, current = true, clock = new Date('2026-10-07T00:00:00.000Z');
+  const unlinkedPrincipals = new Set<string>();
+  const reconcileInputs: { post_started_at: string }[] = [];
   const next = (name: string): Outcome => outcomes[name]?.shift() ?? (name === 'open' ? 'opened' : name === 'publish' ? 'done' : 'posted');
   const take = (name: string) => { calls.push(name); const result = next(name); if (result instanceof Error) throw result; return result; };
   const presenter = createSlackApprovalPresenterV1({ database: db,
     core: { proposal: id => views.get(id), ownerProposals: () => owners },
-    target: () => linked ? target : null, targetCurrent: () => current, projects: () => projects, now: () => clock,
+    target: reviewer => linked && !unlinkedPrincipals.has(reviewer.principal_id) ? target : null, targetCurrent: () => current, projects: () => projects, now: () => clock,
     poster: () => ({
       async openDirectMessage() { const x = take('open'); return x === 'opened' ? { kind: 'opened' as const, channel_id: 'D1' } : { kind: 'retry_allowed' as const }; },
       async postMarker() { const x = take('post'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
-      async reconcileMarker() { const x = take('reconcile'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
+      async reconcileMarker(input) { reconcileInputs.push(input); const x = take('reconcile'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
       async publish() { const x = take('publish'); return x === 'done' ? { kind: 'done' as const } : { kind: 'uncertain' as const }; },
     }) });
   const stage = (id = 'apr_live', patch: Partial<ReturnType<typeof proposal>> = {}) => {
@@ -38,7 +40,7 @@ function fixture() {
     db.prepare('INSERT INTO authority_live_approval_outbox_v2 VALUES (?,?,?)').run(id, 'staged', clock.toISOString());
     return id;
   };
-  return { db, calls, outcomes, presenter, stage, advance: (ms: number) => { clock = new Date(clock.getTime() + ms); }, set projects(value: { project_id: string; name: string }[]) { projects = value; }, set owners(value: { signal_id: string; action: string; proposed: string }[]) { owners = value; }, set linked(value: boolean) { linked = value; }, set current(value: boolean) { current = value; } };
+  return { db, calls, outcomes, reconcileInputs, presenter, stage, advance: (ms: number) => { clock = new Date(clock.getTime() + ms); }, unlink: (principalId: string) => { unlinkedPrincipals.add(principalId); }, set projects(value: { project_id: string; name: string }[]) { projects = value; }, set owners(value: { signal_id: string; action: string; proposed: string }[]) { owners = value; }, set linked(value: boolean) { linked = value; }, set current(value: boolean) { current = value; } };
 }
 function row(f: ReturnType<typeof fixture>, id = 'apr_live') { return f.db.prepare('SELECT * FROM authority_approval_presentations_v1 WHERE approval_id=?').get(id) as { delivery: string; attempts: number; retry_at: string | null; dm_channel_id: string | null; shows: string; message_ts: string | null }; }
 
@@ -77,7 +79,7 @@ describe('Slack approval presenter V1', () => {
     const f = fixture(); f.stage();
     await f.presenter.reconcile(signal());
     expect(row(f)).toMatchObject({ delivery: 'posting', dm_channel_id: 'D1' });
-    f.db.prepare("UPDATE authority_approval_presentations_v1 SET marker_state='in_flight' WHERE approval_id='apr_live'").run();
+    f.db.prepare("UPDATE authority_approval_presentations_v1 SET marker_state='in_flight',marker_started_at='2026-10-07T00:00:00.000Z' WHERE approval_id='apr_live'").run();
     f.outcomes.reconcile = ['uncertain']; await f.presenter.reconcile(signal());
     expect(f.calls).toEqual(['open', 'reconcile']);
     f.advance(2_001); await f.presenter.reconcile(signal());
@@ -91,11 +93,57 @@ describe('Slack approval presenter V1', () => {
     expect(f.calls).toEqual(['open', 'post', 'post', 'publish']);
   });
 
+  it('uses the durable marker start time after a delayed marker crash', async () => {
+    const f = fixture(); f.stage();
+    await f.presenter.reconcile(signal());
+    f.advance(20 * 60_000); f.outcomes.post = ['uncertain'];
+    await f.presenter.reconcile(signal());
+    f.advance(2_001); f.outcomes.reconcile = ['posted'];
+    await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open', 'post', 'reconcile', 'publish']);
+    expect(f.reconcileInputs).toMatchObject([{ post_started_at: '2026-10-07T00:20:00.000Z', reconciliation_started_at: '2026-10-07T00:20:02.001Z' }]);
+  });
+
+  it('does not re-authorize posting after an uncertain recovery', async () => {
+    const f = fixture(); f.stage();
+    await f.presenter.reconcile(signal());
+    f.db.prepare("UPDATE authority_approval_presentations_v1 SET marker_state='in_flight',marker_started_at='2026-10-07T00:00:00.000Z' WHERE approval_id='apr_live'").run();
+    f.outcomes.reconcile = ['uncertain', 'uncertain'];
+    await f.presenter.reconcile(signal());
+    f.advance(2_001); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open', 'reconcile', 'reconcile']);
+    expect(row(f)).toMatchObject({ delivery: 'posting' });
+  });
+
+  it('scans past unlinked proposals to claim a later linked reviewer', async () => {
+    const f = fixture();
+    for (let index = 0; index < 25; index++) {
+      const principal_id = `unlinked_${index}`;
+      f.unlink(principal_id); f.stage(`apr_unlinked_${index}`, { reviewer: { organization_id: 'org_1', principal_id, membership_id: `mem_${index}` } });
+    }
+    f.stage('apr_linked');
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open', 'post', 'publish']);
+  });
+
+  it('selects ready work behind 25 retry-deferred rows', async () => {
+    const f = fixture();
+    for (let index = 0; index < 25; index++) {
+      const approvalId = `apr_wait_${index}`;
+      f.db.prepare('INSERT INTO authority_live_approval_outbox_v2 VALUES (?,?,?)').run(approvalId, 'staged', '2026-10-06T00:00:00.000Z');
+      f.db.prepare("INSERT INTO authority_approval_presentations_v1 VALUES (?,'slack',?,'D1','posting','not_started',NULL,NULL,NULL,'open',1,'2026-10-07T01:00:00.000Z','2026-10-06T00:00:00.000Z','2026-10-06T00:00:00.000Z')").run(approvalId, JSON.stringify(target));
+    }
+    const ready = f.stage();
+    f.db.prepare("INSERT INTO authority_approval_presentations_v1 VALUES (?,'slack',?,'D1','posted',NULL,NULL,'1.000001',NULL,'open',0,NULL,'2026-10-07T00:00:00.000Z','2026-10-07T00:00:00.000Z')").run(ready, JSON.stringify(target));
+    await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['publish']);
+  });
+
   it.each(['open', 'post', 'reconcile', 'publish'] as const)('persists bounded retry state when %s throws', async (operation) => {
     const f = fixture(); f.stage();
     if (operation === 'open') f.outcomes.open = [new Error('network')];
     if (operation === 'post') { await f.presenter.reconcile(signal()); f.outcomes.post = [new Error('network')]; }
-    if (operation === 'reconcile') { await f.presenter.reconcile(signal()); f.db.prepare("UPDATE authority_approval_presentations_v1 SET marker_state='in_flight' WHERE approval_id='apr_live'").run(); f.outcomes.reconcile = [new Error('network')]; }
+    if (operation === 'reconcile') { await f.presenter.reconcile(signal()); f.db.prepare("UPDATE authority_approval_presentations_v1 SET marker_state='in_flight',marker_started_at='2026-10-07T00:00:00.000Z' WHERE approval_id='apr_live'").run(); f.outcomes.reconcile = [new Error('network')]; }
     if (operation === 'publish') { await f.presenter.reconcile(signal()); f.outcomes.post = ['posted']; f.outcomes.publish = [new Error('network')]; }
     await expect(f.presenter.reconcile(signal())).resolves.toBe(operation === 'open' ? 'rendered' : 'uncertain');
     if (operation === 'post') expect(f.calls).toContain('post');
@@ -126,9 +174,9 @@ describe('Slack approval presenter V1', () => {
 
   it('redraws a decided presentation and does not let 25 completed rows starve it', async () => {
     const f = fixture();
-    for (let n = 0; n < 25; n++) f.db.prepare('INSERT INTO authority_approval_presentations_v1 VALUES (?,\'slack\',?,\'D1\',\'posted\',NULL,\'1.1\',\'hash\',\'approved\',0,NULL,?,?)').run(`done_${n}`, JSON.stringify(target), '2026-10-06T00:00:00.000Z', '2026-10-06T00:00:00.000Z');
+    for (let n = 0; n < 25; n++) f.db.prepare('INSERT INTO authority_approval_presentations_v1 VALUES (?,\'slack\',?,\'D1\',\'posted\',NULL,NULL,\'1.1\',\'hash\',\'approved\',0,NULL,?,?)').run(`done_${n}`, JSON.stringify(target), '2026-10-06T00:00:00.000Z', '2026-10-06T00:00:00.000Z');
     const id = f.stage('apr_decided', { status: 'publishing', decided_on: 'desktop' });
-    f.db.prepare('INSERT INTO authority_approval_presentations_v1 VALUES (?,\'slack\',?,\'D1\',\'posted\',NULL,\'1.1\',\'hash\',\'open\',0,NULL,?,?)').run(id, JSON.stringify(target), '2026-10-07T00:00:00.000Z', '2026-10-07T00:00:00.000Z');
+    f.db.prepare('INSERT INTO authority_approval_presentations_v1 VALUES (?,\'slack\',?,\'D1\',\'posted\',NULL,NULL,\'1.1\',\'hash\',\'open\',0,NULL,?,?)').run(id, JSON.stringify(target), '2026-10-07T00:00:00.000Z', '2026-10-07T00:00:00.000Z');
     f.db.prepare('INSERT INTO authority_approval_decisions_v1 VALUES (?,?)').run(id, 'approve');
     await f.presenter.reconcile(signal());
     expect(f.calls).toEqual(['publish']); expect(row(f, id)).toMatchObject({ shows: 'approved' });
