@@ -38,9 +38,9 @@ function liveTicket(key: string, text?: string): EvidenceDeskItemV2 {
     },
     label: `${key}: Thermal fixture gate`,
     ...(text === undefined ? {} : { text }),
-    visibility: "only_me", occurred_at: "2026-10-06", date_kind: "updated",
+    visibility: "only_me", occurred_at: "2026-10-06", date_kind: "created",
     attributes: { status: "Open" }, receipt_sha256: canonicalSha256({ key, text: text ?? null }),
-  } as EvidenceDeskItemV2);
+  } satisfies EvidenceDeskItemV2);
 }
 
 describe("research result beside Ask", () => {
