@@ -6,6 +6,7 @@ import { validatePersonUpdateSubmitV3, validatePersonUpdateRequestId, validatePr
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import { validatePersonSourceEvidenceReadRequestV1, validatePersonMeetingTranscriptReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
+import { validatePersonRunsRequestV1, type PersonRunsRequestV1 } from '@echo-brain/organization-api';
 import { PersonToolOutcomeErrorV1, type PersonToolProviderV1, type PersonToolVerbNameV1, type PersonToolVerbV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
@@ -87,6 +88,7 @@ const OPTIONS = {
   neighbours: { type: "string" },
   mine: { type: "boolean" },
   ref: { type: "string" },
+  request: { type: "string" },
 } as const;
 
 type Option = string;
@@ -135,6 +137,7 @@ const RULES: Readonly<
   },
   list: { accepts: ["project", "mine", "cursor"] },
   open: { accepts: ["ref", "cursor"], requires: ["ref"] },
+  runs: { accepts: ["request"], requires: ["request"] },
   "evidence-search": { accepts: ["query", "project", "kind", "limit"], requires: [] },
   "evidence-open": { accepts: ["item", "project", "neighbours"], requires: ["item"] },
   "ask-source": {
@@ -232,6 +235,10 @@ notice "meetings_unavailable" means meetings are still being indexed and come on
   open: `usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]
 
 Reads one item under your current access: a note's full text, a document's extracted text, or a meeting's decisions, actions and rationales. Documents and meetings are paged. A meeting's first page shows transcript_ref when its approver shared the transcript and you may read it; open that ref to page the transcript. Refs come from person list and from ask citations. Anything you cannot read returns not_found. Pass next_cursor as --cursor with the same --ref for the next page.
+`,
+  runs: `usage: echo-brain person runs --request <json>
+
+Runs a versioned request against your own approved-record impact runs. Use {"schema_version":1,"operation":"list"}, or include run_id for start, retry and view.
 `,
   evidence: `usage: echo-brain person evidence <search|open> [options]
 
@@ -817,7 +824,8 @@ export async function runPersonClientCli(
 
   let values: Record<Option, string | boolean | undefined> = {};
   let listRequest: PersonListRequestV1 | undefined;
-  let openRequest: PersonOpenRequestV1 | undefined;
+    let openRequest: PersonOpenRequestV1 | undefined;
+    let runsRequest: PersonRunsRequestV1 | undefined;
   let toolVerbDefinition: PersonToolVerbV1 | undefined;
   try {
     const args = argv.slice(subcommandAction === undefined ? 1 : 2);
@@ -919,6 +927,10 @@ export async function runPersonClientCli(
         ref: values.ref,
         ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
       });
+    }
+    if (action === 'runs') {
+      try { runsRequest = validatePersonRunsRequestV1(JSON.parse(requiredText(values, 'request'))); }
+      catch (error) { if (error instanceof SyntaxError) throw new Error('Runs request JSON is invalid'); throw error; }
     }
   } catch (error) {
     if (isContextAction(action)) {
@@ -1168,6 +1180,9 @@ export async function runPersonClientCli(
         break;
       case "open":
         print(stdout, { ok: true, result: await client.open(openRequest!, dependencies.abort_signal) });
+        break;
+      case 'runs':
+        print(stdout, { ok: true, result: await client.runs(runsRequest!, dependencies.abort_signal) });
         break;
       case 'evidence-search': {
         const project_id = optionalProject(values);

@@ -67,7 +67,7 @@ function screenFor(labels: readonly string[]): LabelScreen {
   }
   if (parts.size === 0) return { names: () => false, scrub: line => line };
   // A longer title is tried first, so a whole title wins over its own prefix.
-  const source = [...parts].sort((left, right) => [...right[1]].length - [...left[1]].length).map(([pattern]) => pattern).join("|");
+  const source = [...parts].sort((left, right) => [...right[1]].length - [...left[1]].length).map(([pattern]) => `(?<![\\p{L}\\p{N}])${pattern}(?![\\p{L}\\p{N}])`).join("|");
   const find = new RegExp(source, "iu");
   const every = new RegExp(source, "giu");
   return {

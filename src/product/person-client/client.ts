@@ -7,6 +7,7 @@ import { validatePersonSourceEvidenceReadRequestV1, validatePersonMeetingTranscr
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
 import type { PersonResearchEvalReadResponseV1, PersonResearchEvalStartReceiptV1, PersonResearchEvalStartRequestV1 } from '@echo-brain/organization-api';
+import type { PersonRunsRequestV1, PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import {
   validateProjectPageRequestV2, validateProjectCreateV1, validateProjectIdV1,
   validateProjectContextBrowseV1, validateProjectDirectorySearchV1,
@@ -704,6 +705,10 @@ export class PersonClient {
 
   async readResearchEval(runId: string, signal?: AbortSignal): Promise<PersonResearchEvalReadResponseV1> {
     return this.withReadSession((authority, token) => authority.readResearchEval(token, runId, signal));
+  }
+
+  async runs<K extends PersonRunsRequestV1['operation']>(value: Extract<PersonRunsRequestV1, { readonly operation: K }>, signal?: AbortSignal): Promise<PersonRunsResultsV1[K]> {
+    return this.withReadSession((authority, token) => authority.runs(token, value, signal));
   }
 
   /** Each evidence invocation creates a new authenticated, scope-bound desk request. */

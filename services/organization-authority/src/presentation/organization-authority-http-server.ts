@@ -66,6 +66,7 @@ import {
   PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
+  PERSON_RUNS_PATH_V1,
   PERSON_RESEARCH_EVAL_READ_PATH_V1,
   PERSON_RESEARCH_EVAL_START_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
@@ -74,6 +75,7 @@ import {
   validatePersonAnswerRequestV3,
   validatePersonCapabilitiesV1,
   validatePersonEvidenceOpenRequestV1,
+  validatePersonRunsRequestV1,
   validatePersonResearchEvalReadRequestV1,
   validatePersonResearchEvalStartRequestV1,
   validatePersonEvidenceSearchRequestV1,
@@ -85,6 +87,7 @@ import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-appl
 import type { PersonAnswerV4HttpApplication } from "./person-answer-v4-http-application.js";
 import type { PersonAnswerV5HttpApplication } from "./person-answer-v5-http-application.js";
 import type { PersonResearchEvalHttpApplicationV1 } from "./person-research-eval-http-application.js";
+import type { PersonTriggerRunsHttpApplicationV1 } from './person-trigger-runs-http-application.js';
 import {
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
@@ -128,6 +131,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_MEETING_TRANSCRIPT_PATH_V1}`,
   `POST ${PERSON_LIST_PATH_V1}`,
   `POST ${PERSON_OPEN_PATH_V1}`,
+  `POST ${PERSON_RUNS_PATH_V1}`,
 ]);
 
 function routeKey(method: string, path: string): string {
@@ -168,6 +172,7 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_answer_v5?: PersonAnswerV5HttpApplication;
   /** Staging-only research evaluation; its routes do not exist unless composed. */
   readonly person_research_eval?: PersonResearchEvalHttpApplicationV1;
+  readonly person_trigger_runs?: PersonTriggerRunsHttpApplicationV1;
   /** Provider-owned account connection routes, selected by the composition root. */
   readonly person_tool_connections?: readonly ProviderHttpApplicationV1[];
   /** Opening a cited original; it needs no answer model. */
@@ -708,6 +713,17 @@ export function createOrganizationAuthorityHttpServer(
     ...(options.person_research_eval === undefined ? [] : [
       [PERSON_RESEARCH_EVAL_START_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalStartRequestV1, (application, input) => application.start(input))],
       [PERSON_RESEARCH_EVAL_READ_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalReadRequestV1, (application, input) => application.read(input))],
+    ] as const),
+    ...(options.person_trigger_runs === undefined ? [] : [
+      [PERSON_RUNS_PATH_V1, personCancellablePost(options.person_trigger_runs, validatePersonRunsRequestV1, (application, input) => {
+        const common = { access_token: input.access_token, ...(input.signal === undefined ? {} : { signal: input.signal }) };
+        switch (input.request.operation) {
+          case 'list': return application.list(common);
+          case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: input.request.run_id } });
+          case 'retry': return application.retry({ ...common, request: { schema_version: 1, operation: 'retry', run_id: input.request.run_id } });
+          case 'view': return application.view({ ...common, request: { schema_version: 1, operation: 'view', run_id: input.request.run_id } });
+        }
+      })],
     ] as const),
     [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence, validatePersonSourceEvidenceReadRequestV1, (application, input) => application.readSource(input))],
     [PERSON_MEETING_TRANSCRIPT_PATH_V1, personSourcePost(options.person_meeting_transcript, validatePersonMeetingTranscriptReadRequestV1, (application, input) => application.readTranscript(input))],

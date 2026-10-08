@@ -171,6 +171,14 @@ describe("storable impact card: every line a model wrote is screened for outside
     expect(storableImpactCardV1(card, ["The display plan"]).decided[0]!.text).toBe("a cited item still matches a cited item");
   });
 
+  it("does not scrub ordinary words that merely begin with a short outside title", () => {
+    const card = validatePersonImpactCardV1({
+      decided: [{ text: "Show two decimals on the displayed value from the homepage.", citation_index: 0 }],
+      affected: [], unconfirmed: [], people: [], status: "assessed", citations: [recordCitation("display")],
+    });
+    expect(storableImpactCardV1(card, ["Display", "Home"]).decided[0]!.text).toBe("Show two decimals on the displayed value from the homepage.");
+  });
+
   it("drops the date of a row whose milestone is an outside title, and keeps the row", () => {
     const card = cardWith({ rows: [
       { citation: ticketCitation("THERM-46", TITLE), says_now: "x", relation: "conflicts", date_at_risk: { date: "2026-10-15", milestone: TITLE } },
