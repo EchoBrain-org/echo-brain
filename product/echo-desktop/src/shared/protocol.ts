@@ -1,4 +1,4 @@
-import type { PersonMeetingRequestV1, PersonMeetingResultsV1 } from '@echo-brain/organization-api';
+import type { PersonMeetingRequestV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
 // validated output, and the renderer never sees a token, a path or a
@@ -396,7 +396,7 @@ export interface ProjectConfluenceMapping {
 export interface ConfluenceSpacesPage { items: readonly ConfluenceSpace[]; next_cursor: string | null }
 
 export interface HostMethods {
-  'tools.meetings': { params: { expect: Expect; request: PersonMeetingRequestV1 }; result: PersonMeetingResultsV1[keyof PersonMeetingResultsV1] };
+  'tools.meetings': { params: { expect: Expect; request: PersonMeetingRequestV2 }; result: PersonMeetingResultsV2[keyof PersonMeetingResultsV2] };
 
   'app.status': { params: Record<string, never>; result: AppStatus };
   'signin.begin': { params: { authority_url: string }; result: AppStatus };

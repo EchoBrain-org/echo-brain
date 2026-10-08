@@ -491,17 +491,17 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (method === 'POST' && path === '/v1/person/meetings' && mode.startsWith('granola')) {
       const meetingId = '00000000-0000-4000-8000-000000000010';
       const folderId = '00000000-0000-4000-8000-000000000011';
-      const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning', project_id: null, status: granolaApproved ? 'approved' : 'pending' };
+      const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning', project_ids: [], status: granolaApproved ? 'approved' : 'pending', decided_on: granolaApproved ? 'desktop' : null };
       switch (body?.operation) {
         case 'home': return mode === 'granola-browse-unavailable' ? failure('unavailable', 503) : json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64),
-          sources: mode === 'granola-preparing' && granolaWatch ? [{ source_key: 'pms_fixture', folder_id: folderId, project_id: 'prj_11111111-1111-4111-8111-111111111111', baseline: granolaBaselineHomeReads++ > 0, pending_imports: [], checked_at: null, error: null }] : [] });
+          sources: mode === 'granola-preparing' && granolaWatch ? [{ source_key: 'pms_fixture', folder_id: folderId, folder_project_id: 'prj_11111111-1111-4111-8111-111111111111', baseline: granolaBaselineHomeReads++ > 0, pending_imports: [], checked_at: null, error: null }] : [] });
         case 'browse': return json({ meetings: [{ id: meetingId, title: 'Pilot planning', date: '2026-10-06' }] });
         case 'open': return json({ id: meetingId, title: 'Pilot planning', notes: 'Launch the pilot next week.', summary: 'Decision: launch.', truncated: false });
         case 'watch': granolaWatch = true; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
         case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' ? [review] : [] });
-        case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.' });
-        case 'review': granolaApproved = true; return json({ status: 'publishing' });
+        case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.', owners: [], suggested_projects: [] });
+        case 'review': granolaApproved = true; return json({ status: 'publishing', decided_on: 'desktop' });
       }
     }
     // Jira: the browser consent is never shown; the second status read finds it done,

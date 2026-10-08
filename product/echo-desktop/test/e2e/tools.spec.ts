@@ -149,7 +149,7 @@ test('Granola browsing requires explicit retention, then offers personal review 
   await meetings.getByRole('button', { name: 'Approve', exact: true }).click();
   await expect.poll(() => run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
   expect(run.calls().find(call => call.body?.operation === 'import')?.body).toMatchObject({ retain: true, project_id: null });
-  expect(run.calls().find(call => call.body?.operation === 'review')?.body).toMatchObject({ action: 'approve', share_transcript: false, project_id: null });
+  expect(run.calls().find(call => call.body?.operation === 'review')?.body).toMatchObject({ action: 'approve', share_transcript: false, project_ids: [], owners: [] });
 });
 
 test('Granola saves a selected folder while its initial baseline is preparing', async () => {

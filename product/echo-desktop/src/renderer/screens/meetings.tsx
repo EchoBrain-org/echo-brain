@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { PersonMeetingHomeV1, PersonMeetingResultsV1, PersonMeetingReviewV1 } from '@echo-brain/organization-api';
+import type { PersonMeetingHomeV2, PersonMeetingResultsV2, PersonMeetingReviewV2 } from '@echo-brain/organization-api';
 import { loadProjects, meetingCommand, useStore } from '../store.js';
 
 /** Provider browsing is transient. Only checked retention actions enter ECHO. */
 export function Meetings() {
   const state = useStore();
   const alive = useRef(true);
-  const [home, setHome] = useState<PersonMeetingHomeV1 | null>(null);
-  const [reviews, setReviews] = useState<readonly PersonMeetingReviewV1[]>([]);
-  const [meetings, setMeetings] = useState<PersonMeetingResultsV1['browse']['meetings']>([]);
-  const [preview, setPreview] = useState<PersonMeetingResultsV1['open'] | null>(null);
-  const [review, setReview] = useState<(PersonMeetingResultsV1['review_open'] & { command: string }) | null>(null);
+  const [home, setHome] = useState<PersonMeetingHomeV2 | null>(null);
+  const [reviews, setReviews] = useState<readonly PersonMeetingReviewV2[]>([]);
+  const [meetings, setMeetings] = useState<PersonMeetingResultsV2['browse']['meetings']>([]);
+  const [preview, setPreview] = useState<PersonMeetingResultsV2['open'] | null>(null);
+  const [review, setReview] = useState<(PersonMeetingResultsV2['review_open'] & { command: string }) | null>(null);
   const [folder, setFolder] = useState(''), [project, setProject] = useState(''), [reviewProject, setReviewProject] = useState('');
   const [retain, setRetain] = useState(false), [share, setShare] = useState(false);
   const [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
@@ -21,7 +21,7 @@ export function Meetings() {
     setHome(next.status === 'fulfilled' ? next.value : null);
     setReviews(pending.status === 'fulfilled' ? pending.value.reviews : []);
     const watch = next.status === 'fulfilled' ? next.value.sources.find(s => s.folder_id !== null) : undefined;
-    if (watch && initialize) { setFolder(watch.folder_id!); setProject(watch.project_id!); }
+    if (watch && initialize) { setFolder(watch.folder_id!); setProject(watch.folder_project_id!); }
     if (next.status === 'rejected') throw next.reason;
     if (pending.status === 'rejected') throw pending.reason;
   }
@@ -42,7 +42,7 @@ export function Meetings() {
     {busy && <p class="context">Working…</p>}
     {home && <>
       <p>{home.connected ? `${home.email} · ${home.workspace}` : 'Reconnect Granola to browse and import meetings.'}</p>
-      {watch && <p>{watch.baseline ? 'Automatic import active:' : 'Preparing automatic import:'} {home.folders.find(f => f.id === watch.folder_id)?.title ?? 'Selected folder'} → {projects.find(p => p.project_id === watch.project_id)?.name ?? 'Selected project'}.
+      {watch && <p>{watch.baseline ? 'Automatic import active:' : 'Preparing automatic import:'} {home.folders.find(f => f.id === watch.folder_id)?.title ?? 'Selected folder'} → {projects.find(p => p.project_id === watch.folder_project_id)?.name ?? 'Selected project'}.
         <button class="plain-button small" disabled={busy} onClick={() => void run(async () => { await meetingCommand({ operation: 'watch', folder_id: null, project_id: null, settings_sha256: home.settings_sha256, retain: true }); await refresh(); })}>Stop automatic import</button></p>}
       {home.sources.map(s => <div key={s.source_key}>
         {s.error && <p class="error">{s.error}</p>}
@@ -74,14 +74,14 @@ export function Meetings() {
     <h3>Review</h3><p>You approve these meetings in ECHO. A Slack connection is not required.</p>
     <ul>{reviews.map(item => <li key={item.approval_id}><button class="plain-button" disabled={busy} onClick={() => void run(async () => {
       const result = await meetingCommand({ operation: 'review_open', approval_id: item.approval_id });
-      if (alive.current) { setReview({ ...result, command: crypto.randomUUID() }); setReviewProject(result.review.project_id ?? ''); setShare(false); setPreview(null); }
+      if (alive.current) { setReview({ ...result, command: crypto.randomUUID() }); setReviewProject(result.review.project_ids[0] ?? ''); setShare(false); setPreview(null); }
     })}>{item.title}</button> · {item.status}</li>)}</ul>
     {review && <article><h4>{review.review.title}</h4><pre>{review.content}</pre>
       {review.review.status === 'pending' && <>{audience(reviewProject, setReviewProject)}
         <label><input type="checkbox" checked={share} disabled={busy} onChange={e => setShare(e.currentTarget.checked)} /> Share the transcript with the selected audience</label>
         <div class="choices">{(['reject', 'approve'] as const).map(action => <button class={action === 'approve' ? 'primary-button small' : 'plain-button'} disabled={busy} onClick={() => void run(async () => {
           const result = await meetingCommand({ operation: 'review', approval_id: review.review.approval_id, command_id: review.command, snapshot_sha256: review.snapshot_sha256,
-            action, project_id: action === 'approve' ? reviewProject || null : null, share_transcript: action === 'approve' && share });
+            action, project_ids: action === 'approve' && reviewProject ? [reviewProject] : [], share_transcript: action === 'approve' && share, owners: [] });
           if (alive.current) { setReview(null); setNotice(result.status === 'publishing' ? 'Approved. Publishing to ECHO…' : result.status); } await refresh();
         })}>{action === 'approve' ? 'Approve' : 'Reject'}</button>)}</div>
       </>}

@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { PERSON_MEETINGS_PATH_V1, validatePersonMeetingRequestV1, validatePersonMeetingResultV1,
-  type OrganizationPersonToolV4, type PersonMeetingResultsV1, type PersonMeetingReviewV1 } from '@echo-brain/organization-api';
+import { PERSON_MEETINGS_PATH_V2, validatePersonMeetingRequestV2, validatePersonMeetingResultV2,
+  type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
@@ -16,6 +16,7 @@ import { readAdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organiza
 import { bindApprovalWorkflowStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1';
 import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointCodecV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
+import { SqlitePersonListDirectoryV1 } from '../adapters/persistence/sqlite/person-list-directory-v1.js';
 import { approvalProposalTextV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalViewV1 } from './approval-core-v1.js';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
@@ -31,9 +32,9 @@ export interface PersonMeetingProviderV1 {
   open(person: MeetingIntakePersonV1, current: () => void, signal?: AbortSignal): Promise<{
     readonly identity: MeetingSourceAdapter['identity']; readonly custodian: unknown; readonly email: string; readonly workspace: string;
     current(): void;
-    folders(): Promise<PersonMeetingResultsV1['home']['folders']>;
-    browse(folder: string): Promise<PersonMeetingResultsV1['browse']>;
-    preview(meeting: string): Promise<PersonMeetingResultsV1['open']>;
+    folders(): Promise<PersonMeetingResultsV2['home']['folders']>;
+    browse(folder: string): Promise<PersonMeetingResultsV2['browse']>;
+    preview(meeting: string): Promise<PersonMeetingResultsV2['open']>;
   }>;
   source(setting: MeetingIntakeSettingV1, current: () => void): MeetingSourceAdapter & { requireCurrent(): void };
 }
@@ -181,12 +182,11 @@ export function createPersonMeetingRuntimeV1(options: {
     try { check(); return true; }
     catch (error) { if (error instanceof AuthorityOperationError) return false; throw error; }
   }
-  // Meetings API v1 names one project: the first of the proposal's projects (its decision's, or its readable suggestions).
-  function reviewView(view: ApprovalProposalViewV1): PersonMeetingReviewV1 {
-    return { approval_id: view.approval_id, title: view.title, project_id: view.project_ids[0] ?? null, status: view.status };
+  function reviewView(view: ApprovalProposalViewV1): PersonMeetingReviewV2 {
+    return { approval_id: view.approval_id, title: view.title, project_ids: view.project_ids, status: view.status, decided_on: view.decided_on };
   }
   const application: ProviderHttpApplicationV1 = {
-    routes: [{ route_id: 'personal-meetings', method: 'POST', path: PERSON_MEETINGS_PATH_V1 }],
+    routes: [{ route_id: 'personal-meetings', method: 'POST', path: PERSON_MEETINGS_PATH_V2 }],
     async accept(request) {
       if (request.route_id !== 'personal-meetings') throw new AuthorityOperationError('not_found', 'Meeting route unavailable');
       const header = request.headers.authorization;
@@ -194,31 +194,37 @@ export function createPersonMeetingRuntimeV1(options: {
       const token = header.slice(7), authorization = authenticate(token), person = meetingIntakePersonV1(authorization);
       const current = () => { request.signal?.throwIfAborted(); if (canonicalSha256(authenticate(token)) !== canonicalSha256(authorization)) throw new AuthorityOperationError('stale_access_state', 'Person session changed'); };
       let input;
-      try { input = validatePersonMeetingRequestV1(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(request.raw_body))); }
+      try { input = validatePersonMeetingRequestV2(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(request.raw_body))); }
       catch { throw new AuthorityOperationError('invalid_request', 'Invalid meeting request'); }
       const provider = providers.find(p => p.id === input.tool_id);
       if (!provider) throw new AuthorityOperationError('not_found', 'Meeting tool unavailable');
       const result = async (): Promise<unknown> => {
         if (input.operation === 'reviews' || input.operation === 'review_open' || input.operation === 'review') {
           // Reviews belong to the person who brought the meeting in, whatever projects it suggests.
-          const reviewer = allowed(() => intake.currentPerson(person));
-          if (input.operation === 'reviews') return { reviews: reviewer ? (await approvals()).proposals(person).map(reviewView) : [] };
+          const reviewer = allowed(() => intake.currentPerson(person)) ? person : null;
+          if (input.operation === 'reviews') return { reviews: reviewer === null ? [] : (await approvals()).proposals(reviewer).map(reviewView) };
           if (!reviewer) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
           const approvalCore = await approvals();
           const view = approvalCore.proposal(input.approval_id);
           if (!view || view.reviewer.organization_id !== person.organization_id || view.reviewer.principal_id !== person.principal_id
             || view.reviewer.membership_id !== person.membership_id) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
-          if (input.operation === 'review_open') return { review: reviewView(view), snapshot_sha256: view.snapshot_sha256, content: approvalProposalTextV1(view.snapshot_json) };
+          if (input.operation === 'review_open') {
+            const projects = new SqlitePersonListDirectoryV1(db).joinedProjects(options.sessions.authenticateAccess({ access_token: token })).projects;
+            const names = new Map(projects.filter(project => project.status === 'active').map(project => [project.project_id, project.name]));
+            return { review: reviewView(view), snapshot_sha256: view.snapshot_sha256, content: approvalProposalTextV1(view.snapshot_json),
+              owners: approvalCore.ownerProposals(input.approval_id), suggested_projects: view.project_ids.flatMap(project_id => {
+                const name = names.get(project_id as `prj_${string}`); return name === undefined ? [] : [{ project_id: project_id as `prj_${string}`, name }];
+              }) };
+          }
           const action = input;
-          // Until the v2 contract (Task 9): one project or Only me, no owners.
           const decided = approvalCore.decide('desktop', { approval_id: action.approval_id, command_id: action.command_id, snapshot_sha256: action.snapshot_sha256 as `sha256:${string}`,
-            action: action.action, project_ids: action.project_id === null ? [] : [action.project_id], share_transcript: action.share_transcript, owners: [] }, () => {
+            action: action.action, project_ids: action.project_ids, share_transcript: action.share_transcript, owners: action.owners }, () => {
             current(); const a = authenticate(token);
             return { actor: { organization_id: a.organization_id, principal_id: a.principal_id, membership_id: a.membership_id }, evidence: { kind: 'person-session', sha256: a.authorization_sha256 } };
           });
-          if (decided.kind === 'already_decided') throw new AuthorityOperationError('stale_access_state', 'Meeting review has already been resolved');
+          if (decided.kind === 'already_decided') return { status: decided.status, decided_on: decided.surface };
           if (decided.kind === 'stale') throw new AuthorityOperationError('stale_access_state', 'Meeting review has changed');
-          return { status: decided.status };
+          return { status: decided.status, decided_on: decided.surface };
         }
         if (input.operation === 'cancel_import') {
           const setting = intake.list(person).find(s => s.source_key === input.source_key);
@@ -240,8 +246,7 @@ export function createPersonMeetingRuntimeV1(options: {
         if (input.operation === 'home') {
           const folders = session === null ? [] : await session.folders();
           return { connected: session !== null, email: session?.email ?? null, workspace: session?.workspace ?? null, folders, settings_sha256: settings(person),
-            // Meetings API v1 still names the watched folder's project `project_id`.
-            sources: intake.list(person).filter(s => s.source_adapter_id === provider.cursor.policy.source_adapter_id).map(s => ({ source_key: s.source_key, folder_id: s.folder_id, project_id: s.folder_project_id,
+            sources: intake.list(person).filter(s => s.source_adapter_id === provider.cursor.policy.source_adapter_id).map(s => ({ source_key: s.source_key, folder_id: s.folder_id, folder_project_id: s.folder_project_id,
               baseline: ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).baseline, pending_imports: ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual,
               checked_at: observed.get(s.source_key)?.checked_at ?? null, error: observed.get(s.source_key)?.error ?? null })) };
         }
@@ -271,7 +276,7 @@ export function createPersonMeetingRuntimeV1(options: {
         }).immediate();
       };
       const body = await result(); current();
-      return { status: 200, body: validatePersonMeetingResultV1(input.operation, body) };
+      return { status: 200, body: validatePersonMeetingResultV2(input.operation, body) };
     },
   };
   /** Queues meetings for a person through one tool, without an HTTP session (the staging canary). */
