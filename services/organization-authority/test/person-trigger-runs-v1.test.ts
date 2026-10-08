@@ -2,11 +2,18 @@ import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol'
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { observeCoreRuntimeV1, coreRuntimeIdentityV1, annotateCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from '../src/composition/person-diagnostics-v1.js';
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from '../../../tests/support/telemetry-fixture-vocabulary-v1.js';
+
 import { SqliteTriggerRunsV1, enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import { createPersonTriggerRunsV1 } from '../src/composition/person-trigger-runs-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
+
+const captures: PersonDiagnosticsV1[] = [];
+afterEach(() => { for (const capture of captures.splice(0)) capture.close(); });
 
 const record = { kind: 'approved_record' as const, atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'organization-member-readable-person-v2' as const };
 const ticket = { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: 'cloud', ticket_id: '46', permalink: 'https://example.test/THERM-46', text_sha256: canonicalSha256('ticket') };
@@ -29,10 +36,12 @@ async function fixture(options: { readonly anchor?: () => typeof record; readonl
     renderInputs.push(input);
     return { rendered: await (options.render ?? (async () => card))(input), research: { items: [{ citation: record, title: 'Approved display' }, { citation: ticket, title: 'Kestrel cooling fan drift 0xC0FFEE' }] } };
   } }));
-  const create = (serviceRuns: SqliteTriggerRunsV1 = runs) => createPersonTriggerRunsV1({ runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordProjects: () => [] }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage' } as never, research: research as never, lease_ms: 1_000 });
+  const diagnostics = createPersonDiagnosticsV1({ sessions: { authenticateAccess: ({ access_token }) => auth(access_token) } });
+  captures.push(diagnostics);
+  const create = (serviceRuns: SqliteTriggerRunsV1 = runs) => createPersonTriggerRunsV1({ runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordProjects: () => [] }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000 });
   const app = create();
   const settled = async () => await vi.waitFor(() => expect(runs.read(f.person, row.run_id)!.state).not.toBe('running'));
-  return { ...f, runs, row, app, create, research, renderInputs, bindDesk, openCitation, settled, advance: (ms: number) => { now = new Date(now.getTime() + ms); } };
+  return { ...f, runs, row, app, create, research, diagnostics, desk, renderInputs, bindDesk, openCitation, settled, advance: (ms: number) => { now = new Date(now.getTime() + ms); } };
 }
 
 describe('durable approved-record trigger runs', () => {
@@ -51,6 +60,58 @@ describe('durable approved-record trigger runs', () => {
     await expect(f.app.view({ access_token: 'other', request: { schema_version: 1, operation: 'view', run_id: f.row.run_id } })).rejects.toMatchObject({ code: 'not_found' });
     await expect(f.app.retry({ access_token: 'other', request: { schema_version: 1, operation: 'retry', run_id: f.row.run_id } })).rejects.toMatchObject({ code: 'not_found' });
     await expect(f.app.list({ access_token: 'other' })).resolves.toEqual({ runs: [] });
+  });
+
+  it('captures one approved run with a linked background root and preserves its research outcome after committing output', async () => {
+    const f = await fixture({ render: async () => { annotateCoreRuntimeV1({ result: 'partial' }); return card; } });
+    const capture = await f.diagnostics.prepare({ access_token: 'approver', request: { schema_version: 1, operation: 'prepare', target: { kind: 'trigger_run', run_id: f.row.run_id } } });
+    const events: CoreRuntimeObservationV1[] = [];
+    await observeCoreRuntimeV1('http_request', () => f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id, capture_id: capture.capture_id } }), {
+      vocabulary: { ...TELEMETRY_FIXTURE_VOCABULARY_V1, triggers: ['approved_record'] }, observer: event => { events.push(event); },
+    });
+    await f.settled();
+    const result = await f.diagnostics.read({ access_token: 'approver', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } });
+    expect(result).toMatchObject({ status: 'completed', trace: { complete: true, events: [
+      { kind: 'lifecycle', stage: 'trigger', data: { trigger: 'approved_record', run_id: f.row.run_id, event_id: f.row.event_ref } },
+      { kind: 'lifecycle', stage: 'persistence', event: 'succeeded' },
+      { kind: 'lifecycle', stage: 'application', event: 'succeeded' },
+    ] } });
+    expect(f.desk.revalidate).toHaveBeenCalledTimes(1);
+    const http = events.find(event => event.phase === 'http_request' && event.event === 'succeeded')!;
+    const run = events.find(event => event.phase === 'research_run' && event.event === 'succeeded')!;
+    expect(run).toMatchObject({ root: true, parent_operation_id: http.operation_id, parent_span_id: null, trigger: 'approved_record',
+      run_id: coreRuntimeIdentityV1('research-run', f.row.run_id), event_id: coreRuntimeIdentityV1('research-event', f.row.event_ref),
+      output_id: coreRuntimeIdentityV1('research-output', canonicalSha256(JSON.parse(f.runs.read(f.person, f.row.run_id)!.result_json!))), result: 'partial',
+    });
+    expect(run.operation_id).not.toBe(http.operation_id);
+    expect(events.find(event => event.phase === 'research_run' && event.event === 'started')).toMatchObject({ run_id: run.run_id, event_id: run.event_id, attempt_id: run.attempt_id, trigger: 'approved_record' });
+    expect(result.trace!.events.every(event => event.operation_id === run.operation_id)).toBe(true);
+    await expect(f.diagnostics.read({ access_token: 'other', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } })).rejects.toMatchObject({ code: 'not_found' });
+    await f.app.view({ access_token: 'approver', request: { schema_version: 1, operation: 'view', run_id: f.row.run_id } });
+    expect(f.research).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the run lease without an attempt when a capture belongs to another target', async () => {
+    const f = await fixture();
+    const capture = await f.diagnostics.prepare({ access_token: 'approver', request: { schema_version: 1, operation: 'prepare', target: { kind: 'ask' } } });
+    await expect(f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id, capture_id: capture.capture_id } })).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'pending', attempts: 0 });
+    expect(f.research).not.toHaveBeenCalled();
+  });
+
+  it('marks the capture failed when a completed renderer has lost the durable run lease', async () => {
+    const f = await fixture();
+    const capture = await f.diagnostics.prepare({ access_token: 'approver', request: { schema_version: 1, operation: 'prepare', target: { kind: 'trigger_run', run_id: f.row.run_id } } });
+    const finish = vi.spyOn(f.runs, 'finish').mockReturnValueOnce(false);
+    await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id, capture_id: capture.capture_id } });
+    await f.settled();
+    expect(finish).toHaveBeenCalledTimes(1);
+    const result = await f.diagnostics.read({ access_token: 'approver', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } });
+    expect(result).toMatchObject({ status: 'failed', error: { code: 'conflict' } });
+    expect(result.trace!.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: 'persistence', event: 'skipped' }), expect.objectContaining({ stage: 'application', event: 'failed' }),
+    ]));
+    expect(result.trace!.events.some(event => event.stage === 'application' && event.event === 'succeeded')).toBe(false);
   });
 
   it('releases index lag without an attempt and maps access loss and repeated timeouts', async () => {

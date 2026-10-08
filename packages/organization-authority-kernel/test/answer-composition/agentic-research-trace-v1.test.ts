@@ -1,9 +1,7 @@
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { describe, expect, it, vi } from 'vitest';
-import type { AgenticResearchTraceEventV1 } from '../../src/answer-composition/agentic-ask-v1.js';
-import { agenticResearchTraceErrorKindV1, observeAgenticResearchTraceV1 } from '../../src/answer-composition/agentic-research-trace-v1.js';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
-import { captureCoreRuntimeContentV1, observeCoreRuntimeV1 } from '../../src/shared/core-runtime-observation-v1.js';
+import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import type { EvidenceDeskItemV2 } from '../../src/shared/evidence-desk-v2.js';
 import { need, part, record, researchHarness, result, step } from './fixtures/agentic-scenarios.js';
 
@@ -19,7 +17,7 @@ function ticket(id: string, text?: string): EvidenceDeskItemV2 {
 
 describe('request-owned research trace', () => {
   it('captures exact linked-open prompts, raw rejected decisions and repair calls without enabling runtime content capture', async () => {
-    const events: AgenticResearchTraceEventV1[] = [];
+    const events: CoreRuntimeDiagnosticObservationV1[] = [];
     const anchor = ticket('THERM-50');
     const linked = ticket('THERM-51');
     const anchorBody = ticket('THERM-50', 'DVT is on hold pending the fixture; inspect the linked PVT gate.');
@@ -43,10 +41,10 @@ describe('request-owned research trace', () => {
       live_sources: [{ source_id: 'jira', kind: 'ticket', selector: 'tickets', description: 'Live tickets', metadata_only_list: true, tool_id: 'jira' }],
       list: async () => result([anchor]),
       open: async input => input.item === anchor.id ? result([anchorBody, linked]) : result([linkedBody]),
-    }, { on_trace: event => { events.push(event); }, usage: () => usage });
+    }, { usage: () => usage });
     const runtimeContent = vi.fn();
-    const output = await observeCoreRuntimeV1('ask_request', () => h.research.answerWithResearch({ question: 'Why is DVT on hold and what is required for PVT?' }),
-      { observer: () => undefined, content_observer: runtimeContent });
+    const output = await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => observeCoreRuntimeV1('ask_request', () => h.research.answerWithResearch({ question: 'Why is DVT on hold and what is required for PVT?' }),
+      { observer: () => undefined, content_observer: runtimeContent }));
 
     expect(output.response.outcome).toBe('answered');
     const requests = events.filter(event => event.kind === 'model_request');
@@ -77,18 +75,17 @@ describe('request-owned research trace', () => {
       { id: 4, round: 4, tool: 'finish', args: {} },
     ]);
     expect(events.filter(event => event.kind === 'tool_request' && event.tool === 'finish')).toHaveLength(1);
-    expect(events).toContainEqual({ kind: 'tool_response', tool_call_id: 4, round: 4, tool: 'finish', result: { tool: 'finish' } });
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool_response', tool_call_id: 4, round: 4, tool: 'finish', result: { tool: 'finish' } }));
     const expanded = events.find(event => event.kind === 'tool_response' && event.tool_call_id === 2);
     expect(expanded).toMatchObject({ result: beforeLinkedRead.last_results[0] });
     expect(JSON.stringify(events)).not.toContain('private-desk-');
     expect(JSON.stringify(events)).not.toContain('receipt_sha256');
     // Opt-in diagnostics never restore the separate global content observer.
-    expect(runtimeContent).toHaveBeenCalledTimes(1);
-    expect(runtimeContent.mock.calls[0]![0].content).not.toContain(anchor.label);
+    expect(runtimeContent).not.toHaveBeenCalled();
   });
 
   it('correlates batched reads that finish out of order while preserving the model-visible admission order', async () => {
-    const events: AgenticResearchTraceEventV1[] = [];
+    const events: CoreRuntimeDiagnosticObservationV1[] = [];
     const completed: string[] = [];
     let releaseSlow!: () => void;
     const slow = new Promise<void>(resolve => { releaseSlow = resolve; });
@@ -103,9 +100,9 @@ describe('request-owned research trace', () => {
     ], { search: async input => {
       if (input.query === 'slow') { await slow; completed.push('slow'); return result([first]); }
       completed.push('fast'); releaseSlow(); return result([second]);
-    } }, { on_trace: event => { events.push(event); } });
+    } });
 
-    const output = await h.research.answerWithResearch({ question: 'Are both gates ready?' });
+    const output = await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => h.research.answerWithResearch({ question: 'Are both gates ready?' }));
 
     expect(output.response.outcome).toBe('answered');
     expect(completed).toEqual(['fast', 'slow']);
@@ -128,46 +125,34 @@ describe('request-owned research trace', () => {
       step([part('Fixture', [need('readiness', 'open')])], [{ tool: 'search', args: { query: 'fixture' } }]),
       step([part('Fixture', [need('readiness', 'found', ['E1'])])], [{ tool: 'finish', args: {} }]),
       { sentences: [{ text: 'The fixture is ready.', evidence: ['E1'] }], not_found: [] },
-    ], { search: async () => result([body]) }, { on_trace: event => {
+    ], { search: async () => result([body]) });
+    const output = await withCoreRuntimeDiagnosticsV1(event => {
       if (event.kind === 'model_request') (event.input.schema as Record<string, unknown>).type = 'mutated';
       if (event.kind === 'model_response' && typeof event.value === 'object' && event.value !== null) Object.assign(event.value, { parts: [] });
       if (event.kind === 'tool_response') Object.assign(event.result, { error: 'invented' });
       throw new Error('observer unavailable');
-    } });
-    const output = await h.research.answerWithResearch({ question: 'Is the fixture ready?' });
+    }, () => h.research.answerWithResearch({ question: 'Is the fixture ready?' }));
     expect(output.response.outcome).toBe('answered');
     expect(h.inputs.every(input => input.schema.type === 'object')).toBe(true);
     expect(h.prompt(1).last_results).toEqual([expect.not.objectContaining({ error: 'invented' })]);
   });
 
   it('captures finite model and tool failure labels without exception messages', async () => {
-    const toolEvents: AgenticResearchTraceEventV1[] = [];
+    const toolEvents: CoreRuntimeDiagnosticObservationV1[] = [];
     const toolFailure = new AuthorityOperationError('rate_limited', 'private upstream response');
     const h = researchHarness([
       step([part('Fixture', [need('readiness', 'open')])], [{ tool: 'search', args: { query: 'fixture' } }]),
-    ], { search: async () => { throw toolFailure; } }, { on_trace: event => { toolEvents.push(event); } });
-    await expect(h.research.answerWithResearch({ question: 'Is the fixture ready?' })).rejects.toBe(toolFailure);
-    expect(toolEvents).toContainEqual({ kind: 'tool_error', tool_call_id: 1, round: 1, tool: 'search', error_kind: 'rate_limited' });
+    ], { search: async () => { throw toolFailure; } });
+    await expect(withCoreRuntimeDiagnosticsV1(event => { toolEvents.push(event); }, () => h.research.answerWithResearch({ question: 'Is the fixture ready?' }))).rejects.toBe(toolFailure);
+    expect(toolEvents).toContainEqual(expect.objectContaining({ kind: 'tool_error', tool_call_id: 1, round: 1, tool: 'search', error_kind: 'rate_limited' }));
 
-    const modelEvents: AgenticResearchTraceEventV1[] = [];
+    const modelEvents: CoreRuntimeDiagnosticObservationV1[] = [];
     const modelFailure = new Error('private model exception');
-    const model = researchHarness(() => { throw modelFailure; }, {}, { on_trace: event => { modelEvents.push(event); } });
-    await expect(model.research.answerWithResearch({ question: 'Is the fixture ready?' })).rejects.toBe(modelFailure);
-    expect(modelEvents).toContainEqual({ kind: 'model_error', call_id: 1, role: 'step', error_kind: 'other' });
+    const model = researchHarness(() => { throw modelFailure; });
+    await expect(withCoreRuntimeDiagnosticsV1(event => { modelEvents.push(event); }, () => model.research.answerWithResearch({ question: 'Is the fixture ready?' }))).rejects.toBe(modelFailure);
+    expect(modelEvents).toContainEqual(expect.objectContaining({ kind: 'model_error', call_id: 1, role: 'step', error_kind: 'other' }));
     expect(JSON.stringify([...toolEvents, ...modelEvents])).not.toContain('private upstream response');
     expect(JSON.stringify([...toolEvents, ...modelEvents])).not.toContain('private model exception');
   });
 
-  it('reports an unsnapshotable diagnostic and safely classifies exotic errors', () => {
-    const observer = vi.fn();
-    observeAgenticResearchTraceV1(observer, { kind: 'model_response', call_id: 1, role: 'step', value: () => undefined });
-    expect(observer).toHaveBeenCalledExactlyOnceWith({ kind: 'capture_error', error_kind: 'snapshot_failed' });
-    expect(agenticResearchTraceErrorKindV1(new Proxy({}, { get() { throw new Error('private getter'); } }))).toBe('other');
-  });
-
-  it.each([Infinity, NaN, undefined, { omitted: undefined }, new Date(), [, 'sparse']])('marks a non-JSON structured reply incomplete instead of normalizing it (%j)', value => {
-    const observer = vi.fn();
-    observeAgenticResearchTraceV1(observer, { kind: 'model_response', call_id: 1, role: 'step', value });
-    expect(observer).toHaveBeenCalledExactlyOnceWith({ kind: 'capture_error', error_kind: 'snapshot_failed' });
-  });
 });

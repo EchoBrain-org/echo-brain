@@ -232,10 +232,10 @@ prompts, raw errors, or stack traces from these fields. The legacy
 metric and alarm. It is not part of new lifecycle diagnosis, and this slice
 does not add alarms, a status API, correlation, or close #87.
 
-#### Inspect the staging journey transport heartbeat
+#### Inspect the shared trace transport heartbeat
 
-For `https://authority-staging.echobrain.org` only, use the same retained
-`authority` log stream and run this Logs Insights query:
+Staging and production use the same core context and transport implementation.
+Use the target Authority's retained `authority` log stream and run this query:
 
 ```
 fields @timestamp, event, release_sha, build_number
@@ -254,15 +254,59 @@ container whose label and effective environment bindings disagree.
 Stage metadata and heartbeat records are content-free and best effort. The
 separate opt-in development content records described below share this transport.
 At the service boundary,
-missing or malformed immutable image identity disables only the staging journey
+missing or malformed immutable image identity disables only the journey
 telemetry transport; it must not prevent Authority startup or request handling.
 A guarded staging update rejects inconsistent telemetry-capable image metadata
 before accepting the candidate, preserving the currently accepted runtime. The
 Docker `awslogs` driver
 delivers the JSON lines using the host role's log-stream-only permission, so no
 AWS credential is exposed to a browser. Journey metrics, alarms, dashboards,
-and the operator Explorer are separate from this core liveness loop. Do not
-enable or rehearse this transport against a production Authority in this sprint.
+and the operator Explorer are separate from this core liveness loop. The
+existing image capability label `ECHO_STAGING_JOURNEY_TELEMETRY_V1` retains its
+name for release compatibility. The service selects `environment=staging` for
+the staging origin and `environment=production` otherwise. Production EMF uses
+`EchoBrain/AuthorityJourneyV1`; staging retains `EchoBrain/StagingJourneyV1`.
+Production never enables the legacy global development-content logger.
+
+#### Follow a research execution and select private payload capture
+
+`shared/core-runtime-observation-v1.ts` owns operation/span context for source
+processing, approval, research, model calls, tools, release and output reads.
+CloudWatch events and metrics are projections of that context. Ask no longer
+creates a second journey or aggregates planner calls into a synthetic attempt.
+Historical Ask journey records remain readable.
+
+Each research execution carries a registered trigger label and hashed run ID.
+An approved-record execution also carries a hashed approval event ID and a
+unique attempt ID. Background execution starts its own operation linked to the
+request that started it. Human approval wait does not keep a machine span open.
+Follow the approval event hash across publication and execution, and the output
+hash from committed card storage to later card reads. The durable approval/run
+tables and audits remain the business source of truth.
+
+Routine traces contain finite labels, opaque hashes, counts and timings. Exact
+payload capture is selected separately through authenticated Person diagnostics:
+prepare an `ask` or exact `trigger_run` target, then supply its one-use
+`capture_id` on the ordinary Ask request or existing run `start`. This does not
+approve a meeting, change the research brief, or change the product response.
+The same shared observer records model-port inputs, exposed structured replies,
+tool inputs/results, automatic starting reads and lifecycle outcomes. These are
+observable decisions, not hidden model reasoning or provider HTTP credentials.
+
+Captures stay in process memory: at most eight globally and two per actor,
+8 MiB/512 events each, with a 15-minute expiry and a non-extending 60-second
+window after a terminal read. Capacity loss marks a trace incomplete. Restart
+or expiry loses its payloads; CloudWatch metadata has independent retention.
+Only the originating organization, principal and membership may claim/read it.
+Every terminal read revalidates source access and the reading session. Failed
+runs can be inspected only while those checks still pass; known revocation
+erases content. Payloads never enter CloudWatch or immutable audit/run storage.
+
+Use the [research trace exporter](../../tools/evals/research-loop/README.md#one-ordinary-request-diagnostic-trace)
+to save the receipt before execution and export private files. Resume reads
+with the saved capture ID after a lost response; do not repeat the Ask to
+recover its trace. The staging evaluator retains its compatibility capture
+field but shares this collector and core instrumentation.
 
 #### Staging journey overview and Explorer
 
@@ -270,11 +314,12 @@ A read-only staging inspection on 2026-09-08 verified the journey overview,
 the fixed Explorer Lambda and policy, and a redacted Journey Explorer query.
 This is dated staging evidence, not a standing claim about a future deployment:
 inspect the stack, alarm state, and current journey before relying on it. The
-overview and Explorer remain staging-only and are never a production
-observability path.
+deployed overview and Explorer remain staging-only. The shared Explorer reader
+now supports one explicitly configured production metadata log group, but this
+change does not deploy or authorize a production Explorer.
 
-The formatter and `authority-staging-journey-observability-v1.template.json`
-are dedicated to staging and distinct from the
+The overview `authority-staging-journey-observability-v1.template.json`
+remains dedicated to staging and distinct from the
 generic `authority-observability-v1.template.json` stack, and can select only
 `/echo-brain/authority/authority-staging.echobrain.org`. It therefore cannot
 create a production journey resource, permission, dashboard, alarm, retention
@@ -299,14 +344,14 @@ build number, and every business or person identifier are never dimensions.
 | `StageStarted`, `StageSucceeded`, `StageFailed`, `StageSkipped` | `1` for the corresponding canonical stage event | `workflow`, `stage` |
 | `StageClosedLatencyMs` | `elapsed_ms` for succeeded or failed measured machine stages; recovery and shared references are excluded | `workflow`, `stage` |
 | `StageRetryAttempt` | `1` for a measured execution start with `accounting.retry_of_attempt`; skipped, recovered and historical ordinal observations are excluded | `workflow`, `stage` |
-| `TerminalOutcome` | `1` for a succeeded stage with a non-null bounded stage outcome | `workflow`, `stage`, `outcome` |
+| `TerminalOutcome` | `1` for a succeeded stage with a bounded stage outcome, or a terminal `research_run` result | `workflow`, `stage`, `outcome` |
 | `StageFailure` | `1` for a failed stage | `workflow`, `stage`, `failure_class` |
-| `AskRetrievalFailure` | `1` for a failed `ask_retrieval` stage | none |
+| `AskRetrievalFailure` | `1` for a failed `research_loop` (historical `ask_retrieval` remains supported) | none |
 | `CoreModelAttempt`, `CoreModelTotalTokens`, `CoreModelUsageReported` | actual terminal model call; non-null total tokens and total-usage coverage, across extraction, related projection, planner and answer | `workflow`, `stage` (purpose) |
-| `LlmAttempt`, `LlmUsageReported`, `LlmUsageUnavailable`, `LlmProviderLatencyMs` | one terminal LLM-attempt count, usage-status count, and provider RTT | `stage`, `provider`, `model` |
+| `LlmAttempt`, `LlmUsageReported`, `LlmUsageUnavailable`, `LlmProviderLatencyMs` | one actual terminal `model_call`, usage-status count, and provider RTT; historical role aggregates retain their original semantics | `stage`, `provider`, `model` |
 | `LlmInputTokens`, `LlmOutputTokens`, `LlmTotalTokens`, `LlmCachedInputTokens`, `LlmReasoningTokens` | the respective non-null provider-reported value only | `stage`, `provider`, `model` |
 | `LlmTotalTokensAvailable` | `1` only when that attempt has a non-null total-token value | `stage`, `provider`, `model` |
-| `RetrievalPlannedQueries`, `RetrievalQueryHits`, `RetrievalReleasedAtoms`, `RetrievalContextAtoms`, `RetrievalCitations` | the respective non-null retrieval counter | `workflow`, `stage` |
+| `RetrievalPlannedQueries`, `RetrievalQueryHits`, `RetrievalReleasedAtoms`, `RetrievalContextAtoms`, `RetrievalCitations` | the respective non-null counter once per `research_run`; historical journey events retain their original projection | `workflow`, `stage` |
 | `ApprovalHumanWaitMs` | `queue_age_ms` from card staging to verified action | `workflow`, `stage` |
 | `JourneyTelemetryAlive`, `WorkerCycleCompleted` | `1` for liveness output and a completed worker cycle, respectively | none |
 | `ApprovedSearchPendingCount`, `ApprovedSearchStuckCount`, `ApprovedSearchBacklogCheck`, `ApprovedSearchOldestAgeMs` | explicit-zero durable backlog gauge, stuck-gauge, scan heartbeat, and oldest pending age | none |
@@ -371,8 +416,14 @@ fixture's raw canonical journey events and approved-search state.
 #### Explorer backend
 
 The separate `authority-staging-journey-explorer-v1.template.json` and its
-inline Node handler are staging-only and accept only
-`/echo-brain/authority/authority-staging.echobrain.org` as the source log group.
+inline Node handler select exactly one Authority runtime log group at deployment.
+The existing `StagingLogGroupName` parameter and environment-variable names remain
+compatible, with `/echo-brain/authority/authority-staging.echobrain.org` as the
+default. An explicit `/echo-brain/authority/<DNS-hostname>` selects production
+metadata; the handler derives the environment from this server configuration.
+Request parameters cannot choose a group or environment. The query role remains
+scoped to that one selected group; resource inventory and IAM actions are unchanged.
+No production stack, dashboard, or permission assignment is deployed by this change.
 The backend is invoked directly by a CloudWatch custom widget. It is not a
 public service: there is no function URL, API Gateway route,
 application-managed or end-user AWS credential, direct widget permission to
@@ -437,7 +488,8 @@ asks the operator to narrow the range for older journeys. `detail` and
 
 The client cannot supply Logs Insights text, a query ID, `SOURCE`, a raw log
 message, prompt, answer, source content, or other event content. Every query
-filters `environment=staging`. The handler rejects unknown parameter keys and
+filters the environment derived from the configured log group (`staging` for
+the staging default, `production` otherwise). The handler rejects unknown parameter keys and
 uses finite allowlists for workflow, stage, event, outcome, failure class,
 provider, model, finish reason, and usage status. Returned detail is an
 allowlisted projection only: schema version, journey UUID, sequence, attempt,
@@ -490,7 +542,19 @@ grants only exact-Lambda invocation; the effective permission set must be
 separately reviewed for broader access. The widget has no direct CloudWatch
 Logs permission, public dashboard sharing, function URL, API Gateway route,
 application-managed credential, end-user credential, production target, or
-mutation operation.
+mutation operation. Reconfiguring the existing backend for a production group
+requires a separate reviewed deployment and permission-set decision; the current
+dashboard remains staging. Development-content reads are disabled for production.
+
+The reader retains registered historical trigger labels (`ask`, `approved_record`,
+`sweep`, `other`); a contract test checks new registered triggers against that
+allowlist. Core detail includes opaque run, event, output, attempt, source-revision,
+and parent-operation links. Approval publication records its event and source
+links only after the receipt and trigger hook transaction commits, so operators
+can correlate intake, approval, and later research without a span covering the
+human approval wait. A trigger's output link names its card, while publication's
+output link names the approved record. Core LLM columns count terminal `model_call`
+spans; research summary counts come from `research_run`.
 
 The list surface shows recent Ask and approval journeys. Selected detail shows
 safe outcome, a chronological stage-and-attempt waterfall whose bars are

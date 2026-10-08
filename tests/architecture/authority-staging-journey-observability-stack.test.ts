@@ -277,6 +277,9 @@ describe("staging journey observability overview stack", () => {
     for (const outcome of JOURNEY_TERMINAL_OUTCOMES_V1.ask_response) {
       expect(metricSerialized).toContain(`"TerminalOutcome","workflow","ask","stage","ask_response","outcome","${outcome}"`);
     }
+    for (const outcome of ["answered", "partial", "not_found", "off_scope", "completed"]) {
+      expect(metricSerialized).toContain(`"TerminalOutcome","workflow","core_runtime","stage","research_run","outcome","${outcome}"`);
+    }
     expect(metricSerialized).toContain('"outcome","actionable"');
     expect(metricSerialized).toContain('"outcome","staged"');
     expect(metricSerialized).toContain('"outcome","current"');
@@ -370,7 +373,7 @@ describe("staging journey observability overview stack", () => {
     const tokenTotals = queries.find((query) => query.includes("journey_total_tokens"));
     expect(tokenTotals).toBeDefined();
     if (tokenTotals === undefined) throw new Error("token-total query is required");
-    expect(tokenTotals).toContain("llm_usage.total_tokens as total_tokens");
+    expect(tokenTotals).toContain('if(workflow = "core_runtime" and runtime_stage = "model_call" and event in ["succeeded", "failed"], diagnostic.counts.total_tokens, llm_usage.total_tokens) as total_tokens');
     expect(tokenTotals).toContain(
       'filter kind = "echo-authority-journey-stage-v1" | fields parseDate',
     );
@@ -394,6 +397,16 @@ describe("staging journey observability overview stack", () => {
     expect(tokenTotals).toContain('outcome in ["current", "published"]');
     expect(tokenTotals).not.toContain("superseded");
     expect(tokenTotals).toContain("p95_total_tokens");
+    for (const query of [wallClock, tokenTotals]) {
+      // A run's own start/terminal pair is required even when its parent HTTP
+      // operation started earlier. Recoverable child failures do not close it.
+      expect(query).toContain('coalesce(diagnostic.phase, stage) as runtime_stage');
+      expect(query).toContain('if(workflow = "core_runtime", event = "started" and runtime_stage = "research_run", event = "started" and sequence = 1)');
+      expect(query).toContain('if(workflow = "core_runtime", runtime_stage = "research_run" and event in ["succeeded", "failed"],');
+      expect(query).toContain('if(workflow = "core_runtime", coalesce(diagnostic.trigger, "other"), workflow) as journey_type');
+      expect(query).toContain('by journey_id, journey_type');
+      expect(query).toContain('by journey_type | sort journey_type asc');
+    }
     const rates = queries.find((query) => query.includes("failure_rate_pct"));
     expect(rates).toBeDefined();
     if (rates === undefined) throw new Error("stage-rate query is required");
@@ -405,7 +418,7 @@ describe("staging journey observability overview stack", () => {
     expect(rates).toContain("failed_attempts / closed_attempts");
     expect(rates).toContain("retry_attempts as measured_retry_attempts, unknown_retry_attempts");
     expect(rates).toContain(
-      "display workflow, stage, closed_attempts, 100 * succeeded_attempts / closed_attempts",
+      "display workflow, runtime_stage, closed_attempts, 100 * succeeded_attempts / closed_attempts",
     );
     expect(rates).not.toContain(
       "fields workflow, stage, closed_attempts, 100 * succeeded_attempts / closed_attempts",

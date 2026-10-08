@@ -38,7 +38,7 @@ function harness(options: { readonly generate?: (input: StructuredGenerationInpu
   const deskAuthorize = vi.fn((_input: { readonly access_token: string; readonly scope: unknown }) => { if (revoked) throw new AuthorityOperationError('unauthorized', 'grant revoked'); return { checked_at: '2026-10-06T00:00:00.000Z' }; });
   const openDeskCitation = vi.fn(options.openRecord ?? (() => { throw new AuthorityOperationError('not_found', 'record is not readable'); }));
   const recordProjects = vi.fn(options.recordProjects ?? (() => { throw new AuthorityOperationError('not_found', 'record is not readable'); }));
-  const tokens = new Map([['token-a', member('a')], ['token-b', member('b')]]);
+  const tokens = new Map([['token-a', member('a')], ['token-b', member('b')], ['token-renewed', member('a')]]);
   const audits: unknown[] = [];
   const generate = vi.fn(options.generate ?? (async () => ({ parts: [{ question: 'Q', needs: [{ need: 'fact', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] })));
   const dependencies = {
@@ -72,7 +72,7 @@ function harness(options: { readonly generate?: (input: StructuredGenerationInpu
     await vi.waitFor(async () => { if (value.status === 'running') value = await read(token, run_id); expect(value.status).not.toBe('running'); });
     return value;
   };
-  return { application, generate, audits, read, settled, deskSearch, deskAuthorize, openDeskCitation, recordProjects, revoke: () => { revoked = true; }, advance: (ms: number) => { clock += ms; } };
+  return { application, generate, audits, revokeToken: (token: string) => { tokens.delete(token); }, read, settled, deskSearch, deskAuthorize, openDeskCitation, recordProjects, revoke: () => { revoked = true; }, advance: (ms: number) => { clock += ms; } };
 }
 
 describe('staging research evaluation runs', () => {
@@ -251,9 +251,9 @@ describe('staging research evaluation runs', () => {
     expect(result.trace!.events.filter(event => event.kind === 'model_response')).toHaveLength(requests.length);
     expect(JSON.stringify(h.audits)).not.toContain('blocks PVT');
     expect(JSON.stringify(h.audits)).not.toContain('model_request');
-    const first = result.trace!.events[0]!;
+    const first = requests[0]!;
     (first.input as { user_prompt: string }).user_prompt = 'changed outside the registry';
-    expect((await h.read('token-a', run.run_id)).trace!.events[0]).not.toMatchObject({ input: { user_prompt: 'changed outside the registry' } });
+    expect((await h.read('token-a', run.run_id)).trace!.events.find(event => event.kind === 'model_request')).not.toMatchObject({ input: { user_prompt: 'changed outside the registry' } });
     h.advance(PERSON_RESEARCH_EVAL_REREAD_MS_V1 + 1);
     await expect(h.read('token-a', run.run_id)).rejects.toMatchObject({ code: 'not_found' });
     h.application.close();
@@ -275,13 +275,40 @@ describe('staging research evaluation runs', () => {
     const h = harness({ generate: async () => { throw new AgenticAskDeadlineErrorV1(); } });
     const run = await h.application.start({ access_token: 'token-a', request: { ...ask('Fail after input?'), capture_trace: true } });
     const first = await h.settled('token-a', run.run_id);
-    expect(first).toMatchObject({ status: 'failed', error: { code: 'timed_out' }, trace: { complete: true, events: [expect.objectContaining({ kind: 'model_request' }), expect.objectContaining({ kind: 'model_error' })] } });
+    expect(first).toMatchObject({ status: 'failed', error: { code: 'timed_out' }, trace: { complete: true, events: expect.arrayContaining([expect.objectContaining({ kind: 'model_request' }), expect.objectContaining({ kind: 'model_error' }), expect.objectContaining({ kind: 'lifecycle', stage: 'application', event: 'failed' })]) } });
     const priorChecks = h.deskAuthorize.mock.calls.length;
     h.revoke();
     const revoked = await h.read('token-a', run.run_id);
     expect(h.deskAuthorize.mock.calls.length).toBeGreaterThan(priorChecks);
     expect(revoked).toMatchObject({ status: 'failed', error: { code: 'unauthorized' } });
     expect(revoked).not.toHaveProperty('trace');
+    await expect(h.read('token-a', run.run_id)).rejects.toMatchObject({ code: 'not_found' });
+    h.application.close();
+  });
+
+  it('preserves a terminal capture when its reader cancels during source revalidation', async () => {
+    const h = harness();
+    const run = await h.application.start({ access_token: 'token-a', request: { ...ask('Download again?'), capture_trace: true } });
+    await h.settled('token-a', run.run_id);
+    const controller = new AbortController();
+    h.deskAuthorize.mockImplementationOnce(() => {
+      controller.abort();
+      throw controller.signal.reason;
+    });
+    await expect(h.application.read({ access_token: 'token-a', request: { schema_version: 1, run_id: run.run_id }, signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(await h.read('token-a', run.run_id)).toMatchObject({ status: 'completed', trace: { complete: true } });
+    h.application.close();
+  });
+
+  it('rechecks the reading session after the execution source fence before releasing payloads', async () => {
+    const h = harness();
+    const run = await h.application.start({ access_token: 'token-a', request: { ...ask('Session race?'), capture_trace: true } });
+    await h.settled('token-a', run.run_id);
+    h.deskAuthorize.mockImplementationOnce(() => {
+      h.revokeToken('token-renewed');
+      return { checked_at: '2026-10-06T00:00:00.000Z' };
+    });
+    await expect(h.read('token-renewed', run.run_id)).rejects.toMatchObject({ code: 'unauthorized' });
     await expect(h.read('token-a', run.run_id)).rejects.toMatchObject({ code: 'not_found' });
     h.application.close();
   });

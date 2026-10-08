@@ -62,9 +62,6 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly on_worker_telemetry?: (
     event: import("@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle").MeetingProcessingWorkerTelemetryEventV1,
   ) => void;
-  /** Staging-only Ask telemetry; omitted from every production runtime. */
-  readonly ask_journey_telemetry?:
-    OrganizationAuthorityApiRuntimeDependencies["ask_journey_telemetry"];
   /**
    * Staging-selected release canary over the owner's synthetic personal source.
    * The runtime only serializes it with the worker.
@@ -200,10 +197,7 @@ export async function openOrganizationAuthorityRuntime(
       ? { agentic_ask_v1_small_scope_shortcut: true }
       : {}),
     ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
-    ...(dependencies.api?.ask_journey_telemetry !== undefined ||
-    config.ask_journey_telemetry === undefined
-      ? {}
-      : { ask_journey_telemetry: config.ask_journey_telemetry }),
+
   };
   const authority = openAuthorityDatabase(
     join(config.state_directory, "authority.sqlite"),

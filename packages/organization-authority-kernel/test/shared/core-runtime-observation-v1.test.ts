@@ -11,6 +11,27 @@ const linked = "11111111-1111-4111-8111-111111111111";
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 
 describe("core runtime observations", () => {
+  it.each([
+    [Object.assign(new Error("PRIVATE"), { name: "AgenticAskDeadlineErrorV1" }), "timeout"],
+    [Object.assign(new Error("PRIVATE"), { name: "AbortError" }), "cancelled"],
+    [{ code: "stale_access_state" }, "authorization"],
+    [{ code: "invalid_request" }, "invalid_request"],
+    [{ code: "invalid_output" }, "invalid_output"],
+    [{ diagnostic: { failure_class: "adapter_http", http_status: 429 } }, "rate_limited"],
+    [{ diagnostic: { failure_class: "adapter_provider_error", http_status: 503 } }, "unavailable"],
+    [{ diagnostic: { failure_class: "adapter_transport" } }, "unavailable"],
+    [{ diagnostic: { failure_class: "adapter_json" } }, "invalid_output"],
+    [{ diagnostic: { failure_class: "adapter_refusal" } }, "provider_failure"],
+    [new Error("PRIVATE"), "failed"],
+    [new Proxy({}, { get() { throw new Error("PRIVATE"); } }), "failed"],
+  ])("classifies research failures through finite shared metadata (%#)", async (error, result) => {
+    const events: CoreRuntimeObservationV1[] = [];
+    await expect(observeCoreRuntimeV1("research_run", async () => { throw error; }, { observer: event => { events.push(event); } })).rejects.toBe(error);
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({ event: "failed", result });
+    expect(JSON.stringify(events)).not.toContain("PRIVATE");
+  });
+
   it("round-trips only finite live-source categories and preserves legacy observations", async () => {
     const events: CoreRuntimeObservationV1[] = [];
     await observeCoreRuntimeV1("evidence_connection", async () => {

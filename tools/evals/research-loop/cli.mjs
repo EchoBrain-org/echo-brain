@@ -24,9 +24,11 @@ const USAGE = `Research loop evaluation (docs/product/2026-10-06-research-loop-e
   run --run --model <loop-model-id> --split development|holdout --state S0|S1 --out <dir> [--trials 3] [--only id,…] [--background-diagnostic]
                                              Run cases against the staging research endpoint, one at a time.
   trace --run --question <question> --project-id <prj_…> --out <dir>
-                                             Capture one live-budget Ask's exact model inputs, structured
-                                             outputs and model-facing tool calls privately (staging only).
-  trace --run-id <rr_…> --out <dir>           Resume reading an existing diagnostic run without starting another.
+                                             Capture one ordinary live Ask's exact model/tool payloads privately.
+  trace --run --trigger-run-id <run_…> --out <dir>
+                                             Capture one existing pending approval run; never approves or retries.
+  trace --capture-id <cap_…> --out <dir>     Resume reading a capture without repeating the product request.
+  trace --run-id <rr_…> --out <dir>           Read an existing legacy staging evaluation; never starts one.
   grade --out <dir> (--judge-model <openrouter-slug> --judge-credential-file <path> | --no-judge)
   report --out <dir>
   calibrate sheet --out <dir>                 Write a blind 15-run sheet for the founder.
@@ -216,7 +218,7 @@ export async function main(argv, dependencies = {}) {
   else if (command === "run") await run(args, dependencies);
   else if (command === "trace") {
     const result = await runTrace(args, { ...dependencies, get_client: personClient, source_sha: sourceIdentity() });
-    process.stdout.write(`diagnostic ${result.run_id}: ${result.status}, complete capture, ${result.model_calls} model calls, ${result.tool_calls} tool calls; saved to ${result.out}\n`);
+    process.stdout.write(`diagnostic ${result.capture_id ?? result.run_id}: ${result.status}, complete capture, ${result.model_calls} model calls, ${result.tool_calls} tool calls; saved to ${result.out}\n`);
   }
   else if (command === "grade") await grade(args);
   else if (command === "report") report(args);

@@ -6,9 +6,10 @@ import type {
   StructuredGenerationPort,
   StructuredGenerationUsageV1,
 } from "./structured-generation-v1.js";
-import { observeCoreRuntimeV1, withoutCoreRuntimeContentV1, type CoreRuntimePhaseV1 } from "../shared/core-runtime-observation-v1.js";
+import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, withoutCoreRuntimeContentV1, type CoreRuntimePhaseV1 } from "../shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, cleanLine, repairPrompt } from "./agentic-ask-v1-model-protocol.js";
-import { agenticResearchTraceErrorKindV1, observeAgenticResearchTraceV1, type AgenticResearchTraceObserverV1 } from './agentic-research-trace-v1.js';
+import { coreRuntimeDiagnosticErrorKindV1 } from '../shared/core-runtime-diagnostics-v1.js';
+import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 
 /**
  * The shared model gate (research trigger contract v1, section 3): every model
@@ -148,7 +149,6 @@ export interface CreateAgenticModelGateV1Options {
   readonly content_sensitive: () => boolean;
   /** Runs once per admitted call, after the budget and access checks and before the provider call. */
   readonly before_call?: (role: AgenticAskModelRoleV1) => void;
-  readonly on_trace?: AgenticResearchTraceObserverV1;
 }
 
 export interface AgenticModelGateStatsV1 {
@@ -183,7 +183,8 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     assertLive();
     if (calls >= budget.max_model_calls) throw new AgenticAskGenerationFailureV1("call budget exhausted", "fallback");
     // Every call is preceded by a cumulative desk revalidation of what it may carry.
-    const validated = await raceAbort(activeSignal, options.desk_revalidate({ signal: activeSignal }));
+    const validated = await observeAgenticLifecycleV1('revalidation', 'research_revalidation', { purpose: 'model', role, next_call_id: calls + 1 },
+      () => raceAbort(activeSignal, options.desk_revalidate({ signal: activeSignal })), value => ({ checked_at: value.checked_at }));
     options.on_checked(validated.checked_at);
     assertLive();
     // Revalidation itself spends request time. Recompute the role budget after the fence,
@@ -197,8 +198,6 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     const callId = calls;
     options.before_call?.(role);
     invocationDigests.push(canonicalSha256({ role, model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms }));
-    observeAgenticResearchTraceV1(options.on_trace, { kind: 'model_request', call_id: callId, role, recovery,
-      input: { model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms } });
     // Live-provider evidence must never reach runtime content capture.
     const contentSafe = <T>(operation: () => Promise<T>): Promise<T> => {
       // Each call is its own span, named by its caller, so provider model calls carry that purpose.
@@ -211,20 +210,31 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
       return (options.content_sensitive() ? withoutCoreRuntimeContentV1(observed) : observed()).then(value => { settle(); return value; }, (error: unknown) => { settle(); throw error; });
     };
     try {
-      if (options.model.generate_with_observation !== undefined) {
-        const generate = options.model.generate_with_observation.bind(options.model);
-        const observed = await raceAbort(activeSignal, contentSafe(() => generate(modelInput)));
-        observeAgenticResearchTraceV1(options.on_trace, { kind: 'model_response', call_id: callId, role, value: observed.value, usage: observed.usage, finish_reason: observed.finish_reason });
-        generations.push(Object.freeze({ role, finish_reason: observed.finish_reason, usage: observed.usage }));
-        if (observed.finish_reason !== null && observed.finish_reason !== "stop") throw finishFailure(observed.finish_reason);
-        return observed.value;
-      }
-      const value = await raceAbort(activeSignal, contentSafe(() => options.model.generate(modelInput)));
-      observeAgenticResearchTraceV1(options.on_trace, { kind: 'model_response', call_id: callId, role, value });
-      generations.push(Object.freeze({ role, finish_reason: null, usage: null }));
-      return value;
+      return await contentSafe(async () => {
+        observeCoreRuntimeDiagnosticV1({ kind: 'model_request', call_id: callId, role, recovery,
+          input: { model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms } });
+        // Only a provider failure has an error terminal. A returned value has
+        // one response terminal even when its finish reason requires recovery.
+        const generate = async <T>(operation: () => Promise<T>): Promise<T> => {
+          try { return await raceAbort(activeSignal, operation()); }
+          catch (error) {
+            observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: callId, role, error_kind: coreRuntimeDiagnosticErrorKindV1(error) });
+            throw error;
+          }
+        };
+        if (options.model.generate_with_observation !== undefined) {
+          const observed = await generate(() => options.model.generate_with_observation!(modelInput));
+          observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: callId, role, value: observed.value, usage: observed.usage, finish_reason: observed.finish_reason });
+          generations.push(Object.freeze({ role, finish_reason: observed.finish_reason, usage: observed.usage }));
+          if (observed.finish_reason !== null && observed.finish_reason !== "stop") throw finishFailure(observed.finish_reason);
+          return observed.value;
+        }
+        const value = await generate(() => options.model.generate(modelInput));
+        observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: callId, role, value });
+        generations.push(Object.freeze({ role, finish_reason: null, usage: null }));
+        return value;
+      });
     } catch (error) {
-      observeAgenticResearchTraceV1(options.on_trace, { kind: 'model_error', call_id: callId, role, error_kind: agenticResearchTraceErrorKindV1(error) });
       if (error instanceof AgenticAskGenerationFailureV1) {
         if (error.recovery === "fallback") generationStopped = true;
         throw error;

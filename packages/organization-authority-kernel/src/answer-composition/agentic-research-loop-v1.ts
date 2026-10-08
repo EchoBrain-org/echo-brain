@@ -48,7 +48,9 @@ import type {
   AgenticResearchRoundV1,
 } from "./agentic-research-v1.js";
 import { AuthorityOperationError } from "../domain/errors.js";
-import { agenticResearchTraceErrorKindV1, observeAgenticResearchTraceV1, type AgenticResearchTraceObserverV1 } from './agentic-research-trace-v1.js';
+import { observeCoreRuntimeDiagnosticV1 } from '../shared/core-runtime-observation-v1.js';
+import { coreRuntimeDiagnosticErrorKindV1 } from '../shared/core-runtime-diagnostics-v1.js';
+import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 
 /**
  * The research loop (research trigger contract v1): a brief in, the full
@@ -130,7 +132,6 @@ export interface CreateAgenticResearchLoopV1Options {
   readonly assert_live: () => void;
   /** The runner's own observation, read when the bundle is built: the last access check, and research's model and desk time. */
   readonly observed: () => { readonly checked_at: string | null; readonly model_ms: number; readonly desk_ms: number };
-  readonly on_trace?: AgenticResearchTraceObserverV1;
 }
 
 /** What the request's audit and journey report read from research, while it runs and after it fails. */
@@ -368,6 +369,14 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const selectorOf = (item: EvidenceDeskItemV2): string => item.source_id === undefined ? evidenceDeskSourceV2(item) : sourcesById.get(item.source_id)?.selector ?? item.source_id;
   // Tool results carry discovery metadata. Bodies appear once, in the budgeted scratchpad.
   const describe = (entry: Entry): Record<string, unknown> => describeAgenticEvidenceItemV1({ short: entry.short, source: selectorOf(entry.item), item: entry.item });
+  /** Released source projections for automatic starting/preload reads, before short ids are assigned. */
+  const releasedView = (result: EvidenceDeskResultV2): Record<string, unknown> => ({
+    released_items: result.items.map(item => {
+      const { id: _id, ...metadata } = describeAgenticEvidenceItemV1({ short: '', source: selectorOf(item), item });
+      return { ...metadata, citation: item.citation, ...(item.text === undefined ? {} : { text: item.text }) };
+    }),
+    truncated: result.truncated, ...(result.notice === undefined ? {} : { notice: result.notice }),
+  });
 
   // ---- tools ---------------------------------------------------------
   const search = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
@@ -501,13 +510,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     // Only planner-selected reads enter this function; finish has no tool result.
     const tool = action.tool === 'search' || action.tool === 'open' ? action.tool : 'list';
     const identity = { tool_call_id: ++toolCalls, round: steps, tool } as const;
-    observeAgenticResearchTraceV1(options.on_trace, { kind: 'tool_request', ...identity, args: action.args });
+    observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', ...identity, args: action.args });
     try {
       const result = await (tool === 'search' ? search(action.args, admit, signal) : tool === 'open' ? open(action.args, admit, signal) : list(action.args, admit, signal));
-      observeAgenticResearchTraceV1(options.on_trace, { kind: 'tool_response', ...identity, result });
+      observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', ...identity, result });
       return result;
     } catch (error) {
-      observeAgenticResearchTraceV1(options.on_trace, { kind: 'tool_error', ...identity, error_kind: agenticResearchTraceErrorKindV1(error) });
+      observeCoreRuntimeDiagnosticV1({ kind: 'tool_error', ...identity, error_kind: coreRuntimeDiagnosticErrorKindV1(error) });
       throw error;
     }
   };
@@ -693,9 +702,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const startingIds: (string | null)[] = [];
     for (const { citation, if_unreadable: ifUnreadable } of brief.starting) {
       assertLive();
-      if (desk.openCitation === undefined) throw new AuthorityOperationError("unavailable", "Starting evidence is unavailable");
       let opened: EvidenceDeskResultV2;
-      try { opened = await raceAbort(activeSignal, desk.openCitation({ citation, signal: activeSignal })); }
+      try { opened = await observeAgenticLifecycleV1('starting_read', 'research_starting_read', { index: startingIds.length + 1, citation, if_unreadable: ifUnreadable }, async () => {
+        if (desk.openCitation === undefined) throw new AuthorityOperationError("unavailable", "Starting evidence is unavailable");
+        return raceAbort(activeSignal, desk.openCitation({ citation, signal: activeSignal }));
+      }, releasedView); }
       catch (error) {
         // A deleted or now-hidden item is news to a brief that asked to hear about it; nothing else about it is known.
         if (ifUnreadable !== "report" || !unreadableRefusal(error)) throw error;
@@ -727,14 +738,16 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     // ---- optional small-scope preload -----------------------------------
     if (brief.options.small_scope_preload) {
       assertLive();
-      const inventory = await raceAbort(activeSignal, desk.search({ limit: SHORTCUT_ITEMS, inventory_mode: "items", signal: activeSignal }));
+      const inventory = await observeAgenticLifecycleV1('preload', 'research_preload', { operation: 'search', limit: SHORTCUT_ITEMS, inventory_mode: 'items' },
+        () => raceAbort(activeSignal, desk.search({ limit: SHORTCUT_ITEMS, inventory_mode: "items", signal: activeSignal })), releasedView);
       observe(inventory);
       cover('search', undefined, inventory);
       if (!inventory.truncated && inventory.items.length <= SHORTCUT_ITEMS) {
         let used = 0;
         for (const listed of inventory.items) {
           assertLive();
-          const opened = await raceAbort(activeSignal, desk.open({ item: listed.id, signal: activeSignal }));
+          const opened = await observeAgenticLifecycleV1('preload', 'research_preload', { operation: 'open', citation: listed.citation },
+            () => raceAbort(activeSignal, desk.open({ item: listed.id, signal: activeSignal })), releasedView);
           observe(opened);
           cover('open', evidenceDeskSourceV2(listed), opened);
           const exact = opened.items.find(item => item.id === listed.id && item.text !== undefined);
@@ -742,7 +755,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           const entry = register(exact); entry.opened = true; entry.preloaded = true; used += bytes(exact.text);
         }
       }
-    }
+    } else observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'preload', event: 'skipped' });
 
     // ---- research loop --------------------------------------------------
     let results: ToolResult[] = [];
@@ -818,11 +831,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const reads = step.actions.filter(action => action.tool !== "finish");
       if (reads.length === 0) {
         const identity = { tool_call_id: ++toolCalls, round: steps, tool: 'finish' } as const;
-        observeAgenticResearchTraceV1(options.on_trace, { kind: 'tool_request', ...identity, args: {} });
+        observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', ...identity, args: {} });
         researchIncomplete = false;
         researchStop = 'finished';
         recordRound(roundStartedAt, [roundView("finish", {}, undefined)]);
-        observeAgenticResearchTraceV1(options.on_trace, { kind: 'tool_response', ...identity, result: { tool: 'finish' } });
+        observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', ...identity, result: { tool: 'finish' } });
         break;
       }
       const hadCitableEvidence = [...entries.values()].some(entry => entry.full);

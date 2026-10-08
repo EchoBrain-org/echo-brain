@@ -41,15 +41,16 @@ function resource(stack: Template, logicalId: string): Resource {
 }
 
 describe("staging Journey Explorer backend stack", () => {
-  it("has an exact four-resource inventory and only the fixed staging input", () => {
+  it("has four existing resources and one explicit Authority log group input with staging default", () => {
     const stack = template();
     expect(stack.Parameters).toEqual({
       StagingLogGroupName: {
         Type: "String",
         Default: STAGING_LOG_GROUP,
-        AllowedValues: [STAGING_LOG_GROUP],
+        AllowedPattern: "^/echo-brain/authority/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:[.][a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$",
+        MaxLength: 275,
         ConstraintDescription:
-          "must be the one owned Authority staging runtime log group",
+          "must be one explicitly selected Authority runtime log group with a DNS hostname",
       },
     });
     expect(Object.keys(stack.Resources)).toEqual([

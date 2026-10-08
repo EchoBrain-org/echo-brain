@@ -5,20 +5,15 @@ import type {
   PersonAnswerResponseV4,
 } from "@echo-brain/organization-api";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
-import type {
-  AnswerCompositionGenerationObservationV1,
-  AnswerCompositionStageObservationV1,
-  StructuredGenerationFinishReasonV1,
-  StructuredGenerationPort,
-  StructuredGenerationUsageV1,
-} from "./structured-generation-v1.js";
+import type { StructuredGenerationPort } from "./structured-generation-v1.js";
 import {
   liveSourceDescriptorV2,
   type EvidenceDeskPortV2,
   type EvidenceDeskSourceV2,
 } from "../shared/evidence-desk-v2.js";
 import type { EvidenceDeskPortV1 } from "../shared/evidence-desk-v1.js";
-import { annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
+import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1, withoutCoreRuntimeContentV1 } from "../shared/core-runtime-observation-v1.js";
+import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 import {
   ANSWER_PROMPT,
   AgenticAskOutputErrorV1,
@@ -35,13 +30,11 @@ import {
   createAgenticModelGateV1,
   isAbort,
   object,
-  type AgenticAskModelRoleV1,
 } from "./agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPortV1, type AgenticAuditContextV1 } from "./agentic-release-v1.js";
 import type { AgenticRendererV1, AgenticRenderOutputV1 } from "./agentic-renderer-v1.js";
 import { createAgenticResearchLoopV1, type AgenticResearchCatalogEntryV1, type AgenticResearchCatalogV1, type AgenticResearchSourceV1 } from "./agentic-research-loop-v1.js";
 import { createAskRendererV1 } from "./renderers/ask-renderer-v1.js";
-import type { AgenticResearchTraceObserverV1 } from './agentic-research-trace-v1.js';
 import {
   AGENTIC_RESEARCH_LIVE_BUDGET_V1,
   type AgenticAskWithResearchV1,
@@ -53,7 +46,6 @@ import {
 export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./agentic-research-v1.js";
 export { AgenticAskDeadlineErrorV1 } from "./agentic-model-gate-v1.js";
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
-export type { AgenticResearchTraceEventV1, AgenticResearchTraceObserverV1 } from './agentic-research-trace-v1.js';
 
 /** Request-wide model-call budget, including retries and repairs. */
 export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
@@ -98,15 +90,6 @@ export interface CreateAgenticAskV1Options {
    * and "my" resolve to a person. Only the models see it; audits never do.
    */
   readonly asker?: { readonly display_name: string };
-  /**
-   * Content-free stage timings for the Ask journey, in the same shape as the
-   * V2 composition: retrieval (desk time during research), planner (research
-   * step calls), context, answer, revalidation (final fence) and audit.
-   * Observer failures never alter the answer.
-   */
-  readonly on_stage?: (event: AnswerCompositionStageObservationV1) => void;
-  /** Explicit request-owned diagnostic capture. The caller owns authorization, bounds and release revalidation. */
-  readonly on_trace?: AgenticResearchTraceObserverV1;
 }
 
 /** One run: the brief, and the trigger definition's name as a label for the audit and the evaluation. */
@@ -122,7 +105,6 @@ export interface AgenticRenderedResearchInputV1<In, Out> extends AgenticResearch
   readonly trigger_input: In;
 }
 
-const FINISH_REASONS: readonly StructuredGenerationFinishReasonV1[] = ["stop", "length", "content_filter", "error", "other"];
 
 /** A directory name the prompts may carry: one trimmed line of 1 to 200 characters, or none. */
 function askerName(value: { readonly display_name: string } | undefined): string | undefined {
@@ -252,11 +234,14 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
    * question, the trigger's own for a task, or none) and the shared release step.
    */
   type RequestOutput = { readonly response?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6; readonly rendered?: unknown; readonly research: AgenticResearchResultV1; readonly writer_evidence: readonly string[] };
-  const request = async (input: AgenticResearchInputV1, render?: Pick<AgenticRenderedResearchInputV1<unknown, unknown>, "renderer" | "trigger_input">): Promise<RequestOutput> => {
-      const brief = runnableBrief(input.brief);
-      if (brief === null) throw new AgenticAskOutputErrorV1(input.brief.goal.kind === "question" ? "question is invalid" : "research goal is invalid");
-      // Ask's question has Ask's writer; only a task brief takes its trigger's renderer.
-      if (render !== undefined && brief.goal.kind === "question") throw new AgenticAskOutputErrorV1("research goal is invalid");
+  const request = async (input: AgenticResearchInputV1, render?: Pick<AgenticRenderedResearchInputV1<unknown, unknown>, "renderer" | "trigger_input">): Promise<RequestOutput> => withoutCoreRuntimeContentV1(() => observeAgenticLifecycleV1<RequestOutput>('run', undefined, { trigger: input.trigger }, async () => {
+      const brief = await observeAgenticLifecycleV1('brief', 'research_brief', { trigger: input.trigger, brief: input.brief, scope: options.desk.scope }, async () => {
+        const selected = runnableBrief(input.brief);
+        if (selected === null) throw new AgenticAskOutputErrorV1(input.brief.goal.kind === "question" ? "question is invalid" : "research goal is invalid");
+        // Ask's question has Ask's writer; only a task brief takes its trigger's renderer.
+        if (render !== undefined && selected.goal.kind === "question") throw new AgenticAskOutputErrorV1("research goal is invalid");
+        return selected;
+      }, value => ({ brief: value, output_kind: value.goal.kind === 'question' ? 'answer' : render === undefined ? 'research' : 'rendered' }));
       const { goal, budget } = brief;
       const researchOnly = goal.kind !== "question";
       const beyondLive = budget.deadline_ms > AGENTIC_RESEARCH_LIVE_BUDGET_V1.deadline_ms || budget.max_rounds > AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_rounds || budget.max_model_calls > AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
@@ -269,15 +254,9 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       const deadlineTimer = setTimeout(() => { deadlineExpired = true; terminalAbort.abort(new AgenticAskDeadlineErrorV1()); }, budget.deadline_ms);
       deadlineTimer.unref?.();
       let writerFallbacks = 0; let checkedAt: string | null = null;
-      // ---- journey observation (content-free; never alters the answer) ----
+      // ---- research cost accounting; shared core spans own runtime observation ----
       let phase: "research" | "answer" | "final" = "research";
-      let deskMs = 0; let stepModelMs = 0; let answerModelMs = 0;
-      const report = (event: Pick<AnswerCompositionStageObservationV1, "stage" | "event" | "elapsed_ms"> & Partial<AnswerCompositionStageObservationV1>): void => {
-        if (options.on_stage === undefined) return;
-        try {
-          options.on_stage(Object.freeze({ failure_class: null, http_status: null, generation_usage: null, retrieval: null, ...event, elapsed_ms: Math.max(0, Math.round(event.elapsed_ms)) }));
-        } catch { /* observation only */ }
-      };
+      let deskMs = 0; let stepModelMs = 0;
       /** Research desk time is wall time: overlapping reads occupy one interval. */
       let activeResearchDeskCalls = 0;
       let researchDeskStartedAt = 0;
@@ -299,21 +278,6 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         ...(options.desk.openCitation === undefined ? {} : { openCitation: (request: Parameters<NonNullable<EvidenceDeskPortV2["openCitation"]>>[0]) => timed(() => options.desk.openCitation!(request)) }),
       });
       let terminalAudited = false;
-      /** One role's calls summed, for the journey's LLM usage; any unreported part makes that total unknown. */
-      const usageOf = (role: AgenticAskModelRoleV1, elapsedMs: number): AnswerCompositionGenerationObservationV1 | null => {
-        const matching = gate.stats().generations.filter(entry => entry.role === role);
-        if (matching.length === 0) return null;
-        const sum = (field: keyof StructuredGenerationUsageV1): number | null =>
-          matching.every(entry => typeof entry.usage?.[field] === "number") ? matching.reduce((total, entry) => total + (entry.usage![field] as number), 0) : null;
-        const last = matching.at(-1)!.finish_reason;
-        return Object.freeze({
-          adapter_id: options.generation.generation_adapter_id, model: options.generation.answer_model,
-          provider_latency_ms: Math.max(0, Math.round(elapsedMs)),
-          input_tokens: sum("input_tokens"), output_tokens: sum("output_tokens"), total_tokens: sum("total_tokens"),
-          cached_input_tokens: sum("cached_input_tokens"), reasoning_tokens: sum("reasoning_tokens"),
-          finish_reason: last === null ? null : FINISH_REASONS.includes(last as StructuredGenerationFinishReasonV1) ? last as StructuredGenerationFinishReasonV1 : "other",
-        });
-      };
       let selectedTicketCount = 0; let ticketContextCount = 0; let ticketCitationCount = 0;
       const scope = scopeText(options.desk.scope);
 
@@ -331,7 +295,6 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         context: context(requestDay), scope, catalog,
         now, remaining, signal: activeSignal, assert_live: assertLive,
         observed: () => ({ checked_at: checkedAt, model_ms: stepModelMs, desk_ms: deskMs }),
-        ...(options.on_trace === undefined ? {} : { on_trace: options.on_trace }),
       });
       const gate = createAgenticModelGateV1({
         generation: options.generation, model: options.model,
@@ -342,10 +305,9 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         is_deadline_expired: () => deadlineExpired,
         on_span: event => {
           if (event.phase === "enter") { if (event.role === "answer") ticketContextCount = selectedTicketCount; return; }
-          if (event.role === "step") stepModelMs += event.elapsed_ms; else answerModelMs += event.elapsed_ms;
+          if (event.role === "step") stepModelMs += event.elapsed_ms;
         },
         ...loop.gate_hooks,
-        ...(options.on_trace === undefined ? {} : { on_trace: options.on_trace }),
       });
       /** What every audit record of this request carries, taken when its release or terminal witness starts. */
       const auditContext = (): AgenticAuditContextV1 => {
@@ -359,37 +321,42 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
 
       try {
         // The loop never sees the trigger; its name is a label for the audit and the evaluation.
-        const { schema_version, kind, ...gathered } = await loop.run(gate);
+        const { schema_version, kind, ...gathered } = await observeAgenticLifecycleV1('research', 'research_loop', {}, () => loop.run(gate), value => {
+          annotateCoreRuntimeV1({ research_stop_reason: value.stop.reason, ...(value.stop.admission === undefined ? {} : { research_admission: value.stop.admission }) });
+          return { research: trimAgenticEvidenceBundleV1({ ...value, trigger: input.trigger }) };
+        });
         const bundle: AgenticEvidenceBundleV1 = Object.freeze({ schema_version, kind, trigger: input.trigger, ...gathered });
         const researched = trimAgenticEvidenceBundleV1(bundle);
+        // Back in the enclosing run span: one summary for every trigger.
+        annotateCoreRuntimeV1({ research_stop_reason: bundle.stop.reason,
+          ...(bundle.stop.admission === undefined ? {} : { research_admission: bundle.stop.admission }),
+          counts: { released_atom_count: bundle.items.length },
+        });
         if (researchOnly) {
           // A task brief: its trigger's renderer, which reads only the bundle, or research only.
           // Either result goes through the shared release step.
           phase = "final";
-          const output = render === undefined ? researchOnlyOutput(bundle, researched) : await render.renderer.render({
+          let selectedEvidence: readonly string[] = [];
+          if (render === undefined) observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'renderer', event: 'skipped', data: { output_kind: 'research' } });
+          const output = render === undefined ? researchOnlyOutput(bundle, researched) : await observeAgenticLifecycleV1('renderer', 'research_output', { output_kind: 'rendered' }, () => render.renderer.render({
             bundle, trigger_input: render.trigger_input, gate, signal: activeSignal, prompt_budget: promptBudget,
             remaining: () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
-          });
+            on_context: ids => { selectedEvidence = ids; },
+          }), value => ({ output_kind: 'rendered', selected_evidence: selectedEvidence, fallback_count: value.fallbacks, outcome: value.outcome, result: value.result }));
           writerFallbacks += output.fallbacks;
+          annotateCoreRuntimeV1({ counts: { context_atom_count: selectedEvidence.length } });
           const released = await releaseAgenticResultV1({
             ...auditContext(), desk, outcome: output.outcome, citation_count: output.cited.length, result: output.result, answer_sha256: output.answer_sha256,
-            fence_after_audit: true, signal: activeSignal, assert_live: assertLive, now,
+            fence_after_audit: true, signal: activeSignal, assert_live: assertLive,
             on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
           });
+          annotateCoreRuntimeV1({ result: output.outcome, counts: { citation_count: output.cited.length } });
           clearTimeout(deadlineTimer);
           return Object.freeze({ ...(render === undefined ? {} : { rendered: released }), research: researched, writer_evidence: Object.freeze([]) });
         }
 
-        // Research is over: its desk time is the journey's retrieval stage and its step calls the planner stage.
+        // Research is over; its cost bundle excludes renderer and finalization work.
         phase = "answer";
-        const { searches, search_hits } = loop.progress();
-        report({ stage: "retrieval", event: "succeeded", elapsed_ms: deskMs, retrieval: {
-          planned_query_count: searches, query_hit_count: search_hits, released_atom_count: bundle.items.length,
-          research_stop_reason: bundle.stop.reason,
-          ...(bundle.stop.admission === undefined ? {} : { research_admission: bundle.stop.admission }),
-        } });
-        const stepUsage = usageOf("step", stepModelMs);
-        report(stepUsage === null ? { stage: "planner", event: "skipped", elapsed_ms: 0 } : { stage: "planner", event: "succeeded", elapsed_ms: stepModelMs, generation_usage: stepUsage });
 
         // ---- Ask's renderer: the writer and the layout read only the bundle ----
         const writer = createAskRendererV1({
@@ -397,30 +364,27 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
         });
         const ticketsAmong = (shorts: readonly string[]) => shorts.filter(short => bundle.items.find(item => item.short === short)?.item.citation.kind === "ticket").length;
-        const rendered = await writer.render({
+        let selectedEvidence: readonly string[] = [];
+        const rendered = await observeAgenticLifecycleV1('renderer', 'research_output', { output_kind: 'answer' }, () => writer.render({
           bundle, trigger_input: { question: goal.question }, gate, signal: activeSignal, prompt_budget: promptBudget,
           // The release step keeps its reserve after the writer.
           remaining: () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
           on_context: selected => {
-            report({ stage: "context", event: "succeeded", elapsed_ms: 0, retrieval: { context_atom_count: selected.length } });
+            selectedEvidence = selected;
             // Counted as answer context only once the writer call starts (its span).
             selectedTicketCount = ticketsAmong(selected);
           },
-        });
+        }), value => ({ output_kind: 'answer', selected_evidence: selectedEvidence, fallback_count: value.fallbacks, outcome: value.outcome, result: value.result.response }));
         writerFallbacks += rendered.fallbacks;
-        // A failed answer call still ends in a response (records or not found); its span keeps the failure.
-        const answerUsage = usageOf("answer", answerModelMs);
-        report(answerUsage === null ? { stage: "answer", event: "skipped", elapsed_ms: 0 } : { stage: "answer", event: "succeeded", elapsed_ms: answerModelMs, generation_usage: answerUsage, retrieval: { citation_count: rendered.cited.length } });
+        annotateCoreRuntimeV1({ counts: { context_atom_count: selectedEvidence.length } });
         phase = "final";
         // V5/V6 keep the access check after the audit write; V4 never had one.
         const response = await releaseAgenticResultV1({
           ...auditContext(), desk, outcome: rendered.outcome, citation_count: rendered.cited.length, result: rendered.result.response, answer_sha256: rendered.answer_sha256,
-          fence_after_audit: tickets, signal: activeSignal, assert_live: assertLive, now,
+          fence_after_audit: tickets, signal: activeSignal, assert_live: assertLive,
           on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
-          on_stage: event => report(event.stage === "revalidation"
-            ? { stage: "revalidation", event: "succeeded", elapsed_ms: event.elapsed_ms }
-            : { stage: "audit", event: "succeeded", elapsed_ms: event.elapsed_ms, retrieval: { citation_count: rendered.cited.length } }),
         });
+        annotateCoreRuntimeV1({ result: rendered.outcome, counts: { citation_count: rendered.cited.length } });
         clearTimeout(deadlineTimer);
         ticketCitationCount = response.citations.filter(value => value.citation.kind === "ticket").length;
         return Object.freeze({ response, research: researched, writer_evidence: rendered.result.writer_evidence });
@@ -439,9 +403,11 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         terminalAbort.abort();
         throw error;
       } finally {
+        const { searches, search_hits } = loop.progress();
+        annotateCoreRuntimeV1({ counts: { planned_query_count: searches, query_hit_count: search_hits } });
         if (tickets) annotateCoreRuntimeV1({ counts: { ticket_retrieved_items: loop.progress().retrieved_tickets, ticket_context_items: ticketContextCount, ticket_citations: ticketCitationCount } });
       }
-  };
+  }, value => ({ trigger: input.trigger, output_kind: value.response !== undefined ? 'answer' : value.rendered !== undefined ? 'rendered' : 'research', result: value.response ?? value.rendered ?? value.research })));
   const signalOf = (signal: AbortSignal | undefined) => signal === undefined ? {} : { signal };
   return Object.freeze({
     async answer(input: { readonly question: string; readonly signal?: AbortSignal }) {

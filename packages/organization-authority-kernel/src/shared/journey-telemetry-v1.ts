@@ -1,5 +1,5 @@
 import { createTelemetryVocabularyV1, EMPTY_TELEMETRY_VOCABULARY_V1, type TelemetryVocabularyV1 } from "./telemetry-vocabulary-v1.js";
-import { normalizeCoreRuntimeDetailV1, type CoreRuntimeDetailV1 } from "./core-runtime-observation-v1.js";
+import { CORE_RUNTIME_RESEARCH_ADMISSIONS_V1, CORE_RUNTIME_RESEARCH_STOP_REASONS_V1, normalizeCoreRuntimeDetailV1, type CoreRuntimeDetailV1 } from "./core-runtime-observation-v1.js";
 import { randomUUID } from "node:crypto";
 
 /**
@@ -155,13 +155,9 @@ export interface JourneyRetrievalCountersV1 {
   readonly research_admission: JourneyResearchAdmissionV1 | null;
 }
 
-export const JOURNEY_RESEARCH_STOP_REASONS_V1 = Object.freeze([
-  "finished", "empty_catalog", "no_progress", "step_limit", "budget", "unusable_step",
-] as const);
+export const JOURNEY_RESEARCH_STOP_REASONS_V1 = CORE_RUNTIME_RESEARCH_STOP_REASONS_V1;
 export type JourneyResearchStopReasonV1 = (typeof JOURNEY_RESEARCH_STOP_REASONS_V1)[number];
-export const JOURNEY_RESEARCH_ADMISSIONS_V1 = Object.freeze([
-  "post_revalidation_no_time",
-] as const);
+export const JOURNEY_RESEARCH_ADMISSIONS_V1 = CORE_RUNTIME_RESEARCH_ADMISSIONS_V1;
 export type JourneyResearchAdmissionV1 = (typeof JOURNEY_RESEARCH_ADMISSIONS_V1)[number];
 
 export interface JourneyRetrievalCountersInputV1 {

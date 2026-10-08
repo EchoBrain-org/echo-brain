@@ -1,3 +1,4 @@
+import { validatePersonDiagnosticTraceV1, PERSON_DIAGNOSTICS_MAX_TRACE_BYTES_V1, PERSON_DIAGNOSTICS_MAX_TRACE_EVENTS_V1, PERSON_DIAGNOSTICS_MAX_TRACE_DEPTH_V1, type PersonDiagnosticTraceV1 } from './person-diagnostics-v1.js';
 import { validatePersonAnswerResponseV6 } from './person-answer-v4.js';
 import type { PersonAnswerResponseV6 } from './person-answer-v6.js';
 import { validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
@@ -46,13 +47,8 @@ export interface PersonResearchEvalReadRequestV1 {
 }
 
 export type PersonResearchEvalStatusV1 = 'running' | 'completed' | 'failed';
-export interface PersonResearchEvalTraceV1 {
-  readonly schema_version: 1;
-  readonly kind: 'echo-agentic-research-trace-v1';
-  readonly complete: boolean;
-  readonly events: readonly Readonly<Record<string, unknown>>[];
-  readonly dropped_events: number;
-}
+/** Compatibility name for the shared ordinary-request diagnostic trace. */
+export type PersonResearchEvalTraceV1 = PersonDiagnosticTraceV1;
 
 export interface PersonResearchEvalReadResponseV1 {
   readonly schema_version: 1;
@@ -72,15 +68,14 @@ export interface PersonResearchEvalReadResponseV1 {
 
 /** A research result carries released text; the eval reads it whole. */
 export const PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1 = 16 * 1024 * 1024;
-export const PERSON_RESEARCH_EVAL_MAX_TRACE_BYTES_V1 = 8 * 1024 * 1024;
-export const PERSON_RESEARCH_EVAL_MAX_TRACE_EVENTS_V1 = 512;
+export const PERSON_RESEARCH_EVAL_MAX_TRACE_BYTES_V1 = PERSON_DIAGNOSTICS_MAX_TRACE_BYTES_V1;
+export const PERSON_RESEARCH_EVAL_MAX_TRACE_EVENTS_V1 = PERSON_DIAGNOSTICS_MAX_TRACE_EVENTS_V1;
 /** Model JSON schemas nest more deeply than a trigger's input. Counts the trace envelope itself. */
-export const PERSON_RESEARCH_EVAL_MAX_TRACE_DEPTH_V1 = 48;
+export const PERSON_RESEARCH_EVAL_MAX_TRACE_DEPTH_V1 = PERSON_DIAGNOSTICS_MAX_TRACE_DEPTH_V1;
 const RUN_ID = /^rr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const TRIGGER = /^[a-z_]{1,64}$/;
 /** Objects and arrays nested in a trigger's input, counting the input itself. */
 const MAX_INPUT_DEPTH = 8;
-const TRACE_EVENT_KINDS = new Set(['model_request', 'model_response', 'model_error', 'tool_request', 'tool_response', 'tool_error']);
 const ERROR_CODES = new Set(['conflict', 'invalid_request', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable', 'timed_out']);
 
 function exactKeys(record: Record<string, unknown>, required: readonly string[], optional: readonly string[], label: string): void {
@@ -120,21 +115,6 @@ function jsonValue(value: unknown, depth: number, maximumDepth = MAX_INPUT_DEPTH
   }
 }
 
-function traceValue(value: unknown): PersonResearchEvalTraceV1 {
-  jsonValue(value, 0, PERSON_RESEARCH_EVAL_MAX_TRACE_DEPTH_V1, 'Research evaluation trace');
-  const trace = asRecord(value, 'Research evaluation trace');
-  exactKeys(trace, ['schema_version', 'kind', 'complete', 'events', 'dropped_events'], [], 'Research evaluation trace');
-  if (trace.schema_version !== 1 || trace.kind !== 'echo-agentic-research-trace-v1' || typeof trace.complete !== 'boolean' ||
-      !Number.isSafeInteger(trace.dropped_events) || (trace.dropped_events as number) < 0 || trace.complete !== (trace.dropped_events === 0) ||
-      !Array.isArray(trace.events) || trace.events.length > PERSON_RESEARCH_EVAL_MAX_TRACE_EVENTS_V1) fail('Research evaluation trace is invalid');
-  const events = trace.events.map((value, index) => {
-    const event = asRecord(value, 'Research evaluation trace event');
-    if (typeof event.kind !== 'string' || !TRACE_EVENT_KINDS.has(event.kind) || event.sequence !== index + 1) fail('Research evaluation trace event is invalid');
-    return Object.freeze({ ...event });
-  });
-  if (utf8ByteLength(JSON.stringify(trace)) > PERSON_RESEARCH_EVAL_MAX_TRACE_BYTES_V1) fail('Research evaluation trace is too large');
-  return Object.freeze({ schema_version: 1, kind: 'echo-agentic-research-trace-v1', complete: trace.complete, events: Object.freeze(events), dropped_events: trace.dropped_events as number });
-}
 
 export function validatePersonResearchEvalStartRequestV1(value: unknown): PersonResearchEvalStartRequestV1 {
   const request = asEnumerableRecord(value, 'Research evaluation start request');
@@ -177,7 +157,7 @@ export function validatePersonResearchEvalReadRequestV1(value: unknown): PersonR
 export function validatePersonResearchEvalReadResponseV1(value: unknown): PersonResearchEvalReadResponseV1 {
   const input = asRecord(value, 'Research evaluation result');
   // Bound the trace before the existing recursive envelope-property check.
-  const trace = Object.hasOwn(input, 'trace') ? traceValue(input.trace) : undefined;
+  const trace = Object.hasOwn(input, 'trace') ? validatePersonDiagnosticTraceV1(input.trace) : undefined;
   asEnumerableRecord(input, 'Research evaluation result');
   exactKeys(input, ['schema_version', 'kind', 'run_id', 'status'], ['research', 'ask', 'rendered', 'error', 'trace'], 'Research evaluation result');
   if (input.schema_version !== 1 || input.kind !== 'echo-person-research-eval-result-v1') fail('Research evaluation result is invalid');
