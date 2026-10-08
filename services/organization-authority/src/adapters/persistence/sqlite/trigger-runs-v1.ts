@@ -91,18 +91,18 @@ export class SqliteTriggerRunsV1 {
 
   release(runId: string, leaseToken: string, attempt: { readonly counted: false } | { readonly counted: true; readonly exhausted: 'timed_out' | 'unavailable' }): void {
     this.immediate(() => {
-      const current = this.database.prepare('SELECT state, lease_token, attempts FROM authority_trigger_runs_v1 WHERE run_id=?').get(runId) as Pick<StoredRowV1, 'state' | 'lease_token' | 'attempts'> | undefined;
-      if (current === undefined || current.state !== 'running' || current.lease_token !== leaseToken) return;
       const timestamp = this.timestamp();
+      const current = this.database.prepare('SELECT state, lease_token, lease_expires_at, attempts FROM authority_trigger_runs_v1 WHERE run_id=?').get(runId) as Pick<StoredRowV1, 'state' | 'lease_token' | 'lease_expires_at' | 'attempts'> | undefined;
+      if (current === undefined || current.state !== 'running' || current.lease_token !== leaseToken || current.lease_expires_at === null || current.lease_expires_at <= timestamp) return;
       if (!attempt.counted) {
         this.database.prepare(`UPDATE authority_trigger_runs_v1 SET state='pending', lease_token=NULL, lease_expires_at=NULL, updated_at=?
-          WHERE run_id=? AND state='running' AND lease_token=?`).run(timestamp, runId, leaseToken);
+          WHERE run_id=? AND state='running' AND lease_token=? AND lease_expires_at>?`).run(timestamp, runId, leaseToken, timestamp);
       } else {
         const attempts = current.attempts + 1;
         if (attempts >= 3) this.database.prepare(`UPDATE authority_trigger_runs_v1 SET state='failed', attempts=?, lease_token=NULL,
-          lease_expires_at=NULL, error_code=?, updated_at=? WHERE run_id=? AND state='running' AND lease_token=?`).run(attempts, attempt.exhausted, timestamp, runId, leaseToken);
+          lease_expires_at=NULL, error_code=?, updated_at=? WHERE run_id=? AND state='running' AND lease_token=? AND lease_expires_at>?`).run(attempts, attempt.exhausted, timestamp, runId, leaseToken, timestamp);
         else this.database.prepare(`UPDATE authority_trigger_runs_v1 SET state='pending', attempts=?, lease_token=NULL,
-          lease_expires_at=NULL, updated_at=? WHERE run_id=? AND state='running' AND lease_token=?`).run(attempts, timestamp, runId, leaseToken);
+          lease_expires_at=NULL, updated_at=? WHERE run_id=? AND state='running' AND lease_token=? AND lease_expires_at>?`).run(attempts, timestamp, runId, leaseToken, timestamp);
       }
     });
   }

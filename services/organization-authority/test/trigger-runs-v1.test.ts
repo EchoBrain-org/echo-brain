@@ -102,6 +102,16 @@ describe('SQLite trigger runs v1', () => {
     expect(f.runs.read(f.owner, run.run_id)).toMatchObject({ state: 'pending', attempts: 0, error_code: null });
   });
 
+  it('does not let an expired lease release or count an attempt before a successor claims it', async () => {
+    const f = await approvedRunFixture();
+    const run = f.runs.list(f.owner, 1)[0]!;
+    const claimed = f.runs.claim(f.owner, run.run_id, 600_000);
+    if (claimed.kind !== 'claimed') throw new Error('expected lease');
+    f.advance(600_001);
+    f.runs.release(run.run_id, claimed.lease_token, { counted: true, exhausted: 'timed_out' });
+    expect(f.runs.read(f.owner, run.run_id)).toMatchObject({ state: 'running', attempts: 0, lease_token: claimed.lease_token });
+  });
+
   it('never lets a lost lease finish a run', async () => {
     const f = await approvedRunFixture();
     const run = f.runs.list(f.owner, 1)[0]!;
