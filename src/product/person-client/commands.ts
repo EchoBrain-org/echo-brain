@@ -88,6 +88,10 @@ const OPTIONS = {
   neighbours: { type: "string" },
   mine: { type: "boolean" },
   ref: { type: "string" },
+} as const;
+
+/** Runs and tool meetings each use a versioned JSON request without sharing parser scope. */
+const RUNS_OPTIONS = {
   request: { type: "string" },
 } as const;
 
@@ -843,7 +847,7 @@ export async function runPersonClientCli(
       strict: true,
       tokens: true,
       allowPositionals: false,
-      options: { ...OPTIONS, ...(verbName === undefined ? {} : { tool: { type: 'string' as const }, ...toolOptions }) },
+      options: { ...OPTIONS, ...(action === 'runs' ? RUNS_OPTIONS : {}), ...(verbName === undefined ? {} : { tool: { type: 'string' as const }, ...toolOptions }) },
     });
     values = parsed.values as Record<Option, string | boolean | undefined>;
     if (isContextAction(action)) {
