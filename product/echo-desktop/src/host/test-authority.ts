@@ -502,7 +502,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const decidedOn = granolaApproved ? mode === 'granola-decided-in-slack' ? 'slack' : 'desktop' : null;
       const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning',
         project_ids: Array.isArray(granolaReview?.project_ids) ? granolaReview.project_ids : [],
-        status: granolaApproved ? mode === 'granola-publishing' && granolaRun === null ? 'publishing' : 'approved' : 'pending', decided_on: decidedOn };
+        status: granolaApproved ? mode === 'granola-publishing' && granolaRun === null ? 'publishing' : 'approved' : 'pending', decided_on: decidedOn,
+        first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' };
       switch (body?.operation) {
         case 'home': return mode === 'granola-browse-unavailable' ? failure('unavailable', 503) : json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64),
           sources: mode === 'granola-preparing' && granolaWatch ? [{ source_key: 'pms_fixture', folder_id: folderId, folder_project_id: 'prj_11111111-1111-4111-8111-111111111111', baseline: granolaBaselineHomeReads++ > 0, pending_imports: [], checked_at: null, error: null }] : [] });

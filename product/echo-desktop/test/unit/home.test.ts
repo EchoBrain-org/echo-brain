@@ -20,7 +20,7 @@ beforeEach(() => {
   vi.resetModules();
   vi.useFakeTimers();
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn() });
-  review = { approval_id: approval, title: 'Private meeting', project_ids: [], status: 'pending', decided_on: null };
+  review = { approval_id: approval, title: 'Private meeting', project_ids: [], status: 'pending', decided_on: null, first_line: null, action_count: 0, meeting_at: null };
   run = null;
   failNextList = false;
   rpc.mockReset();
