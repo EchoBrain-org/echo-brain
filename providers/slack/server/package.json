@@ -13,6 +13,14 @@
       "types": "./dist/private-approval/private-slack-approval-interaction-protocol-v1.d.ts",
       "import": "./dist/private-approval/private-slack-approval-interaction-protocol-v1.js"
     },
+    "./private-approval/slack-approval-card-v4": {
+      "types": "./dist/private-approval/slack-approval-card-v4.d.ts",
+      "import": "./dist/private-approval/slack-approval-card-v4.js"
+    },
+    "./private-approval/slack-approval-presenter-v1": {
+      "types": "./dist/private-approval/slack-approval-presenter-v1.d.ts",
+      "import": "./dist/private-approval/slack-approval-presenter-v1.js"
+    },
     "./processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1": {
       "types": "./dist/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.d.ts",
       "import": "./dist/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js"

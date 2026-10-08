@@ -16,6 +16,9 @@ import { SlackWebAppManifestProviderV1, type SlackAppManifestProviderV1 } from "
 import { SlackWebIdentityProviderV1, type SlackIdentityProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-web-identity-provider-v1";
 import { createSlackBotTokenSourceV1, type SlackBotTokenSourceV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-bot-token-source-v1";
 import { SlackConnectionHealthV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-connection-health-v1";
+import { PrivateSlackApprovalCardPosterV1 } from '@echo-brain/provider-slack-server/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1';
+import { createSlackApprovalPresenterV1 } from '@echo-brain/provider-slack-server/private-approval/slack-approval-presenter-v1';
+import { openOrganizationControlDatabase, readActiveSlackConnectionV1, resolveCurrentSlackDmApprovalReviewerTargetV1 } from '@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1';
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { join } from "node:path";
 import { createStagingSyntheticPersonalMeetingProviderV1 } from "@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1";
@@ -138,13 +141,33 @@ export async function openOrganizationAuthorityService(
       // This root selects one personal intake runtime; a caller cannot silently replace its worker.
       try {
         if (existing?.processing !== undefined) throw new Error('Personal meeting processing is already selected');
+        const control = openOrganizationControlDatabase(join(sharedConfig.state_directory, 'integrations.sqlite'), { fileMustExist: true });
+        const poster = new PrivateSlackApprovalCardPosterV1(async options => {
+          const active = readActiveSlackConnectionV1(control, resources.coordinates);
+          if (active === undefined) throw new Error('Slack is not connected');
+          return slack.bot_token_source.botToken(active, options);
+        }, { needs_reinstall: () => slack.connection_health.needsReinstall(readActiveSlackConnectionV1(control, resources.coordinates)?.state_sha256),
+          on_auth_failure: () => { const active = readActiveSlackConnectionV1(control, resources.coordinates); if (active !== undefined) slack.connection_health.markNeedsReinstall(active.state_sha256); } });
         const granola = openGranolaPersonLiveRuntimeV1({ state_directory: sharedConfig.state_directory, sessions, resources,
           processor: dependencies.person_meeting_processor ?? decisionProcessor, projectors: policyProjectors, nango_authorization: () => slack_nango.secret_key,
+          approval_core: { presenters: [core => createSlackApprovalPresenterV1({ database: resources.database, core,
+            target: reviewer => {
+              const active = readActiveSlackConnectionV1(control, resources.coordinates); if (active === undefined) return null;
+              const membership_type = resources.database.prepare('SELECT membership_type FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND status=\'active\'')
+                .pluck().get(reviewer.organization_id, reviewer.principal_id, reviewer.membership_id);
+              if (membership_type !== 'owner' && membership_type !== 'employee') return null;
+              const resolved = resolveCurrentSlackDmApprovalReviewerTargetV1(control, resources.coordinates, active.connection.connection_id, { ...reviewer, membership_type });
+              if (resolved === undefined) return null;
+              return { connection_id: active.connection.connection_id, external_identity_link_id: resolved.current_slack_identity_link.external_identity_link_id,
+                external_identity_link_contract_sha256: resolved.current_slack_identity_link.external_identity_link_contract_sha256,
+                slack_workspace_id: active.connection.provider_tenant_id, slack_subject_id: resolved.current_slack_identity_link.provider_subject_id, api_app_id: active.connection.provider_app_id,
+                dm_channel_id: '' };
+            }, poster, projects: reviewer => resources.database.prepare(`SELECT p.project_id,p.name FROM authority_projects_v1 p JOIN authority_project_memberships_v1 m ON m.project_id=p.project_id WHERE p.organization_id=? AND p.status='active' AND m.principal_id=? AND m.membership_id=? AND m.status='active' ORDER BY p.project_id LIMIT 100`).all(reviewer.organization_id, reviewer.principal_id, reviewer.membership_id) as readonly { readonly project_id: string; readonly name: string }[] })] },
           ...(stagingSynthetic === undefined ? {} : { providers: [stagingSynthetic] }) });
         if (stagingSynthetic !== undefined) stagingCanary = (release_id, signal) => runStagingSyntheticPersonalCanaryV1({ database: resources.database, runtime: granola, release_id, signal });
         return { applications: [...(existing?.applications ?? []), ...granola.applications], processing: granola.processing,
           tools: async token => [...await (existing?.tools?.(token) ?? []), ...await granola.tools(token)],
-          close() { granola.close(); existing?.close(); } };
+          close() { granola.close(); control.close(); existing?.close(); } };
       } catch (error) { existing?.close(); throw error; }
     },
     live_connectors: [

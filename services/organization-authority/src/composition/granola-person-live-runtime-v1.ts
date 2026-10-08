@@ -28,7 +28,7 @@ export function openGranolaPersonLiveRuntimeV1(options: {
   /** Further personal meeting providers served beside Granola by the same processing and review runtime. */
   readonly providers?: readonly PersonMeetingProviderV1[];
   /** After-record hooks of the shared approval core (Task 13 registers its runs trigger here). */
-  readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'after_record'>;
+  readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'after_record' | 'presenters'>;
   readonly seams?: { readonly database?: Database.Database; readonly nango?: NangoPersonConnectionV1; readonly fetch?: typeof fetch };
 }) {
   const path = join(options.state_directory, 'granola-person-connections.sqlite'), owned = options.seams?.database === undefined;
