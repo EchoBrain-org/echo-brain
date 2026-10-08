@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createSlackApprovalPresenterV1, createTargetBoundSlackApprovalPosterV1 } from '../../src/private-approval/slack-approval-presenter-v1.js';
+import { createSlackApprovalPresenterV1, createTargetBoundSlackApprovalPosterV1, type ApprovalProposalViewV1 } from '../../src/private-approval/slack-approval-presenter-v1.js';
 
 const databases: Database.Database[] = [];
 const signal = () => new AbortController().signal;
@@ -8,7 +8,7 @@ const target = { connection_id: 'con_1', external_identity_link_id: 'lnk_1', ext
 afterEach(() => databases.splice(0).forEach(db => db.close()));
 
 type Outcome = 'opened' | 'retry_allowed' | 'posted' | 'uncertain' | 'done' | Error;
-function proposal(approval_id: string) {
+function proposal(approval_id: string): ApprovalProposalViewV1 {
   return { approval_id, reviewer: { organization_id: 'org_1', principal_id: 'prn_1', membership_id: 'mem_1' }, reviewer_active: true, title: 'Roadmap', status: 'pending' as const, decided_on: null,
     project_ids: [], snapshot_sha256: `sha256:${'b'.repeat(64)}`, snapshot_json: JSON.stringify({ approved_payload: { brief: { meeting: { title: 'Roadmap' }, decisions: [], actions: [{ text: 'Send draft', evidence: [{ block_id: 'blk_1' }] }], rationales: [] } } }) };
 }
