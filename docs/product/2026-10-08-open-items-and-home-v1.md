@@ -262,6 +262,16 @@ storage rules. It acts as the person who asked, with their access.
 Because the last check is shared, one person's sweep refreshes the item for
 everyone; another desktop skips items checked in the last 24 hours.
 
+**What opening ECHO costs.** An impact check runs once per approval; a sweep
+at most about once a day per person with stale items, and not at all if a
+teammate's desktop checked them that day. Opening ECHO with nothing waiting
+makes no model call. Estimated, not yet measured: a background run is two to
+five Asks' worth of model work (a measured Ask is about 6 calls, about $0.003
+on DeepSeek V3.2 and $0.023 on Gemini 3.8 Flash), so a 10-person team with 15
+approvals a week runs about 65 runs a week, roughly $1 a week on DeepSeek or
+$3 to $8 on Gemini Flash. Jira and Confluence rate limits are the tighter
+limit: each run makes a dozen or more reads as one person.
+
 ## 7. API
 
 All on `POST /v1/person/runs`, one envelope `{schema_version: 1, operation,
@@ -367,8 +377,13 @@ with a stop between them:
 ## Not in this round
 
 - Slack DMs to owners. Owners learn from Home only.
-- Server-side or scheduled sweeps. Checks run only from a signed-in desktop,
-  so "latest" means as fresh as the last time someone involved opened ECHO.
+- Scheduled checks (founder: keep it simple for now). Checks run only from a
+  signed-in desktop showing Home, so "latest" means as fresh as the last time
+  someone involved opened ECHO. Two later options: a schedule in the desktop's
+  background process (a fixed time while the app runs in the menu bar, the
+  same access, a small change), or server-side checks for everyone, which
+  need a revocable per-person "check while I'm away" grant and a security
+  decision.
 - More than one live run per person; sweeps queue behind impact checks.
 - An organization-admin view across projects; any count that includes rows
   the viewer cannot see.
