@@ -97,6 +97,37 @@ describe('shared Atlassian custody with separate product identities', () => {
   });
 });
 
+describe('people by connected account', () => {
+  it('finds only the people whose active binding is this account on this site', () => {
+    const database = new Database(':memory:');
+    try {
+      const jira = new JiraConnectionStoreV1(database);
+      const confluence = new ConfluenceConnectionStoreV1(database);
+      const otherCloud = '00000000-0000-4000-8000-000000000008';
+      const member = (name: string) => ({ organization_id: 'org-fixture', principal_id: `person-${name}`, membership_id: `membership-${name}` });
+      const connect = (store: PersonConnectionStoreV1, who: typeof person, account: string, scope = cloud) =>
+        store.complete(who, store.begin(who).attempt, `reference-${who.principal_id}`, scope, account, site);
+      const [mina, rafael, okafor, ari, gone, twin] = ['mina', 'rafael', 'okafor', 'ari', 'gone', 'twin'].map(member);
+      connect(jira, mina!, 'account-mina');
+      connect(jira, rafael!, 'account-mina', otherCloud);
+      connect(jira, okafor!, 'account-okafor');
+      connect(confluence, ari!, 'account-mina');
+      connect(jira, gone!, 'account-mina'); jira.revoke(gone!);
+      expect(jira.peopleForSubject(cloud, 'account-mina')).toEqual([mina]);
+      expect(jira.peopleForSubject(otherCloud, 'account-mina')).toEqual([rafael]);
+      expect(confluence.peopleForSubject(cloud, 'account-mina')).toEqual([ari]);
+      expect(jira.peopleForSubject(cloud, 'account-unknown')).toEqual([]);
+      // Two people who connected the same account are both returned; the caller decides.
+      connect(jira, twin!, 'account-okafor');
+      expect([...jira.peopleForSubject(cloud, 'account-okafor')].sort((a, b) => a.membership_id.localeCompare(b.membership_id)))
+        .toEqual([okafor, twin]);
+      // A reconnect in progress has no active binding.
+      jira.begin(mina!);
+      expect(jira.peopleForSubject(cloud, 'account-mina')).toEqual([]);
+    } finally { database.close(); }
+  });
+});
+
 describe('provider registration without shared engine branches', () => {
   type Mapping = { schema_version: 1; project_id: string; revision: string | null; mapping: null };
   const validateMapping = (value: unknown): Mapping => value as Mapping;
