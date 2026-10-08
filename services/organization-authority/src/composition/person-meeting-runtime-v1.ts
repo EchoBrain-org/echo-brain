@@ -147,8 +147,9 @@ export function createPersonMeetingRuntimeV1(options: {
           source_ingestion: { store: new SqliteSourceAdmissionStoreV1(db, delivered => {
             source.requireCurrent(); state.assertCurrentSourceAdmission(source.identity);
             if (provider.cursor.write(sourceIntake.checkpoint(setting.source_key)) !== admission.source.cursor) throw new AuthorityOperationError('stale_access_state', 'Meeting intake changed during acquisition');
-            // Same transaction as the admission: a folder delivery keeps the folder's project as its suggestion.
-            sourceIntake.recordDelivery(setting, delivered.item.external_id);
+            // Same transaction as the admission: a consumed import's pending projects, or a folder delivery's
+            // project, become the meeting's suggestions.
+            sourceIntake.recordAdmission(setting, delivered.item.external_id);
           }),
             scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
         }).runOnce(signal);
@@ -164,6 +165,11 @@ export function createPersonMeetingRuntimeV1(options: {
       }
     },
   };
+  /** True when the access check passes, false when it refuses; any other failure is rethrown. */
+  function allowed(check: () => unknown): boolean {
+    try { check(); return true; }
+    catch (error) { if (error instanceof AuthorityOperationError) return false; throw error; }
+  }
   function reviewRows(person: MeetingIntakePersonV1, approvalId?: string) {
     return db.prepare(`SELECT o.approval_id,o.state,o.approved_snapshot_sha256,o.approved_snapshot_json,s.source_key,
       json_extract(c.meeting_json,'$.provenance.external_id') AS external_id,
@@ -180,7 +186,7 @@ export function createPersonMeetingRuntimeV1(options: {
   // Until the meetings API carries several projects, a review names the first suggested project the person can still read.
   // Imports and folder deliveries both record per-meeting suggestions.
   function suggestedProject(person: MeetingIntakePersonV1, row: ReturnType<typeof reviewRows>[number]): string | null {
-    return intake.suggestions(row.source_key, row.external_id).find(project => { try { intake.currentPerson(person, project); return true; } catch { return false; } }) ?? null;
+    return intake.suggestions(row.source_key, row.external_id).find(project => allowed(() => intake.currentPerson(person, project))) ?? null;
   }
   function reviewView(person: MeetingIntakePersonV1, row: ReturnType<typeof reviewRows>[number]): PersonMeetingReviewV1 {
     const action = row.body_json === null ? null : (JSON.parse(row.body_json) as { request: { action: string } }).request.action;
@@ -203,9 +209,7 @@ export function createPersonMeetingRuntimeV1(options: {
       const result = async (): Promise<unknown> => {
         if (input.operation === 'reviews' || input.operation === 'review_open' || input.operation === 'review') {
           // Reviews belong to the person who brought the meeting in, whatever projects it suggests.
-          let member = true;
-          try { intake.currentPerson(person); } catch { member = false; }
-          const rows = member ? reviewRows(person, input.operation === 'reviews' ? undefined : input.approval_id) : [];
+          const rows = allowed(() => intake.currentPerson(person)) ? reviewRows(person, input.operation === 'reviews' ? undefined : input.approval_id) : [];
           if (input.operation === 'reviews') return { reviews: rows.map(row => reviewView(person, row)) };
           const row = rows.find(row => row.approval_id === input.approval_id);
           if (!row) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');

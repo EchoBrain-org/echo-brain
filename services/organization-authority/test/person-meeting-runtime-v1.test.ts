@@ -236,7 +236,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     expect(f.db.prepare('SELECT count(*) AS n FROM authority_source_revisions_v1').get()).toEqual(before); expect(f.extracted()).toBe(0);
   });
-  it('lists and cites imported originals in Mine and project scope, without releasing transcripts or outsider content', async () => {
+  it('lists and cites imported originals in Mine and project scope; the importer always reads their own imports, without releasing transcripts or outsider content', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject();
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
@@ -258,14 +258,21 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toEqual([]);
     f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(new Date().toISOString(), project);
     expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release: search })).toThrow();
-    // The importer keeps their own import; project scope needs current project membership.
+    // Intended rule (R26): the importer always reads their own imports; project members read them only while they are members.
+    // Project scope itself still needs current project membership.
     expect(() => originals.deskSearch({ access_token: 'owner', scope: { kind: 'project', project_id: project }, query: 'cohort' })).toThrow();
     expect(JSON.stringify(await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } }))).toContain('Ship the cohort');
   });
   it('lets current members of the import project read the unapproved notes, and only while they are members', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    // The project choice waits as pending until processing consumes the queued import.
+    expect(f.count('authority_person_meeting_suggestions_v1')).toBe(0);
+    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(1);
     await f.processUntilIdle(runtime);
+    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect(f.intake.suggestions(source!.source_key, id)).toEqual([project]);
+    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(await f.readers()).toEqual(['owner', 'reader-a']);
     f.leave(project, 'reader-a');
     expect(await f.readers()).toEqual(['owner']);
@@ -306,10 +313,54 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     await f.processUntilIdle(runtime);
     expect(await f.readers()).toEqual(['owner', 'reader-a']);
+    const revisions = f.count('authority_source_revisions_v1');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: projectB, retain: true });
+    expect(await f.readers()).toEqual(['owner', 'reader-a']);
     await f.processUntilIdle(f.create());
-    expect(f.extracted()).toBe(1);
+    // The unchanged revision is re-admitted as a duplicate; that admission consumes the queued import and promotes B.
+    expect(f.count('authority_source_revisions_v1')).toBe(revisions); expect(f.extracted()).toBe(1);
+    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect(f.intake.suggestions(source!.source_key, id)).toEqual([project, projectB].sort());
+    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(await f.readers()).toEqual(['owner', 'reader-a', 'reader-b']);
+  });
+  it('grants nothing to the project of a cancelled import when the note is re-imported privately', async () => {
+    const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    const [queued] = (await f.call(runtime, { operation: 'home' })).sources;
+    await f.call(runtime, { operation: 'cancel_import', source_key: queued!.source_key, meeting_id: id });
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await f.processUntilIdle(runtime);
+    expect(f.extracted()).toBe(1);
+    expect(f.count('authority_person_meeting_suggestions_v1')).toBe(0);
+    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
+    expect(await f.readers()).toEqual(['owner']);
+  });
+  it('grants nothing to the project of a cancelled import when the folder later delivers the note', async () => {
+    const f = await fixture(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
+    const home = await f.call(f.create(), { operation: 'home' });
+    await f.call(f.create(), { operation: 'watch', folder_id: folder, project_id: projectB, retain: true, settings_sha256: home.settings_sha256 });
+    await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
+    await f.call(f.create(), { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    const [queued] = (await f.call(f.create(), { operation: 'home' })).sources;
+    await f.call(f.create(), { operation: 'cancel_import', source_key: queued!.source_key, meeting_id: id });
+    f.folderDeliveries.push(id);
+    await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    expect(f.folderDeliveries).toEqual([]); expect(f.extracted()).toBe(1);
+    expect(f.intake.suggestions(queued!.source_key, id)).toEqual([projectB]);
+    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
+    expect(await f.readers()).toEqual(['owner', 'reader-b']);
+  });
+  it('refuses a project reader\'s earlier desk release once they leave the project', async () => {
+    const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    await f.processUntilIdle(runtime);
+    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
+    const release = originals.deskSearch({ access_token: 'reader-a', scope: { kind: 'global' }, query: 'cohort', kinds: ['imported_meeting'] });
+    expect(release.items).toHaveLength(1);
+    expect(() => originals.revalidateDeskRelease({ access_token: 'reader-a', release })).not.toThrow();
+    f.leave(project, 'reader-a');
+    expect(() => originals.revalidateDeskRelease({ access_token: 'reader-a', release })).toThrow();
   });
   it('opens a valid transcript-only imported meeting with no releasable body', async () => {
     const f = await fixture({ transcriptOnly: true }), runtime = f.create();

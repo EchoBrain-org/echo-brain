@@ -8,7 +8,7 @@ import {
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
 const AUTHORITY_BASELINE_SHA256_V12 =
-  "sha256:a9d0dd0109e224cf31b0823ca0282ee3433c05bce8bb086cc73aa089964ede96";
+  "sha256:127286d4a0fcf1266f82523b8e223fa205dd007fbc07c83d020ab622f73b93a1";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-29T00:00:00.000Z";
 /** A personal source key; the admission table keys every source by its own text key. */
@@ -92,6 +92,7 @@ describe("Authority admitted meeting-source schema", () => {
       expect(database.prepare('SELECT settings_revision FROM authority_person_meeting_sources_v2').pluck().get()).toBe(0);
       expect((database.pragma('table_info(authority_person_meeting_sources_v2)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'person_key', 'folder_id', 'folder_project_id', 'settings_revision']);
       expect((database.pragma('table_info(authority_person_meeting_suggestions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'external_id', 'project_id', 'created_at']);
+      expect((database.pragma('table_info(authority_person_meeting_pending_suggestions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'external_id', 'project_id', 'created_at']);
       expect((database.pragma('table_info(authority_person_meeting_approval_actions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['sequence', 'approval_id', 'command_id', 'body_json', 'receipt_json']);
     } finally { database.close(); }
   });

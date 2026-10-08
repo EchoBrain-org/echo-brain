@@ -578,6 +578,15 @@ CREATE TRIGGER authority_person_meeting_suggestion_immutable_v1 BEFORE UPDATE ON
 BEGIN SELECT RAISE(ABORT, 'meeting suggestion is immutable'); END;
 CREATE TRIGGER authority_person_meeting_suggestion_delete_denied_v1 BEFORE DELETE ON authority_person_meeting_suggestions_v1
 BEGIN SELECT RAISE(ABORT, 'meeting suggestion deletion is denied'); END;
+-- An import's project choice waits here while the import is queued; cancelling deletes it, and the
+-- admission that consumes the queued import moves it into the suggestions above.
+CREATE TABLE authority_person_meeting_pending_suggestions_v1 (
+  source_key TEXT NOT NULL REFERENCES authority_person_meeting_sources_v2(source_key),
+  external_id TEXT NOT NULL CHECK (length(external_id) BETWEEN 1 AND 256),
+  project_id TEXT NOT NULL REFERENCES authority_projects_v1(project_id),
+  created_at TEXT NOT NULL CHECK (unixepoch(created_at) IS NOT NULL),
+  PRIMARY KEY (source_key, external_id, project_id)
+) STRICT;
 
 CREATE TABLE authority_live_source_candidates_v2 (
   candidate_id TEXT PRIMARY KEY CHECK (candidate_id GLOB 'cnd_*'),

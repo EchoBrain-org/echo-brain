@@ -50,26 +50,52 @@ describe('personal meeting intake: one source per person and tool account', () =
     expect(w.count('authority_live_source_admission_v2')).toBe(3);
   });
 
-  it('records sorted import suggestions only for projects the person is an active member of', () => {
+  it('holds import projects as pending until the queued import is admitted, then records them as sorted suggestions', () => {
     const w = world(), setting = w.ensure();
+    const pending = (id: string) => w.db.prepare('SELECT project_id FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=? ORDER BY project_id').pluck().all(setting.source_key, id);
     w.intake.enqueue(setting, NOTE_1, PROJECT_BETA, () => undefined);
     w.intake.enqueue(setting, NOTE_1, PROJECT_ALPHA, () => undefined);
     w.intake.enqueue(setting, NOTE_1, PROJECT_BETA, () => undefined);
     w.intake.enqueue(setting, NOTE_2, null, () => undefined);
-    expect(w.intake.suggestions(setting.source_key, NOTE_1)).toEqual([PROJECT_ALPHA, PROJECT_BETA].sort());
-    expect(w.intake.suggestions(setting.source_key, NOTE_2)).toEqual([]);
+    expect(pending(NOTE_1)).toEqual([PROJECT_ALPHA, PROJECT_BETA].sort());
+    expect(w.count('authority_person_meeting_suggestions_v1')).toBe(0);
     expect(w.intake.checkpoint(setting.source_key).manual).toEqual([NOTE_1, NOTE_2]);
     for (const project of [FOREIGN, ARCHIVED]) {
       expect(() => w.intake.enqueue(setting, NOTE_3, project, () => undefined)).toThrow(expect.objectContaining({ code: 'unauthorized' }));
     }
-    expect(w.intake.suggestions(setting.source_key, NOTE_3)).toEqual([]);
+    expect(pending(NOTE_3)).toEqual([]);
     expect(w.intake.checkpoint(setting.source_key).manual).toEqual([NOTE_1, NOTE_2]);
-    expect(w.count('authority_person_meeting_suggestions_v1')).toBe(2);
+    const queued = w.intake.list(person(OWNER))[0]!;
+    w.intake.recordAdmission(queued, NOTE_1);
+    w.intake.recordAdmission(queued, NOTE_2);
+    expect(w.intake.suggestions(setting.source_key, NOTE_1)).toEqual([PROJECT_ALPHA, PROJECT_BETA].sort());
+    expect(w.intake.suggestions(setting.source_key, NOTE_2)).toEqual([]);
+    expect(w.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
+  });
+
+  it('drops pending import projects on cancel, on a fresh re-import, and for a project the person has left', () => {
+    const w = world(), setting = w.ensure();
+    w.intake.enqueue(setting, NOTE_1, PROJECT_ALPHA, () => undefined);
+    w.intake.cancelImport(setting, NOTE_1, () => undefined);
+    expect(w.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
+    w.intake.enqueue(setting, NOTE_1, null, () => undefined);
+    w.intake.recordAdmission(w.intake.list(person(OWNER))[0]!, NOTE_1);
+    expect(w.intake.suggestions(setting.source_key, NOTE_1)).toEqual([]);
+    // A pending row left behind by a queue that dropped its import without admitting it is stale.
+    w.db.prepare('INSERT INTO authority_person_meeting_pending_suggestions_v1 VALUES (?,?,?,?)').run(setting.source_key, NOTE_2, PROJECT_ALPHA, PROJECT_CONTEXT_NOW);
+    w.intake.enqueue(setting, NOTE_2, null, () => undefined);
+    expect(w.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
+    w.intake.enqueue(setting, NOTE_3, PROJECT_BETA, () => undefined);
+    w.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_BETA);
+    w.intake.recordAdmission(w.intake.list(person(OWNER))[0]!, NOTE_3);
+    expect(w.intake.suggestions(setting.source_key, NOTE_3)).toEqual([]);
+    expect(w.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
   });
 
   it('keeps suggestions insert-only', () => {
     const w = world(), setting = w.ensure();
     w.intake.enqueue(setting, NOTE_1, PROJECT_ALPHA, () => undefined);
+    w.intake.recordAdmission(w.intake.list(person(OWNER))[0]!, NOTE_1);
     expect(() => w.db.prepare('UPDATE authority_person_meeting_suggestions_v1 SET project_id=?').run(PROJECT_BETA)).toThrow('immutable');
     expect(() => w.db.prepare('DELETE FROM authority_person_meeting_suggestions_v1').run()).toThrow('deletion is denied');
   });
@@ -95,18 +121,18 @@ describe('personal meeting intake: one source per person and tool account', () =
 
   it('records the watched folder project for meetings the folder delivers, not for queued imports', () => {
     const w = world(), setting = w.ensure();
-    w.intake.recordDelivery(setting, NOTE_1);
+    w.intake.recordAdmission(setting, NOTE_1);
     expect(w.count('authority_person_meeting_suggestions_v1')).toBe(0);
     w.intake.watch(setting, FOLDER, PROJECT_ALPHA, () => undefined);
     w.intake.enqueue(w.intake.list(person(OWNER))[0]!, NOTE_2, null, () => undefined);
     const watched = w.intake.list(person(OWNER))[0]!;
-    w.intake.recordDelivery(watched, NOTE_1);
-    w.intake.recordDelivery(watched, NOTE_1);
-    w.intake.recordDelivery(watched, NOTE_2);
+    w.intake.recordAdmission(watched, NOTE_1);
+    w.intake.recordAdmission(watched, NOTE_1);
+    w.intake.recordAdmission(watched, NOTE_2);
     expect(w.intake.suggestions(setting.source_key, NOTE_1)).toEqual([PROJECT_ALPHA]);
     expect(w.intake.suggestions(setting.source_key, NOTE_2)).toEqual([]);
     w.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA);
-    expect(() => w.intake.recordDelivery(watched, NOTE_3)).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+    expect(() => w.intake.recordAdmission(watched, NOTE_3)).toThrow(expect.objectContaining({ code: 'unauthorized' }));
     expect(w.intake.suggestions(setting.source_key, NOTE_3)).toEqual([]);
   });
 

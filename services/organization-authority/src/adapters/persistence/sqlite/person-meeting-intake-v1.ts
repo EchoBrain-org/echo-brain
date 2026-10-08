@@ -95,37 +95,62 @@ export class SqlitePersonMeetingIntakeV1 {
       current();
     }).immediate();
   }
+  /** Cancelling a queued import also forgets the projects it was saved to. */
   cancelImport(setting: MeetingIntakeSettingV1, meetingId: string, current: () => void): void {
     this.db.transaction(() => {
       current(); this.currentPerson(setting);
       const checkpoint = this.checkpoint(setting.source_key);
       this.write(setting.source_key, { ...checkpoint, manual: checkpoint.manual.filter(id => id !== meetingId) });
+      this.db.prepare('DELETE FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=?').run(setting.source_key, meetingId);
       current();
     }).immediate();
   }
-  /** Queues one meeting; a project records an insert-only suggestion after the person's project membership is checked. */
+  /**
+   * Queues one meeting. A project is checked for the person's active membership and held as a pending
+   * choice; it becomes a suggestion only when processing admits the queued import.
+   */
   enqueue(setting: MeetingIntakeSettingV1, meetingId: string, projectId: string | null, current: () => void): void {
     this.db.transaction(() => {
       current(); this.requireCurrent(setting);
-      if (projectId !== null) this.suggest(setting, meetingId, projectId);
       const old = this.checkpoint(setting.source_key);
+      // Pending choices exist only while their import is queued; any left from an import the queue dropped are stale.
+      if (!old.manual.includes(meetingId)) this.db.prepare('DELETE FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=?').run(setting.source_key, meetingId);
+      if (projectId !== null) {
+        this.currentPerson(setting, projectId);
+        this.db.prepare(`INSERT INTO authority_person_meeting_pending_suggestions_v1(source_key,external_id,project_id,created_at) VALUES (?,?,?,?)
+          ON CONFLICT(source_key,external_id,project_id) DO NOTHING`).run(setting.source_key, meetingId, projectId, new Date().toISOString());
+      }
       this.write(setting.source_key, { ...old, manual: [...new Set([...old.manual, meetingId])] });
       current();
     }).immediate();
   }
   /**
-   * Called inside the transaction that admits a meeting. A meeting the watched folder delivers (not a
-   * queued import) keeps the folder's current project as its suggestion, so it stays readable by that
-   * project's members after the watch moves. The person must still be an active member, as on import.
+   * Called inside the transaction that admits a meeting, including an unchanged revision admitted again
+   * as a duplicate. A queued import is being consumed: its pending projects become suggestions, except
+   * any project the person has since left. A meeting the watched folder delivers keeps the folder's
+   * current project as its suggestion, so it stays readable by that project's members after the watch
+   * moves; the person must still be an active member, as on import.
    */
-  recordDelivery(setting: MeetingIntakeSettingV1, externalId: string): void {
-    if (setting.folder_project_id === null || this.checkpoint(setting.source_key).manual.includes(externalId)) return;
+  recordAdmission(setting: MeetingIntakeSettingV1, externalId: string): void {
     this.requireCurrent(setting);
-    this.suggest(setting, externalId, setting.folder_project_id);
+    if (this.checkpoint(setting.source_key).manual.includes(externalId)) {
+      const pending = this.db.prepare('SELECT project_id FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=? ORDER BY project_id')
+        .pluck().all(setting.source_key, externalId) as string[];
+      for (const projectId of pending) {
+        if (this.isMember(setting, projectId)) this.suggest(setting, externalId, projectId);
+      }
+      this.db.prepare('DELETE FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=?').run(setting.source_key, externalId);
+    } else if (setting.folder_project_id !== null) {
+      this.currentPerson(setting, setting.folder_project_id);
+      this.suggest(setting, externalId, setting.folder_project_id);
+    }
+  }
+  private isMember(person: MeetingIntakePersonV1, projectId: string): boolean {
+    try { this.currentPerson(person, projectId); return true; }
+    catch (error) { if (error instanceof AuthorityOperationError && error.code === 'unauthorized') return false; throw error; }
   }
   private suggest(setting: MeetingIntakeSettingV1, externalId: string, projectId: string): void {
-    this.currentPerson(setting, projectId);
-    this.db.prepare('INSERT OR IGNORE INTO authority_person_meeting_suggestions_v1(source_key,external_id,project_id,created_at) VALUES (?,?,?,?)')
-      .run(setting.source_key, externalId, projectId, new Date().toISOString());
+    this.db.prepare(`INSERT INTO authority_person_meeting_suggestions_v1(source_key,external_id,project_id,created_at) VALUES (?,?,?,?)
+      ON CONFLICT(source_key,external_id,project_id) DO NOTHING`).run(setting.source_key, externalId, projectId, new Date().toISOString());
   }
 }
