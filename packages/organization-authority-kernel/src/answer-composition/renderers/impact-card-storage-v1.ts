@@ -1,4 +1,4 @@
-import { canonicalJson } from "@echo-brain/federation-protocol";
+import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import {
   PERSON_IMPACT_CARD_LIMITS_V1 as LIMITS,
   validatePersonImpactCardV1,
@@ -23,7 +23,7 @@ export interface StoredImpactCardV1 {
   readonly schema_version: 1;
   readonly status: PersonImpactCardV1["status"];
   readonly decided: PersonImpactCardV1["decided"];
-  readonly affected: readonly { readonly citation_index: number; readonly relation?: PersonImpactRelationV1;
+  readonly affected: readonly { readonly citation_index: number; readonly relation?: PersonImpactRelationV1; readonly expected?: string;
     readonly date_at_risk?: { readonly date: string; readonly milestone: string }; readonly says_now?: string /* ECHO-local only */ }[];
   readonly unconfirmed: readonly string[];
   readonly citations: readonly unknown[];   // citation pointers only (PersonAnswerCitationV6['citation'])
@@ -47,8 +47,8 @@ const LABEL_PREFIX_CHARS = 200;
 interface LabelScreen {
   /** The line names an outside item. */
   readonly names: (line: string) => boolean;
-  /** The line with each named title replaced by "a cited item". */
-  readonly scrub: (line: string) => string;
+  /** The line with each named title replaced by "a cited item", within `maximum` characters (a card line's by default). */
+  readonly scrub: (line: string, maximum?: number) => string;
 }
 
 /**
@@ -80,9 +80,9 @@ function screenFor(labels: readonly string[]): LabelScreen {
   const every = new RegExp(source, "giu");
   return {
     names: line => find.test(line.normalize("NFC")),
-    scrub: line => {
+    scrub: (line, maximum = LIMITS.line_chars) => {
       const text = line.normalize("NFC");
-      return find.test(text) ? cleanLine(text.replace(every, CITED_ITEM), LIMITS.line_chars) : line;
+      return find.test(text) ? cleanLine(text.replace(every, CITED_ITEM), maximum) : line;
     },
   };
 }
@@ -114,6 +114,8 @@ export function storableImpactCardV1(input: PersonImpactCardV1, outsideLabels: r
     affected: Object.freeze(card.affected.map(entry => Object.freeze({
       citation_index: at[entry.citation_index]!,
       ...(entry.relation === undefined ? {} : { relation: entry.relation }),
+      // What the record requires is ECHO's own phrase; a title it names grows into "a cited item", still within its limit.
+      ...(entry.expected === undefined ? {} : { expected: screen.scrub(entry.expected, LIMITS.expected_chars) }),
       // A milestone that names an outside item loses its date; the row stays.
       ...(entry.date_at_risk === undefined || screen.names(entry.date_at_risk.milestone) ? {} : { date_at_risk: Object.freeze({ date: entry.date_at_risk.date, milestone: entry.date_at_risk.milestone }) }),
       // What an outside item says is read again on every view; only ECHO's own text is kept.
@@ -149,8 +151,18 @@ function itemOf(citation: unknown): string | undefined {
   return JSON.stringify([pointer.kind, ...fields.map(field => pointer[field])]);
 }
 
+/**
+ * One key per item a pointer opens: the hash of its kind and primary id, so
+ * two pointers to one ticket at different text hashes share it. Undefined for
+ * a pointer that names no item.
+ */
+export function impactItemKeyV1(pointer: unknown): Sha256Digest | undefined {
+  const item = itemOf(pointer);
+  return item === undefined ? undefined : canonicalSha256(item);
+}
+
 /** What an outside item says now: the first characters of its current text on one line, else its title and details. */
-function currentLine(item: FreshImpactItemV1): string {
+export function currentImpactLineV1(item: FreshImpactItemV1): string {
   const text = cleanLine(item.text, LIMITS.line_chars);
   return text.length > 0 ? text : detailsOfImpactItemV1(item);
 }
@@ -186,7 +198,7 @@ export function refreshImpactCardV1(stored: StoredImpactCardV1, fresh: readonly 
     const owner = ownerOfImpactItemV1(current);
     return {
       citation_index: at[entry.citation_index]!,
-      says_now: isLocal(current.citation.citation) && entry.says_now !== undefined ? entry.says_now : currentLine(current),
+      says_now: isLocal(current.citation.citation) && entry.says_now !== undefined ? entry.says_now : currentImpactLineV1(current),
       ...(entry.relation === undefined ? {} : { relation: entry.relation }),
       ...(owner === undefined ? {} : { owner }),
       // A date the item no longer states is dropped; the row stays.

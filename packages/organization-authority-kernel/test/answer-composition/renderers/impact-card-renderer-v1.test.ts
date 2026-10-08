@@ -93,6 +93,18 @@ function alone(input: { readonly bundle?: AgenticEvidenceBundleV1; readonly repl
   return { render, trace, inputs, gate, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, unknown> };
 }
 
+/**
+ * The renderer over E1 (the record's decision), E2 (THERM-46) and E3 (the PRD
+ * display page), with a gate that answers `reply`, plus the decided line, to
+ * every call.
+ */
+async function renderWith(reply: { readonly affected: readonly Record<string, unknown>[] }) {
+  const answer = { decided: [{ id: "E1", text: "Show two decimals on the display from DVT." }], ...reply };
+  const run = alone({ bundle: bundle({ items: [ITEMS[0]!, ITEMS[2]!, ITEMS[3]!], cited: ["E1", "E2", "E3"] }), replies: [answer, answer] });
+  const rendered = await run.render();
+  return { card: rendered.result, calls: run.inputs.length };
+}
+
 const affected = (id: string, says_now: string, relation: string, date_at_risk = "", milestone = "") => ({ id, says_now, relation, date_at_risk, milestone });
 const REPLY = {
   decided: [
@@ -127,6 +139,10 @@ describe("impact card renderer", () => {
     expect(events.filter(event => !event.root && event.event === "started").map(event => event.stage)).toEqual(["research_render"]);
     expect(run.gate.stats().generations.map(entry => entry.role)).toEqual(["answer"]);
     expect(run.inputs[0]!.system_prompt).toBe(IMPACT_CARD_PROMPT);
+    // Each affected entry also says what the record requires of the item.
+    const entry = (run.inputs[0]!.schema as { properties: { affected: { items: { required: string[]; properties: Record<string, unknown> } } } }).properties.affected.items;
+    expect(entry.required).toContain("expected");
+    expect(entry.properties.expected).toEqual({ type: "string", maxLength: 120 });
     const user = run.prompt(0);
     expect(user.task).toBe(bundle().goal.kind === "task" ? (bundle().goal as { task: string }).task : "");
     expect((user.record as { id: string }[]).map(value => value.id)).toEqual(["E1", "E2"]);
@@ -293,6 +309,20 @@ describe("impact card renderer", () => {
       expect(run.inputs[1]!.system_prompt).toContain("never say who owns, is assigned to or is responsible for anything");
       expect(JSON.stringify(rendered.result)).not.toMatch(/Zhen Ye said|Ana Ruiz|responsible/u);
     }
+  });
+
+  it("keeps the expected phrase for a conflict and drops it for a confirmation", async () => {
+    const { card } = await renderWith({ affected: [
+      { id: "E2", says_now: "THERM-46 asks for one decimal", relation: "conflicts", date_at_risk: "", milestone: "", expected: "two decimals from DVT" },
+      { id: "E3", says_now: "The PRD already says two decimals", relation: "confirms", date_at_risk: "", milestone: "", expected: "two decimals" },
+    ] });
+    expect(card.affected.find(row => row.relation === "conflicts")!.expected).toBe("two decimals from DVT");
+    expect(card.affected.find(row => row.relation === "confirms")).not.toHaveProperty("expected");
+  });
+
+  it("sends an instruction in expected back for one repair", async () => {
+    const { calls } = await renderWith({ affected: [{ id: "E2", says_now: "x", relation: "needs_updating", date_at_risk: "", milestone: "", expected: "update the ticket to two decimals" }] });
+    expect(calls).toBe(2);
   });
 
   it("keeps ordinary summaries, the needs_updating relation and names a summary quotes, with one call", async () => {

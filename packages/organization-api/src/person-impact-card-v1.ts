@@ -24,6 +24,12 @@ export interface PersonImpactAffectedV1 {
   readonly says_now: string;
   /** Present exactly when the card is assessed. */
   readonly relation?: PersonImpactRelationV1;
+  /**
+   * What the record requires of this item, in the record's own terms ("two
+   * decimals from DVT"). Present only when the card is assessed and the
+   * relation is `conflicts` or `needs_updating`.
+   */
+  readonly expected?: string;
   /** The item's assignee or owner, from its details. */
   readonly owner?: string;
   readonly date_at_risk?: { readonly date: string; readonly milestone: string };
@@ -48,7 +54,7 @@ export interface PersonImpactCardV1 {
 }
 
 /** Entry counts, and text lengths in characters. */
-export const PERSON_IMPACT_CARD_LIMITS_V1 = Object.freeze({ decided: 12, affected: 20, unconfirmed: 20, line_chars: 300, name_chars: 200, milestone_chars: 120 });
+export const PERSON_IMPACT_CARD_LIMITS_V1 = Object.freeze({ decided: 12, affected: 20, unconfirmed: 20, line_chars: 300, name_chars: 200, milestone_chars: 120, expected_chars: 120 });
 
 const RELATIONS: readonly string[] = ['confirms', 'conflicts', 'needs_updating'];
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -92,7 +98,7 @@ export function validatePersonImpactCardV1(value: unknown): PersonImpactCardV1 {
   });
   const affected = list(input.affected, 'Impact card affected', limits.affected).map(raw => {
     const entry = object(raw, 'Impact card affected item');
-    assertExactKeys(entry, ['citation_index', 'says_now', ...['relation', 'owner', 'date_at_risk'].filter(key => Object.hasOwn(entry, key))], 'Impact card affected item');
+    assertExactKeys(entry, ['citation_index', 'says_now', ...['relation', 'expected', 'owner', 'date_at_risk'].filter(key => Object.hasOwn(entry, key))], 'Impact card affected item');
     if (Object.hasOwn(entry, 'relation') && !RELATIONS.includes(entry.relation as string)) fail('Impact card relation is invalid');
     let dateAtRisk: PersonImpactAffectedV1['date_at_risk'];
     if (Object.hasOwn(entry, 'date_at_risk')) {
@@ -104,6 +110,7 @@ export function validatePersonImpactCardV1(value: unknown): PersonImpactCardV1 {
     return Object.freeze({
       citation_index: index(entry.citation_index, 'Impact card affected citation_index'), says_now: line(entry.says_now, 'Impact card says_now', limits.line_chars),
       ...(Object.hasOwn(entry, 'relation') ? { relation: entry.relation as PersonImpactRelationV1 } : {}),
+      ...(Object.hasOwn(entry, 'expected') ? { expected: line(entry.expected, 'Impact card expected', limits.expected_chars) } : {}),
       ...(Object.hasOwn(entry, 'owner') ? { owner: line(entry.owner, 'Impact card owner', limits.name_chars) } : {}),
       ...(dateAtRisk === undefined ? {} : { date_at_risk: dateAtRisk }),
     });
@@ -118,6 +125,8 @@ export function validatePersonImpactCardV1(value: unknown): PersonImpactCardV1 {
 
   // Only a model's assessment carries relations, dates and decisions.
   if (affected.some(entry => (entry.relation !== undefined) !== assessed) || (!assessed && (decided.length > 0 || affected.some(entry => entry.date_at_risk !== undefined)))) fail('Impact card status is inconsistent');
+  // What the record requires is said only of an item it conflicts with or changes.
+  if (affected.some(entry => entry.expected !== undefined && entry.relation !== 'conflicts' && entry.relation !== 'needs_updating')) fail('Impact card expected is only for an item that conflicts or needs updating');
   const affectedIndexes = affected.map(entry => entry.citation_index);
   unique(affectedIndexes, 'Impact card affected');
   if (affectedIndexes.some(at => decided.some(entry => entry.citation_index === at))) fail('Impact card lists a decided item as affected');

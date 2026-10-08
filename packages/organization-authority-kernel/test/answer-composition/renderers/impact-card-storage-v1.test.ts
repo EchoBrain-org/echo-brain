@@ -3,6 +3,8 @@ import { validatePersonImpactCardV1, type PersonAnswerCitationV6, type PersonImp
 import { describe, expect, it } from "vitest";
 import { cleanLine } from "../../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import {
+  currentImpactLineV1,
+  impactItemKeyV1,
   refreshImpactCardV1,
   storableImpactCardV1,
   type FreshImpactItemV1,
@@ -38,7 +40,7 @@ const pageCitation = (id: string, label: string): PersonAnswerCitationV6 => Obje
 });
 
 /** Builds a valid card: the record decided index 0, then each given row in order. */
-interface Row { readonly citation: PersonAnswerCitationV6; readonly says_now: string; readonly relation?: "confirms" | "conflicts" | "needs_updating"; readonly owner?: string; readonly date_at_risk?: PersonImpactAffectedV1["date_at_risk"] }
+interface Row { readonly citation: PersonAnswerCitationV6; readonly says_now: string; readonly relation?: "confirms" | "conflicts" | "needs_updating"; readonly expected?: string; readonly owner?: string; readonly date_at_risk?: PersonImpactAffectedV1["date_at_risk"] }
 function cardWith(input: { readonly rows: readonly Row[]; readonly unconfirmed?: readonly string[]; readonly status?: PersonImpactCardV1["status"] }): PersonImpactCardV1 {
   const status = input.status ?? "assessed";
   const rows = input.rows.map((row, at) => ({ ...row, index: status === "assessed" ? at + 1 : at }));
@@ -233,6 +235,41 @@ describe("storable impact card: every line a model wrote is screened for outside
     const stored = storableImpactCardV1(card, [TITLE, "Unrelated title"]);
     expect(stored.decided).toEqual(card.decided);
     expect(stored.affected[0]!.says_now).toBe("The  display plan is unchanged.");
+  });
+
+  it("stores expected with outside titles replaced", () => {
+    const card = cardWith({ rows: [{ citation: ticketCitation("THERM-46", OUTSIDE), says_now: "x", relation: "conflicts", expected: `${OUTSIDE} shows two decimals` }] });
+    const stored = storableImpactCardV1(card, [OUTSIDE]);
+    expect(stored.affected[0]!.expected).toBe("a cited item shows two decimals");
+  });
+
+  it("keeps a stored expected phrase within its 120 characters when a short title grows into 'a cited item'", () => {
+    const expected = `Home and ${"two decimals ".repeat(8)}on Home`;
+    expect([...expected].length).toBe(120);
+    const card = cardWith({ rows: [{ citation: pageCitation("1441793", "Home"), says_now: "x", relation: "needs_updating", expected }] });
+    const kept = storableImpactCardV1(card, []).affected[0]!.expected!;
+    expect([...kept].length).toBeLessThanOrEqual(120);
+    expect(kept.startsWith("a cited item and two decimals")).toBe(true);
+    expect(kept).not.toMatch(/home/iu);
+  });
+});
+
+describe("impact items", () => {
+  const TICKET_46 = ticketCitation("THERM-46", "THERM-46: Display precision").citation;
+  const TICKET_47 = ticketCitation("THERM-47", "THERM-47: Fan curve").citation;
+  const H1 = canonicalSha256({ ticket: "one decimal" });
+  const H2 = canonicalSha256({ ticket: "two decimals" });
+
+  it("gives one key per item whatever its text hash", () => {
+    expect(impactItemKeyV1({ ...TICKET_46, text_sha256: H1 })).toBe(impactItemKeyV1({ ...TICKET_46, text_sha256: H2 }));
+    expect(impactItemKeyV1(TICKET_46)).not.toBe(impactItemKeyV1(TICKET_47));
+    expect(impactItemKeyV1({ kind: "ticket" })).toBeUndefined();
+  });
+
+  it("says what an item says now: its current text on one line, else its title and details", () => {
+    const ticket = ticketCitation("THERM-46", "THERM-46: Display precision");
+    expect(currentImpactLineV1(fresh(ticket, { text: "Formats one\ndecimal." }))).toBe("Formats one decimal.");
+    expect(currentImpactLineV1(fresh(ticket, { attributes: { status: "In Progress", due_at: "2026-10-15" } }))).toBe("THERM-46: Display precision; status In Progress; due 2026-10-15");
   });
 });
 
