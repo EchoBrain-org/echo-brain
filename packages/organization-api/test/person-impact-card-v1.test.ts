@@ -42,6 +42,9 @@ const refused = (value: Card, label: string) => {
   expect(() => validatePersonImpactCardV1(value), label).toThrow(expect.objectContaining({ name: 'OrganizationApiValidationError' }));
 };
 const affectedWith = (card: Card, index: number, entry: Record<string, unknown>) => ({ ...card, affected: (card.affected as Card[]).map((value, at) => at === index ? entry : value) });
+/** Each card with its first affected row changed. */
+const assessedCard = (row: Card) => affectedWith(assessed, 0, { ...ticket, ...row });
+const notAssessedCard = (row: Card) => affectedWith(notAssessed, 0, { ...(notAssessed.affected[0] as Card), ...row });
 
 describe('impact card', () => {
   it('accepts an assessed card and a card whose items are not yet assessed', () => {
@@ -64,8 +67,8 @@ describe('impact card', () => {
   });
 
   it('rejects any text field over its limit, and text that is not one trimmed line', () => {
-    const { line_chars: line, name_chars: name, milestone_chars: milestone } = PERSON_IMPACT_CARD_LIMITS_V1;
-    expect({ line, name, milestone }).toEqual({ line: 300, name: 200, milestone: 120 });
+    const { line_chars: line, name_chars: name, milestone_chars: milestone, expected_chars: expected } = PERSON_IMPACT_CARD_LIMITS_V1;
+    expect({ line, name, milestone, expected }).toEqual({ line: 300, name: 200, milestone: 120, expected: 120 });
     // At the limit is accepted; one over is refused.
     expect(() => validatePersonImpactCardV1({ ...assessed, decided: [{ text: 'd'.repeat(line), citation_index: 0 }] })).not.toThrow();
     for (const [label, value] of [
@@ -73,6 +76,7 @@ describe('impact card', () => {
       ['says_now', affectedWith(assessed, 0, { ...ticket, says_now: 's'.repeat(line + 1) })],
       ['owner', { ...affectedWith(assessed, 0, { ...ticket, owner: 'o'.repeat(name + 1) }), people: [{ name: 'o'.repeat(name + 1), items: [1] }] }],
       ['milestone', affectedWith(assessed, 0, { ...ticket, date_at_risk: { date: '2026-10-15', milestone: 'm'.repeat(milestone + 1) } })],
+      ['expected', assessedCard({ expected: 'e'.repeat(expected + 1) })],
       ['unconfirmed', { ...assessed, unconfirmed: ['u'.repeat(line + 1)] }],
       ['two lines', { ...assessed, decided: [{ text: 'Show two decimals.\nAlso ship.', citation_index: 0 }] }],
       ['untrimmed', affectedWith(assessed, 0, { ...ticket, says_now: ' padded' })],
@@ -106,5 +110,11 @@ describe('impact card', () => {
       ['too many notes', { ...assessed, unconfirmed: Array.from({ length: limits.unconfirmed + 1 }, (_, index) => `Note ${index}.`) }],
       ['repeated note', { ...assessed, unconfirmed: ['Note.', 'Note.'] }],
     ] as const) refused(value as Card, label);
+  });
+
+  it('allows expected only on assessed conflicts and needs-updating rows', () => {
+    expect(() => validatePersonImpactCardV1(assessedCard({ relation: 'confirms', expected: 'x' }))).toThrow();
+    expect(() => validatePersonImpactCardV1(notAssessedCard({ expected: 'x' }))).toThrow();
+    expect(validatePersonImpactCardV1(assessedCard({ relation: 'conflicts', expected: 'two decimals' })).affected[0]!.expected).toBe('two decimals');
   });
 });

@@ -71,6 +71,13 @@ describe('durable approved-record trigger runs', () => {
     await expect(f.app.view({ access_token: 'approver', request: { schema_version: 1, operation: 'view', run_id: f.row.run_id } })).resolves.toMatchObject({ hidden: 1, card: { citations: [expect.anything()] } });
   });
 
+  it('stores what the record expects of a conflicting item and reads the stored card back', async () => {
+    const f = await fixture({ render: async () => ({ ...card, affected: [{ ...card.affected[0], expected: 'two decimals from DVT' }] }) });
+    await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }); await f.settled();
+    expect(JSON.parse(f.runs.read(f.person, f.row.run_id)!.result_json!).affected).toEqual([{ citation_index: 1, relation: 'conflicts', expected: 'two decimals from DVT' }]);
+    await expect(f.app.view({ access_token: 'approver', request: { schema_version: 1, operation: 'view', run_id: f.row.run_id } })).resolves.toMatchObject({ hidden: 0 });
+  });
+
   it('refuses an invalid stored pointer card before opening a citation', async () => {
     const f = await fixture(); await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }); await f.settled();
     const invalid = canonicalJson({ schema_version: 1, status: 'assessed', citations: [ticket], decided: [{ citation_index: 0, text: 'Outside ticket text must never persist.' }], affected: [], unconfirmed: [] });

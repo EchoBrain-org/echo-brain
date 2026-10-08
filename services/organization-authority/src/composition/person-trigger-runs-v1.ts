@@ -58,7 +58,7 @@ function stored(json: string): StoredImpactCardV1 {
     const affected = rawAffected.map(entry => {
       if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) throw new Error('stored affected row is invalid');
       const row = entry as Record<string, unknown>;
-      const allowed = ['citation_index', 'date_at_risk', 'relation', 'says_now'];
+      const allowed = ['citation_index', 'date_at_risk', 'expected', 'relation', 'says_now'];
       if (Object.keys(row).some(key => !allowed.includes(key))) throw new Error('stored affected row has an extra field');
       return { ...row, says_now: row.says_now ?? 'Stored local value.' };
     });
@@ -71,7 +71,8 @@ function stored(json: string): StoredImpactCardV1 {
     return Object.freeze({ schema_version: 1 as const, status: validated.status,
       decided: Object.freeze(validated.decided.map(row => Object.freeze({ text: row.text, citation_index: row.citation_index }))),
       affected: Object.freeze(validated.affected.map((row, index) => Object.freeze({ citation_index: row.citation_index,
-        ...(row.relation === undefined ? {} : { relation: row.relation }), ...(row.date_at_risk === undefined ? {} : { date_at_risk: row.date_at_risk }),
+        ...(row.relation === undefined ? {} : { relation: row.relation }), ...(row.expected === undefined ? {} : { expected: row.expected }),
+        ...(row.date_at_risk === undefined ? {} : { date_at_risk: row.date_at_risk }),
         ...(Object.hasOwn(rawAffected[index] as object, 'says_now') ? { says_now: row.says_now } : {}),
       }))),
       unconfirmed: validated.unconfirmed, citations: Object.freeze(citations),
