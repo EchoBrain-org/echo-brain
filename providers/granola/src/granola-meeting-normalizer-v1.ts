@@ -187,15 +187,16 @@ function meetingTime(note: GranolaMeetingContentInputV1): MeetingDocument["time"
   return Object.keys(time).length === 0 ? undefined : time;
 }
 
+function nameParticipantId(displayName: string): string {
+  return `name:sha256:${createHash("sha256").update(displayName.toLowerCase()).digest("hex")}`;
+}
+
 function participantFrom(value: unknown): MeetingParticipant | null {
   if (isNonEmptyString(value)) {
     const email = value.includes("@") ? value.trim().toLowerCase() : null;
     const displayName = value.trim();
     return {
-      id:
-        email === null
-          ? `name:sha256:${createHash("sha256").update(displayName.toLowerCase()).digest("hex")}`
-          : `email:${email}`,
+      id: email === null ? nameParticipantId(displayName) : `email:${email}`,
       display_name: displayName,
       ...(email === null
         ? {}
@@ -224,9 +225,7 @@ function participantFrom(value: unknown): MeetingParticipant | null {
         ? `source:${sourceId}`
         : email !== null
           ? `email:${email}`
-          : `name:sha256:${createHash("sha256")
-              .update(displayName!.toLowerCase())
-              .digest("hex")}`,
+          : nameParticipantId(displayName!),
     ...(displayName === null ? {} : { display_name: displayName }),
     ...(identities.length === 0 ? {} : { identities }),
   };

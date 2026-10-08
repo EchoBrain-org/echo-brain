@@ -29,6 +29,6 @@ if (argv.length === 1 && argv[0] === '--version') {
   process.stderr.write('usage: echo-brain person <command> [options]\n');
   process.exitCode = 2;
 } else {
-  const updatedExit = argv.includes('--help') ? undefined : await updateBeforePersonCommand(argv.slice(1));
-  process.exitCode = updatedExit ?? await runPersonClientCli(argv.slice(1));
+  if (!argv.includes('--help')) await updateBeforePersonCommand();
+  process.exitCode = await runPersonClientCli(argv.slice(1));
 }

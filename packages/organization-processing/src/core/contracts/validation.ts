@@ -719,22 +719,14 @@ export function assertCanonicalMeetingBatch(
   }
 }
 
-interface SignalValidationContext {
-  meetingId: string;
-  meeting?: MeetingDocument;
-}
-
 function assertSignalArray(
   value: unknown,
   label: string,
-  context: SignalValidationContext,
-  ids: Set<string>,
+  meeting: MeetingDocument,
 ): ExtractedSignal[] {
   if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
-  const blocks =
-    context.meeting === undefined
-      ? undefined
-      : new Map(context.meeting.content.map((block) => [block.id, block]));
+  const ids = new Set<string>();
+  const blocks = new Map(meeting.content.map((block) => [block.id, block]));
   return value.map((item, index) => {
     const signal = object(item, `${label}[${index}]`);
     nonEmptyString(signal['id'], `${label}[${index}].id`);
@@ -793,17 +785,17 @@ function assertSignalArray(
         ['meeting_id', 'block_id', 'quote', 'started_at', 'ended_at'],
         `${label}[${index}].evidence[${evidenceIndex}]`,
       );
-      if (evidence['meeting_id'] !== context.meetingId) {
+      if (evidence['meeting_id'] !== meeting.id) {
         throw new Error('signal evidence meeting_id does not match its meeting');
       }
       nonEmptyString(evidence['block_id'], 'signal evidence block_id');
-      const block = blocks?.get(evidence['block_id']);
-      if (blocks !== undefined && block === undefined) {
+      const block = blocks.get(evidence['block_id']);
+      if (block === undefined) {
         throw new Error('signal evidence block_id does not resolve to the meeting');
       }
       if (evidence['quote'] !== undefined) {
         nonEmptyString(evidence['quote'], 'signal evidence quote');
-        if (block !== undefined && !block.text.includes(evidence['quote'])) {
+        if (!block.text.includes(evidence['quote'])) {
           throw new Error('signal evidence quote does not resolve to the meeting block');
         }
       }
@@ -888,10 +880,6 @@ export function assertCanonicalDecisionSet(
     throw new Error('decision processor result identity does not match the configured adapter');
   }
   timestamp(decisions['generated_at'], 'decision_set.generated_at');
-  const ids = new Set<string>();
-  const signals = assertSignalArray(decisions['signals'], 'decision_set.signals', {
-    meetingId: meeting.id,
-    meeting,
-  }, ids);
+  const signals = assertSignalArray(decisions['signals'], 'decision_set.signals', meeting);
   assertRationaleLinks(signals);
 }

@@ -1,11 +1,9 @@
 import { HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecRegistryV4 } from "./record-input-codec-v4.js";
 import { Buffer } from "node:buffer";
 import {
-  assertP256LowS,
   canonicalJsonBytes,
   canonicalSha256,
   verifyP256LowSSignature,
-  verifyP256SigningKeyDescriptor,
 } from "@echo-brain/federation-protocol";
 import type {
   P256SigningKeyDescriptor,
@@ -23,6 +21,9 @@ import {
 } from "./person-content-policy-v2.js";
 import { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from "./record-payload.js";
 import {
+  assertPinnedRecordSigner,
+  decodeRecordSignature,
+  signerRecordSignature,
   verifyOrganizationRecordEnvelopeV4,
 } from "./record-envelope-v4.js";
 import type {
@@ -84,9 +85,6 @@ const RECEIPT_WRAPPER_KEYS = [
 ] as const;
 
 const CREATE_INPUT_KEYS = ["envelope", "record_position", "issued_at"] as const;
-
-const CANONICAL_BASE64_PATTERN =
-  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 export interface NoPolicyFactOutcomeV2 {
   readonly kind: "none";
@@ -202,27 +200,6 @@ function validatePolicyFactOutcome(
   }
   assertPolicyId(outcome.policy_id, "Record receipt v2 policy fact outcome");
   return { kind: "appended", policy_id: outcome.policy_id };
-}
-
-function decodeSignature(value: unknown): Buffer {
-  if (
-    typeof value !== "string" ||
-    value.length < 8 ||
-    value.length > 96 ||
-    !CANONICAL_BASE64_PATTERN.test(value)
-  ) {
-    fail("Record receipt v2 signature must be bounded canonical base64");
-  }
-  const signature = Buffer.from(value, "base64");
-  if (signature.toString("base64") !== value) {
-    fail("Record receipt v2 signature must be bounded canonical base64");
-  }
-  try {
-    assertP256LowS(signature);
-  } catch (error) {
-    fail("Record receipt v2 signature must be strict DER low-S P-256", error);
-  }
-  return signature;
 }
 
 export function validateOrganizationRecordReceiptBodyV2(
@@ -383,7 +360,7 @@ export function validateOrganizationRecordReceiptV2(
     wrapper.signing_key_descriptor,
     "Record receipt v2 signing key descriptor",
   );
-  decodeSignature(wrapper.signature);
+  decodeRecordSignature(wrapper.signature, "Record receipt v2");
   return {
     body,
     receipt_sha256: wrapper.receipt_sha256,
@@ -422,32 +399,6 @@ function assertReceiptMatchesEnvelope(
   }
 }
 
-function assertPinnedReceipt(
-  receipt: OrganizationRecordReceiptV2,
-  pinnedAuthority: PinnedOrganizationAuthority,
-  expectedStateLineageId: string,
-): Buffer {
-  assertText(expectedStateLineageId, "expected state lineage ID");
-  const authority = resolvePinnedOrganizationAuthority(pinnedAuthority);
-  if (
-    receipt.body.authority_id !== authority.authority_id ||
-    receipt.body.organization_id !== authority.organization_id ||
-    receipt.body.state_lineage_id !== expectedStateLineageId
-  ) {
-    fail("Record receipt v2 does not match the pinned Authority and expected lineage");
-  }
-  const actual = receipt.signing_key_descriptor;
-  const expected = authority.signing_key;
-  if (
-    actual.key_id !== expected.key_id ||
-    actual.algorithm !== expected.algorithm ||
-    actual.public_key_spki_der_base64 !== expected.public_key_spki_der_base64
-  ) {
-    fail("Record receipt v2 signing key does not match the pinned Authority");
-  }
-  return verifyP256SigningKeyDescriptor(expected, "organization Authority");
-}
-
 export function verifyOrganizationRecordReceiptV2(
   value: unknown,
   envelopeValue: unknown,
@@ -462,16 +413,18 @@ export function verifyOrganizationRecordReceiptV2(
   );
   const receipt = validateOrganizationRecordReceiptV2(value);
   assertReceiptMatchesEnvelope(receipt, envelope);
-  const publicKey = assertPinnedReceipt(
-    receipt,
+  const publicKey = assertPinnedRecordSigner(
+    receipt.body,
+    receipt.signing_key_descriptor,
     pinnedAuthority,
     expectedStateLineageId,
+    "Record receipt v2",
   );
   const signatureInput = buildOrganizationRecordReceiptSignatureInputV2(
     receipt.body,
     receipt.signing_key_descriptor.key_id,
   );
-  const signature = decodeSignature(receipt.signature);
+  const signature = decodeRecordSignature(receipt.signature, "Record receipt v2");
   let valid = false;
   try {
     valid = verifyP256LowSSignature(
@@ -557,19 +510,10 @@ export async function createOrganizationRecordReceiptV2(
   const bytesToSign = Buffer.from(
     organizationRecordReceiptSignatureInputV2Bytes(signatureInput),
   );
-  const signerResult = await sign(
-    Buffer.from(bytesToSign),
-    signingKeyDescriptor.key_id,
+  const signature = signerRecordSignature(
+    await sign(Buffer.from(bytesToSign), signingKeyDescriptor.key_id),
+    "Record receipt v2",
   );
-  if (!Buffer.isBuffer(signerResult)) {
-    fail("Record receipt v2 signer must return signature bytes");
-  }
-  const signature = Buffer.from(signerResult);
-  try {
-    assertP256LowS(signature);
-  } catch (error) {
-    fail("Record receipt v2 signer returned a non-canonical signature", error);
-  }
   return verifyOrganizationRecordReceiptV2(
     {
       body,

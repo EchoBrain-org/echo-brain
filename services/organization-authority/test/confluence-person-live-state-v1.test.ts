@@ -3,10 +3,8 @@ import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import {
-  assertPrivateConfluencePersonLiveDatabaseV1,
-  bindConfluencePersonLiveStateV1,
-} from '../src/composition/confluence-person-live-state-v1.js';
+import { bindConfluencePersonLiveStateV1 } from '../src/composition/confluence-person-live-state-v1.js';
+import { assertPrivatePersonProviderDatabaseV1 } from '../src/composition/person-provider-state-v1.js';
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 
 const roots: string[] = [];
@@ -37,7 +35,7 @@ it('binds the durable person connection state to the current Authority lineage a
   bindConfluencePersonLiveStateV1({ database: first, state_directory: state.state_directory, cloud_id: CLOUD_ID, integration_id: 'confluence' });
   first.close();
 
-  assertPrivateConfluencePersonLiveDatabaseV1(state.database_path);
+  assertPrivatePersonProviderDatabaseV1(state.database_path);
   const restarted = new Database(state.database_path);
   expect(() => bindConfluencePersonLiveStateV1({ database: restarted, state_directory: state.state_directory, cloud_id: CLOUD_ID, integration_id: 'confluence' })).not.toThrow();
   expect(() => bindConfluencePersonLiveStateV1({ database: restarted, state_directory: state.state_directory, cloud_id: CLOUD_ID, integration_id: 'another-confluence' })).toThrow('does not match the selected Authority lineage and Cloud target');
@@ -49,5 +47,5 @@ it('refuses a durable connection database that is readable by group or other use
   const database = new Database(state.database_path);
   database.close();
   chmodSync(state.database_path, 0o644);
-  expect(() => assertPrivateConfluencePersonLiveDatabaseV1(state.database_path)).toThrow('database is not a private regular file');
+  expect(() => assertPrivatePersonProviderDatabaseV1(state.database_path)).toThrow('database is not a private regular file');
 });

@@ -28,10 +28,8 @@ import {
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import {
-  assertFederationId,
   canonicalJson,
   canonicalSha256,
-  federationId,
   sha256Digest,
 } from "@echo-brain/federation-protocol";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
@@ -43,10 +41,11 @@ import {
   isCanonicalPersonEmail,
   isExpectedPersonEmail,
 } from "@echo-brain/organization-authority-kernel/domain/person-session-rules";
-import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
-import { readPrivateAuthorityCredential } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
+import { readPrivateAuthorityCredential, readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import {
   bootstrapOrganizationAuthorityState,
+  generatedAuthorityStateSeed,
+  validateAuthorityStateSeed,
   type AuthorityStateSeedV1,
 } from "./organization-authority-state-bootstrap.js";
 import { admitSyntheticDemoMeetingSource } from "@echo-brain/provider-synthetic-demo/synthetic-demo-meeting-source-admission";
@@ -393,24 +392,11 @@ function writeCanonicalPrivateFile(
   }
 }
 
+/** The same seed rule genesis applies, reported as one setup error. */
 function assertSetupSeed(seed: AuthorityStateSeedV1): void {
   try {
-    if (Object.keys(seed).sort().join(",") !==
-      "authority_id,control_plane_id,organization_id,owner_membership_id,owner_principal_id,state_lineage_id") {
-      throw new Error("unexpected setup seed fields");
-    }
-    assertFederationId(seed.authority_id, "oau", "setup authority_id");
-    assertFederationId(seed.organization_id, "org", "setup organization_id");
-    assertFederationId(seed.owner_principal_id, "prn", "setup owner_principal_id");
-    assertFederationId(seed.owner_membership_id, "mem", "setup owner_membership_id");
+    validateAuthorityStateSeed(seed);
   } catch {
-    throw new Error("organization setup seed is invalid");
-  }
-  const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
-  if (
-    !new RegExp(`^lineage-${uuid}$`).test(seed.state_lineage_id) ||
-    !new RegExp(`^ocp_${uuid}$`).test(seed.control_plane_id)
-  ) {
     throw new Error("organization setup seed is invalid");
   }
 }
@@ -528,14 +514,7 @@ function setupManifest(
   createdAt: string,
 ): OrganizationAuthoritySetupManifestV3 {
   const credentialsDirectory = join(input.state_directory, "credentials");
-  const seed: AuthorityStateSeedV1 = Object.freeze({
-    authority_id: federationId("oau"),
-    organization_id: federationId("org"),
-    state_lineage_id: `lineage-${randomUUID()}`,
-    owner_principal_id: federationId("prn"),
-    owner_membership_id: federationId("mem"),
-    control_plane_id: `ocp_${randomUUID()}`,
-  });
+  const seed = generatedAuthorityStateSeed();
   return Object.freeze({
     schema_version: 3,
     kind: "echo-clean-founder-onboarding-manifest-v3",
@@ -719,10 +698,8 @@ function usableInitialOwnerInvitation(
       parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
         ? Object.keys(parsed).sort().join(",")
         : undefined;
+    // `keys` is undefined unless the invitation is a plain object.
     if (
-      parsed === null ||
-      typeof parsed !== "object" ||
-      Array.isArray(parsed) ||
       !(
         keys === "authority_url,expires_at,kind,login_grant,schema_version" ||
         keys ===
@@ -800,6 +777,15 @@ function discardUnusableInvitation(path: string): void {
   }
 }
 
+function genesisIsPublished(manifest: OrganizationAuthoritySetupManifestV3): boolean {
+  try {
+    verifySetupGenesis(manifest);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function plannedSlackIsActive(
   manifest: OrganizationAuthoritySetupManifestV3,
 ): boolean {
@@ -821,27 +807,19 @@ function durableSetupStage(
   });
 }
 
+function readSetupStage(
+  manifest: OrganizationAuthoritySetupManifestV3,
+  dependencies?: OrganizationAuthoritySetupCliDependencies,
+): OrganizationAuthoritySetupStage {
+  return dependencies?.read_setup_stage?.(manifest) ?? durableSetupStage(manifest);
+}
+
 interface InitialOwnerSetupStatus {
   readonly founder_oidc_bound: boolean;
   readonly founder_slack_link_active: boolean;
   readonly llm_credential_valid: boolean;
   readonly source_admission_present: boolean;
   readonly source_mode?: "staging_synthetic" | "staging_canary";
-}
-
-function llmCredentialValid(full: InitialOwnerSetupStatus): boolean {
-  return full.llm_credential_valid;
-}
-
-function sourceAdmissionPresent(full: InitialOwnerSetupStatus): boolean {
-  return full.source_admission_present;
-}
-
-function sourceMode(full: InitialOwnerSetupStatus):
-  | "staging_synthetic"
-  | "staging_canary"
-  | "none" {
-  return full.source_mode ?? "none";
 }
 
 /**
@@ -916,8 +894,8 @@ function nextOrganizationAuthoritySetupStep(input: {
   if (!input.full.founder_oidc_bound) return "complete_founder_browser_login";
   if (!input.slack_connected) return "connect_slack_in_app";
   if (!input.full.founder_slack_link_active) return "complete_founder_slack_link";
-  if (!llmCredentialValid(input.full)) return "install_provider_credentials";
-  if (input.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN && !sourceAdmissionPresent(input.full)) return "run_finalize";
+  if (!input.full.llm_credential_valid) return "install_provider_credentials";
+  if (input.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN && !input.full.source_admission_present) return "run_finalize";
   return "ready_to_start";
 }
 
@@ -1196,17 +1174,6 @@ function stagingSyntheticCanaryObserved(
   return false;
 }
 
-
-
-/**
- * The fixed fixture source cannot use a one-record canary as completion
- * evidence. Each candidate must belong to the singleton's admitted source,
- * preserve its canonical bytes, name one of the four fixed revisions, and
- * have a corresponding published approval record. Distinct meeting IDs keep
- * retries and duplicate approvals from inflating the count.
- */
-
-
 /**
  * Read only durable proof. The head and active-generation pointer are read
  * before and after the proof query: any append or generation publication in
@@ -1247,6 +1214,11 @@ function setupCanaryEvidence(
       authority,
       record,
     );
+    // The fixed fixture source cannot use a one-record canary as completion
+    // evidence. Each candidate must belong to the singleton's admitted source,
+    // preserve its canonical bytes, name one of the four fixed revisions, and
+    // have a corresponding published approval record. Distinct meeting IDs keep
+    // retries and duplicate approvals from inflating the count.
     const syntheticFixtureApproval = syntheticFixtureApprovalEvidence(
       manifest,
       authority,
@@ -1437,29 +1409,20 @@ async function bootstrap(
   }
   const manifest = setup.manifest;
   if (!existsSync(input.state_directory)) {
-    const seed = manifest.setup_seed;
     dependencies.initialize_state({
       state_directory: input.state_directory,
       organization_display_name: input.organization_name,
       owner_display_name: input.owner_display_name,
       created_at: manifest.created_at,
       creating_artifact_revision: input.artifact_revision,
-      seed: {
-        authority_id: seed.authority_id,
-        organization_id: seed.organization_id,
-        state_lineage_id: seed.state_lineage_id,
-        owner_principal_id: seed.owner_principal_id,
-        owner_membership_id: seed.owner_membership_id,
-        control_plane_id: seed.control_plane_id,
-      },
+      seed: manifest.setup_seed,
     });
   }
   // Genesis verifies its rename target. Verify it once more before the plan
   // crosses from its sibling file into the published state directory.
   verifySetupGenesis(manifest);
   publishSetupPlan(manifest);
-  const stage = () =>
-    dependencies.read_setup_stage?.(manifest) ?? durableSetupStage(manifest);
+  const stage = () => readSetupStage(manifest, dependencies);
   if (!stage().credentials_ready) {
     await dependencies.initialize_credentials(input.state_directory);
   }
@@ -1539,13 +1502,8 @@ async function resume(
   const manifest = setup.manifest;
   // A terminal rehearsal is durable state, not a signal to replay setup. This
   // keeps `resume` safe to rerun after the final status check.
-  let genesisPublished = false;
-  try {
-    verifySetupGenesis(manifest);
-    genesisPublished = true;
-  } catch {}
-  const durable =
-    dependencies.read_setup_stage?.(manifest) ?? durableSetupStage(manifest);
+  const genesisPublished = genesisIsPublished(manifest);
+  const durable = readSetupStage(manifest, dependencies);
   const full = readInitialOwnerSetupStatus(manifest, dependencies);
   const setupStep = nextOrganizationAuthoritySetupStep({
     authority_url: manifest.authority_url,
@@ -1559,7 +1517,7 @@ async function resume(
   });
   if (
     setupStep === "ready_to_start" &&
-    ((manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN && !sourceAdmissionPresent(full)) ||
+    ((manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN && !full.source_admission_present) ||
       readSetupCanaryEvidence(manifest, dependencies).complete)
   ) {
     status(input, io, dependencies);
@@ -1591,7 +1549,7 @@ function installProviderCredentials(
   }
   const llmCredential = readPrivateAuthorityCredential(`file:${input.llm_credential_source}`);
   installPrivateCredentialValue(manifest.llm_credential_file, llmCredential);
-  if (!llmCredentialValid(initialOwnerSetupStatus(manifest))) {
+  if (!initialOwnerSetupStatus(manifest).llm_credential_valid) {
     throw new Error("organization setup LLM credential did not install");
   }
   io.stdout(`${canonicalJson({ ok: true, credentials_ready: true, next_instruction: "Run echo-organization-authority-setup status to continue." } as never)}\n`);
@@ -1607,12 +1565,12 @@ async function finalize(
   // command. Prove genesis before a dependency can admit anything.
   verifySetupGenesis(manifest);
   const full = readInitialOwnerSetupStatus(manifest, dependencies);
-  const stage = dependencies.read_setup_stage?.(manifest) ?? durableSetupStage(manifest);
+  const stage = readSetupStage(manifest, dependencies);
   const missing = [
     !full.founder_oidc_bound && "initial-owner OIDC binding",
     !stage.slack_connected && "organization Slack connection",
     !full.founder_slack_link_active && "initial-owner Slack identity link",
-    !llmCredentialValid(full) && "LLM credential",
+    !full.llm_credential_valid && "LLM credential",
   ].filter((value): value is string => typeof value === "string");
   if (missing.length > 0) {
     throw new Error(
@@ -1626,8 +1584,8 @@ async function finalize(
           authority_url: manifest.authority_url,
           meetings_directory: input.staging_synthetic_meetings_directory,
         });
-  const admittedMode = sourceMode(full);
-  if (sourceAdmissionPresent(full)) {
+  if (full.source_admission_present) {
+    const admittedMode = full.source_mode ?? "none";
     if (
       stagingSyntheticMeetingsDirectory !== undefined &&
       admittedMode !== "staging_synthetic"
@@ -1637,16 +1595,10 @@ async function finalize(
     if (stagingSyntheticMeetingsDirectory === undefined && admittedMode !== "staging_canary") {
       throw new Error("the admitted staging synthetic source requires its fixture selector at runtime");
     }
-    if (stagingSyntheticMeetingsDirectory !== undefined) {
-      // Admission is idempotent only when the current bounded corpus and its
-      // processor commitment still match the immutable singleton.
-      await dependencies.admit_staging_synthetic_source({
-        state_directory: manifest.state_directory,
-        meetings_directory: stagingSyntheticMeetingsDirectory,
-        llm_credential_file: manifest.llm_credential_file,
-      });
-    }
-  } else if (stagingSyntheticMeetingsDirectory !== undefined) {
+  }
+  if (stagingSyntheticMeetingsDirectory !== undefined) {
+    // For an admitted source, admission is idempotent only when the current
+    // bounded corpus and its processor commitment still match the immutable singleton.
     await dependencies.admit_staging_synthetic_source({
       state_directory: manifest.state_directory,
       meetings_directory: stagingSyntheticMeetingsDirectory,
@@ -1720,16 +1672,8 @@ function status(
     );
     return;
   }
-  let genesisPublished = false;
-  try {
-    verifySetupGenesis(setup.manifest);
-    genesisPublished = true;
-  } catch {
-    genesisPublished = false;
-  }
-  const durable =
-    dependencies?.read_setup_stage?.(setup.manifest) ??
-    durableSetupStage(setup.manifest);
+  const genesisPublished = genesisIsPublished(setup.manifest);
+  const durable = readSetupStage(setup.manifest, dependencies);
   const full = readInitialOwnerSetupStatus(setup.manifest, dependencies);
   const credentialsReady = genesisPublished && durable.credentials_ready;
   const slackConnected = genesisPublished && durable.slack_connected;
@@ -1753,7 +1697,7 @@ function status(
     ? readSetupCanaryEvidence(setup.manifest, dependencies)
     : EMPTY_SETUP_CANARY_EVIDENCE;
   const ordinarySourceFree = nextStep === "ready_to_start" &&
-    setup.manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN && !sourceAdmissionPresent(full);
+    setup.manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN && !full.source_admission_present;
   const terminalStep: OrganizationAuthoritySetupNextStep = canary.complete || ordinarySourceFree
     ? "complete"
     : nextStep;
@@ -1774,9 +1718,9 @@ function status(
       founder_invitation_valid: invitationValid,
       founder_oidc_bound: full.founder_oidc_bound,
       founder_slack_link_active: full.founder_slack_link_active,
-      llm_credential_valid: llmCredentialValid(full),
-      source_mode: sourceMode(full),
-      source_admission_present: sourceAdmissionPresent(full),
+      llm_credential_valid: full.llm_credential_valid,
+      source_mode: full.source_mode ?? "none",
+      source_admission_present: full.source_admission_present,
       source_progress_observed: canary.source_progress_observed,
       synthetic_staging_canary_observed:
         canary.synthetic_staging_canary_observed ?? false,

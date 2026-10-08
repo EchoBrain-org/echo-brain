@@ -407,6 +407,13 @@ Shows each employee's name, canonical email, membership state, and invitation st
 `,
 };
 
+const EMPLOYEE_ACTIONS = {
+  invite: "employee-invite",
+  reissue: "employee-reissue",
+  revoke: "employee-revoke",
+  list: "employee-list",
+} as const;
+
 const TOOL_VERBS: readonly PersonToolVerbNameV1[] = ['setup', 'connect', 'disconnect', 'status', 'cancel', 'project', 'meetings'];
 
 function toolVerb(value: string | undefined): PersonToolVerbNameV1 | undefined {
@@ -460,12 +467,7 @@ function personClientCliHelp(argv: readonly string[], providers: readonly Person
     argv[0] === "employee" &&
     argv[2] === "--help"
   ) {
-    const action = ({
-      invite: "employee-invite",
-      reissue: "employee-reissue",
-      revoke: "employee-revoke",
-      list: "employee-list",
-    } as const)[argv[1] as "invite" | "reissue" | "revoke" | "list"];
+    const action = EMPLOYEE_ACTIONS[argv[1] as keyof typeof EMPLOYEE_ACTIONS];
     return action === undefined ? undefined : HELP[action];
   }
   return undefined;
@@ -524,6 +526,18 @@ function contextCliFailure(action: string, error: unknown, values: Record<Option
       ...(requestId === undefined ? {} : { request_id: requestId }),
     } : {}),
   };
+}
+
+/** Optional paired options that bind a document operation to its captured account. */
+function expectedAccount(values: Record<Option, string | boolean | undefined>) {
+  return {
+    ...(values['expected-membership-id'] === undefined ? {} : { expected_membership_id: requiredText(values, 'expected-membership-id') }),
+    ...(values['expected-authority'] === undefined ? {} : { expected_authority: requiredText(values, 'expected-authority') }),
+  };
+}
+
+function optionalProject(values: Record<Option, string | boolean | undefined>) {
+  return values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, 'project'));
 }
 
 function contextPaging(values: Record<Option, string | boolean | undefined>) {
@@ -785,16 +799,7 @@ export async function runPersonClientCli(
     return 0;
   }
   const employeeAction =
-    argv[0] === "employee"
-      ? ({
-          invite: "employee-invite",
-          reissue: "employee-reissue",
-          revoke: "employee-revoke",
-          list: "employee-list",
-        } as const)[
-          argv[1] as "invite" | "reissue" | "revoke" | "list"
-        ]
-      : undefined;
+    argv[0] === "employee" ? EMPLOYEE_ACTIONS[argv[1] as keyof typeof EMPLOYEE_ACTIONS] : undefined;
   const documentAction = argv[0] === 'documents' ? `documents-${argv[1] ?? ''}` : undefined;
   const evidenceAction = argv[0] === 'evidence' ? `evidence-${argv[1] ?? ''}` : undefined;
   const updateAction = argv[0] === 'updates' && ['search', 'submit-v3', 'status-v3', 'search-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
@@ -802,7 +807,8 @@ export async function runPersonClientCli(
   // `tools` alone lists tools; `tools <verb>` is a tool verb, refused unless it is one of the five.
   const toolAction = argv[0] === 'tools' && argv[1] !== undefined && !argv[1].startsWith('-') ? `tools-${argv[1]}` : undefined;
   const verbName = toolAction === undefined ? undefined : toolVerb(argv[1]);
-  const action = documentAction ?? evidenceAction ?? projectAction ?? updateAction ?? employeeAction ?? toolAction ?? (argv[0] ?? "");
+  const subcommandAction = documentAction ?? evidenceAction ?? projectAction ?? updateAction ?? employeeAction ?? toolAction;
+  const action = subcommandAction ?? (argv[0] ?? "");
   const rule = RULES[action] ?? (verbName === undefined ? undefined : { accepts: ['tool', ...Object.keys(toolOptions)], requires: ['tool'] });
   if (rule === undefined) {
     print(stderr, { ok: false, error: usage() });
@@ -814,7 +820,7 @@ export async function runPersonClientCli(
   let openRequest: PersonOpenRequestV1 | undefined;
   let toolVerbDefinition: PersonToolVerbV1 | undefined;
   try {
-    const args = [...argv.slice(employeeAction === undefined && updateAction === undefined && projectAction === undefined && documentAction === undefined && evidenceAction === undefined && toolAction === undefined ? 1 : 2)];
+    const args = argv.slice(subcommandAction === undefined ? 1 : 2);
     // Accept a negative integer as a limit value so the existing bounds explain
     // it. Other dash-prefixed values retain parseArgs' strict option behavior.
     if (action === "records") {
@@ -972,8 +978,7 @@ export async function runPersonClientCli(
         printDocument(stdout, await client.uploadDocumentV2({ file: requiredText(values, 'file'), request_id: requestId,
           title: requiredText(values, 'title'), audience: uploadAudienceV3(values),
           association_project_ids: canonicalProjectIdArray(values['association-project-ids-json'], '--association-project-ids-json'),
-          ...(values['expected-membership-id'] === undefined ? {} : { expected_membership_id: requiredText(values, 'expected-membership-id') }),
-          ...(values['expected-authority'] === undefined ? {} : { expected_authority: requiredText(values, 'expected-authority') }) }));
+          ...expectedAccount(values) }));
         break;
       }
       case 'documents-associate':
@@ -981,10 +986,7 @@ export async function runPersonClientCli(
         const validate = action === 'documents-associate' ? validatePersonDocumentAssociateV1 : validatePersonDocumentDissociateV1;
         const request = validate({ schema_version: 1, kind: action === 'documents-associate' ? 'echo-person-document-associate-v1' : 'echo-person-document-dissociate-v1',
           request_id: requiredText(values, 'request-id'), document_id: requiredText(values, 'document-id'), project_id: requiredText(values, 'project-id') });
-        printDocument(stdout, await client.changeDocumentAssociation(request, {
-          ...(values['expected-membership-id'] === undefined ? {} : { expected_membership_id: requiredText(values, 'expected-membership-id') }),
-          ...(values['expected-authority'] === undefined ? {} : { expected_authority: requiredText(values, 'expected-authority') }),
-        }));
+        printDocument(stdout, await client.changeDocumentAssociation(request, expectedAccount(values)));
         break;
       }
       case 'documents-pending':
@@ -992,10 +994,7 @@ export async function runPersonClientCli(
         break;
       case 'documents-retry':
       case 'documents-abandon': {
-        const expected = {
-          ...(values['expected-membership-id'] === undefined ? {} : { expected_membership_id: requiredText(values, 'expected-membership-id') }),
-          ...(values['expected-authority'] === undefined ? {} : { expected_authority: requiredText(values, 'expected-authority') }),
-        };
+        const expected = expectedAccount(values);
         const requestId = requiredText(values, 'request-id');
         printDocument(stdout, action === 'documents-retry' ? await client.retryDocument(requestId, expected) : client.abandonDocument(requestId, expected));
         break;
@@ -1171,7 +1170,7 @@ export async function runPersonClientCli(
         print(stdout, { ok: true, result: await client.open(openRequest!, dependencies.abort_signal) });
         break;
       case 'evidence-search': {
-        const project_id = values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, 'project'));
+        const project_id = optionalProject(values);
         const kind = values.kind;
         if (kind !== undefined && !['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'].includes(String(kind))) throw new Error('Invalid evidence kind');
         const limit = values.limit === undefined ? undefined : Number(values.limit);
@@ -1189,7 +1188,7 @@ export async function runPersonClientCli(
         try { citation = JSON.parse(requiredText(values, 'item')); } catch { throw new Error('Evidence citation JSON is invalid'); }
         const neighbours = values.neighbours === undefined ? undefined : Number(values.neighbours);
         if (neighbours !== undefined && (!Number.isSafeInteger(neighbours) || neighbours < 0 || neighbours > 2)) throw new Error('Invalid evidence neighbours');
-        const project_id = values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, 'project'));
+        const project_id = optionalProject(values);
         print(stdout, { ok: true, result: await client.evidenceOpen({ schema_version: 1, citation: citation as never,
           ...(neighbours === undefined ? {} : { neighbours: neighbours as 0 | 1 | 2 }),
           ...(project_id === undefined ? {} : { project_id }),
@@ -1197,9 +1196,7 @@ export async function runPersonClientCli(
         break;
       }
       case "ask-source": {
-        const project_id = values.project === undefined
-          ? undefined
-          : validateProjectIdV1(requiredText(values, "project"));
+        const project_id = optionalProject(values);
         print(stdout, {
           ok: true,
           result: await client.askSourceEvidence(validatePersonSourceEvidenceReadRequestV1({
@@ -1219,9 +1216,7 @@ export async function runPersonClientCli(
         break;
       }
       case "transcript": {
-        const project_id = values.project === undefined
-          ? undefined
-          : validateProjectIdV1(requiredText(values, "project"));
+        const project_id = optionalProject(values);
         const offset = values.offset === undefined ? undefined : Number(values.offset);
         print(stdout, {
           ok: true,

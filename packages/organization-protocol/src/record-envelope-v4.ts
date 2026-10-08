@@ -542,23 +542,77 @@ export function organizationRecordSignatureInputV4Bytes(
   return canonicalJsonBytes(validateOrganizationRecordSignatureInputV4(value));
 }
 
-function decodeSignature(value: unknown): Buffer {
+/*
+ * The signature profile below is shared by record envelope v4 and record
+ * receipt v2. `label` names the signed document in every refusal.
+ */
+
+export function decodeRecordSignature(value: unknown, label: string): Buffer {
   if (
     typeof value !== "string" ||
     value.length < 8 ||
     value.length > 96 ||
     !CANONICAL_BASE64_PATTERN.test(value)
   ) {
-    fail("Record envelope v4 signature must be bounded canonical base64");
+    fail(`${label} signature must be bounded canonical base64`);
   }
   const signature = Buffer.from(value, "base64");
   if (signature.toString("base64") !== value) {
-    fail("Record envelope v4 signature must be bounded canonical base64");
+    fail(`${label} signature must be bounded canonical base64`);
   }
   try {
     assertP256LowS(signature);
   } catch (error) {
-    fail("Record envelope v4 signature must be strict DER low-S P-256", error);
+    fail(`${label} signature must be strict DER low-S P-256`, error);
+  }
+  return signature;
+}
+
+/** Binds a signed document to the pinned Authority; returns its public key. */
+export function assertPinnedRecordSigner(
+  body: {
+    readonly authority_id: string;
+    readonly organization_id: string;
+    readonly state_lineage_id: string;
+  },
+  signingKey: P256SigningKeyDescriptor,
+  pinnedAuthority: PinnedOrganizationAuthority,
+  expectedStateLineageId: string,
+  label: string,
+): Buffer {
+  assertText(expectedStateLineageId, "expected state lineage ID");
+  const authority = resolvePinnedOrganizationAuthority(pinnedAuthority);
+  if (
+    body.authority_id !== authority.authority_id ||
+    body.organization_id !== authority.organization_id ||
+    body.state_lineage_id !== expectedStateLineageId
+  ) {
+    fail(`${label} does not match the pinned Authority and expected lineage`);
+  }
+  const expected = authority.signing_key;
+  if (
+    signingKey.key_id !== expected.key_id ||
+    signingKey.algorithm !== expected.algorithm ||
+    signingKey.public_key_spki_der_base64 !== expected.public_key_spki_der_base64
+  ) {
+    fail(`${label} signing key does not match the pinned Authority`);
+  }
+  return verifyP256SigningKeyDescriptor(expected, "organization Authority");
+}
+
+/** Copies a detached signer's result and requires a strict low-S signature. */
+export function signerRecordSignature(
+  signerResult: unknown,
+  label: string,
+): Buffer {
+  if (!Buffer.isBuffer(signerResult)) {
+    fail(`${label} signer must return signature bytes`);
+  }
+  const signature = Buffer.from(signerResult);
+  try {
+    assertP256LowS(signature);
+  } catch (error) {
+    fail(`${label} signer returned a non-canonical signature`, error);
   }
   return signature;
 }
@@ -577,39 +631,13 @@ export function validateOrganizationRecordEnvelopeV4(
     wrapper.signing_key_descriptor,
     "Record envelope v4 signing key descriptor",
   );
-  decodeSignature(wrapper.signature);
+  decodeRecordSignature(wrapper.signature, "Record envelope v4");
   return {
     body,
     record_sha256: wrapper.record_sha256,
     signing_key_descriptor: descriptor,
     signature: wrapper.signature as string,
   };
-}
-
-function assertPinnedEnvelope(
-  envelope: OrganizationRecordEnvelopeV4,
-  pinnedAuthority: PinnedOrganizationAuthority,
-  expectedStateLineageId: string,
-): Buffer {
-  assertText(expectedStateLineageId, "expected state lineage ID");
-  const authority = resolvePinnedOrganizationAuthority(pinnedAuthority);
-  if (
-    envelope.body.authority_id !== authority.authority_id ||
-    envelope.body.organization_id !== authority.organization_id ||
-    envelope.body.state_lineage_id !== expectedStateLineageId
-  ) {
-    fail("Record envelope v4 does not match the pinned Authority and expected lineage");
-  }
-  const actual = envelope.signing_key_descriptor;
-  const expected = authority.signing_key;
-  if (
-    actual.key_id !== expected.key_id ||
-    actual.algorithm !== expected.algorithm ||
-    actual.public_key_spki_der_base64 !== expected.public_key_spki_der_base64
-  ) {
-    fail("Record envelope v4 signing key does not match the pinned Authority");
-  }
-  return verifyP256SigningKeyDescriptor(expected, "organization Authority");
 }
 
 export function verifyOrganizationRecordEnvelopeV4(
@@ -619,16 +647,18 @@ export function verifyOrganizationRecordEnvelopeV4(
   codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
 ): OrganizationRecordEnvelopeV4 {
   const envelope = validateOrganizationRecordEnvelopeV4(value, codecs);
-  const publicKey = assertPinnedEnvelope(
-    envelope,
+  const publicKey = assertPinnedRecordSigner(
+    envelope.body,
+    envelope.signing_key_descriptor,
     pinnedAuthority,
     expectedStateLineageId,
+    "Record envelope v4",
   );
   const signatureInput = buildOrganizationRecordSignatureInputV4(
     envelope.body,
     envelope.signing_key_descriptor.key_id, codecs,
   );
-  const signature = decodeSignature(envelope.signature);
+  const signature = decodeRecordSignature(envelope.signature, "Record envelope v4");
   let valid = false;
   try {
     valid = verifyP256LowSSignature(
@@ -692,19 +722,10 @@ export async function createOrganizationRecordEnvelopeV4(
   const bytesToSign = Buffer.from(
     organizationRecordSignatureInputV4Bytes(signatureInput),
   );
-  const signerResult = await sign(
-    Buffer.from(bytesToSign),
-    signingKeyDescriptor.key_id,
+  const signature = signerRecordSignature(
+    await sign(Buffer.from(bytesToSign), signingKeyDescriptor.key_id),
+    "Record envelope v4",
   );
-  if (!Buffer.isBuffer(signerResult)) {
-    fail("Record envelope v4 signer must return signature bytes");
-  }
-  const signature = Buffer.from(signerResult);
-  try {
-    assertP256LowS(signature);
-  } catch (error) {
-    fail("Record envelope v4 signer returned a non-canonical signature", error);
-  }
   return verifyOrganizationRecordEnvelopeV4(
     {
       body,

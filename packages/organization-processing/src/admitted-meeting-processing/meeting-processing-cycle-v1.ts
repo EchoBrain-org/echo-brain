@@ -22,6 +22,7 @@ import type {
 import type {
   MeetingApprovalJourneyRefV1,
   MeetingApprovalJourneyStageAttemptV1,
+  MeetingApprovalJourneyStageV1,
   MeetingApprovalJourneyTelemetryPortV1,
 } from "./meeting-approval-journey-telemetry-port-v1.js";
 import type { DecisionExtractionGenerationObservation } from "../core/contracts/decision.js";
@@ -333,6 +334,12 @@ function inputFingerprint(
   ])}`;
 }
 
+function operationContext(
+  signal: AbortSignal | undefined,
+): { readonly signal: AbortSignal } | undefined {
+  return signal === undefined ? undefined : { signal };
+}
+
 function canonicalDurableTimestamp(
   value: string | null | undefined,
 ): string | undefined {
@@ -425,14 +432,10 @@ export class AdmittedMeetingProcessingCycleV1 {
     if (this.running !== undefined) return this.running;
     const run = this.run(signal);
     this.running = run;
-    void run.then(
-      () => {
-        if (this.running === run) this.running = undefined;
-      },
-      () => {
-        if (this.running === run) this.running = undefined;
-      },
-    );
+    const release = (): void => {
+      if (this.running === run) this.running = undefined;
+    };
+    void run.then(release, release);
     return run;
   }
 
@@ -443,7 +446,7 @@ export class AdmittedMeetingProcessingCycleV1 {
     try { result = await this.processSource(signal); }
     catch (error) {
       if (error instanceof AdapterError && signal?.aborted !== true) {
-        await this.options.stager.reconcilePendingDeliveries(signal === undefined ? undefined : { signal });
+        await this.options.stager.reconcilePendingDeliveries(operationContext(signal));
       }
       throw error;
     }
@@ -452,10 +455,7 @@ export class AdmittedMeetingProcessingCycleV1 {
     // this cycle from durably admitting the next unrelated meeting first.
     await this.phase(
       "approval_staging",
-      () =>
-        this.options.stager.reconcilePendingDeliveries(
-          signal === undefined ? undefined : { signal },
-        ),
+      () => this.options.stager.reconcilePendingDeliveries(operationContext(signal)),
       signal,
     );
     return result;
@@ -486,7 +486,7 @@ export class AdmittedMeetingProcessingCycleV1 {
         source: new MeetingSourceBridgeV1(this.options.source),
         request: { cursor: admission.source.cursor, limit: MAXIMUM_PULL_LIMIT },
         admission: automaticMeetingSourceAdmission(this.options.source_ingestion),
-        context: signal === undefined ? undefined : { signal },
+        context: operationContext(signal),
       }));
       const batch = { meetings: sourceBatch.sources.map(meetingFromSourceEnvelopeV1), next_cursor: sourceBatch.next_cursor };
       const meeting = batch.meetings[0];
@@ -593,9 +593,7 @@ export class AdmittedMeetingProcessingCycleV1 {
             this.reconcileStagedApproval(journey, frozen);
           }
           if (frozen.disposition === "no_signals") {
-            await this.options.stager.reconcileSuperseded(
-              signal === undefined ? undefined : { signal },
-            );
+            await this.options.stager.reconcileSuperseded(operationContext(signal));
           }
           return this.finishWithoutStage(
             "already_processed",
@@ -680,7 +678,7 @@ export class AdmittedMeetingProcessingCycleV1 {
               observation = event;
             },
           },
-          signal === undefined ? undefined : { signal },
+          operationContext(signal),
         );
         receivedOutput = true;
         assertCanonicalDecisionSet(
@@ -749,9 +747,7 @@ export class AdmittedMeetingProcessingCycleV1 {
         this.bindCandidate(journey, candidate);
         if (candidate.disposition !== "actionable") {
           this.skipApprovalStages(journey);
-          await this.options.stager.reconcileSuperseded(
-            signal === undefined ? undefined : { signal },
-          );
+          await this.options.stager.reconcileSuperseded(operationContext(signal));
           return candidate.disposition === "no_signals"
             ? this.finishWithoutStage(
                 "no_signals",
@@ -789,7 +785,7 @@ export class AdmittedMeetingProcessingCycleV1 {
     try {
       staged = await this.options.stager.stage(
         { admission, candidate, meeting, decisions },
-        signal === undefined ? undefined : { signal },
+        operationContext(signal),
       );
     } catch (error) {
       // The candidate/outbox is already durable. Preserve a visible delivery
@@ -945,9 +941,7 @@ export class AdmittedMeetingProcessingCycleV1 {
     startedAt: number,
   ): void {
     this.safely(() => {
-      const telemetry = this.options.journey_telemetry;
-      if (telemetry === undefined) return;
-      telemetry.succeedExtractionStage(
+      this.options.journey_telemetry?.succeedExtractionStage(
         attempt,
         observation,
         Math.max(0, Date.now() - startedAt),
@@ -962,9 +956,7 @@ export class AdmittedMeetingProcessingCycleV1 {
     startedAt: number,
   ): void {
     this.safely(() => {
-      const telemetry = this.options.journey_telemetry;
-      if (telemetry === undefined) return;
-      telemetry.failExtractionStage(
+      this.options.journey_telemetry?.failExtractionStage(
         attempt,
         error,
         observation,
@@ -1050,15 +1042,7 @@ export class AdmittedMeetingProcessingCycleV1 {
 
   private skipStageIfMissing(
     journey: MeetingApprovalJourneyRefV1 | null,
-    stage:
-      | "meeting_extraction"
-      | "meeting_candidate_persist"
-      | "meeting_approval_staging"
-      | "meeting_approval_action_verify"
-      | "meeting_approval_action_queue"
-      | "meeting_terminal_persist"
-      | "meeting_record_append"
-      | "meeting_search_publication",
+    stage: Exclude<MeetingApprovalJourneyStageV1, "meeting_source_intake">,
   ): void {
     if (journey === null) return;
     this.safely(() => {

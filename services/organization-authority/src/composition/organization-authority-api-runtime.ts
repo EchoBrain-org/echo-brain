@@ -1,5 +1,5 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { validateProjectIdV1 } from '@echo-brain/organization-api';
+import { validateOrganizationAuthorityOrigin, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createPersonDocumentApplicationV1 } from '../application/document-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../adapters/persistence/sqlite/document-v1.js';
@@ -29,7 +29,6 @@ import {
   RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
 } from "@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1";
 import type { AddressInfo } from "node:net";
-import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import { SqlitePersonSessionRepository } from "../adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
@@ -39,8 +38,7 @@ import { PersonIdentitySessionApplication } from "../application/person-identity
 import type { PersonSessionOidcConfiguration } from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
 import { SystemAuthorityClock } from "../adapters/system/system-authority-clock.js";
 import { createOrganizationAuthorityHttpServer } from "../presentation/organization-authority-http-server.js";
-import type { PersonSessionOidcAuthorizationProvider } from "./lazy-person-session-oidc-provider.js";
-import { LazyPersonSessionOidcProvider } from "./lazy-person-session-oidc-provider.js";
+import { LazyPersonSessionOidcProvider, type PersonSessionOidcAuthorizationProvider } from "./lazy-person-session-oidc-provider.js";
 import { createPersonRecordReadRouteV1 } from "./person-record-read-route.js";
 import { createPersonRecordSearchRouteV1, personMeetingReleaseOptionsV1 } from "./person-record-search-route.js";
 import { PersonEmployeeLifecycleApplication } from "../application/person-employee-lifecycle.js";
@@ -153,10 +151,6 @@ export interface RunningOrganizationAuthorityApiRuntime {
   close(): Promise<void>;
 }
 
-export function verifyOrganizationAuthorityApiLineage(stateDirectory: string) {
-  return verifyAuthorityStateLineage(stateDirectory);
-}
-
 /**
  * Opens the Organization Authority HTTP API and its request-serving database
  * handles. It verifies lineage before opening Authority writeable and never
@@ -183,7 +177,7 @@ export async function startOrganizationAuthorityApiRuntime(
     );
   }
   const connectorDefinitions = personLiveConnectorDefinitionsV1(dependencies);
-  const lineage = verifyOrganizationAuthorityApiLineage(config.state_directory);
+  const lineage = verifyAuthorityStateLineage(config.state_directory);
   // Do not contact an OIDC provider merely to bind the local API runtime.
   // Discovery is deferred until the initial owner begins an OIDC login.
   const provider =
@@ -235,6 +229,7 @@ export async function startOrganizationAuthorityApiRuntime(
     );
     sessions.expireOidcLoginAttempts({ limit: 1000 });
     const projectRepository = new SqliteProjectContextRepositoryV1(database);
+    const memberships = { membership: (id: string) => repository.read((transaction) => transaction.membership(id)) };
     const authorizeLiveProject = (access_token: string, project_id: string) => {
       const person = sessions.authenticateAccess({ access_token });
       const id = validateProjectIdV1(project_id);
@@ -312,9 +307,7 @@ export async function startOrganizationAuthorityApiRuntime(
       // Mine needs the approver; the person list names it and offers a shared transcript.
       ...personMeetingReleaseOptionsV1({
         record_approver: dependencies.record_approver,
-        memberships: {
-          membership: (id) => repository.read((transaction) => transaction.membership(id)),
-        },
+        memberships,
         originals,
       }),
     });
@@ -331,7 +324,7 @@ export async function startOrganizationAuthorityApiRuntime(
     const answerOptions = dependencies.answer_composition_generation === undefined ? undefined : {
       authority_id: metadata.authority_id, organization_id: metadata.organization_id, state_lineage_id: lineage.root.state_lineage_id,
       sessions, originals, records: recordSearch,
-      memberships: { membership: (id: string) => repository.read(transaction => transaction.membership(id)) },
+      memberships,
       model: dependencies.answer_composition_generation.structured_output,
       generation: dependencies.answer_composition_generation.generation,
       audit: new SqlitePersonAgenticAskAuditV1(database),
@@ -356,9 +349,7 @@ export async function startOrganizationAuthorityApiRuntime(
         records: new PersonRecordReaderV1(recordDatabase),
         capture_projects: captureProjects,
         record_approver: dependencies.record_approver,
-        memberships: {
-          membership: (id) => repository.read((transaction) => transaction.membership(id)),
-        },
+        memberships,
         audit: readAudit,
       }),
       person_record_search: recordSearch,

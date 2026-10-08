@@ -99,6 +99,14 @@ function isNodeModuleSpecifier(node) {
   return specifier === 'module' || specifier === 'node:module';
 }
 
+function namesUnsafeNodeModuleExport(specifiers) {
+  return specifiers.some(
+    (specifier) =>
+      !specifier.isTypeOnly &&
+      !SAFE_NODE_MODULE_EXPORTS.has(importedName(specifier)),
+  );
+}
+
 // `node:module` exposes several loader entry points, not just the export named
 // `createRequire` (`Module`, the default export, `_load`, and `runMain` are
 // examples). Once the namespace or one of those values is acquired, reflection
@@ -117,11 +125,7 @@ function exposesNodeModuleLoader(node) {
     const bindings = clause.namedBindings;
     if (bindings === undefined) return false;
     if (ts.isNamespaceImport(bindings)) return true;
-    return bindings.elements.some(
-      (specifier) =>
-        !specifier.isTypeOnly &&
-        !SAFE_NODE_MODULE_EXPORTS.has(importedName(specifier)),
-    );
+    return namesUnsafeNodeModuleExport(bindings.elements);
   }
   if (
     ts.isExportDeclaration(node) &&
@@ -131,11 +135,7 @@ function exposesNodeModuleLoader(node) {
     if (node.isTypeOnly) return false;
     const clause = node.exportClause;
     if (clause === undefined || ts.isNamespaceExport(clause)) return true;
-    return clause.elements.some(
-      (specifier) =>
-        !specifier.isTypeOnly &&
-        !SAFE_NODE_MODULE_EXPORTS.has(importedName(specifier)),
-    );
+    return namesUnsafeNodeModuleExport(clause.elements);
   }
   if (
     ts.isImportEqualsDeclaration(node) &&

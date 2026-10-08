@@ -364,14 +364,6 @@ function buildCardAndSnapshotV2(
   });
 }
 
-function retainedTranscriptSourceV2(
-  database: Database.Database,
-  organizationId: string,
-  meeting: ApprovalWorkflowStageInputV1["meeting"],
-): PrivateApprovalTranscriptSourceV1 | undefined {
-  return retainedMeetingSourceCoordinateV1(database, organizationId, meeting);
-}
-
 function candidateCommitment(
   outbox: ApprovalWorkflowOutboxV1,
   card: Pick<PrivateCardAndSnapshotV1 | PrivateCardAndSnapshotV2, "frozen_card_sha256" | "approved_snapshot_sha256">,
@@ -458,21 +450,15 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
         // visibly pending and is never redirected to a shared channel.
         continue;
       }
-      const rendered = await this.options.poster.tombstone(
+      await this.tombstone(
         {
           approval_id: obsolete.approval_id,
           successor_id: obsolete.superseded_by_candidate_id,
           dm_channel_id: recovery.assignment.dm_channel.channel_id,
           provider_message_ts: recovery.provider_message_ts,
         },
-        context?.signal,
+        context,
       );
-      if (rendered.kind === "done") {
-        this.options.authority.recordSupersededApprovalCardTombstoned({
-          approval_id: obsolete.approval_id,
-          presentation_external_id: recovery.provider_message_ts,
-        });
-      }
     }
   }
 
@@ -532,13 +518,8 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
         readonly contract: PendingPrivateApprovalV2;
       }) => PendingPrivateApprovalV2;
     };
-    const v2DeliverySupported =
-      deliveryV2.readDeliveryV2 !== undefined ||
-      deliveryV2.freezeDeliveryV2 !== undefined;
-    const existingV2 = v2DeliverySupported
-      ? deliveryV2.readDeliveryV2?.(outbox.approval_id)
-      : undefined;
-    if (existingV2 !== undefined || (v2DeliverySupported && outbox.state === "queued" && deliveryV2.freezeDeliveryV2 !== undefined)) {
+    const existingV2 = deliveryV2.readDeliveryV2?.(outbox.approval_id);
+    if (existingV2 !== undefined || (outbox.state === "queued" && deliveryV2.freezeDeliveryV2 !== undefined)) {
       // This read-only proof precedes the only V2 delivery write. A missing
       // owner leaves the durable candidate queued without freezing a card.
       target = this.resolveReviewerTarget(targetInput);
@@ -546,7 +527,7 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
       if (existingV2 !== undefined) {
         pendingV2 = existingV2;
       } else {
-        const transcriptSource = retainedTranscriptSourceV2(
+        const transcriptSource = retainedMeetingSourceCoordinateV1(
           this.options.authority_database,
           target.slack_target.connection.body.organization_id,
           input.meeting,
@@ -876,19 +857,27 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
     context?: { readonly signal: AbortSignal },
   ): Promise<void> {
     if (outbox.presentation_external_id === null || outbox.superseded_by_candidate_id === null) return;
-    const result = await this.options.poster.tombstone(
+    await this.tombstone(
       {
         approval_id: outbox.approval_id,
         successor_id: outbox.superseded_by_candidate_id,
         dm_channel_id: assignment.dm_channel.channel_id,
         provider_message_ts: outbox.presentation_external_id,
       },
-      context?.signal,
+      context,
     );
+  }
+
+  /** Renders the card inert; Authority records it only once Slack confirms. */
+  private async tombstone(
+    card: Parameters<PrivateSlackApprovalCardPosterV1["tombstone"]>[0],
+    context?: { readonly signal: AbortSignal },
+  ): Promise<void> {
+    const result = await this.options.poster.tombstone(card, context?.signal);
     if (result.kind === "done") {
       this.options.authority.recordSupersededApprovalCardTombstoned({
-        approval_id: outbox.approval_id,
-        presentation_external_id: outbox.presentation_external_id,
+        approval_id: card.approval_id,
+        presentation_external_id: card.provider_message_ts,
       });
     }
   }

@@ -279,14 +279,11 @@ export class HttpNangoConnectionClientV1 implements NangoConnectionClientV1 {
         url: `${this.baseUrl}${input.path}`,
         init: {
           method: input.method,
-          headers:
-            input.body === undefined
-              ? { accept: "application/json", authorization: `Bearer ${this.secretKey}` }
-              : {
-                  accept: "application/json",
-                  authorization: `Bearer ${this.secretKey}`,
-                  "content-type": "application/json",
-                },
+          headers: {
+            accept: "application/json",
+            authorization: `Bearer ${this.secretKey}`,
+            ...(input.body === undefined ? {} : { "content-type": "application/json" }),
+          },
           body: input.body === undefined ? undefined : JSON.stringify(input.body),
         },
         fetch: this.fetchImpl,
