@@ -275,7 +275,11 @@ export async function startOrganizationAuthorityServiceLifecycle(
             // Coalesce wakes while queued, but preserve one that arrives
             // after this attempt starts, including if the provider fails.
             presentationPending = false;
-            return dependencies.processing.reconcileApprovalPresentations!(signal);
+            const primary = dependencies.processing.reconcileApprovalPresentations;
+            const additional = dependencies.additional_processing?.reconcileApprovalPresentations;
+            const first = primary === undefined ? 'idle' : await primary(signal);
+            const second = additional === undefined ? 'idle' : await additional(signal);
+            return first === 'uncertain' || second === 'uncertain' ? 'uncertain' : first === 'rendered' || second === 'rendered' ? 'rendered' : 'idle';
           })
           .then((result) => {
             if (result === "rendered") presentationPending = true;
@@ -294,7 +298,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
       });
     };
     requestApprovalPresentation = (): void => {
-      if (closing || dependencies.processing.reconcileApprovalPresentations === undefined) return;
+      if (closing || (dependencies.processing.reconcileApprovalPresentations === undefined && dependencies.additional_processing?.reconcileApprovalPresentations === undefined)) return;
       presentationPending = true;
       if (completePresentation === undefined) {
         presentationTail = new Promise((resolve) => { completePresentation = resolve; });

@@ -19,3 +19,4 @@ export {
   type PrivateApprovalSlackIdentityLinkV1,
   type SlackDmApprovalReviewerTargetCoordinatesV1,
 } from "./persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
+export { readActiveSlackConnectionV1 } from "./persistence/sqlite-slack-active-connection-v1.js";

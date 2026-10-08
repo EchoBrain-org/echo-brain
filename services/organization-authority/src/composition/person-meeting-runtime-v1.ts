@@ -80,7 +80,9 @@ export function createPersonMeetingRuntimeV1(options: {
   readonly providers: readonly PersonMeetingProviderV1[]; readonly processor: DecisionProcessorBundleV1;
   readonly approval: Omit<ApprovalWorkflowContextV1, 'state'>; readonly extraction_attempts: ExtractionAttemptStoreV1;
   /** Static, core-independent approval core options: the decided_at test seam and the after-record hooks. */
-  readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'now' | 'after_record'>;
+  readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'now' | 'after_record' | 'presenters'>;
+  /** Provider routes composed around the shared personal Authority runtime. */
+  readonly provider_applications?: readonly ProviderHttpApplicationV1[];
 }) {
   const { database: db, providers, processor } = options;
   if (providers.length === 0 || new Set(providers.map(p => p.id)).size !== providers.length || new Set(providers.map(p => p.cursor.policy.source_adapter_id)).size !== providers.length) {
@@ -133,6 +135,7 @@ export function createPersonMeetingRuntimeV1(options: {
   const processing: OrganizationAuthorityProcessingCycleV1 = {
     recoverV4Appends: publish, appendFinalizedApprovalsToV4: publish,
     async observeAndFinalizePendingApprovals() {}, async reconcileReadableSearchGeneration() {},
+    async reconcileApprovalPresentations(signal) { return (await approvals()).processing.reconcileApprovalPresentations?.(signal); },
     async pollAndStageAdmittedMeetings(signal) {
       // A source with an unfrozen proposal stays eligible until its freeze succeeds, even with nothing left to import.
       const unfrozen = new Set(workflowState.listPendingApprovalSourceKeys());
@@ -288,6 +291,6 @@ export function createPersonMeetingRuntimeV1(options: {
     observed.delete(setting.source_key);
     return setting;
   }
-  return { applications: [...providers.map(p => p.connection_http), application], processing, queue,
+  return { applications: [...providers.map(p => p.connection_http), ...(options.provider_applications ?? []), application], processing, queue,
     tools: async (token: string) => providers.map(p => p.tool(token)), approvals, close() {} };
 }

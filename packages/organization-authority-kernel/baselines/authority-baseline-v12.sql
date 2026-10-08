@@ -683,6 +683,42 @@ CREATE TABLE authority_approval_decisions_v1 (
 ) STRICT;
 CREATE INDEX authority_approval_decisions_v1_unpublished
   ON authority_approval_decisions_v1(sequence) WHERE receipt_json IS NULL AND action = 'approve';
+
+-- A provider presentation is deliberately separate from the approval and its
+-- decision: delivery is best-effort and must never affect the durable record.
+CREATE TABLE authority_approval_presentations_v1 (
+  approval_id TEXT NOT NULL REFERENCES authority_live_approval_outbox_v2(approval_id),
+  surface TEXT NOT NULL CHECK (surface = 'slack'),
+  target_json TEXT NOT NULL CHECK (json_valid(target_json) AND json_type(target_json) = 'object'),
+  dm_channel_id TEXT CHECK (dm_channel_id IS NULL OR length(dm_channel_id) BETWEEN 1 AND 256),
+  delivery TEXT NOT NULL CHECK (delivery IN ('opening', 'posting', 'posted', 'unrepresentable', 'failed')),
+  marker_state TEXT CHECK (marker_state IS NULL OR marker_state IN ('not_started', 'in_flight')),
+  marker_started_at TEXT CHECK (marker_started_at IS NULL OR unixepoch(marker_started_at) IS NOT NULL),
+  message_ts TEXT CHECK (message_ts IS NULL OR length(message_ts) BETWEEN 1 AND 64),
+  card_sha256 TEXT CHECK (card_sha256 IS NULL OR card_sha256 LIKE 'sha256:%'),
+  shows TEXT NOT NULL CHECK (shows IN ('open', 'approved', 'rejected', 'superseded')),
+  attempts INTEGER NOT NULL CHECK (attempts >= 0),
+  retry_at TEXT CHECK (retry_at IS NULL OR unixepoch(retry_at) IS NOT NULL),
+  created_at TEXT NOT NULL CHECK (unixepoch(created_at) IS NOT NULL),
+  updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
+  PRIMARY KEY (approval_id, surface),
+  CHECK (message_ts IS NULL OR delivery IN ('posted', 'failed')),
+  CHECK (delivery IN ('opening', 'unrepresentable', 'failed') OR dm_channel_id IS NOT NULL),
+  CHECK (delivery != 'posting' OR marker_state IS NOT NULL),
+  CHECK (marker_state IS NULL OR delivery IN ('posting', 'failed')),
+  CHECK (marker_state != 'in_flight' OR marker_started_at IS NOT NULL),
+  CHECK (marker_started_at IS NULL OR marker_state = 'in_flight'),
+  CHECK (delivery NOT IN ('opening', 'unrepresentable') OR shows = 'open')
+) STRICT;
+CREATE TRIGGER authority_approval_presentation_target_immutable_v1
+BEFORE UPDATE ON authority_approval_presentations_v1
+WHEN NEW.approval_id != OLD.approval_id OR NEW.surface != OLD.surface OR NEW.target_json != OLD.target_json
+  OR (OLD.dm_channel_id IS NOT NULL AND NEW.dm_channel_id IS NOT OLD.dm_channel_id)
+  OR (OLD.message_ts IS NOT NULL AND NEW.message_ts IS NOT OLD.message_ts)
+BEGIN SELECT RAISE(ABORT, 'approval presentation target is immutable'); END;
+CREATE TRIGGER authority_approval_presentation_delete_denied_v1
+BEFORE DELETE ON authority_approval_presentations_v1
+BEGIN SELECT RAISE(ABORT, 'approval presentation deletion is denied'); END;
 CREATE TRIGGER authority_approval_decision_immutable_v1
 BEFORE UPDATE ON authority_approval_decisions_v1
 WHEN NEW.sequence != OLD.sequence OR NEW.approval_id != OLD.approval_id OR NEW.command_id != OLD.command_id

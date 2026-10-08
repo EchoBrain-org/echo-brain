@@ -101,7 +101,13 @@ export interface ApprovalCoreOptionsV1 {
   /** Run inside the receipt transaction only when that transaction's UPDATE changed one row; synchronous functions only
    *  (async functions are refused at creation); Authority rows only. */
   readonly after_record?: readonly AfterApprovedRecordHookV1[];
+  /** Optional delivery-only surfaces. Factories receive only safe read views of this core. */
+  readonly presenters?: readonly ApprovalPresenterFactoryV1[];
 }
+export interface ApprovalPresenterV1 {
+  reconcile(signal: AbortSignal): Promise<'rendered' | 'idle' | 'uncertain'>;
+}
+export type ApprovalPresenterFactoryV1 = (core: Pick<ApprovalCoreV1, 'proposal' | 'ownerProposals'>) => ApprovalPresenterV1;
 export interface ApprovalCoreV1 {
   /** Runtime-wide stager: stage = freeze; reconcilePendingDeliveries re-freezes queued heads of every configured source
    *  (limit 25); reconcileSuperseded is a no-op (presenters redraw from proposal()). */
@@ -427,5 +433,20 @@ export async function createApprovalCoreV1(database: Database.Database, context:
     return Object.freeze(ownerProposalsFor(approvalId, meeting, decisions).map(item => Object.freeze({ signal_id: item.signal_id, action: item.action, proposed: item.proposed })));
   }
 
-  return Object.freeze({ stager: stagerFor(undefined), stagerForSource: (sourceKey: string) => stagerFor(sourceKey), processing, decide, proposal, proposals, ownerProposals });
+  const views = Object.freeze({ proposal, ownerProposals });
+  const presenters = Object.freeze((options.presenters ?? []).map(factory => factory(views)));
+  const withPresentations: ApprovalWorkflowProcessingV1 = presenters.length === 0 ? processing : Object.freeze({
+    ...processing,
+    async reconcileApprovalPresentations(signal: AbortSignal) {
+      let rendered = false;
+      for (const presenter of presenters) {
+        signal.throwIfAborted();
+        const result = await presenter.reconcile(signal);
+        if (result === 'uncertain') return 'uncertain';
+        rendered ||= result === 'rendered';
+      }
+      return rendered ? 'rendered' : 'idle';
+    },
+  });
+  return Object.freeze({ stager: stagerFor(undefined), stagerForSource: (sourceKey: string) => stagerFor(sourceKey), processing: withPresentations, decide, proposal, proposals, ownerProposals });
 }

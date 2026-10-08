@@ -208,6 +208,8 @@ describe('approval publisher: R30(d) two publishers', () => {
     const peer = await f.peer();
     expect(f.core.decide('desktop', f.approve(), () => f.session)).toMatchObject({ kind: 'decided', surface: 'desktop' });
     expect(peer.core.decide('slack', f.approve({ command_id: 'slack:race' }), () => f.click)).toEqual({ kind: 'already_decided', status: 'publishing', surface: 'desktop' });
+    expect(f.decisionCount()).toBe(1);
+    expect(peer.core.proposal(f.approvalId)!.status).toBe('publishing');
     await Promise.all([f.core.processing.appendFinalizedApprovalsToV4(signal()), peer.core.processing.appendFinalizedApprovalsToV4(signal())]);
     expect(f.recordCount()).toBe(1);
     expect(publishedCount(f)).toBe(1);
