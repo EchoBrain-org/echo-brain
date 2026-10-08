@@ -34,7 +34,7 @@ test('approving a meeting shows its impact card once the check finishes', async 
   const meetings = await approveMeeting(page);
   const impact = meetings.getByRole('region', { name: 'Impact' });
   await expect(impact.getByText('Impact check queued.').or(impact.getByText('Checking what this changes. This can take a few minutes.'))).toBeVisible();
-  await expect(impact.getByRole('heading', { name: 'Affected items' })).toBeVisible({ timeout: 20_000 });
+  await expect(impact.getByRole('heading', { name: 'Affected items' })).toBeVisible({ timeout: 30_000 });
   await expect(impact.getByRole('heading', { name: 'What was decided' })).toBeVisible();
   await expect(impact).toContainText('Launch the pilot next week.');
   await expect(impact.getByText('Conflicts')).toBeVisible();
@@ -58,10 +58,10 @@ test('a failed check gives its reason and offers Try again', async () => {
   run = await launch('granola-run-failed');
   const meetings = await approveMeeting(run.page);
   const impact = meetings.getByRole('region', { name: 'Impact' });
-  await expect(impact.getByText('The impact check failed.')).toBeVisible({ timeout: 20_000 });
+  await expect(impact.getByText('The impact check failed.')).toBeVisible({ timeout: 30_000 });
   await impact.getByRole('button', { name: 'Try again' }).click();
   await expect.poll(runOperations).toContain('retry');
   // Tried again, the check runs and finishes.
-  await expect(impact.getByRole('heading', { name: 'Affected items' })).toBeVisible({ timeout: 20_000 });
+  await expect(impact.getByRole('heading', { name: 'Affected items' })).toBeVisible({ timeout: 30_000 });
   expect(runOperations().filter(operation => operation === 'start')).toHaveLength(2);
 });

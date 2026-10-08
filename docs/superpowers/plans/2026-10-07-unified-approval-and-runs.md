@@ -1432,7 +1432,7 @@ Codex built Tasks 9–14 on the three tracks of ruling R16 (9→10, 11→12, 13�
 - A presentation whose proposal closes before the first marker is made terminal as `unrepresentable` without a terminal-only card, and a stale target fails the row at once (`attempts` set to the maximum of 5).
 - Presenters bind as factories `(core) => ApprovalPresenterV1` through `ApprovalCoreOptionsV1.presenters` (R30(e)); the core runs them in order from `processing.reconcileApprovalPresentations`, and the lifecycle runs the personal processing's presenters after the primary's.
 - The poster's `reconcileMarker` now answers `uncertain` instead of `retry_allowed` for a rate limit or a blocked retry, so a marker is never reposted blindly.
-- The V1 and V2/V3 card builders were not deleted. Card V4 reuses `buildPrivateSlackApprovalBlockKitCardV1` for the review blocks and rewrites its fallback text. `private-slack-approval-block-kit-card-v2.ts`, `slack-approval-card-input-v1.ts` and `private-slack-approval-project-eligibility-v2.ts` now have no caller outside their tests (left for the final review).
+- The V1 and V2/V3 card builders were not deleted. Card V4 reuses `buildPrivateSlackApprovalBlockKitCardV1` for the review blocks and rewrites its fallback text. `private-slack-approval-block-kit-card-v2.ts`, `slack-approval-card-input-v1.ts` and `private-slack-approval-project-eligibility-v2.ts` had no caller outside their tests; they and their tests were deleted in the Task 16 pass and their paths retired.
 - `slack-approval-integration-v1.ts` also exports `readActiveSlackConnectionV1`, and the package exports `slack-app-credentials-v1` plus the card, presenter, click, handler and HTTP adapter modules.
 
 ### Task 12 (Slack click)
@@ -1493,3 +1493,24 @@ Codex built Tasks 9–14 on the three tracks of ruling R16 (9→10, 11→12, 13�
 - `6c1305f test: cover Slack approval run enqueue races`
 - `0c4483a fix: skip Slack card after desktop decision`
 - `f3a005e test(desktop): wait for tools reread`
+
+## As built (Tasks 15–16)
+
+Built in this session on top of Codex's `f3a005e`, then combined with Tasks 1–14 on one branch.
+
+### Task 15 (desktop Impact section)
+
+- The host method is `runs` as planned, with `RunsResults` and `ImpactView` in `src/shared/protocol.ts`. The host validates the request and result with the API's own validators and turns a `view` card's citations into answer sources (`impactCardView` in `views.ts`, a source without a label is "Item n"); `v4Source` stays private because `impactCardView` sits beside it.
+- Runs state lives in the meetings screen, like the rest of the sheet, not in `store.ts`. `store.ts` adds `runsCommand` (account-fenced, only while the Granola sheet is open) and `openImpactSource` (main's `source.openExternal`).
+- After Approve, the meeting stays open (read again with `review_open`), so its Impact section shows beside it. While the meeting is still publishing and its run is not listed yet, the section says "Impact check queued."
+- `ImpactSection` takes `{ run, view, publishing, busy, tools, onRetry }`; it opens outside items itself. Only outside items get "Open in …"; ECHO records are named, not opened.
+- The sheet lists runs on every refresh, starts the oldest queued run when none is running, and lists again 5 s after a start or while a run is running, until the sheet closes. A start always schedules one more list, which covers a run released back to `pending` because search had not indexed the record yet. Runs failures are silent; the sheet works without them.
+- Copy beyond the plan: a not-assessed card says "Not assessed. These items may be affected."; no affected items says "No affected items found."; a view that fails says "The impact check could not be opened. Open the meeting again to retry." A date at risk reads "Date at risk: <milestone>, <date>", and each person lists the labels of the items they own.
+- The test authority answers `/v1/person/runs` in every `granola*` mode: approving queues one run; a start runs it; the second list after that finds it done, or in `granola-run-failed` failed until Try again. The e2e tests are in `test/e2e/impact.spec.ts`.
+
+### Task 16 (documentation and final consistency)
+
+- Docs, operator prompts in `onboard-clean-v1.sh` and `update-clean-v1.sh`, and their test pins describe the built system; ADR-0031 and ADR-0032 stay proposed for the founder.
+- The Slack provider no longer depends on `@echo-brain/organization-record`; it keeps `@echo-brain/organization-protocol` for the owner-text helpers.
+- The three Slack card modules with no callers were deleted (see Task 11 above), and the stale "until Task 11" comments in the approval core and publisher were corrected.
+- Not changed: `AGENTS.md` still says "private Slack-card approval" (repo rules, left for the founder); the journey telemetry `meeting_approval` vocabulary and the old `delivery_pending` and `quarantined` canary receipt values remain in code (ruling 5); edited ADRs and invariants keep their `reviewed_at` and `reviewed_ref`.
