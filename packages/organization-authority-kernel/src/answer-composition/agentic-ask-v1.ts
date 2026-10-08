@@ -377,7 +377,11 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         // Research is over: its desk time is the journey's retrieval stage and its step calls the planner stage.
         phase = "answer";
         const { searches, search_hits } = loop.progress();
-        report({ stage: "retrieval", event: "succeeded", elapsed_ms: deskMs, retrieval: { planned_query_count: searches, query_hit_count: search_hits, released_atom_count: bundle.items.length } });
+        report({ stage: "retrieval", event: "succeeded", elapsed_ms: deskMs, retrieval: {
+          planned_query_count: searches, query_hit_count: search_hits, released_atom_count: bundle.items.length,
+          research_stop_reason: bundle.stop.reason,
+          ...(bundle.stop.admission === undefined ? {} : { research_admission: bundle.stop.admission }),
+        } });
         const stepUsage = usageOf("step", stepModelMs);
         report(stepUsage === null ? { stage: "planner", event: "skipped", elapsed_ms: 0 } : { stage: "planner", event: "succeeded", elapsed_ms: stepModelMs, generation_usage: stepUsage });
 

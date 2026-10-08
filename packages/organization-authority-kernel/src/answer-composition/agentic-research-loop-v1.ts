@@ -31,6 +31,7 @@ import { describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type A
 import {
   AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
   AGENTIC_ASK_MIN_STEP_MS_V1,
+  AgenticAskPostRevalidationNoTimeErrorV1,
   isAbort,
   object,
   raceAbort,
@@ -41,6 +42,7 @@ import {
 } from "./agentic-model-gate-v1.js";
 import type {
   AgenticResearchActionV1,
+  AgenticResearchAdmissionV1,
   AgenticResearchGoalV1,
   AgenticResearchPartV1,
   AgenticResearchRoundV1,
@@ -427,7 +429,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const metadata = result.items
         .filter(item => item.text === undefined && item.id !== entry.item.id)
         .map(item => register(item));
-      return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => describe(value)) }), ...(result.truncated ? { truncated: true } : {}), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
+      return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => describe(value)) }), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
     };
     return admit === undefined ? apply() : admit(apply);
   };
@@ -647,6 +649,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   // ---- stop state ------------------------------------------------------
   let researchIncomplete = true;
   let researchStop: 'finished' | 'empty_catalog' | 'no_progress' | 'step_limit' | 'budget' | 'unusable_step' = 'step_limit';
+  let researchAdmission: AgenticResearchAdmissionV1 | undefined;
 
   // ---- research bookkeeping (never enters a prompt) ----------------------
   const rounds: AgenticResearchRoundV1[] = [];
@@ -783,6 +786,15 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       catch (error) {
         // The request's signal is aborted exactly when the caller cancelled or the deadline passed.
         if (isAbort(error, activeSignal) || !(error instanceof AgenticAskOutputErrorV1)) throw error;
+        // The access fence is required. If it consumed the next step's minimum
+        // time, preserve released evidence and report a budget stop, rather
+        // than claiming that the planner produced an unusable reply.
+        if (error instanceof AgenticAskPostRevalidationNoTimeErrorV1) {
+          researchStop = 'budget';
+          researchAdmission = 'post_revalidation_no_time';
+          recordRound(roundStartedAt, []);
+          break;
+        }
         // A research step that cannot finish stops research; the answer uses what was found.
         fallbacks += 1; researchStop = 'unusable_step';
         stepRejections.push(cleanLine(error.message, 600)); recordRound(roundStartedAt, []);
@@ -835,7 +847,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       schema_version: 1 as const, kind: "echo-agentic-evidence-bundle-v1" as const, goal, budget,
       plan: planView() as readonly AgenticResearchPartV1[], items: Object.freeze(items), unreadable_starting: Object.freeze([...unreadableStarting]), rounds: Object.freeze([...rounds]),
       coverage: Object.freeze({ reads: Object.freeze(readCoverage.map(read => Object.freeze({ ...read }))), inventories: Object.freeze(inventoryView().map(({ args, ...inventory }) => Object.freeze({ source: args.source, ...inventory }))), notices: Object.freeze([...notice]) }),
-      stop: Object.freeze({ reason: researchStop, completed: !researchIncomplete }),
+      stop: Object.freeze({ reason: researchStop, completed: !researchIncomplete, ...(researchAdmission === undefined ? {} : { admission: researchAdmission }) }),
       cost: Object.freeze({ rounds: steps, model_calls: calls, repairs, fallbacks, input_tokens: usage("input_tokens"), output_tokens: usage("output_tokens"), total_tokens: usage("total_tokens"),
         model_ms: Math.max(0, Math.round(observed.model_ms)), desk_ms: Math.max(0, Math.round(observed.desk_ms)), elapsed_ms: Math.max(0, Math.round(now() - researchStartedAt)) }),
       gathered_for: Object.freeze({ scope: desk.scope, checked_at: observed.checked_at }),

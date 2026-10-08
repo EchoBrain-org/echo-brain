@@ -151,7 +151,18 @@ export interface JourneyRetrievalCountersV1 {
   readonly released_atom_count: number | null;
   readonly context_atom_count: number | null;
   readonly citation_count: number | null;
+  readonly research_stop_reason: JourneyResearchStopReasonV1 | null;
+  readonly research_admission: JourneyResearchAdmissionV1 | null;
 }
+
+export const JOURNEY_RESEARCH_STOP_REASONS_V1 = Object.freeze([
+  "finished", "empty_catalog", "no_progress", "step_limit", "budget", "unusable_step",
+] as const);
+export type JourneyResearchStopReasonV1 = (typeof JOURNEY_RESEARCH_STOP_REASONS_V1)[number];
+export const JOURNEY_RESEARCH_ADMISSIONS_V1 = Object.freeze([
+  "post_revalidation_no_time",
+] as const);
+export type JourneyResearchAdmissionV1 = (typeof JOURNEY_RESEARCH_ADMISSIONS_V1)[number];
 
 export interface JourneyRetrievalCountersInputV1 {
   readonly planned_query_count?: number | null;
@@ -159,6 +170,8 @@ export interface JourneyRetrievalCountersInputV1 {
   readonly released_atom_count?: number | null;
   readonly context_atom_count?: number | null;
   readonly citation_count?: number | null;
+  readonly research_stop_reason?: JourneyResearchStopReasonV1 | null;
+  readonly research_admission?: JourneyResearchAdmissionV1 | null;
 }
 
 /** Immutable context supplied by trusted composition once for the whole journey. */
@@ -396,6 +409,16 @@ function normalizeRetrieval(
     released_atom_count: nullableCount(input.released_atom_count, "released_atom_count"),
     context_atom_count: nullableCount(input.context_atom_count, "context_atom_count"),
     citation_count: nullableCount(input.citation_count, "citation_count"),
+    research_stop_reason: input.research_stop_reason === undefined || input.research_stop_reason === null
+      ? null
+      : includes(JOURNEY_RESEARCH_STOP_REASONS_V1, input.research_stop_reason)
+        ? input.research_stop_reason
+        : invalid("research_stop_reason is invalid"),
+    research_admission: input.research_admission === undefined || input.research_admission === null
+      ? null
+      : includes(JOURNEY_RESEARCH_ADMISSIONS_V1, input.research_admission)
+        ? input.research_admission
+        : invalid("research_admission is invalid"),
   });
 }
 

@@ -10,6 +10,12 @@ The connection requests `offline_access`, `read:page:confluence`, `read:space:co
 
 Atlassian documents the relevant APIs and grant behavior: [pages](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/), [spaces](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-space/), [CQL](https://developer.atlassian.com/cloud/confluence/advanced-searching-using-cql/), and [OAuth 2.0 3LO](https://developer.atlassian.com/cloud/confluence/oauth-2-3lo-apps/).
 
+Within a request, simultaneous connection checks with the same abort signal
+share a verification only while it is queued, before remote requests begin.
+Checks arriving after it starts perform a new verification; no result is cached.
+Each caller retains its local binding and cancellation checks. Post-read access
+checks, current space-key resolution, and exact page revalidation remain fresh.
+
 ## Connection and Ask
 
 The reviewed Authority runtime profile selects both `--confluence-cloud-id`

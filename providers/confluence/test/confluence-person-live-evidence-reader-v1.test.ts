@@ -79,6 +79,25 @@ async function fixture(options: { selected?: readonly string[]; pages?: Page[]; 
 // Every operation below crosses the production audited release boundary; raw
 // reader outputs alone would miss citation, coordinate, digest and size defects.
 describe('Confluence live reader through the audited evidence source', () => {
+  it('batches simultaneous connection fences but checks the account again on the next read', async () => {
+    const f = await fixture({ selected: ['42'] });
+    const controller = new AbortController();
+    const results = await Promise.all(['gate', 'regression', 'approval'].map(query =>
+      f.source.search({ query, signal: controller.signal })));
+    expect(results.every(result => result.items.length === 1)).toBe(true);
+    // Initialization, then one shared pre-read and one shared post-read fence.
+    // Each search still performs its own scoped discovery and exact page read.
+    expect(f.calls.filter(call => call.path === '/rest/api/user/current')).toHaveLength(3);
+    expect(f.calls.filter(call => call.path === '/oauth/token/accessible-resources')).toHaveLength(3);
+    expect(f.calls.filter(call => call.path === '/rest/api/search')).toHaveLength(3);
+    expect(f.calls.filter(call => call.path === '/api/v2/pages/123')).toHaveLength(3);
+    const released = f.audits.length;
+    f.state.account = 'different-account';
+    await expect(f.source.search({ query: 'gate', signal: controller.signal })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.audits).toHaveLength(released);
+    expect(f.calls.filter(call => call.path === '/rest/api/user/current')).toHaveLength(4);
+  });
+
   it('can finish both release fences after a multi-step Ask discovers fifteen pages and opens three sections', async () => {
     const f = await fixture({ pages: Array.from({ length: 15 }, (_, index) => page({ id: String(100 + index),
       document: document('Gate readiness evidence. '.repeat(270)) })) });

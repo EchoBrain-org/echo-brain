@@ -1,4 +1,4 @@
-import { canonicalSha256 } from "@echo-brain/federation-protocol";
+import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it, vi } from "vitest";
 import { createAgenticResearchV1, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { TASK_RULE_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
@@ -26,6 +26,21 @@ function importedMeeting(id: string, text: string): EvidenceDeskItemV2 {
     visibility: "only_me" as const, occurred_at: "2026-10-05",
     receipt_sha256: canonicalSha256({ imported: id, receipt: true }),
   });
+}
+
+function liveTicket(key: string, text?: string): EvidenceDeskItemV2 {
+  return Object.freeze({
+    id: `ticket_${key}`, source_id: "jira", kind: "ticket",
+    citation: {
+      kind: "ticket", tool_id: "jira", external_scope_id: "thermo-project", ticket_id: key,
+      permalink: `https://tickets.example.test/browse/${key}`,
+      text_sha256: sha256Digest(text ?? ""),
+    },
+    label: `${key}: Thermal fixture gate`,
+    ...(text === undefined ? {} : { text }),
+    visibility: "only_me", occurred_at: "2026-10-06", date_kind: "updated",
+    attributes: { status: "Open" }, receipt_sha256: canonicalSha256({ key, text: text ?? null }),
+  } as EvidenceDeskItemV2);
 }
 
 describe("research result beside Ask", () => {
@@ -64,6 +79,142 @@ describe("research result beside Ask", () => {
     expect(view.rounds[0]!.rejected).toEqual([expect.stringContaining('"parts" must be an array')]);
     expect(view.rounds[1]!.rejected).toEqual([]);
     expect(view.cost.repairs).toBe(1);
+  });
+
+  it("keeps an open representation notice in the next planner result and the evidence coverage", async () => {
+    const discovered = listed("notice-open");
+    const h = harness([
+      step([part("DVT hold", [need("hold reason", "open")])], [{ tool: "search", args: { query: "DVT hold" } }]),
+      step([part("DVT hold", [need("hold reason", "open")])], [{ tool: "open", args: { id: "E1" } }]),
+      step([part("DVT hold", [need("hold reason", "found", ["E1"])])], [{ tool: "finish", args: {} }]),
+      { sentences: [{ text: "The released record describes the DVT hold.", evidence: ["E1"] }], not_found: [] },
+    ], {
+      search: async () => result([discovered]),
+      open: async () => result([record("notice-open", "DVT remains on hold pending review.")], { notice: "Some page sections could not be represented." }),
+    });
+
+    const output = await h.research.answerWithResearch({ question: "Why is DVT on hold?" });
+
+    expect(output.research.rounds[1]!.actions[0]!.result.notice).toBe(true);
+    expect(output.research.coverage.reads).toEqual(expect.arrayContaining([
+      expect.objectContaining({ tool: "open", notice: true, truncated: false }),
+    ]));
+    expect(output.research.coverage.notices).toEqual(["Some page sections could not be represented."]);
+    expect(h.prompt(2).last_results).toEqual([expect.objectContaining({ tool: "open", notice: "Some page sections could not be represented." })]);
+  });
+
+  it("uses the same scoped search, list, and open rules for Ask and approved-record research", async () => {
+    const anchorMetadata = liveTicket("THERM-100");
+    const linkedMetadata = liveTicket("BUG-412");
+    const anchorBody = liveTicket("THERM-100", "DVT remains on hold pending the linked fault.");
+    const linkedBody = liveTicket("BUG-412", "The thermal fault needs disposition before PVT.");
+    const approved = record("thermo-trigger", "Approved: assess the DVT hold.");
+    const desk = () => {
+      const calls: { tool: string; source?: string; kinds?: readonly string[]; item?: string }[] = [];
+      const port: Partial<EvidenceDeskPortV2> = {
+        scope: { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000001" },
+        ticket_available: true,
+        live_sources: [{ source_id: "jira", kind: "ticket", selector: "tickets", description: "Live work items.", metadata_only_list: true, tool_id: "jira" }],
+        search: async input => {
+          calls.push({ tool: "search", source: input.source, kinds: input.kinds });
+          return result([]);
+        },
+        list: async input => {
+          calls.push({ tool: "list", source: input.source, kinds: input.kinds });
+          return result([anchorMetadata]);
+        },
+        open: async input => {
+          calls.push({ tool: "open", item: input.item });
+          return input.item === anchorMetadata.id
+            ? result([anchorBody, linkedMetadata])
+            : result([linkedBody]);
+        },
+        openCitation: async () => result([approved]),
+      };
+      return { port, calls };
+    };
+    const stepsFor = (anchor: string, linked: string) => [
+      step([part("DVT hold", [need("hold cause", "open"), need("linked ticket", "open")])], [{ tool: "search", args: { source: "tickets", query: "DVT hold" } }]),
+      step([part("DVT hold", [need("hold cause", "open"), need("linked ticket", "open")])], [{ tool: "list", args: { source: "tickets" } }]),
+      step([part("DVT hold", [need("hold cause", "open"), need("linked ticket", "open")])], [{ tool: "open", args: { id: anchor } }]),
+      // The linked result is metadata only here, so completion cannot cite it.
+      step([part("DVT hold", [need("hold cause", "found", [anchor]), need("linked ticket", "found", [linked])])], [{ tool: "finish", args: {} }]),
+      step([part("DVT hold", [need("hold cause", "open"), need("linked ticket", "open")])], [{ tool: "open", args: { id: linked } }]),
+      step([part("DVT hold", [need("hold cause", "found", [anchor]), need("linked ticket", "found", [linked])])], [{ tool: "finish", args: {} }]),
+    ];
+
+    const askDesk = desk();
+    const ask = harness([
+      ...stepsFor("E1", "E2"),
+      { sentences: [{ text: "The DVT hold and the linked fault both require follow-up.", evidence: ["E1", "E2"] }], not_found: [] },
+    ], askDesk.port);
+    const askOutput = await ask.research.answerWithResearch({ question: "Why is DVT on hold and what must happen before PVT?" });
+
+    const taskDesk = desk();
+    const task = harness(stepsFor("E2", "E3"), taskDesk.port);
+    const taskOutput = await task.research.research({
+      trigger: "approved_record",
+      brief: taskBrief(`Assess what approved record ${agenticStartingSlotV1(1)} means for the DVT hold.`, [approved.citation]),
+    });
+
+    for (const calls of [askDesk.calls, taskDesk.calls]) {
+      expect(calls.slice(0, 2)).toEqual([
+        { tool: "search", source: "jira", kinds: ["ticket"] },
+        { tool: "list", source: "jira", kinds: undefined },
+      ]);
+      expect(calls.filter(call => call.tool === "open").map(call => call.item)).toEqual([anchorMetadata.id, linkedMetadata.id]);
+    }
+    // The linked ticket delivered beside the anchor is discovery metadata, not
+    // a full or citable passage until the following normal open admits its body.
+    expect(ask.prompt(3)).toMatchObject({
+      opened: [expect.objectContaining({ id: "E1", text: anchorBody.text })],
+      seen: [expect.objectContaining({ id: "E2" })],
+    });
+    expect((ask.prompt(3).seen as readonly Record<string, unknown>[])[0]).not.toHaveProperty("text");
+    expect(askOutput.research.rounds[3]!.rejected).toEqual([
+      expect.stringContaining("found but cites no item whose full text you have read"),
+    ]);
+    expect(askOutput.research).toMatchObject({ stop: { reason: "finished", completed: true } });
+    expect(taskOutput).toMatchObject({ trigger: "approved_record", stop: { reason: "finished", completed: true } });
+    expect(askOutput.research.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "E1", opened: true, read_in_full: true, cited_by_plan: true }),
+      expect.objectContaining({ id: "E2", opened: true, read_in_full: true, cited_by_plan: true }),
+    ]));
+    expect(taskOutput.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "E2", opened: true, read_in_full: true, cited_by_plan: true }),
+      expect.objectContaining({ id: "E3", opened: true, read_in_full: true, cited_by_plan: true }),
+    ]));
+  });
+
+  it("keeps preloaded evidence and records a budget stop when a required revalidation consumes the next planner step", async () => {
+    let time = 0;
+    let checks = 0;
+    const full = record("budget-preload", "Approved: preserve the already released evidence.");
+    const { research, generate } = harness([
+      step([part("Current approved evidence", [need("current record", "open")])], [{ tool: "search", args: { query: "current record" } }]),
+    ], {
+      openCitation: async () => result([full]),
+      revalidate: async () => {
+        checks += 1;
+        if (checks === 2) time = 86_001;
+        return checked;
+      },
+    }, { now_ms: () => time });
+
+    const view = await research.research({
+      trigger: "sweep",
+      brief: {
+        goal: { kind: "task", task: "Find the current approved evidence." },
+        starting: [{ citation: full.citation, if_unreadable: "fail" }],
+        budget: { deadline_ms: 90_000, max_rounds: 10, max_model_calls: 24, writer_reserve_ms: 25_000 },
+        options: { small_scope_preload: false },
+      },
+    });
+
+    expect(view.stop).toEqual({ reason: "budget", completed: false, admission: "post_revalidation_no_time" });
+    expect(view.items).toEqual([expect.objectContaining({ id: "E1", preloaded: true, read_in_full: true })]);
+    expect(view.cost).toMatchObject({ model_calls: 1, repairs: 0, fallbacks: 0 });
+    expect(generate).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a personal imported meeting distinct from approved decisions through Ask research and writing", async () => {

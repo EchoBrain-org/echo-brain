@@ -1,6 +1,6 @@
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../support/telemetry-fixture-vocabulary-v1.js";
 import { CORE_RUNTIME_COUNT_KEYS_V1, CORE_RUNTIME_PHASES_V1, CORE_RUNTIME_RESULTS_V1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
-import { JOURNEY_TERMINAL_OUTCOMES_V1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
+import { JOURNEY_TERMINAL_OUTCOMES_V1, JOURNEY_RESEARCH_STOP_REASONS_V1, JOURNEY_RESEARCH_ADMISSIONS_V1, createJourneyTelemetryEventV1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import { createStagingJourneyTelemetryTransportV1 } from "../../services/organization-authority/src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
@@ -1580,6 +1580,99 @@ describe("staging Journey Explorer custom widget", () => {
   });
 });
 
+
+describe("research admission Explorer round trip", () => {
+  function researchRows(
+    researchStopReason: (typeof JOURNEY_RESEARCH_STOP_REASONS_V1)[number],
+    researchAdmission?: (typeof JOURNEY_RESEARCH_ADMISSIONS_V1)[number],
+  ) {
+    const emitted = createJourneyTelemetryEventV1({
+      journey_id: id,
+      sequence: 2,
+      observed_at: "2026-09-02T11:59:00.000Z",
+      context: {
+        environment: "staging",
+        release_sha: "a".repeat(40),
+        build_number: 42,
+        workflow: "ask",
+      },
+      event: {
+        stage: "ask_response",
+        event: "succeeded",
+        outcome: "answered",
+        elapsed_ms: 4,
+        retrieval: {
+          planned_query_count: 3,
+          research_stop_reason: researchStopReason,
+          ...(researchAdmission === undefined ? {} : { research_admission: researchAdmission }),
+        },
+      },
+    });
+    return [
+      event({ stage: "ask_validation", event: "started", outcome: null, elapsed_ms: 0, observed_at: "2026-09-02T11:58:00.000Z" }),
+      row({
+        ...emitted,
+        retrieval: undefined,
+        llm_usage: undefined,
+        diagnostic: undefined,
+        accounting: undefined,
+        ...Object.fromEntries(Object.entries(emitted.retrieval!).map(([key, value]) => [`retrieval_${key}`, value])),
+      }),
+    ];
+  }
+
+  it.each(JOURNEY_RESEARCH_STOP_REASONS_V1)("projects the kernel's %s research stop reason", async (reason) => {
+    const client = new Client([{ queryId: "q" }, { status: "Complete", results: researchRows(reason) }]);
+    await expect(handler(client)({ operation: "detail", journey_id: id })).resolves.toMatchObject({
+      status: "complete",
+      stages: expect.arrayContaining([expect.objectContaining({
+        sequence: 2,
+        retrieval: expect.objectContaining({ planned_query_count: 3, research_stop_reason: reason, research_admission: null }),
+      })]),
+    });
+    const query = String((client.sent[0] as Start).input.queryString);
+    expect(query).toContain("retrieval.research_stop_reason as retrieval_research_stop_reason");
+    expect(query).toContain("retrieval.research_admission as retrieval_research_admission");
+    expect(query.split(" | display ")[1]).toContain("retrieval_research_stop_reason, retrieval_research_admission");
+  });
+
+  it.each(JOURNEY_RESEARCH_ADMISSIONS_V1)("projects and renders the kernel's %s research admission", async (admission) => {
+    const rows = researchRows("budget", admission);
+    const client = new Client([{ queryId: "q" }, { status: "Complete", results: rows }]);
+    await expect(handler(client)({ operation: "detail", journey_id: id })).resolves.toMatchObject({
+      stages: expect.arrayContaining([expect.objectContaining({ retrieval: expect.objectContaining({ research_stop_reason: "budget", research_admission: admission }) })]),
+    });
+    const rendered = await handler(new Client([{ queryId: "q" }, { status: "Complete", results: rows }]))({ operation: "detail", journey_id: id, render: true });
+    expect(rendered).toContain("research stop: budget");
+    expect(rendered).toContain(`planner admission: ${admission}`);
+  });
+
+  it("keeps legacy missing research metadata explicitly unreported", async () => {
+    const rows = [
+      event({ stage: "ask_validation", event: "started", outcome: null, elapsed_ms: 0, observed_at: "2026-09-02T11:58:00.000Z" }),
+      event({ sequence: 2, retrieval_planned_query_count: 3 }),
+    ];
+    const client = new Client([{ queryId: "q" }, { status: "Complete", results: rows }]);
+    await expect(handler(client)({ operation: "detail", journey_id: id })).resolves.toMatchObject({
+      status: "complete",
+      stages: expect.arrayContaining([expect.objectContaining({ sequence: 2, retrieval: expect.objectContaining({ research_stop_reason: null, research_admission: null }) })]),
+    });
+  });
+
+  it.each([
+    { retrieval_research_stop_reason: "private meeting title" },
+    { retrieval_research_admission: "private query" },
+    { stage: "ask_validation", event: "started", outcome: null, elapsed_ms: 0, retrieval_research_admission: "post_revalidation_no_time" },
+    { stage: "meeting_source_intake", workflow: "meeting_approval", event: "started", outcome: null, elapsed_ms: 0, retrieval_research_stop_reason: "budget" },
+  ])("fails closed for unknown or misplaced research metadata %j", async (fields) => {
+    const rows = "stage" in fields ? [event(fields)] : [
+      event({ stage: "ask_validation", event: "started", outcome: null, elapsed_ms: 0, observed_at: "2026-09-02T11:58:00.000Z" }),
+      event({ sequence: 2, ...fields }),
+    ];
+    const client = new Client([{ queryId: "q" }, { status: "Complete", results: rows }]);
+    await expect(handler(client)({ operation: "detail", journey_id: id })).resolves.toEqual({ error: "journey_explorer_unavailable" });
+  });
+});
 
 describe("core observation Explorer round trip", () => {
   it.each([...CORE_RUNTIME_PHASES_V1, "slack_terminal_update"])("reads the %s core-runtime diagnostic phase", async (phase) => {

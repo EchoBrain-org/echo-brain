@@ -221,7 +221,13 @@ export function formatJourneyTelemetryMetricsV1(
   }
 
   if (event.retrieval !== null) {
-    const counters: readonly [keyof typeof event.retrieval, string][] = [
+    type NumericRetrievalCounter =
+      | "planned_query_count"
+      | "query_hit_count"
+      | "released_atom_count"
+      | "context_atom_count"
+      | "citation_count";
+    const counters: readonly [NumericRetrievalCounter, string][] = [
       ["planned_query_count", "RetrievalPlannedQueries"],
       ["query_hit_count", "RetrievalQueryHits"],
       ["released_atom_count", "RetrievalReleasedAtoms"],

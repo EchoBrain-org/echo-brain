@@ -47,8 +47,6 @@ const SUGGESTED_EDIT: readonly RegExp[] = [
 ];
 /** A claim about who owns or is assigned something: owners come only from item details. */
 const OWNERSHIP_CLAIM = /\b(?:owners?|owns|owned|owning|(?:re)?assign\w*|responsible)\b/iu;
-/** A short evidence id such as E5: it means nothing to a person. */
-const EVIDENCE_ID = /\b[Ee]\d{1,4}\b/u;
 const STOPPED_NOTE = "Research stopped before it finished, so other items may be affected too.";
 
 export const IMPACT_CARD_PROMPT = [
@@ -71,6 +69,7 @@ export const IMPACT_CARD_PROMPT = [
   "- Use only the record and items given. Never invent items, ids, dates or facts. Never write ids such as E4 in text.",
   "- Describe; never instruct. Write no ticket text, no suggested edits and nothing like \"change X in Jira\", \"should be updated\" or \"needs to be changed\": people decide what to change.",
   "- Never say who owns, is assigned to or is responsible for anything, or who to tell: the card adds owners from each item's details.",
+  "- Keep a material qualification from a record or item: distinguish a proposal, plan, example, draft, report, unapproved state, or work not yet executed from an established decision or completed result. An approved meeting record establishes only its recorded decision or commitment.",
   "- If the record affects none of the items, return \"affected\": [].",
   "",
   "Reply with ONLY a JSON object in exactly this shape:",
@@ -141,16 +140,11 @@ export function detailsOfImpactItemV1(item: ImpactItemFactsV1): string {
   const { status, due_at: due } = item.attributes ?? {};
   return cleanLine([item.label, ...(status === undefined ? [] : [`status ${status}`]), ...(due === undefined ? [] : [`due ${due}`])].join("; "), LIMITS.line_chars);
 }
-/** Couldn't confirm: an early stop, needs research did not find, cut-short lists, items and sources it could not read, source notices. */
+/** Couldn't confirm: code-observed retrieval limits, never the planner's invented needs. */
 function unconfirmedOf(bundle: AgenticEvidenceBundleV1): string[] {
   const byShort = new Map(bundle.items.map(entry => [entry.short, entry]));
-  // A need is the research model's own text: one that suggests an edit, claims an owner or names an evidence id is counted, never shown or repaired.
-  const needs = [...new Set(bundle.plan.flatMap(part => part.needs).filter(need => need.status !== "found").map(need => cleanLine(need.need, LIMITS.line_chars)))].filter(need => need.length > 0);
-  const shown = needs.filter(need => !SUGGESTED_EDIT.some(rule => rule.test(need)) && !OWNERSHIP_CLAIM.test(need) && !EVIDENCE_ID.test(need));
-  const hidden = needs.length - shown.length;
   const notes = [
     ...(bundle.stop.completed ? [] : [STOPPED_NOTE]),
-    ...shown, ...(hidden === 0 ? [] : [hidden === 1 ? "1 fact research looked for was not found." : `${hidden} facts research looked for were not found.`]),
     ...bundle.coverage.inventories.filter(inventory => inventory.truncated === true || inventory.more === true).map(inventory => `The ${String(inventory.source)} list was cut short at ${String(inventory.shown_count)} items.`),
     // A desk refusal on an id research had seen and never read; a mistyped id is the model's error, not an unreadable item.
     ...bundle.rounds.flatMap(round => round.actions).flatMap(action => {
@@ -158,7 +152,10 @@ function unconfirmedOf(bundle: AgenticEvidenceBundleV1): string[] {
       return entry === undefined || entry.opened ? [] : [`${entry.item.label} could not be read.`];
     }),
     ...bundle.coverage.reads.filter(read => read.unavailable && read.tool !== "open").map(read => `The ${read.source} source could not be read.`),
-    ...bundle.coverage.notices,
+    ...bundle.coverage.reads.filter(read => read.truncated && read.tool !== "list").map(read => `A ${read.source} ${read.tool} result was cut short.`),
+    ...(bundle.coverage.notices.length === 0 ? [] : [bundle.coverage.notices.length === 1
+      ? "A source representation notice limited this assessment."
+      : `${bundle.coverage.notices.length} source representation notices limited this assessment.`]),
   ];
   return [...new Set(notes.map(note => cleanLine(note, LIMITS.line_chars)).filter(note => note.length > 0))].slice(0, LIMITS.unconfirmed);
 }

@@ -15,11 +15,12 @@ import { checked, generation, result } from "./fixtures/agentic-scenarios.js";
  * card renderer and the shared release step. The fixture holds each card and
  * the fingerprints of every model input and audit record.
  *
- * Recorded once, from the reviewed implementation, with IMPACT_GOLDEN_WRITE=1.
- * That switch writes only this fixture; GOLDEN_WRITE never touches it, and
- * this switch never touches the Ask fixtures.
+ * The original fixture is a preserved historical control. Current behavior
+ * has its own reviewed quality baseline and cannot rewrite that control.
  */
-const FIXTURE = new URL("./agentic-impact-card-golden.v1.json", import.meta.url);
+const HISTORICAL_FIXTURE = new URL("./agentic-impact-card-golden.v1.json", import.meta.url);
+const QUALITY_FIXTURE = new URL("./agentic-impact-card-quality-baseline.v1.json", import.meta.url);
+const HISTORICAL_FIXTURE_SHA256 = "sha256:894c0a9caea9ad11620d88664f83ec582a7175eff9fbe908b8dda1a026a6612c";
 const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "approved_record")!;
 
 const RECORD = canonicalSha256({ record: "display-review" });
@@ -155,11 +156,31 @@ async function run(name: string, scenario: Scenario) {
 }
 
 describe("impact card golden replay", () => {
-  it("reproduces every recorded card, model input and audit fingerprint", async () => {
+  it("retains the historical impact-card control", () => {
+    const recorded = JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8"));
+    expect(canonicalSha256(recorded)).toBe(HISTORICAL_FIXTURE_SHA256);
+  });
+
+  it("preserves historical cards outside the intentional planner-need removal", async () => {
     const observed: Record<string, Awaited<ReturnType<typeof run>>> = {};
     for (const [name, scenario] of Object.entries(SCENARIOS)) observed[name] = await run(name, scenario);
-    if (process.env.IMPACT_GOLDEN_WRITE === "1") writeFileSync(FIXTURE, `${JSON.stringify(observed, null, 2)}\n`);
-    const recorded = JSON.parse(readFileSync(FIXTURE, "utf8")) as typeof observed;
+    const recorded = JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8")) as typeof observed;
+    for (const name of Object.keys(observed).filter(name => name !== "research_stopped_on_budget")) {
+      expect(observed[name]!.card).toEqual(recorded[name]!.card);
+    }
+  });
+
+  it("removes an unfulfilled planner need from the stopped-research card", async () => {
+    const observed = await run("research_stopped_on_budget", SCENARIOS.research_stopped_on_budget!);
+    expect((observed.card as { readonly unconfirmed?: readonly string[] }).unconfirmed)
+      .toEqual(["Research stopped before it finished, so other items may be affected too."]);
+  });
+
+  it("reproduces the reviewed current quality baseline", async () => {
+    const observed: Record<string, Awaited<ReturnType<typeof run>>> = {};
+    for (const [name, scenario] of Object.entries(SCENARIOS)) observed[name] = await run(name, scenario);
+    if (process.env.IMPACT_QUALITY_BASELINE_WRITE === "1") writeFileSync(QUALITY_FIXTURE, `${JSON.stringify(observed, null, 2)}\n`);
+    const recorded = JSON.parse(readFileSync(QUALITY_FIXTURE, "utf8")) as typeof observed;
     expect(observed).toEqual(recorded);
   });
 });

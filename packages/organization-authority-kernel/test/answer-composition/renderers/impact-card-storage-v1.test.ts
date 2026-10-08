@@ -259,6 +259,19 @@ describe("refreshed impact card", () => {
     expect(result.card).toEqual(base);
   });
 
+  it("retains code-owned coverage notes across a pointer-only refresh", () => {
+    const covered = storableImpactCardV1(cardWith({
+      rows: [{ citation: ticket, says_now: "THERM-46 formats one decimal.", relation: "conflicts" }],
+      unconfirmed: ["A source representation notice limited this assessment."],
+    }), ["THERM-46: Display precision"]);
+    const result = refreshImpactCardV1(covered, [
+      fresh(record),
+      fresh(ticket, { text: "THERM-46 formats one decimal." }),
+    ]);
+    expect(result.card.unconfirmed).toEqual(["A source representation notice limited this assessment."]);
+    expect(JSON.stringify(covered)).not.toContain("THERM-46 formats one decimal.");
+  });
+
   it("hides what the viewer can no longer open and re-indexes citations", () => {
     const result = refreshImpactCardV1(stored, [fresh(record), null, fresh(page, { text: "The PRD specifies one decimal." })]);
     expect(result.hidden).toBe(1);

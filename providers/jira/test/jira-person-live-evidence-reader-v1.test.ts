@@ -21,7 +21,7 @@ const ticket = (id = '10001', summary = 'Ship connector') => ({ id, key: `ECHO-$
     { type: 'paragraph', content: [{ type: 'text', text: 'Launch Friday', marks: [{ type: 'strong' }] }] },
     { type: 'paragraph', content: [{ type: 'mention', attrs: { text: '@Alex', id: 'never-return-this-id' } }] },
   ] }, created: '2026-09-30T12:34:56.000+0000', status: { name: 'In progress' }, assignee: { displayName: 'Alex', emailAddress: 'never-return@example.test' }, duedate: '2026-10-02',
-    comment: { comments: [{ body: 'never-return-comment' }] }, attachment: [{ content: 'https://never-fetch.example.test' }] } });
+    comment: { comments: [{ body: 'never-return-comment' }] }, attachment: [{ content: 'https://never-fetch.example.test' }], issuelinks: [] } });
 const page = (ids = ['10001'], token?: string) => ({ isLast: token === undefined, issues: ids.map(id => ({ id })), ...(token === undefined ? {} : { nextPageToken: token }) });
 
 function fixture() {
@@ -103,6 +103,168 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !request.query?.fields?.includes('description'))).toBe(true);
     const opened = await source.open({ item: discovered.items[0]!.id });
     expect(opened.items[0]).toMatchObject({ id: discovered.items[0]!.id, text: 'ECHO-1: Ship connector\n\nLaunch Friday\n@Alex' });
+  });
+
+  it('shares only queued connection checks and keeps post-read fences independent', async () => {
+    const f = fixture(); const { reader } = await f.make('ECHO');
+    const verificationReads = () => f.request.mock.calls.filter(([request]) =>
+      request.path === '/oauth/token/accessible-resources' || request.path === `${prefix}/myself` || request.path === `${prefix}/project/ECHO`);
+    f.request.mockClear();
+
+    await Promise.all([reader.search({ query: 'ship', limit: 1 }), reader.search({ query: 'ship', limit: 1 })]);
+    // The two pre-read checks queue together (3 reads). Once provider I/O
+    // starts, each post-read fence is new (3 + 3), never an in-flight cache.
+    expect(verificationReads()).toHaveLength(9);
+
+    f.request.mockClear();
+    await reader.search({ query: 'ship', limit: 1 });
+    await reader.search({ query: 'ship', limit: 1 });
+    expect(verificationReads()).toHaveLength(12);
+  });
+
+  it.each(['subject', 'project'] as const)('keeps the final remote %s fence fresh after an initial verification', async drift => {
+    const f = fixture(); const { reader } = await f.make('ECHO');
+    f.state.hook = request => {
+      if (request.path !== `${prefix}/search/jql`) return;
+      if (drift === 'subject') f.state.myself = { accountId: 'other-person', active: true, accountType: 'atlassian' };
+      else f.state.project = { id: '99999', key: 'ECHO', self: `${origin}/rest/api/3/project/99999` };
+    };
+    await expect(reader.search({ query: 'ship', limit: 1 })).rejects.toMatchObject({ code: drift === 'subject' ? 'unauthorized' : 'stale_access_state' });
+  });
+
+  it('opens an anchor first and admits bounded, deduplicated linked-ticket metadata through the existing item refs', async () => {
+    const f = fixture();
+    for (const id of ['10002', '10003', '10004', '10005', '10006', '10007']) f.state.tickets.set(id, ticket(id, `Linked ${id}`));
+    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: [
+      { outwardIssue: { id: '10007' } }, { inwardIssue: { id: '10003' } }, { outwardIssue: { id: '10002' } },
+      { inwardIssue: { id: '10003' } }, { outwardIssue: { id: '10001' } }, { outwardIssue: { id: '10006' } },
+      { inwardIssue: { id: '10005' } }, { outwardIssue: { id: '10004' } },
+    ] } });
+    const { source } = await f.make('ECHO');
+    const anchor = (await source.search({ query: 'ship' })).items[0]!;
+
+    const opened = await source.open({ item: anchor.id });
+
+    expect(opened.items.map(item => item.citation.ticket_id)).toEqual(['10001', '10002', '10003', '10004', '10005']);
+    expect(opened.items[0]).toHaveProperty('text', 'ECHO-1: Ship connector\n\nLaunch Friday\n@Alex');
+    for (const item of opened.items.slice(1)) {
+      expect(item).not.toHaveProperty('text');
+      expect(item).toMatchObject({ label: `ECHO-${Number(item.citation.ticket_id) - 10000}: Linked ${item.citation.ticket_id}`, attributes: { status: 'In progress' } });
+    }
+    expect(opened.truncated).toBe(true);
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,status,assignee,duedate,description,issuelinks' } }));
+    for (const id of ['10002', '10003', '10004', '10005']) {
+      expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/${id}`, query: { fields: 'summary,project,created,status,assignee,duedate' } }));
+    }
+    expect(f.request).not.toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10006` }));
+    const linked = await source.open({ item: opened.items[1]!.id });
+    expect(linked.items[0]).toMatchObject({ citation: { ticket_id: '10002' }, text: 'ECHO-2: Linked 10002\n\nLaunch Friday\n@Alex' });
+  });
+
+  it('opens an anchor when Jira omits optional link context, without inferring that no relationship exists', async () => {
+    const f = fixture();
+    const anchor = ticket();
+    const { issuelinks: _issuelinks, ...fields } = anchor.fields;
+    f.state.tickets.set('10001', { ...anchor, fields });
+    const { source } = await f.make('ECHO');
+    const discovered = (await source.search({ query: 'ship' })).items[0]!;
+
+    const opened = await source.open({ item: discovered.id });
+
+    expect(opened.items).toHaveLength(1);
+    expect(opened.items[0]).toMatchObject({ citation: { ticket_id: '10001' }, text: 'ECHO-1: Ship connector\n\nLaunch Friday\n@Alex' });
+    expect(opened.truncated).toBe(false);
+  });
+
+  it('bounds a large valid link list without blocking the anchor, including limit one', async () => {
+    const f = fixture();
+    for (const id of ['10002', '10003', '10004', '10005']) f.state.tickets.set(id, ticket(id, `Linked ${id}`));
+    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: Array.from({ length: 65 }, (_, index) => ({ outwardIssue: { id: String(10002 + index) } })) } });
+    const { source } = await f.make('ECHO');
+    const anchor = (await source.search({ query: 'ship' })).items[0]!;
+    f.request.mockClear();
+
+    const anchorOnly = await source.open({ item: anchor.id, limit: 1 });
+    expect(anchorOnly.items.map(item => item.citation.ticket_id)).toEqual(['10001']);
+    expect(anchorOnly.truncated).toBe(true);
+    expect(f.request).not.toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10002` }));
+
+    f.request.mockClear();
+    const expanded = await source.open({ item: anchor.id });
+    expect(expanded.items.map(item => item.citation.ticket_id)).toEqual(['10001', '10002', '10003', '10004', '10005']);
+    expect(expanded.truncated).toBe(true);
+  });
+
+  it('refreshes a citation as anchor-only without reading optional linked context', async () => {
+    const f = fixture();
+    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: [{ outwardIssue: { id: '10002' } }] } });
+    f.state.denied.set('10002', 'unauthorized');
+    const { source } = await f.make('ECHO');
+    const discovered = (await source.search({ query: 'ship' })).items[0]!;
+    f.request.mockClear();
+
+    const refreshed = await source.openCitation!({ citation: discovered.citation });
+
+    expect(refreshed.items).toHaveLength(1);
+    expect(refreshed.items[0]).toMatchObject({ citation: { ticket_id: '10001' }, text: 'ECHO-1: Ship connector\n\nLaunch Friday\n@Alex' });
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,status,assignee,duedate,description' } }));
+    expect(f.request).not.toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10002` }));
+  });
+
+  it('omits an inaccessible or out-of-project linked issue without leaking its metadata', async () => {
+    for (const state of ['outside_project', 'denied'] as const) {
+      const f = fixture();
+      const related = ticket('10002', 'Private linked issue');
+      f.state.tickets.set('10002', state === 'outside_project' ? { ...related, key: 'OTHER-2', fields: { ...related.fields,
+        project: { id: '20000', key: 'OTHER', self: `${origin}/rest/api/3/project/20000` } } } : related);
+      f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: [{ outwardIssue: { id: '10002' } }] } });
+      if (state === 'denied') f.state.denied.set('10002', 'unauthorized');
+      const { source } = await f.make('ECHO');
+      const anchor = (await source.search({ query: 'ship' })).items[0]!;
+
+      const opened = await source.open({ item: anchor.id });
+      expect(opened.items.map(item => item.citation.ticket_id)).toEqual(['10001']);
+      expect(opened.truncated).toBe(true);
+      expect(f.audit.record).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(f.releases)).not.toContain('Private linked issue');
+      expect(JSON.stringify(f.releases)).not.toContain('OTHER-2');
+    }
+  });
+
+  it('fails closed for a transient linked-issue error after the final connection fence', async () => {
+    const f = fixture();
+    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: [{ outwardIssue: { id: '10002' } }] } });
+    f.state.hook = request => {
+      if (request.path === `${prefix}/issue/10002`) throw new AuthorityOperationError('unavailable', 'synthetic temporary provider failure');
+    };
+    const { source } = await f.make('ECHO');
+    const anchor = (await source.search({ query: 'ship' })).items[0]!;
+    const checksBefore = f.request.mock.calls.filter(([request]) => request.path === '/oauth/token/accessible-resources').length;
+
+    await expect(source.open({ item: anchor.id })).rejects.toMatchObject({ code: 'unavailable' });
+    expect(f.request.mock.calls.filter(([request]) => request.path === '/oauth/token/accessible-resources')).toHaveLength(checksBefore + 2);
+    expect(f.audit.record).toHaveBeenCalledTimes(1);
+  });
+
+  it('limits related metadata by the existing open limit and rejects malformed link references', async () => {
+    const f = fixture();
+    f.state.tickets.set('10002', ticket('10002', 'First related'));
+    f.state.tickets.set('10003', ticket('10003', 'Second related'));
+    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: [
+      { outwardIssue: { id: '10003' } }, { inwardIssue: { id: '10002' } },
+    ] } });
+    const { source } = await f.make('ECHO');
+    const anchor = (await source.search({ query: 'ship' })).items[0]!;
+    const limited = await source.open({ item: anchor.id, limit: 2 });
+    expect(limited.items.map(item => item.citation.ticket_id)).toEqual(['10001', '10002']);
+    expect(limited.truncated).toBe(true);
+
+    const malformed = fixture();
+    malformed.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: [{ outwardIssue: { id: '10002' }, inwardIssue: { id: '10003' } }] } });
+    const malformedSource = await malformed.make('ECHO');
+    const malformedAnchor = (await malformedSource.source.search({ query: 'ship' })).items[0]!;
+    await expect(malformedSource.source.open({ item: malformedAnchor.id })).rejects.toMatchObject({ code: 'invalid_output' });
+    expect(malformed.audit.record).toHaveBeenCalledTimes(1);
   });
 
   it('lists visible tickets across projects globally and pins project discovery before release', async () => {
@@ -234,7 +396,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const opened = await source.open({ item: item.id });
     const text = 'ECHO-1: Ship connector\n\nLaunch Friday\n@Alex';
     expect(opened.items[0]).toMatchObject({ id: item.id, text, citation: { text_sha256: digest(text) } });
-    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,status,assignee,duedate,description' } }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,status,assignee,duedate,description,issuelinks' } }));
     expect(f.audit.record).toHaveBeenCalledTimes(2);
     const second = await f.make();
     await expect(second.source.open({ item: item.id })).rejects.toMatchObject({ code: 'not_found' });

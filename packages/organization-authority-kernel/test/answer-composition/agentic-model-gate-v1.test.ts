@@ -1,6 +1,6 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
-import { createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
+import { AgenticAskPostRevalidationNoTimeErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, repairPrompt } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import type { StructuredGenerationInput, StructuredGenerationJsonSchema } from "../../src/answer-composition/structured-generation-v1.js";
@@ -11,7 +11,11 @@ const schema = { type: "object" } as unknown as StructuredGenerationJsonSchema;
 const STEP = { role: "step", span: "ask_planner" } as const;
 const ANSWER = { role: "answer", span: "ask_answer" } as const;
 
-function harness(options: { readonly replies?: readonly (unknown | Error)[]; readonly max_model_calls?: number } = {}) {
+function harness(options: {
+  readonly replies?: readonly (unknown | Error)[];
+  readonly max_model_calls?: number;
+  readonly desk_revalidate?: () => Promise<{ readonly checked_at: string }>;
+} = {}) {
   const trace: string[] = [];
   const inputs: StructuredGenerationInput[] = [];
   const replies = [...(options.replies ?? [])];
@@ -26,7 +30,10 @@ function harness(options: { readonly replies?: readonly (unknown | Error)[]; rea
         return reply;
       },
     },
-    desk_revalidate: async () => { trace.push("revalidate"); return { checked_at: `2026-10-06T00:00:0${checked.length}.000Z` }; },
+    desk_revalidate: async () => {
+      trace.push("revalidate");
+      return options.desk_revalidate?.() ?? { checked_at: `2026-10-06T00:00:0${checked.length}.000Z` };
+    },
     on_checked: at => { checked.push(at); },
     budget: { max_model_calls: options.max_model_calls ?? 24 },
     now: () => 0,
@@ -54,6 +61,41 @@ describe("agentic model gate", () => {
     await expect(gate.call(STEP, "system", {}, schema, () => 20_000)).rejects.toThrow("call budget exhausted");
     expect(trace).toEqual(["revalidate", "generate:0"]);
     expect(gate.stats()).toMatchObject({ calls: 1, stopped: false });
+  });
+
+  it("reports a content-free admission failure when revalidation leaves too little time for a step", async () => {
+    let available = 20_000;
+    const { gate, trace } = harness({ desk_revalidate: async () => {
+      available = 3_999;
+      return { checked_at: "2026-10-06T00:00:00.000Z" };
+    } });
+
+    await expect(gate.call(STEP, "system", {}, schema, () => available))
+      .rejects.toBeInstanceOf(AgenticAskPostRevalidationNoTimeErrorV1);
+    expect(trace).toEqual(["revalidate"]);
+    expect(gate.stats()).toMatchObject({ calls: 0, repairs: 0, generations: [] });
+  });
+
+  it("preserves the post-revalidation admission reason on a repair attempt", async () => {
+    let available = 20_000;
+    let checks = 0;
+    const { gate, trace } = harness({
+      replies: [{ invalid: true }],
+      desk_revalidate: async () => {
+        checks += 1;
+        if (checks === 2) available = 3_999;
+        return { checked_at: `2026-10-06T00:00:0${checks}.000Z` };
+      },
+    });
+
+    await expect(gate.withRepair(STEP, "system", {}, schema, () => available, reply => {
+      if ((reply as { readonly invalid?: boolean }).invalid === true) {
+        throw new AgenticAskOutputErrorV1("parts are invalid");
+      }
+      return reply;
+    })).rejects.toBeInstanceOf(AgenticAskPostRevalidationNoTimeErrorV1);
+    expect(trace).toEqual(["revalidate", "generate:0", "revalidate"]);
+    expect(gate.stats()).toMatchObject({ calls: 1, repairs: 0, generations: [{ role: "step" }] });
   });
 
   it("stops after a permanent provider failure and still records the call", async () => {

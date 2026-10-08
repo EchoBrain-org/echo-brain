@@ -41,7 +41,11 @@ describe("Ask journey telemetry", () => {
         reasoning_tokens: 999,
         finish_reason: "stop",
       },
-      retrieval: { planned_query_count: 1 },
+      retrieval: {
+        planned_query_count: 1,
+        research_stop_reason: "budget",
+        research_admission: "post_revalidation_no_time",
+      },
     });
     recorder.complete("answered", recorder.startTimer());
 
@@ -71,6 +75,14 @@ describe("Ask journey telemetry", () => {
     expect(events.map((event) => event.sequence)).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
     ]);
+    expect(events.find((event) => event.stage === "ask_planner")!.retrieval).toMatchObject({
+      research_stop_reason: "budget",
+      research_admission: "post_revalidation_no_time",
+    });
+    expect(events.find((event) => event.stage === "ask_response")!.retrieval).toMatchObject({
+      research_stop_reason: "budget",
+      research_admission: "post_revalidation_no_time",
+    });
   });
 
   it("rejects a runtime model that is outside the telemetry allowlist", () => {

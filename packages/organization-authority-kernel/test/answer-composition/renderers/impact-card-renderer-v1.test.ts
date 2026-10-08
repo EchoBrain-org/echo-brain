@@ -108,12 +108,10 @@ const REPLY = {
   ],
 };
 const NOTES = [
-  // The checklist's "owner of the display spec": research's own words about an owner are counted, never shown.
-  "1 fact research looked for was not found.",
   "The tickets list was cut short at 25 items.",
   "Gate review 99 could not be read.",
   "The documents source could not be read.",
-  "Knowledge search returns at most 50 pages.",
+  "A source representation notice limited this assessment.",
 ];
 const citation = (short: string) => {
   const item = ITEMS[Number(short.slice(1)) - 1]!;
@@ -188,7 +186,7 @@ describe("impact card renderer", () => {
     expect((await alone({ bundle: retried, replies: [REPLY] }).render()).result.unconfirmed).toEqual(NOTES);
   });
 
-  it("shows only needs fit for a person: one suggesting an edit, claiming an owner or naming an evidence id is counted, never shown", async () => {
+  it("does not promote planner needs into requirements on an impact card", async () => {
     const needs = [
       { need: "PRD sections that must be changed to two decimals", status: "not_found" as const, evidence: [] },
       { need: "whether Mara owns PRD-D01", status: "open" as const, evidence: [] },
@@ -197,7 +195,29 @@ describe("impact card renderer", () => {
     ];
     const checklist = { ...bundle(), plan: [{ ...bundle().plan[0]!, needs }], rounds: [], coverage: { reads: [], inventories: [], notices: [] } };
     const rendered = await alone({ bundle: checklist, replies: [REPLY] }).render();
-    expect(rendered.result.unconfirmed).toEqual(["the DVT test review date", "3 facts research looked for were not found."]);
+    expect(rendered.result.unconfirmed).toEqual([]);
+  });
+
+  it("keeps material qualifications in model-written card lines and exposes generic coverage limits without source text", async () => {
+    const limited = {
+      ...bundle(), plan: [], rounds: [], coverage: {
+        reads: [{ tool: "search" as const, source: "pages", returned_items: 1, truncated: true, notice: true, unavailable: false }],
+        inventories: [], notices: ["A private source-specific representation warning."],
+      },
+    };
+    const qualified = {
+      ...REPLY,
+      decided: [{ id: "E1", text: "The record proposes two decimals on the display from DVT." }],
+      affected: [affected("E3", "THERM-46 reports one decimal; its result is not yet confirmed.", "conflicts")],
+    };
+    const rendered = await alone({ bundle: limited, replies: [qualified] }).render();
+    expect(rendered.result.decided[0]!.text).toBe("The record proposes two decimals on the display from DVT.");
+    expect(rendered.result.affected[0]!.says_now).toBe("THERM-46 reports one decimal; its result is not yet confirmed.");
+    expect(rendered.result.unconfirmed).toEqual([
+      "A pages search result was cut short.",
+      "A source representation notice limited this assessment.",
+    ]);
+    expect(JSON.stringify(rendered.result)).not.toContain("private source-specific");
   });
 
   it("falls back without a model: the cited items with their details and owners, not yet assessed, plus the notes", async () => {

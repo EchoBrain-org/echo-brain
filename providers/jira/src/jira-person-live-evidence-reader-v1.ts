@@ -3,14 +3,18 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { validatePersonTicketCitationV1, type PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
+import { createAtlassianVerificationBatchV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { jiraProjectMatches, parseJiraIssueV1, parseJiraProject, verifyJiraConnectionV1, type ParsedJiraIssueV1 } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_ID, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
 const INVENTORY_FIELDS = 'summary,project,created,status,assignee,duedate';
 const TEXT_FIELDS = `${INVENTORY_FIELDS},description`;
+const OPEN_FIELDS = `${TEXT_FIELDS},issuelinks`;
 const REQUEST_MAX_HANDLES = 512;
 const REVALIDATION_BATCH_SIZE = 50;
+/** One-hop expansion is deliberately bounded; deeper traversal requires an explicit existing open. */
+const OPEN_RELATED_MAX_ITEMS = 4;
 
 interface ListCursor {
   readonly selection: string;
@@ -75,29 +79,54 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     }
   }
 
+  const verificationBatch = createAtlassianVerificationBatchV1(async (signal?: AbortSignal) => {
+    const previousOrigin = pinnedOrigin;
+    const previousProjectId = pinnedProject?.id;
+    const { origin } = await verifyJiraConnectionV1(transport, { signal, expected_origin: previousOrigin });
+    let project: ReturnType<typeof parseJiraProject> | undefined;
+    if (fixedProject !== undefined) {
+      project = parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${fixedProject}`, query: { expand: 'projectKeys' }, signal }), origin, apiPrefix);
+      signal?.throwIfAborted();
+      if (!jiraProjectMatches(project, fixedProject)) jiraFailure('invalid_output');
+      if (previousProjectId !== undefined && project.id !== previousProjectId) jiraFailure('stale_access_state');
+    }
+    return Object.freeze({ origin, project });
+  });
+
   async function verifyConnection(signal?: AbortSignal): Promise<string> {
+    // The local binding and caller abort fence remain caller-specific even
+    // when several checks share a not-yet-started remote verification.
     signal?.throwIfAborted();
     if (canonicalSha256(copyJiraBindingV1(transport.binding)) !== bindingDigest) jiraFailure('stale_access_state');
-    const { origin } = await verifyJiraConnectionV1(transport, { signal, expected_origin: pinnedOrigin });
-    pinnedOrigin = origin;
-    if (fixedProject !== undefined) {
-      const current = parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${fixedProject}`, query: { expand: 'projectKeys' }, signal }), origin, apiPrefix);
-      signal?.throwIfAborted();
-      if (!jiraProjectMatches(current, fixedProject)) jiraFailure('invalid_output');
-      if (pinnedProject !== undefined && current.id !== pinnedProject.id) jiraFailure('stale_access_state');
-      pinnedProject = current;
-    }
-    return origin;
+    const current = await verificationBatch(signal);
+    signal?.throwIfAborted();
+    if (canonicalSha256(copyJiraBindingV1(transport.binding)) !== bindingDigest) jiraFailure('stale_access_state');
+    pinnedOrigin = current.origin;
+    if (current.project !== undefined) pinnedProject = current.project;
+    return current.origin;
   }
 
-  async function issue(id: string, origin: string, inventory: boolean, signal?: AbortSignal): Promise<ParsedJiraIssueV1> {
-    const value = await transport.request({ path: `${pathPrefix}/issue/${id}`, query: { fields: inventory ? INVENTORY_FIELDS : TEXT_FIELDS }, signal });
+  async function issue(id: string, origin: string, inventory: boolean, signal?: AbortSignal, related = false): Promise<ParsedJiraIssueV1> {
+    const value = await transport.request({ path: `${pathPrefix}/issue/${id}`, query: { fields: inventory ? INVENTORY_FIELDS : related ? OPEN_FIELDS : TEXT_FIELDS }, signal });
     signal?.throwIfAborted();
-    const parsed = parseJiraIssueV1(value, { cloudid, origin, inventory });
+    const parsed = parseJiraIssueV1(value, { cloudid, origin, inventory, related });
     if (parsed.id !== id) jiraFailure('invalid_output');
     // Exact reads fence stale search pages, moved tickets and retained handles.
     if (pinnedProject !== undefined && parsed.project_id !== pinnedProject.id) jiraFailure('unauthorized');
     return parsed;
+  }
+
+  /** A direct link is only an optional navigation hint. Never release a hidden or moved target. */
+  async function relatedIssue(id: string, origin: string, signal?: AbortSignal): Promise<ParsedJiraIssueV1 | undefined> {
+    try {
+      return await issue(id, origin, true, signal);
+    } catch (error) {
+      // Jira commonly represents an inaccessible or deleted linked issue as
+      // 403/404. Its link stub is not evidence, so omit only those targets.
+      // Transient, malformed and stale-state failures still fail closed.
+      if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'not_found')) return undefined;
+      throw error;
+    }
   }
 
   async function revalidateIssues(ids: readonly string[], origin: string, signal?: AbortSignal): Promise<void> {
@@ -167,13 +196,29 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     return { selected, token, tokens, ids };
   }
 
-  /** The exact read enforces current issue security and the project pin. */
-  function openIssue(id: string, signal?: AbortSignal): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
+  /**
+   * The anchor's direct Jira links are only opaque IDs. Every selected linked
+   * issue receives its own current exact read before metadata is released;
+   * linked bodies remain unavailable until the caller opens that item ref.
+   */
+  function openIssue(id: string, maximum: number, signal?: AbortSignal, expandRelated = true): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
     return safe(async () => {
       const origin = await verifyConnection(signal);
-      const selected = await issue(id, origin, false, signal);
-      await verifyConnection(signal);
-      return Object.freeze({ items: remember([selected]), truncated: selected.truncated });
+      let selected: ParsedJiraIssueV1;
+      let relatedIds: readonly string[];
+      let related: readonly (ParsedJiraIssueV1 | undefined)[];
+      try {
+        selected = await issue(id, origin, false, signal, expandRelated);
+        relatedIds = expandRelated ? selected.related_issue_ids.slice(0, Math.min(OPEN_RELATED_MAX_ITEMS, Math.max(0, maximum - 1))) : Object.freeze([]);
+        related = await Promise.all(relatedIds.map(relatedId => relatedIssue(relatedId, origin, signal)));
+      } finally {
+        // A link target may be omitted, but every open still finishes with a
+        // fresh account/resource/project fence before it can issue handles.
+        await verifyConnection(signal);
+      }
+      const visibleRelated = related.filter((item): item is ParsedJiraIssueV1 => item !== undefined);
+      return Object.freeze({ items: remember([selected, ...visibleRelated]),
+        truncated: selected.truncated || selected.related_truncated || visibleRelated.some(item => item.truncated) || visibleRelated.length !== relatedIds.length || relatedIds.length !== selected.related_issue_ids.length });
     }, signal);
   }
 
@@ -197,17 +242,19 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       }, input.signal);
     },
     async open(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
-      limit(input.limit);
+      const maximum = limit(input.limit);
       const id = handles.get(input.handle);
       if (id === undefined) jiraFailure('not_found');
-      return openIssue(id, input.signal);
+      return openIssue(id, maximum, input.signal);
     },
     async openCitation(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
-      limit(input.limit);
+      const maximum = limit(input.limit);
       let citation: PersonTicketCitationV1;
       try { citation = validatePersonTicketCitationV1(input.citation); } catch { jiraFailure('invalid_request'); }
       if (citation.tool_id !== binding.tool_id || citation.external_scope_id !== cloudid || !JIRA_ID.test(citation.ticket_id)) jiraFailure('unauthorized');
-      return openIssue(citation.ticket_id, input.signal);
+      // A citation refresh proves the cited anchor remains readable. It does
+      // not need to discover new neighboring metadata or pay link-read costs.
+      return openIssue(citation.ticket_id, maximum, input.signal, false);
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       const maximum = Math.min(limit(input.limit), 20);

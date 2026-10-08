@@ -17,7 +17,7 @@ The bundle owns the credential read. The evaluator only verifies that the path
 exists; it neither reads nor prints the credential. Without `--run`, it exits
 before loading the bundle or making a network request.
 
-The default suite has nine bounded cases:
+The default suite has ten bounded cases:
 
 | Case | What it checks |
 | --- | --- |
@@ -29,6 +29,7 @@ The default suite has nine bounded cases:
 | `empty-source` | Returns an honest no-evidence result without citations. |
 | `later-page-discovery` | Continues browsing until it can discover and open an item beyond the first visible list page. |
 | `held-out-long-release-decision` | Answers a long release-identifier question from a fully sufficient approved record without adding false missing context. |
+| `held-out-proposed-prerequisites` | Keeps a proposal qualified while naming each recorded prerequisite. |
 | `held-out-multipart-missing-date-owner` | States the supported decision, returns a partial result, and names only the unsupported date and owner. |
 
 The evaluator grades source/citation coverage, discovery before an actual desk
@@ -39,7 +40,7 @@ deterministic unit-test concern; this live-model evaluator only observes the
 real controller's desk operations.
 
 Use `--cases`, `--trials`, `--max-model-calls`, and `--timeout-ms` to make a
-small diagnostic run. Bounds are fixed at nine cases, three trials, twelve
+small diagnostic run. Bounds are fixed at ten cases, three trials, twelve
 model calls per case, 72 calls per invocation, and 85 seconds per case. The
 default is one trial, six calls per case, and 60 seconds.
 
