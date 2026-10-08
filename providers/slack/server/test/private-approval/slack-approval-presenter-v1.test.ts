@@ -22,6 +22,7 @@ function fixture() {
   let projects: { project_id: string; name: string }[] = [];
   let owners: { signal_id: string; action: string; proposed: string }[] = [];
   let linked = true, current = true, clock = new Date('2026-10-07T00:00:00.000Z');
+  let afterOpen: (() => void) | undefined;
   const unlinkedPrincipals = new Set<string>();
   const reconcileInputs: { post_started_at: string }[] = [];
   const next = (name: string): Outcome => outcomes[name]?.shift() ?? (name === 'open' ? 'opened' : name === 'publish' ? 'done' : 'posted');
@@ -30,7 +31,7 @@ function fixture() {
     core: { proposal: id => views.get(id), ownerProposals: () => owners },
     target: reviewer => linked && !unlinkedPrincipals.has(reviewer.principal_id) ? target : null, targetCurrent: () => current, projects: () => projects, now: () => clock,
     poster: () => ({
-      async openDirectMessage() { const x = take('open'); return x === 'opened' ? { kind: 'opened' as const, channel_id: 'D1' } : { kind: 'retry_allowed' as const }; },
+      async openDirectMessage() { const x = take('open'); afterOpen?.(); return x === 'opened' ? { kind: 'opened' as const, channel_id: 'D1' } : { kind: 'retry_allowed' as const }; },
       async postMarker() { const x = take('post'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
       async reconcileMarker(input) { reconcileInputs.push(input); const x = take('reconcile'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
       async publish() { const x = take('publish'); return x === 'done' ? { kind: 'done' as const } : { kind: 'uncertain' as const }; },
@@ -40,7 +41,7 @@ function fixture() {
     db.prepare('INSERT INTO authority_live_approval_outbox_v2 VALUES (?,?,?)').run(id, 'staged', clock.toISOString());
     return id;
   };
-  return { db, calls, outcomes, reconcileInputs, presenter, stage, advance: (ms: number) => { clock = new Date(clock.getTime() + ms); }, unlink: (principalId: string) => { unlinkedPrincipals.add(principalId); }, set projects(value: { project_id: string; name: string }[]) { projects = value; }, set owners(value: { signal_id: string; action: string; proposed: string }[]) { owners = value; }, set linked(value: boolean) { linked = value; }, set current(value: boolean) { current = value; } };
+  return { db, calls, outcomes, reconcileInputs, presenter, stage, advance: (ms: number) => { clock = new Date(clock.getTime() + ms); }, unlink: (principalId: string) => { unlinkedPrincipals.add(principalId); }, set proposal(value: ApprovalProposalViewV1) { views.set(value.approval_id, value); }, set afterOpen(value: (() => void) | undefined) { afterOpen = value; }, set projects(value: { project_id: string; name: string }[]) { projects = value; }, set owners(value: { signal_id: string; action: string; proposed: string }[]) { owners = value; }, set linked(value: boolean) { linked = value; }, set current(value: boolean) { current = value; } };
 }
 function row(f: ReturnType<typeof fixture>, id = 'apr_live') { return f.db.prepare('SELECT * FROM authority_approval_presentations_v1 WHERE approval_id=?').get(id) as { delivery: string; attempts: number; retry_at: string | null; dm_channel_id: string | null; shows: string; message_ts: string | null }; }
 
@@ -73,6 +74,24 @@ describe('Slack approval presenter V1', () => {
     await f.presenter.reconcile(signal()); expect(f.calls).toEqual([]);
     f.linked = true; await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
     expect(f.calls).toEqual(['open', 'post', 'publish']);
+  });
+
+  it('does not post a terminal-only card when desktop decides while opening the DM', async () => {
+    const f = fixture(); const id = f.stage();
+    f.afterOpen = () => f.proposal = { ...proposal(id), status: 'publishing', decided_on: 'desktop' };
+    await f.presenter.reconcile(signal());
+    await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open']);
+    expect(row(f)).toMatchObject({ delivery: 'unrepresentable', dm_channel_id: 'D1', message_ts: null });
+  });
+
+  it('does not claim a first marker after desktop decides during channel reservation', async () => {
+    const f = fixture(); const id = f.stage();
+    await f.presenter.reconcile(signal());
+    f.proposal = { ...proposal(id), status: 'publishing', decided_on: 'desktop' };
+    await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open']);
+    expect(row(f)).toMatchObject({ delivery: 'unrepresentable', dm_channel_id: 'D1', message_ts: null });
   });
 
   it('after the channel has persisted, reconciles an uncertain marker without blind reposting', async () => {

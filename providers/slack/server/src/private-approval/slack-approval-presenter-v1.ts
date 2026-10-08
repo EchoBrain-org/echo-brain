@@ -199,6 +199,15 @@ export function createSlackApprovalPresenterV1(options: {
   const persistChannel = database.prepare(`UPDATE authority_approval_presentations_v1
     SET dm_channel_id=?,delivery='posting',marker_state='not_started',marker_started_at=NULL,updated_at=?
     WHERE approval_id=? AND surface='slack' AND delivery='opening' AND dm_channel_id IS NULL`);
+  // A reserved DM is not a Slack presentation until its first marker claim has
+  // begun. If the proposal closes before that point, retain the immutable DM
+  // reservation but make the row terminal without creating a terminal-only card.
+  const finishUnposted = database.prepare(`UPDATE authority_approval_presentations_v1
+    SET dm_channel_id=COALESCE(dm_channel_id,?),delivery='unrepresentable',marker_state=NULL,marker_started_at=NULL,retry_at=NULL,updated_at=?
+    WHERE approval_id=? AND surface='slack' AND (
+      (delivery='opening' AND dm_channel_id IS NULL) OR
+      (delivery='posting' AND marker_state='not_started')
+    )`);
   const beginMarker = database.prepare(`UPDATE authority_approval_presentations_v1
     SET marker_state='in_flight',marker_started_at=?,updated_at=?
     WHERE approval_id=? AND surface='slack' AND delivery='posting' AND marker_state='not_started'`);
@@ -233,6 +242,7 @@ export function createSlackApprovalPresenterV1(options: {
     if (proposal.status === "rejected") return "rejected";
     return proposal.status === "pending" ? "open" : "approved";
   };
+  const pendingActive = (proposal: ApprovalProposalViewV1 | undefined): proposal is ApprovalProposalViewV1 => proposal !== undefined && proposal.reviewer_active && proposal.status === "pending";
   const isAborted = (signal: AbortSignal) => signal.aborted;
   const provider = (target: SlackApprovalTargetV1): SlackApprovalPosterV1 => options.poster(target);
 
@@ -255,7 +265,7 @@ export function createSlackApprovalPresenterV1(options: {
         if (!options.targetCurrent(target)) { backoff(row, true); continue; }
         const proposal = options.core.proposal(row.approval_id);
         if (row.delivery === "opening") {
-          if (proposal === undefined || proposal.status !== "pending") { unrepresentable.run(asIso(now()), row.approval_id); changed = true; continue; }
+          if (!pendingActive(proposal)) { unrepresentable.run(asIso(now()), row.approval_id); changed = true; continue; }
           try { card(proposal); } catch (error) {
             if (!(error instanceof Error) || !error.message.includes("exceeds Slack limits")) throw error;
             unrepresentable.run(asIso(now()), row.approval_id); changed = true; continue;
@@ -263,6 +273,10 @@ export function createSlackApprovalPresenterV1(options: {
           try {
             const opened = await provider(target).openDirectMessage(target.slack_subject_id, signal);
             if (!options.targetCurrent(target) || opened.kind !== "opened") { backoff(row); continue; }
+            if (!pendingActive(options.core.proposal(row.approval_id))) {
+              if (finishUnposted.run(opened.channel_id, asIso(now()), row.approval_id).changes === 1) changed = true;
+              continue;
+            }
             if (persistChannel.run(opened.channel_id, asIso(now()), row.approval_id).changes === 1) changed = true;
           } catch (error) {
             if (isAborted(signal)) throw error;
@@ -273,6 +287,12 @@ export function createSlackApprovalPresenterV1(options: {
         if (row.delivery === "posting") {
           if (row.dm_channel_id === null || row.marker_state === null) throw new Error("posting presentation has incomplete marker state");
           if (row.marker_state === "not_started") {
+            // There is no await between this read and beginMarker. Once the
+            // claim is durable, recovery must preserve at-most-one marker.
+            if (!pendingActive(options.core.proposal(row.approval_id))) {
+              if (finishUnposted.run(row.dm_channel_id, asIso(now()), row.approval_id).changes === 1) changed = true;
+              continue;
+            }
             const markerStartedAt = asIso(now());
             if (beginMarker.run(markerStartedAt, markerStartedAt, row.approval_id).changes !== 1) continue;
             const inFlight = { ...row, marker_state: "in_flight" as const, marker_started_at: markerStartedAt };
