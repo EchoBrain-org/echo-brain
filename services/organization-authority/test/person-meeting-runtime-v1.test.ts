@@ -29,7 +29,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean } = {}) {
   addMembership(f.db, { ...readerA, membership_type: 'employee' }, 'Reader A', 'reader-a@example.test');
   addMembership(f.db, { ...readerB, membership_type: 'employee' }, 'Reader B', 'reader-b@example.test');
   const actors = { owner: person, other, 'reader-a': readerA, 'reader-b': readerB } as const;
-  let active = true, extracted = 0, duringPull: (() => void | Promise<void>) | undefined;
+  let active = true, extracted = 0, duringPull: (() => void | Promise<void>) | undefined, duringExtract: (() => void | Promise<void>) | undefined, failExtraction = false;
   // Meetings the watched folder delivers on its next scans after the baseline.
   const folderDeliveries: string[] = [];
   const current = () => { if (!active) throw new Error('Disconnected'); };
@@ -80,7 +80,10 @@ async function fixture(options: { readonly transcriptOnly?: boolean } = {}) {
     processor: { processor_adapter_id: 'llm', current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }), assert_admission_commitments() {},
       create_processor(admission) { const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
         return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
-          async extract(meeting) { extracted++; return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
+          async extract(meeting) {
+            extracted++; await duringExtract?.();
+            if (failExtraction) { failExtraction = false; throw new Error('extraction failed'); }
+            return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
             signals: decisions.signals.map(signal => ({ ...signal, evidence: signal.evidence.map(evidence => ({ ...evidence, meeting_id: meeting.id })) })) }; } };
       },
     },
@@ -132,7 +135,8 @@ async function fixture(options: { readonly transcriptOnly?: boolean } = {}) {
   const proposals = (sourceKey: string) => f.db.prepare(`SELECT count(*) FROM authority_live_approval_outbox_v2 o
     JOIN authority_live_source_candidates_v2 c ON c.candidate_id=o.candidate_id
     JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256 WHERE a.source_key=?`).pluck().get(sourceKey);
-  return { ...f, person, other, sessions, create, call, grantProject, join, leave, readers, folderDeliveries, fakeProvider, sources, intake, processUntilIdle, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; } };
+  return { ...f, person, other, sessions, create, call, grantProject, join, leave, readers, folderDeliveries, fakeProvider, sources, intake, processUntilIdle, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
+    duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: () => { failExtraction = true; } };
 }
 describe('personal meeting intake uses the shared processing path', () => {
   it('imports one note into two projects as one source and one extraction', async () => {
@@ -350,6 +354,53 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.intake.suggestions(queued!.source_key, id)).toEqual([projectB]);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(await f.readers()).toEqual(['owner', 'reader-b']);
+  });
+  it('grants nothing when the import is cancelled while its admitted meeting is being extracted', async () => {
+    const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    const [queued] = (await f.call(runtime, { operation: 'home' })).sources;
+    f.duringExtract(async () => {
+      // The meeting is already admitted; the cancel lands before the cursor advance.
+      expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(1);
+      await expect(f.call(runtime, { operation: 'cancel_import', source_key: queued!.source_key, meeting_id: id })).resolves.toEqual({ status: 'cancelled' });
+    });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    expect(f.extracted()).toBe(1);
+    expect(f.intake.checkpoint(queued!.source_key).manual).toEqual([]);
+    expect(f.count('authority_person_meeting_suggestions_v1')).toBe(0);
+    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
+    expect(await f.readers()).toEqual(['owner']);
+  });
+  it('grants nothing when a cycle fails after admission and the import is then cancelled', async () => {
+    const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    f.failNextExtraction();
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const [failed] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect(failed).toMatchObject({ pending_imports: [id], error: expect.any(String) });
+    expect(await f.readers()).toEqual(['owner']);
+    await f.call(runtime, { operation: 'cancel_import', source_key: failed!.source_key, meeting_id: id });
+    await f.processUntilIdle(f.create());
+    expect(f.count('authority_person_meeting_suggestions_v1')).toBe(0);
+    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
+    expect(await f.readers()).toEqual(['owner']);
+  });
+  it('records an in-flight re-import\'s project when the cursor advance drops the meeting', async () => {
+    const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    f.duringExtract(async () => {
+      f.duringExtract(undefined);
+      await f.call(runtime, { operation: 'import', meeting_id: id, project_id: projectB, retain: true });
+      expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(2);
+      expect(f.count('authority_person_meeting_suggestions_v1')).toBe(0);
+    });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect(source!.pending_imports).toEqual([]);
+    expect(f.intake.suggestions(source!.source_key, id)).toEqual([project, projectB].sort());
+    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
+    expect(f.extracted()).toBe(1);
+    expect(await f.readers()).toEqual(['owner', 'reader-a', 'reader-b']);
   });
   it('refuses a project reader\'s earlier desk release once they leave the project', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');

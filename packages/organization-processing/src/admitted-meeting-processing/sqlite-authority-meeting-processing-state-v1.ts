@@ -165,6 +165,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     /** The personal source this state reads and writes; every source names its own key. */
     private readonly sourceKey: string,
     private readonly requireSourceCurrent: () => void = () => {},
+    /**
+     * Runs inside the cursor-advance transaction, after the compare-and-set succeeds, so a source can
+     * settle what the advance consumed atomically with it. A throw rolls the advance back.
+     */
+    private readonly afterCursorAdvance: (transition: { readonly expected_cursor: string; readonly next_cursor: string }) => void = () => {},
   ) {
     if (expectedProcessorAdapterId.trim().length === 0) {
       throw new Error(
@@ -652,7 +657,10 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
               )`,
         )
         .run(input.next_cursor, updatedAt, this.sourceKey, input.expected_cursor);
-      if (update.changes === 1) return "advanced" as const;
+      if (update.changes === 1) {
+        this.afterCursorAdvance({ expected_cursor: input.expected_cursor, next_cursor: input.next_cursor });
+        return "advanced" as const;
+      }
 
       const admission = this.admission();
       return admission.membership_status === "active"

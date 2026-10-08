@@ -544,6 +544,28 @@ it.each(["approve", "reject"] as const)(
     });
   });
 
+  it("runs the after-advance hook inside a successful advance only, and rolls the advance back when it throws", async () => {
+    const value = database();
+    const seen: unknown[] = [];
+    let fail = true;
+    const state = new SqliteAuthorityMeetingProcessingStateV1(value, fixtureCursorPolicy, "llm", () => ADVANCED_AT, FIXTURE_SOURCE_KEY, () => {}, (transition) => {
+      seen.push({ ...transition, in_transaction: value.inTransaction });
+      if (fail) throw new Error("hook refused");
+    });
+    await state.readAdmission();
+    const cursor = () => value.prepare("SELECT cursor FROM authority_live_source_progress_v2").pluck().get();
+    await expect(state.advanceCursor({ expected_cursor: sourceCursor, next_cursor: nextCursor })).rejects.toThrow("hook refused");
+    expect(cursor()).toBe(sourceCursor);
+    fail = false;
+    await expect(state.advanceCursor({ expected_cursor: sourceCursor, next_cursor: nextCursor })).resolves.toBe("advanced");
+    await expect(state.advanceCursor({ expected_cursor: sourceCursor, next_cursor: nextCursor })).resolves.toBe("state_drift");
+    expect(cursor()).toBe(nextCursor);
+    expect(seen).toEqual([
+      { expected_cursor: sourceCursor, next_cursor: nextCursor, in_transaction: true },
+      { expected_cursor: sourceCursor, next_cursor: nextCursor, in_transaction: true },
+    ]);
+  });
+
   it("will not initialize or advance a source after its owner is revoked", async () => {
     const { value, state } = stateFixture();
     await state.readAdmission();

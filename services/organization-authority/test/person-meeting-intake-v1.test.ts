@@ -33,7 +33,18 @@ function world() {
     current: () => undefined,
   });
   const count = (table: string) => db.prepare(`SELECT count(*) FROM ${table}`).pluck().get();
-  return { db, intake, ensure, count };
+  // Emulates the processing cursor advance that drops `ids` from the queued imports, and its promotion hook.
+  const consume = (setting: { readonly source_key: string } & MeetingIntakePersonV1, ids: readonly string[]) => {
+    const before = db.prepare('SELECT cursor FROM authority_live_source_progress_v2 WHERE source_key=?').pluck().get(setting.source_key) as string;
+    const checkpoint = readGranolaCheckpointV1(before);
+    const after = writeGranolaCheckpointV1({ ...checkpoint, manual: checkpoint.manual.filter(id => !ids.includes(id)) });
+    db.transaction(() => {
+      db.prepare('UPDATE authority_live_source_progress_v2 SET cursor=?,cursor_version=cursor_version+1 WHERE source_key=?').run(after, setting.source_key);
+      intake.promoteConsumedImports(stored(setting), before, after);
+    })();
+  };
+  const stored = (setting: { readonly source_key: string }) => intake.list().find(s => s.source_key === setting.source_key)!;
+  return { db, intake, ensure, count, consume };
 }
 
 describe('personal meeting intake: one source per person and tool account', () => {
@@ -50,7 +61,7 @@ describe('personal meeting intake: one source per person and tool account', () =
     expect(w.count('authority_live_source_admission_v2')).toBe(3);
   });
 
-  it('holds import projects as pending until the queued import is admitted, then records them as sorted suggestions', () => {
+  it('holds import projects as pending until the cursor advance drops the queued import, then records them as sorted suggestions', () => {
     const w = world(), setting = w.ensure();
     const pending = (id: string) => w.db.prepare('SELECT project_id FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=? ORDER BY project_id').pluck().all(setting.source_key, id);
     w.intake.enqueue(setting, NOTE_1, PROJECT_BETA, () => undefined);
@@ -65,10 +76,13 @@ describe('personal meeting intake: one source per person and tool account', () =
     }
     expect(pending(NOTE_3)).toEqual([]);
     expect(w.intake.checkpoint(setting.source_key).manual).toEqual([NOTE_1, NOTE_2]);
-    const queued = w.intake.list(person(OWNER))[0]!;
-    w.intake.recordAdmission(queued, NOTE_1);
-    w.intake.recordAdmission(queued, NOTE_2);
+    // Admission alone does not record an import's projects; the cursor advance that drops the import does.
+    w.intake.recordAdmission(w.intake.list(person(OWNER))[0]!, NOTE_1);
+    expect(w.count('authority_person_meeting_suggestions_v1')).toBe(0);
+    w.consume(setting, [NOTE_1]);
+    expect(pending(NOTE_1)).toEqual([]);
     expect(w.intake.suggestions(setting.source_key, NOTE_1)).toEqual([PROJECT_ALPHA, PROJECT_BETA].sort());
+    w.consume(setting, [NOTE_2]);
     expect(w.intake.suggestions(setting.source_key, NOTE_2)).toEqual([]);
     expect(w.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
   });
@@ -79,7 +93,7 @@ describe('personal meeting intake: one source per person and tool account', () =
     w.intake.cancelImport(setting, NOTE_1, () => undefined);
     expect(w.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     w.intake.enqueue(setting, NOTE_1, null, () => undefined);
-    w.intake.recordAdmission(w.intake.list(person(OWNER))[0]!, NOTE_1);
+    w.consume(setting, [NOTE_1]);
     expect(w.intake.suggestions(setting.source_key, NOTE_1)).toEqual([]);
     // A pending row left behind by a queue that dropped its import without admitting it is stale.
     w.db.prepare('INSERT INTO authority_person_meeting_pending_suggestions_v1 VALUES (?,?,?,?)').run(setting.source_key, NOTE_2, PROJECT_ALPHA, PROJECT_CONTEXT_NOW);
@@ -87,7 +101,7 @@ describe('personal meeting intake: one source per person and tool account', () =
     expect(w.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     w.intake.enqueue(setting, NOTE_3, PROJECT_BETA, () => undefined);
     w.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_BETA);
-    w.intake.recordAdmission(w.intake.list(person(OWNER))[0]!, NOTE_3);
+    w.consume(setting, [NOTE_2, NOTE_3]);
     expect(w.intake.suggestions(setting.source_key, NOTE_3)).toEqual([]);
     expect(w.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
   });
@@ -95,7 +109,7 @@ describe('personal meeting intake: one source per person and tool account', () =
   it('keeps suggestions insert-only', () => {
     const w = world(), setting = w.ensure();
     w.intake.enqueue(setting, NOTE_1, PROJECT_ALPHA, () => undefined);
-    w.intake.recordAdmission(w.intake.list(person(OWNER))[0]!, NOTE_1);
+    w.consume(setting, [NOTE_1]);
     expect(() => w.db.prepare('UPDATE authority_person_meeting_suggestions_v1 SET project_id=?').run(PROJECT_BETA)).toThrow('immutable');
     expect(() => w.db.prepare('DELETE FROM authority_person_meeting_suggestions_v1').run()).toThrow('deletion is denied');
   });
@@ -124,13 +138,15 @@ describe('personal meeting intake: one source per person and tool account', () =
     w.intake.recordAdmission(setting, NOTE_1);
     expect(w.count('authority_person_meeting_suggestions_v1')).toBe(0);
     w.intake.watch(setting, FOLDER, PROJECT_ALPHA, () => undefined);
-    w.intake.enqueue(w.intake.list(person(OWNER))[0]!, NOTE_2, null, () => undefined);
+    w.intake.enqueue(w.intake.list(person(OWNER))[0]!, NOTE_2, PROJECT_BETA, () => undefined);
     const watched = w.intake.list(person(OWNER))[0]!;
     w.intake.recordAdmission(watched, NOTE_1);
     w.intake.recordAdmission(watched, NOTE_1);
     w.intake.recordAdmission(watched, NOTE_2);
     expect(w.intake.suggestions(setting.source_key, NOTE_1)).toEqual([PROJECT_ALPHA]);
+    // A queued import admitted while a folder is watched keeps only its own pending choice.
     expect(w.intake.suggestions(setting.source_key, NOTE_2)).toEqual([]);
+    expect(w.count('authority_person_meeting_pending_suggestions_v1')).toBe(1);
     w.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA);
     expect(() => w.intake.recordAdmission(watched, NOTE_3)).toThrow(expect.objectContaining({ code: 'unauthorized' }));
     expect(w.intake.suggestions(setting.source_key, NOTE_3)).toEqual([]);

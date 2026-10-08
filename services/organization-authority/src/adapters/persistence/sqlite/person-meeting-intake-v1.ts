@@ -107,7 +107,7 @@ export class SqlitePersonMeetingIntakeV1 {
   }
   /**
    * Queues one meeting. A project is checked for the person's active membership and held as a pending
-   * choice; it becomes a suggestion only when processing admits the queued import.
+   * choice; it becomes a suggestion only when the processing cursor advance consumes the queued import.
    */
   enqueue(setting: MeetingIntakeSettingV1, meetingId: string, projectId: string | null, current: () => void): void {
     this.db.transaction(() => {
@@ -125,24 +125,32 @@ export class SqlitePersonMeetingIntakeV1 {
     }).immediate();
   }
   /**
-   * Called inside the transaction that admits a meeting, including an unchanged revision admitted again
-   * as a duplicate. A queued import is being consumed: its pending projects become suggestions, except
-   * any project the person has since left. A meeting the watched folder delivers keeps the folder's
-   * current project as its suggestion, so it stays readable by that project's members after the watch
-   * moves; the person must still be an active member, as on import.
+   * Called inside the transaction that admits a meeting. A meeting the watched folder delivers (not a
+   * queued import) keeps the folder's current project as its suggestion, so it stays readable by that
+   * project's members after the watch moves; the person must still be an active member, as on import.
+   * A queued import's projects wait for the cursor advance that consumes it (`promoteConsumedImports`).
    */
   recordAdmission(setting: MeetingIntakeSettingV1, externalId: string): void {
     this.requireCurrent(setting);
-    if (this.checkpoint(setting.source_key).manual.includes(externalId)) {
+    if (setting.folder_project_id === null || this.checkpoint(setting.source_key).manual.includes(externalId)) return;
+    this.currentPerson(setting, setting.folder_project_id);
+    this.suggest(setting, externalId, setting.folder_project_id);
+  }
+  /**
+   * Called inside the processing cursor-advance transaction, after its compare-and-set succeeded. Each
+   * import the advance drops from the queue has been processed: its pending projects become suggestions,
+   * except any project the person has since left. A cancelled import changed the cursor first, so its
+   * advance never succeeds and its (already deleted) pending projects are never recorded.
+   */
+  promoteConsumedImports(setting: MeetingIntakeSettingV1, expectedCursor: string, nextCursor: string): void {
+    const next = new Set(this.cursor.read(nextCursor).manual);
+    for (const externalId of this.cursor.read(expectedCursor).manual.filter(id => !next.has(id))) {
       const pending = this.db.prepare('SELECT project_id FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=? ORDER BY project_id')
         .pluck().all(setting.source_key, externalId) as string[];
       for (const projectId of pending) {
         if (this.isMember(setting, projectId)) this.suggest(setting, externalId, projectId);
       }
       this.db.prepare('DELETE FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=?').run(setting.source_key, externalId);
-    } else if (setting.folder_project_id !== null) {
-      this.currentPerson(setting, setting.folder_project_id);
-      this.suggest(setting, externalId, setting.folder_project_id);
     }
   }
   private isMember(person: MeetingIntakePersonV1, projectId: string): boolean {

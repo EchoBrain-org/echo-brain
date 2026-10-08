@@ -106,7 +106,10 @@ export function createPersonMeetingRuntimeV1(options: {
       if (grant !== undefined && now !== grant) throw new AuthorityOperationError('stale_access_state', 'Meeting access changed');
       grant = now;
     });
-    const state = new SqliteAuthorityMeetingProcessingStateV1(db, provider.cursor.policy, processor.processor_adapter_id, undefined, setting.source_key, () => source.requireCurrent());
+    const providerIntake = ownerOf(setting.source_adapter_id).intake;
+    // The advance that drops a processed import from the queue records its project choices in the same transaction.
+    const state = new SqliteAuthorityMeetingProcessingStateV1(db, provider.cursor.policy, processor.processor_adapter_id, undefined, setting.source_key, () => source.requireCurrent(),
+      ({ expected_cursor, next_cursor }) => providerIntake.promoteConsumedImports(setting, expected_cursor, next_cursor));
     const review = await createPersonMeetingReviewV1(db, { ...options.approval,
       state: bindApprovalWorkflowStateV1(state, () => { if (db.inTransaction) throw new Error('Meeting review state transaction must be idle'); }),
     }, setting.source_key);
@@ -147,8 +150,7 @@ export function createPersonMeetingRuntimeV1(options: {
           source_ingestion: { store: new SqliteSourceAdmissionStoreV1(db, delivered => {
             source.requireCurrent(); state.assertCurrentSourceAdmission(source.identity);
             if (provider.cursor.write(sourceIntake.checkpoint(setting.source_key)) !== admission.source.cursor) throw new AuthorityOperationError('stale_access_state', 'Meeting intake changed during acquisition');
-            // Same transaction as the admission: a consumed import's pending projects, or a folder delivery's
-            // project, become the meeting's suggestions.
+            // Same transaction as the admission: a folder delivery's project becomes the meeting's suggestion.
             sourceIntake.recordAdmission(setting, delivered.item.external_id);
           }),
             scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
