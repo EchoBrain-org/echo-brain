@@ -24,7 +24,7 @@ export interface CreatePersonTriggerRunsV1Options {
   /** Kept injectable for focused service tests and shared with the live evaluator. */
   readonly bindDesk: typeof bindPersonLiveEvidenceDeskV1;
   readonly audit: SqlitePersonAgenticAskAuditV1;
-  readonly bind_options?: BoundOptions;
+  readonly bind_options: BoundOptions;
   readonly live_sources?: BoundOptions['live_sources'];
   readonly research: (input: { readonly desk: Desk; readonly context: PersonLiveRequestContextV1 }) => RunResearch;
   readonly lease_ms?: number;
@@ -55,7 +55,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
   const controllers = new Set<AbortController>();
   const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= 6);
   const context = (authorization: PersonAccessAuthorization): PersonLiveRequestContextV1 => ({
-    authority_id: options.bind_options?.authority_id ?? '', organization_id: authorization.organization_id, state_lineage_id: options.bind_options?.state_lineage_id ?? '',
+    authority_id: options.bind_options.authority_id, organization_id: authorization.organization_id, state_lineage_id: options.bind_options.state_lineage_id,
     principal_id: authorization.principal_id, membership_id: authorization.membership_id, session_family_id: authorization.session_family_id, request_id: `trigger_run_${randomUUID()}`,
   });
   const launch = (row: TriggerRunRowV1, token: string, authorization: PersonAccessAuthorization, lease_token: string) => {
@@ -65,7 +65,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
         const anchor = options.records.recordAnchor({ access_token: token, record_sha256: row.record_sha256 });
         const scope = scopeFor(options.records, token, row.record_sha256);
         const requestContext = context(authorization);
-        const desk = await options.bindDesk(options.bind_options ?? {} as BoundOptions, compatible, { access_token: token, scope, signal: controller.signal }, requestContext);
+        const desk = await options.bindDesk(options.bind_options, compatible, { access_token: token, scope, signal: controller.signal }, requestContext);
         const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
         const output = await options.research({ desk, context: requestContext }).renderWithResearch({ trigger: definition.name, brief: definition.brief(anchor), renderer: definition.renderer!, trigger_input: anchor, signal: controller.signal });
         const card = validatePersonImpactCardV1(output.rendered);
@@ -75,7 +75,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
         options.runs.finish(row.run_id, lease_token, { json: canonicalJson(value), sha256: canonicalSha256(value) });
       } catch (error) {
         if (error instanceof PersonRecordSearchIndexLagV1) options.runs.release(row.run_id, lease_token, { counted: false });
-        else if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'stale_access_state')) options.runs.fail(row.run_id, lease_token, 'no_access');
+        else if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'stale_access_state' || error.code === 'not_found')) options.runs.fail(row.run_id, lease_token, 'no_access');
         else if (controller.signal.aborted || error instanceof AgenticAskDeadlineErrorV1) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'timed_out' });
         else if (unavailable(error)) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'unavailable' });
         else options.runs.fail(row.run_id, lease_token, 'research_failed');
@@ -104,7 +104,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
       const row = options.runs.read(actor, input.request.run_id); if (row === undefined) throw new AuthorityOperationError('not_found', 'run is not available');
       if (!sameActor(row.actor, actor) || row.state !== 'done' || row.result_json === null) throw new AuthorityOperationError('not_found', 'run is not available');
       const card = stored(row.result_json); const scope = scopeFor(options.records, input.access_token, row.record_sha256); const requestContext = context(authorization);
-      const desk = await options.bindDesk(options.bind_options ?? {} as BoundOptions, compatible, { access_token: input.access_token, scope, ...(input.signal === undefined ? {} : { signal: input.signal }) }, requestContext);
+      const desk = await options.bindDesk(options.bind_options, compatible, { access_token: input.access_token, scope, ...(input.signal === undefined ? {} : { signal: input.signal }) }, requestContext);
       const fresh = await Promise.all(card.citations.map(async citation => {
         try { const opened = await desk.openCitation!({ citation, ...(input.signal === undefined ? {} : { signal: input.signal }) }); const item = opened.items[0]; return item === undefined ? null : { citation: { citation: item.citation, kind: item.kind, label: item.label, visibility: item.visibility }, text: item.text, label: item.label, ...(item.attributes === undefined ? {} : { attributes: item.attributes }) } as FreshImpactItemV1; } catch { return null; }
       }));

@@ -51,9 +51,17 @@ root owns the serialized full validation gate.
 - R24 storage helper and regression
 - `tests/person-client/person-runs.test.ts`
 
-## Concerns
+## Follow-up focused proofs
 
-The focused service behavior is typechecked and composed through the existing
-live-desk/research path. The requested dedicated service and HTTP integration
-fixtures have not been added in this task candidate; full-route behavior still
-needs coverage during integration review.
+Added an actual V12 SQLite DAO fixture for the service and an HTTP transport
+fixture. They cover actor-only list/start/retry/view, approver-bound detached
+work and outside-text scrubbing, unindexed no-count release, lost-record
+access mapping to `no_access`, three deadline attempts to `timed_out`, fresh
+empty citation opens, lease expiry takeover, bearer enforcement, route
+reservation, and no-model `unavailable` transport behavior.
+
+Passed after those additions:
+
+- `npm exec vitest run services/organization-authority/test/person-trigger-runs-v1.test.ts services/organization-authority/test/person-runs-http.test.ts tests/person-client/person-runs.test.ts packages/organization-authority-kernel/test/answer-composition/renderers/impact-card-storage-v1.test.ts` (4 files, 35 tests)
+- `npx tsc --noEmit -p tsconfig.json`
+- `git diff --check`

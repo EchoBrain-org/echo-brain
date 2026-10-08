@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 
-const run_id = 'run_00000000-0000-4000-8000-000000000001';
 const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 
 describe('person runs client', () => {
