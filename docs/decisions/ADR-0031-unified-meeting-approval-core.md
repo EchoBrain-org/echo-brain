@@ -9,9 +9,9 @@ component_ids:
   - CMP-PERMISSIONS
   - CMP-PERSON-CLIENT
 created_at: 2026-10-07
-reviewed_at: 2026-10-07
-reviewed_ref: 57b31260209293a7da7822ff46e82a2beb3c887e
-status: proposed
+reviewed_at: 2026-10-08
+reviewed_ref: bfcf3a6bf21456eea506247f724ca3272bd7e966
+status: accepted
 supersedes: []
 superseded_by: []
 updates:

@@ -1510,7 +1510,7 @@ Built in this session on top of Codex's `f3a005e`, then combined with Tasks 1–
 
 ### Task 16 (documentation and final consistency)
 
-- Docs, operator prompts in `onboard-clean-v1.sh` and `update-clean-v1.sh`, and their test pins describe the built system; ADR-0031 and ADR-0032 stay proposed for the founder.
+- Docs, operator prompts in `onboard-clean-v1.sh` and `update-clean-v1.sh`, and their test pins describe the built system; The founder accepted ADR-0031 and ADR-0032 on 2026-10-08.
 - The Slack provider no longer depends on `@echo-brain/organization-record`; it keeps `@echo-brain/organization-protocol` for the owner-text helpers.
 - The three Slack card modules with no callers were deleted (see Task 11 above), and the stale "until Task 11" comments in the approval core and publisher were corrected.
 - Not changed: `AGENTS.md` still says "private Slack-card approval" (repo rules, left for the founder); the journey telemetry `meeting_approval` vocabulary and the old `delivery_pending` and `quarantined` canary receipt values remain in code (ruling 5); edited ADRs and invariants keep their `reviewed_at` and `reviewed_ref`.

@@ -53,8 +53,8 @@ separately.
 | [ADR-0029](ADR-0029-capture-and-derive-foundation.md) | Project-scoped capture and exact derivation inputs | proposed |
 
 | [ADR-0030](ADR-0030-personal-meeting-custody-and-review.md) | Personal Granola custody and shared in-app meeting review | accepted |
-| [ADR-0031](ADR-0031-unified-meeting-approval-core.md) | One meeting approval core with optional surfaces | proposed |
-| [ADR-0032](ADR-0032-stored-trigger-runs.md) | Stored trigger runs keep pointers and judgments, not outside text | proposed |
+| [ADR-0031](ADR-0031-unified-meeting-approval-core.md) | One meeting approval core with optional surfaces | accepted |
+| [ADR-0032](ADR-0032-stored-trigger-runs.md) | Stored trigger runs keep pointers and judgments, not outside text | accepted |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary
