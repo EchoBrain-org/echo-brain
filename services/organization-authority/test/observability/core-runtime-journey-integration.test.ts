@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createOpenRouterStructuredGenerationAdapter } from "../../../../providers/openrouter/src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../../tests/support/telemetry-fixture-vocabulary-v1.js";
 import { formatStagingJourneyContentRecordsV2 } from "../../src/composition/staging/observability/staging-journey-content-telemetry-v1.js";
-import { createStagingJourneyTelemetryTransportV1 } from "../../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
+import { createJourneyTelemetryTransportV1 } from "../../src/composition/observability/journey-telemetry-transport-v1.js";
 
 const identity = { release_sha: "a".repeat(40), build_number: 42 };
 const linked = "11111111-1111-4111-8111-111111111111";
@@ -16,7 +16,7 @@ describe("core runtime observations through the existing journey channel", () =>
 
   it("captures a failed model call followed by a successful call without inventing usage", async () => {
     const lines: string[] = [];
-    const transport = createStagingJourneyTelemetryTransportV1(identity, { write: (line) => { lines.push(line); } }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, content_enabled: true });
+    const transport = createJourneyTelemetryTransportV1("staging", identity, { write: (line) => { lines.push(line); } }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, content_enabled: true });
     let calls = 0;
     const adapter = createOpenRouterStructuredGenerationAdapter({
       credential_ref: "fixture", credential_resolver: () => "fixture-credential-never-record",
@@ -40,19 +40,36 @@ describe("core runtime observations through the existing journey channel", () =>
     expect(lines.join("")).not.toContain("fixture-credential-never-record");
 
     const closedCall = callsObserved[1];
-    const accounting = { kind: "execution", execution_attempt: 2, retry_count: 1, retry_of_attempt: 1 };
     const beforeInjected = lines.length;
     transport.observer({
       ...closedCall,
       injected: "must-not-serialize",
-      accounting: { ...accounting, injected: "must-not-serialize" },
+      accounting: {
+        kind: "execution",
+        execution_attempt: 2,
+        retry_count: 1,
+        retry_of_attempt: 1,
+        injected: "must-not-serialize",
+      },
       diagnostic: {
         ...closedCall.diagnostic,
         injected: "must-not-serialize",
         counts: { ...closedCall.diagnostic.counts, injected: "must-not-serialize" },
       },
     });
-    expect(JSON.parse(lines[beforeInjected]!)).toEqual({ ...closedCall, accounting });
+    const canonical = JSON.parse(lines[beforeInjected]!);
+    expect(canonical).toEqual(closedCall);
+    expect(canonical).toMatchObject({
+      workflow: "core_runtime",
+      stage: "core_operation",
+      diagnostic: {
+        phase: "model_call",
+        provider: "openrouter",
+        model: request.model,
+        counts: { total_tokens: null },
+      },
+    });
+    expect(canonical).not.toHaveProperty("accounting");
     expect(lines.slice(beforeInjected).join("")).not.toContain("must-not-serialize");
     transport.close();
   });
@@ -62,7 +79,7 @@ describe("core runtime observations through the existing journey channel", () =>
     const lines: string[] = [];
     let callback = () => {};
     let fail = true;
-    const transport = createStagingJourneyTelemetryTransportV1(identity, {
+    const transport = createJourneyTelemetryTransportV1("staging", identity, {
       write: (line) => { if (fail) throw new Error("writer failure"); lines.push(line); },
       scheduler: { set_interval: (fn) => { callback = fn; return 1; }, clear_interval: () => {} },
     }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, content_enabled: true });

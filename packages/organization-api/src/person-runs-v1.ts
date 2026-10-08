@@ -1,3 +1,4 @@
+import { validatePersonDiagnosticCaptureIdV1, type PersonDiagnosticCaptureIdV1 } from './person-diagnostics-v1.js';
 import { validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
 import { asEnumerableRecord, assertExactKeys, assertString, assertTimestamp, fail, utf8ByteLength } from './validation.js';
 
@@ -18,7 +19,9 @@ export type PersonRunErrorCodeV1 = 'no_access' | 'unavailable' | 'timed_out' | '
 
 export type PersonRunsRequestV1 =
   | { readonly schema_version: 1; readonly operation: 'list' }
-  | { readonly schema_version: 1; readonly operation: 'start' | 'retry' | 'view'; readonly run_id: string };
+  | { readonly schema_version: 1; readonly operation: 'start'; readonly run_id: string; readonly capture_id?: PersonDiagnosticCaptureIdV1 }
+  | { readonly schema_version: 1; readonly operation: 'retry'; readonly run_id: string }
+  | { readonly schema_version: 1; readonly operation: 'view'; readonly run_id: string };
 
 export interface PersonRunV1 {
   readonly run_id: string; readonly trigger: 'approved_record'; readonly event_ref: string;
@@ -54,10 +57,12 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
   const request = asEnumerableRecord(value, 'Runs request');
   const operation = request.operation;
   if (typeof operation !== 'string' || !Object.hasOwn(REQUEST_KEYS, operation)) fail('Runs request operation is invalid');
-  assertExactKeys(request, ['schema_version', 'operation', ...REQUEST_KEYS[operation as PersonRunsRequestV1['operation']]], 'Runs request');
+  assertExactKeys(request, ['schema_version', 'operation', ...REQUEST_KEYS[operation as PersonRunsRequestV1['operation']], ...(operation === 'start' && Object.hasOwn(request, 'capture_id') ? ['capture_id'] : [])], 'Runs request');
   if (request.schema_version !== 1) fail('Runs request version is invalid');
   if (operation === 'list') return Object.freeze({ schema_version: 1 as const, operation });
-  return Object.freeze({ schema_version: 1 as const, operation: operation as 'start' | 'retry' | 'view', run_id: runId(request.run_id, 'Runs request run id') });
+  const run_id = runId(request.run_id, 'Runs request run id');
+  if (operation === 'start') return Object.freeze({ schema_version: 1 as const, operation, run_id, ...(Object.hasOwn(request, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(request.capture_id) } : {}) });
+  return Object.freeze({ schema_version: 1 as const, operation: operation as 'retry' | 'view', run_id });
 }
 
 function run(value: unknown): PersonRunV1 {

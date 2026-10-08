@@ -9,7 +9,6 @@ import {
   type EvidenceDeskResultV2,
   type EvidenceDeskSourceV2,
 } from "../shared/evidence-desk-v2.js";
-import { isRetainedPersonEvidenceCitationV1 } from '../shared/person-evidence-provenance-v1.js';
 import {
   AGENTIC_ASK_MAX_NEEDS_PER_PART_V1,
   AgenticAskOutputErrorV1,
@@ -48,6 +47,9 @@ import type {
   AgenticResearchRoundV1,
 } from "./agentic-research-v1.js";
 import { AuthorityOperationError } from "../domain/errors.js";
+import { observeCoreRuntimeDiagnosticV1 } from '../shared/core-runtime-observation-v1.js';
+import { coreRuntimeDiagnosticErrorKindV1 } from '../shared/core-runtime-diagnostics-v1.js';
+import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 
 /**
  * The research loop (research trigger contract v1): a brief in, the full
@@ -146,8 +148,8 @@ export interface AgenticResearchProgressV1 {
 }
 
 export interface AgenticResearchLoopV1 {
-  /** The request gate's per-call hooks: live items keep content out of runtime capture, and an admitted step call reads its scratchpad in full. */
-  readonly gate_hooks: Pick<CreateAgenticModelGateV1Options, "content_sensitive" | "before_call">;
+  /** An admitted step call reads its scratchpad in full. */
+  readonly gate_hooks: Pick<CreateAgenticModelGateV1Options, "before_call">;
   progress(): AgenticResearchProgressV1;
   /** Runs research once, calling the model only through `gate`, and returns everything it gathered. The runner adds the trigger's name. */
   run(gate: AgenticModelGateV1): Promise<Omit<AgenticEvidenceBundleV1, "trigger">>;
@@ -366,6 +368,14 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const selectorOf = (item: EvidenceDeskItemV2): string => item.source_id === undefined ? evidenceDeskSourceV2(item) : sourcesById.get(item.source_id)?.selector ?? item.source_id;
   // Tool results carry discovery metadata. Bodies appear once, in the budgeted scratchpad.
   const describe = (entry: Entry): Record<string, unknown> => describeAgenticEvidenceItemV1({ short: entry.short, source: selectorOf(entry.item), item: entry.item });
+  /** Released source projections for automatic starting/preload reads, before short ids are assigned. */
+  const releasedView = (result: EvidenceDeskResultV2): Record<string, unknown> => ({
+    released_items: result.items.map(item => {
+      const { id: _id, ...metadata } = describeAgenticEvidenceItemV1({ short: '', source: selectorOf(item), item });
+      return { ...metadata, citation: item.citation, ...(item.text === undefined ? {} : { text: item.text }) };
+    }),
+    truncated: result.truncated, ...(result.notice === undefined ? {} : { notice: result.notice }),
+  });
 
   // ---- tools ---------------------------------------------------------
   const search = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
@@ -494,10 +504,20 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     };
     return admit === undefined ? apply() : admit(apply);
   };
+  let toolCalls = 0;
   const run = async (action: StepAction, admit?: OrderedAdmission, signal?: AbortSignal): Promise<ToolResult> => {
-    if (action.tool === "search") return search(action.args, admit, signal);
-    if (action.tool === "open") return open(action.args, admit, signal);
-    return list(action.args, admit, signal);
+    // Only planner-selected reads enter this function; finish has no tool result.
+    const tool = action.tool === 'search' || action.tool === 'open' ? action.tool : 'list';
+    const identity = { tool_call_id: ++toolCalls, round: steps, tool } as const;
+    observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', ...identity, args: action.args });
+    try {
+      const result = await (tool === 'search' ? search(action.args, admit, signal) : tool === 'open' ? open(action.args, admit, signal) : list(action.args, admit, signal));
+      observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', ...identity, result });
+      return result;
+    } catch (error) {
+      observeCoreRuntimeDiagnosticV1({ kind: 'tool_error', ...identity, error_kind: coreRuntimeDiagnosticErrorKindV1(error) });
+      throw error;
+    }
   };
   /**
    * Reads planned together have no model-visible dependency. Start their
@@ -644,8 +664,6 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     seen.sort((left, right) => Number(String(left.id).slice(1)) - Number(String(right.id).slice(1)));
     return { opened: shown, seen, read };
   };
-  const liveInPrompt = () => [...entries.values()].some(entry => !isRetainedPersonEvidenceCitationV1(entry.item.citation));
-
   // ---- stop state ------------------------------------------------------
   let researchIncomplete = true;
   let researchStop: 'finished' | 'empty_catalog' | 'no_progress' | 'step_limit' | 'budget' | 'unusable_step' = 'step_limit';
@@ -681,9 +699,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const startingIds: (string | null)[] = [];
     for (const { citation, if_unreadable: ifUnreadable } of brief.starting) {
       assertLive();
-      if (desk.openCitation === undefined) throw new AuthorityOperationError("unavailable", "Starting evidence is unavailable");
       let opened: EvidenceDeskResultV2;
-      try { opened = await raceAbort(activeSignal, desk.openCitation({ citation, signal: activeSignal })); }
+      try { opened = await observeAgenticLifecycleV1('starting_read', 'research_starting_read', { index: startingIds.length + 1, citation, if_unreadable: ifUnreadable }, async () => {
+        if (desk.openCitation === undefined) throw new AuthorityOperationError("unavailable", "Starting evidence is unavailable");
+        return raceAbort(activeSignal, desk.openCitation({ citation, signal: activeSignal }));
+      }, releasedView); }
       catch (error) {
         // A deleted or now-hidden item is news to a brief that asked to hear about it; nothing else about it is known.
         if (ifUnreadable !== "report" || !unreadableRefusal(error)) throw error;
@@ -715,14 +735,16 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     // ---- optional small-scope preload -----------------------------------
     if (brief.options.small_scope_preload) {
       assertLive();
-      const inventory = await raceAbort(activeSignal, desk.search({ limit: SHORTCUT_ITEMS, inventory_mode: "items", signal: activeSignal }));
+      const inventory = await observeAgenticLifecycleV1('preload', 'research_preload', { operation: 'search', limit: SHORTCUT_ITEMS, inventory_mode: 'items' },
+        () => raceAbort(activeSignal, desk.search({ limit: SHORTCUT_ITEMS, inventory_mode: "items", signal: activeSignal })), releasedView);
       observe(inventory);
       cover('search', undefined, inventory);
       if (!inventory.truncated && inventory.items.length <= SHORTCUT_ITEMS) {
         let used = 0;
         for (const listed of inventory.items) {
           assertLive();
-          const opened = await raceAbort(activeSignal, desk.open({ item: listed.id, signal: activeSignal }));
+          const opened = await observeAgenticLifecycleV1('preload', 'research_preload', { operation: 'open', citation: listed.citation },
+            () => raceAbort(activeSignal, desk.open({ item: listed.id, signal: activeSignal })), releasedView);
           observe(opened);
           cover('open', evidenceDeskSourceV2(listed), opened);
           const exact = opened.items.find(item => item.id === listed.id && item.text !== undefined);
@@ -730,7 +752,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           const entry = register(exact); entry.opened = true; entry.preloaded = true; used += bytes(exact.text);
         }
       }
-    }
+    } else observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'preload', event: 'skipped' });
 
     // ---- research loop --------------------------------------------------
     let results: ToolResult[] = [];
@@ -805,9 +827,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       // Batched reads must be observed in another step before completion.
       const reads = step.actions.filter(action => action.tool !== "finish");
       if (reads.length === 0) {
+        const identity = { tool_call_id: ++toolCalls, round: steps, tool: 'finish' } as const;
+        observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', ...identity, args: {} });
         researchIncomplete = false;
         researchStop = 'finished';
         recordRound(roundStartedAt, [roundView("finish", {}, undefined)]);
+        observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', ...identity, result: { tool: 'finish' } });
         break;
       }
       const hadCitableEvidence = [...entries.values()].some(entry => entry.full);
@@ -857,7 +882,6 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
 
   return Object.freeze({
     gate_hooks: Object.freeze({
-      content_sensitive: liveInPrompt,
       // Only an admitted research call makes a complete body read. Retrieval,
       // opening, and scratchpad construction alone cannot satisfy a need.
       before_call: (role: AgenticAskModelRoleV1) => {

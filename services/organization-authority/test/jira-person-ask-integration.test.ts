@@ -16,7 +16,7 @@ import type { BegunPersonOidcLogin } from '../src/application/person-identity-se
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from '../src/composition/person-onboarding-service.js';
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
-import { createStagingJourneyTelemetryTransportV1 } from '../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js';
+import { createJourneyTelemetryTransportV1 } from '../src/composition/observability/journey-telemetry-transport-v1.js';
 import { FIXTURE_JIRA_CLOUD_V1 as CLOUD, FIXTURE_JIRA_SITE_V1 as SITE, fakeJiraCloudFetchV1, fakeJiraNangoV1 } from './fixtures/fake-jira-v1.js';
 
 const EMAIL = 'founder@example.test';
@@ -81,7 +81,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
   });
   const privateFile = (name: string, value: string) => { const path = join(root, name); writeFileSync(path, value, { mode: 0o600 }); return path; };
   const telemetry: string[] = [];
-  const transport = createStagingJourneyTelemetryTransportV1({ release_sha: 'a'.repeat(40), build_number: 1 }, { write: line => { telemetry.push(line); } });
+  const transport = createJourneyTelemetryTransportV1('staging', { release_sha: 'a'.repeat(40), build_number: 1 }, { write: line => { telemetry.push(line); } });
   const events = () => telemetry.map(line => JSON.parse(line)).filter(event => event.kind === 'echo-authority-journey-stage-v1');
   const runtime = await openOrganizationAuthorityService({
     core_runtime_observation: transport.core_runtime,
@@ -130,7 +130,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     const cited = answer.citations[0]!.citation; if (cited.kind !== 'ticket') throw new Error('Expected fixture ticket citation');
     expect(() => validatePersonAnswerResponseV4(response.body)).toThrow();
     expect(generate).toHaveBeenCalledTimes(4);
-    const completed = events().find(event => event.diagnostic?.phase === 'http_request' && event.diagnostic.root === true && event.event === 'succeeded');
+    const completed = events().find(event => event.diagnostic?.phase === 'research_run' && event.event === 'succeeded');
     expect(completed).toMatchObject({ diagnostic: { result: 'answered', counts: { ticket_retrieved_items: 1, ticket_context_items: 1, ticket_citations: 1 } } });
     expect(events()).toEqual(expect.arrayContaining([
       expect.objectContaining({ journey_id: completed.journey_id, event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'verified' }) }),
@@ -168,7 +168,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(JSON.parse(generate.mock.calls[0]![0].user_prompt).scope).toContain('live sources are limited to their saved project mappings');
     expect(events()).toEqual(expect.arrayContaining([
       expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'verified' }) }),
-      expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'http_request', result: 'answered', counts: expect.objectContaining({ ticket_retrieved_items: 1, ticket_context_items: 1, ticket_citations: 1 }) }) }),
+      expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'research_run', result: 'answered', counts: expect.objectContaining({ ticket_retrieved_items: 1, ticket_context_items: 1, ticket_citations: 1 }) }) }),
     ]));
     const employeeMembership = audit.prepare('SELECT membership_id FROM authority_memberships WHERE membership_id != ?').get(initialized.owner_membership_id) as { membership_id: string };
     expect((await post('/v1/person/projects/members/add', { schema_version: 1, kind: 'echo-project-member-add-v1', request_id: randomUUID(), project_id, membership_id: employeeMembership.membership_id })).status).toBe(200);

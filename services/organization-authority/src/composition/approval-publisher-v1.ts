@@ -5,6 +5,7 @@ import {
   organizationAuthorityPinSha256, verifyOrganizationAuthorityPin, type RecordAppendFactoryOptionsV4,
 } from '@echo-brain/organization-protocol';
 import type { ApprovalWorkflowContextV1, ApprovalWorkflowProcessingV1 } from '@echo-brain/organization-processing/ports/approval-workflow-bundle-v1';
+import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { ApprovalActorV1, ApprovalDecisionBodyV1 } from './approval-core-v1.js';
 import { buildApprovalDecisionRecordV1 } from './approval-decision-projection-v1.js';
 
@@ -116,7 +117,7 @@ export function createApprovalPublisherV1(database: Database.Database, context: 
     // A nested .immediate() would be a savepoint, so the hooks would commit with someone else's outer transaction.
     if (database.inTransaction) throw new Error('Approval receipts need an idle Authority transaction');
     // [T3] authority.sqlite: one BEGIN IMMEDIATE transaction, with no await inside.
-    database.transaction(() => {
+    const published = database.transaction(() => {
       const changes = writeReceipt.run(receipt_json, row.approval_id).changes;
       if (changes === 1) {
         // The receipt is visible inside this transaction. Registration order; the first throw rolls all back.
@@ -128,11 +129,21 @@ export function createApprovalPublisherV1(database: Database.Database, context: 
             throw new Error('An after-record hook must be synchronous; it returned a promise');
           }
         }
-        return;
+        return true;
       }
       // R30(d) zero-change path: another publisher (handle, process or earlier pass) already wrote this approval's receipt. Verify and run nothing.
       if (storedRecord.get(row.approval_id) !== result.record_sha256) throw new Error('approval receipt conflicts with the stored record');
+      return false;
     }).immediate();
+    // Publish correlation only after the receipt and all hook writes have committed. The
+    // source revision joins the earlier intake; the event joins the later research run.
+    // Each row has its own span, so a batch cannot overwrite another approval's links.
+    annotateCoreRuntimeV1({
+      event_id: coreRuntimeIdentityV1('research-event', ref.approval_id),
+      output_id: coreRuntimeIdentityV1('research-output', result.record_sha256),
+      source_revision: coreRuntimeIdentityV1('source_revision', JSON.stringify([provenance.external_id, provenance.canonical_revision])),
+      result: published ? 'published' : 'current',
+    });
   }
 
   async function publish(signal: AbortSignal): Promise<void> {
@@ -145,7 +156,7 @@ export function createApprovalPublisherV1(database: Database.Database, context: 
         // The cursor passes failed rows, so a pass always ends.
         afterSequence = row.sequence;
         signal.throwIfAborted();
-        try { await publishOne(row, options); }
+        try { await observeCoreRuntimeV1('record_append', () => publishOne(row, options)); }
         catch (error) {
           if (signal.aborted) throw error;
           if (!failed) { failed = true; first = error; }

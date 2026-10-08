@@ -37,7 +37,7 @@ function harness(options: { readonly generate?: (input: StructuredGenerationInpu
   const deskAuthorize = vi.fn((_input: { readonly access_token: string; readonly scope: unknown }) => { if (revoked) throw new AuthorityOperationError('unauthorized', 'grant revoked'); return { checked_at: '2026-10-06T00:00:00.000Z' }; });
   const openDeskCitation = vi.fn(options.openRecord ?? (() => { throw new AuthorityOperationError('not_found', 'record is not readable'); }));
   const recordProjects = vi.fn(options.recordProjects ?? (() => { throw new AuthorityOperationError('not_found', 'record is not readable'); }));
-  const tokens = new Map([['token-a', member('a')], ['token-b', member('b')]]);
+  const tokens = new Map([['token-a', member('a')], ['token-b', member('b')], ['token-renewed', member('a')]]);
   const audits: unknown[] = [];
   const generate = vi.fn(options.generate ?? (async () => ({ parts: [{ question: 'Q', needs: [{ need: 'fact', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] })));
   const dependencies = {
@@ -71,7 +71,7 @@ function harness(options: { readonly generate?: (input: StructuredGenerationInpu
     await vi.waitFor(async () => { if (value.status === 'running') value = await read(token, run_id); expect(value.status).not.toBe('running'); });
     return value;
   };
-  return { application, generate, audits, read, settled, deskSearch, deskAuthorize, openDeskCitation, recordProjects, revoke: () => { revoked = true; }, advance: (ms: number) => { clock += ms; } };
+  return { application, generate, audits, revokeToken: (token: string) => { tokens.delete(token); }, read, settled, deskSearch, deskAuthorize, openDeskCitation, recordProjects, revoke: () => { revoked = true; }, advance: (ms: number) => { clock += ms; } };
 }
 
 describe('staging research evaluation runs', () => {
@@ -93,7 +93,10 @@ describe('staging research evaluation runs', () => {
   it('records a deadline as a timed_out failure and frees the person for another run', async () => {
     const h = harness({ generate: async () => { throw new AgenticAskDeadlineErrorV1(); } });
     const run = await h.application.start({ access_token: 'token-a', request: ask('Too slow?') });
+    await vi.waitFor(() => expect(h.generate).toHaveBeenCalled());
+    const beforeRead = h.deskAuthorize.mock.calls.length;
     expect(await h.settled('token-a', run.run_id)).toMatchObject({ status: 'failed', error: { code: 'timed_out', message: 'The research run reached its deadline' } });
+    expect(h.deskAuthorize).toHaveBeenCalledTimes(beforeRead);
     await expect(h.application.start({ access_token: 'token-a', request: ask('Again?') })).resolves.toMatchObject({ status: 'running' });
   });
 
@@ -232,5 +235,50 @@ describe('staging research evaluation runs', () => {
     await vi.waitFor(() => expect(seen).toHaveLength(1));
     h.application.close();
     expect(seen[0]!.aborted).toBe(true);
+  });
+
+  it('preserves a terminal research result when its reader cancels during source revalidation', async () => {
+    const h = harness();
+    const run = await h.application.start({ access_token: 'token-a', request: ask('Download again?') });
+    await h.settled('token-a', run.run_id);
+    const controller = new AbortController();
+    h.deskAuthorize.mockImplementationOnce(() => {
+      controller.abort();
+      throw controller.signal.reason;
+    });
+    await expect(h.application.read({ access_token: 'token-a', request: { schema_version: 1, run_id: run.run_id }, signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(await h.read('token-a', run.run_id)).toMatchObject({ status: 'completed', research: { trigger: 'ask' } });
+    h.application.close();
+  });
+
+  it('rechecks the reading session after the execution source fence before releasing payloads', async () => {
+    const h = harness();
+    const run = await h.application.start({ access_token: 'token-a', request: ask('Session race?') });
+    await h.settled('token-a', run.run_id);
+    h.deskAuthorize.mockImplementationOnce(() => {
+      h.revokeToken('token-renewed');
+      return { checked_at: '2026-10-06T00:00:00.000Z' };
+    });
+    await expect(h.read('token-renewed', run.run_id)).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(h.read('token-a', run.run_id)).rejects.toMatchObject({ code: 'not_found' });
+    h.application.close();
+  });
+
+  it('withholds a completed research result after source-access revocation', async () => {
+    const h = harness();
+    const complete = await h.application.start({ access_token: 'token-a', request: ask('Still permitted?') });
+    await vi.waitFor(() => expect(h.audits).toHaveLength(1));
+    h.revoke();
+    const refused = await h.settled('token-a', complete.run_id);
+    expect(refused).toMatchObject({ status: 'failed', error: { code: 'unauthorized' } });
+    expect(refused).not.toHaveProperty('research');
+    h.application.close();
+
+    const missing = harness();
+    const unopened = await missing.application.start({ access_token: 'token-a', request: approved() });
+    const failed = await missing.settled('token-a', unopened.run_id);
+    expect(failed).toMatchObject({ status: 'failed', error: { code: 'not_found' } });
+    expect(failed).not.toHaveProperty('research');
+    missing.application.close();
   });
 });

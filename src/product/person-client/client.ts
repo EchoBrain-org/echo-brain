@@ -1,3 +1,4 @@
+import type { PersonDiagnosticCaptureIdV1, PersonDiagnosticsRequestV1, PersonDiagnosticsResultsV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentIdV1, validatePersonDocumentSearchV2, type PersonDocumentSearchV2 } from '@echo-brain/organization-api';
 import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots, abandonDocumentSnapshot, reconcileDocumentSnapshot, saveDocumentDownload, type DocumentFileUploadV2, type DocumentSnapshot } from './document-file.js';
@@ -675,27 +676,32 @@ export class PersonClient {
   }
 
   /** Agentic Ask (RFC-0003), the only Ask since the one-shot routes were retired (ADR-0022). */
-  async ask(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswer> {
+  async ask(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswer> {
     validateAskInput(question, scope);
-    return this.withReadSession((authority, token) => authority.askV3(token, question, scope, signal));
+    return this.withReadSession((authority, token) => authority.askV3(token, question, scope, signal, captureId));
   }
 
   /** Explicit opt-in to the versioned ticket-capable response. */
-  async askWithTickets(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV5> {
+  async askWithTickets(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV5> {
     validateAskInput(question, scope);
-    return this.withReadSession((authority, token) => authority.askV4(token, question, scope, signal));
+    return this.withReadSession((authority, token) => authority.askV4(token, question, scope, signal, captureId));
   }
 
   /** Uses all request-advertised live evidence sources. Falls back only when an older Authority has no V5 route. */
-  async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV6 | PersonAnswerV5> {
+  async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV6 | PersonAnswerV5> {
     validateAskInput(question, scope);
     return this.withReadSession(async (authority, token) => {
-      try { return await authority.askV5(token, question, scope, signal); }
+      try { return await authority.askV5(token, question, scope, signal, captureId); }
       catch (error) {
-        if (!(error instanceof PersonAuthorityClientError) || error.status !== 404 || error.code !== 'not_found' || error.routeMatched) throw error;
+        if (captureId !== undefined || !(error instanceof PersonAuthorityClientError) || error.status !== 404 || error.code !== 'not_found' || error.routeMatched) throw error;
         return authority.askV4(token, question, scope, signal);
       }
     });
+  }
+
+  /** Prepare before starting work so the capture remains readable even if the product response is lost. */
+  async diagnostics<K extends PersonDiagnosticsRequestV1['operation']>(value: Extract<PersonDiagnosticsRequestV1, { readonly operation: K }>, signal?: AbortSignal): Promise<PersonDiagnosticsResultsV1[K]> {
+    return this.withReadSession((authority, token) => authority.diagnostics(token, value, signal));
   }
 
   /** Staging-only research evaluation (research loop evaluation v1); no CLI command exposes it. */

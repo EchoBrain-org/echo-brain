@@ -8,6 +8,7 @@ import { createPersonDocumentUploadStagingV1 } from '../adapters/files/document-
 import { startPersonDocumentProcessingV1 } from './person-document-processing-v1.js';
 import { createPersonResearchEvalV1 } from './person-research-eval-v1.js';
 import { createPersonTriggerRunsV1 } from './person-trigger-runs-v1.js';
+import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
 import { SqliteTriggerRunsV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import { createAgenticResearchV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
@@ -64,7 +65,6 @@ import type {
   PersonExternalIdentityRuntimeBundleV1,
   OpenedPersonExternalIdentityRuntimeV1,
 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
-import type { AskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
 
 export interface OrganizationAuthorityApiRuntimeConfig {
   readonly state_directory: string;
@@ -121,8 +121,6 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly answer_composition_generation?: AnswerCompositionGenerationBindingV1;
   /** Bound by the active rebuild runtime so serving accepts the same model profile. */
   readonly readable_search_retrieval_contract_sha256?: import("@echo-brain/federation-protocol").Sha256Digest;
-  /** Staging-only request-local Ask journey factory. */
-  readonly ask_journey_telemetry?: AskJourneyTelemetryFactoryV1;
   /** Present only when the signed private-approval surface is active. */
   readonly private_approval_interaction_ingress?:
     ProviderHttpApplicationV1;
@@ -196,6 +194,7 @@ export async function startOrganizationAuthorityApiRuntime(
     { fileMustExist: true },
   );
   let documentWorker: ReturnType<typeof startPersonDocumentProcessingV1> | undefined;
+  let diagnostics: PersonDiagnosticsV1 | undefined;
   let recordDatabase:
     ReturnType<typeof openOrganizationRecordDatabase> | undefined;
   let externalIdentity:
@@ -324,6 +323,7 @@ export async function startOrganizationAuthorityApiRuntime(
     documentWorker = startPersonDocumentProcessingV1(documents,new SqlitePersonTextSourceInboxV1(database),{
       on_failure: event => console.error(JSON.stringify(event)),
     });
+    diagnostics = dependencies.answer_composition_generation === undefined ? undefined : createPersonDiagnosticsV1({ sessions });
     const answerOptions = dependencies.answer_composition_generation === undefined ? undefined : {
       authority_id: metadata.authority_id, organization_id: metadata.organization_id, state_lineage_id: lineage.root.state_lineage_id,
       sessions, originals, records: recordSearch,
@@ -331,6 +331,7 @@ export async function startOrganizationAuthorityApiRuntime(
       model: dependencies.answer_composition_generation.structured_output,
       generation: dependencies.answer_composition_generation.generation,
       audit: new SqlitePersonAgenticAskAuditV1(database),
+      ...(diagnostics === undefined ? {} : { diagnostics }),
       ...(dependencies.agentic_ask_v1_small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
     };
     const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && answerOptions !== undefined
@@ -385,15 +386,14 @@ export async function startOrganizationAuthorityApiRuntime(
       }),
       // Agentic Ask is the only Ask (ADR-0022); it needs the bound answer model.
       ...(answerOptions === undefined ? {} : {
-        person_answer_v3: createPersonAnswerV3Route({ ...answerOptions,
-          ...(dependencies.ask_journey_telemetry === undefined ? {} : { ask_journey_telemetry: dependencies.ask_journey_telemetry }),
-        }),
+        person_answer_v3: createPersonAnswerV3Route(answerOptions),
         // A response version is available with the model even when no external
         // source is configured. The request catalog still contains local context.
         person_answer_v4: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 5),
         person_answer_v5: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 6),
       }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
+      ...(diagnostics === undefined ? {} : { person_diagnostics: diagnostics }),
       person_trigger_runs: triggerRuns,
       person_documents: createPersonDocumentApplicationV1({
         authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
@@ -450,6 +450,7 @@ export async function startOrganizationAuthorityApiRuntime(
         stopAcceptingRequests();
         researchEval?.close();
         triggerRuns?.close();
+        diagnostics?.close();
         await Promise.all([serverClosed, documentWorker?.close()]);
         for (const { runtime } of [...liveConnectors].reverse()) runtime.close();
         personHttp?.close();
@@ -459,6 +460,7 @@ export async function startOrganizationAuthorityApiRuntime(
       },
     };
   } catch (error) {
+    diagnostics?.close();
     await documentWorker?.close();
     for (const { runtime } of [...liveConnectors].reverse()) runtime.close();
     personHttp?.close();

@@ -44,6 +44,7 @@ export interface PersonResearchEvalReadRequestV1 {
 }
 
 export type PersonResearchEvalStatusV1 = 'running' | 'completed' | 'failed';
+
 export interface PersonResearchEvalReadResponseV1 {
   readonly schema_version: 1;
   readonly kind: 'echo-person-research-eval-result-v1';
@@ -79,13 +80,30 @@ function runId(value: unknown): string {
   if (typeof value !== 'string' || !RUN_ID.test(value)) fail('Research evaluation run id is invalid');
   return value;
 }
-/** Plain JSON only: finite numbers, strings, booleans, null, arrays and plain objects, nested at most MAX_INPUT_DEPTH deep. */
-function jsonValue(value: unknown, depth: number): void {
+/** Plain JSON only; inspect descriptors before reading values, with a bounded ancestor walk. */
+function jsonValue(value: unknown, depth: number, maximumDepth = MAX_INPUT_DEPTH, label = 'Research evaluation input', ancestors = new Set<object>()): void {
   if (value === null || typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return;
   const prototype = typeof value === 'object' ? Object.getPrototypeOf(value) : undefined;
-  if (depth >= MAX_INPUT_DEPTH || !(Array.isArray(value) || prototype === Object.prototype || prototype === null)) fail('Research evaluation input is invalid');
-  for (const entry of Object.values(value as object)) jsonValue(entry, depth + 1);
+  if (depth >= maximumDepth || !(Array.isArray(value) || prototype === Object.prototype || prototype === null)) fail(`${label} is invalid`);
+  const object = value as object;
+  if (ancestors.has(object) || Object.getOwnPropertySymbols(object).length !== 0) fail(`${label} is invalid`);
+  const descriptors = Object.getOwnPropertyDescriptors(object);
+  if (Array.isArray(value)) {
+    if (Object.keys(descriptors).length !== value.length + 1) fail(`${label} is invalid`);
+    for (let index = 0; index < value.length; index += 1) if (!Object.hasOwn(descriptors, index)) fail(`${label} is invalid`);
+    delete descriptors.length;
+  }
+  ancestors.add(object);
+  try {
+    for (const descriptor of Object.values(descriptors)) {
+      if (!('value' in descriptor) || descriptor.enumerable !== true) fail(`${label} is invalid`);
+      jsonValue(descriptor.value, depth + 1, maximumDepth, label, ancestors);
+    }
+  } finally {
+    ancestors.delete(object);
+  }
 }
+
 
 export function validatePersonResearchEvalStartRequestV1(value: unknown): PersonResearchEvalStartRequestV1 {
   const request = asEnumerableRecord(value, 'Research evaluation start request');

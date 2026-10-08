@@ -7,7 +7,7 @@ import { verifyAuthorityStateLineage } from "../../../packages/organization-auth
 import { openAuthorityDatabase } from "../../../packages/organization-authority-kernel/dist/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../../../services/organization-authority/dist/adapters/security/file-organization-authority-signer.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../../../services/organization-authority/dist/composition/readable-search-generation-composition.js";
-import { createStagingJourneyTelemetryTransportV1 } from "../../../services/organization-authority/dist/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
+import { createJourneyTelemetryTransportV1 } from "../../../services/organization-authority/dist/composition/observability/journey-telemetry-transport-v1.js";
 import { observeCoreRuntimeV1, captureCoreRuntimeContentV1 } from "../../../packages/organization-authority-kernel/dist/shared/core-runtime-observation-v1.js";
 import { openOrganizationRecordDatabase, createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { clearReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
@@ -28,7 +28,7 @@ try {
     const modes = round % 2 === 0 ? ["off", "metadata", "content"] : ["content", "metadata", "off"];
     for (const mode of modes) {
       let bytes = 0, events = 0;
-      const transport = createStagingJourneyTelemetryTransportV1({ release_sha: "a".repeat(40), build_number: 1 }, { write(line) { bytes += Buffer.byteLength(line); events++; } }, { content_enabled: mode === "content" });
+      const transport = createJourneyTelemetryTransportV1("staging", { release_sha: "a".repeat(40), build_number: 1 }, { write(line) { bytes += Buffer.byteLength(line); events++; } }, { content_enabled: mode === "content" });
       const rssBefore = process.memoryUsage().rss;
       const heapBefore = process.memoryUsage().heapUsed;
       const began = performance.now();
