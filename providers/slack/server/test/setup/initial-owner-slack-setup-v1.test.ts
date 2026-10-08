@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
-import { applyOrganizationControlBaselineV3, openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
+import { applyOrganizationControlBaselineV4, openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
@@ -28,7 +28,7 @@ describe("initial-owner Slack setup status", () => {
     directories.push(state_directory);
     const database = openOrganizationControlDatabase(join(state_directory, "integrations.sqlite"));
     try {
-      applyOrganizationControlBaselineV3(database);
+      applyOrganizationControlBaselineV4(database);
       database.prepare(`INSERT INTO organization_control_plane_metadata (singleton, control_plane_id, organization_id, authority_id,
         authority_descriptor_sha256, created_at) VALUES (1, 'ocp_1', ?, ?, ?, ?)`)
         .run(COORDINATES.organization_id, COORDINATES.authority_id, canonicalSha256({ descriptor: "test" }), NOW);

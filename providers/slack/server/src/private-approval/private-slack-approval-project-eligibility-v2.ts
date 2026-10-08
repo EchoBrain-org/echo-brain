@@ -1,12 +1,12 @@
 /** Server-owned project choices for a frozen private-approval card. */
 import type Database from "better-sqlite3";
-import type { PrivateSlackApprovalReviewerV1 } from "./resolve-private-slack-approval-reviewer-target-v1.js";
+import type { CurrentSlackDmApprovalReviewerV1 } from "../organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
 import type { PrivateSlackApprovalEligibleProjectV2 } from "./private-slack-approval-block-kit-card-v2.js";
 
 export interface PrivateSlackApprovalProjectEligibilityInputV2 {
   readonly database: Database.Database;
   readonly organization_id: string;
-  readonly reviewer: PrivateSlackApprovalReviewerV1;
+  readonly reviewer: CurrentSlackDmApprovalReviewerV1;
 }
 
 /**

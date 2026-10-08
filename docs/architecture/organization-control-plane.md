@@ -251,36 +251,29 @@ The core runtime observer records `person_tools_status`,
 attribution. These events contain no provider identities, challenge codes,
 credentials, or provider response bodies.
 
-## Private DM approval persistence
+## Private DM approvals
 
-The Authority resolves the meeting owner's current Slack DM target from the
-active connection and that member's active link, posts the frozen approval
-card, and verifies each Slack interaction against the signing secret. The
-control plane stores, per approval: the pending contract, every signed action
-receipt, every denied action receipt, and the terminal evidence. Each
-authorization is revalidated inside the Authority transaction against the
-current membership tenure and the current link, and the resolution derives the
-final approver exclusively from that revalidated authorization.
+Slack DM approvals are paused. The control plane no longer stores approval
+state: the pending contracts, signed and denied action receipts, and terminal
+evidence were removed with control-plane baseline V4, together with the
+Slack-bound policy resolutions and their neutral core. The Slack connection,
+the bot token source, connection health and the identity-link lookup
+(`resolveCurrentSlackDmApprovalReviewerTargetV1`) stay; the coming Slack
+plug-in posts copies of approval-core proposals with them and decides through
+the approval core
+([unified meeting approval](../product/2026-10-07-unified-meeting-approval-v1.md)).
+Until then a verified Approve or Reject click writes nothing and gets a fixed
+ephemeral reply pointing to the ECHO desktop app.
 [INV-IDENTITY-005](../invariants/INV-IDENTITY-005-adapter-to-echo-identity-chain.md)
 governs the identity chain.
 
-Policy resolution is split along the provider boundary. The neutral core
-(`application/private-approval-policy-resolution-core-v1`) owns the durable
-command shape, verified assignees, the shared commitment identity, policy
-binding, and exact replay matching. The Slack-owned module
-(`providers/slack/server/src/organization-control-plane/application/slack/private-approval-policy-resolution-v1`) binds that core
-to one exact Slack human and validates the link proof (`provider: "slack"`,
-canonical `U`/`W` subject). The persisted field names
-`assigned_owner_slack_identity_link` and `current_slack_identity_link` are
-frozen, digested commitments; a second provider composes the core with its own
-proof module and its own versioned contract rather than renaming these.
-
 ## Storage
 
-Fresh state uses `baselines/organization-control-plane-baseline-v3.sql`,
-containing only the 11 active tables below. Its applier requires an empty
+Fresh state uses `baselines/organization-control-plane-baseline-v4.sql`,
+containing only the 7 active tables below. Its applier requires an empty
 database. Runtime and stopped-state setup require its exact digest and the
-six-role V2 root manifest. Startup performs no schema migration.
+six-role V2 root manifest. Startup performs no schema migration, and no
+migration reaches V4: existing state is reset.
 
 Tables with a current reader or writer:
 
@@ -290,10 +283,6 @@ Tables with a current reader or writer:
 | `organization_tool_connection_contracts`, `organization_tool_connection_current_state` | The verified Slack connection and its current state |
 | `organization_external_human_link_contracts`, `organization_external_human_link_current` | One canonical Slack human bound to one exact principal and membership |
 | `organization_person_slack_link_challenges`, `organization_person_slack_link_commands` | Private-DM challenge coordinates and command replay evidence |
-| `organization_private_approval_pending_contracts_v2` | The frozen pending approval |
-| `organization_private_approval_signed_action_receipts_v2` | Every verified Slack action |
-| `organization_private_approval_denied_action_receipts_v2` | Every rejected Slack action |
-| `organization_private_approval_terminal_evidence_v2` | The final approve or reject with its revalidated authorization |
 
 Authority `principal_id` and `membership_id` values are opaque references.
 They are not foreign keys because the Authority remains the sole source of

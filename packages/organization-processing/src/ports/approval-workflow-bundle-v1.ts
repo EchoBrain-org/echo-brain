@@ -3,7 +3,6 @@ import type { AppendV4RecordInput, AppendedV4Record } from "@echo-brain/organiza
 import type { ApprovalWorkflowStagerV1 } from "../admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import type { ApprovalWorkflowStateV1 } from "../admitted-meeting-processing/approval-workflow-state-v1.js";
 import type { ProviderHttpApplicationV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
-import type { MeetingApprovalJourneyTelemetryPortV1 } from "../admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
 
 /**
  * The outcome of one bounded provider terminal-card reconciliation turn.
@@ -43,8 +42,6 @@ export interface ApprovalWorkflowContextV1 {
     readonly state_lineage_id: string;
   };
   readonly next_envelope_id: () => string;
-  /** Present only in the explicitly configured staging runtime. */
-  readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
   /**
    * Optional wake signal. An approval surface calls it after a verified
    * terminal action is durably queued so the runtime can publish it now

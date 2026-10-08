@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { canonicalJson, canonicalSha256 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
-import { applyOrganizationControlBaselineV3 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
+import { applyOrganizationControlBaselineV4 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import { openOrganizationControlDatabase } from "../../../../../../packages/organization-control-plane/src/persistence/open-organization-control-database.js";
 import { FileOrganizationSecretStore } from "../../../../../../packages/organization-control-plane/src/security/file-secret-store.js";
 import type { NangoSlackConnectionV1 } from "../../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
@@ -38,7 +38,7 @@ function setup(): TestState {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "echo-slack-nango-")));
   directories.push(directory);
   const database = openOrganizationControlDatabase(join(directory, "integrations.sqlite"));
-  applyOrganizationControlBaselineV3(database);
+  applyOrganizationControlBaselineV4(database);
   database
     .prepare(
       `INSERT INTO organization_control_plane_metadata
@@ -167,34 +167,6 @@ function seedOwnerLink(database: Database.Database, active: StoredSlackConnectio
     .prepare("INSERT INTO organization_external_human_link_current VALUES (?, ?, 'https://slack.com', 'workspace', ?, ?, 'U_OWNER', 'prn_owner', 'mem_owner', 'active', ?)")
     .run("clm_owner", linkSha, active.connection.provider_tenant_id, active.connection.provider_enterprise_id, NOW);
   return linkSha;
-}
-
-function seedPendingApproval(database: Database.Database, active: StoredSlackConnectionV1, linkSha: string): void {
-  database
-    .prepare(
-      `INSERT INTO organization_private_approval_pending_contracts_v2
-       (approval_id, candidate_id, organization_id, authority_id, pending_json, pending_sha256,
-        card_binding_json, card_binding_sha256, stage_command_id, connection_id,
-        connection_contract_sha256, connection_state_sha256, external_identity_link_id,
-        external_identity_link_contract_sha256, assignee_principal_id, assignee_membership_id,
-        slack_workspace_id, slack_enterprise_id, slack_subject_id, dm_channel_id,
-        provider_message_ts, card_sha256, created_at)
-       VALUES ('apr_1', 'cnd_1', ?, ?, '{"pending":1}', ?, '{"card":1}', ?, 'pas_1', ?, ?, ?,
-               'clm_owner', ?, 'prn_owner', 'mem_owner', ?, NULL, 'U_OWNER', 'D_OWNER', '1.0001', ?, ?)`,
-    )
-    .run(
-      COORDINATES.organization_id,
-      COORDINATES.authority_id,
-      canonicalSha256({ pending: 1 }),
-      canonicalSha256({ card_binding: 1 }),
-      active.connection.connection_id,
-      active.contract_sha256,
-      active.state_sha256,
-      linkSha,
-      active.connection.provider_tenant_id,
-      canonicalSha256({ card: 1 }),
-      NOW,
-    );
 }
 
 const PREDATES_IN_APP_SETUP = "stored Slack connection predates in-app setup; install this release's host tooling, then run replace-rehearsal";
@@ -458,11 +430,11 @@ describe("Nango Slack connection activation v1", () => {
     expect(findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256)).toEqual(activeBundle);
   });
 
-  it("refuses a different app while a connection is active, writing nothing and leaving every waiting card alone", async () => {
+  it("refuses a different app while a connection is active, writing nothing", async () => {
     const state = setup();
     await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
     const active = readActiveSlackConnectionV1(state.database)!;
-    seedPendingApproval(state.database, active, seedOwnerLink(state.database, active));
+    seedOwnerLink(state.database, active);
     const replacement = pendingBundle(state, "A0APP2");
     const before = refs(state);
 
@@ -473,7 +445,6 @@ describe("Nango Slack connection activation v1", () => {
     expect(refs(state)).toEqual(before);
     expect(readActiveSlackConnectionV1(state.database)?.state_sha256).toBe(active.state_sha256);
     expect(rowCount(state.database, "organization_tool_connection_contracts")).toBe(1);
-    expect(rowCount(state.database, "organization_private_approval_pending_contracts_v2")).toBe(1);
   });
 
   it("refuses an install while a connection from before in-app setup is stored, writing nothing", async () => {

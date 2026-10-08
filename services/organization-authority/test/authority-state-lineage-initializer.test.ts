@@ -17,7 +17,7 @@ import {
 import { applyAuthorityBaselineV12, AUTHORITY_BASELINE_SCHEMA_VERSION_V12, authorityBaselineSha256V12 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import {
-  openOrganizationControlDatabase, applyOrganizationControlBaselineV3, ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3, organizationControlBaselineSha256V3,
+  openOrganizationControlDatabase, applyOrganizationControlBaselineV4, ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4, organizationControlBaselineSha256V4,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
   openOrganizationRecordDatabase, applyOrganizationRecordLogBaselineV4, ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4, organizationRecordLogBaselineSha256V4,
@@ -121,8 +121,8 @@ function realBaselineInput(
       },
       "control-plane": {
         database_schema_version:
-          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
-        schema_sha256: organizationControlBaselineSha256V3(),
+          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4,
+        schema_sha256: organizationControlBaselineSha256V4(),
       },
       "record-log": {
         database_schema_version:
@@ -153,7 +153,7 @@ function realBaselineInput(
     },
     top_level_appliers: {
       authority: { apply: applyAuthorityBaselineV12 },
-      "control-plane": { apply: applyOrganizationControlBaselineV3 },
+      "control-plane": { apply: applyOrganizationControlBaselineV4 },
       "record-log": { apply: applyOrganizationRecordLogBaselineV4 },
     },
     open_writable_database: (path, role) => {

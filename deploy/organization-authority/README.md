@@ -351,7 +351,7 @@ update the app. The compatibility DM-code challenge
 available as the fallback for a machine without a browser.
 
 After that setup, the ordinary release updater only replaces artifacts within
-the current lineage: Authority V12, private-approval control-plane V3,
+the current lineage: Authority V12, control-plane V4,
 record-log V4, retrieval facts V3, retrieval content/lexical V2, and a six-role
 V2 root. It refuses older or mixed persisted state before runtime,
 configuration, or state mutation. Use `replace-rehearsal --confirm-no-live-users`

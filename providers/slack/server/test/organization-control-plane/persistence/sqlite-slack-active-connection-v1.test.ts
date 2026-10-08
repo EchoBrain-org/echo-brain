@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2 } from "../../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import { readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1, type SlackConnectionCoordinatesV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
-import { applyOrganizationControlBaselineV3 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
+import { applyOrganizationControlBaselineV4 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 
 const COORDINATES = Object.freeze({
   authority_id: "oau_00000000-0000-4000-8000-000000000001",
@@ -18,7 +18,7 @@ const databases: Database.Database[] = [];
 /** One stored Nango-kind connection, or none with `seed: false`. */
 function database(input: { readonly seed?: boolean; readonly coordinates?: SlackConnectionCoordinatesV1; readonly row_status?: "active" | "revoked" } = {}) {
   const opened = new Database(":memory:");
-  applyOrganizationControlBaselineV3(opened);
+  applyOrganizationControlBaselineV4(opened);
   databases.push(opened);
   if (input.seed === false) return opened;
   const connection = buildOrganizationToolConnectionContractV2({

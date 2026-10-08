@@ -3,12 +3,11 @@ import { sha256Digest } from "@echo-brain/federation-protocol";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
-  PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PersonApprovalPolicyId,
   type PersonApprovalPolicyIdV2,
 } from "../organization-control-plane/slack-approval-integration-v1.js";
-import { PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1, privateSlackApprovalBlockKitActionIdV1 } from "./private-slack-approval-block-kit-card-v1.js";
+import { PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS, PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1, privateSlackApprovalBlockKitActionIdV1 } from "./private-slack-approval-block-kit-card-v1.js";
 import { PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V2, PRIVATE_SLACK_APPROVAL_OWNER_PROPOSALS_MAX_V3, canonicalPrivateSlackApprovalOwnerV3, privateSlackApprovalBlockKitActionIdV2, privateSlackApprovalBlockKitOwnerActionIdV3 } from "./private-slack-approval-block-kit-card-v2.js";
 
 /** The largest Slack interactivity request this pure boundary will retain. */

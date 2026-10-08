@@ -30,10 +30,9 @@ defines the supported operator and employee flow.
 - `meeting-source-bundle-v1.ts`, `decision-processor-bundle-v1.ts`, and
   `approval-workflow-bundle-v1.ts` in `packages/organization-processing/src/ports/`
   define provider-neutral composition seams.
-- `providers/synthetic-demo/src/synthetic-demo-meeting-source-bundle-v1.ts`,
-  `providers/openrouter/src/openrouter-decision-processor-bundle-v1.ts`, and
-  `providers/slack/server/src/private-approval/private-slack-approval-workflow-bundle-v1.ts`
-  own the selected providers. Slack Person identity composition is under
+- `providers/openrouter/src/openrouter-decision-processor-bundle-v1.ts` owns
+  the selected decision processor. Slack approvals are paused; no approval
+  workflow bundle is composed. Slack Person identity composition is under
   `providers/slack/server/src/person-identity/`; the Slack private-DM staging
   canary is under `providers/slack/server/src/composition/staging/slack-private-approval/`.
 - Private Slack interactions are separated into protocol, handler, HTTP adapter,
@@ -414,7 +413,7 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
-Current state uses Authority V10, control-plane V3, record-log V4, retrieval
+Current state uses Authority V12, control-plane V4, record-log V4, retrieval
 facts V3, and retrieval lexical/content V2. The V2 root binds exactly these six
 roles. Per-database manifests remain V1; schema versions and digests identify
 each role's current baseline. Each baseline applies only to a completely empty

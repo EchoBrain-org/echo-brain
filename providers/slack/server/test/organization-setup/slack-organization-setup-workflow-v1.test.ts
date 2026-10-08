@@ -5,7 +5,7 @@ import type Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
-import { applyOrganizationControlBaselineV3, openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
+import { applyOrganizationControlBaselineV4, openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1, type OrganizationSlackInstallFailureReasonV1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
@@ -72,7 +72,7 @@ function controlDatabase(): { directory: string; database: Database.Database } {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "echo-slack-setup-")));
   directories.push(directory);
   const database = openOrganizationControlDatabase(join(directory, "integrations.sqlite"));
-  applyOrganizationControlBaselineV3(database);
+  applyOrganizationControlBaselineV4(database);
   database.prepare(`INSERT INTO organization_control_plane_metadata (singleton, control_plane_id, organization_id, authority_id,
     authority_descriptor_sha256, created_at) VALUES (1, ?, ?, ?, ?, ?)`)
     .run(`ocp_${uuid(1)}`, ORGANIZATION_ID, AUTHORITY_ID, canonicalSha256({ descriptor: "test" }), T0);
@@ -178,20 +178,12 @@ function setup() {
   return { ...f, database, secrets, health, context, workflow, finishConnect, connect, heldAttempts, restart };
 }
 
-function seedWaitingCard(database: Database.Database): void {
+function seedOwnerLink(database: Database.Database): void {
   const active = readActiveSlackConnectionV1(database)!;
   const linkSha = canonicalSha256({ link: "owner" });
   database.prepare("INSERT INTO organization_external_human_link_contracts VALUES (?, ?, ?, ?)").run("clm_owner", linkSha, '{"link":"owner"}', T0);
   database.prepare("INSERT INTO organization_external_human_link_current VALUES (?, ?, 'https://slack.com', 'workspace', ?, NULL, 'U_OWNER', 'prn_owner', 'mem_owner', 'active', ?)")
     .run("clm_owner", linkSha, active.connection.provider_tenant_id, T0);
-  database.prepare(`INSERT INTO organization_private_approval_pending_contracts_v2 (approval_id, candidate_id, organization_id, authority_id,
-      pending_json, pending_sha256, card_binding_json, card_binding_sha256, stage_command_id, connection_id, connection_contract_sha256,
-      connection_state_sha256, external_identity_link_id, external_identity_link_contract_sha256, assignee_principal_id,
-      assignee_membership_id, slack_workspace_id, slack_enterprise_id, slack_subject_id, dm_channel_id, provider_message_ts, card_sha256, created_at)
-    VALUES ('apr_1', 'cnd_1', ?, ?, '{"pending":1}', ?, '{"card":1}', ?, 'pas_1', ?, ?, ?, 'clm_owner', ?, 'prn_owner', 'mem_owner', ?, NULL,
-      'U_OWNER', 'D_OWNER', '1.0001', ?, ?)`)
-    .run(ORGANIZATION_ID, AUTHORITY_ID, canonicalSha256({ pending: 1 }), canonicalSha256({ card_binding: 1 }), active.connection.connection_id,
-      active.contract_sha256, active.state_sha256, linkSha, active.connection.provider_tenant_id, canonicalSha256({ card: 1 }), T0);
 }
 
 const SETUP_REQUEST = { request_id: `oss_${uuid(1)}`, configuration_token: CONFIG_TOKEN };
@@ -364,10 +356,10 @@ describe("Slack organization setup workflow v1", () => {
     expect(findSlackAppCredentialsByReferenceSha256V1(f.secrets, active.state.credential_reference_sha256).credentials.app_id).toBe("A0APP1");
   });
 
-  it("pushes the four-scope delivery manifest to the connected app through ordinary setup, leaving cards and links alone", async () => {
+  it("pushes the four-scope delivery manifest to the connected app through ordinary setup, leaving links alone", async () => {
     const f = setup();
     const before = await f.connect();
-    seedWaitingCard(f.database);
+    seedOwnerLink(f.database);
     const rerun = f.restart();
     await rerun.setup({ ...SETUP_REQUEST, request_id: `oss_${uuid(2)}` }, "owner");
     expect(f.manifest.createApp).toHaveBeenCalledOnce();
@@ -400,7 +392,7 @@ describe("Slack organization setup workflow v1", () => {
     expect(f.verifier.verifyConnection).toHaveBeenCalledTimes(verifierCalls);
   });
 
-  it("rejects current-attempt reconnect tags that name another owner or organization without touching cards or links", async () => {
+  it("rejects current-attempt reconnect tags that name another owner or organization without touching links", async () => {
     const foreignTags: Readonly<Record<string, string>>[] = [
       { echo_membership_id: `mem_${uuid(9)}` },
       { echo_organization_id: `org_${uuid(9)}` },
@@ -408,9 +400,8 @@ describe("Slack organization setup workflow v1", () => {
     for (const wrongTag of foreignTags) {
       const f = setup();
       const before = await f.connect();
-      seedWaitingCard(f.database);
+      seedOwnerLink(f.database);
       const snapshot = () => [
-        f.database.prepare("SELECT * FROM organization_private_approval_pending_contracts_v2").all(),
         f.database.prepare("SELECT * FROM organization_external_human_link_current").all(),
       ];
       const frozen = snapshot();
@@ -425,12 +416,11 @@ describe("Slack organization setup workflow v1", () => {
     }
   });
 
-  it("preserves a six-scope token, approval cards and identity links when reconnecting under the baseline profile", async () => {
+  it("preserves a six-scope token and identity links when reconnecting under the baseline profile", async () => {
     const f = setup();
     const before = await f.connect();
-    seedWaitingCard(f.database);
+    seedOwnerLink(f.database);
     const snapshot = () => [
-      f.database.prepare("SELECT * FROM organization_private_approval_pending_contracts_v2").all(),
       f.database.prepare("SELECT * FROM organization_external_human_link_current").all(),
     ];
     const frozen = snapshot();
@@ -657,10 +647,9 @@ describe("Slack organization setup workflow v1", () => {
   it.each(["reconnect", "rebind"] as const)("keeps the active app authoritative during %s with an unrelated pending app", async (mode) => {
     const f = setup();
     const before = await f.connect();
-    seedWaitingCard(f.database);
+    seedOwnerLink(f.database);
     const frozen = () => [
       readActiveSlackConnectionV1(f.database),
-      f.database.prepare("SELECT * FROM organization_private_approval_pending_contracts_v2").all(),
       f.database.prepare("SELECT * FROM organization_external_human_link_current").all(),
     ];
     const snapshot = frozen();
@@ -694,9 +683,8 @@ describe("Slack organization setup workflow v1", () => {
     const f = setup();
     const { workflow, database } = f;
     const before = await f.connect();
-    seedWaitingCard(database);
+    seedOwnerLink(database);
     const snapshot = () => [
-      database.prepare("SELECT * FROM organization_private_approval_pending_contracts_v2").all(),
       database.prepare("SELECT * FROM organization_external_human_link_current").all(),
     ];
     const frozen = snapshot();
@@ -739,7 +727,7 @@ describe("Slack organization setup workflow v1", () => {
   it("rebinds the active connection to a new Nango connection after Nango lost it, keeping the handle and the state hash", async () => {
     const { workflow, nango, connections, connect, finishConnect, database, secrets, health } = setup();
     const before = await connect();
-    seedWaitingCard(database);
+    seedOwnerLink(database);
     const bundle = findSlackAppCredentialsByReferenceSha256V1(secrets, before.state.credential_reference_sha256);
     connections.delete("nango-conn-1");
     health.markNeedsReinstall(before.state_sha256);

@@ -133,48 +133,34 @@ describe("SQLite admitted meeting-processing state", () => {
     ).toBe(0);
   });
 
-it.each(["approved", "rejected"] as const)(
-    "keeps a completed %s private approval terminal when a later revision arrives",
-    async (outcome) => {
+it.each(["approve", "reject"] as const)(
+    "keeps a proposal decided by %s when a later revision arrives",
+    async (action) => {
       const { value, state, current, candidate: first } = await actionableFixture();
 
-      // This source-state boundary does not need a full private-assignment
-      // fixture; constrain the FK exception to the terminal receipt insert.
-      value.pragma("foreign_keys = OFF");
-      try {
-        value
-          .prepare(
-            `INSERT INTO authority_private_approval_terminal_receipts_v3 (
-               approval_id, candidate_id, outcome, resolution_json,
-               resolution_sha256, v4_receipt_json, v4_receipt_sha256,
-               card_render_state, card_rendered_at, recorded_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, 'unrendered', NULL, ?)`,
-          )
-          .run(
-            first.approval_id,
-            first.candidate_id,
-            outcome,
-            JSON.stringify({ approval_id: first.approval_id, outcome }),
-            `sha256:${outcome === "approved" ? "a".repeat(64) : "b".repeat(64)}`,
-            outcome === "approved" ? "{}" : null,
-            outcome === "approved" ? `sha256:${"c".repeat(64)}` : null,
-            ADVANCED_AT,
-          );
-      } finally {
-        value.pragma("foreign_keys = ON");
-      }
+      value
+        .prepare(
+          `INSERT INTO authority_person_meeting_approval_actions_v1 (
+             approval_id, command_id, body_json, receipt_json
+           ) VALUES (?, ?, ?, NULL)`,
+        )
+        .run(
+          first.approval_id,
+          `command-terminal-${action}`,
+          JSON.stringify({ request: { approval_id: first.approval_id, action } }),
+        );
 
       const revised: MeetingDocument = {
         ...meeting,
         provenance: {
           ...meeting.provenance,
-          canonical_revision: `sha256:note-terminal-${outcome}`,
+          canonical_revision: `sha256:note-terminal-${action}`,
         },
         content: [
           {
             id: "block-terminal",
             kind: "note",
-            text: `A ${outcome} terminal must remain final.`,
+            text: `A ${action} decision must remain final.`,
           },
         ],
       };

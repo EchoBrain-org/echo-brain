@@ -4,18 +4,18 @@ import { sha256Digest } from "../canonical/canonical-json.js";
 
 /** `ECOP` is stable for the Control Plane database role. */
 export const ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID = 0x45434f50;
-export const ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3 = 3;
+export const ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4 = 4;
 
-export function organizationControlBaselineSqlV3(): string {
-  return readFileSync(new URL("../../baselines/organization-control-plane-baseline-v3.sql", import.meta.url), "utf8");
+export function organizationControlBaselineSqlV4(): string {
+  return readFileSync(new URL("../../baselines/organization-control-plane-baseline-v4.sql", import.meta.url), "utf8");
 }
 
-export function organizationControlBaselineSha256V3(): `sha256:${string}` {
-  return sha256Digest(organizationControlBaselineSqlV3());
+export function organizationControlBaselineSha256V4(): `sha256:${string}` {
+  return sha256Digest(organizationControlBaselineSqlV4());
 }
 
-export function applyOrganizationControlBaselineV3(database: Database.Database): void {
-  const sql = organizationControlBaselineSqlV3();
+export function applyOrganizationControlBaselineV4(database: Database.Database): void {
+  const sql = organizationControlBaselineSqlV4();
   database.exec("BEGIN IMMEDIATE");
   try {
     const userVersion = database.pragma("user_version", {
@@ -38,7 +38,7 @@ export function applyOrganizationControlBaselineV3(database: Database.Database):
       `application_id = ${ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID}`,
     );
     database.pragma(
-      `user_version = ${ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3}`,
+      `user_version = ${ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4}`,
     );
     database.exec("COMMIT");
   } catch (error) {

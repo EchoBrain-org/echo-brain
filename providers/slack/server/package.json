@@ -21,10 +21,6 @@
       "types": "./dist/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.d.ts",
       "import": "./dist/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.js"
     },
-    "./private-approval/private-slack-approval-workflow-bundle-v1": {
-      "types": "./dist/private-approval/private-slack-approval-workflow-bundle-v1.d.ts",
-      "import": "./dist/private-approval/private-slack-approval-workflow-bundle-v1.js"
-    },
     "./person-identity/slack-person-external-identity-runtime-bundle-v1": {
       "types": "./dist/person-identity/slack-person-external-identity-runtime-bundle-v1.d.ts",
       "import": "./dist/person-identity/slack-person-external-identity-runtime-bundle-v1.js"

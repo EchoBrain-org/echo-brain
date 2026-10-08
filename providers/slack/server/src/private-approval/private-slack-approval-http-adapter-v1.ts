@@ -14,12 +14,18 @@ export function createPrivateSlackApprovalHttpAdapterV1(
       path: PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1,
     })]),
     async accept({ raw_body, content_type, headers }: ProviderHttpRequestV1) {
-      await interaction_handler.accept({
+      const reply = await interaction_handler.accept({
         raw_body,
         content_type,
         slack_request_timestamp: headers["x-slack-request-timestamp"],
         slack_signature: headers["x-slack-signature"],
       });
+      if (reply.kind === "ephemeral") {
+        return {
+          status: 200 as const,
+          body: { response_type: "ephemeral", replace_original: false, text: reply.text },
+        };
+      }
       return { status: 200 as const, raw_body: new Uint8Array() };
     },
   });

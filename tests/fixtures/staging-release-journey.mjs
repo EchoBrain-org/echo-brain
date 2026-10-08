@@ -136,8 +136,7 @@ try {
     try { return db.prepare(sql).all(); } finally { db.close(); }
   };
   const noApproval = () => {
-    assert.deepEqual(rows('integrations.sqlite', 'SELECT * FROM organization_private_approval_signed_action_receipts_v2'), []);
-    assert.deepEqual(rows('integrations.sqlite', 'SELECT * FROM organization_private_approval_terminal_evidence_v2'), []);
+    assert.deepEqual(rows('authority.sqlite', 'SELECT * FROM authority_person_meeting_approval_actions_v1'), []);
     assert.deepEqual(rows('record-log.sqlite', 'SELECT * FROM organization_record_log'), []);
   };
   const noEngineCalls = () => existsSync(join(root, 'engine-calls.jsonl')) ? readFileSync(join(root, 'engine-calls.jsonl'), 'utf8') : '';

@@ -12,6 +12,7 @@
     "packages/organization-processing/src/core/contracts/decision.ts",
     "packages/organization-processing/src/core/contracts/meeting.ts",
     "packages/organization-processing/src/core/processing/brief.ts",
+    "packages/organization-processing/src/core/processing/owner-proposals-v1.ts",
     "packages/organization-processing/src/llm/llm-decision-processor.ts",
     "packages/organization-processing/src/core/contracts/validation.ts",
     "packages/organization-processing/src/core/index.ts",

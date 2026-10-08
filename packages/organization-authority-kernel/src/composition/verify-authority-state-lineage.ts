@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  organizationControlBaselineSha256V3,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
+  organizationControlBaselineSha256V4,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
   organizationRecordLogBaselineSha256V4,
@@ -55,8 +55,8 @@ export function verifyAuthorityStateLineage(stateDirectory: string) {
       },
       "control-plane": {
         database_schema_version:
-          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
-        schema_sha256: organizationControlBaselineSha256V3(),
+          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4,
+        schema_sha256: organizationControlBaselineSha256V4(),
       },
       "record-log": {
         database_schema_version:

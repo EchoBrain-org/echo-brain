@@ -1226,11 +1226,6 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           )
             AND state != 'superseded'
             AND NOT EXISTS (
-              SELECT 1
-                FROM authority_private_approval_terminal_receipts_v3 AS terminal
-               WHERE terminal.approval_id = authority_live_approval_outbox_v2.approval_id
-            )
-            AND NOT EXISTS (
               SELECT 1 FROM authority_person_meeting_approval_actions_v1 AS terminal
                WHERE terminal.approval_id = authority_live_approval_outbox_v2.approval_id
             )`,

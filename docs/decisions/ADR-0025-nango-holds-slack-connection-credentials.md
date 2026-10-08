@@ -167,6 +167,7 @@ Nango key reaches SQLite.
 and `tests/architecture/organization-authority-command-rehearsal.test.ts` prove
 the Authority only ever reads the Slack bot token from Nango.
 `providers/slack/server/test/private-approval/private-slack-approval-terminal-coordinator-v1.test.ts`
-and `private-slack-approval-workflow-bundle-v1.test.ts` prove that startup
-recovery completes and card updates stay pending while no bot token can be
-obtained.
+and `private-slack-approval-workflow-bundle-v1.test.ts` proved that startup
+recovery completed and card updates stayed pending while no bot token could be
+obtained. Both were removed with the Slack approval internals on 2026-10-07
+(Slack approvals are paused until the approval core's Slack plug-in).

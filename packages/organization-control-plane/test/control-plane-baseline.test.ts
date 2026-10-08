@@ -6,10 +6,10 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
-  applyOrganizationControlBaselineV3,
-  organizationControlBaselineSha256V3,
-  organizationControlBaselineSqlV3,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4,
+  applyOrganizationControlBaselineV4,
+  organizationControlBaselineSha256V4,
+  organizationControlBaselineSqlV4,
 } from "../src/persistence/baseline.js";
 import { openOrganizationControlDatabase } from "../src/persistence/open-organization-control-database.js";
 
@@ -65,33 +65,39 @@ afterEach(() => {
   }
 });
 
-describe("organization control state baseline V3", () => {
+describe("organization control state baseline V4", () => {
   const RETIRED_IDENTITY = /enrollment|installation|(?<!re)lease/i;
 
+  it('has no private approval tables in baseline V4', () => {
+    const db = new Database(':memory:');
+    applyOrganizationControlBaselineV4(db);
+    const names = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'organization_private_approval_%'").pluck().all();
+    expect(names).toEqual([]);
+  });
+
   it("freezes a migration-ledger-free ECOP schema without retired identity objects", () => {
-    const sql = organizationControlBaselineSqlV3();
+    const sql = organizationControlBaselineSqlV4();
     expect(RETIRED_IDENTITY.test(sql)).toBe(false);
     expect(sql).not.toContain("organization_schema_migrations");
-    expect(organizationControlBaselineSha256V3()).toBe(
-      "sha256:9aa161419d77355058151d2dd41283594802fe6da62f62f4aa92dbce01029c69",
+    expect(organizationControlBaselineSha256V4()).toBe(
+      "sha256:ba84d1a7e605db91f0aca1319fca9db17fb3f62b004b22a943f89897a2a64825",
     );
 
     const database = openOrganizationControlDatabase(databasePath());
     try {
-      applyOrganizationControlBaselineV3(database);
+      applyOrganizationControlBaselineV4(database);
       const names = schemaObjects(database).map(({ name }) => name);
       expect(names).not.toContain("organization_schema_migrations");
       expect(names).not.toContain("organization_provider_human_action_evidence");
-      expect(names).toContain("organization_private_approval_pending_contracts_v2");
       expect(names).toContain("organization_person_slack_link_challenges");
       expect(digest(JSON.stringify(schemaObjects(database)))).toBe(
-        "sha256:bbc0351ea8234acb1f43f4ebf0316a4e8ecac30f25297fc45f3afd8c1a726229",
+        "sha256:9d9cdf0d4d72082b2763cfa09b30a841db425e9998c8c826bc60b7e60aabe34e",
       );
       expect(database.pragma("application_id", { simple: true })).toBe(
         ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID,
       );
       expect(database.pragma("user_version", { simple: true })).toBe(
-        ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
+        ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4,
       );
       expect(database.pragma("foreign_key_check")).toEqual([]);
     } finally {
@@ -102,9 +108,9 @@ describe("organization control state baseline V3", () => {
   it("applies only to a completely empty database and leaves refusal targets untouched", () => {
     const database = openOrganizationControlDatabase(databasePath());
     try {
-      applyOrganizationControlBaselineV3(database);
+      applyOrganizationControlBaselineV4(database);
       const objects = schemaObjects(database);
-      expect(() => applyOrganizationControlBaselineV3(database)).toThrow(
+      expect(() => applyOrganizationControlBaselineV4(database)).toThrow(
         /completely empty database/,
       );
       expect(schemaObjects(database)).toEqual(objects);
@@ -115,7 +121,7 @@ describe("organization control state baseline V3", () => {
     const occupied = new Database(":memory:");
     try {
       occupied.exec("CREATE TABLE occupied (value TEXT) STRICT");
-      expect(() => applyOrganizationControlBaselineV3(occupied)).toThrow(
+      expect(() => applyOrganizationControlBaselineV4(occupied)).toThrow(
         /completely empty database/,
       );
       expect(
@@ -131,7 +137,7 @@ describe("organization control state baseline V3", () => {
   it("does not allow null enterprise IDs to bypass active human-link uniqueness", () => {
     const database = openOrganizationControlDatabase(databasePath());
     try {
-      applyOrganizationControlBaselineV3(database);
+      applyOrganizationControlBaselineV4(database);
       for (const [id, membership] of [
         ["clm_one", "mem_one"],
         ["clm_two", "mem_two"],
@@ -180,7 +186,7 @@ describe("organization control state baseline V3", () => {
   it("requires every mutable connection fence to name its exact frozen contract", () => {
     const database = openOrganizationControlDatabase(databasePath());
     try {
-      applyOrganizationControlBaselineV3(database);
+      applyOrganizationControlBaselineV4(database);
       const first = seedConnection(database, "con_one");
       const second = seedConnection(database, "con_two");
       expect(() =>
@@ -222,7 +228,7 @@ describe("organization control state baseline V3", () => {
   it("permits only terminal Person Slack challenge transitions", () => {
     const database = openOrganizationControlDatabase(databasePath());
     try {
-      applyOrganizationControlBaselineV3(database);
+      applyOrganizationControlBaselineV4(database);
       seedConnection(database);
       database
         .prepare(

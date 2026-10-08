@@ -11,7 +11,6 @@
     "providers/slack/server/src/organization-protocol/private-slack-block-approval-record-input-v2.ts",
     "providers/slack/server/src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.ts",
     "providers/slack/server/src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.ts",
-    "providers/slack/server/src/private-approval/private-slack-approval-workflow-bundle-v1.ts",
     "providers/slack/server/src/person-identity/slack-person-external-identity-runtime-bundle-v1.ts",
     "providers/slack/server/src/private-approval/private-slack-approval-interaction-protocol-v1.ts",
     "providers/slack/server/src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.ts",
@@ -30,16 +29,9 @@
     "providers/slack/server/src/organization-control-plane/adapters/nango/nango-connection-client-v1.ts",
     "providers/slack/server/src/person-identity/sqlite-slack-person-identity-link-repository-v1.ts",
     "providers/slack/server/src/person-identity/slack-person-browser-identity-link-workflow-v1.ts",
-    "providers/slack/server/src/private-approval/sqlite-private-slack-approval-terminal-authority-v1.ts",
-    "providers/slack/server/src/private-approval/sqlite-private-slack-approval-assignment-state-v1.ts",
-    "providers/slack/server/src/organization-control-plane/application/slack/private-approval-policy-resolution-v1.ts",
-    "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.ts",
-    "providers/slack/server/src/private-approval/resolve-private-slack-approval-reviewer-target-v1.ts",
-    "providers/slack/server/src/private-approval/sqlite-stable-private-approval-authority-fence-v1.ts",
-    "providers/slack/server/src/private-approval/private-slack-dm-approval-stager-v1.ts",
     "providers/slack/server/src/private-approval/private-slack-approval-interaction-handler-v1.ts",
-    "providers/slack/server/src/private-approval/private-slack-approval-terminal-coordinator-v1.ts",
-    "providers/slack/server/src/processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.ts",
+    "providers/slack/server/src/private-approval/slack-approval-card-input-v1.ts",
+    "providers/slack/server/src/private-approval/private-slack-approval-project-eligibility-v2.ts",
     "providers/slack/server/src/processing/adapters/shared/slack/slack-web-api-client.ts",
     "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.ts"
   ],
@@ -106,11 +98,6 @@
   "component_index_contract": {
     "canonical_components": [
       {
-        "name": "Private Slack approval workflow bundle",
-        "path": "providers/slack/server/src/private-approval/private-slack-approval-workflow-bundle-v1.ts",
-        "export": "createPrivateSlackApprovalWorkflowBundleV1"
-      },
-      {
         "name": "Slack Person external-identity runtime bundle",
         "path": "providers/slack/server/src/person-identity/slack-person-external-identity-runtime-bundle-v1.ts",
         "export": "createSlackPersonExternalIdentityRuntimeBundleV1"
@@ -138,7 +125,7 @@
       {
         "name": "Slack approval integration API",
         "path": "providers/slack/server/src/organization-control-plane/slack-approval-integration-v1.ts",
-        "export": "SqliteSlackDmApprovalPersistenceV1"
+        "export": "resolveCurrentSlackDmApprovalReviewerTargetV1"
       },
       {
         "name": "Slack web identity provider",

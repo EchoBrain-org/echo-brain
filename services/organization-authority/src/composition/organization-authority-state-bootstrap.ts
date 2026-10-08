@@ -11,10 +11,10 @@ import {
   type OrganizationAuthorityDescriptorV1,
 } from "@echo-brain/organization-protocol";
 import {
-  applyOrganizationControlBaselineV3,
+  applyOrganizationControlBaselineV4,
   openOrganizationControlDatabase,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
-  organizationControlBaselineSha256V3,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4,
+  organizationControlBaselineSha256V4,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
   applyOrganizationRecordLogBaselineV4,
@@ -350,8 +350,8 @@ export function bootstrapOrganizationAuthorityState(
       },
       "control-plane": {
         database_schema_version:
-          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
-        schema_sha256: organizationControlBaselineSha256V3(),
+          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4,
+        schema_sha256: organizationControlBaselineSha256V4(),
       },
       "record-log": {
         database_schema_version:
@@ -380,7 +380,7 @@ export function bootstrapOrganizationAuthorityState(
     },
     top_level_appliers: {
       authority: { apply: applyAuthorityBaselineV12 },
-      "control-plane": { apply: applyOrganizationControlBaselineV3 },
+      "control-plane": { apply: applyOrganizationControlBaselineV4 },
       "record-log": { apply: applyOrganizationRecordLogBaselineV4 },
     },
     open_writable_database: (path, role) => {

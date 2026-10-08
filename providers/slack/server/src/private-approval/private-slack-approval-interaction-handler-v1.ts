@@ -1,42 +1,23 @@
-import { annotateCoreRuntimeV1, coreRuntimeIdentityV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type {
-  MeetingApprovalJourneyClockV1,
-  MeetingApprovalJourneyStageAttemptV1,
-  MeetingApprovalJourneyTelemetryPortV1,
-} from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1";
-import {
-  PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V2_KIND,
-  PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V3_KIND,
-  type EnqueuePrivateApprovalInteractionResultV1,
-  type PrivateApprovalSignedTerminalActionV1,
-  type PrivateApprovalSignedTerminalActionV2,
-  type PrivateApprovalSignedTerminalActionV3,
-} from "../organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
-import type { PrivateSlackApprovalInteractionHttpPortV1 } from "../presentation/private-slack-approval-interaction-http-port-v1.js";
+  PrivateSlackApprovalInteractionHttpPortV1,
+  PrivateSlackApprovalInteractionReplyV1,
+} from "../presentation/private-slack-approval-interaction-http-port-v1.js";
 import { PrivateSlackApprovalInteractionError, parseVerifiedPrivateSlackApprovalInteractionV1, type PrivateSlackApprovalInteractionRejectionStageV1, verifyPrivateSlackApprovalRequestV1 } from "./private-slack-approval-interaction-protocol-v1.js";
 
 /**
- * The one durable operation this ingress needs. Keeping this narrow avoids a
- * second queue adapter whose only job was to copy the verified intent into
- * this receipt shape.
+ * Slack approvals are paused: an Approve or Reject click is verified and
+ * parsed, changes nothing, and gets this reply until clicks decide through
+ * the approval core.
  */
-export interface PrivateSlackApprovalInteractionResolutionPersistenceV1 {
-  enqueue(input: {
-    readonly disposition: "resolution";
-    readonly receipt: PrivateApprovalSignedTerminalActionV1;
-  }):
-    | EnqueuePrivateApprovalInteractionResultV1
-    | Promise<EnqueuePrivateApprovalInteractionResultV1>;
-  /** V2 has a separate durable receipt contract so no project choice is lost. */
-  enqueueV2?(receipt: PrivateApprovalSignedTerminalActionV2):
-    | { readonly disposition: "resolution"; readonly receipt: PrivateApprovalSignedTerminalActionV2; readonly receipt_sha256: `sha256:${string}`; readonly idempotent: boolean }
-    | Promise<{ readonly disposition: "resolution"; readonly receipt: PrivateApprovalSignedTerminalActionV2; readonly receipt_sha256: `sha256:${string}`; readonly idempotent: boolean }>;
-  /** V3 keeps the owner fields of a card that proposed owners (ADR-0021). */
-  enqueueV3?(receipt: PrivateApprovalSignedTerminalActionV3):
-    | { readonly disposition: "resolution"; readonly receipt: PrivateApprovalSignedTerminalActionV3; readonly receipt_sha256: `sha256:${string}`; readonly idempotent: boolean }
-    | Promise<{ readonly disposition: "resolution"; readonly receipt: PrivateApprovalSignedTerminalActionV3; readonly receipt_sha256: `sha256:${string}`; readonly idempotent: boolean }>;
-}
+export const PRIVATE_SLACK_APPROVAL_INACTIVE_CARD_TEXT_V1 =
+  "This card is no longer active. Open the ECHO desktop app to review it.";
+
+const ACKNOWLEDGED: PrivateSlackApprovalInteractionReplyV1 = Object.freeze({ kind: "acknowledged" });
+const INACTIVE_CARD: PrivateSlackApprovalInteractionReplyV1 = Object.freeze({
+  kind: "ephemeral",
+  text: PRIVATE_SLACK_APPROVAL_INACTIVE_CARD_TEXT_V1,
+});
 
 export interface PrivateSlackApprovalInteractionHandlerInputV1 {
   /**
@@ -44,24 +25,8 @@ export interface PrivateSlackApprovalInteractionHandlerInputV1 {
    * per request, so the active connection's app secret applies at once.
    */
   readonly signing_secret: () => string;
-  readonly persistence: PrivateSlackApprovalInteractionResolutionPersistenceV1;
-  /** Clock for request freshness and durable receipt timestamps. */
+  /** Clock for request freshness. */
   readonly now_unix_seconds?: () => number;
-  readonly now?: () => string;
-  /** Staging-only durable wait-anchor lookup. It returns no Slack content. */
-  readonly read_durable_card_staged_at?: (approval_id: string) => string | null;
-  /**
-   * Optional staging-only journey telemetry. This must never affect Slack's
-   * acknowledgement or durable receipt semantics.
-   */
-  readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
-  /**
-   * Observational only. Invoked after a verified terminal action has been
-   * durably queued, so the runtime may publish it without waiting for the
-   * periodic cycle. Receives no data; its failure never changes the
-   * acknowledgement.
-   */
-  readonly on_action_queued?: () => void;
   /**
    * Observational only. Receives no provider data and is invoked only after a
    * successfully HMAC-verified request fails the parser boundary.
@@ -69,79 +34,6 @@ export interface PrivateSlackApprovalInteractionHandlerInputV1 {
   readonly on_rejection?: (event: {
     readonly stage: PrivateSlackApprovalInteractionRejectionStageV1;
   }) => void;
-}
-
-function captureJourneyClock(
-  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
-): MeetingApprovalJourneyClockV1 | undefined {
-  try {
-    return telemetry?.captureClock();
-  } catch {
-    return undefined;
-  }
-}
-
-function beginApprovalJourneyStage(
-  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
-  approvalId: string,
-  stage: "meeting_approval_action_verify" | "meeting_approval_action_queue",
-  started?: MeetingApprovalJourneyClockV1,
-): MeetingApprovalJourneyStageAttemptV1 | null {
-  try {
-    return telemetry?.beginStageForApproval(approvalId, stage, started) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function approvalQueueAgeMs(
-  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
-  approvalId: string,
-  observedAt: string,
-): number | null {
-  try {
-    return telemetry?.queueAgeMs(approvalId, observedAt) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function restoreDurableCardStaged(
-  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
-  readStagedAt: ((approval_id: string) => string | null) | undefined,
-  approvalId: string,
-): void {
-  if (telemetry === undefined || readStagedAt === undefined) return;
-  try {
-    const stagedAt = readStagedAt(approvalId);
-    if (stagedAt !== null) telemetry.markCardStaged(approvalId, stagedAt);
-  } catch {
-    // Durable wait recovery is staging-only and cannot affect interaction ack.
-  }
-}
-
-function succeedApprovalJourneyStage(
-  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
-  attempt: MeetingApprovalJourneyStageAttemptV1 | null,
-  input?: { readonly queue_age_ms?: number | null },
-): void {
-  try {
-    telemetry?.succeedStage(attempt, input);
-  } catch {
-    // Telemetry is strictly observational.
-  }
-}
-
-function failApprovalJourneyStage(
-  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
-  attempt: MeetingApprovalJourneyStageAttemptV1 | null,
-  error: unknown,
-): void {
-  try {
-    telemetry?.failStage(attempt, error);
-  } catch {
-    // Telemetry is strictly observational.
-  }
 }
 
 function reportRejection(
@@ -155,20 +47,6 @@ function reportRejection(
   }
 }
 
-function canonicalNow(now: () => string): string {
-  const value = now();
-  let canonical: string | undefined;
-  try {
-    canonical = new Date(value).toISOString();
-  } catch {
-    canonical = undefined;
-  }
-  if (canonical !== value) {
-    throw new Error("private approval Slack receipt time must be UTC milliseconds");
-  }
-  return value;
-}
-
 function isSlackFormContentType(value: string | undefined): boolean {
   return (
     value?.split(";", 1)[0]?.trim().toLowerCase() ===
@@ -177,24 +55,19 @@ function isSlackFormContentType(value: string | undefined): boolean {
 }
 
 /**
- * Verifies and normalizes one Slack interaction before any durable call.
- * Signed policy/comment change events are acknowledged as presentation-only
- * no-ops. Terminal buttons must first be durably queued (or proven an exact
- * replay/denial) before the HTTP layer returns its 200 acknowledgement.
+ * Verifies and normalizes one Slack interaction and writes nothing. Signed
+ * selector and input changes are acknowledged as presentation-only no-ops;
+ * terminal buttons get the fixed inactive-card reply.
  */
 export function createPrivateSlackApprovalInteractionHandlerV1(
   input: PrivateSlackApprovalInteractionHandlerInputV1,
 ): PrivateSlackApprovalInteractionHttpPortV1 {
-  const now = input.now ?? (() => new Date().toISOString());
   return Object.freeze({
     async accept(
       request: Parameters<
         PrivateSlackApprovalInteractionHttpPortV1["accept"]
       >[0],
-    ): Promise<"accepted"> {
-      // Capture at ingress so human-action verification latency excludes no
-      // work before HTTP acceptance. An unavailable observer is fail-open.
-      const acceptedAt = captureJourneyClock(input.journey_telemetry);
+    ): Promise<PrivateSlackApprovalInteractionReplyV1> {
       if (!isSlackFormContentType(request.content_type)) {
         throw new AuthorityOperationError(
           "invalid_request",
@@ -245,118 +118,8 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
         }
         throw error;
       }
-      if (interaction.disposition === "presentation_change") return "accepted";
-
-      try {
-        const journey = input.journey_telemetry?.readForApproval(interaction.approval_id);
-        annotateCoreRuntimeV1({ action: coreRuntimeIdentityV1("approval_action", interaction.provider_action_key_sha256), ...(journey ? { linked_journey_ids: [journey.journey_id] } : {}) });
-      } catch { /* optional correlation */ }
-      let queueAttempt: MeetingApprovalJourneyStageAttemptV1 | null = null;
-      try {
-        const observedAt = canonicalNow(now);
-        restoreDurableCardStaged(
-          input.journey_telemetry,
-          input.read_durable_card_staged_at,
-          interaction.approval_id,
-        );
-        const verificationAttempt = beginApprovalJourneyStage(
-          input.journey_telemetry,
-          interaction.approval_id,
-          "meeting_approval_action_verify",
-          acceptedAt,
-        );
-        succeedApprovalJourneyStage(input.journey_telemetry, verificationAttempt, {
-          queue_age_ms: approvalQueueAgeMs(
-            input.journey_telemetry,
-            interaction.approval_id,
-            observedAt,
-          ),
-        });
-        queueAttempt = beginApprovalJourneyStage(
-          input.journey_telemetry,
-          interaction.approval_id,
-          "meeting_approval_action_queue",
-          captureJourneyClock(input.journey_telemetry),
-        );
-        let result: EnqueuePrivateApprovalInteractionResultV1 | { readonly disposition: "resolution"; readonly receipt: PrivateApprovalSignedTerminalActionV2 | PrivateApprovalSignedTerminalActionV3; readonly receipt_sha256: `sha256:${string}`; readonly idempotent: boolean };
-        if (interaction.schema_version === 1) {
-          const receipt: PrivateApprovalSignedTerminalActionV1 = Object.freeze({
-              schema_version: 1 as const,
-              kind: "echo-private-approval-signed-block-action-receipt-v1" as const,
-              provider_action_key_sha256: interaction.provider_action_key_sha256,
-              request: interaction.request,
-              approval_id: interaction.approval_id,
-              action_id: interaction.action_id,
-              action: interaction.action,
-              selected_policy_id: interaction.selected_policy_id,
-              comment: interaction.comment,
-              lookup: interaction.lookup,
-              received_at: observedAt,
-              verified_at: observedAt,
-          });
-          result = await input.persistence.enqueue({ disposition: "resolution", receipt });
-        } else if (interaction.schema_version === 3) {
-          const receipt: PrivateApprovalSignedTerminalActionV3 = Object.freeze({
-              schema_version: 3 as const,
-              kind: PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V3_KIND,
-              provider_action_key_sha256: interaction.provider_action_key_sha256,
-              request: interaction.request,
-              approval_id: interaction.approval_id,
-              action_id: interaction.action_id,
-              action: interaction.action,
-              selected_policy_id: interaction.selected_policy_id,
-              selected_project_ids: interaction.selected_project_ids,
-              share_transcript: interaction.share_transcript,
-              comment: interaction.comment,
-              action_owners: interaction.action_owners,
-              lookup: interaction.lookup,
-              received_at: observedAt,
-              verified_at: observedAt,
-          });
-          if (input.persistence.enqueueV3 === undefined) {
-            throw new Error("private approval V3 receipt persistence is not configured");
-          }
-          result = await input.persistence.enqueueV3(receipt);
-        } else {
-          const receipt: PrivateApprovalSignedTerminalActionV2 = Object.freeze({
-              schema_version: 2 as const,
-              kind: PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V2_KIND,
-              provider_action_key_sha256: interaction.provider_action_key_sha256,
-              request: interaction.request,
-              approval_id: interaction.approval_id,
-              action_id: interaction.action_id,
-              action: interaction.action,
-              selected_policy_id: interaction.selected_policy_id,
-              selected_project_ids: interaction.selected_project_ids,
-              share_transcript: interaction.share_transcript,
-              comment: interaction.comment,
-              lookup: interaction.lookup,
-              received_at: observedAt,
-              verified_at: observedAt,
-          });
-          if (input.persistence.enqueueV2 === undefined) {
-            throw new Error("private approval V2 receipt persistence is not configured");
-          }
-          result = await input.persistence.enqueueV2(receipt);
-        }
-        if (result.disposition !== "resolution") {
-          throw new Error("private approval terminal receipt was not queued");
-        }
-        succeedApprovalJourneyStage(input.journey_telemetry, queueAttempt);
-        try {
-          input.on_action_queued?.();
-        } catch {
-          // The wake signal is observational; the receipt is already durable.
-        }
-        return "accepted";
-      } catch (error) {
-        failApprovalJourneyStage(input.journey_telemetry, queueAttempt, error);
-        if (error instanceof AuthorityOperationError) throw error;
-        throw new AuthorityOperationError(
-          "unavailable",
-          "Slack interaction could not be durably queued",
-        );
-      }
+      if (interaction.disposition === "presentation_change") return ACKNOWLEDGED;
+      return INACTIVE_CARD;
     },
   });
 }

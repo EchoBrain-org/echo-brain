@@ -316,7 +316,7 @@ describe("provider identity and approval HTTP transport V1", () => {
         _request: Parameters<
           PrivateSlackApprovalInteractionHttpPortV1["accept"]
         >[0],
-      ) => "accepted" as const,
+      ) => ({ kind: "acknowledged" as const }),
     );
     const server = await start(
       createPrivateSlackApprovalHttpAdapterV1({ accept }),
@@ -375,7 +375,7 @@ describe("provider identity and approval HTTP transport V1", () => {
         _request: Parameters<
           PrivateSlackApprovalInteractionHttpPortV1["accept"]
         >[0],
-      ) => "accepted" as const,
+      ) => ({ kind: "acknowledged" as const }),
     );
     const server = await start(
       createPrivateSlackApprovalHttpAdapterV1({ accept }),

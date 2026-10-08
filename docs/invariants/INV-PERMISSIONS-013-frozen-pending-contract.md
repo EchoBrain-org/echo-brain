@@ -35,21 +35,23 @@ runtime while inspecting production state without creating or migrating it.
 
 ## Enforcement and verification
 
-Frozen private Slack approval state is implemented for the bounded owner-review
-path. The tests in `providers/slack/server/test/private-approval/` prove it:
+Frozen private Slack approval state was implemented for the bounded
+owner-review path. These tests, at the reviewed ref, proved it; they were
+removed with the Slack approval internals on 2026-10-07, and Slack approvals
+are paused until the approval core's Slack plug-in must prove this again:
 
-- [`private-slack-dm-approval-stager-v2.test.ts`](../../providers/slack/server/test/private-approval/private-slack-dm-approval-stager-v2.test.ts):
+- `private-slack-dm-approval-stager-v2.test.ts`:
   the V2 pending contract is frozen before Slack I/O, a retry resolves from it
   after current project state changes, and recipient drift or a missing
   retained source refuses before provider I/O;
-- [`sqlite-private-slack-approval-assignment-state-v1.test.ts`](../../providers/slack/server/test/private-approval/sqlite-private-slack-approval-assignment-state-v1.test.ts):
+- `sqlite-private-slack-approval-assignment-state-v1.test.ts`:
   the frozen delivery and assignment are immutable, replay exactly after
   restart, and complete a terminal from the frozen tuple after supersession,
   while corrupted frozen evidence refuses;
-- [`sqlite-stable-private-approval-authority-fence-v1.test.ts`](../../providers/slack/server/test/private-approval/sqlite-stable-private-approval-authority-fence-v1.test.ts):
+- `sqlite-stable-private-approval-authority-fence-v1.test.ts`:
   the tap-time fence rejects a pending contract or card binding that differs
   from the stored one; and
-- [`sqlite-private-slack-approval-terminal-authority-v1.test.ts`](../../providers/slack/server/test/private-approval/sqlite-private-slack-approval-terminal-authority-v1.test.ts):
+- `sqlite-private-slack-approval-terminal-authority-v1.test.ts`:
   a missing card or snapshot commitment, or a presentation spliced from
   another frozen tuple, is rejected before V4.
 

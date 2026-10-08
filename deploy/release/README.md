@@ -12,7 +12,7 @@ Staging alone does not finish that workflow or make a client available to
 The runtime-profile field is current-only. A pre-beta Authority prepared with
 an older release record has no compatibility bridge. `clean-v1` describes an
 artifact replacement loop, not a database migration: it accepts only the
-current Authority V12, private-approval control-plane V3, record-log V4,
+current Authority V12, control-plane V4, record-log V4,
 retrieval facts V3, retrieval content/lexical V2, and six-role V2 root lineage.
 For populated state, `stage` pulls the immutable
 candidate and runs its state-lineage and admitted-processor verifiers in an

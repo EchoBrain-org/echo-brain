@@ -8,11 +8,11 @@
 import { createHash } from "node:crypto";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-  PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
 } from "../organization-control-plane/slack-approval-integration-v1.js";
 import {
   buildPrivateSlackApprovalBlockKitCardV1,
+  PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,
   type PrivateSlackApprovalActionItemV1,
   type PrivateSlackApprovalDecisionGroupV1,
   type PrivateSlackApprovalReviewItemV1,
