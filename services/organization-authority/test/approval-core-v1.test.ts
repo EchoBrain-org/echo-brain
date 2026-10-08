@@ -2,15 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import { isApprovalOwnerTextV1 } from '@echo-brain/organization-protocol';
 import { ownerProposalsV1 } from '@echo-brain/organization-processing/core/processing/owner-proposals-v1';
-import { SqliteApprovalWorkflowStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
-import { bindApprovalWorkflowStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1';
+import { retainedMeetingSourceCoordinateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import type { DecisionBrief } from '@echo-brain/organization-processing/core';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
 import {
-  APPROVAL_DECISION_RECORD_SHA256_PATH_V1, APPROVAL_PROJECTS_MAX_V1, APPROVAL_SNAPSHOT_SURFACE_V1, approvalDecisionReceiptJsonV1, approvalProposalTextV1,
+  APPROVAL_PROJECTS_MAX_V1, APPROVAL_SNAPSHOT_SURFACE_V1, approvalProposalTextV1,
   createApprovalCoreV1, validateApprovalDecisionRequestV1, type ApprovalAuthorizationV1,
 } from '../src/composition/approval-core-v1.js';
-import { projectPersonMeetingApproverV1 } from '../src/composition/person-meeting-approval-projection-v1.js';
 
 const refusal = vi.hoisted(() => ({ next: 0 }));
 vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (importOriginal) => {
@@ -273,6 +271,17 @@ describe('approval core: decide', () => {
     expect(() => f.core.decide('desktop', f.approve(), () => f.session)).toThrow(expect.objectContaining({ code: 'unavailable' }));
     expect(f.core.decide('desktop', f.reject(), () => f.session)).toMatchObject({ kind: 'decided', status: 'rejected' });
   });
+  it('stores the retained transcript coordinate in an approval body and null in a rejection', async () => {
+    const f = await approvalCoreFixture();
+    const other = await f.otherProposal();
+    f.core.decide('desktop', f.approve(), () => f.session);
+    f.core.decide('desktop', f.reject({ approval_id: other.approvalId, command_id: 'desk-reject-other' }), () => f.session);
+    const body = (id: string) => JSON.parse(f.db.prepare('SELECT body_json FROM authority_approval_decisions_v1 WHERE approval_id=?').pluck().get(id) as string);
+    expect(body(f.approvalId).transcript_source).toEqual(retainedMeetingSourceCoordinateV1(f.db, f.actor.organization_id, f.first.meeting));
+    expect(body(f.approvalId).transcript_source).toMatchObject({ source_sha256: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) });
+    expect(body(other.approvalId).transcript_source).toBeNull();
+    expect(Object.keys(body(f.approvalId)).sort()).toEqual(['actor', 'decided_at', 'evidence', 'request', 'surface', 'transcript_source']);
+  });
   it('refuses to decide inside an open transaction', async () => {
     const f = await approvalCoreFixture();
     expect(() => f.db.transaction(() => f.core.decide('desktop', f.approve(), never))()).toThrow(/idle/);
@@ -304,161 +313,6 @@ describe('approval core: decide', () => {
     expect(validateApprovalDecisionRequestV1('slack', { ...good, command_id: 'slack:Zx_9-.' }).command_id).toBe('slack:Zx_9-.');
     expect(f.core.decide('desktop', good, () => f.session).kind).toBe('decided');
     expect(APPROVAL_PROJECTS_MAX_V1).toBe(20);
-  });
-});
-
-describe('approval core: publication', () => {
-  it('Race: desktop and Slack decide on two handles and publish one record', async () => {
-    const f = await approvalCoreFixture({ file: true });
-    const peer = await f.peer();
-    expect(f.core.decide('desktop', f.approve(), () => f.session)).toMatchObject({ kind: 'decided', surface: 'desktop' });
-    expect(peer.core.decide('slack', f.approve({ command_id: 'slack:race' }), () => f.click)).toEqual({ kind: 'already_decided', status: 'publishing', surface: 'desktop' });
-    expect(f.decisionCount()).toBe(1);
-    await Promise.all([f.core.processing.appendFinalizedApprovalsToV4(signal()), peer.core.processing.appendFinalizedApprovalsToV4(signal())]);
-    expect(f.recordCount()).toBe(1);
-    expect(f.db.prepare('SELECT count(*) FROM authority_approval_decisions_v1 WHERE receipt_json IS NOT NULL').pluck().get()).toBe(1);
-    expect(f.core.proposal(f.approvalId)!.status).toBe('approved');
-    expect(peer.core.proposal(f.approvalId)!.status).toBe('approved');
-  });
-  it('Race: a peer finishes an append interrupted before its receipt', async () => {
-    const f = await approvalCoreFixture({ file: true });
-    const peer = await f.peer();
-    f.core.decide('desktop', f.approve(), () => f.session);
-    const interrupted = await f.create({ record_append: { async append(input) { await f.context.record_append.append(input); throw new Error('interrupted after signed append'); } } });
-    await expect(interrupted.processing.recoverV4Appends(signal())).rejects.toThrow('interrupted');
-    expect(f.receipt()).toBeNull();
-    await peer.core.processing.recoverV4Appends(signal());
-    expect(f.recordCount()).toBe(1);
-    expect(f.core.proposal(f.approvalId)!.status).toBe('approved');
-  });
-  it('runs the after-receipt step once when two publishers append the same approval', async () => {
-    const f = await approvalCoreFixture({ file: true });
-    const peerHandle = await f.peer();
-    f.core.decide('desktop', f.approve(), () => f.session);
-    let count = 0;
-    const counter = () => { count++; };
-    let release!: () => void, appended!: () => void;
-    const gate = new Promise<void>(resolve => { release = resolve; });
-    const reached = new Promise<void>(resolve => { appended = resolve; });
-    const shared = f.context.record_append;
-    f.withAppend(() => ({ async append(input) { const result = await shared.append(input); appended(); await gate; return result; } }));
-    const p1 = await f.publisher(counter);
-    f.withAppend(() => shared);
-    const p2 = await f.publisher(counter, peerHandle);
-    const first = p1.appendFinalizedApprovalsToV4(signal());
-    await reached;
-    await p2.appendFinalizedApprovalsToV4(signal());
-    expect(count).toBe(1);
-    const stored = f.receipt();
-    release();
-    await first;
-    expect(count).toBe(1);
-    expect(f.recordCount()).toBe(1);
-    expect(f.db.prepare('SELECT count(*) FROM authority_approval_decisions_v1 WHERE receipt_json IS NOT NULL').pluck().get()).toBe(1);
-    expect(f.receipt()).toBe(stored);
-  });
-  it('refuses a second receipt that names another record', async () => {
-    const f = await approvalCoreFixture({ file: true });
-    f.core.decide('desktop', f.approve(), () => f.session);
-    let count = 0;
-    const shared = f.context.record_append;
-    let gateRelease!: () => void, reached!: () => void;
-    const gate = new Promise<void>(resolve => { gateRelease = resolve; });
-    const reachedP = new Promise<void>(resolve => { reached = resolve; });
-    f.withAppend(() => ({ async append(input) {
-      const result = await shared.append(input);
-      reached(); await gate;
-      const other = canonicalSha256('another record');
-      return { ...result, record_sha256: other, receipt: { ...(result.receipt as object), body: { ...(result.receipt as { body: object }).body, record_sha256: other } } } as typeof result;
-    } }));
-    const stub = await f.publisher(() => { count++; });
-    f.withAppend(() => shared);
-    const real = await f.publisher(() => { count++; });
-    const pending = stub.appendFinalizedApprovalsToV4(signal());
-    await reachedP;
-    await real.appendFinalizedApprovalsToV4(signal());
-    expect(count).toBe(1);
-    gateRelease();
-    await expect(pending).rejects.toThrow('approval receipt conflicts with the stored record');
-    expect(count).toBe(1);
-  });
-  it.each([[[], false], [[], true], [['A'], false], [['A'], true], [['A', 'B'], false], [['A', 'B'], true]] as const)('publishes the exact audience %j (share %s) and recovers once', async (names, share) => {
-    const f = await approvalCoreFixture();
-    const ids = names.map(name => f.project(name));
-    expect(f.core.decide('desktop', f.approve({ project_ids: ids, share_transcript: share }), () => f.session)).toMatchObject({ kind: 'decided', status: 'publishing' });
-    const resumed = await f.create();
-    await resumed.processing.recoverV4Appends(signal());
-    expect(resumed.decide('desktop', f.approve({ project_ids: ids, share_transcript: share }), () => f.session)).toMatchObject({ kind: 'replayed', status: 'approved' });
-    await resumed.processing.recoverV4Appends(signal());
-    expect(f.recordCount()).toBe(1);
-    const envelope = f.lastRecord();
-    expect(envelope.body.human_act_resolution_ref.share_transcript).toBe(share);
-    expect(envelope.body.human_act_resolution_ref.audience_project_ids).toEqual(ids);
-    expect(envelope.body.human_act_resolution_ref.association_project_ids).toEqual(ids);
-    expect(projectPersonMeetingApproverV1(envelope)?.membership_id).toBe(f.actor.membership_id);
-    expect(resumed.decide('desktop', f.approve({ project_ids: ids, share_transcript: !share }), () => f.session).kind).toBe('already_decided');
-  });
-  it('stores the receipt wrapper with the record digest at $.record_sha256', async () => {
-    const f = await approvalCoreFixture();
-    f.core.decide('desktop', f.approve(), () => f.session);
-    let captured: { record_sha256: string; receipt: unknown } | undefined;
-    const shared = f.context.record_append;
-    const core = await f.create({ record_append: { async append(input) { const result = await shared.append(input); captured = result; return result; } } });
-    await core.processing.appendFinalizedApprovalsToV4(signal());
-    const digest = f.db.prepare('SELECT json_extract(receipt_json, ?) FROM authority_approval_decisions_v1').pluck().get(APPROVAL_DECISION_RECORD_SHA256_PATH_V1);
-    expect(digest).toBe(f.record.prepare('SELECT record_sha256 FROM organization_record_log').pluck().get());
-    expect(digest).toBe(f.db.prepare("SELECT json_extract(receipt_json, '$.receipt.body.record_sha256') FROM authority_approval_decisions_v1").pluck().get());
-    expect(JSON.parse(f.receipt()!).receipt).toEqual(JSON.parse(JSON.stringify(captured!.receipt)));
-    expect(f.receipt()).toBe(approvalDecisionReceiptJsonV1(captured!));
-    expect(() => approvalDecisionReceiptJsonV1({ record_sha256: canonicalSha256('other'), receipt: captured!.receipt })).toThrow();
-  });
-  it('recovers an append committed just before the local receipt was saved', async () => {
-    const f = await approvalCoreFixture();
-    f.core.decide('desktop', f.approve(), () => f.session);
-    const interrupted = await f.create({ record_append: { async append(input) { await f.context.record_append.append(input); throw new Error('interrupted after signed append'); } } });
-    await expect(interrupted.processing.recoverV4Appends(signal())).rejects.toThrow('interrupted');
-    expect(f.receipt()).toBeNull();
-    await f.core.processing.recoverV4Appends(signal());
-    expect(f.recordCount()).toBe(1);
-    expect(f.core.proposal(f.approvalId)!.status).toBe('approved');
-  });
-  it('a rejection writes no record and keeps no receipt', async () => {
-    const f = await approvalCoreFixture();
-    expect(f.core.decide('desktop', f.reject(), () => f.session)).toMatchObject({ kind: 'decided', status: 'rejected' });
-    await f.core.processing.recoverV4Appends(signal());
-    expect(f.receipt()).toBeNull();
-    expect(f.recordCount()).toBe(0);
-    expect(f.core.proposal(f.approvalId)!.status).toBe('rejected');
-  });
-  it('publishes a decided proposal after a newer revision replaced it', async () => {
-    const f = await approvalCoreFixture();
-    f.core.decide('desktop', f.approve(), () => f.session);
-    const next = await f.newRevision();
-    await f.core.processing.appendFinalizedApprovalsToV4(signal());
-    expect(f.recordCount()).toBe(1);
-    expect(f.core.proposal(f.approvalId)!.status).toBe('approved');
-    expect(f.core.proposal(next.approvalId)!.status).toBe('pending');
-  });
-  it('isolates a failing approval and keeps publishing the rest', async () => {
-    const f = await approvalCoreFixture();
-    const other = await f.otherProposal();
-    f.core.decide('desktop', f.approve(), () => f.session);
-    f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: 'desk-other' }), () => f.session);
-    const shared = f.context.record_append;
-    const core = await f.create({ record_append: { async append(input) { if (input.approval_id === f.approvalId) throw new Error('first approval cannot publish'); return shared.append(input); } } });
-    await expect(core.processing.appendFinalizedApprovalsToV4(signal())).rejects.toThrow('first approval cannot publish');
-    expect(f.recordCount()).toBe(1);
-    expect(f.core.proposal(other.approvalId)!.status).toBe('approved');
-    expect(f.core.proposal(f.approvalId)!.status).toBe('publishing');
-  });
-  it('skips approvals of a source this runtime does not configure', async () => {
-    const f = await approvalCoreFixture();
-    f.core.decide('desktop', f.approve(), () => f.session);
-    const unconfigured = bindApprovalWorkflowStateV1(new SqliteApprovalWorkflowStateV1(f.db, { source_cursor_policies: [{ source_adapter_id: 'another-source', assert_live_cursor() {} }], processor_adapter_id: 'llm' }), () => {});
-    const core = await f.create({ state: unconfigured });
-    await core.processing.appendFinalizedApprovalsToV4(signal());
-    expect(f.recordCount()).toBe(0);
-    expect(core.proposal(f.approvalId)!.status).toBe('publishing');
   });
 });
 

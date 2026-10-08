@@ -73,9 +73,10 @@ export function splitAtomTextV1(text: string): readonly string[] {
 }
 
 /**
- * Owners an approver confirmed in the signed human act (ADR-0021), by signal
- * ID. The approved brief never carries an owner; the search text of an owned
- * action ends with " Owner: <name>." and must match exactly.
+ * Owners the approver confirmed (ADR-0021), carried by the approval decision
+ * reference by signal ID; the approved brief never carries them. Read by
+ * field, never by kind. The search text of an owned action ends with
+ * " Owner: <name>." and must match exactly. A repeated signal ID is refused.
  */
 export function confirmedOwners(reference: unknown): ReadonlyMap<string, string> {
   const owners = new Map<string, string>();
@@ -84,6 +85,7 @@ export function confirmedOwners(reference: unknown): ReadonlyMap<string, string>
   if (!Array.isArray(entries)) metadataUnavailable();
   for (const entry of entries as readonly { readonly signal_id?: unknown; readonly owner?: unknown }[]) {
     if (typeof entry?.signal_id !== "string" || typeof entry.owner !== "string") metadataUnavailable();
+    if (owners.has(entry.signal_id)) metadataUnavailable();
     owners.set(entry.signal_id, entry.owner);
   }
   return owners;

@@ -1,4 +1,3 @@
-import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, PERSON_MEETING_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
 /** Single child process running the existing core through canonical IPC ports. */
 import { randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -9,10 +8,10 @@ import { FileOrganizationAuthoritySigner } from "../../../services/organization-
 import { SqliteAuthorityMeetingProcessingStateV1 } from "../../../packages/organization-processing/dist/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import { AdmittedMeetingProcessingCycleV1 } from "../../../packages/organization-processing/dist/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import { DEFAULT_MEETING_PROCESSING_WORKER_INTERVAL_MS } from "../../../packages/organization-processing/dist/admitted-meeting-processing/serialized-meeting-processing-worker.js";
-import { createPersonMeetingApprovalPolicyProjectorV1 } from "../../../services/organization-authority/dist/composition/person-meeting-approval-projection-v1.js";
+import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from "../../../services/organization-authority/dist/composition/authority-record-protocols-v1.js";
 import { startOrganizationAuthorityServiceLifecycle } from "../../../services/organization-authority/dist/composition/organization-authority-service-lifecycle.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../../../services/organization-authority/dist/composition/readable-search-generation-composition.js";
-import { openOrganizationRecordDatabase, OrganizationRecordAppenderV4, createRecordPolicyFactProjectorRegistryV1 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { openOrganizationRecordDatabase, OrganizationRecordAppenderV4 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { createCoreIdentity } from "./core-identity.mjs";
 import { createCoreInput, createCoreSourceIngestion } from "./core-input.mjs";
 import { createCoreApproval } from "./core-approval.mjs";
@@ -69,7 +68,7 @@ async function open(state_directory) {
     authority, input.source_cursor_policy, input.processor.identity.adapter_id, undefined, input.source_key, () => input.requireCurrent(),
   );
   const signer = FileOrganizationAuthoritySigner.openExisting({ directory: join(state_directory, "keys"), ...coordinates });
-  const projectors = createRecordPolicyFactProjectorRegistryV1([createPersonMeetingApprovalPolicyProjectorV1()]);
+  const projectors = authorityRecordPolicyProjectorsV1();
   approvals = await createCoreApproval({
     context: {
       // Match the production composition root: approval construction happens
@@ -82,10 +81,7 @@ async function open(state_directory) {
     },
     input, owner: identity.owner, employee: identity.employee, sessions: identity.sessions,
   });
-  const record_input_codecs = createRecordInputCodecRegistryV4([
-    HUMAN_ACT_RECORD_INPUT_CODEC_V1,
-    PERSON_MEETING_APPROVAL_RECORD_INPUT_CODEC_V1,
-  ]);
+  const record_input_codecs = AUTHORITY_RECORD_INPUT_CODECS_V1;
   reads = createCoreReadRoutes({ state_directory, sessions: identity.sessions, record_input_codecs });
   const search = createReadableSearchGenerationReconcilerV1({
     state_directory, root, authority, record, signer,

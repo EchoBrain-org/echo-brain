@@ -9,12 +9,13 @@ import { SqliteApprovalWorkflowStateV1, SqliteAuthorityMeetingProcessingStateV1 
 import { bindApprovalWorkflowStateV1, type ApprovalWorkflowStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1';
 import type { ActionSignal, DecisionSet, MeetingDocument } from '@echo-brain/organization-processing/core';
 import { meetingSourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
-import { applyOrganizationRecordLogBaselineV4, OrganizationRecordAppenderV4, createRecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { applyOrganizationRecordLogBaselineV4, OrganizationRecordAppenderV4, RecordRetrievalSourceSnapshotPortV1, type RecordPolicyFactProjectorRegistryV1, type RecordRetrievalSourceAtomV1 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { organizationAuthorityPinSha256, verifyOrganizationAuthorityPin, verifyOrganizationRecordEnvelopeV4 } from '@echo-brain/organization-protocol';
 import type { ApprovalWorkflowContextV1, ApprovalWorkflowProcessingV1 } from '@echo-brain/organization-processing/ports/approval-workflow-bundle-v1';
 import { testAuthority } from '../../../../packages/organization-protocol/test/fixtures/record-v4-fixture.js';
 import { database as sourceFixture, databases as fixtures, decisions as fixtureDecisions, FIXTURE_SOURCE_KEY, fixtureCursorPolicy, meeting as fixtureMeeting, REVIEW_POLICY } from '../../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
-import { createApprovalCoreV1, createInterimApprovalPublisherV1, approvalPublisherFactoriesV1, type ApprovalAuthorizationV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalDecisionRequestV1 } from '../../src/composition/approval-core-v1.js';
-import { createPersonMeetingApprovalPolicyProjectorV1 } from '../../src/composition/person-meeting-approval-projection-v1.js';
+import { createApprovalCoreV1, createApprovalPublisherV1, type AfterApprovedRecordHookV1, type ApprovalAuthorizationV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalDecisionRequestV1 } from '../../src/composition/approval-core-v1.js';
+import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from '../../src/composition/authority-record-protocols-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../../src/adapters/persistence/sqlite/source-admission-v1.js';
 import { SqlitePersonMeetingIntakeV1, type PersonalMeetingCheckpointCodecV1, type PersonalMeetingCheckpointV1 } from '../../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { addMembership } from './project-context-sqlite.js';
@@ -49,6 +50,8 @@ export interface ApprovalFixtureActorV1 { readonly organization_id: string; read
 export interface ApprovalContextFixtureV1 {
   readonly db: Database.Database; readonly record: Database.Database; readonly actor: ApprovalFixtureActorV1; readonly context: ApprovalWorkflowContextV1;
   readonly state: SqliteAuthorityMeetingProcessingStateV1; readonly path: string | undefined;
+  /** Verifies a stored canonical envelope with the production record codecs. */
+  readonly verify: (value: unknown) => ReturnType<typeof verifyOrganizationRecordEnvelopeV4>;
 }
 /** An Authority database seeded with the processing fixture's tenancy and admission, a record log and the approval context; no candidate. */
 export async function approvalContextFixture(options: { readonly path?: string } = {}): Promise<ApprovalContextFixtureV1> {
@@ -68,14 +71,17 @@ export async function approvalContextFixture(options: { readonly path?: string }
   const record = new Database(':memory:'); opened.push(record); record.pragma('foreign_keys=ON'); applyOrganizationRecordLogBaselineV4(record);
   const coordinates = { authority_id: authority.descriptor.authority_id, organization_id: actor.organization_id, state_lineage_id: 'lineage-test' };
   record.prepare('INSERT INTO organization_record_log_metadata VALUES (1,?,?,?,?)').run(coordinates.authority_id, coordinates.organization_id, coordinates.state_lineage_id, '2026-10-06T00:00:00.000Z');
-  const append = new OrganizationRecordAppenderV4(record, coordinates, createRecordPolicyFactProjectorRegistryV1([createPersonMeetingApprovalPolicyProjectorV1()]));
+  const append = new OrganizationRecordAppenderV4(record, coordinates, authorityRecordPolicyProjectorsV1());
   const state = new SqliteAuthorityMeetingProcessingStateV1(db, fixtureCursorPolicy, 'llm', undefined, FIXTURE_SOURCE_KEY);
   await state.readAdmission();
   let envelopes = 0;
   const context: ApprovalWorkflowContextV1 = { coordinates, signer: { inspect: async () => authority.descriptor, sign: authority.sign },
     record_append: append, next_envelope_id: () => `envelope-approval-${++envelopes}`,
     state: bindApprovalWorkflowStateV1(state, () => { if (db.inTransaction) throw new Error('Shared approval port called inside a transaction'); }) };
-  return { db, record, actor, context, state, path };
+  // Pinned by the package build the verifier comes from (the protocol fixture pins with its source build).
+  const pinned = verifyOrganizationAuthorityPin(authority.descriptor, organizationAuthorityPinSha256(authority.descriptor));
+  const verify = (value: unknown) => verifyOrganizationRecordEnvelopeV4(value, pinned, coordinates.state_lineage_id, AUTHORITY_RECORD_INPUT_CODECS_V1);
+  return { db, record, actor, context, state, path, verify };
 }
 
 export interface ApprovalCoreFixtureOptionsV1 {
@@ -94,7 +100,9 @@ export interface ApprovalCoreFixtureOptionsV1 {
   readonly stage?: boolean;
   /** False leaves the first revision's source content unretained. */
   readonly retained?: boolean;
-  readonly core?: Pick<ApprovalCoreOptionsV1, 'now'>;
+  readonly core?: Pick<ApprovalCoreOptionsV1, 'now' | 'after_record'>;
+  /** After-record hooks of every core and publisher the fixture builds (merged into `core`). */
+  readonly after_record?: readonly AfterApprovedRecordHookV1[];
   readonly wake?: () => void;
 }
 
@@ -154,10 +162,11 @@ async function buildApprovalCoreFixture(base: ApprovalContextFixtureV1, options:
   const idle = (handle: Database.Database) => () => { if (handle.inTransaction) throw new Error('Shared approval port called inside a transaction'); };
   const boundState = bindApprovalWorkflowStateV1(state, idle(db));
   let wakes = 0;
+  const hooks = options.after_record ?? options.core?.after_record ?? [];
   const context: ApprovalWorkflowContextV1 = { ...base.context, state: boundState, on_terminal_action_queued: () => { wakes++; options.wake?.(); } };
   const coreOptions = (handle: Database.Database): ApprovalCoreOptionsV1 => {
     const handleIntake = handle === db ? intake : new SqlitePersonMeetingIntakeV1(handle, fixtureCheckpointCodec);
-    return { ...options.core, suggestions: (key, external) => handleIntake.proposalSuggestions(key, external),
+    return { ...options.core, ...(options.after_record === undefined ? {} : { after_record: options.after_record }), suggestions: (key, external) => handleIntake.proposalSuggestions(key, external),
       projects: (who, ids) => { for (const id of ids) handleIntake.currentPerson(who, id); } };
   };
   const create = (overrides: Partial<ApprovalWorkflowContextV1> = {}, extra: Partial<ApprovalCoreOptionsV1> = {}) => createApprovalCoreV1(db, { ...context, ...overrides }, { ...coreOptions(db), ...extra });
@@ -191,7 +200,6 @@ async function buildApprovalCoreFixture(base: ApprovalContextFixtureV1, options:
     const peerContext: ApprovalWorkflowContextV1 = { ...context, state: peerState };
     return { db: handle, context: peerContext, core: await createApprovalCoreV1(handle, peerContext, coreOptions(handle)) };
   };
-  let append = base.context.record_append;
   return {
     core, context, state, intake, actor, person, approvalId, sourceKey: FIXTURE_SOURCE_KEY, externalId, setting,
     projectA: PROJECT_A, projectB: PROJECT_B, projectC: PROJECT_C, project: (name: 'A' | 'B' | 'C') => PROJECTS[name],
@@ -217,16 +225,25 @@ async function buildApprovalCoreFixture(base: ApprovalContextFixtureV1, options:
     recordCount: () => record.prepare('SELECT count(*) FROM organization_record_log').pluck().get() as number,
     decisionCount: () => db.prepare('SELECT count(*) FROM authority_approval_decisions_v1').pluck().get() as number,
     receipt: (id = approvalId) => db.prepare('SELECT receipt_json FROM authority_approval_decisions_v1 WHERE approval_id=?').pluck().get(id) as string | null | undefined,
-    withAppend: (wrap: (append: ApprovalWorkflowContextV1['record_append']) => ApprovalWorkflowContextV1['record_append']) => { append = wrap(base.context.record_append); return append; },
+    /** A publisher on this handle with the fixture's hooks whose append goes through `wrap` (the shared appender is its second argument). */
+    withAppend: (wrap: (input: AppendInputV1, append: (input: AppendInputV1) => ReturnType<AppendV1>) => ReturnType<AppendV1>): { readonly processing: ApprovalWorkflowProcessingV1 } =>
+      ({ processing: createApprovalPublisherV1(db, { ...context, record_append: { append: input => wrap(input, next => base.context.record_append.append(next)) } }, hooks) }),
     create,
-    publisher: async (onReceiptWritten?: (database: Database.Database, event: { readonly approval_id: string; readonly record_sha256: Sha256Digest }) => void,
-      handle?: { readonly db: Database.Database; readonly context: ApprovalWorkflowContextV1 }): Promise<ApprovalWorkflowProcessingV1> => {
+    /** A publisher with these hooks (default: the fixture's) on this handle or a peer's, optionally through another append. */
+    publisher: (with_hooks: readonly AfterApprovedRecordHookV1[] = hooks, handle?: { readonly db: Database.Database; readonly context: ApprovalWorkflowContextV1 },
+      append: ApprovalWorkflowContextV1['record_append'] = base.context.record_append): ApprovalWorkflowProcessingV1 => {
       const target = handle ?? { db, context };
-      const factories = await approvalPublisherFactoriesV1(target.context);
-      return createInterimApprovalPublisherV1(target.db, { ...target.context, record_append: append }, factories, onReceiptWritten);
+      return createApprovalPublisherV1(target.db, { ...target.context, record_append: append }, with_hooks);
     },
+    /** The search snapshot's atoms of the record log, read with the production record protocols. */
+    snapshotAtoms: (tamper?: (envelope: ReturnType<typeof verifyOrganizationRecordEnvelopeV4>) => unknown,
+      policy_projectors: RecordPolicyFactProjectorRegistryV1 = authorityRecordPolicyProjectorsV1()): readonly RecordRetrievalSourceAtomV1[] =>
+      new RecordRetrievalSourceSnapshotPortV1(record).snapshot({ ...context.coordinates, policy_projectors,
+        verify_envelope: value => (tamper === undefined ? base.verify(value) : tamper(base.verify(value))) as ReturnType<typeof base.verify> }).atoms,
     peer,
   };
 }
+type AppendV1 = ApprovalWorkflowContextV1['record_append']['append'];
+type AppendInputV1 = Parameters<AppendV1>[0];
 export type ApprovalCoreFixtureV1 = Awaited<ReturnType<typeof approvalCoreFixture>>;
 export type { ApprovalCoreV1 };

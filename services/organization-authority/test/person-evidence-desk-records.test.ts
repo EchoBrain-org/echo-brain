@@ -29,7 +29,7 @@ import { createPersonRecordSearchRouteV1, type PersonEvidenceDeskRecordsV1 } fro
 import { meetingWorld } from './fixtures/person-meeting-world.js';
 import { COORDINATES, appendInput, database as recordDatabase, protocolAuthority } from '../../../packages/organization-record/test/fixtures/record-append-fixture.js';
 
-import { SIGNED_APPROVAL_CODECS, SIGNED_APPROVAL_PROJECTORS, approveSignedSlackV2 } from './fixtures/signed-slack-approval-v2.js';
+import { SIGNED_APPROVAL_CODECS, SIGNED_APPROVAL_PROJECTORS, appendSignedApprovalV1 } from './fixtures/signed-approval-decision-v1.js';
 
 const roots: string[] = [];
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
@@ -308,16 +308,17 @@ describe('Person evidence desk: one source at a time', () => {
   });
 });
 
-describe('Person evidence desk over a Slack-approved record with a confirmed owner', () => {
-  async function slackFixture(withCodecs: boolean) {
+describe('Person evidence desk over an approval-decision record with a confirmed owner', () => {
+  async function approvedFixture(withCodecs: boolean) {
     const authority = openAuthorityDatabase(':memory:');
     applyAuthorityBaselineV12(authority);
     authority.prepare("INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES(1,?,?, 'Clean','{}','2026-09-27T00:00:00.000Z','2026-09-27T00:00:00.000Z')").run(COORDINATES.authority_id, COORDINATES.organization_id);
     const record = recordDatabase();
     const signer = protocolAuthority();
     const approval_id = 'apr_desk_owner_v3';
-    await approveSignedSlackV2(new OrganizationRecordAppenderV4(record, COORDINATES, SIGNED_APPROVAL_PROJECTORS), signer, {
-      approval_id, audit_sequence: 1, projects: 'team', final_approver: { principal_id: 'principal-owner', membership_id: 'membership-owner' },
+    await appendSignedApprovalV1(new OrganizationRecordAppenderV4(record, COORDINATES, SIGNED_APPROVAL_PROJECTORS), signer, {
+      // Only me, approved by the reader the desk's route authenticates.
+      approval_id, audit_sequence: 1, projects: [], final_approver: { principal_id: 'principal_reader', membership_id: 'membership_reader' },
       signals: { decisions: 1, actions: 2 }, action_owners: [{ signal_id: `action-${approval_id}-1`, owner: 'Jules' }],
     });
     const row = record.prepare('SELECT record_sha256, envelope_sha256 FROM organization_record_log WHERE position = 1').get() as { record_sha256: Sha256Digest; envelope_sha256: Sha256Digest };
@@ -335,15 +336,15 @@ describe('Person evidence desk over a Slack-approved record with a confirmed own
   }
 
   it('reads the confirmed owner from the signed approval, and matches the owned search text exactly', async () => {
-    const value = await slackFixture(true);
+    const value = await approvedFixture(true);
     try {
       const searched = await value.desk.search({ query: 'Jules', limit: 10 });
       expect(searched.items.find(item => item.citation.kind === 'approved_record')).toMatchObject({ kind: 'action', text: 'Action 1 Owner: Jules.', attributes: { owner: 'Jules' } });
     } finally { value.close(); }
   });
 
-  it('needs the Authority record codecs to read a Slack-approved record at all', async () => {
-    const value = await slackFixture(false);
+  it('needs the Authority record codecs to read an approval-decision record at all', async () => {
+    const value = await approvedFixture(false);
     try {
       await expect(value.desk.search({ query: 'Jules', limit: 10 })).rejects.toMatchObject({ code: 'unavailable' });
     } finally { value.close(); }

@@ -7,13 +7,12 @@ import test from "node:test";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
   OrganizationRecordAppenderV4,
-  createRecordPolicyFactProjectorRegistryV1,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { openAuthorityDatabase } from "../../../../packages/organization-authority-kernel/dist/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../../../../services/organization-authority/dist/adapters/security/file-organization-authority-signer.js";
 import { bootstrapOrganizationAuthorityState } from "../../../../services/organization-authority/dist/composition/organization-authority-state-bootstrap.js";
-import { createPersonMeetingApprovalPolicyProjectorV1 } from "../../../../services/organization-authority/dist/composition/person-meeting-approval-projection-v1.js";
+import { authorityRecordPolicyProjectorsV1 } from "../../../../services/organization-authority/dist/composition/authority-record-protocols-v1.js";
 import { verifyAuthorityStateLineage } from "../../../../packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js";
 import { AdmittedMeetingProcessingCycleV1 } from "../../../../packages/organization-processing/dist/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import { SqliteAuthorityMeetingProcessingStateV1 } from "../../../../packages/organization-processing/dist/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
@@ -92,7 +91,7 @@ async function createFixture(on_terminal_action_queued) {
       authority, input.source_cursor_policy, input.processor.identity.adapter_id, undefined, input.source_key, () => input.requireCurrent(),
     );
     const signer = FileOrganizationAuthoritySigner.openExisting({ directory: join(initialized.state_directory, "keys"), ...coordinates });
-    const projectors = createRecordPolicyFactProjectorRegistryV1([createPersonMeetingApprovalPolicyProjectorV1()]);
+    const projectors = authorityRecordPolicyProjectorsV1();
     const approvals = await createCoreApproval({
       context: {
         state,

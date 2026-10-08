@@ -5,22 +5,6 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    "./organization-protocol/private-slack-block-approval-record-input-v1": {
-      "types": "./dist/organization-protocol/private-slack-block-approval-record-input-v1.d.ts",
-      "import": "./dist/organization-protocol/private-slack-block-approval-record-input-v1.js"
-    },
-    "./organization-protocol/private-slack-block-approval-record-input-v2": {
-      "types": "./dist/organization-protocol/private-slack-block-approval-record-input-v2.d.ts",
-      "import": "./dist/organization-protocol/private-slack-block-approval-record-input-v2.js"
-    },
-    "./organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1": {
-      "types": "./dist/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.d.ts",
-      "import": "./dist/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.js"
-    },
-    "./organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2": {
-      "types": "./dist/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.d.ts",
-      "import": "./dist/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.js"
-    },
     "./person-identity/slack-person-external-identity-runtime-bundle-v1": {
       "types": "./dist/person-identity/slack-person-external-identity-runtime-bundle-v1.d.ts",
       "import": "./dist/person-identity/slack-person-external-identity-runtime-bundle-v1.js"

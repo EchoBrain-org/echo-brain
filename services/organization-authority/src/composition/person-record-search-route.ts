@@ -303,7 +303,7 @@ export interface CreatePersonRecordSearchRouteV1Options {
   readonly search_generation?: SearchGeneration;
   /** Optional until the Layer 2 related-atom projector is installed. */
   readonly expand_related_atoms?: ExpandReadableSearchRelatedAtomsV1;
-  /** The Authority's record codecs; Slack-approved records need them to parse. */
+  /** The Authority's record codecs; approval-decision records need them to parse. */
   readonly record_input_codecs?: RecordInputCodecRegistryV4;
   /** The composed approver projectors. Mine needs them; without them mine is unavailable, never global. */
   readonly record_approver?: RecordApproverProjectorV1;

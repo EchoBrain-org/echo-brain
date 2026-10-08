@@ -1,14 +1,8 @@
 import { openGranolaPersonLiveRuntimeV1 } from './granola-person-live-runtime-v1.js';
-import { createPersonMeetingApprovalPolicyProjectorV1, projectPersonMeetingApproverV1 } from './person-meeting-approval-projection-v1.js';
+import { AUTHORITY_RECORD_APPROVER_PROJECTORS_V1, AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from './authority-record-protocols-v1.js';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 import { composePersonExternalIdentityRuntimeBundlesV1 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
-import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, PERSON_MEETING_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
-import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
-import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v2";
-const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([PERSON_MEETING_APPROVAL_RECORD_INPUT_CODEC_V1, HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3]);
-import { composeRecordApproverProjectorsV1, createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
-import { createPrivateSlackBlockApprovalPolicyProjectorV1, projectPrivateSlackBlockApprovalApproverV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
-import { createPrivateSlackBlockApprovalPolicyProjectorV2, createPrivateSlackBlockApprovalPolicyProjectorV3, projectPrivateSlackBlockApprovalApproverV2 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2";
+import { composeRecordApproverProjectorsV1 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   openOrganizationAuthorityRuntime,
   type OrganizationAuthorityRuntimeConfig,
@@ -128,10 +122,8 @@ export async function openOrganizationAuthorityService(
   } = config;
   const slack = composeSlackV1({ ...sharedConfig, slack_nango }, dependencies.slack);
   const decisionProcessor = createOpenRouterDecisionProcessorBundleV1({ credential_file: openrouter_credential_file });
-  const policyProjectors = createRecordPolicyFactProjectorRegistryV1([
-    createPersonPolicyFactProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV1(),
-    createPrivateSlackBlockApprovalPolicyProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV3(), createPersonMeetingApprovalPolicyProjectorV1(),
-  ]);
+  // One instance for the personal appender and the Authority's readers.
+  const policyProjectors = authorityRecordPolicyProjectorsV1();
   // Staging only: the owner's synthetic personal source carries the release canary and the fixture meetings.
   const stagingSynthetic = config.authority_url === STAGING_AUTHORITY_ORIGIN_V1
     ? createStagingSyntheticPersonalMeetingProviderV1(staging_synthetic_meetings_directory === undefined ? {} : {
@@ -169,9 +161,7 @@ export async function openOrganizationAuthorityService(
       }]),
     ],
     record_approver: composeRecordApproverProjectorsV1([
-      projectPersonMeetingApproverV1,
-      projectPrivateSlackBlockApprovalApproverV1,
-      projectPrivateSlackBlockApprovalApproverV2,
+      ...AUTHORITY_RECORD_APPROVER_PROJECTORS_V1,
       ...(dependencies.api?.record_approver === undefined ? [] : [dependencies.api.record_approver]),
     ]),
     external_identity_runtime_bundle:
@@ -185,7 +175,7 @@ export async function openOrganizationAuthorityService(
         createOpenRouterAnswerCompositionGenerationBundleV1({
           credential_file: openrouter_credential_file,
         }),
-      record_input_codecs: RECORD_INPUT_CODECS,
+      record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1,
       record_policy_fact_projectors: policyProjectors,
       ...(stagingSynthetic === undefined ? {} : {
         run_staging_synthetic_canary: (release_id: string, signal: AbortSignal) => {

@@ -18,6 +18,7 @@ import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_FOLDER_CURSO
 import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
+import type { AfterApprovedRecordEventV1 } from '../src/composition/approval-core-v1.js';
 import { authorization, addMembership } from './fixtures/project-context-sqlite.js';
 import { meeting as original, decisions } from '../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
 const id = '00000000-0000-4000-8000-000000000001';
@@ -83,8 +84,9 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   });
   const provider = fakeProvider('granola', GRANOLA_FOLDER_CURSOR_POLICY_V1.source_adapter_id);
   const sessions = { authenticateAccess: ({ access_token }: { access_token: string }) => authorization({ ...(actors[access_token as keyof typeof actors] ?? other), membership_type: access_token === 'owner' ? 'owner' : 'employee' }) };
-  const create = (providers: readonly PersonMeetingProviderV1[] = [provider]) => createPersonMeetingRuntimeV1({ database: f.db, approval: f.context, providers,
-    sessions,
+  const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append } = {}) =>
+    createPersonMeetingRuntimeV1({ database: f.db, approval: seams.record_append === undefined ? f.context : { ...f.context, record_append: seams.record_append }, providers,
+    sessions, ...(seams.approval_core === undefined ? {} : { approval_core: seams.approval_core }),
     processor: { processor_adapter_id: 'llm', current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }), assert_admission_commitments() {},
       create_processor(admission) { const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
         return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
@@ -584,6 +586,38 @@ describe('personal meeting intake uses the shared processing path', () => {
     const envelope = JSON.parse(f.record.prepare('SELECT canonical_envelope FROM organization_record_log').pluck().get() as string);
     expect(envelope.body.human_act_resolution_ref.audience_project_ids).toEqual([projectB]);
     expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]).toMatchObject({ status: 'approved', project_id: projectB });
+  });
+  it('forwards after_record hooks from the runtime passthrough', async () => {
+    const calls: AfterApprovedRecordEventV1[] = [];
+    const f = await fixture(), runtime = f.create(undefined, { approval_core: { after_record: [(tx, event) => { expect(tx.inTransaction).toBe(true); calls.push(event); }] } });
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await f.processUntilIdle(runtime);
+    const [pending] = (await f.call(runtime, { operation: 'reviews' })).reviews;
+    const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-hooked', action: 'approve', project_id: null, share_transcript: false });
+    await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
+    await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
+    expect(calls).toEqual([expect.objectContaining({ approval_id: pending!.approval_id, record_sha256: f.record.prepare('SELECT record_sha256 FROM organization_record_log').pluck().get() })]);
+  });
+  it('crash between append and receipt at restart: one record, one receipt, one hook', async () => {
+    const calls: AfterApprovedRecordEventV1[] = [];
+    const after_record = [(_tx: unknown, event: AfterApprovedRecordEventV1) => { calls.push(event); }];
+    const f = await fixture();
+    const crashing = f.create(undefined, { approval_core: { after_record }, record_append: { async append(input) { await f.context.record_append.append(input); throw new Error('crash after append'); } } });
+    await f.call(crashing, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await f.processUntilIdle(crashing);
+    const [pending] = (await f.call(crashing, { operation: 'reviews' })).reviews;
+    const opened = await f.call(crashing, { operation: 'review_open', approval_id: pending!.approval_id });
+    await f.call(crashing, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-crash', action: 'approve', project_id: null, share_transcript: false });
+    await expect(crashing.processing.recoverV4Appends(new AbortController().signal)).rejects.toThrow('crash after append');
+    expect(calls).toEqual([]);
+    crashing.close();
+    const restarted = f.create(undefined, { approval_core: { after_record } });
+    await restarted.processing.recoverV4Appends(new AbortController().signal);
+    await restarted.processing.recoverV4Appends(new AbortController().signal);
+    expect(f.record.prepare('SELECT count(*) FROM organization_record_log').pluck().get()).toBe(1);
+    expect(f.db.prepare('SELECT count(*) FROM authority_approval_decisions_v1 WHERE receipt_json IS NOT NULL').pluck().get()).toBe(1);
+    expect(calls).toEqual([expect.objectContaining({ approval_id: pending!.approval_id })]);
   });
   it('answers an already decided review with stale_access_state and writes no second row', async () => {
     const f = await fixture(), runtime = f.create();

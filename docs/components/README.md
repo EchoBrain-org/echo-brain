@@ -71,7 +71,7 @@ The shared implementation packages are `packages/organization-processing` and
 | `providers/confluence/client` | Confluence connection and project-space wire contracts and Person tool commands; no server dependencies |
 | `providers/synthetic-demo` | Fixed synthetic source and its evaluation/setup proofs |
 | `providers/slack/client` | Client contracts and Person commands |
-| `providers/slack/server` | Server identity, approval delivery, historical codec/projector, connection/setup and assets |
+| `providers/slack/server` | Server identity, approval delivery, connection/setup and assets |
 
 ### Reusing personal tool connections
 

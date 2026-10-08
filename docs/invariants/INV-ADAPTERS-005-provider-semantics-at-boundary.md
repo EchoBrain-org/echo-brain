@@ -180,8 +180,9 @@ host-side Slack credential flags and uses `person tools setup --tool slack`.
 Provider verification and wire/state interpretation are delegated to their
 provider folders. Adding a provider can require a new versioned domain capability,
 but cannot silently widen an existing canonical contract. V2 Person compatibility
-and historical Slack V4 codecs remain explicit provider-owned selections, with
-no permissive fallback. Historical signed bytes and SQL baselines remain unchanged.
+remains an explicit selection, with no permissive fallback. A meeting approval on
+any surface is recorded with the one neutral `echo-approval-decision-ref-v1`
+proof. Historical signed bytes and SQL baselines remain unchanged.
 
 CODEOWNERS covers the provider tree, public contracts, bootstrap/source manifests,
 application code, and architecture tests. Changes to provider facts in shared

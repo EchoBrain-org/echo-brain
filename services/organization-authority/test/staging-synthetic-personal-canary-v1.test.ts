@@ -2,11 +2,11 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { applyAuthorityBaselineV12 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
-import { applyOrganizationRecordLogBaselineV4, createRecordPolicyFactProjectorRegistryV1, OrganizationRecordAppenderV4 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { applyOrganizationRecordLogBaselineV4, OrganizationRecordAppenderV4 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { createStagingSyntheticPersonalMeetingProviderV1 } from '@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1';
 import { testAuthority } from '../../../packages/organization-protocol/test/fixtures/record-v4-fixture.js';
 import { createPersonMeetingRuntimeV1 } from '../src/composition/person-meeting-runtime-v1.js';
-import { createPersonMeetingApprovalPolicyProjectorV1 } from '../src/composition/person-meeting-approval-projection-v1.js';
+import { authorityRecordPolicyProjectorsV1 } from '../src/composition/authority-record-protocols-v1.js';
 import { runStagingSyntheticPersonalCanaryV1 } from '../src/composition/staging/staging-synthetic-personal-canary-v1.js';
 
 const NOW = '2026-10-07T00:00:00.000Z';
@@ -50,7 +50,7 @@ async function syntheticWorld(options: { readonly signals?: boolean } = {}) {
       },
     },
     approval: { coordinates, signer: { inspect: async () => authority.descriptor, sign: authority.sign },
-      record_append: new OrganizationRecordAppenderV4(record, coordinates, createRecordPolicyFactProjectorRegistryV1([createPersonMeetingApprovalPolicyProjectorV1()])),
+      record_append: new OrganizationRecordAppenderV4(record, coordinates, authorityRecordPolicyProjectorsV1()),
       next_envelope_id: () => `env_canary_${++envelopes}` },
     extraction_attempts: { reserve: () => ({ status: 'reserved', attempt: 1, claim_id: 'claim' }), complete() {} },
   });

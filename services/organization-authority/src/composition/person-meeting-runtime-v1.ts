@@ -78,8 +78,8 @@ export function createPersonMeetingRuntimeV1(options: {
   /** One provider per tool; a stored source belongs to the provider whose cursor policy names its source adapter. */
   readonly providers: readonly PersonMeetingProviderV1[]; readonly processor: DecisionProcessorBundleV1;
   readonly approval: Omit<ApprovalWorkflowContextV1, 'state'>; readonly extraction_attempts: ExtractionAttemptStoreV1;
-  /** Static, core-independent approval core options (Task 8 adds after_record). */
-  readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'now'>;
+  /** Static, core-independent approval core options: the decided_at test seam and the after-record hooks. */
+  readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'now' | 'after_record'>;
 }) {
   const { database: db, providers, processor } = options;
   if (providers.length === 0 || new Set(providers.map(p => p.id)).size !== providers.length || new Set(providers.map(p => p.cursor.policy.source_adapter_id)).size !== providers.length) {

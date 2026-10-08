@@ -18,6 +18,7 @@ import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import { assertPrivatePersonProviderDatabaseV1, bindPersonProviderStateV1 } from './person-provider-state-v1.js';
 import type { PersonHttpRuntimeResourcesV1 } from './organization-authority-api-runtime.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
+import type { ApprovalCoreOptionsV1 } from './approval-core-v1.js';
 
 /** Only this selecting bootstrap knows Granola or Nango; the processing/review runtime is shared. */
 export function openGranolaPersonLiveRuntimeV1(options: {
@@ -26,6 +27,8 @@ export function openGranolaPersonLiveRuntimeV1(options: {
   readonly projectors: RecordPolicyFactProjectorRegistryV1; readonly nango_authorization: () => string;
   /** Further personal meeting providers served beside Granola by the same processing and review runtime. */
   readonly providers?: readonly PersonMeetingProviderV1[];
+  /** After-record hooks of the shared approval core (Task 13 registers its runs trigger here). */
+  readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'after_record'>;
   readonly seams?: { readonly database?: Database.Database; readonly nango?: NangoPersonConnectionV1; readonly fetch?: typeof fetch };
 }) {
   const path = join(options.state_directory, 'granola-person-connections.sqlite'), owned = options.seams?.database === undefined;
@@ -44,6 +47,7 @@ export function openGranolaPersonLiveRuntimeV1(options: {
     attempts = openExtractionAttemptStoreV1(join(options.state_directory, 'extraction-attempts.sqlite'), coordinates);
     const signer = FileOrganizationAuthoritySigner.openExisting({ directory: join(options.state_directory, 'keys'), ...coordinates });
     const runtime = createPersonMeetingRuntimeV1({ database, sessions: options.sessions, processor: options.processor, extraction_attempts: attempts,
+      ...(options.approval_core === undefined ? {} : { approval_core: options.approval_core }),
       approval: { coordinates, signer, on_terminal_action_queued: options.resources.on_processing_queued, record_append: new OrganizationRecordAppenderV4(record, coordinates, options.projectors), next_envelope_id: () => `env_${randomUUID()}` },
       providers: [{
         id: 'granola', normalizer_version: GRANOLA_MEETING_NORMALIZER_VERSION_V1,
