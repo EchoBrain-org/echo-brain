@@ -13,6 +13,12 @@ import {
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1,
   PERSON_RESEARCH_EVAL_READ_PATH_V1,
   PERSON_RESEARCH_EVAL_START_PATH_V1,
+  PERSON_RUNS_PATH_V1,
+  PERSON_RUNS_MAX_RESPONSE_BYTES_V1,
+  validatePersonRunsRequestV1,
+  validatePersonRunsResultV1,
+  type PersonRunsRequestV1,
+  type PersonRunsResultsV1,
   validatePersonResearchEvalReadRequestV1,
   validatePersonResearchEvalReadResponseV1,
   validatePersonResearchEvalStartReceiptV1,
@@ -1336,6 +1342,13 @@ export class PersonAuthorityClient {
     return this.json({ path: PERSON_RESEARCH_EVAL_READ_PATH_V1, body: { schema_version: 1, run_id: runId },
       validate_request: validatePersonResearchEvalReadRequestV1, validate_response: validatePersonResearchEvalReadResponseV1,
       access_token: accessToken, maximum_response_bytes: PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, timeout_ms: ASK_TIMEOUT_MS, signal });
+  }
+
+  async runs<K extends PersonRunsRequestV1['operation']>(accessToken: string, value: Extract<PersonRunsRequestV1, { readonly operation: K }>, signal?: AbortSignal): Promise<PersonRunsResultsV1[K]> {
+    const request = validatePersonRunsRequestV1(value);
+    return this.json({ path: PERSON_RUNS_PATH_V1, body: request, validate_request: validatePersonRunsRequestV1,
+      validate_response: value => validatePersonRunsResultV1(request.operation, value), access_token: accessToken,
+      maximum_response_bytes: PERSON_RUNS_MAX_RESPONSE_BYTES_V1, timeout_ms: DEFAULT_TIMEOUT_MS, signal }) as Promise<PersonRunsResultsV1[K]>;
   }
 
   evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {

@@ -770,6 +770,56 @@ WHEN EXISTS (
         AND grant_row.membership_id = json_extract(NEW.body_json, '$.actor.membership_id')))
 BEGIN SELECT RAISE(ABORT, 'approval decision audience needs active project membership'); END;
 
+CREATE TABLE authority_trigger_runs_v1 (
+  run_id TEXT PRIMARY KEY CHECK (run_id GLOB 'run_*' AND length(run_id) BETWEEN 8 AND 64),
+  trigger TEXT NOT NULL CHECK (trigger IN ('approved_record')),
+  event_ref TEXT NOT NULL CHECK (length(event_ref) BETWEEN 1 AND 128),
+  organization_id TEXT NOT NULL, principal_id TEXT NOT NULL, membership_id TEXT NOT NULL,
+  record_sha256 TEXT NOT NULL CHECK (record_sha256 LIKE 'sha256:%'),
+  state TEXT NOT NULL CHECK (state IN ('pending', 'running', 'done', 'failed')),
+  attempts INTEGER NOT NULL CHECK (attempts BETWEEN 0 AND 3),
+  lease_token TEXT, lease_expires_at TEXT CHECK (lease_expires_at IS NULL OR unixepoch(lease_expires_at) IS NOT NULL),
+  result_json TEXT CHECK (result_json IS NULL OR (json_valid(result_json) AND json_type(result_json) = 'object')),
+  result_sha256 TEXT CHECK (result_sha256 IS NULL OR result_sha256 LIKE 'sha256:%'),
+  error_code TEXT CHECK (error_code IS NULL OR error_code IN ('no_access', 'unavailable', 'timed_out', 'research_failed')),
+  created_at TEXT NOT NULL CHECK (unixepoch(created_at) IS NOT NULL),
+  updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
+  UNIQUE (trigger, event_ref),
+  CHECK ((lease_token IS NULL) = (lease_expires_at IS NULL)),
+  CHECK ((state = 'running') = (lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)),
+  CHECK ((result_json IS NULL) = (result_sha256 IS NULL)),
+  CHECK ((state = 'done') = (result_json IS NOT NULL)),
+  CHECK ((state = 'failed') = (error_code IS NOT NULL))
+) STRICT;
+CREATE INDEX authority_trigger_runs_by_actor_v1 ON authority_trigger_runs_v1 (organization_id, principal_id, membership_id, created_at);
+CREATE TRIGGER authority_trigger_run_approved_record_v1
+BEFORE INSERT ON authority_trigger_runs_v1
+WHEN NEW.trigger = 'approved_record' AND NOT EXISTS (
+  SELECT 1 FROM authority_approval_decisions_v1 d
+  WHERE d.approval_id = NEW.event_ref AND d.action = 'approve' AND d.receipt_json IS NOT NULL
+    AND json_extract(d.body_json, '$.actor.organization_id') = NEW.organization_id
+    AND json_extract(d.body_json, '$.actor.principal_id') = NEW.principal_id
+    AND json_extract(d.body_json, '$.actor.membership_id') = NEW.membership_id
+    AND json_extract(d.receipt_json, '$.record_sha256') = NEW.record_sha256)
+BEGIN SELECT RAISE(ABORT, 'approved-record run needs its published approval'); END;
+CREATE TRIGGER authority_trigger_run_identity_immutable_v1
+BEFORE UPDATE ON authority_trigger_runs_v1
+WHEN NEW.run_id != OLD.run_id OR NEW.trigger != OLD.trigger OR NEW.event_ref != OLD.event_ref
+  OR NEW.organization_id != OLD.organization_id OR NEW.principal_id != OLD.principal_id OR NEW.membership_id != OLD.membership_id
+  OR NEW.record_sha256 != OLD.record_sha256 OR NEW.created_at != OLD.created_at
+BEGIN SELECT RAISE(ABORT, 'trigger run identity is immutable'); END;
+CREATE TRIGGER authority_trigger_run_transition_v1
+BEFORE UPDATE OF state ON authority_trigger_runs_v1
+WHEN NOT ((OLD.state = 'pending' AND NEW.state = 'running') OR (OLD.state = 'running' AND NEW.state IN ('pending', 'running', 'done', 'failed'))
+  OR (OLD.state = 'failed' AND NEW.state = 'pending'))
+BEGIN SELECT RAISE(ABORT, 'trigger run transition is not allowed'); END;
+CREATE TRIGGER authority_trigger_run_done_frozen_v1
+BEFORE UPDATE ON authority_trigger_runs_v1 WHEN OLD.state = 'done'
+BEGIN SELECT RAISE(ABORT, 'a finished trigger run is frozen'); END;
+CREATE TRIGGER authority_trigger_run_delete_denied_v1
+BEFORE DELETE ON authority_trigger_runs_v1
+BEGIN SELECT RAISE(ABORT, 'trigger run deletion is denied'); END;
+
 CREATE INDEX authority_memberships_current
   ON authority_memberships (principal_id, status, membership_id);
 

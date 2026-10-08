@@ -7,6 +7,9 @@ import { SqlitePersonTextSourceInboxV1 } from '../adapters/persistence/sqlite/pe
 import { createPersonDocumentUploadStagingV1 } from '../adapters/files/document-upload-staging-v1.js';
 import { startPersonDocumentProcessingV1 } from './person-document-processing-v1.js';
 import { createPersonResearchEvalV1 } from './person-research-eval-v1.js';
+import { createPersonTriggerRunsV1 } from './person-trigger-runs-v1.js';
+import { SqliteTriggerRunsV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
+import { createAgenticResearchV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 import { createProjectContextApplicationV1 } from '../application/project-context-application-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
@@ -47,7 +50,7 @@ import { readableSearchGenerationContractV1 } from "./readable-search-generation
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { createPersonMeetingTranscriptReadRouteV1, createPersonSourceEvidenceRouteV1 } from "./person-source-evidence-route.js";
 import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
-import { createPersonLiveAnswerRouteV1 } from './person-live-answer-route-v1.js';
+import { bindPersonLiveEvidenceDeskV1, createPersonLiveAnswerRouteV1 } from './person-live-answer-route-v1.js';
 import type { PersonLiveConnectorDefinitionV1, OpenedPersonLiveConnectorV1, PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { personLiveConnectorDefinitionsV1 } from './person-live-connector-registry-v1.js';
 import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
@@ -333,6 +336,17 @@ export async function startOrganizationAuthorityApiRuntime(
     const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && answerOptions !== undefined
       ? createPersonResearchEvalV1({ ...answerOptions, live_sources: liveSources })
       : undefined;
+    const triggerRuns = answerOptions === undefined ? Object.freeze({
+      async list(input: { readonly access_token: string }) { sessions.authenticateAccess({ access_token: input.access_token }); throw new AuthorityOperationError('unavailable', 'an answer model is not configured'); },
+      async start(input: { readonly access_token: string }) { sessions.authenticateAccess({ access_token: input.access_token }); throw new AuthorityOperationError('unavailable', 'an answer model is not configured'); },
+      async retry(input: { readonly access_token: string }) { sessions.authenticateAccess({ access_token: input.access_token }); throw new AuthorityOperationError('unavailable', 'an answer model is not configured'); },
+      async view(input: { readonly access_token: string }) { sessions.authenticateAccess({ access_token: input.access_token }); throw new AuthorityOperationError('unavailable', 'an answer model is not configured'); },
+      close() {},
+    }) : createPersonTriggerRunsV1({
+      runs: new SqliteTriggerRunsV1(database), sessions, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, audit: answerOptions.audit, bind_options: answerOptions, live_sources: liveSources,
+      research: ({ desk, context }) => createAgenticResearchV1({ desk, model: answerOptions.model, generation: answerOptions.generation, audit: answerOptions.audit.forRequest(context),
+        ...(answerOptions.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}) }),
+    });
     let closing = false;
     const server = createOrganizationAuthorityHttpServer({
       is_closing: () => closing,
@@ -380,6 +394,7 @@ export async function startOrganizationAuthorityApiRuntime(
         person_answer_v5: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 6),
       }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
+      person_trigger_runs: triggerRuns,
       person_documents: createPersonDocumentApplicationV1({
         authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
         repository: documents,
@@ -434,6 +449,7 @@ export async function startOrganizationAuthorityApiRuntime(
       close: async () => {
         stopAcceptingRequests();
         researchEval?.close();
+        triggerRuns?.close();
         await Promise.all([serverClosed, documentWorker?.close()]);
         for (const { runtime } of [...liveConnectors].reverse()) runtime.close();
         personHttp?.close();

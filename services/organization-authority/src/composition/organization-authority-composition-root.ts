@@ -1,5 +1,9 @@
 import { openGranolaPersonLiveRuntimeV1 } from "./granola-person-live-runtime-v1.js";
 import {
+  enqueueApprovedRecordRunV1,
+  SqliteTriggerRunsV1,
+} from "../adapters/persistence/sqlite/trigger-runs-v1.js";
+import {
   AUTHORITY_RECORD_APPROVER_PROJECTORS_V1,
   AUTHORITY_RECORD_INPUT_CODECS_V1,
   authorityRecordPolicyProjectorsV1,
@@ -368,6 +372,11 @@ export async function openOrganizationAuthorityService(
           nango_authorization: () => slack_nango.secret_key,
           provider_applications: [interaction],
           approval_core: {
+            after_record: [
+              enqueueApprovedRecordRunV1(
+                new SqliteTriggerRunsV1(resources.database),
+              ),
+            ],
             presenters: [
               (core) =>
                 createSlackApprovalPresenterV1({
