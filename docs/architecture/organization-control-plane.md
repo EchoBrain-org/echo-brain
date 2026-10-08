@@ -1,7 +1,8 @@
 # Organization control plane
 
-**Status:** current organization-owned Slack onboarding through Nango, Person
-Slack identity linking, and private Slack DM approval persistence.
+**Status:** current organization-owned Slack onboarding through Nango and
+Person Slack identity linking. Slack DM approvals are paused, and the control
+plane stores no approval state.
 
 The control plane is a library linked into the Organization Authority. It owns
 no HTTP listener. The Authority composes neutral control contracts with the
@@ -18,9 +19,9 @@ paths below are relative to its `organization-control-plane/` folder:
 | Slack provider `adapters/slack/slack-web-identity-provider-v1` | Slack `auth.test` checks of an install and the DM-code person link |
 | Slack provider `application/organization-tool-connection-contracts-v2` | External human-link and organization-tool connection contracts |
 | `security/file-secret-store` | The private secret store for the organization's Slack app credential bundle: client ID/secret, signing secret, and Nango connection ID ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)) |
-| Slack provider `slack-approval-integration-v1` | Private DM approval policy resolution, reviewer targeting, and approval persistence |
-| `organization-control-database-v1` | Opening the control database and applying the current V3 baseline |
-| `record-visibility-policy-contracts-v1` | Provider-neutral Person visibility policy contracts consumed by approval resolution |
+| Slack provider `slack-approval-integration-v1` | The control database opener, visibility policy and tool connection contracts, and the Slack identity-link lookup (`resolveCurrentSlackDmApprovalReviewerTargetV1`) kept for the Slack approval plug-in |
+| `organization-control-database-v1` | Opening the control database and applying the current V4 baseline |
+| `record-visibility-policy-contracts-v1` | Provider-neutral Person visibility policy identifiers and contract digests |
 
 ## Current behaviors
 
@@ -31,16 +32,16 @@ paths below are relative to its `organization-control-plane/` folder:
    it to their current ECHO membership, review that link under Connected
    tools, and disconnect it. Linking creates no approval capability, role, or
    permission grant.
-3. The Authority's private Slack DM approval path persists its pending
-   contracts, signed action receipts, denied action receipts, and terminal
-   evidence here. It is the only approval surface.
+3. Slack DM approvals are paused. The control plane stores no approval state;
+   meeting approval decisions are Authority state (see
+   [Private DM approvals](#private-dm-approvals)).
 
 ## Ownership boundaries
 
 | Boundary | Owner | Responsibility |
 | --- | --- | --- |
 | Organization Authority | Customer | Principal, membership, role, Person session, processing, and revocation truth |
-| Organization control plane | Customer | Verified provider connection, Person provider identity links, and private approval persistence |
+| Organization control plane | Customer | Verified provider connection and Person provider identity links |
 | Organization record | Customer | The append-only log of human-approved decisions and rejections, and the deterministic graph derived from it |
 | Authority processing | Customer | Meetings, decisions, server processing, pending approval, and delivery evidence |
 | Person client | Person | One private Authority session and bounded authenticated requests |
@@ -49,9 +50,8 @@ paths below are relative to its `organization-control-plane/` folder:
 Decision ownership is split deliberately. Authority processing owns the
 meeting and pre-record decision state; the organization record owns the
 org-wide act once a human approved or rejected it. The control plane owns
-neither: it holds verified provider identity and the durable evidence that a
-specific human took a specific approval action. No control-plane table exists
-for records.
+neither: it holds verified provider connections and identity links only. No
+control-plane table exists for approvals or records.
 
 The future ECHO entitlement cannot create a customer membership, grant an
 adapter permission, resolve a customer secret, or read customer organization
@@ -96,8 +96,8 @@ per-connection override. Nango runs the OAuth install and returns the bot
 token; the Authority never
 asks the owner for it directly. The install requests exactly four bot
 scopes: `chat:write`, `im:history`, `im:write`, and `users:read`. The bot only
-delivers: `im:write` opens the verified meeting owner's private DM and
-`im:history` reconciles a retry without duplicating that DM card. The bot reads
+delivers private DMs: the DM-code link challenge today, and approval cards
+once the Slack approval plug-in returns. The bot reads
 no channel; reading Slack for Ask is a person's own grant, not the bot's. The
 stored connection contract names those four scopes as required. Install and
 reconnect accept a granted superset, because a token installed before the
@@ -136,7 +136,7 @@ workspace or bot, so the connection reads "needs reinstall" until the owner
 reconnects to the original one. A failed, incomplete, or unavailable
 verification leaves no active connection; absence therefore means inactive. A
 reconnect of the same app reuses the same Nango connection ID and leaves every
-outstanding approval card untouched. It completes only once that connection
+identity link untouched. It completes only once that connection
 reports the current attempt, organization and owner membership tags and fresh
 Slack identity and permission checks pass; Nango's `updated_at` is not
 completion evidence. When Nango no longer has that connection
@@ -144,7 +144,7 @@ completion evidence. When Nango no longer has that connection
 `person tools setup --tool slack --reconnect` opens a new install and, once it
 reproduces the stored verification evidence for the same app, workspace and
 bot, rebinds the bundle's Nango connection ID under the same handle; the state
-hash and the cards stay unchanged
+hash and the identity links stay unchanged
 ([ADR-0027](../decisions/ADR-0027-rebind-lost-nango-slack-connection.md),
 proposed).
 
@@ -182,22 +182,18 @@ that bundle plus the verified workspace, bot identity, app ID, granted scopes,
 evidence digests, and activation audit. The database never receives the bot
 token, the client secret, or the signing secret.
 
-Startup recovery first materializes every finalized approval and its V4 receipt
-without contacting Slack. Terminal-card redraw is a later, optional presentation
-step; its scheduling and retry rules are in
-[meeting processing core and adapters](meeting-processing-core-and-adapters.md#adapter-responsibilities).
-A Nango outage therefore leaves the durable decision intact and the card
-pending without delaying Authority readiness. The owner's setup and install
-report "Slack setup is unavailable right now". Unavailability and Nango's 401
-or 403 never mark the connection "needs reinstall".
+Authority startup reads no Slack bot token, so a Nango outage does not delay
+Authority readiness. The owner's setup and install report "Slack setup is
+unavailable right now". Unavailability and Nango's 401 or 403 never mark the
+connection "needs reinstall".
 
 The `slack-organization-tool-v1` ready state is accepted only while its opaque
 credential reference resolves to a private readable secret during Authority
-startup. Private approval additionally needs that same bundle's signing
-secret to verify Slack's Interactivity Request URL at
-`/v2/integrations/slack/interactions`; the Slack app recipe sets that URL, so
-no operator saves it by hand. Event Subscriptions and Socket Mode are not
-used.
+startup. The Slack app recipe sets the Interactivity Request URL
+`/v2/integrations/slack/interactions`, so no operator saves it by hand. That
+route is not mounted while Slack approvals are paused; the Slack approval
+plug-in will verify each click there with the same bundle's signing secret.
+Event Subscriptions and Socket Mode are not used.
 
 ## Person Slack identity link
 
@@ -253,17 +249,22 @@ credentials, or provider response bodies.
 
 ## Private DM approvals
 
-Slack DM approvals are paused. The control plane no longer stores approval
-state: the pending contracts, signed and denied action receipts, and terminal
-evidence were removed with control-plane baseline V4, together with the
-Slack-bound policy resolutions and their neutral core. The Slack connection,
-the bot token source, connection health and the identity-link lookup
-(`resolveCurrentSlackDmApprovalReviewerTargetV1`) stay; the coming Slack
-plug-in posts copies of approval-core proposals with them and decides through
-the approval core
-([unified meeting approval](../product/2026-10-07-unified-meeting-approval-v1.md)).
-Until then a verified Approve or Reject click writes nothing and gets a fixed
-ephemeral reply pointing to the ECHO desktop app.
+Slack DM approvals are paused. The control plane stores no approval state:
+control-plane baseline V4 removed the pending contracts, signed and denied
+action receipts, and terminal evidence, together with the Slack-bound policy
+resolutions. The Slack connection, the bot token source, connection health and
+the identity-link lookup (`resolveCurrentSlackDmApprovalReviewerTargetV1`)
+stay for the Slack approval plug-in
+([unified meeting approval](../product/2026-10-07-unified-meeting-approval-v1.md),
+sections 3 and 5). That plug-in will post a copy of each proposal to a
+reviewer who linked Slack and decide a click through the same approval core as
+the desktop. Its decision will be Authority state, written once to the
+decision table the spec defines (`authority_approval_decisions_v1`), never to
+the control plane, and a click will count only when the clicker's active
+identity link maps to the reviewer's membership, read again inside that
+transaction. Until then the Interactivity route is not mounted, and a verified
+Approve or Reject click would write nothing and get a fixed ephemeral reply
+pointing to the ECHO desktop app.
 [INV-IDENTITY-005](../invariants/INV-IDENTITY-005-adapter-to-echo-identity-chain.md)
 governs the identity chain.
 
@@ -305,12 +306,12 @@ those facts.
   Authority state; the bot token stays in Nango. SQLite stores only an opaque
   handle, never token bytes, authorization codes, or raw OAuth state, nonce, or
   PKCE material.
-- Commit the link, receipt, or terminal evidence before publishing success.
-- Never reuse a provider event as authorization. Every approval action is
-  revalidated inside the Authority transaction against the current membership
-  and the current link before it is recorded.
-- Keep the private Slack DM card the single resolver. The Person client ships
-  no approve or reject command.
+- Commit the link before publishing success.
+- Never reuse a provider event as authorization. While Slack approvals are
+  paused, a verified Slack click decides nothing.
+- Meeting approvals are decided only in the Authority's review (today the
+  desktop app's in-app review). The Person CLI ships no approve or reject
+  command.
 
 The Authority and control plane run in one process. No positive authorization
 result is cached.
@@ -322,8 +323,7 @@ The current schema does not persist:
 - membership or principal mirrors;
 - organization groups or inherited policy;
 - quorum and candidate snapshots;
-- projection streams or authorization receipts beyond the private approval
-  receipts above;
+- projection streams or authorization receipts;
 - non-Slack and general-purpose organization workload identities;
 - Person-bound approval delegation and record-writer bindings;
 - control-plane signing delegation or recovery epochs;
