@@ -128,6 +128,44 @@ THERM.
 
 ## Privacy
 
+### One complete diagnostic trace
+
+After staging a capture-enabled server and building its matching Person client,
+capture one project-scoped Ask with the ordinary live budget:
+
+```bash
+npm run eval:research-loop -- trace --run --question "Why is Thermo DVT on hold and what must happen before PVT starts?" --project-id prj_… --out ~/.local/state/echo-thermo-diagnostic-<run>
+```
+
+This opts only that evaluation run into private, bounded, in-memory capture.
+The export includes each exact model-port input (system/user prompts, schema,
+model and limits), structured model response including repair attempts, and
+each model-facing tool request/result. These are the model's exposed decisions,
+not hidden reasoning or raw provider HTTP/authentication traffic. Tool result
+references are resolved in the exact subsequent prompt's `opened` and `seen`
+fields and the evaluation's released items.
+
+`result.json` preserves the authenticated response; `events/` has one file per
+event. `models/` contains exact request JSON and system/user text, plus a readable
+JSON copy of each user prompt. `summary.json` checks capture completeness and
+request/response pairing. A truncated, missing or incomplete trace is saved but
+reported as incomplete. Capture is bounded to 8 MiB and 512 events per run; it
+does not write live source content to runtime logs. The existing person, access
+revalidation and expiry checks apply to every trace release, including failures.
+
+The runner saves `receipt.json` immediately after starting and never retries a
+start automatically. If polling is interrupted, use its `run_id` to resume
+within the server's existing result lifetime:
+
+```bash
+npm run eval:research-loop -- trace --run-id rr_… --out ~/.local/state/echo-thermo-diagnostic-<run>
+```
+
+An existing completed export is not overwritten. Treat these files as private
+source content; keep them outside the repository. A diagnostic evaluation uses
+the same live research implementation and desk, through the evaluation endpoint;
+it is not the normal Ask HTTP route.
+
 Runs contain released text from Jira, Confluence and approved meetings. A
 saved run keeps the research result (the trimmed bundle) and Ask's answer or
 the impact card, never server records such as receipts or model-call

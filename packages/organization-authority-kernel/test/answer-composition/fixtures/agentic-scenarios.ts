@@ -271,6 +271,7 @@ export async function replay(name: string, scenario: Scenario, hooks: { readonly
  */
 export function researchHarness(replies: readonly unknown[] | ((input: StructuredGenerationInput, index: number) => unknown), desk: Partial<EvidenceDeskPortV2> = {}, core: {
   readonly small_scope_shortcut?: true; readonly now_ms?: () => number; readonly usage?: (call: number) => StructuredGenerationUsageV1;
+  readonly on_trace?: import('../../../src/answer-composition/agentic-ask-v1.js').AgenticResearchTraceObserverV1;
 } = {}) {
   const inputs: StructuredGenerationInput[] = [];
   const audit: AgenticAskAuditEntryV1[] = [];

@@ -48,6 +48,7 @@ import type {
   AgenticResearchRoundV1,
 } from "./agentic-research-v1.js";
 import { AuthorityOperationError } from "../domain/errors.js";
+import { agenticResearchTraceErrorKindV1, observeAgenticResearchTraceV1, type AgenticResearchTraceObserverV1 } from './agentic-research-trace-v1.js';
 
 /**
  * The research loop (research trigger contract v1): a brief in, the full
@@ -129,6 +130,7 @@ export interface CreateAgenticResearchLoopV1Options {
   readonly assert_live: () => void;
   /** The runner's own observation, read when the bundle is built: the last access check, and research's model and desk time. */
   readonly observed: () => { readonly checked_at: string | null; readonly model_ms: number; readonly desk_ms: number };
+  readonly on_trace?: AgenticResearchTraceObserverV1;
 }
 
 /** What the request's audit and journey report read from research, while it runs and after it fails. */
@@ -494,10 +496,20 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     };
     return admit === undefined ? apply() : admit(apply);
   };
+  let toolCalls = 0;
   const run = async (action: StepAction, admit?: OrderedAdmission, signal?: AbortSignal): Promise<ToolResult> => {
-    if (action.tool === "search") return search(action.args, admit, signal);
-    if (action.tool === "open") return open(action.args, admit, signal);
-    return list(action.args, admit, signal);
+    // Only planner-selected reads enter this function; finish has no tool result.
+    const tool = action.tool === 'search' || action.tool === 'open' ? action.tool : 'list';
+    const identity = { tool_call_id: ++toolCalls, round: steps, tool } as const;
+    observeAgenticResearchTraceV1(options.on_trace, { kind: 'tool_request', ...identity, args: action.args });
+    try {
+      const result = await (tool === 'search' ? search(action.args, admit, signal) : tool === 'open' ? open(action.args, admit, signal) : list(action.args, admit, signal));
+      observeAgenticResearchTraceV1(options.on_trace, { kind: 'tool_response', ...identity, result });
+      return result;
+    } catch (error) {
+      observeAgenticResearchTraceV1(options.on_trace, { kind: 'tool_error', ...identity, error_kind: agenticResearchTraceErrorKindV1(error) });
+      throw error;
+    }
   };
   /**
    * Reads planned together have no model-visible dependency. Start their
@@ -805,9 +817,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       // Batched reads must be observed in another step before completion.
       const reads = step.actions.filter(action => action.tool !== "finish");
       if (reads.length === 0) {
+        const identity = { tool_call_id: ++toolCalls, round: steps, tool: 'finish' } as const;
+        observeAgenticResearchTraceV1(options.on_trace, { kind: 'tool_request', ...identity, args: {} });
         researchIncomplete = false;
         researchStop = 'finished';
         recordRound(roundStartedAt, [roundView("finish", {}, undefined)]);
+        observeAgenticResearchTraceV1(options.on_trace, { kind: 'tool_response', ...identity, result: { tool: 'finish' } });
         break;
       }
       const hadCitableEvidence = [...entries.values()].some(entry => entry.full);

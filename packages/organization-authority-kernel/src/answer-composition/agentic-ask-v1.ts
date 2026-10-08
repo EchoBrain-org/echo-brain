@@ -41,6 +41,7 @@ import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPor
 import type { AgenticRendererV1, AgenticRenderOutputV1 } from "./agentic-renderer-v1.js";
 import { createAgenticResearchLoopV1, type AgenticResearchCatalogEntryV1, type AgenticResearchCatalogV1, type AgenticResearchSourceV1 } from "./agentic-research-loop-v1.js";
 import { createAskRendererV1 } from "./renderers/ask-renderer-v1.js";
+import type { AgenticResearchTraceObserverV1 } from './agentic-research-trace-v1.js';
 import {
   AGENTIC_RESEARCH_LIVE_BUDGET_V1,
   type AgenticAskWithResearchV1,
@@ -52,6 +53,7 @@ import {
 export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./agentic-research-v1.js";
 export { AgenticAskDeadlineErrorV1 } from "./agentic-model-gate-v1.js";
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
+export type { AgenticResearchTraceEventV1, AgenticResearchTraceObserverV1 } from './agentic-research-trace-v1.js';
 
 /** Request-wide model-call budget, including retries and repairs. */
 export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
@@ -103,6 +105,8 @@ export interface CreateAgenticAskV1Options {
    * Observer failures never alter the answer.
    */
   readonly on_stage?: (event: AnswerCompositionStageObservationV1) => void;
+  /** Explicit request-owned diagnostic capture. The caller owns authorization, bounds and release revalidation. */
+  readonly on_trace?: AgenticResearchTraceObserverV1;
 }
 
 /** One run: the brief, and the trigger definition's name as a label for the audit and the evaluation. */
@@ -327,6 +331,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         context: context(requestDay), scope, catalog,
         now, remaining, signal: activeSignal, assert_live: assertLive,
         observed: () => ({ checked_at: checkedAt, model_ms: stepModelMs, desk_ms: deskMs }),
+        ...(options.on_trace === undefined ? {} : { on_trace: options.on_trace }),
       });
       const gate = createAgenticModelGateV1({
         generation: options.generation, model: options.model,
@@ -340,6 +345,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           if (event.role === "step") stepModelMs += event.elapsed_ms; else answerModelMs += event.elapsed_ms;
         },
         ...loop.gate_hooks,
+        ...(options.on_trace === undefined ? {} : { on_trace: options.on_trace }),
       });
       /** What every audit record of this request carries, taken when its release or terminal witness starts. */
       const auditContext = (): AgenticAuditContextV1 => {

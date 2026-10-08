@@ -8,6 +8,7 @@ import type {
 } from "./structured-generation-v1.js";
 import { observeCoreRuntimeV1, withoutCoreRuntimeContentV1, type CoreRuntimePhaseV1 } from "../shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, cleanLine, repairPrompt } from "./agentic-ask-v1-model-protocol.js";
+import { agenticResearchTraceErrorKindV1, observeAgenticResearchTraceV1, type AgenticResearchTraceObserverV1 } from './agentic-research-trace-v1.js';
 
 /**
  * The shared model gate (research trigger contract v1, section 3): every model
@@ -147,6 +148,7 @@ export interface CreateAgenticModelGateV1Options {
   readonly content_sensitive: () => boolean;
   /** Runs once per admitted call, after the budget and access checks and before the provider call. */
   readonly before_call?: (role: AgenticAskModelRoleV1) => void;
+  readonly on_trace?: AgenticResearchTraceObserverV1;
 }
 
 export interface AgenticModelGateStatsV1 {
@@ -192,8 +194,11 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     calls += 1;
     if (recovery) repairs += 1;
     const modelInput: StructuredGenerationInput = Object.freeze({ model: options.generation.answer_model, system_prompt, user_prompt: JSON.stringify(user), schema, max_output_tokens: AGENTIC_MODEL_OUTPUT_TOKENS_V1[role], timeout_ms: Math.max(1, Math.floor(Math.min(options.generation.timeout_ms, timeoutMs, remaining()))), signal: activeSignal });
+    const callId = calls;
     options.before_call?.(role);
     invocationDigests.push(canonicalSha256({ role, model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms }));
+    observeAgenticResearchTraceV1(options.on_trace, { kind: 'model_request', call_id: callId, role, recovery,
+      input: { model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms } });
     // Live-provider evidence must never reach runtime content capture.
     const contentSafe = <T>(operation: () => Promise<T>): Promise<T> => {
       // Each call is its own span, named by its caller, so provider model calls carry that purpose.
@@ -209,14 +214,17 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
       if (options.model.generate_with_observation !== undefined) {
         const generate = options.model.generate_with_observation.bind(options.model);
         const observed = await raceAbort(activeSignal, contentSafe(() => generate(modelInput)));
+        observeAgenticResearchTraceV1(options.on_trace, { kind: 'model_response', call_id: callId, role, value: observed.value, usage: observed.usage, finish_reason: observed.finish_reason });
         generations.push(Object.freeze({ role, finish_reason: observed.finish_reason, usage: observed.usage }));
         if (observed.finish_reason !== null && observed.finish_reason !== "stop") throw finishFailure(observed.finish_reason);
         return observed.value;
       }
       const value = await raceAbort(activeSignal, contentSafe(() => options.model.generate(modelInput)));
+      observeAgenticResearchTraceV1(options.on_trace, { kind: 'model_response', call_id: callId, role, value });
       generations.push(Object.freeze({ role, finish_reason: null, usage: null }));
       return value;
     } catch (error) {
+      observeAgenticResearchTraceV1(options.on_trace, { kind: 'model_error', call_id: callId, role, error_kind: agenticResearchTraceErrorKindV1(error) });
       if (error instanceof AgenticAskGenerationFailureV1) {
         if (error.recovery === "fallback") generationStopped = true;
         throw error;

@@ -2,6 +2,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { validatePersonResearchEvalReadResponseV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { captureCoreRuntimeContentV1, observeCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { describe, expect, it, vi } from 'vitest';
 import { createPersonResearchEvalV1, PERSON_RESEARCH_EVAL_REREAD_MS_V1, PERSON_RESEARCH_EVAL_RESULT_TTL_MS_V1 } from '../src/composition/person-research-eval-v1.js';
@@ -82,6 +83,7 @@ describe('staging research evaluation runs', () => {
     const result = await h.settled('token-a', receipt.run_id);
     expect(result).toMatchObject({ status: 'completed', research: { kind: 'echo-agentic-research-result-v1', trigger: 'ask', stop: { reason: 'unusable_step' } }, ask: { writer_evidence: [], response: { schema_version: 6 } } });
     expect(result).not.toHaveProperty('rendered');
+    expect(result).not.toHaveProperty('trace');
     expect((await h.read('token-a', receipt.run_id)).status).toBe('completed');
     h.advance(PERSON_RESEARCH_EVAL_REREAD_MS_V1 + 1);
     await expect(h.read('token-a', receipt.run_id)).rejects.toMatchObject({ code: 'not_found' });
@@ -126,16 +128,16 @@ describe('staging research evaluation runs', () => {
     expect(h.deskSearch).toHaveBeenCalledWith(expect.objectContaining({ inventory_mode: 'items' }));
   });
 
-  it("never shows one person's run to another", async () => {
+  it.each([false, true])("never shows one person's run to another (trace: %s)", async traced => {
     const h = harness();
-    const run = await h.application.start({ access_token: 'token-a', request: ask('Mine?') });
+    const run = await h.application.start({ access_token: 'token-a', request: { ...ask('Mine?'), ...(traced ? { capture_trace: true as const } : {}) } });
     await expect(h.read('token-b', run.run_id)).rejects.toMatchObject({ code: 'not_found' });
     expect((await h.settled('token-a', run.run_id)).status).toBe('completed');
   });
 
-  it('drops an unread result after it expires', async () => {
+  it.each([false, true])('drops an unread result after it expires (trace: %s)', async traced => {
     const h = harness();
-    const run = await h.application.start({ access_token: 'token-a', request: ask('Later?') });
+    const run = await h.application.start({ access_token: 'token-a', request: { ...ask('Later?'), ...(traced ? { capture_trace: true as const } : {}) } });
     await vi.waitFor(() => expect(h.generate).toHaveBeenCalled());
     await new Promise(resolve => setTimeout(resolve, 20));
     h.advance(PERSON_RESEARCH_EVAL_RESULT_TTL_MS_V1 + 1);
@@ -232,5 +234,92 @@ describe('staging research evaluation runs', () => {
     await vi.waitFor(() => expect(seen).toHaveLength(1));
     h.application.close();
     expect(seen[0]!.aborted).toBe(true);
+  });
+
+  it('exports exact model inputs and structured replies only for an opted-in, settled run', async () => {
+    const h = harness();
+    const run = await h.application.start({ access_token: 'token-a', request: { ...ask('Which linked item blocks PVT?'), capture_trace: true } });
+    const result = await h.settled('token-a', run.run_id);
+    expect(result.trace).toMatchObject({ kind: 'echo-agentic-research-trace-v1', complete: true, dropped_events: 0 });
+    const requests = result.trace!.events.filter(event => event.kind === 'model_request');
+    expect(requests).toHaveLength(h.generate.mock.calls.length);
+    requests.forEach((event, index) => {
+      const { signal: _signal, ...expected } = h.generate.mock.calls[index]![0];
+      expect(event.input).toEqual(expected);
+      expect(event.input).not.toHaveProperty('signal');
+    });
+    expect(result.trace!.events.filter(event => event.kind === 'model_response')).toHaveLength(requests.length);
+    expect(JSON.stringify(h.audits)).not.toContain('blocks PVT');
+    expect(JSON.stringify(h.audits)).not.toContain('model_request');
+    const first = result.trace!.events[0]!;
+    (first.input as { user_prompt: string }).user_prompt = 'changed outside the registry';
+    expect((await h.read('token-a', run.run_id)).trace!.events[0]).not.toMatchObject({ input: { user_prompt: 'changed outside the registry' } });
+    h.advance(PERSON_RESEARCH_EVAL_REREAD_MS_V1 + 1);
+    await expect(h.read('token-a', run.run_id)).rejects.toMatchObject({ code: 'not_found' });
+    h.application.close();
+  });
+
+  it('withholds trace while running and discards it on close before late events can arrive', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const h = harness({ generate: async () => { await gate; throw new AgenticAskDeadlineErrorV1(); } });
+    const run = await h.application.start({ access_token: 'token-a', request: { ...ask('Pending?'), capture_trace: true } });
+    await vi.waitFor(() => expect(h.generate).toHaveBeenCalled());
+    expect(await h.read('token-a', run.run_id)).toEqual(expect.not.objectContaining({ trace: expect.anything() }));
+    h.application.close();
+    release();
+    await expect(h.read('token-a', run.run_id)).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('rechecks source access before releasing a failed run trace and discards it when access is revoked', async () => {
+    const h = harness({ generate: async () => { throw new AgenticAskDeadlineErrorV1(); } });
+    const run = await h.application.start({ access_token: 'token-a', request: { ...ask('Fail after input?'), capture_trace: true } });
+    const first = await h.settled('token-a', run.run_id);
+    expect(first).toMatchObject({ status: 'failed', error: { code: 'timed_out' }, trace: { complete: true, events: [expect.objectContaining({ kind: 'model_request' }), expect.objectContaining({ kind: 'model_error' })] } });
+    const priorChecks = h.deskAuthorize.mock.calls.length;
+    h.revoke();
+    const revoked = await h.read('token-a', run.run_id);
+    expect(h.deskAuthorize.mock.calls.length).toBeGreaterThan(priorChecks);
+    expect(revoked).toMatchObject({ status: 'failed', error: { code: 'unauthorized' } });
+    expect(revoked).not.toHaveProperty('trace');
+    await expect(h.read('token-a', run.run_id)).rejects.toMatchObject({ code: 'not_found' });
+    h.application.close();
+  });
+
+  it('discards a completed trace on source-access revocation and never releases a trace without an established fence', async () => {
+    const h = harness();
+    const complete = await h.application.start({ access_token: 'token-a', request: { ...ask('Still permitted?'), capture_trace: true } });
+    await vi.waitFor(() => expect(h.audits).toHaveLength(1));
+    h.revoke();
+    const refused = await h.settled('token-a', complete.run_id);
+    expect(refused).toMatchObject({ status: 'failed', error: { code: 'unauthorized' } });
+    expect(refused).not.toHaveProperty('trace');
+    h.application.close();
+
+    const missing = harness();
+    const unopened = await missing.application.start({ access_token: 'token-a', request: { ...approved(), capture_trace: true } });
+    const failed = await missing.settled('token-a', unopened.run_id);
+    expect(failed).toMatchObject({ status: 'failed', error: { code: 'not_found' } });
+    expect(failed).not.toHaveProperty('trace');
+    missing.application.close();
+  });
+
+  it('adds no runtime content capture when the private trace is enabled', async () => {
+    const counts: number[] = [];
+    for (const traced of [false, true]) {
+      const capture = vi.fn();
+      const h = harness({ generate: async input => {
+        captureCoreRuntimeContentV1('model_request', input.user_prompt);
+        return { parts: [{ question: 'Q', needs: [{ need: 'fact', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
+      } });
+      await observeCoreRuntimeV1('ask_request', async () => {
+        const run = await h.application.start({ access_token: 'token-a', request: { ...ask('Same runtime behavior?'), ...(traced ? { capture_trace: true as const } : {}) } });
+        await h.settled('token-a', run.run_id);
+      }, { observer: () => undefined, content_observer: capture });
+      counts.push(capture.mock.calls.length);
+      expect(JSON.stringify(capture.mock.calls)).not.toContain('echo-agentic-research-trace-v1');
+      h.application.close();
+    }
+    expect(counts[1]).toBe(counts[0]);
   });
 });

@@ -13,6 +13,7 @@ import { askerOf, scopeOf } from './person-answer-v3-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1 } from './person-live-answer-route-v1.js';
 import type { PersonRecordProjectsV1 } from './person-record-search-route.js';
 import type { PersonResearchEvalHttpApplicationV1 } from '../presentation/person-research-eval-http-application.js';
+import { createPersonResearchEvalTraceV1, type PersonResearchEvalTraceCollectorV1 } from './person-research-eval-trace-v1.js';
 
 export type { PersonResearchEvalHttpApplicationV1 } from '../presentation/person-research-eval-http-application.js';
 
@@ -40,6 +41,8 @@ type Run = {
   ask?: NonNullable<PersonResearchEvalReadResponseV1['ask']>;
   rendered?: NonNullable<PersonResearchEvalReadResponseV1['rendered']>;
   error?: NonNullable<PersonResearchEvalReadResponseV1['error']>;
+  /** Opt-in only; never a runtime log or a durable audit record. */
+  trace?: PersonResearchEvalTraceCollectorV1;
 };
 
 const FAILURE_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
@@ -84,7 +87,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
   const runs = new Map<string, Run>();
   const purge = () => {
     const current = now();
-    for (const [id, run] of runs) if (run.status !== 'running' && run.expires_at <= current) runs.delete(id);
+    for (const [id, run] of runs) if (run.status !== 'running' && run.expires_at <= current) { run.trace?.close(); runs.delete(id); }
   };
   // Released text never outlives its expiry just because no further request arrives.
   const sweeper = setInterval(purge, PURGE_INTERVAL_MS);
@@ -114,7 +117,8 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       }
       const requested = definition.scope === 'requested' ? scopeOf(request) : undefined;
       const runId = `rr_${randomUUID()}`;
-      const run: Run = { owner, controller: new AbortController(), status: 'running', expires_at: Number.POSITIVE_INFINITY };
+      const run: Run = { owner, controller: new AbortController(), status: 'running', expires_at: Number.POSITIVE_INFINITY,
+        ...(request.capture_trace === true ? { trace: createPersonResearchEvalTraceV1(now) } : {}) };
       runs.set(runId, run);
       const context = {
         authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
@@ -133,7 +137,8 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
           const asker = askerOf(options, authorization);
           // Runs exactly as served: the brief asks for the small-scope preload where the deployment allows it.
           const loop = createAgenticResearchV1({ desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
-            ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}) });
+            ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+            ...(run.trace === undefined ? {} : { on_trace: run.trace.record }) });
           if (brief.goal.kind === 'question') {
             // A question is Ask's: its writer answers it.
             const output = await loop.answerWithResearch({ question: brief.goal.question, budget: brief.budget, signal });
@@ -150,8 +155,12 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
           run.status = 'completed';
         } catch (error) {
           run.error = failure(error);
+          // Once access is known to be invalid, do not retain already gathered
+          // trace content waiting for a later access state to change again.
+          if (run.error.code === 'unauthorized' || run.error.code === 'stale_access_state') { run.trace?.close(); delete run.trace; }
           run.status = 'failed';
         } finally {
+          run.trace?.seal();
           run.expires_at = now() + PERSON_RESEARCH_EVAL_RESULT_TTL_MS_V1;
         }
       })();
@@ -166,20 +175,33 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       if (run.status === 'running') return Object.freeze({ ...base, status: 'running' as const });
       // A delivered result can be read again briefly if its response was lost, then it is dropped.
       run.expires_at = Math.min(run.expires_at, now() + PERSON_RESEARCH_EVAL_REREAD_MS_V1);
-      if (run.status === 'failed') return Object.freeze({ ...base, status: 'failed' as const, error: run.error! });
+      if (run.status === 'failed' && (run.trace === undefined || run.revalidate === undefined)) {
+        // A failure before the desk's fence exists cannot release any trace.
+        run.trace?.close(); delete run.trace;
+        return Object.freeze({ ...base, status: 'failed' as const, error: run.error! });
+      }
       // Access is rechecked before evidence leaves the Authority, as for every Ask response.
       try { await run.revalidate!(input.signal); }
       catch (error) {
+        run.trace?.close();
         runs.delete(input.request.run_id);
         const fenced = failure(error);
         return Object.freeze({ ...base, status: 'failed' as const, error: fenced.code === 'unavailable' ? Object.freeze({ code: 'stale_access_state', message: FAILURE_MESSAGES.stale_access_state! }) : fenced });
       }
+      // A close or expiry while the access check was in flight must not revive
+      // a removed run or release its retained content.
+      if (runs.get(input.request.run_id) !== run || run.expires_at <= now()) {
+        run.trace?.close(); runs.delete(input.request.run_id);
+        throw new AuthorityOperationError('not_found', 'Research run is not available');
+      }
+      const trace = run.trace === undefined ? {} : { trace: run.trace.snapshot() };
+      if (run.status === 'failed') return Object.freeze({ ...base, status: 'failed' as const, error: run.error!, ...trace });
       return Object.freeze({ ...base, status: 'completed' as const, research: JSON.parse(JSON.stringify(run.research)) as Readonly<Record<string, unknown>>,
-        ...(run.ask === undefined ? {} : { ask: run.ask }), ...(run.rendered === undefined ? {} : { rendered: run.rendered }) });
+        ...(run.ask === undefined ? {} : { ask: run.ask }), ...(run.rendered === undefined ? {} : { rendered: run.rendered }), ...trace });
     },
     close() {
       clearInterval(sweeper);
-      for (const run of runs.values()) if (run.status === 'running') run.controller.abort();
+      for (const run of runs.values()) { run.trace?.close(); if (run.status === 'running') run.controller.abort(); }
       runs.clear();
     },
   });
