@@ -437,3 +437,8 @@ button.toast:hover { background: #211f1f; }
 .review-readers input { margin-right: 6px; accent-color: var(--accent); }
 .review-project-picker { max-width: 360px; margin: 8px 0 12px; padding: 8px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel); }
 .review-owner .field { display: block; width: min(100%, 400px); margin-top: 5px; }
+.impact { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line-strong); }
+.impact h4 { margin: 0 0 6px; }
+.impact h5 { margin: 14px 0 6px; font-size: 12.5px; font-weight: 600; color: var(--faint); }
+.personal-meetings .impact-items { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.impact .link-button { padding: 2px 0; }

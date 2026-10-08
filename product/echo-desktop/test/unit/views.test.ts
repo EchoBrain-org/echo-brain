@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, changeView, createdView, directoryView, employeesView, failureView, invitationView, listView, membersView, noteMatchesView,
+  abandonView, answerView, changeView, createdView, directoryView, employeesView, failureView, impactCardView, invitationView, listView, membersView, noteMatchesView,
   noteTitle, openView, revokedView, NotReadable, projectMatchesView, projectPageView, projectSettingsView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
@@ -43,6 +43,26 @@ describe('view models copy only what the renderer may see', () => {
       expect(() => answerView(reply(link), { kind: 'global' })).toThrow(ViewError);
     }
   });
+  it('an impact card keeps its rows and turns each citation into a source the card can name or open', () => {
+    const permalink = 'https://example.atlassian.net/browse/ECHO-12';
+    const record = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'restricted-reviewer-person-v2' } as const;
+    const ticket = { kind: 'ticket', tool_id: 'jira', external_scope_id: 'private-tenant', ticket_id: '10012', permalink, text_sha256: sha('3') } as const;
+    const card = {
+      status: 'assessed', decided: [{ text: 'Launch next week.', citation_index: 0 }],
+      affected: [{ citation_index: 1, says_now: 'Planned for the end of the month.', relation: 'conflicts', owner: 'Mina Patel' }],
+      unconfirmed: ['No contract was found.'], people: [{ name: 'Mina Patel', items: [1] }],
+      citations: [{ kind: 'decision', label: '', visibility: 'only_me', citation: record }, { kind: 'ticket', label: 'ECHO-12 · Pilot launch', visibility: 'only_me', citation: ticket }],
+    } as const;
+    const view = impactCardView({ card, checked_at: '2026-10-07T10:05:00.000Z', hidden: 2 } as unknown as Parameters<typeof impactCardView>[0]);
+    expect(view).toEqual({
+      status: 'assessed', decided: card.decided, affected: card.affected, unconfirmed: card.unconfirmed, people: card.people,
+      sources: [{ kind: 'record', label: 'Item 1', record: { record_sha256: sha('2'), policy_id: 'restricted-reviewer-person-v2' } },
+        { kind: 'ticket', tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink }],
+      checked_at: '2026-10-07T10:05:00.000Z', hidden: 2,
+    });
+    expect(JSON.stringify(view)).not.toContain('private-tenant');
+  });
+
   it('status keeps the account and nothing else', () => {
     const view = statusView({
       schema_version: 1, kind: 'echo-person-client-status-v1', installed_version: '1', signed_in: true,

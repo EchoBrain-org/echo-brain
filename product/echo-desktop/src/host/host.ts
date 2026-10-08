@@ -1,4 +1,4 @@
-import { validatePersonMeetingRequestV2, validatePersonMeetingResultV2 } from '@echo-brain/organization-api';
+import { validatePersonMeetingRequestV2, validatePersonMeetingResultV2, validatePersonRunsRequestV1, validatePersonRunsResultV1 } from '@echo-brain/organization-api';
 // The person host: an Electron utility process that runs the TypeScript person
 // client in-process. It is the only process that reads the session or holds a
 // token; what it posts back is a token-free view model or a failure code.
@@ -13,7 +13,7 @@ import {
 import { askText, searchQuery } from '../shared/query.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
-  abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, invitationView, isRecordRef, listView,
+  abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, impactCardView, invitationView, isRecordRef, listView,
   membersView, noteMatchesView, noteTitle, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectSettingsView, projectView,
   NotReadable, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
@@ -87,7 +87,7 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'projects.leave': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
   'employees.reissue': 45_000, 'employees.revoke': 45_000,
   'projects.jiraRead': 45_000, 'projects.jiraSet': 90_000, 'projects.confluenceRead': 45_000, 'projects.confluenceSet': 90_000, 'projects.confluenceSpaces': 45_000,
-  'tools.meetings': 90_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
+  'tools.meetings': 90_000, 'runs': 45_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
 };
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
 const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon']);
@@ -660,6 +660,18 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       try { request = validatePersonMeetingRequestV2(raw); } catch { return code('invalid_request', true); }
       return forAccount(method, expect, ['tools', 'meetings', option('tool', request.tool_id), option('request', JSON.stringify(request))],
         stdout => validatePersonMeetingResultV2(request.operation, (lastJson(stdout) as { result: unknown }).result));
+    }
+    // Impact checks of your own approvals. Start and retry change a run; view
+    // rebuilds a finished card from fresh reads, so nothing outside ECHO is kept.
+    case 'runs': {
+      const { expect, request: raw } = params as Params<'runs'>;
+      let request;
+      try { request = validatePersonRunsRequestV1(raw); } catch { return code('invalid_request', true); }
+      return forAccount(method, expect, ['runs', option('request', JSON.stringify(request))], stdout => {
+        let result;
+        try { result = validatePersonRunsResultV1(request.operation, (lastJson(stdout) as { result: unknown }).result); } catch { throw new ViewError(); }
+        return request.operation === 'view' ? impactCardView(result as Parameters<typeof impactCardView>[0]) : result;
+      });
     }
     case 'tools.connect': {
       const { expect, tool_id: tool } = params as Params<'tools.connect'>;
