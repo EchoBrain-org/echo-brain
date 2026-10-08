@@ -1,4 +1,4 @@
-import { validatePersonMeetingRequestV1, validatePersonMeetingResultV1 } from '@echo-brain/organization-api';
+import { validatePersonMeetingRequestV2, validatePersonMeetingResultV2 } from '@echo-brain/organization-api';
 // The person host: an Electron utility process that runs the TypeScript person
 // client in-process. It is the only process that reads the session or holds a
 // token; what it posts back is a token-free view model or a failure code.
@@ -657,9 +657,9 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
     case 'tools.meetings': {
       const { expect, request: raw } = params as Params<'tools.meetings'>;
       let request;
-      try { request = validatePersonMeetingRequestV1(raw); } catch { return code('invalid_request', true); }
+      try { request = validatePersonMeetingRequestV2(raw); } catch { return code('invalid_request', true); }
       return forAccount(method, expect, ['tools', 'meetings', option('tool', request.tool_id), option('request', JSON.stringify(request))],
-        stdout => validatePersonMeetingResultV1(request.operation, (lastJson(stdout) as { result: unknown }).result));
+        stdout => validatePersonMeetingResultV2(request.operation, (lastJson(stdout) as { result: unknown }).result));
     }
     case 'tools.connect': {
       const { expect, tool_id: tool } = params as Params<'tools.connect'>;

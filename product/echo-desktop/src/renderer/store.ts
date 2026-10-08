@@ -1,4 +1,4 @@
-import type { PersonMeetingOperationV1, PersonMeetingResultsV1 } from '@echo-brain/organization-api';
+import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
 // All renderer state and the actions that change it. Every request carries the
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
@@ -726,13 +726,13 @@ export function cancelConnect(): void {
 }
 
 /** Account-fenced command for the personal meeting sheet. No provider token enters the renderer. */
-export async function meetingCommand<K extends PersonMeetingOperationV1['operation']>(operation: PersonMeetingOperationV1 & { readonly operation: K }): Promise<PersonMeetingResultsV1[K]> {
+export async function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }): Promise<PersonMeetingResultsV2[K]> {
   const account = expect(), sheet = state.sheet;
   if (!account || sheet?.kind !== 'tool-manage' || sheet.tool.tool_id !== 'granola' || state.concealed) throw new Error('Open Granola for the current account.');
-  const result = await rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 1, tool_id: 'granola' } });
+  const result = await rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id: 'granola' } });
   if (state.sheet !== sheet || JSON.stringify(expect()) !== JSON.stringify(account) || state.concealed) throw new Error('Account or screen changed.');
   if (!result.ok) { accountLost(result.failure); throw new Error(message(result.failure)); }
-  return result.value as PersonMeetingResultsV1[K];
+  return result.value as PersonMeetingResultsV2[K];
 }
 
 export function manageTool(tool: ConnectedTool): void {
