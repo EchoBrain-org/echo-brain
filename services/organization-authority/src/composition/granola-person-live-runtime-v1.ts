@@ -19,6 +19,7 @@ import { assertPrivatePersonProviderDatabaseV1, bindPersonProviderStateV1 } from
 import type { PersonHttpRuntimeResourcesV1 } from './organization-authority-api-runtime.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { ApprovalCoreOptionsV1 } from './approval-core-v1.js';
+import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 
 /** Only this selecting bootstrap knows Granola or Nango; the processing/review runtime is shared. */
 export function openGranolaPersonLiveRuntimeV1(options: {
@@ -29,6 +30,7 @@ export function openGranolaPersonLiveRuntimeV1(options: {
   readonly providers?: readonly PersonMeetingProviderV1[];
   /** After-record hooks of the shared approval core (Task 13 registers its runs trigger here). */
   readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'after_record' | 'presenters'>;
+  readonly provider_applications?: readonly ProviderHttpApplicationV1[];
   readonly seams?: { readonly database?: Database.Database; readonly nango?: NangoPersonConnectionV1; readonly fetch?: typeof fetch };
 }) {
   const path = join(options.state_directory, 'granola-person-connections.sqlite'), owned = options.seams?.database === undefined;
@@ -48,6 +50,7 @@ export function openGranolaPersonLiveRuntimeV1(options: {
     const signer = FileOrganizationAuthoritySigner.openExisting({ directory: join(options.state_directory, 'keys'), ...coordinates });
     const runtime = createPersonMeetingRuntimeV1({ database, sessions: options.sessions, processor: options.processor, extraction_attempts: attempts,
       ...(options.approval_core === undefined ? {} : { approval_core: options.approval_core }),
+      ...(options.provider_applications === undefined ? {} : { provider_applications: options.provider_applications }),
       approval: { coordinates, signer, on_terminal_action_queued: options.resources.on_processing_queued, record_append: new OrganizationRecordAppenderV4(record, coordinates, options.projectors), next_envelope_id: () => `env_${randomUUID()}` },
       providers: [{
         id: 'granola', normalizer_version: GRANOLA_MEETING_NORMALIZER_VERSION_V1,

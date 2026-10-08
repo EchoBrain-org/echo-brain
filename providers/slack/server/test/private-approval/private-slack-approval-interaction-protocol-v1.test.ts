@@ -1,457 +1,78 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHmac } from 'node:crypto';
+import { describe, expect, it } from 'vitest';
 import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-} from "../../src/organization-control-plane/slack-approval-integration-v1.js";
-import { describe, expect, it } from "vitest";
-import { PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1, privateSlackApprovalBlockKitActionIdV1 } from "../../src/private-approval/private-slack-approval-block-kit-card-v1.js";
-import { PRIVATE_SLACK_APPROVAL_INTERACTION_MAX_AGE_SECONDS, PrivateSlackApprovalInteractionError, parseVerifiedPrivateSlackApprovalInteractionV1, verifyPrivateSlackApprovalRequestV1 } from "../../src/private-approval/private-slack-approval-interaction-protocol-v1.js";
+  PRIVATE_SLACK_APPROVAL_INTERACTION_MAX_AGE_SECONDS,
+  PrivateSlackApprovalInteractionError,
+  parseVerifiedPrivateSlackApprovalInteractionV1,
+  verifyPrivateSlackApprovalRequestV1,
+} from '../../src/private-approval/private-slack-approval-interaction-protocol-v1.js';
+import { slackApprovalActionIdV4, slackApprovalOwnerActionIdV4 } from '../../src/private-approval/slack-approval-card-v4.js';
 
-const SECRET = "not-a-real-signing-secret";
+const SECRET = 'not-a-real-signing-secret';
 const NOW = 1_800_000_000;
-const CARD = Object.freeze({
-  approval_id: "apr_00000000-0000-4000-8000-000000000001",
-});
-const POLICY_ACTION_ID = privateSlackApprovalBlockKitActionIdV1(
-  CARD,
-  PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.policy,
-);
-const COMMENT_ACTION_ID = privateSlackApprovalBlockKitActionIdV1(
-  CARD,
-  PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.comment,
-);
-const APPROVE_ACTION_ID = privateSlackApprovalBlockKitActionIdV1(
-  CARD,
-  PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.approve,
-);
-const REJECT_ACTION_ID = privateSlackApprovalBlockKitActionIdV1(
-  CARD,
-  PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.reject,
-);
-const TRIGGER_ID = "1234567890.1234567890.abcdefghijklmnopqrstuvwxyzABCD";
-const ACTION_TS = "1712345680.123456";
+const APPROVAL_ID = 'apr_00000000-0000-4000-8000-000000000001';
+const SNAPSHOT = `sha256:${'a'.repeat(64)}`;
+const PROJECT_A = 'prj_11111111-1111-4111-8111-111111111111';
+const PROJECT_B = 'prj_22222222-2222-4222-8222-222222222222';
+const plain = (text: string) => ({ type: 'plain_text', text, emoji: false });
 
-function sha256(value: string | Uint8Array): `sha256:${string}` {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+function form(value: unknown): Uint8Array { return new TextEncoder().encode(new URLSearchParams({ payload: JSON.stringify(value) }).toString()); }
+function verify(raw: Uint8Array, timestamp = NOW) {
+  const signature = createHmac('sha256', SECRET).update(`v0:${timestamp}:`).update(raw).digest('hex');
+  return verifyPrivateSlackApprovalRequestV1({ raw_body: raw, signing_secret: SECRET,
+    headers: { 'x-slack-request-timestamp': String(timestamp), 'x-slack-signature': `v0=${signature}` }, now_unix_seconds: NOW });
 }
-
-function payload(input?: {
-  readonly action_id?: string;
-  readonly action_type?: string;
-  readonly action_value?: string;
-  readonly action_style?: string;
-  readonly selected_policy_id?: string;
-  readonly comment?: string | null;
-  readonly state?: unknown;
-}): Record<string, unknown> {
-  const actionId = input?.action_id ?? APPROVE_ACTION_ID;
-  const state =
-    input?.state ??
-    {
-      "policy-block": {
-        [POLICY_ACTION_ID]: {
-          type: "radio_buttons",
-          selected_option: {
-            text: { type: "plain_text", text: "Team", emoji: false },
-            value:
-              input?.selected_policy_id ??
-              ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-          },
-        },
-      },
-      "comment-block": {
-        [COMMENT_ACTION_ID]: {
-          type: "plain_text_input",
-          value:
-            input !== undefined && Object.hasOwn(input, "comment")
-              ? input.comment
-              : "A clear decision rationale.",
-        },
-      },
-    };
-  const defaultActionType =
-    actionId === POLICY_ACTION_ID
-      ? "radio_buttons"
-      : actionId === COMMENT_ACTION_ID
-        ? "plain_text_input"
-        : "button";
+function payload(input: { readonly action?: 'approve' | 'reject' | 'audience-select'; readonly audience?: 'only-me' | 'projects'; readonly projects?: readonly string[];
+  readonly owners?: Readonly<Record<string, string | null>>; readonly snapshot?: string | null; readonly response_url?: string; readonly state?: Record<string, unknown> } = {}) {
+  const action = input.action ?? 'approve', audience = input.audience ?? 'only-me';
+  const ownerState = Object.fromEntries(Object.entries(input.owners ?? {}).map(([signal_id, owner]) => [
+    `owner-${signal_id}`, { [slackApprovalOwnerActionIdV4(APPROVAL_ID, signal_id)]: { type: 'plain_text_input', value: owner } },
+  ]));
+  const state = input.state ?? {
+    audience: { [slackApprovalActionIdV4(APPROVAL_ID, 'audience-select')]: { type: 'static_select', selected_option: { text: plain(audience === 'projects' ? 'Projects' : 'Only me'), value: audience } } },
+    projects: { [slackApprovalActionIdV4(APPROVAL_ID, 'projects-select')]: { type: 'multi_static_select', selected_options: (input.projects ?? []).map(id => ({ text: plain(id === PROJECT_A ? 'Alpha' : 'Beta'), value: id })) } },
+    transcript: { [slackApprovalActionIdV4(APPROVAL_ID, 'transcript-checkbox')]: { type: 'checkboxes', selected_options: [] } },
+    ...ownerState,
+  };
   return {
-    type: "block_actions",
-    user: { id: "U012ABCDEF", team_id: "T012ABCDEF" },
-    api_app_id: "A012ABCDEF",
-    trigger_id: TRIGGER_ID,
-    container: {
-      type: "message",
-      channel_id: "D012ABCDEF",
-      message_ts: "1712345678.123456",
-      is_ephemeral: false,
-    },
-    team: { id: "T012ABCDEF", domain: "echo" },
-    enterprise: null,
-    is_enterprise_install: false,
-    channel: { id: "D012ABCDEF", name: "directmessage" },
-    message: {
-      type: "message",
-      user: "U098BOTAPP",
-      ts: "1712345678.123456",
-      app_id: "A012ABCDEF",
-      bot_id: "B012ABCDEF",
-      blocks: [],
-    },
-    state: { values: state },
-    actions: [
-      {
-        type: input?.action_type ?? defaultActionType,
-        action_id: actionId,
-        block_id: "actions-block",
-        ...(input?.action_style === undefined
-          ? {}
-          : { style: input.action_style }),
-        value:
-          input?.action_value ??
-          JSON.stringify({ schema_version: 1, ...CARD }),
-        action_ts: ACTION_TS,
-      },
-    ],
+    type: 'block_actions', user: { id: 'U012ABCDEF', team_id: 'T012ABCDEF' }, api_app_id: 'A012ABCDEF', trigger_id: '1234567890.1234567890.abcdefghijklmnopqrstuvwxyzABCD',
+    container: { type: 'message', channel_id: 'D012ABCDEF', message_ts: '1712345678.123456', is_ephemeral: false }, team: { id: 'T012ABCDEF', domain: 'echo' }, enterprise: null, is_enterprise_install: false,
+    channel: { id: 'D012ABCDEF', name: 'directmessage' }, message: { type: 'message', user: 'U098BOTAPP', ts: '1712345678.123456', app_id: 'A012ABCDEF', bot_id: 'B012ABCDEF', blocks: [] },
+    state: { values: state }, ...(input.response_url === undefined ? {} : { response_url: input.response_url }),
+    actions: [{ type: action === 'audience-select' ? 'static_select' : 'button', action_id: slackApprovalActionIdV4(APPROVAL_ID, action), block_id: 'actions',
+      value: JSON.stringify({ schema_version: 2, approval_id: APPROVAL_ID, ...(input.snapshot === null ? {} : { snapshot_sha256: input.snapshot ?? SNAPSHOT }) }), action_ts: '1712345680.123456' }],
   };
 }
+function parse(value: unknown) { return parseVerifiedPrivateSlackApprovalInteractionV1(verify(form(value))); }
+function rejected(value: unknown) { expect(() => parse(value)).toThrow(PrivateSlackApprovalInteractionError); }
 
-function form(value: unknown): Uint8Array {
-  return new TextEncoder().encode(
-    new URLSearchParams({ payload: JSON.stringify(value) }).toString(),
-  );
-}
-
-function verify(body: Uint8Array, timestamp = String(NOW)) {
-  const digest = createHmac("sha256", SECRET)
-    .update(`v0:${timestamp}:`)
-    .update(body)
-    .digest("hex");
-  return verifyPrivateSlackApprovalRequestV1({
-    raw_body: body,
-    signing_secret: SECRET,
-    headers: {
-      "x-slack-request-timestamp": timestamp,
-      "x-slack-signature": `v0=${digest}`,
-    },
-    now_unix_seconds: NOW,
+describe('private Slack approval interaction V4', () => {
+  it('parses a signed V4 project approval with signal-keyed owners and no response URL retention', () => {
+    const result = parse(payload({ audience: 'projects', projects: [PROJECT_A, PROJECT_B], owners: { act_alpha: 'Ada Lovelace' }, response_url: 'https://hooks.slack.com/actions/T000/B000/fake' }));
+    expect(result).toMatchObject({ disposition: 'resolution', action: 'approve', approval_id: APPROVAL_ID, snapshot_sha256: SNAPSHOT,
+      audience: 'projects', project_ids: [PROJECT_A, PROJECT_B], share_transcript: false, owners: [{ signal_id: 'act_alpha', owner: 'Ada Lovelace' }] });
+    expect(JSON.stringify(result)).not.toContain('response_url');
   });
-}
-
-function parse(value: unknown) {
-  return parseVerifiedPrivateSlackApprovalInteractionV1(verify(form(value)));
-}
-
-function rejectionStage(value: unknown) {
-  try {
-    parse(value);
-  } catch (error) {
-    expect(error).toBeInstanceOf(PrivateSlackApprovalInteractionError);
-    return (error as PrivateSlackApprovalInteractionError).rejection_stage;
-  }
-  throw new Error("expected the verified interaction to be rejected");
-}
-
-describe("private approval Slack interaction v1", () => {
-  it("verifies the original bytes and returns a bounded resolution intent without provider authority", () => {
-    const value = payload({ comment: "  Capture this as the owner decision.  " });
-    const raw = form(value);
-    const providedSignature = `v0=${createHmac("sha256", SECRET)
-      .update(`v0:${NOW}:`)
-      .update(raw)
-      .digest("hex")}`;
-    const result = parseVerifiedPrivateSlackApprovalInteractionV1(verify(raw));
-
-    expect(result).toEqual({
-      schema_version: 1,
-      kind: "echo-private-approval-slack-interaction-v1",
-      disposition: "resolution",
-      action: "approve",
-      action_id: APPROVE_ACTION_ID,
-      approval_id: CARD.approval_id,
-      selected_policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-      comment: "Capture this as the owner decision.",
-      provider_action_key_sha256: sha256(
-        [
-          "echo-private-slack-provider-action-key-v1",
-          "A012ABCDEF",
-          "T012ABCDEF",
-          "U012ABCDEF",
-          "D012ABCDEF",
-          "1712345678.123456",
-          TRIGGER_ID,
-          ACTION_TS,
-          APPROVE_ACTION_ID,
-        ].join("\u0000"),
-      ),
-      request: {
-        request_timestamp: String(NOW),
-        signature_version: "v0",
-        signature_sha256: sha256(providedSignature),
-        raw_body_sha256: sha256(raw),
-      },
-      lookup: {
-        api_app_id: "A012ABCDEF",
-        workspace_id: "T012ABCDEF",
-        enterprise_id: null,
-        slack_user_id: "U012ABCDEF",
-        channel_id: "D012ABCDEF",
-        message_ts: "1712345678.123456",
-        message_user_id: "U098BOTAPP",
-        message_app_id: "A012ABCDEF",
-        message_bot_id: "B012ABCDEF",
-      },
-    });
-    expect(JSON.stringify(result)).not.toContain(SECRET);
-    expect(JSON.stringify(result)).not.toContain("response_url");
+  it('accepts only-me with zero project options and maps a reject to empty choices', () => {
+    expect(parse(payload())).toMatchObject({ disposition: 'resolution', audience: 'only-me', project_ids: [], owners: [] });
+    expect(parse(payload({ action: 'reject', audience: 'projects', projects: [PROJECT_A], owners: { act_alpha: 'Ada' } }))).toMatchObject({ disposition: 'resolution', action: 'reject', project_ids: [], share_transcript: false, owners: [] });
   });
-
-  it("requires the complete selector and comment state for either resolving button", () => {
-    const result = parse(
-      payload({
-        action_id: REJECT_ACTION_ID,
-        selected_policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-        comment: " \t\n ",
-      }),
-    );
-    expect(result).toMatchObject({
-      disposition: "resolution",
-      action: "reject",
-      selected_policy_id: null,
-      comment: null,
-    });
-
-    const incomplete = payload({
-      state: {
-        "policy-block": {
-          [POLICY_ACTION_ID]: {
-            type: "radio_buttons",
-            selected_option: {
-              text: { type: "plain_text", text: "Only me", emoji: false },
-              value: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-            },
-          },
-        },
-      },
-    });
-    expect(rejectionStage(incomplete)).toBe("state");
+  it('canonicalizes Slack selection order but refuses missing snapshots, legacy controls, unknown owners, duplicate or 21 project choices, and incomplete state', () => {
+    rejected(payload({ snapshot: null }));
+    rejected(payload({ action: 'approve', state: { legacy: { 'echo-private-approval-v2-deadbeef-policy-v2': { type: 'static_select', selected_option: null } } } }));
+    rejected(payload({ owners: { 'not an authority signal': 'Ada' } }));
+    expect(parse(payload({ audience: 'projects', projects: [PROJECT_B, PROJECT_A] }))).toMatchObject({ project_ids: [PROJECT_A, PROJECT_B] });
+    rejected(payload({ audience: 'projects', projects: [PROJECT_A, PROJECT_A] }));
+    rejected(payload({ audience: 'projects', projects: Array.from({ length: 21 }, (_, index) => `prj_${String(index).padStart(8, '0')}-1111-4111-8111-111111111111`) }));
+    rejected(payload({ state: {} }));
   });
-
-  it("accepts both legacy radios and the new static-select policy state", () => {
-    const staticState = {
-      "policy-block": {
-        [POLICY_ACTION_ID]: {
-          type: "static_select",
-          selected_option: {
-            text: { type: "plain_text", text: "Only me" },
-            description: {
-              type: "plain_text",
-              text: "Only the approving reviewer can read this record.",
-              emoji: true,
-            },
-            value: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-          },
-        },
-      },
-      "comment-block": {
-        [COMMENT_ACTION_ID]: {
-          type: "plain_text_input",
-          value: "A one-line note.",
-        },
-      },
-    };
-    expect(parse(payload({ state: staticState }))).toMatchObject({
-      disposition: "resolution",
-      selected_policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-      comment: "A one-line note.",
-    });
-    expect(
-      parse(
-        payload({
-          state: {
-            ...staticState,
-            "policy-block": {
-              [POLICY_ACTION_ID]: {
-                type: "static_select",
-                selected_option: null,
-              },
-            },
-          },
-        }),
-      ),
-    ).toMatchObject({
-      disposition: "resolution",
-      selected_policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-    });
-    expect(
-      parse(
-        payload({
-          action_id: POLICY_ACTION_ID,
-          action_type: "static_select",
-          state: {},
-        }),
-      ),
-    ).toMatchObject({ disposition: "presentation_change", action: "policy" });
-    expect(() =>
-      parse(
-        payload({
-          state: {
-            ...staticState,
-            "policy-block": {
-              [POLICY_ACTION_ID]: {
-                type: "static_select",
-                selected_option: {
-                  text: { type: "plain_text", text: "Only me", emoji: "false" },
-                  value: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-                },
-              },
-            },
-          },
-        }),
-      ),
-    ).toThrow(PrivateSlackApprovalInteractionError);
+  it('keeps original-byte HMAC, freshness and body-size enforcement before parsing', () => {
+    const raw = form(payload());
+    expect(() => verifyPrivateSlackApprovalRequestV1({ raw_body: raw, signing_secret: SECRET, headers: { 'x-slack-request-timestamp': String(NOW), 'x-slack-signature': 'v0=00'.padEnd(67, '0') }, now_unix_seconds: NOW })).toThrow(PrivateSlackApprovalInteractionError);
+    expect(() => verify(raw, NOW + PRIVATE_SLACK_APPROVAL_INTERACTION_MAX_AGE_SECONDS + 1)).toThrow(PrivateSlackApprovalInteractionError);
+    expect(() => verifyPrivateSlackApprovalRequestV1({ raw_body: new Uint8Array(64 * 1024 + 1), signing_secret: SECRET, headers: { 'x-slack-request-timestamp': String(NOW), 'x-slack-signature': 'v0=00'.padEnd(67, '0') }, now_unix_seconds: NOW })).toThrow(PrivateSlackApprovalInteractionError);
   });
-
-  it("accepts Slack's null untouched comment and omitted workspace-only hints", () => {
-    const value = payload({ comment: null });
-    delete value.enterprise;
-    delete value.is_enterprise_install;
-
-    expect(parse(value)).toMatchObject({
-      disposition: "resolution",
-      action: "approve",
-      selected_policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-      comment: null,
-      lookup: { enterprise_id: null },
-    });
-  });
-
-  it("accepts the style Slack echoes from the rendered approval button", () => {
-    expect(parse(payload({ action_style: "primary" }))).toMatchObject({
-      disposition: "resolution",
-      action: "approve",
-    });
-    expect(
-      parse(
-        payload({
-          action_id: REJECT_ACTION_ID,
-          action_style: "danger",
-        }),
-      ),
-    ).toMatchObject({ disposition: "resolution", action: "reject" });
-  });
-
-  it("accepts signed input events as presentation-only no-ops", () => {
-    const policyChange = parse(
-      payload({
-        action_id: POLICY_ACTION_ID,
-        action_type: "radio_buttons",
-        state: {},
-      }),
-    );
-    expect(policyChange).toMatchObject({
-      disposition: "presentation_change",
-      action: "policy",
-      lookup: { slack_user_id: "U012ABCDEF" },
-    });
-    expect(
-      parse(
-        payload({
-          action_id: COMMENT_ACTION_ID,
-          action_type: "plain_text_input",
-          state: {},
-        }),
-      ),
-    ).toMatchObject({ disposition: "presentation_change", action: "comment" });
-  });
-
-  it("retains the bound message bot ID and refuses an unbound message shape", () => {
-    const parsed = parse(payload());
-    expect(parsed).toMatchObject({
-      lookup: { message_bot_id: "B012ABCDEF" },
-    });
-    const missingBot = payload();
-    delete (missingBot.message as Record<string, unknown>).bot_id;
-    expect(rejectionStage(missingBot)).toBe("lookup");
-  });
-
-  it("rejects tampering, missing/old/future signatures, and does not expose request bytes", () => {
-    const body = form(payload());
-    const verified = verify(body);
-    body[0] = body[0] === 0 ? 1 : 0;
-    expect(parseVerifiedPrivateSlackApprovalInteractionV1(verified)).toMatchObject({
-      disposition: "resolution",
-    });
-
-    const digest = createHmac("sha256", SECRET)
-      .update(`v0:${NOW}:`)
-      .update(form(payload()))
-      .digest("hex");
-    expect(() =>
-      verifyPrivateSlackApprovalRequestV1({
-        raw_body: form(payload()),
-        signing_secret: SECRET,
-        headers: {
-          "x-slack-request-timestamp": String(NOW),
-          "x-slack-signature": `v0=${digest[0] === "0" ? "1" : "0"}${digest.slice(1)}`,
-        },
-        now_unix_seconds: NOW,
-      }),
-    ).toThrow(PrivateSlackApprovalInteractionError);
-    for (const timestamp of [
-      String(NOW - PRIVATE_SLACK_APPROVAL_INTERACTION_MAX_AGE_SECONDS - 1),
-      String(NOW + PRIVATE_SLACK_APPROVAL_INTERACTION_MAX_AGE_SECONDS + 1),
-    ]) {
-      expect(() => verify(form(payload()), timestamp)).toThrow(
-        PrivateSlackApprovalInteractionError,
-      );
-    }
-    expect(() =>
-      parseVerifiedPrivateSlackApprovalInteractionV1(
-        {} as never,
-      ),
-    ).toThrow(PrivateSlackApprovalInteractionError);
-  });
-
-  it("fails closed on noncanonical form, payload, action, policy, and comment shapes", () => {
-    const body = new TextEncoder().encode(
-      new URLSearchParams({ payload: JSON.stringify(payload()), extra: "1" }).toString(),
-    );
-    expect(() => parseVerifiedPrivateSlackApprovalInteractionV1(verify(body))).toThrow(
-      PrivateSlackApprovalInteractionError,
-    );
-    expect(() =>
-      parse(
-        payload({
-          action_id: "echo-private-approval-v1-00000000000000000000000000000000-approve-v1",
-        }),
-      ),
-    ).toThrow(PrivateSlackApprovalInteractionError);
-    expect(() =>
-      parse(
-        payload({
-          action_id: "echo-private-approval-v1-0123456789abcdef0123456789abcdef-delegate-v1",
-        }),
-      ),
-    ).toThrow(PrivateSlackApprovalInteractionError);
-    expect(() =>
-      parse(
-        payload({
-          selected_policy_id: "not-an-available-policy",
-        }),
-      ),
-    ).toThrow(PrivateSlackApprovalInteractionError);
-    expect(() => parse(payload({ action_style: "warning" }))).toThrow(
-      PrivateSlackApprovalInteractionError,
-    );
-    expect(() => parse(payload({ comment: "bad\rcomment" }))).toThrow(
-      PrivateSlackApprovalInteractionError,
-    );
-    const enterpriseInstall = payload();
-    enterpriseInstall.is_enterprise_install = true;
-    expect(() => parse(enterpriseInstall)).toThrow(PrivateSlackApprovalInteractionError);
-    const expanded = payload();
-    (expanded as Record<string, unknown>).unexpected = true;
-    expect(() => parse(expanded)).toThrow(PrivateSlackApprovalInteractionError);
+  it('acknowledges signed V4 selector changes without a decision intent', () => {
+    expect(parse(payload({ action: 'audience-select' }))).toMatchObject({ disposition: 'presentation_change' });
   });
 });

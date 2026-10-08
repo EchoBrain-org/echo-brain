@@ -20,6 +20,15 @@ const plain = (text: string) => Object.freeze({ type: 'plain_text' as const, tex
 const key = (id: string) => createHash('sha256').update(`echo-approval-v4\0${id}`).digest('hex').slice(0, 32);
 const id = (approval: string, name: string) => `echo-approval-v4-${key(approval)}-${name}`;
 
+/** Shared with the verified interaction parser. These identifiers bind controls to one approval without exposing card state. */
+export function slackApprovalActionIdV4(approvalId: string, action: 'audience-select' | 'projects-select' | 'transcript-checkbox' | 'approve' | 'reject'): string {
+  return id(approvalId, action);
+}
+/** A signal id remains explicit so a submitted owner can never be re-associated by its rendered position. */
+export function slackApprovalOwnerActionIdV4(approvalId: string, signalId: string): string {
+  return id(approvalId, `owner-${signalId}`);
+}
+
 /** Builds the V4 controls around the existing complete review renderer. */
 export function buildSlackApprovalCardV4(input: SlackApprovalCardInputV4): SlackApprovalCardV4 {
   if (input.projects.length > 100 || input.owners.length > 40) throw new Error('Slack approval card exceeds Slack limits');
@@ -30,15 +39,15 @@ export function buildSlackApprovalCardV4(input: SlackApprovalCardInputV4): Slack
   const suggested = projects.filter(project => input.suggested_project_ids.includes(project.value));
   const blocks: Readonly<Record<string, unknown>>[] = [
     ...retained,
-    ...input.owners.map((owner, index) => ({ type: 'input', block_id: id(input.approval_id, `owner-${index}`), optional: true,
-      label: plain(`Owner · ${owner.action.slice(0, 140)}`), element: { type: 'plain_text_input', action_id: id(input.approval_id, `owner-input-${index}`), initial_value: owner.proposed, max_length: 120, multiline: false } })),
+    ...input.owners.map(owner => ({ type: 'input', block_id: id(input.approval_id, `owner-${owner.signal_id}`), optional: true,
+      label: plain(`Owner · ${owner.action.slice(0, 140)}`), element: { type: 'plain_text_input', action_id: slackApprovalOwnerActionIdV4(input.approval_id, owner.signal_id), initial_value: owner.proposed, max_length: 120, multiline: false } })),
     { type: 'divider', block_id: id(input.approval_id, 'divider') },
-    { type: 'input', block_id: id(input.approval_id, 'audience'), optional: false, label: plain('Who should be able to read this record?'), element: { type: 'static_select', action_id: id(input.approval_id, 'audience-select'), options: [
+    { type: 'input', block_id: id(input.approval_id, 'audience'), optional: false, label: plain('Who should be able to read this record?'), element: { type: 'static_select', action_id: slackApprovalActionIdV4(input.approval_id, 'audience-select'), options: [
       { text: plain('Only me'), value: 'only-me' }, { text: plain('Projects'), value: 'projects' },
     ], initial_option: { text: plain('Only me'), value: 'only-me' } } },
-    { type: 'input', block_id: id(input.approval_id, 'projects'), optional: true, label: plain('Projects to share with'), element: { type: 'multi_static_select', action_id: id(input.approval_id, 'projects-select'), options: projects, max_selected_items: 20, ...(suggested.length === 0 ? {} : { initial_options: suggested }) } },
-    { type: 'input', block_id: id(input.approval_id, 'transcript'), optional: true, label: plain('Transcript'), element: { type: 'checkboxes', action_id: id(input.approval_id, 'transcript-checkbox'), options: [{ text: plain('Share transcript with the selected audience'), value: 'share-transcript-v1' }] } },
-    { type: 'actions', block_id: id(input.approval_id, 'actions'), elements: ['approve', 'reject'].map(action => ({ type: 'button', action_id: id(input.approval_id, action), ...(action === 'approve' ? { style: 'primary' } : { style: 'danger' }), text: plain(action === 'approve' ? 'Approve meeting' : 'Reject'), value: JSON.stringify({ schema_version: 2, approval_id: input.approval_id, snapshot_sha256: input.snapshot_sha256 }) })) },
+    { type: 'input', block_id: id(input.approval_id, 'projects'), optional: true, label: plain('Projects to share with'), element: { type: 'multi_static_select', action_id: slackApprovalActionIdV4(input.approval_id, 'projects-select'), options: projects, max_selected_items: 20, ...(suggested.length === 0 ? {} : { initial_options: suggested }) } },
+    { type: 'input', block_id: id(input.approval_id, 'transcript'), optional: true, label: plain('Transcript'), element: { type: 'checkboxes', action_id: slackApprovalActionIdV4(input.approval_id, 'transcript-checkbox'), options: [{ text: plain('Share transcript with the selected audience'), value: 'share-transcript-v1' }] } },
+    { type: 'actions', block_id: id(input.approval_id, 'actions'), elements: (['approve', 'reject'] as const).map(action => ({ type: 'button', action_id: slackApprovalActionIdV4(input.approval_id, action), ...(action === 'approve' ? { style: 'primary' } : { style: 'danger' }), text: plain(action === 'approve' ? 'Approve meeting' : 'Reject'), value: JSON.stringify({ schema_version: 2, approval_id: input.approval_id, snapshot_sha256: input.snapshot_sha256 }) })) },
   ];
   if (blocks.length > 50) throw new Error('Slack approval card exceeds Slack limits');
   const text = base.text

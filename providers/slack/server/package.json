@@ -21,6 +21,18 @@
       "types": "./dist/private-approval/slack-approval-presenter-v1.d.ts",
       "import": "./dist/private-approval/slack-approval-presenter-v1.js"
     },
+    "./private-approval/slack-approval-click-v1": {
+      "types": "./dist/private-approval/slack-approval-click-v1.d.ts",
+      "import": "./dist/private-approval/slack-approval-click-v1.js"
+    },
+    "./private-approval/private-slack-approval-interaction-handler-v1": {
+      "types": "./dist/private-approval/private-slack-approval-interaction-handler-v1.d.ts",
+      "import": "./dist/private-approval/private-slack-approval-interaction-handler-v1.js"
+    },
+    "./private-approval/private-slack-approval-http-adapter-v1": {
+      "types": "./dist/private-approval/private-slack-approval-http-adapter-v1.d.ts",
+      "import": "./dist/private-approval/private-slack-approval-http-adapter-v1.js"
+    },
     "./processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1": {
       "types": "./dist/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.d.ts",
       "import": "./dist/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js"
@@ -32,6 +44,10 @@
     "./organization-control-plane/application/slack-bot-token-source-v1": {
       "types": "./dist/organization-control-plane/application/slack-bot-token-source-v1.d.ts",
       "import": "./dist/organization-control-plane/application/slack-bot-token-source-v1.js"
+    },
+    "./organization-control-plane/application/slack-app-credentials-v1": {
+      "types": "./dist/organization-control-plane/application/slack-app-credentials-v1.d.ts",
+      "import": "./dist/organization-control-plane/application/slack-app-credentials-v1.js"
     },
     "./organization-control-plane/application/slack-connection-health-v1": {
       "types": "./dist/organization-control-plane/application/slack-connection-health-v1.d.ts",
