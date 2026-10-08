@@ -133,7 +133,6 @@ export function renderClientUpdateResult(result: ClientUpdateResult, presentatio
   }
   if (result.status === 'not_due') return 'Automatic availability check is not due yet.\n' + savedStatusDetails(result, presentation.automatic) + '\n';
   if (result.status === 'automatic_disabled') return 'Automatic availability checks are disabled. Installed release: ' + installed + '.\n';
-  if (result.status === 'not_configured') return updateProblem(result.status) + '\n';
   return updateProblem(result.status) + '\n';
 }
 
@@ -191,20 +190,20 @@ export async function runClientUpdateCli(argv: readonly string[]): Promise<numbe
 }
 
 /** Announces availability before the caller dispatches its Person command once. */
-export async function updateBeforePersonCommand(_argv: readonly string[]): Promise<undefined> {
-  if (process.env.ECHO_CLIENT_UPDATE_DISPATCH === '1') return undefined;
+export async function updateBeforePersonCommand(): Promise<void> {
+  if (process.env.ECHO_CLIENT_UPDATE_DISPATCH === '1') return;
   try {
     const root = installedUpdateRoot();
-    if (!root) return undefined;
+    if (!root) return;
     const config = readClientUpdateConfig(root);
-    if (!config?.automatic) return undefined;
+    if (!config?.automatic) return;
     const result = await runClientUpdate('automatic', { root, platform: detectUpdatePlatform(config.installation) });
     if (result.status === 'available') {
       const available = safeRelease(result.available_release);
       if (available !== 'unknown' && available !== result.installed_release) {
         process.stderr.write(`ECHO update available: ${available}. Run echo-brain update to install it.\n`);
       }
-      return undefined;
+      return;
     }
     if (!['current', 'not_due', 'automatic_disabled', 'update_busy'].includes(result.status)) {
       process.stderr.write(`ECHO update: ${result.status}; continuing with ${safeRelease(result.installed_release)}.\n`);
@@ -212,5 +211,4 @@ export async function updateBeforePersonCommand(_argv: readonly string[]): Promi
   } catch {
     process.stderr.write('ECHO update check failed; continuing with the installed client.\n');
   }
-  return undefined;
 }

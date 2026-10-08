@@ -291,6 +291,8 @@ export function createGitCheckCache({ run = spawnSync, cwd = REPO } = {}) {
   return Object.freeze({ object, reachable: reachableCommit });
 }
 
+const RFC3339_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+
 function fullSha(value) {
   return /^[0-9a-f]{40}$/.test(String(value));
 }
@@ -552,16 +554,10 @@ function validateQualification(
       );
   if (
     metadata.started_at !== "not-recorded" &&
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(
-      metadata.started_at,
-    )
+    !RFC3339_UTC.test(metadata.started_at)
   )
     errors.push(`${record.path}: started_at must be RFC 3339 or not-recorded`);
-  if (
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(
-      metadata.completed_at,
-    )
-  )
+  if (!RFC3339_UTC.test(metadata.completed_at))
     errors.push(`${record.path}: completed_at must be RFC 3339`);
   const matrix = recordsById.get(metadata.matrix_id);
   if (matrix?.metadata.kind !== "qualification-matrix")
@@ -823,12 +819,7 @@ export function checkDocumentation() {
         );
       continue;
     }
-    records.push({
-      absolutePath,
-      path: relative(REPO, absolutePath),
-      source,
-      metadata,
-    });
+    records.push({ path: relative(REPO, absolutePath), source, metadata });
   }
   const recordsById = new Map();
   for (const record of records) {

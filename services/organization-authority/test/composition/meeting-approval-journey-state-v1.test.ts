@@ -61,7 +61,10 @@ describe("meeting approval journey state v1", () => {
         CLOSED_AT,
       ),
     ).toEqual({ sequence: 2 });
-    expect(first.stageClosed(JOURNEY_ID, "meeting_source_intake")).toBe(true);
+    expect(first.readLatestStage(JOURNEY_ID, "meeting_source_intake")).toMatchObject({
+      status: "closed",
+      result: "succeeded",
+    });
     first.close();
 
     const restarted = openMeetingApprovalJourneyStateV1(path, {
@@ -145,7 +148,7 @@ describe("meeting approval journey state v1", () => {
     });
     expect(state.markCardStaged(JOURNEY_ID, CARD_STAGED_AT)).toBe(CARD_STAGED_AT);
     expect(state.markCardStaged(JOURNEY_ID, SEARCH_PENDING_AT)).toBe(CARD_STAGED_AT);
-    expect(state.readCardStagedAt(JOURNEY_ID)).toBe(CARD_STAGED_AT);
+    expect(state.readForApproval("approval-private-sentinel")?.card_staged_at).toBe(CARD_STAGED_AT);
 
     state.markApprovedRecordAwaitingSearch(JOURNEY_ID, SEARCH_PENDING_AT);
     expect(state.listApprovedRecordsAwaitingSearch()).toEqual([
@@ -228,7 +231,6 @@ describe("meeting approval journey state v1", () => {
       status: "closed",
       result: "failed",
     });
-    expect(state.stageClosed(JOURNEY_ID, "meeting_extraction")).toBe(false);
     expect(
       state.reserveStageStart(JOURNEY_ID, "meeting_extraction", CARD_STAGED_AT),
     ).toEqual({ sequence: 3, attempt: 2 });

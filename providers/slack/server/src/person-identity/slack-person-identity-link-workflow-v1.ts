@@ -109,7 +109,8 @@ function unauthorized(): AuthorityOperationError {
   );
 }
 
-function personSession(
+/** The Person session fields every Slack identity-link flow binds and compares. */
+export function personSession(
   authorization: PersonAccessAuthorization,
   authorityId: string,
 ) {
@@ -153,47 +154,46 @@ function samePersonSession(
   );
 }
 
-function sameTool(
+/** True while `right` is still exactly the tool a flow began with. */
+export function sameTool(
   left: ActiveSlackOrganizationTool,
   right: ActiveSlackOrganizationTool | null,
 ): right is ActiveSlackOrganizationTool {
   return right !== null && canonicalJson(left) === canonicalJson(right);
 }
 
-type SlackProviderFailureCode =
-  | "unauthorized"
-  | "identity_mismatch"
-  | "unavailable"
-  | "invalid_response"
-  | "not_observed";
-
-function slackProviderFailureCode(
-  error: unknown,
-): SlackProviderFailureCode | null {
-  return error instanceof SlackIdentityProviderErrorV1 ? error.code : null;
-}
-
 function providerFailure(error: unknown): never {
-  const code = slackProviderFailureCode(error);
+  const code = error instanceof SlackIdentityProviderErrorV1 ? error.code : null;
   if (code === "not_observed") {
     throw new AuthorityOperationError(
       "unavailable",
       "The exact Slack challenge reply has not been observed yet",
     );
   }
-  if (code === "unavailable") {
-    throw new AuthorityOperationError(
-      "unavailable",
-      "Slack identity verification is temporarily unavailable",
-    );
-  }
-  if (code !== null) {
+  if (code !== null && code !== "unavailable") {
     throw new AuthorityOperationError(
       "invalid_request",
       "Slack could not verify the identity-link evidence",
     );
   }
   throw new AuthorityOperationError("unavailable", "Slack identity verification is temporarily unavailable");
+}
+
+function beginResponse(
+  tool: ActiveSlackOrganizationTool,
+  challenge: Pick<BegunSlackIdentityLinkChallenge, "challenge_attempt_id" | "channel_id" | "expires_at">,
+  challengeMessageTs: string,
+): OrganizationPersonSlackIdentityLinkBeginResponseV2 {
+  return validateOrganizationPersonSlackIdentityLinkBeginResponse({
+    schema_version: 2,
+    kind: "echo-organization-person-slack-link-begin-response",
+    challenge_attempt_id: challenge.challenge_attempt_id,
+    provider: "slack",
+    provider_tenant_id: tool.team_id,
+    channel_id: challenge.channel_id,
+    challenge_message_ts: challengeMessageTs,
+    expires_at: challenge.expires_at,
+  });
 }
 
 function repositoryOperation<T>(operation: () => T): T {
@@ -325,16 +325,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       return replay;
     });
     if (earlyReplay !== null) {
-      return validateOrganizationPersonSlackIdentityLinkBeginResponse({
-        schema_version: 2,
-        kind: "echo-organization-person-slack-link-begin-response",
-        challenge_attempt_id: earlyReplay.challenge_attempt_id,
-        provider: "slack",
-        provider_tenant_id: activeTool.team_id,
-        channel_id: earlyReplay.channel_id,
-        challenge_message_ts: earlyReplay.challenge_message_ts,
-        expires_at: earlyReplay.expires_at,
-      });
+      return beginResponse(activeTool, earlyReplay, earlyReplay.challenge_message_ts);
     }
     const verified = await this.verifyTool(
       await this.readToolToken(activeTool),
@@ -389,16 +380,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     });
 
     if (begun.replayed === true && begun.challenge_message_ts !== undefined) {
-      return validateOrganizationPersonSlackIdentityLinkBeginResponse({
-        schema_version: 2,
-        kind: "echo-organization-person-slack-link-begin-response",
-        challenge_attempt_id: begun.challenge_attempt_id,
-        provider: "slack",
-        provider_tenant_id: activeTool.team_id,
-        channel_id: begun.channel_id,
-        challenge_message_ts: begun.challenge_message_ts,
-        expires_at: begun.expires_at,
-      });
+      return beginResponse(activeTool, begun, begun.challenge_message_ts);
     }
 
     let posted: Awaited<
@@ -468,16 +450,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       );
     });
 
-    return validateOrganizationPersonSlackIdentityLinkBeginResponse({
-      schema_version: 2,
-      kind: "echo-organization-person-slack-link-begin-response",
-      challenge_attempt_id: begun.challenge_attempt_id,
-      provider: "slack",
-      provider_tenant_id: activeTool.team_id,
-      channel_id: begun.channel_id,
-      challenge_message_ts: posted.challenge_message_ts,
-      expires_at: begun.expires_at,
-    });
+    return beginResponse(activeTool, begun, posted.challenge_message_ts);
   }
 
   private async completeInternal(

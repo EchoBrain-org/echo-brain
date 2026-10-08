@@ -84,7 +84,7 @@ function seedControlPlane({ control_plane_database, coordinates, owner, employee
     throw new TypeError("control_plane_database is required");
   }
   const ownerActor = person(owner, "owner");
-  const employeeActor = employee === undefined ? undefined : person(employee, "employee");
+  const employeeActor = person(employee, "employee");
   const connection = buildOrganizationToolConnectionContractV2({
     ...coordinates,
     connection_id: CONNECTION_ID,
@@ -251,12 +251,12 @@ export async function createCoreApproval({ context, owner, employee, sessions } 
   }
   const location = context.coordinates;
   const ownerActor = person(owner, "owner");
-  const employeeActor = employee === undefined ? undefined : person(employee, "employee");
+  const employeeActor = person(employee, "employee");
   seedControlPlane({
     control_plane_database: context.control_plane_database,
     coordinates: location,
     owner: ownerActor,
-    ...(employeeActor === undefined ? {} : { employee: employeeActor }),
+    employee: employeeActor,
   });
   const connection = readActiveSlackConnectionV1(context.control_plane_database, location).connection;
   const poster = new DeterministicCoreApprovalPoster();

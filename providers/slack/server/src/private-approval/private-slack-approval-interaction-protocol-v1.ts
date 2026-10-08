@@ -852,6 +852,16 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
       rejectionStage = "action";
       return invalid();
     }
+    const providerActionKeySha256 = providerActionKey({
+      api_app_id: lookup.api_app_id,
+      workspace_id: lookup.workspace_id,
+      slack_user_id: lookup.slack_user_id,
+      channel_id: lookup.channel_id,
+      message_ts: lookup.message_ts,
+      trigger_id: triggerId,
+      action_ts: actionTs,
+      action_id: actionId,
+    });
     rejectionStage = "state";
     if (card.schema_version === 3) {
       const state = completeStateV2({ ...card, schema_version: 3, state: payload.state, action: resolutionAction });
@@ -867,7 +877,7 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
         share_transcript: resolutionAction === "approve" ? state.share_transcript : false,
         comment: state.comment,
         action_owners: resolutionAction === "approve" ? state.action_owners : Object.freeze([]),
-        provider_action_key_sha256: providerActionKey({ api_app_id: lookup.api_app_id, workspace_id: lookup.workspace_id, slack_user_id: lookup.slack_user_id, channel_id: lookup.channel_id, message_ts: lookup.message_ts, trigger_id: triggerId, action_ts: actionTs, action_id: actionId }),
+        provider_action_key_sha256: providerActionKeySha256,
         request,
         lookup,
       });
@@ -885,7 +895,7 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
         selected_project_ids: resolutionAction === "approve" ? state.selected_project_ids : Object.freeze([]),
         share_transcript: resolutionAction === "approve" ? state.share_transcript : false,
         comment: state.comment,
-        provider_action_key_sha256: providerActionKey({ api_app_id: lookup.api_app_id, workspace_id: lookup.workspace_id, slack_user_id: lookup.slack_user_id, channel_id: lookup.channel_id, message_ts: lookup.message_ts, trigger_id: triggerId, action_ts: actionTs, action_id: actionId }),
+        provider_action_key_sha256: providerActionKeySha256,
         request,
         lookup,
       });
@@ -901,16 +911,7 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
       selected_policy_id:
         resolutionAction === "approve" ? state.selected_policy_id : null,
       comment: state.comment,
-      provider_action_key_sha256: providerActionKey({
-        api_app_id: lookup.api_app_id,
-        workspace_id: lookup.workspace_id,
-        slack_user_id: lookup.slack_user_id,
-        channel_id: lookup.channel_id,
-        message_ts: lookup.message_ts,
-        trigger_id: triggerId,
-        action_ts: actionTs,
-        action_id: actionId,
-      }),
+      provider_action_key_sha256: providerActionKeySha256,
       request,
       lookup,
     });

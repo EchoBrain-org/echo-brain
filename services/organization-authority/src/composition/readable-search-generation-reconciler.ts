@@ -7,6 +7,23 @@ export interface ReadableSearchRecordHeadV1 {
   readonly record_sha256: Sha256Digest | null;
 }
 
+/** The record log's current head; position 0 with no digest when the log is empty. */
+export function readReadableSearchRecordHeadV1(record: Database.Database): ReadableSearchRecordHeadV1 {
+  const row = record
+    .prepare(
+      `SELECT position, record_sha256
+         FROM organization_record_log
+        ORDER BY position DESC
+        LIMIT 1`,
+    )
+    .get() as
+    | { readonly position: number; readonly record_sha256: Sha256Digest }
+    | undefined;
+  return row === undefined
+    ? Object.freeze({ position: 0, record_sha256: null })
+    : Object.freeze({ ...row });
+}
+
 export interface ReadableSearchSnapshotV1 {
   readonly record_head: ReadableSearchRecordHeadV1;
 }

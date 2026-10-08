@@ -230,8 +230,8 @@ async function requestProviderJson(
       );
     }
     if (
-      (error instanceof Error && error.name === 'TimeoutError') ||
-      (error instanceof Error && error.name === 'AbortError')
+      error instanceof Error &&
+      (error.name === 'TimeoutError' || error.name === 'AbortError')
     ) {
       throw new AdapterError(
         'timeout',

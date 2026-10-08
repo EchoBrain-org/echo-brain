@@ -44,22 +44,6 @@ export const JOURNEY_STAGES_V1 = Object.freeze([
 ] as const);
 export type JourneyStageV1 = (typeof JOURNEY_STAGES_V1)[number];
 
-/**
- * The only keys a later metric emitter may use as CloudWatch dimensions.
- * Journey, request, person, user, meeting, candidate, and approval identifiers
- * are deliberately excluded: they belong only in permitted run-detail logs.
- */
-export const JOURNEY_METRIC_DIMENSION_KEYS_V1 = Object.freeze([
-  "environment",
-  "workflow",
-  "stage",
-  "outcome",
-  "failure_class",
-  "retryable",
-  "provider",
-  "model",
-] as const);
-
 export const JOURNEY_EVENTS_V1 = Object.freeze([
   "started",
   "succeeded",

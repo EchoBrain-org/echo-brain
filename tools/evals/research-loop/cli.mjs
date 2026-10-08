@@ -77,6 +77,9 @@ async function bindings(args) {
   process.stdout.write(`bindings.json written; meetings bound: ${Object.keys(meetings).join(", ") || "none"}${missing.length === 0 ? "" : `; not found: ${missing.join(", ")} (fill them in by hand)`}\n`);
 }
 
+/** A saved run or grade keeps at most 300 characters of an error's message. */
+const errorText = error => String(error?.message ?? error).slice(0, 300);
+
 function runBase(testCase, budget, trial, model, started) {
   return { schema_version: 1, kind: "echo-research-loop-eval-run-v1", case_id: testCase.id, split: testCase.split, state: testCase.state, trigger: testCase.trigger, budget, trial, model, started_at: new Date(started).toISOString() };
 }
@@ -87,16 +90,17 @@ async function runOne(client, testCase, request, budget, trial, model, pollMs) {
   let receipt;
   try { receipt = await client.startResearchEval(request); }
   catch (error) {
-    return { ...base, outcome: rejectedAtIngress(testCase, error) ? "rejected" : "error", error: { code: error?.code ?? error?.name ?? "error", message: String(error?.message ?? error).slice(0, 300) }, elapsed_ms: Date.now() - started };
+    return { ...base, outcome: rejectedAtIngress(testCase, error) ? "rejected" : "error", error: { code: error?.code ?? error?.name ?? "error", message: errorText(error) }, elapsed_ms: Date.now() - started };
   }
   const deadline = started + pollDeadlineMs(budget);
+  const finished = fields => ({ ...base, run_id: receipt.run_id, ...fields, elapsed_ms: Date.now() - started });
   for (;;) {
     await new Promise(resolve => setTimeout(resolve, pollMs));
     let result;
     try { result = await client.readResearchEval(receipt.run_id); }
-    catch (error) { return { ...base, run_id: receipt.run_id, outcome: "error", error: { code: error?.code ?? "error", message: String(error?.message ?? error).slice(0, 300) }, elapsed_ms: Date.now() - started }; }
-    if (result.status !== "running") return { ...base, run_id: receipt.run_id, outcome: result.status, result: savedResult(result), elapsed_ms: Date.now() - started };
-    if (Date.now() > deadline) return { ...base, run_id: receipt.run_id, outcome: "error", error: { code: "poll_timeout", message: "The run did not finish before the polling deadline" }, elapsed_ms: Date.now() - started };
+    catch (error) { return finished({ outcome: "error", error: { code: error?.code ?? "error", message: errorText(error) } }); }
+    if (result.status !== "running") return finished({ outcome: result.status, result: savedResult(result) });
+    if (Date.now() > deadline) return finished({ outcome: "error", error: { code: "poll_timeout", message: "The run did not finish before the polling deadline" } });
   }
 }
 
@@ -119,7 +123,7 @@ async function run(args, { client: given, poll_ms: pollMs = 2_000 } = {}) {
         // A case whose request cannot be built (an unbound or unstartable citation) is recorded and counted, and the run goes on; any other error stops it.
         try { request = startRequest(testCase, bound, budget); } catch (error) { if (!(error instanceof CaseNotStartableError)) throw error; unstartable = error; }
         const saved = unstartable === undefined ? await runOne(client, testCase, request, budget, trial, model, pollMs)
-          : { ...runBase(testCase, budget, trial, model, Date.now()), outcome: "error", error: { code: "case_not_startable", message: String(unstartable?.message ?? unstartable).slice(0, 300) }, elapsed_ms: 0 };
+          : { ...runBase(testCase, budget, trial, model, Date.now()), outcome: "error", error: { code: "case_not_startable", message: errorText(unstartable) }, elapsed_ms: 0 };
         writePrivateJson(out, `runs/${testCase.id}/${budget}-${trial}.json`, { ...saved, source_sha: sourceIdentity() });
         process.stdout.write(`${testCase.id} ${budget} #${trial}: ${saved.outcome}${saved.result?.research?.stop ? ` (${saved.result.research.stop.reason})` : ""}${saved.result?.rendered ? `, card ${saved.result.rendered.status}` : ""}\n`);
       }
@@ -140,7 +144,7 @@ async function grade(args) {
     let judged = null; let judgeError = null;
     if (judge !== null && checks.status === "completed") {
       try { judged = parseJudge(testCase, await judge(judgeInput(testCase, saved))); }
-      catch (error) { judgeError = String(error?.message ?? error).slice(0, 300); }
+      catch (error) { judgeError = errorText(error); }
     }
     graded.push({ run: { file, sha256 }, checks, judge: judged, judge_error: judgeError });
   }

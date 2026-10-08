@@ -185,7 +185,12 @@ function sameSlackIdentityLink(
   );
 }
 
-function pending(value: unknown): PendingPrivateApprovalV1 {
+/**
+ * Validates and defensively freezes the commitment which may be staged before
+ * an approval card is delivered.  Staging deliberately does not synthesize an
+ * authorization allow: a provider action must still cross the stable fence.
+ */
+export function validatePendingPrivateApprovalV1(value: unknown): PendingPrivateApprovalV1 {
   const label = "pending approval";
   const record = privateApprovalExactRecord(
     value,
@@ -219,7 +224,8 @@ function pending(value: unknown): PendingPrivateApprovalV1 {
   });
 }
 
-function authorization(value: unknown): PrivateApprovalAuthorizationAllowV1 {
+/** Validates the server-only authorization proof before terminal persistence. */
+export function validatePrivateApprovalAuthorizationAllowV1(value: unknown): PrivateApprovalAuthorizationAllowV1 {
   const label = "authorization allow";
   const record = privateApprovalExactRecord(
     value,
@@ -308,7 +314,8 @@ function build(
   });
 }
 
-function prior(value: unknown): PrivateApprovalResolutionV1 {
+/** Validates immutable terminal evidence before an exact durable replay. */
+export function validatePrivateApprovalResolutionV1(value: unknown): PrivateApprovalResolutionV1 {
   const label = "prior resolution";
   const record = privateApprovalExactRecord(
     value,
@@ -370,31 +377,6 @@ function prior(value: unknown): PrivateApprovalResolutionV1 {
 }
 
 /**
- * Validates and defensively freezes the commitment which may be staged before
- * an approval card is delivered.  Staging deliberately does not synthesize an
- * authorization allow: a provider action must still cross the stable fence.
- */
-export function validatePendingPrivateApprovalV1(
-  value: unknown,
-): PendingPrivateApprovalV1 {
-  return pending(value);
-}
-
-/** Validates immutable terminal evidence before an exact durable replay. */
-export function validatePrivateApprovalResolutionV1(
-  value: unknown,
-): PrivateApprovalResolutionV1 {
-  return prior(value);
-}
-
-/** Validates the server-only authorization proof before terminal persistence. */
-export function validatePrivateApprovalAuthorizationAllowV1(
-  value: unknown,
-): PrivateApprovalAuthorizationAllowV1 {
-  return authorization(value);
-}
-
-/**
  * Resolve one explicit approval or rejection. Exact durable retries are
  * returned before consulting current state; otherwise the current pending
  * owner and server-revalidated authorization allow must match exactly.
@@ -404,14 +386,14 @@ export function resolvePrivateApprovalPolicyV1(
 ): PrivateApprovalResolutionV1 {
   const request = privateApprovalCommand(input.command);
   if ("prior_resolution" in input && input.prior_resolution !== undefined) {
-    const durable = prior(input.prior_resolution);
+    const durable = validatePrivateApprovalResolutionV1(input.prior_resolution);
     if (!privateApprovalResolutionMatchesCommand(durable, request)) {
       privateApprovalInvalid("approval command command_id conflicts with prior resolution");
     }
     return durable;
   }
-  const current = pending(input.pending);
-  const allow = authorization(input.authorization_allow);
+  const current = validatePendingPrivateApprovalV1(input.pending);
+  const allow = validatePrivateApprovalAuthorizationAllowV1(input.authorization_allow);
   if (request.approval_id !== current.approval_id) {
     privateApprovalInvalid("approval command approval_id does not match the pending approval");
   }

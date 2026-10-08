@@ -1,8 +1,7 @@
 import type { TelemetryVocabularyV1 } from "@echo-brain/organization-authority-kernel/shared/telemetry-vocabulary-v1";
 import { currentCoreRuntimeDetailV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { join } from "node:path";
-import type { AdapterError } from "@echo-brain/organization-processing/core/contracts/adapter";
-import { AdapterError as AdapterFailure } from "@echo-brain/organization-processing/core/contracts/adapter";
+import { AdapterError } from "@echo-brain/organization-processing/core/contracts/adapter";
 import type { DecisionExtractionGenerationObservation } from "@echo-brain/organization-processing/core/contracts/decision";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import {
@@ -93,7 +92,7 @@ function classifyFailure(
       retryable: override.retryable,
     };
   }
-  if (error instanceof AdapterFailure) {
+  if (error instanceof AdapterError) {
     const failure_class = {
       invalid_config: "invalid_contract",
       unauthorized: "authorization",
@@ -337,19 +336,12 @@ class MeetingApprovalJourneyTelemetryV1
     return journey === null ? null : this.beginStage(journey, stage, started, observation_kind);
   }
 
-  succeedStage(
-    attempt: MeetingApprovalJourneyStageAttemptV1 | null,
-    input: MeetingApprovalJourneyStageSuccessV1 = {},
-  ): void {
-    this.closeSucceededStage(attempt, input);
-  }
-
   succeedExtractionStage(
     attempt: MeetingApprovalJourneyStageAttemptV1 | null,
     observation: DecisionExtractionGenerationObservation | null,
     fallback_provider_latency_ms: number,
   ): void {
-    this.closeSucceededStage(attempt, {
+    this.succeedStage(attempt, {
       llm_usage: this.extractionUsage(
         observation,
         fallback_provider_latency_ms,
@@ -357,11 +349,11 @@ class MeetingApprovalJourneyTelemetryV1
     });
   }
 
-  private closeSucceededStage(
+  succeedStage(
     attempt: MeetingApprovalJourneyStageAttemptV1 | null,
     input: MeetingApprovalJourneyStageSuccessV1 & {
       readonly llm_usage?: JourneyLlmUsageInputV1;
-    },
+    } = {},
   ): void {
     if (attempt === null) return;
     try {
@@ -395,21 +387,13 @@ class MeetingApprovalJourneyTelemetryV1
     }
   }
 
-  failStage(
-    attempt: MeetingApprovalJourneyStageAttemptV1 | null,
-    error: unknown,
-    input: MeetingApprovalJourneyStageFailureV1 = {},
-  ): void {
-    this.closeFailedStage(attempt, error, input);
-  }
-
   failExtractionStage(
     attempt: MeetingApprovalJourneyStageAttemptV1 | null,
     error: unknown,
     observation: DecisionExtractionGenerationObservation | null,
     fallback_provider_latency_ms: number,
   ): void {
-    this.closeFailedStage(attempt, error, {
+    this.failStage(attempt, error, {
       llm_usage: this.extractionUsage(
         observation,
         fallback_provider_latency_ms,
@@ -417,12 +401,12 @@ class MeetingApprovalJourneyTelemetryV1
     });
   }
 
-  private closeFailedStage(
+  failStage(
     attempt: MeetingApprovalJourneyStageAttemptV1 | null,
     error: unknown,
     input: MeetingApprovalJourneyStageFailureV1 & {
       readonly llm_usage?: JourneyLlmUsageInputV1;
-    },
+    } = {},
   ): void {
     if (attempt === null) return;
     try {

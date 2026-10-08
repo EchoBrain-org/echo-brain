@@ -342,6 +342,15 @@ function parsedContextJson(text: string, status: number): unknown {
   return value;
 }
 
+function isJsonResponse(response: Response): boolean {
+  return /^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(response.headers.get("content-type") ?? "");
+}
+
+/** Error codes of the closed project/V2 and document families. */
+const CLOSED_CONTEXT_ERROR_CODES: ReadonlySet<string> = new Set([
+  'invalid_request', 'conflict', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable',
+]);
+
 function validateSuccess<T>(
   value: unknown,
   status: number,
@@ -705,11 +714,7 @@ export class PersonAuthorityClient {
   }
 
   private async jsonValue(response: Response, maximumBytes: number, expectedStatus?: number): Promise<unknown> {
-    const contentType = response.headers.get("content-type");
-    if (
-      contentType === null ||
-      !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType)
-    ) {
+    if (!isJsonResponse(response)) {
       throw new PersonAuthorityClientError(
         "invalid_response",
         response.status,
@@ -791,7 +796,7 @@ export class PersonAuthorityClient {
         ...(body === undefined ? {} : { body }),
       });
       status = response.status;
-      if (!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(response.headers.get('content-type') ?? '')) {
+      if (!isJsonResponse(response)) {
         throw new PersonAuthorityClientError('invalid_response', status, 'Person Authority returned a non-JSON response');
       }
       const text = await readBoundedBody(response, PROJECT_CONTEXT_RESPONSE_MAX_BYTES);
@@ -800,7 +805,7 @@ export class PersonAuthorityClient {
         const error = validateSuccess(value, status, validateOrganizationApiError);
         // The generic API envelope permits extension codes; this frozen
         // project/V2 family is closed and cannot infer rejection from one.
-        if (!['invalid_request', 'conflict', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable'].includes(error.error.code)) {
+        if (!CLOSED_CONTEXT_ERROR_CODES.has(error.error.code)) {
           throw new PersonAuthorityClientError('invalid_response', status, 'Person Authority returned a noncanonical error');
         }
         if (input.request_id !== undefined && status >= 400 && status < 500) {
@@ -825,14 +830,14 @@ export class PersonAuthorityClient {
   }
 
   private async documentResponse<T>(response: Response, validate: (value: unknown) => T, expectedStatus = 200): Promise<T> {
-    if (!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(response.headers.get('content-type') ?? '')) {
+    if (!isJsonResponse(response)) {
       await response.body?.cancel();
       throw new PersonAuthorityClientError('invalid_response', response.status, 'Document response was not JSON.');
     }
     const value = parsedContextJson(await readBoundedBody(response, PERSON_DOCUMENT_JSON_MAX_BYTES), response.status);
     if (!response.ok) {
       const failure = validateSuccess(value, response.status, validateOrganizationApiError);
-      if (!['invalid_request', 'conflict', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'unavailable', 'quota_exceeded'].includes(failure.error.code)) {
+      if (!CLOSED_CONTEXT_ERROR_CODES.has(failure.error.code)) {
         throw new PersonAuthorityClientError('invalid_response', response.status, 'Document error response was invalid.');
       }
       throw new PersonAuthorityClientError(failure.error.code, response.status, 'Document request was rejected.');
@@ -888,59 +893,43 @@ export class PersonAuthorityClient {
         result.project_id === request.project_id && result.operation === operation });
   }
 
-  private async documentStatusFor<T extends { readonly request_id: string | null }>(accessToken: string, requestId: string, base: string, validate: (value: unknown) => T): Promise<T> {
+  async documentStatusV2(accessToken: string, requestId: string) {
     validatePersonUpdateRequestId(requestId);
-    const result = await this.documentResponse(await this.send(`${base}/requests/${requestId}`, {
+    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V2}/requests/${requestId}`, {
       method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
-    }), validate);
+    }), validatePersonDocumentStatusV2);
     if (result.request_id !== requestId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document status coordinates changed.');
     return result;
   }
 
-  async documentStatusV2(accessToken: string, requestId: string) {
-    return this.documentStatusFor(accessToken, requestId, PERSON_DOCUMENTS_PATH_V2, validatePersonDocumentStatusV2);
-  }
-
-  private async documentMetadataFor<T extends { document_id: string }>(accessToken: string, documentId: string, projectId: string | undefined, base: string, validate: (value: unknown) => T): Promise<T> {
+  async documentMetadataV2(accessToken: string, documentId: string, projectId?: string) {
     validatePersonDocumentIdV1(documentId);
-    const result = await this.documentResponse(await this.send(`${base}/${documentId}${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
+    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V2}/${documentId}${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
       method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
-    }), validate);
+    }), validatePersonDocumentMetadataV2);
     if (result.document_id !== documentId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document metadata coordinates changed.');
     return result;
   }
 
-  async documentMetadataV2(accessToken: string, documentId: string, projectId?: string) {
-    return this.documentMetadataFor(accessToken, documentId, projectId, PERSON_DOCUMENTS_PATH_V2, validatePersonDocumentMetadataV2);
-  }
-
-  private async searchDocumentsFor<T extends { limit: number }, R extends { documents: readonly { document_id: string }[] }>(accessToken: string, input: T, base: string, validateRequest: (value: unknown) => T, validateResponse: (value: unknown) => R): Promise<R> {
-    const request = validateRequest(input);
-    const result = await this.documentResponse(await this.send(`${base}/search`, {
+  async searchDocumentsV2(accessToken: string, input: PersonDocumentSearchV2) {
+    const request = validatePersonDocumentSearchV2(input);
+    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V2}/search`, {
       method: 'POST', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'content-type': 'application/json' }, body: canonicalJson(request),
-    }), validateResponse);
+    }), validatePersonDocumentSearchResultV2);
     if (result.documents.length > request.limit || new Set(result.documents.map(item => item.document_id)).size !== result.documents.length) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Document search page was invalid.');
     }
     return result;
   }
 
-  async searchDocumentsV2(accessToken: string, input: PersonDocumentSearchV2) {
-    return this.searchDocumentsFor(accessToken, input, PERSON_DOCUMENTS_PATH_V2, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV2);
-  }
-
-  private async documentOriginalFor(accessToken: string, documentId: string, projectId: string | undefined, base: string): Promise<Response> {
+  async documentOriginalV2(accessToken: string, documentId: string, projectId?: string): Promise<Response> {
     validatePersonDocumentIdV1(documentId);
-    const response = await this.send(`${base}/${documentId}/original${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
+    const response = await this.send(`${PERSON_DOCUMENTS_PATH_V2}/${documentId}/original${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
       method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/octet-stream' },
     }, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
     if (!response.ok) await this.documentResponse(response, () => { throw new Error('Unexpected document response'); });
     if (response.status !== 200) { await response.body?.cancel(); throw new PersonAuthorityClientError('invalid_response', response.status, 'Document response status was unexpected.'); }
     return response;
-  }
-
-  async documentOriginalV2(accessToken: string, documentId: string, projectId?: string): Promise<Response> {
-    return this.documentOriginalFor(accessToken, documentId, projectId, PERSON_DOCUMENTS_PATH_V2);
   }
 
   async projects(accessToken: string, value: ProjectPageRequestV1 = {}) {
@@ -1137,11 +1126,7 @@ export class PersonAuthorityClient {
         headers: { accept: "application/json" },
       },
     );
-    const contentType = response.headers.get("content-type");
-    if (
-      contentType === null ||
-      !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType)
-    ) {
+    if (!isJsonResponse(response)) {
       throw new PersonAuthorityClientError(
         "invalid_response",
         response.status,
@@ -1312,51 +1297,25 @@ export class PersonAuthorityClient {
   }
 
   /** Agentic Ask; global by default, a supplied project ID is a strict project-only scope, and mine is only what the asker added. */
-  async askV3(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV4> {
-    const request = validatePersonAnswerRequestV3({
-      schema_version: 3,
-      question,
-      ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}),
-    });
-    const response = await this.json({
-      path: PERSON_ANSWER_PATH_V3,
-      body: request,
-      validate_request: validatePersonAnswerRequestV3,
-      validate_response: validatePersonAnswerResponseV4,
-      access_token: accessToken,
-      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-      timeout_ms: ASK_TIMEOUT_MS,
-      signal,
-    });
-    const expectedScope = scope === undefined
-      ? { kind: 'global' as const }
-      : typeof scope === 'string'
-        ? { kind: 'project' as const, project_id: scope }
-        : { kind: 'mine' as const };
-    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
-      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
-    }
-    return response;
+  askV3(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV4> {
+    return this.ask(PERSON_ANSWER_PATH_V3, validatePersonAnswerResponseV4, accessToken, question, scope, signal);
   }
 
-  async askV4(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV5> {
-    const request = validatePersonAnswerRequestV3({ schema_version: 3, question,
-      ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}) });
-    const response = await this.json({ path: PERSON_ANSWER_PATH_V4, body: request,
-      validate_request: validatePersonAnswerRequestV3, validate_response: validatePersonAnswerResponseV5,
-      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
-    const expectedScope = scope === undefined ? { kind: 'global' } : typeof scope === 'string' ? { kind: 'project', project_id: scope } : { kind: 'mine' };
-    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
-      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
-    }
-    return response;
+  askV4(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV5> {
+    return this.ask(PERSON_ANSWER_PATH_V4, validatePersonAnswerResponseV5, accessToken, question, scope, signal);
   }
 
-  async askV5(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV6> {
+  askV5(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV6> {
+    return this.ask(PERSON_ANSWER_PATH_V5, validatePersonAnswerResponseV6, accessToken, question, scope, signal);
+  }
+
+  /** Every Ask route takes the same V3 request and must echo the requested scope. */
+  private async ask<T extends { readonly scope: unknown }>(path: string, validate_response: (value: unknown) => T, accessToken: string,
+    question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined): Promise<T> {
     const request = validatePersonAnswerRequestV3({ schema_version: 3, question,
       ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}) });
-    const response = await this.json({ path: PERSON_ANSWER_PATH_V5, body: request,
-      validate_request: validatePersonAnswerRequestV3, validate_response: validatePersonAnswerResponseV6,
+    const response = await this.json({ path, body: request,
+      validate_request: validatePersonAnswerRequestV3, validate_response,
       access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
     const expectedScope = scope === undefined ? { kind: 'global' } : typeof scope === 'string' ? { kind: 'project', project_id: scope } : { kind: 'mine' };
     if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
@@ -1379,20 +1338,19 @@ export class PersonAuthorityClient {
       access_token: accessToken, maximum_response_bytes: PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, timeout_ms: ASK_TIMEOUT_MS, signal });
   }
 
-  async evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    const request = validatePersonEvidenceSearchRequestV1(value);
-    const response = await this.json({ path: PERSON_EVIDENCE_SEARCH_PATH_V1, body: request,
-      validate_request: validatePersonEvidenceSearchRequestV1, validate_response: validatePersonEvidenceDeskResponseV1,
-      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, signal });
-    const expectedScope = request.project_id === undefined ? { kind: 'global' } : { kind: 'project', project_id: request.project_id };
-    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different evidence scope');
-    return response;
+  evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
+    return this.evidenceDesk(PERSON_EVIDENCE_SEARCH_PATH_V1, validatePersonEvidenceSearchRequestV1, accessToken, value, signal);
   }
 
-  async evidenceOpen(accessToken: string, value: PersonEvidenceOpenV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    const request = validatePersonEvidenceOpenRequestV1(value);
-    const response = await this.json({ path: PERSON_EVIDENCE_OPEN_PATH_V1, body: request,
-      validate_request: validatePersonEvidenceOpenRequestV1, validate_response: validatePersonEvidenceDeskResponseV1,
+  evidenceOpen(accessToken: string, value: PersonEvidenceOpenV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
+    return this.evidenceDesk(PERSON_EVIDENCE_OPEN_PATH_V1, validatePersonEvidenceOpenRequestV1, accessToken, value, signal);
+  }
+
+  private async evidenceDesk<T extends { readonly project_id?: string }>(path: string, validate_request: (value: unknown) => T, accessToken: string,
+    value: T, signal: AbortSignal | undefined): Promise<PersonEvidenceDeskV1> {
+    const request = validate_request(value);
+    const response = await this.json({ path, body: request,
+      validate_request, validate_response: validatePersonEvidenceDeskResponseV1,
       access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, signal });
     const expectedScope = request.project_id === undefined ? { kind: 'global' } : { kind: 'project', project_id: request.project_id };
     if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different evidence scope');

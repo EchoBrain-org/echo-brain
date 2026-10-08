@@ -43,8 +43,8 @@ export class GranolaFolderSourceV1 implements MeetingSourceAdapter {
     granolaFolderInitialCursorV1(folderId);
   }
   validateConfig(config: AdapterConfig) {
-    return { ok: config.adapter_id === this.identity.adapter_id && config.instance_id === this.identity.instance_id,
-      errors: config.adapter_id === this.identity.adapter_id && config.instance_id === this.identity.instance_id ? [] : ['Granola source identity differs'] };
+    const ok = config.adapter_id === this.identity.adapter_id && config.instance_id === this.identity.instance_id;
+    return { ok, errors: ok ? [] : ['Granola source identity differs'] };
   }
   async healthCheck(context?: AdapterOperationContext) {
     const checked_at = new Date().toISOString();

@@ -272,8 +272,6 @@ export function writePersonOnboardingInvitation(
     fchmodSync(descriptor, 0o600);
     writeFileSync(descriptor, bytes, "utf8");
     fsyncSync(descriptor);
-  } catch (error) {
-    throw error;
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }

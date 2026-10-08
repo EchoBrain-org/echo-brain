@@ -557,11 +557,6 @@ export class MeetingApprovalJourneyStateV1 {
     );
   }
 
-  stageClosed(journeyIdValue: string, stageValue: JourneyStageV1): boolean {
-    const latest = this.readLatestStage(journeyIdValue, stageValue);
-    return latest?.status === "skipped" || latest?.result === "succeeded";
-  }
-
   markCardStaged(journeyIdValue: string, observedAtValue: string): string {
     const id = journeyId(journeyIdValue);
     const observedAt = canonicalTimestamp(observedAtValue);
@@ -579,13 +574,6 @@ export class MeetingApprovalJourneyStateV1 {
         .run(observedAt, id);
       return observedAt;
     })();
-  }
-
-  readCardStagedAt(journeyIdValue: string): string | null {
-    const current = this.requireJourney(journeyId(journeyIdValue));
-    return current.card_staged_at === null
-      ? null
-      : canonicalTimestamp(current.card_staged_at, "card_staged_at");
   }
 
   markApprovedRecordAwaitingSearch(journeyIdValue: string, observedAtValue: string): string {

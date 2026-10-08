@@ -43,6 +43,14 @@ export function providerModuleGraph(tree, resolveRelative, errors) {
   const resolve = (path, specifier) => specifier.startsWith('.')
     ? resolveRelative(tree, path, specifier)
     : publicExports.get(specifier) ?? null;
+  // At runtime the URL resolves against the emitted module, not its source.
+  const emittedAsset = (path, specifier) => {
+    const output = outputs.find(item => path.startsWith(item.source + "/"));
+    if (!output) return null;
+    const emitted = posix.join(output.output, posix.relative(output.source, path));
+    const asset = posix.join(posix.dirname(emitted), specifier);
+    return tree.has(asset) ? asset : null;
+  };
   const cache = new Map();
   const targets = path => {
     if (cache.has(path)) return cache.get(path);
@@ -56,15 +64,7 @@ export function providerModuleGraph(tree, resolveRelative, errors) {
           const literal = node.arguments[0];
           if (!literal || !ts.isStringLiteral(literal)) errors.push('runtime asset URL must be literal: ' + path);
           else {
-            let target = resolve(path, literal.text);
-            if (!target) {
-              const output = outputs.find(item => path.startsWith(item.source + "/"));
-              if (output) {
-                const emitted = posix.join(output.output, posix.relative(output.source, path));
-                const asset = posix.join(posix.dirname(emitted), literal.text);
-                if (tree.has(asset)) target = asset;
-              }
-            }
+            const target = resolve(path, literal.text) || emittedAsset(path, literal.text);
             if (target) found.add(target);
             else errors.push('runtime asset has no source: ' + path + ' -> ' + literal.text);
           }

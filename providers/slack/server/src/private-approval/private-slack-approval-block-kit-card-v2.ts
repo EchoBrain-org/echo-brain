@@ -108,12 +108,16 @@ function projectOptionLabel(project: PrivateSlackApprovalEligibleProjectV2): str
   return project.name.length <= limit ? project.name : `${project.name.slice(0, limit - 1).trimEnd()}…${suffix}`;
 }
 
-function actionId(approvalId: string, action: PrivateSlackApprovalBlockKitActionV2): string {
-  const key = createHash("sha256")
+/** One card's stable key: every V2/V3 action and block ID derives from it. */
+function cardKey(approvalId: string): string {
+  return createHash("sha256")
     .update(`echo-private-approval-v2\u0000${approvalId}`)
     .digest("hex")
     .slice(0, 32);
-  return `echo-private-approval-v2-${key}-${action}-v2`;
+}
+
+function actionId(approvalId: string, action: PrivateSlackApprovalBlockKitActionV2): string {
+  return `echo-private-approval-v2-${cardKey(approvalId)}-${action}-v2`;
 }
 
 export function privateSlackApprovalBlockKitActionIdV2(
@@ -129,11 +133,7 @@ export function privateSlackApprovalBlockKitOwnerActionIdV3(
   actionIndex: number,
 ): string {
   if (!Number.isSafeInteger(actionIndex) || actionIndex < 0 || actionIndex > 999) throw new Error("private approval owner action index is invalid");
-  const key = createHash("sha256")
-    .update(`echo-private-approval-v2\u0000${input.approval_id}`)
-    .digest("hex")
-    .slice(0, 32);
-  return `echo-private-approval-v2-${key}-owner-${actionIndex}-v3`;
+  return `echo-private-approval-v2-${cardKey(input.approval_id)}-owner-${actionIndex}-v3`;
 }
 
 /**
@@ -148,11 +148,7 @@ export function canonicalPrivateSlackApprovalOwnerV3(value: string): string | nu
 }
 
 function blockId(approvalId: string, name: string): string {
-  const key = createHash("sha256")
-    .update(`echo-private-approval-v2\u0000${approvalId}`)
-    .digest("hex")
-    .slice(0, 32);
-  return `echo-private-approval-v2-${key}-${name}-v2`;
+  return `echo-private-approval-v2-${cardKey(approvalId)}-${name}-v2`;
 }
 
 function validate(input: PrivateSlackApprovalBlockKitCardInputV2): void {

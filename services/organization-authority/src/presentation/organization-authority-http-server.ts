@@ -19,7 +19,7 @@ import {
 import type { ProjectContextApplicationV1 } from '../application/ports/project-context-v1.js';
 import type { PersonDocumentApplicationV1 } from '../application/ports/document-v1.js';
 import type { PersonDocumentUploadStagingV1 } from '../application/ports/document-upload-staging-v1.js';
-import { createPersonDocumentsHttpHandlerV1 } from './person-documents-http-route-v1.js';
+import { createPersonDocumentsHttpHandlerV1, uniqueMemberJsonV1 } from './person-documents-http-route-v1.js';
 import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2 } from '@echo-brain/organization-api';
 import { PERSON_UPDATES_PATH_V1, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
 import { validatePersonQueryText } from "@echo-brain/organization-api";
@@ -347,6 +347,18 @@ function loopbackHandoffPage(input: {
   );
 }
 
+function html(response: ServerResponse, page: Buffer, contentSecurityPolicy: string): void {
+  response.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": String(page.byteLength),
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "content-security-policy": contentSecurityPolicy,
+  });
+  response.end(page);
+}
+
 function handoffHtml(response: ServerResponse, value: {
   url: string;
   token: string;
@@ -354,15 +366,7 @@ function handoffHtml(response: ServerResponse, value: {
 }): void {
   const page = loopbackHandoffPage(value);
   const receiverOrigin = new URL(value.url).origin;
-  response.writeHead(200, {
-    "content-type": "text/html; charset=utf-8",
-    "content-length": String(page.byteLength),
-    "cache-control": "no-store",
-    "referrer-policy": "no-referrer",
-    "x-content-type-options": "nosniff",
-    "content-security-policy": `default-src 'none'; base-uri 'none'; form-action ${receiverOrigin}; script-src 'unsafe-inline'`,
-  });
-  response.end(page);
+  html(response, page, `default-src 'none'; base-uri 'none'; form-action ${receiverOrigin}; script-src 'unsafe-inline'`);
 }
 
 function handoffErrorHtml(
@@ -378,15 +382,7 @@ function handoffErrorHtml(
     `<!doctype html><meta charset="utf-8"><title>Echo sign-in</title><p>Completing sign-in…</p><form id="handoff" method="post" action="${value.url}"><input type="hidden" name="token" value="${value.token}"><input type="hidden" name="error" value="${value.code}"></form><script>document.getElementById("handoff").submit()</script>`,
     "utf8",
   );
-  response.writeHead(200, {
-    "content-type": "text/html; charset=utf-8",
-    "content-length": String(page.byteLength),
-    "cache-control": "no-store",
-    "referrer-policy": "no-referrer",
-    "x-content-type-options": "nosniff",
-    "content-security-policy": `default-src 'none'; base-uri 'none'; form-action ${receiverOrigin}; script-src 'unsafe-inline'`,
-  });
-  response.end(page);
+  html(response, page, `default-src 'none'; base-uri 'none'; form-action ${receiverOrigin}; script-src 'unsafe-inline'`);
 }
 
 function expiredHandoffHtml(response: ServerResponse): void {
@@ -394,15 +390,7 @@ function expiredHandoffHtml(response: ServerResponse): void {
     "<!doctype html><meta charset=\"utf-8\"><title>Echo sign-in expired</title><p>Sign-in expired. Return to your terminal and rerun the exact command that started sign-in.</p>",
     "utf8",
   );
-  response.writeHead(200, {
-    "content-type": "text/html; charset=utf-8",
-    "content-length": String(page.byteLength),
-    "cache-control": "no-store",
-    "referrer-policy": "no-referrer",
-    "x-content-type-options": "nosniff",
-    "content-security-policy": "default-src 'none'; base-uri 'none'",
-  });
-  response.end(page);
+  html(response, page, "default-src 'none'; base-uri 'none'");
 }
 
 function fail(response: ServerResponse, status: number, code: string): void {
@@ -581,32 +569,15 @@ function projectInput<T>(validate: (value: unknown) => T, value: unknown): T {
 
 async function projectBody(request: IncomingMessage): Promise<unknown> {
   try {
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(
-      await rawBody(request, MAX_ORGANIZATION_API_BODY_BYTES),
-    );
-    const value: unknown = JSON.parse(text);
-    // JSON.parse accepts duplicate members. Scan the already-valid JSON tokens
-    // so escaped equivalent names and duplicates in nested objects also fail.
-    const objects: (Set<string> | undefined)[] = [];
-    for (const token of text.matchAll(/"(?:[^"\\]|\\[\s\S])*"(\s*:)?|[{}[\]]/g)) {
-      if (token[0] === '{') objects.push(new Set());
-      else if (token[0] === '[') objects.push(undefined);
-      else if (token[0] === '}' || token[0] === ']') objects.pop();
-      else if (token[1] !== undefined) {
-        const key = JSON.parse(token[0].slice(0, -token[1].length)) as string;
-        const keys = objects.at(-1)!;
-        if (keys.has(key)) throw new Error('duplicate JSON member');
-        keys.add(key);
-      }
-    }
-    return value;
+    return uniqueMemberJsonV1(await rawBody(request, MAX_ORGANIZATION_API_BODY_BYTES));
   } catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
 }
 
-function projectPage(url: URL): unknown {
+/** The V1 list accepts limit and cursor; V2 also accepts a status filter. */
+function projectPage(url: URL, v2: boolean): unknown {
   const page: Record<string, unknown> = {};
   for (const [key, value] of url.searchParams) {
-    if ((key !== 'limit' && key !== 'cursor') || Object.hasOwn(page, key)) {
+    if ((key !== 'limit' && key !== 'cursor' && (!v2 || key !== 'status')) || Object.hasOwn(page, key)) {
       throw new AuthorityOperationError('invalid_request', 'request failed');
     }
     if (key === 'limit' && !/^(?:[1-9]|10)$/.test(value)) {
@@ -614,21 +585,7 @@ function projectPage(url: URL): unknown {
     }
     page[key] = key === 'limit' ? Number(value) : value;
   }
-  return projectInput(validateProjectPageRequestV1, page);
-}
-
-function projectPageV2(url: URL): unknown {
-  const page: Record<string, unknown> = {};
-  for (const [key, value] of url.searchParams) {
-    if ((key !== 'limit' && key !== 'cursor' && key !== 'status') || Object.hasOwn(page, key)) {
-      throw new AuthorityOperationError('invalid_request', 'request failed');
-    }
-    if (key === 'limit' && !/^(?:[1-9]|10)$/.test(value)) {
-      throw new AuthorityOperationError('invalid_request', 'request failed');
-    }
-    page[key] = key === 'limit' ? Number(value) : value;
-  }
-  return projectInput(validateProjectPageRequestV2, page);
+  return v2 ? projectInput(validateProjectPageRequestV2, page) : projectInput(validateProjectPageRequestV1, page);
 }
 
 function projectResponse(response: ServerResponse, status: number, value: unknown, validate: (value: unknown) => unknown): void {
@@ -705,7 +662,7 @@ async function projectRoute(
     throw new AuthorityOperationError('invalid_request', 'request failed');
   }
   if (list) {
-    const page = projectBase === PERSON_PROJECTS_PATH_V2 ? projectPageV2(url) : projectPage(url);
+    const page = projectPage(url, projectBase === PERSON_PROJECTS_PATH_V2);
     return response => projectBase === PERSON_PROJECTS_PATH_V2
       ? projectResponse(response, 200, application.listProjectsV2(token, page), validateProjectListV2)
       : projectResponse(response, 200, application.listProjects(token, page), validateProjectListV1);
