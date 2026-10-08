@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 function setup() {
   const db = new Database(':memory:'); databases.push(db); db.pragma('foreign_keys=ON');
-  db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v12.sql', import.meta.url), 'utf8'));
+  db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v13.sql', import.meta.url), 'utf8'));
   db.prepare(`INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES (1,'oau_associations',?,'Associations','{}',?,?)`).run(OWNER.organization_id, PROJECT_CONTEXT_NOW, PROJECT_CONTEXT_NOW);
   db.prepare('INSERT INTO authority_project_authorization_state_v1(organization_id,revision,updated_at) VALUES (?,0,?)').run(OWNER.organization_id, PROJECT_CONTEXT_NOW);
   addMembership(db, OWNER, 'Owner', null); addMembership(db, MEMBER, 'Member', 'member@example.test');
@@ -53,12 +53,12 @@ function search(project_id: typeof PROJECT_ALPHA | typeof PROJECT_BETA) {
 }
 
 describe('document project associations', () => {
-  it('refuses a pre-V12 schema header at both current runtime adapters before attempting V12 queries', () => {
+  it('refuses a pre-V13 schema header at both current runtime adapters before attempting V13 queries', () => {
     const db = new Database(':memory:'); databases.push(db); db.pragma('foreign_keys=ON');
-    db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v12.sql', import.meta.url), 'utf8'));
+    db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v13.sql', import.meta.url), 'utf8'));
     db.pragma('user_version = 9');
-    expect(() => new SqlitePersonDocumentRepositoryV1(db)).toThrow('Documents require Authority V12');
-    expect(() => new SqliteProjectContextRepositoryV1(db)).toThrow('Project context requires Authority V12');
+    expect(() => new SqlitePersonDocumentRepositoryV1(db)).toThrow('Documents require Authority V13');
+    expect(() => new SqliteProjectContextRepositoryV1(db)).toThrow('Project context requires Authority V13');
   });
 
   it('keeps independent modern project links, immutable audience and exact replay while removing only the requested link', () => {

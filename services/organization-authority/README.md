@@ -6,7 +6,7 @@ admitted meeting processing, approval finalization, immutable V4 records, and
 permission-aware Person reads and answer composition. It also owns durable
 Person document and upload custody, projects with their association and
 audience, audited read/search, and optional search enrichment. Uploads do not
-require Slack approval. The current artifact is Authority V12 with control-plane
+require Slack approval. The current artifact is Authority V13 with control-plane
 V4, with project settings and one approval core for meetings (one proposal per
 meeting, multi-project audiences, confirmed owners). Runtime opening never migrates
 state. This release requires fresh databases; existing disposable rehearsal
@@ -267,7 +267,7 @@ the meeting-owner DM lane.
 
 Re-onboarding a staging lineage uses the same in-app setup and connect as a
 first connection; it does not reuse a Slack app's scopes or token by hand. Use
-a wholly fresh Authority V12 staging lineage with the
+a wholly fresh Authority V13 staging lineage with the
 [current storage baselines](#state-and-baselines); use the supported
 rehearsal reset before preparing state from an earlier release.
 
@@ -430,7 +430,7 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
-Current state uses Authority V12, control-plane V4, record-log V4, retrieval
+Current state uses Authority V13, control-plane V4, record-log V4, retrieval
 facts V3, and retrieval lexical/content V2. The V2 root binds exactly these six
 roles. Per-database manifests remain V1; schema versions and digests identify
 each role's current baseline. Each baseline applies only to a completely empty
@@ -444,7 +444,7 @@ fit Slack's limits is marked unrepresentable in
 the proposal. A temporarily missing reviewer identity leaves the proposal queued
 for reconciliation.
 
-The checkout carries only the current V12 and control-plane V4 baselines. Earlier Authority
+The checkout carries only the current V13 and control-plane V4 baselines. Earlier Authority
 baselines and their offline converters remain in Git history.
 
 Routine releases use baseline-preserving image replacements through the

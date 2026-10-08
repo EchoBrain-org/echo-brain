@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV12,
+  applyAuthorityBaselineV13,
   AUTHORITY_BASELINE_APPLICATION_ID_V1,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V12,
-  authorityBaselineSha256V12,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V13,
+  authorityBaselineSha256V13,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
-const AUTHORITY_BASELINE_SHA256_V12 =
-  "sha256:14e5a3cb1351db83f43822cd49baf6ab4c1b562c832ef792b718486f8fbb15ef";
+const AUTHORITY_BASELINE_SHA256_V13 =
+  "sha256:df78329584428c18fc1cee98f8e6fc1da8cc6326e4a64d4c18b0aa74c36d3012";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-29T00:00:00.000Z";
 /** A personal source key; the admission table keys every source by its own text key. */
@@ -16,7 +16,7 @@ const SOURCE_KEY = "pms_fixture";
 
 function openedCurrentDatabase() {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV12(database);
+  applyAuthorityBaselineV13(database);
   return database;
 }
 
@@ -102,12 +102,12 @@ describe("Authority admitted meeting-source schema", () => {
   it("is a pinned fresh-only provider-neutral schema with stable role headers", () => {
     const database = openedCurrentDatabase();
     try {
-      expect(authorityBaselineSha256V12()).toBe(AUTHORITY_BASELINE_SHA256_V12);
+      expect(authorityBaselineSha256V13()).toBe(AUTHORITY_BASELINE_SHA256_V13);
       expect(database.pragma("application_id", { simple: true })).toBe(
         AUTHORITY_BASELINE_APPLICATION_ID_V1,
       );
       expect(database.pragma("user_version", { simple: true })).toBe(
-        AUTHORITY_BASELINE_SCHEMA_VERSION_V12,
+        AUTHORITY_BASELINE_SCHEMA_VERSION_V13,
       );
       const tables = database
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -178,7 +178,7 @@ describe("Authority admitted meeting-source schema", () => {
   it("refuses to reinitialize an occupied database", () => {
     const database = openedCurrentDatabase();
     try {
-      expect(() => applyAuthorityBaselineV12(database)).toThrow(
+      expect(() => applyAuthorityBaselineV13(database)).toThrow(
         /completely empty database/,
       );
     } finally {

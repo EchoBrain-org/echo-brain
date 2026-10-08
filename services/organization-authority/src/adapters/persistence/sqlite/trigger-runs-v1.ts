@@ -37,8 +37,8 @@ function publicRow(value: StoredRowV1): TriggerRunRowV1 {
 /** Durable, actor-fenced runs for the only product trigger currently enabled. */
 export class SqliteTriggerRunsV1 {
   constructor(private readonly database: Database.Database, private readonly now: () => Date = () => new Date()) {
-    if (database.pragma('user_version', { simple: true }) !== 12 || database.pragma('foreign_keys', { simple: true }) !== 1) {
-      throw new Error('Trigger runs require Authority V12 state with foreign keys enabled');
+    if (database.pragma('user_version', { simple: true }) !== 13 || database.pragma('foreign_keys', { simple: true }) !== 1) {
+      throw new Error('Trigger runs require Authority V13 state with foreign keys enabled');
     }
   }
 

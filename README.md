@@ -56,7 +56,7 @@ Tokens are never printed by successful commands.
 - deterministic, permission-aware record reads and cited answers.
 
 The server starts only from six byte-pinned baseline schemas, one per state
-role: Authority V12, control-plane V4, record-log V4, retrieval facts V3,
+role: Authority V13, control-plane V4, record-log V4, retrieval facts V3,
 retrieval lexical V2 and retrieval content V2. Startup refuses older state
 instead of migrating it; historical baselines and converters remain in Git
 history. Released retrieval

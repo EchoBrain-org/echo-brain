@@ -2,7 +2,7 @@ import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-proto
 import { describe, expect, it } from "vitest";
 import { SqlitePersonAgenticAskAuditV1 } from "../../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { AGENTIC_TRIGGER_NAMES_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
-import { applyAuthorityBaselineV12 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV13 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
@@ -14,7 +14,7 @@ const requestContext = {
 describe("agentic Ask audit", () => {
   it("writes a content-free success terminal witness to the existing immutable table", () => {
     const database = openAuthorityDatabase(":memory:");
-    applyAuthorityBaselineV12(database);
+    applyAuthorityBaselineV13(database);
     try {
       const context = { ...requestContext };
       const audit = new SqlitePersonAgenticAskAuditV1(database).forRequest(context);
@@ -38,7 +38,7 @@ describe("agentic Ask audit", () => {
 
   it("records a research-only trigger under the background limits and keeps Ask limits for Ask", () => {
     const database = openAuthorityDatabase(":memory:");
-    applyAuthorityBaselineV12(database);
+    applyAuthorityBaselineV13(database);
     try {
       const store = new SqlitePersonAgenticAskAuditV1(database);
       const entry = {
@@ -63,7 +63,7 @@ describe("agentic Ask audit", () => {
 
   it("accepts every research-only trigger the definitions name, and no other", () => {
     const database = openAuthorityDatabase(":memory:");
-    applyAuthorityBaselineV12(database);
+    applyAuthorityBaselineV13(database);
     try {
       const store = new SqlitePersonAgenticAskAuditV1(database);
       const entry = {
@@ -85,7 +85,7 @@ describe("agentic Ask audit", () => {
 
   it.each(["cancelled", "timed_out"] as const)("records %s without output hashes", (outcome) => {
     const database = openAuthorityDatabase(":memory:");
-    applyAuthorityBaselineV12(database);
+    applyAuthorityBaselineV13(database);
     try {
       new SqlitePersonAgenticAskAuditV1(database, () => "2026-09-27T00:00:00.000Z").forRequest(requestContext).append({
         kind: "echo-agentic-ask-audit-v1", outcome, receipt_digests: [],
