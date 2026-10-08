@@ -722,6 +722,8 @@ export function createOrganizationAuthorityHttpServer(
           case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: input.request.run_id } });
           case 'retry': return application.retry({ ...common, request: { schema_version: 1, operation: 'retry', run_id: input.request.run_id } });
           case 'view': return application.view({ ...common, request: { schema_version: 1, operation: 'view', run_id: input.request.run_id } });
+          // Temporary: the open-items operations are validated but not served yet.
+          default: throw new AuthorityOperationError('unavailable', 'This operation is not available yet');
         }
       })],
     ] as const),

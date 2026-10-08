@@ -411,6 +411,13 @@ export interface RunsResults {
   start: PersonRunsResultsV1['start'];
   retry: PersonRunsResultsV1['retry'];
   view: ImpactView;
+  // Temporary: open items as the API returns them, until the desktop has views for them.
+  home: PersonRunsResultsV1['home'];
+  items: PersonRunsResultsV1['items'];
+  item: PersonRunsResultsV1['item'];
+  send: PersonRunsResultsV1['send'];
+  set_state: PersonRunsResultsV1['set_state'];
+  assign: PersonRunsResultsV1['assign'];
 }
 
 export interface HostMethods {
