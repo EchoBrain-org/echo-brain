@@ -5,7 +5,7 @@ import {
   type PersonDiagnosticTraceV1,
 } from '@echo-brain/organization-api';
 
-/** One private, bounded prefix, shared by product requests and staging evaluations. */
+/** One private, bounded prefix for a selected ordinary product request. */
 export function createPersonDiagnosticTraceV1(now: () => number) {
   const events: string[] = [];
   let eventBytes = 0;

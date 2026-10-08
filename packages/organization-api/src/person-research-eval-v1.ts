@@ -1,10 +1,9 @@
-import { validatePersonDiagnosticTraceV1, PERSON_DIAGNOSTICS_MAX_TRACE_BYTES_V1, PERSON_DIAGNOSTICS_MAX_TRACE_EVENTS_V1, PERSON_DIAGNOSTICS_MAX_TRACE_DEPTH_V1, type PersonDiagnosticTraceV1 } from './person-diagnostics-v1.js';
 import { validatePersonAnswerResponseV6 } from './person-answer-v4.js';
 import type { PersonAnswerResponseV6 } from './person-answer-v6.js';
 import { validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
 import { validatePersonQueryText } from './person-query.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
-import { asEnumerableRecord, asRecord, fail, MAX_ORGANIZATION_API_BODY_BYTES, utf8ByteLength } from './validation.js';
+import { asEnumerableRecord, fail, MAX_ORGANIZATION_API_BODY_BYTES, utf8ByteLength } from './validation.js';
 
 /**
  * Staging-only research evaluation (research loop evaluation v1). A signed-in
@@ -30,8 +29,6 @@ export interface PersonResearchEvalStartRequestV1 {
   readonly budget?: PersonResearchEvalBudgetV1;
   readonly project_id?: ProjectIdV1;
   readonly mine?: true;
-  /** Retain this run's model and tool payloads for a permission-fenced diagnostic read. */
-  readonly capture_trace?: true;
 }
 
 export interface PersonResearchEvalStartReceiptV1 {
@@ -47,8 +44,6 @@ export interface PersonResearchEvalReadRequestV1 {
 }
 
 export type PersonResearchEvalStatusV1 = 'running' | 'completed' | 'failed';
-/** Compatibility name for the shared ordinary-request diagnostic trace. */
-export type PersonResearchEvalTraceV1 = PersonDiagnosticTraceV1;
 
 export interface PersonResearchEvalReadResponseV1 {
   readonly schema_version: 1;
@@ -62,16 +57,10 @@ export interface PersonResearchEvalReadResponseV1 {
   /** A task's output when its trigger has a renderer: the impact card. A research-only trigger has none. */
   readonly rendered?: PersonImpactCardV1;
   readonly error?: { readonly code: string; readonly message: string };
-  /** Explicitly requested model/tool diagnostics; released only after the run's access fence. */
-  readonly trace?: PersonResearchEvalTraceV1;
 }
 
 /** A research result carries released text; the eval reads it whole. */
 export const PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1 = 16 * 1024 * 1024;
-export const PERSON_RESEARCH_EVAL_MAX_TRACE_BYTES_V1 = PERSON_DIAGNOSTICS_MAX_TRACE_BYTES_V1;
-export const PERSON_RESEARCH_EVAL_MAX_TRACE_EVENTS_V1 = PERSON_DIAGNOSTICS_MAX_TRACE_EVENTS_V1;
-/** Model JSON schemas nest more deeply than a trigger's input. Counts the trace envelope itself. */
-export const PERSON_RESEARCH_EVAL_MAX_TRACE_DEPTH_V1 = PERSON_DIAGNOSTICS_MAX_TRACE_DEPTH_V1;
 const RUN_ID = /^rr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const TRIGGER = /^[a-z_]{1,64}$/;
 /** Objects and arrays nested in a trigger's input, counting the input itself. */
@@ -121,7 +110,7 @@ export function validatePersonResearchEvalStartRequestV1(value: unknown): Person
   // Ask's legacy form, `question` beside the trigger: kept for one release so pre-envelope runners keep working.
   // Remove it once the staging evaluation runner sends the `input` envelope.
   const legacy = Object.hasOwn(request, 'question');
-  exactKeys(request, ['schema_version', 'trigger', legacy ? 'question' : 'input'], ['budget', 'project_id', 'mine', 'capture_trace'], 'Research evaluation start request');
+  exactKeys(request, ['schema_version', 'trigger', legacy ? 'question' : 'input'], ['budget', 'project_id', 'mine'], 'Research evaluation start request');
   if (request.schema_version !== 1) fail('Research evaluation start request version is invalid');
   const trigger = request.trigger;
   if (typeof trigger !== 'string' || !TRIGGER.test(trigger)) fail('Research evaluation trigger is invalid');
@@ -130,13 +119,11 @@ export function validatePersonResearchEvalStartRequestV1(value: unknown): Person
   if (utf8ByteLength(JSON.stringify(input)) > MAX_ORGANIZATION_API_BODY_BYTES) fail('Research evaluation input is too large');
   if (Object.hasOwn(request, 'budget') && request.budget !== 'live' && request.budget !== 'background') fail('Research evaluation budget is invalid');
   if (Object.hasOwn(request, 'mine') && (request.mine !== true || Object.hasOwn(request, 'project_id'))) fail('Research evaluation scope is invalid');
-  if (Object.hasOwn(request, 'capture_trace') && request.capture_trace !== true) fail('Research evaluation trace request is invalid');
   return Object.freeze({
     schema_version: 1 as const, trigger, input,
     ...(Object.hasOwn(request, 'budget') ? { budget: request.budget as PersonResearchEvalBudgetV1 } : {}),
     ...(Object.hasOwn(request, 'project_id') ? { project_id: validateProjectIdV1(request.project_id, 'Research evaluation project_id') } : {}),
     ...(request.mine === true ? { mine: true as const } : {}),
-    ...(request.capture_trace === true ? { capture_trace: true as const } : {}),
   });
 }
 
@@ -155,17 +142,13 @@ export function validatePersonResearchEvalReadRequestV1(value: unknown): PersonR
 }
 
 export function validatePersonResearchEvalReadResponseV1(value: unknown): PersonResearchEvalReadResponseV1 {
-  const input = asRecord(value, 'Research evaluation result');
-  // Bound the trace before the existing recursive envelope-property check.
-  const trace = Object.hasOwn(input, 'trace') ? validatePersonDiagnosticTraceV1(input.trace) : undefined;
-  asEnumerableRecord(input, 'Research evaluation result');
-  exactKeys(input, ['schema_version', 'kind', 'run_id', 'status'], ['research', 'ask', 'rendered', 'error', 'trace'], 'Research evaluation result');
+  const input = asEnumerableRecord(value, 'Research evaluation result');
+  exactKeys(input, ['schema_version', 'kind', 'run_id', 'status'], ['research', 'ask', 'rendered', 'error'], 'Research evaluation result');
   if (input.schema_version !== 1 || input.kind !== 'echo-person-research-eval-result-v1') fail('Research evaluation result is invalid');
   const status = input.status;
   if (status !== 'running' && status !== 'completed' && status !== 'failed') fail('Research evaluation status is invalid');
   if ((status === 'completed') !== Object.hasOwn(input, 'research') || (status === 'failed') !== Object.hasOwn(input, 'error') ||
-      ((Object.hasOwn(input, 'ask') || Object.hasOwn(input, 'rendered')) && status !== 'completed') ||
-      (trace !== undefined && status === 'running')) fail('Research evaluation result does not match its status');
+      ((Object.hasOwn(input, 'ask') || Object.hasOwn(input, 'rendered')) && status !== 'completed')) fail('Research evaluation result does not match its status');
   let research: Readonly<Record<string, unknown>> | undefined;
   if (input.research !== undefined) {
     research = asEnumerableRecord(input.research, 'Research result');
@@ -198,6 +181,5 @@ export function validatePersonResearchEvalReadResponseV1(value: unknown): Person
   return Object.freeze({
     schema_version: 1, kind: 'echo-person-research-eval-result-v1', run_id: runId(input.run_id), status,
     ...(research === undefined ? {} : { research }), ...(ask === undefined ? {} : { ask }), ...(rendered === undefined ? {} : { rendered }), ...(error === undefined ? {} : { error }),
-    ...(trace === undefined ? {} : { trace }),
   });
 }

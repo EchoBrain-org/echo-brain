@@ -5,7 +5,6 @@ import { join } from "node:path";
 import test from "node:test";
 import { runTrace, traceCompleteness } from "../lib/trace.mjs";
 
-const runId = "rr_00000000-0000-4000-8000-000000000001";
 const captureId = "cap_00000000-0000-4000-8000-000000000001";
 const projectId = "prj_00000000-0000-4000-8000-000000000002";
 const outDir = () => mkdtempSync(join(tmpdir(), "echo-private-research-trace-"));
@@ -17,7 +16,6 @@ const trace = () => ({ schema_version: 1, kind: "echo-agentic-research-trace-v1"
   { sequence: 3, kind: "model_request", call_id: 1, role: "step", recovery: false, input: { model: "fixture", system_prompt: "Read related items.\nThen decide.", user_prompt: JSON.stringify(prompt), schema: { type: "object" }, max_output_tokens: 100, timeout_ms: 1000 } },
   { sequence: 4, kind: "model_response", call_id: 1, role: "step", value: { parts: [], actions: [{ tool: "open", args: { id: "E2" } }] } },
 ] });
-const completed = () => ({ schema_version: 1, kind: "echo-person-research-eval-result-v1", run_id: runId, status: "completed", trace: trace() });
 const captured = () => ({ schema_version: 1, kind: "echo-person-diagnostic-result-v1", capture_id: captureId, status: "completed", expires_at: "2026-10-09T00:00:00.000Z", trace: trace() });
 const prepared = () => ({ schema_version: 1, kind: "echo-person-diagnostic-capture-v1", capture_id: captureId, status: "prepared", expires_at: "2026-10-09T00:00:00.000Z" });
 
@@ -36,7 +34,6 @@ test("prepares and saves a capture before exactly one ordinary Ask, then saves a
       assert.equal(read(out, "execution-request.json").capture_id, captureId);
       return { outcome: "answered", statements: [] };
     },
-    async startResearchEval() { throw new Error("new captures must not use evaluation execution"); },
   };
   const args = { run: true, question: "What must happen before PVT?", "project-id": projectId, out };
   const summary = await runTrace(args, { client, poll_ms: 0, source_sha: "fixture-sha" });
@@ -62,27 +59,13 @@ test("prepares and saves a capture before exactly one ordinary Ask, then saves a
   assert.equal(asks.length, 1);
 });
 
-test("resume reads the recorded run without starting another model run", async () => {
-  let starts = 0; const out = outDir();
-  const client = { async startResearchEval() { starts += 1; throw new Error("must not start"); }, async readResearchEval() { return completed(); } };
-  await runTrace({ "run-id": runId, out }, { client, poll_ms: 0 });
-  assert.equal(starts, 0);
-  assert.equal(read(out, "summary.json").complete, true);
-});
-
-test("resume refuses to mix evidence from a different saved run", async () => {
-  const out = outDir();
-  writeFileSync(join(out, "receipt.json"), JSON.stringify({ run_id: "rr_00000000-0000-4000-8000-000000000099" }), { mode: 0o600 });
-  await assert.rejects(runTrace({ "run-id": runId, out }, { client: { async readResearchEval() { throw new Error("must not read"); } }, poll_ms: 0 }), /does not match/u);
-});
-
 test("missing capture or a missing terminal event is saved but never reported as complete", async () => {
   for (const missing of ["trace", "response", "overflow"]) {
-    const out = outDir(); const result = completed();
+    const out = outDir(); const result = captured();
     if (missing === "trace") delete result.trace;
     else if (missing === "response") result.trace.events.pop();
     else { result.trace.complete = false; result.trace.dropped_events = 1; }
-    await assert.rejects(runTrace({ "run-id": runId, out }, { client: { async readResearchEval() { return result; } }, poll_ms: 0 }), /Saved incomplete diagnostic evidence/u);
+    await assert.rejects(runTrace({ "capture-id": captureId, out }, { client: { async diagnostics() { return result; } }, poll_ms: 0 }), /Saved incomplete diagnostic evidence/u);
     assert.deepEqual(read(out, "result.json"), result);
     assert.equal(read(out, "summary.json").complete, false);
   }
@@ -177,9 +160,9 @@ test("read failure preserves the known capture and sanitized failure without rep
 test("capture selection rejects contradictory requests and identity mismatches before further work", async () => {
   for (const args of [
     { "capture-id": captureId, run: true },
-    { "capture-id": captureId, "run-id": runId },
+    { "capture-id": captureId, "run-id": "rr_00000000-0000-4000-8000-000000000001" },
     { "capture-id": captureId, question: "Another Ask" },
-    { "run-id": captureId },
+    { "run-id": "rr_00000000-0000-4000-8000-000000000001" },
     { run: true, "trigger-run-id": "run_pending", "project-id": projectId },
   ]) await assert.rejects(runTrace({ ...args, out: outDir() }, { get_client() { throw new Error("must not construct client"); } }));
   const out = outDir();

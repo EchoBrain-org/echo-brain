@@ -9,7 +9,6 @@ import {
   type EvidenceDeskResultV2,
   type EvidenceDeskSourceV2,
 } from "../shared/evidence-desk-v2.js";
-import { isRetainedPersonEvidenceCitationV1 } from '../shared/person-evidence-provenance-v1.js';
 import {
   AGENTIC_ASK_MAX_NEEDS_PER_PART_V1,
   AgenticAskOutputErrorV1,
@@ -149,8 +148,8 @@ export interface AgenticResearchProgressV1 {
 }
 
 export interface AgenticResearchLoopV1 {
-  /** The request gate's per-call hooks: live items keep content out of runtime capture, and an admitted step call reads its scratchpad in full. */
-  readonly gate_hooks: Pick<CreateAgenticModelGateV1Options, "content_sensitive" | "before_call">;
+  /** An admitted step call reads its scratchpad in full. */
+  readonly gate_hooks: Pick<CreateAgenticModelGateV1Options, "before_call">;
   progress(): AgenticResearchProgressV1;
   /** Runs research once, calling the model only through `gate`, and returns everything it gathered. The runner adds the trigger's name. */
   run(gate: AgenticModelGateV1): Promise<Omit<AgenticEvidenceBundleV1, "trigger">>;
@@ -665,8 +664,6 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     seen.sort((left, right) => Number(String(left.id).slice(1)) - Number(String(right.id).slice(1)));
     return { opened: shown, seen, read };
   };
-  const liveInPrompt = () => [...entries.values()].some(entry => !isRetainedPersonEvidenceCitationV1(entry.item.citation));
-
   // ---- stop state ------------------------------------------------------
   let researchIncomplete = true;
   let researchStop: 'finished' | 'empty_catalog' | 'no_progress' | 'step_limit' | 'budget' | 'unusable_step' = 'step_limit';
@@ -885,7 +882,6 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
 
   return Object.freeze({
     gate_hooks: Object.freeze({
-      content_sensitive: liveInPrompt,
       // Only an admitted research call makes a complete body read. Retrieval,
       // opening, and scratchpad construction alone cannot satisfy a need.
       before_call: (role: AgenticAskModelRoleV1) => {

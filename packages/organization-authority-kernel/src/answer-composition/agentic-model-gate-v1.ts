@@ -6,7 +6,7 @@ import type {
   StructuredGenerationPort,
   StructuredGenerationUsageV1,
 } from "./structured-generation-v1.js";
-import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, withoutCoreRuntimeContentV1, type CoreRuntimePhaseV1 } from "../shared/core-runtime-observation-v1.js";
+import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimePhaseV1 } from "../shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, cleanLine, repairPrompt } from "./agentic-ask-v1-model-protocol.js";
 import { coreRuntimeDiagnosticErrorKindV1 } from '../shared/core-runtime-diagnostics-v1.js';
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
@@ -145,8 +145,6 @@ export interface CreateAgenticModelGateV1Options {
   readonly input_signal?: AbortSignal;
   readonly is_deadline_expired: () => boolean;
   readonly on_span?: (event: AgenticModelGateSpanEventV1) => void;
-  /** True when the prompt may carry live-provider content, which must never reach runtime content capture. */
-  readonly content_sensitive: () => boolean;
   /** Runs once per admitted call, after the budget and access checks and before the provider call. */
   readonly before_call?: (role: AgenticAskModelRoleV1) => void;
 }
@@ -198,19 +196,19 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     const callId = calls;
     options.before_call?.(role);
     invocationDigests.push(canonicalSha256({ role, model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms }));
-    // Live-provider evidence must never reach runtime content capture.
-    const contentSafe = <T>(operation: () => Promise<T>): Promise<T> => {
+    // The request boundary fences runtime content; this records only metadata timing.
+    const observedModelCall = async <T>(operation: () => Promise<T>): Promise<T> => {
       // Each call is its own span, named by its caller, so provider model calls carry that purpose.
-      const observed = () => observeCoreRuntimeV1(span, () => {
-        options.on_span?.({ role, phase: "enter" });
-        return operation();
-      });
       const started = now();
-      const settle = () => { options.on_span?.({ role, phase: "exit", elapsed_ms: Math.max(0, now() - started) }); };
-      return (options.content_sensitive() ? withoutCoreRuntimeContentV1(observed) : observed()).then(value => { settle(); return value; }, (error: unknown) => { settle(); throw error; });
+      try {
+        return await observeCoreRuntimeV1(span, () => {
+          options.on_span?.({ role, phase: "enter" });
+          return operation();
+        });
+      } finally { options.on_span?.({ role, phase: "exit", elapsed_ms: Math.max(0, now() - started) }); }
     };
     try {
-      return await contentSafe(async () => {
+      return await observedModelCall(async () => {
         observeCoreRuntimeDiagnosticV1({ kind: 'model_request', call_id: callId, role, recovery,
           input: { model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms } });
         // Only a provider failure has an error terminal. A returned value has

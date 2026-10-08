@@ -23,14 +23,13 @@ rule exact_staging_journey_overview_inventory {
     let alarm_count = count(%alarms)
     let dashboard_count = count(%dashboards)
 
-    %resource_count == 5
+    %resource_count == 4
     %metric_filter_count == 1
-    %alarm_count == 3
+    %alarm_count == 2
     %dashboard_count == 1
     Resources.WorkerCycleCompletedMetricFilter.Type == 'AWS::Logs::MetricFilter'
     Resources.WorkerSilenceAlarm.Type == 'AWS::CloudWatch::Alarm'
     Resources.AskRetrievalFailureAlarm.Type == 'AWS::CloudWatch::Alarm'
-    Resources.ApprovedSearchStuckAlarm.Type == 'AWS::CloudWatch::Alarm'
     Resources.StagingJourneyOverviewDashboard.Type == 'AWS::CloudWatch::Dashboard'
 }
 
@@ -93,20 +92,6 @@ rule exact_staging_alarm_thresholds {
         "EvaluationPeriods": 1,
         "DatapointsToAlarm": 1,
         "Threshold": 2,
-        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
-        "TreatMissingData": "notBreaching"
-    }
-    Resources.ApprovedSearchStuckAlarm.Properties == {
-        "AlarmDescription": "At least one approved staging meeting record remains awaiting readable-search publication.",
-        "AlarmActions": [ { "Ref": "AlertTopicArn" } ],
-        "OKActions": [ { "Ref": "AlertTopicArn" } ],
-        "Namespace": "EchoBrain/StagingJourneyV1",
-        "MetricName": "ApprovedSearchStuckCount",
-        "Statistic": "Maximum",
-        "Period": 60,
-        "EvaluationPeriods": 3,
-        "DatapointsToAlarm": 2,
-        "Threshold": 1,
         "ComparisonOperator": "GreaterThanOrEqualToThreshold",
         "TreatMissingData": "notBreaching"
     }

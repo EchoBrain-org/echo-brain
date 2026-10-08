@@ -9,7 +9,6 @@ import {
 } from '../src/person-diagnostics-v1.js';
 import { validatePersonAnswerRequestV3 } from '../src/person-answer-v4.js';
 import { validatePersonRunsRequestV1 } from '../src/person-runs-v1.js';
-import { validatePersonResearchEvalReadResponseV1 } from '../src/person-research-eval-v1.js';
 
 const capture_id = 'cap_00000000-0000-4000-8000-000000000001';
 const run_id = 'run_00000000-0000-4000-8000-000000000002';
@@ -91,7 +90,7 @@ describe('ordinary request diagnostic captures', () => {
 });
 
 describe('shared lifecycle diagnostic events', () => {
-  it('preserves lifecycle payloads exactly in ordinary and eval captures', () => {
+  it('preserves lifecycle payloads exactly in ordinary captures', () => {
     const prompt = '  Read E8.\nE8 → E12\tblocks\r\n';
     const captured = { ...trace, events: [
       { kind: 'lifecycle', sequence: 1, stage: 'brief', event: 'succeeded', data: { goal: { question: prompt } } },
@@ -101,7 +100,6 @@ describe('shared lifecycle diagnostic events', () => {
     ] };
     expect(validatePersonDiagnosticTraceV1(captured)).toEqual(captured);
     expect(validatePersonDiagnosticsResponseV1({ ...read, status: 'completed', trace: captured })).toMatchObject({ trace: captured });
-    expect(validatePersonResearchEvalReadResponseV1({ schema_version: 1, kind: 'echo-person-research-eval-result-v1', run_id: 'rr_00000000-0000-4000-8000-000000000001', status: 'failed', error: { code: 'unavailable', message: 'Research could not complete' }, trace: captured }).trace).toEqual(captured);
   });
 
   it('accepts service lifecycle stages surrounding the shared research loop', () => {

@@ -197,14 +197,6 @@ npm run eval:research-loop -- trace --run --trigger-run-id run_… --out ~/.loca
 This prepares a capture bound to that run and calls the ordinary `runs:start`
 operation once. It does not approve a meeting or retry a failed run.
 
-For compatibility, an already-started staging evaluation capture can still be
-read using its evaluation id:
-
-```bash
-npm run eval:research-loop -- trace --run-id rr_… --out ~/.local/state/echo-legacy-eval-diagnostic-<run>
-```
-
-That form reads only the staging evaluation result; it does not start work.
 An existing completed export is never overwritten. Keep all trace files
 outside the repository as private source content; output directories are
 `0700` and files are `0600`.

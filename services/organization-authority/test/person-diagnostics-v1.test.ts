@@ -2,8 +2,6 @@ import { validatePersonDiagnosticsResultV1, type PersonDiagnosticTargetV1 } from
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPersonDiagnosticsV1, type CreatePersonDiagnosticsOptionsV1, type PersonDiagnosticsV1 } from '../src/composition/person-diagnostics-v1.js';
-import { createPersonDiagnosticTraceV1 } from '../src/composition/person-diagnostic-trace-v1.js';
-import { createPersonResearchEvalTraceV1 } from '../src/composition/person-research-eval-trace-v1.js';
 
 const applications: PersonDiagnosticsV1[] = [];
 afterEach(() => { for (const application of applications.splice(0)) application.close(); });
@@ -267,7 +265,4 @@ describe('private diagnostics for product requests', () => {
     await expect(f.prepare()).rejects.toMatchObject({ code: 'unavailable' });
   });
 
-  it('uses one bounded collector implementation for production and staging captures', () => {
-    expect(createPersonResearchEvalTraceV1).toBe(createPersonDiagnosticTraceV1);
-  });
 });

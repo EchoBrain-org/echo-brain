@@ -1,9 +1,6 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1,
-  PERSON_RESEARCH_EVAL_MAX_TRACE_BYTES_V1,
-  PERSON_RESEARCH_EVAL_MAX_TRACE_EVENTS_V1,
   validatePersonResearchEvalReadRequestV1,
   validatePersonResearchEvalReadResponseV1,
   validatePersonResearchEvalStartReceiptV1,
@@ -33,17 +30,6 @@ describe('research evaluation start request', () => {
     expect(() => validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'ask', budget: 'live', question: 'x '.repeat(130).trim() })).toThrow(expect.objectContaining({ name: 'PersonQueryInputError', code: 'query_too_long' }));
   });
 
-  it('requires an explicit true opt-in for diagnostic payload capture, including the legacy Ask form', () => {
-    const request = { schema_version: 1, trigger: 'ask', input: { question: 'Why is DVT on hold?' } };
-    expect(validatePersonResearchEvalStartRequestV1(request)).not.toHaveProperty('capture_trace');
-    expect(validatePersonResearchEvalStartRequestV1({ ...request, capture_trace: true })).toEqual({ ...request, capture_trace: true });
-    expect(validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'ask', question: 'Why is DVT on hold?', capture_trace: true }))
-      .toEqual({ ...request, capture_trace: true });
-    for (const capture_trace of [false, undefined, null, 1, 'true']) {
-      expect(() => validatePersonResearchEvalStartRequestV1({ ...request, capture_trace })).toThrow(/trace request/u);
-    }
-  });
-
   it('refuses a malformed envelope', () => {
     const deep = (depth: number): unknown => depth === 0 ? 'leaf' : { next: deep(depth - 1) };
     const bad: unknown[] = [
@@ -66,85 +52,6 @@ describe('research evaluation start request', () => {
     ];
     for (const value of bad) expect(() => validatePersonResearchEvalStartRequestV1(value), JSON.stringify(value)).toThrow();
     expect(validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'check', input: deep(7) })).toMatchObject({ trigger: 'check' });
-  });
-});
-
-describe('research evaluation diagnostic trace', () => {
-  const research = { schema_version: 1, kind: 'echo-agentic-research-result-v1', trigger: 'ask', items: [], rounds: [], plan: [] };
-  const completed = { schema_version: 1, kind: 'echo-person-research-eval-result-v1', run_id: runId, status: 'completed', research };
-  const trace = { schema_version: 1, kind: 'echo-agentic-research-trace-v1', complete: true, events: [], dropped_events: 0 };
-  const event = { kind: 'model_request', sequence: 1, call_id: 1 };
-  const deep = (depth: number): unknown => depth === 0 ? 'leaf' : { next: deep(depth - 1) };
-
-  it('preserves exact model prompts, structured decisions, and tool payloads without line normalization', () => {
-    const prompt = ' Read these links.\n\nTHERM-50 → THERM-51\t"blocks"\r\n';
-    const schema = { properties: { nested: deep(16) } };
-    const shared = { tool: 'open', args: { id: 'E8' } };
-    const events = [
-      { ...event, input: { system_prompt: prompt, user_prompt: '{"last_results":[]}', schema } },
-      { kind: 'model_response', sequence: 2, call_id: 1, value: { actions: [shared], plan: [{ need: 'PVT entry', state: 'open' }] } },
-      { kind: 'tool_request', sequence: 3, tool_call_id: 1, ...shared },
-      { kind: 'tool_response', sequence: 4, tool_call_id: 1, result: { opened: ['E8'], results: [{ id: 'E12', title: 'Fixture readiness' }] } },
-      { kind: 'tool_error', sequence: 5, tool_call_id: 2, error_kind: 'unavailable' },
-      { kind: 'model_error', sequence: 6, call_id: 2, error_kind: 'timed_out' },
-    ];
-    const captured = { ...trace, events };
-    expect(validatePersonResearchEvalReadResponseV1({ ...completed, trace: captured }).trace).toEqual(captured);
-    expect(validatePersonResearchEvalReadResponseV1(completed)).not.toHaveProperty('trace');
-  });
-
-  it('allows a captured prefix on completed or failed runs, and never on running runs', () => {
-    const partial = { ...trace, complete: false, events: [event], dropped_events: 3 };
-    expect(validatePersonResearchEvalReadResponseV1({ ...completed, trace: partial }).trace).toEqual(partial);
-    const failed = { schema_version: 1, kind: 'echo-person-research-eval-result-v1', run_id: runId, status: 'failed', error: { code: 'unavailable', message: 'The model request failed' } };
-    expect(validatePersonResearchEvalReadResponseV1({ ...failed, trace }).trace).toEqual(trace);
-    expect(validatePersonResearchEvalReadResponseV1({ ...failed, trace: partial }).trace).toEqual(partial);
-    expect(() => validatePersonResearchEvalReadResponseV1({ schema_version: 1, kind: 'echo-person-research-eval-result-v1', run_id: runId, status: 'running', trace })).toThrow(/status/u);
-  });
-
-  it('rejects malformed trace envelopes, inconsistent completeness, and invalid event sequences', () => {
-    const bad = [
-      undefined, null, [], { ...trace, schema_version: 2 }, { ...trace, kind: 'other' }, { ...trace, extra: true },
-      { ...trace, complete: 'true' }, { ...trace, complete: false }, { ...trace, dropped_events: 1 },
-      ...[-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, '0'].map(dropped_events => ({ ...trace, dropped_events })),
-      { ...trace, events: {} }, { ...trace, events: [null] }, { ...trace, events: [{ ...event, kind: 'prompt' }] },
-      ...[undefined, 0, -1, 0.5, 2, '1', Number.NaN, Number.POSITIVE_INFINITY].map(sequence => ({ ...trace, events: [{ ...event, sequence }] })),
-      { ...trace, events: [event, { ...event, sequence: 1 }] },
-      { ...trace, events: [event, { ...event, sequence: 3 }] },
-    ];
-    for (const invalid of bad) expect(() => validatePersonResearchEvalReadResponseV1({ ...completed, trace: invalid })).toThrow();
-  });
-
-  it('rejects non-JSON payloads, cycles, hidden properties, sparse arrays, and accessors without invoking them', () => {
-    const cycle: Record<string, unknown> = {};
-    cycle.next = cycle;
-    const hidden = Object.defineProperty({}, 'hidden', { value: 'omitted', enumerable: false });
-    const symbol = { [Symbol('omitted')]: 'omitted' };
-    let getterCalls = 0;
-    const accessor = { get payload() { getterCalls += 1; return 'must not read'; } };
-    const arrayWithExtra = Object.assign(['visible'], { extra: 'omitted' });
-    for (const payload of [undefined, Number.NaN, Number.POSITIVE_INFINITY, 1n, () => 'omitted', new Date(), cycle, hidden, symbol, accessor, Array(1), arrayWithExtra]) {
-      expect(() => validatePersonResearchEvalReadResponseV1({ ...completed, trace: { ...trace, events: [{ ...event, payload }] } })).toThrow();
-    }
-    expect(getterCalls).toBe(0);
-  });
-
-  it('uses a separate depth allowance for nested model JSON schemas', () => {
-    const captured = { ...trace, events: [{ ...event, payload: deep(45) }] };
-    expect(validatePersonResearchEvalReadResponseV1({ ...completed, trace: captured }).trace).toEqual(captured);
-    expect(() => validatePersonResearchEvalReadResponseV1({ ...completed, trace: { ...trace, events: [{ ...event, payload: deep(46) }] } })).toThrow(/trace/u);
-  });
-
-  it('bounds the complete JSON trace by event count and UTF-8 bytes, retaining the existing response ceiling', () => {
-    const events = Array.from({ length: PERSON_RESEARCH_EVAL_MAX_TRACE_EVENTS_V1 }, (_, index) => ({ ...event, sequence: index + 1 }));
-    expect(validatePersonResearchEvalReadResponseV1({ ...completed, trace: { ...trace, events } }).trace?.events).toHaveLength(512);
-    expect(() => validatePersonResearchEvalReadResponseV1({ ...completed, trace: { ...trace, events: [...events, { ...event, sequence: 513 }] } })).toThrow(/trace/u);
-    const emptyText = { ...trace, events: [{ ...event, payload: '' }] };
-    const overhead = Buffer.byteLength(JSON.stringify(emptyText), 'utf8');
-    const exact = { ...trace, events: [{ ...event, payload: 'x'.repeat(PERSON_RESEARCH_EVAL_MAX_TRACE_BYTES_V1 - overhead) }] };
-    expect(validatePersonResearchEvalReadResponseV1({ ...completed, trace: exact }).trace?.events).toHaveLength(1);
-    expect(() => validatePersonResearchEvalReadResponseV1({ ...completed, trace: { ...trace, events: [{ ...event, payload: `${exact.events[0]!.payload}é` }] } })).toThrow(/too large/u);
-    expect(PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1).toBe(16 * 1024 * 1024);
   });
 });
 

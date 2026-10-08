@@ -124,7 +124,7 @@ describe('shared selected-run diagnostics', () => {
       detail = currentCoreRuntimeDetailV1();
     }, { vocabulary, observer: () => undefined });
     expect(detail).toMatchObject({ trigger: 'future_trigger', attempt: 1 });
-    const event = createJourneyTelemetryEventV1({ journey_id: detail!.operation_id, sequence: 1, observed_at: '2026-10-08T20:00:00.000Z', context: { environment: 'production', workflow: 'core_runtime' }, event: { stage: 'core_operation', event: 'succeeded', elapsed_ms: 1, diagnostic: detail! } }, vocabulary);
+    const event = createJourneyTelemetryEventV1({ journey_id: detail!.operation_id, sequence: 1, observed_at: '2026-10-08T20:00:00.000Z', context: { environment: 'production', workflow: 'core_runtime', release_sha: 'a'.repeat(40), build_number: 1 }, event: { stage: 'core_operation', event: 'succeeded', elapsed_ms: 1, diagnostic: detail! } }, vocabulary);
     expect(event.diagnostic).toMatchObject({ trigger: 'future_trigger', run_id: coreRuntimeIdentityV1('run', 'r') });
     expect(normalizeCoreRuntimeDetailV1({ ...detail!, trigger: 'private request text' }, vocabulary)).toMatchObject({ trigger: 'other' });
     for (const key of ['run_id', 'event_id', 'output_id', 'attempt_id'] as const) expect(() => normalizeCoreRuntimeDetailV1({ ...detail!, [key]: 'private source text' }, vocabulary)).toThrow('opaque');

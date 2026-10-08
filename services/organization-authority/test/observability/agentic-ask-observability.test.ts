@@ -12,7 +12,7 @@ import { SqlitePersonAgenticAskAuditV1 } from "../../src/adapters/persistence/sq
 import { createPersonDocumentApplicationV1 } from "../../src/application/document-v1.js";
 import { createPersonAnswerV3Route } from "../../src/composition/person-answer-v3-route.js";
 import { PersonRecordSearchIndexLagV1 } from "../../src/composition/person-record-search-route.js";
-import { createStagingJourneyTelemetryTransportV1 } from "../../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
+import { createJourneyTelemetryTransportV1 } from "../../src/composition/observability/journey-telemetry-transport-v1.js";
 import { OWNER, PROJECT_ALPHA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from "../fixtures/project-context-sqlite.js";
 
 const MODEL = "deepseek/deepseek-v3.2";
@@ -53,7 +53,7 @@ function fixture() {
 
   const lines: Line[] = [];
   let heartbeat = () => {};
-  const transport = createStagingJourneyTelemetryTransportV1(identity, {
+  const transport = createJourneyTelemetryTransportV1("staging", identity, {
     write: (line) => { lines.push(JSON.parse(line) as Line); },
     scheduler: { set_interval: (fn) => { heartbeat = fn; return 1; }, clear_interval: () => {} },
   }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, content_enabled: true });
@@ -108,7 +108,7 @@ describe("agentic Ask observability through the canonical runtime channel", () =
     expect(f.lines.some(line => line.workflow === "ask")).toBe(false);
     expect(closed(f.lines, "research_run")).toHaveLength(1);
     expect(closed(f.lines, "research_run")[0]!.diagnostic).toMatchObject({
-      result: "answered", research_stop_reason: "finished",
+      root: false, result: "answered", research_stop_reason: "finished",
       counts: { planned_query_count: 0, query_hit_count: 0, released_atom_count: 1, context_atom_count: 1, citation_count: 1 },
     });
     expect(closed(f.lines, "evidence_list").map(line => line.diagnostic.counts)).toEqual([expect.objectContaining({ included_count: 1, document_items: 1, meeting_items: 0, slack_items: 0, transcript_items: 0 })]);

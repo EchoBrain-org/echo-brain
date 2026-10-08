@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { JOURNEY_TERMINAL_OUTCOMES_V1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -10,6 +9,15 @@ const TEMPLATE = resolve(
 );
 const STAGING_LOG_GROUP = "/echo-brain/authority/authority-staging.echobrain.org";
 const NAMESPACE = "EchoBrain/StagingJourneyV1";
+const HISTORICAL_ASK_TERMINAL_OUTCOMES = [
+  "answered",
+  "insufficient_evidence",
+  "authorship_unsupported",
+  "completed",
+  "partial",
+  "not_found",
+  "off_scope",
+] as const;
 
 type Resource = {
   readonly Type: string;
@@ -95,7 +103,7 @@ describe("staging journey observability overview stack", () => {
         "AWS::S3::Bucket",
       ]),
     );
-    expect(Object.keys(stack.Resources)).toHaveLength(5);
+    expect(Object.keys(stack.Resources)).toHaveLength(4);
   });
 
   it("derives only successful worker-cycle liveness from the supplied staging log group", () => {
@@ -126,12 +134,12 @@ describe("staging journey observability overview stack", () => {
     }
   });
 
-  it("defines exactly the three staging alarms with the intended missing-data behavior and existing topic", () => {
+  it("defines exactly the two active staging alarms with the intended missing-data behavior and existing topic", () => {
     const stack = template();
     const alarms = Object.entries(stack.Resources).filter(
       ([, item]) => item.Type === "AWS::CloudWatch::Alarm",
     );
-    expect(alarms).toHaveLength(3);
+    expect(alarms).toHaveLength(2);
     for (const [, alarm] of alarms) {
       expect(alarm.Properties?.AlarmActions).toEqual([{ Ref: "AlertTopicArn" }]);
       expect(alarm.Properties?.OKActions).toEqual([{ Ref: "AlertTopicArn" }]);
@@ -158,19 +166,11 @@ describe("staging journey observability overview stack", () => {
       ComparisonOperator: "GreaterThanOrEqualToThreshold",
       TreatMissingData: "notBreaching",
     });
-    expect(resource(stack, "ApprovedSearchStuckAlarm").Properties).toMatchObject({
-      MetricName: "ApprovedSearchStuckCount",
-      Statistic: "Maximum",
-      Period: 60,
-      EvaluationPeriods: 3,
-      DatapointsToAlarm: 2,
-      Threshold: 1,
-      ComparisonOperator: "GreaterThanOrEqualToThreshold",
-      TreatMissingData: "notBreaching",
-    });
+    expect(stack.Resources).not.toHaveProperty("ApprovedSearchStuckAlarm");
+    expect(stack.Outputs).not.toHaveProperty("ApprovedSearchStuckAlarmName");
   });
 
-  it("has a valid, staging-only dashboard with health, latency, LLM, retrieval, human-wait, funnel, and backlog views", () => {
+  it("has a valid, staging-only dashboard with active liveness, current core phases, and labeled historical views", () => {
     const stack = template();
     const dashboard = dashboardBody(stack);
     expect(dashboard).toMatchObject({ start: "-PT8H", periodOverride: "inherit" });
@@ -247,10 +247,6 @@ describe("staging journey observability overview stack", () => {
         "RetrievalContextAtoms",
         "RetrievalCitations",
         "ApprovalHumanWaitMs",
-        "ApprovedSearchPendingCount",
-        "ApprovedSearchStuckCount",
-        "ApprovedSearchOldestAgeMs",
-        "ApprovedSearchBacklogCheck",
       ]),
     );
 
@@ -258,7 +254,14 @@ describe("staging journey observability overview stack", () => {
     const serialized = JSON.stringify(dashboard);
     const metricSerialized = JSON.stringify(metricWidgets);
     expect(serialized).toContain("Machine-stage latency percentiles (no human wait)");
+    expect(serialized).toContain("Telemetry and worker liveness");
+    expect(serialized).toContain("Current approval/search phases and historical meeting funnel");
+    expect(serialized).toContain("Current core: approval observation");
+    expect(serialized).toContain("Current core: record append");
+    expect(serialized).toContain("Historical: Approved decision");
+    expect(serialized).toContain("Historical approval wait p50 (ms)");
     expect(serialized).toContain("ApprovalHumanWaitMs");
+    expect(serialized).not.toMatch(/ApprovedSearch|approved-search backlog/i);
     expect(metricSerialized).toContain("StageClosedLatencyMs");
     expect(metricSerialized).toContain("'p50'");
     expect(metricSerialized).toContain("'p95'");
@@ -274,7 +277,7 @@ describe("staging journey observability overview stack", () => {
     expect(metricSerialized).toContain('"outcome","insufficient_evidence"');
     expect(metricSerialized).toContain('"outcome","authorship_unsupported"');
     // Every Ask response outcome the kernel can emit has a dashboard series.
-    for (const outcome of JOURNEY_TERMINAL_OUTCOMES_V1.ask_response) {
+    for (const outcome of HISTORICAL_ASK_TERMINAL_OUTCOMES) {
       expect(metricSerialized).toContain(`"TerminalOutcome","workflow","ask","stage","ask_response","outcome","${outcome}"`);
     }
     for (const outcome of ["answered", "partial", "not_found", "off_scope", "completed"]) {

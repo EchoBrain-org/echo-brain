@@ -34,20 +34,6 @@ export interface JourneyMetricRecordV1 {
   readonly [key: string]: unknown;
 }
 
-export interface ApprovedSearchBacklogSnapshotV1 {
-  readonly observed_at: string;
-  /** Approved journeys awaiting a terminal search result at scan time. */
-  readonly pending_count: number;
-  /** Pending approved journeys older than the configured completion bound. */
-  readonly stuck_count: number;
-  /** Null only when no approved journey is awaiting search completion. */
-  readonly oldest_age_ms: number | null;
-}
-
-export type ApprovedSearchBacklogObserverV1 = (
-  snapshot: ApprovedSearchBacklogSnapshotV1,
-) => void | Promise<void>;
-
 type MetricValue = readonly [name: string, value: number, unit: "Count" | "Milliseconds"];
 
 function canonicalTimestamp(value: unknown): number | null {
@@ -61,10 +47,6 @@ function requiredTimestamp(value: unknown, label: string): number {
   const timestamp = canonicalTimestamp(value);
   if (timestamp === null) throw new TypeError(`${label} must be canonical ISO UTC`);
   return timestamp;
-}
-
-function validNonnegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 /**
@@ -89,19 +71,13 @@ function normalizedOperationalEvent(
       event: {
         stage: event.stage,
         event: event.event,
-        outcome: event.outcome,
         failure_class: event.failure_class,
         retryable: event.retryable,
-        attempt: event.attempt,
-        ...(event.diagnostic === undefined ? {} : { diagnostic: event.diagnostic }),
-        ...(event.accounting === undefined ? {} : { accounting: event.accounting }),
         elapsed_ms: event.elapsed_ms,
-        queue_age_ms: event.queue_age_ms,
-        retrieval: event.retrieval,
-        llm_usage: event.llm_usage,
+        diagnostic: event.diagnostic,
       },
     }, vocabulary);
-    return normalized.environment === "staging" || normalized.environment === "production" ? normalized : null;
+    return normalized;
   } catch {
     return null;
   }
@@ -144,39 +120,37 @@ export function formatJourneyTelemetryMetricsV1(
 ): readonly JourneyMetricRecordV1[] {
   const event = normalizedOperationalEvent(input, vocabulary);
   if (event === null) return Object.freeze([]);
+  const diagnostic = event.diagnostic;
   // Connector exchanges are diagnostic children of the ingress request. Keep
   // them in journey logs without multiplying the existing ingress metrics.
-  if (event.workflow === "core_runtime" && event.diagnostic?.phase === "http_request" && !event.diagnostic.root) {
+  if (diagnostic.phase === "http_request" && !diagnostic.root) {
     return Object.freeze([]);
   }
-  const namespace = metricsNamespace(event.environment as OperationalJourneyEnvironmentV1);
+  const namespace = metricsNamespace(event.environment);
   const timestamp = canonicalTimestamp(event.observed_at);
   if (timestamp === null) return Object.freeze([]);
 
-  const workflowStage = { workflow: event.workflow, stage: (event.workflow === "core_runtime" ? event.diagnostic?.phase : undefined) ?? event.stage };
+  const workflowStage = { workflow: event.workflow, stage: diagnostic.phase };
   const records: JourneyMetricRecordV1[] = [];
 
-  if (event.diagnostic?.phase === "model_call" && event.event !== "started") {
-    const counts = event.diagnostic.counts;
+  if (diagnostic.phase === "model_call" && event.event !== "started") {
+    const counts = diagnostic.counts;
     const values: MetricValue[] = [["CoreModelAttempt", 1, "Count"]];
     if (counts.total_tokens != null) values.push(["CoreModelTotalTokens", counts.total_tokens, "Count"], ["CoreModelUsageReported", 1, "Count"]);
-    records.push(record(namespace, timestamp, { workflow: "core_runtime", stage: event.diagnostic.purpose }, values));
+    records.push(record(namespace, timestamp, { workflow: "core_runtime", stage: diagnostic.purpose }, values));
   }
   if (event.event === "started") {
     const metrics: MetricValue[] = [["StageStarted", 1, "Count"]];
-    if (event.accounting?.kind === "execution" && event.accounting.retry_of_attempt != null) metrics.push(["StageRetryAttempt", 1, "Count"]);
     records.push(record(namespace, timestamp, workflowStage, metrics));
   }
   if (event.event === "succeeded") {
     records.push(record(namespace, timestamp, workflowStage, [
       ["StageSucceeded", 1, "Count"],
-      ...(["shared_reference", "recovery"].includes(event.accounting?.kind ?? "") ? [] : [["StageClosedLatencyMs", event.elapsed_ms, "Milliseconds"] as MetricValue]),
+      ["StageClosedLatencyMs", event.elapsed_ms, "Milliseconds"],
     ]));
-    // Canonical research spans carry their outcome in normalized core metadata;
-    // historical Ask rows retain their original top-level outcome contract.
-    const outcome = event.outcome ?? (event.diagnostic?.phase === "research_run" &&
-      ["answered", "partial", "not_found", "off_scope", "completed"].includes(event.diagnostic.result ?? "")
-      ? event.diagnostic.result : null);
+    const outcome = diagnostic.phase === "research_run" &&
+      ["answered", "partial", "not_found", "off_scope", "completed"].includes(diagnostic.result ?? "")
+      ? diagnostic.result : null;
     if (outcome !== null) {
       records.push(record(namespace, timestamp, {
         ...workflowStage,
@@ -187,22 +161,18 @@ export function formatJourneyTelemetryMetricsV1(
   if (event.event === "failed") {
     records.push(record(namespace, timestamp, workflowStage, [
       ["StageFailed", 1, "Count"],
-      ...(["shared_reference", "recovery"].includes(event.accounting?.kind ?? "") ? [] : [["StageClosedLatencyMs", event.elapsed_ms, "Milliseconds"] as MetricValue]),
+      ["StageClosedLatencyMs", event.elapsed_ms, "Milliseconds"],
     ]));
     records.push(record(namespace, timestamp, {
       ...workflowStage,
       failure_class: event.failure_class!,
     }, [["StageFailure", 1, "Count"]]));
-    if ((event.workflow === "ask" && event.stage === "ask_retrieval") || event.diagnostic?.phase === "research_loop") {
+    if (diagnostic.phase === "research_loop") {
       records.push(record(namespace, timestamp, {}, [["AskRetrievalFailure", 1, "Count"]]));
     }
   }
-  if (event.event === "skipped") {
-    records.push(record(namespace, timestamp, workflowStage, [["StageSkipped", 1, "Count"]]));
-  }
-
-  const modelCall = event.diagnostic?.phase === "model_call" && event.event !== "started" ? event.diagnostic : null;
-  const usage = modelCall === null ? event.llm_usage : {
+  const modelCall = diagnostic.phase === "model_call" && event.event !== "started" ? diagnostic : null;
+  const usage = modelCall === null ? null : {
     provider: modelCall.provider ?? "other",
     model: modelCall.model ?? "other",
     usage_status: ["input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens"].some(key => modelCall.counts[key as keyof typeof modelCall.counts] != null) ? "reported" : "unavailable",
@@ -213,7 +183,7 @@ export function formatJourneyTelemetryMetricsV1(
     cached_input_tokens: modelCall.counts.cached_input_tokens ?? null,
     reasoning_tokens: modelCall.counts.reasoning_tokens ?? null,
   };
-  if (usage !== null && event.accounting?.kind !== "recovery") {
+  if (usage !== null) {
     const metrics: MetricValue[] = [
       ["LlmAttempt", 1, "Count"],
       [
@@ -247,8 +217,10 @@ export function formatJourneyTelemetryMetricsV1(
     }, metrics));
   }
 
-  const researchRun = event.diagnostic?.phase === "research_run" && event.event !== "started" ? event.diagnostic : null;
-  const retrieval = researchRun?.counts ?? event.retrieval;
+  const researchRun = diagnostic.phase === "research_run" && event.event !== "started"
+    ? diagnostic
+    : null;
+  const retrieval = researchRun?.counts ?? null;
   if (retrieval !== null) {
     type NumericRetrievalCounter =
       | "planned_query_count"
@@ -271,14 +243,6 @@ export function formatJourneyTelemetryMetricsV1(
     if (metrics.length > 0) records.push(record(namespace, timestamp, workflowStage, metrics));
   }
 
-  if (event.queue_age_ms !== null) {
-    records.push(record(namespace, timestamp, workflowStage, [[
-      "ApprovalHumanWaitMs",
-      event.queue_age_ms,
-      "Milliseconds",
-    ]]));
-  }
-
   return Object.freeze(records);
 }
 
@@ -290,40 +254,4 @@ export function formatJourneyLivenessMetricV1(
   const namespace = metricsNamespace(environment);
   const timestamp = requiredTimestamp(observed_at, "liveness observed_at");
   return record(namespace, timestamp, {}, [["JourneyTelemetryAlive", 1, "Count"]]);
-}
-
-/** Emits an explicit-zero, zero-dimension gauge after each durable backlog scan. */
-export function formatApprovedSearchBacklogMetricsV1(
-  snapshot: ApprovedSearchBacklogSnapshotV1,
-  environment: OperationalJourneyEnvironmentV1,
-): JourneyMetricRecordV1 {
-  const namespace = metricsNamespace(environment);
-  const timestamp = requiredTimestamp(snapshot.observed_at, "backlog observed_at");
-  if (!validNonnegativeInteger(snapshot.pending_count)) {
-    throw new TypeError("backlog pending_count must be a nonnegative safe integer");
-  }
-  if (!validNonnegativeInteger(snapshot.stuck_count)) {
-    throw new TypeError("backlog stuck_count must be a nonnegative safe integer");
-  }
-  if (snapshot.stuck_count > snapshot.pending_count) {
-    throw new TypeError("backlog stuck_count cannot exceed pending_count");
-  }
-  if (snapshot.oldest_age_ms !== null && !validNonnegativeInteger(snapshot.oldest_age_ms)) {
-    throw new TypeError("backlog oldest_age_ms must be null or a nonnegative safe integer");
-  }
-  if (snapshot.pending_count === 0 && snapshot.oldest_age_ms !== null) {
-    throw new TypeError("backlog oldest_age_ms must be null with no pending work");
-  }
-  if (snapshot.pending_count > 0 && snapshot.oldest_age_ms === null) {
-    throw new TypeError("backlog oldest_age_ms is required with pending work");
-  }
-  const metrics: MetricValue[] = [
-    ["ApprovedSearchPendingCount", snapshot.pending_count, "Count"],
-    ["ApprovedSearchStuckCount", snapshot.stuck_count, "Count"],
-    ["ApprovedSearchBacklogCheck", 1, "Count"],
-  ];
-  if (snapshot.oldest_age_ms !== null) {
-    metrics.push(["ApprovedSearchOldestAgeMs", snapshot.oldest_age_ms, "Milliseconds"]);
-  }
-  return record(namespace, timestamp, {}, metrics);
 }

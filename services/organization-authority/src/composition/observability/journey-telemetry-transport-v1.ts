@@ -13,10 +13,8 @@ import {
   type StagingJourneyContentRecordInputV2 as JourneyContentRecordInputV2,
 } from "../staging/observability/staging-journey-content-telemetry-v1.js";
 import {
-  formatApprovedSearchBacklogMetricsV1,
   formatJourneyTelemetryMetricsV1,
   formatJourneyLivenessMetricV1,
-  type ApprovedSearchBacklogObserverV1,
   type OperationalJourneyEnvironmentV1,
 } from "./journey-metrics-v1.js";
 import { isCanonicalUtcTimestampV1 } from "../../application/canonical-utc-timestamp-v1.js";
@@ -25,15 +23,6 @@ export const JOURNEY_TELEMETRY_LIVENESS_SCHEMA_VERSION_V1 = 1 as const;
 export const JOURNEY_TELEMETRY_LIVENESS_KIND_V1 =
   "echo-authority-journey-telemetry-liveness-v1" as const;
 export const JOURNEY_TELEMETRY_HEARTBEAT_INTERVAL_MS_V1 = 60_000;
-export const APPROVED_SEARCH_BACKLOG_SCHEMA_VERSION_V1 = 1 as const;
-export const APPROVED_SEARCH_BACKLOG_KIND_V1 =
-  "echo-authority-approved-search-backlog-v1" as const;
-
-/** The meeting-approval observer's closed rejection; liveness keeps counting it. */
-export interface MeetingApprovalObservationFailureV1 {
-  readonly emitter: "meeting_approval_observer";
-  readonly reason: "observation_callback_failure";
-}
 
 export interface JourneyTelemetryIdentityV1 {
   readonly release_sha: string;
@@ -47,6 +36,7 @@ export interface TelemetryRejectionCountsV1 {
     readonly invalid_content_record: number;
     readonly content_format_error: number;
   };
+  /** Historical Explorer health shape; this obsolete producer never reports failures. */
   readonly meeting_approval_observer: { readonly observation_callback_failure: number };
 }
 
@@ -61,16 +51,6 @@ export interface JourneyTelemetryLivenessEventV1 {
   readonly delivery?: Readonly<Record<string, number>>;
   /** Process-cumulative local accounting, separate from writes and downstream ingestion. */
   readonly rejection_counts?: TelemetryRejectionCountsV1;
-}
-
-export interface ApprovedSearchBacklogEventV1 {
-  readonly schema_version: typeof APPROVED_SEARCH_BACKLOG_SCHEMA_VERSION_V1;
-  readonly kind: typeof APPROVED_SEARCH_BACKLOG_KIND_V1;
-  readonly observed_at: string;
-  readonly environment: OperationalJourneyEnvironmentV1;
-  readonly pending_count: number;
-  readonly stuck_count: number;
-  readonly oldest_age_ms: number | null;
 }
 
 export type JourneyTelemetryWriterV1 = (line: string) => void | Promise<void>;
@@ -101,7 +81,6 @@ export interface JourneyTelemetryTransportV1 {
   /** False only when the deploy identity is unsafe to emit. */
   readonly enabled: boolean;
   readonly core_runtime: CoreRuntimeObservationScopeV1;
-  readonly observation_failure: (failure: MeetingApprovalObservationFailureV1) => void;
   /** Immutable deploy identity shared by the operational journey emitters. */
   readonly identity: JourneyTelemetryIdentityV1 | null;
   /**
@@ -111,8 +90,6 @@ export interface JourneyTelemetryTransportV1 {
   start(): void;
   /** Safe to pass directly to createJourneyTelemetryV1, including while liveness is inert. */
   readonly observer: JourneyTelemetryObserverV1;
-  /** Safe to pass to the staging approval sidecar recorder. */
-  readonly approved_search_backlog_observer: ApprovedSearchBacklogObserverV1;
   /** True only when the staging content switch is on for a valid identity. */
   readonly content_enabled: boolean;
   /** Writes bounded content records; inert unless content_enabled. */
@@ -166,11 +143,9 @@ function disabledTransport(): JourneyTelemetryTransportV1 {
     environment: null,
     enabled: false,
     core_runtime: {},
-    observation_failure: () => undefined,
     identity: null,
     start: () => undefined,
     observer: () => undefined,
-    approved_search_backlog_observer: () => undefined,
     content_enabled: false,
     content_observer: () => undefined,
     close: () => undefined,
@@ -306,27 +281,6 @@ export function createJourneyTelemetryTransportV1(
     }
   };
 
-  const approvedSearchBacklogObserver: ApprovedSearchBacklogObserverV1 =
-    (snapshot) => {
-      if (closed) return;
-      try {
-        // Format first so the strict content-free snapshot contract is checked
-        // before either the diagnostic event or its metric projection is written.
-        const metric = formatApprovedSearchBacklogMetricsV1(snapshot, deploymentEnvironment);
-        write({
-          schema_version: APPROVED_SEARCH_BACKLOG_SCHEMA_VERSION_V1,
-          kind: APPROVED_SEARCH_BACKLOG_KIND_V1,
-          observed_at: snapshot.observed_at,
-          environment: deploymentEnvironment,
-          pending_count: snapshot.pending_count,
-          stuck_count: snapshot.stuck_count,
-          oldest_age_ms: snapshot.oldest_age_ms,
-        } satisfies ApprovedSearchBacklogEventV1);
-        write(metric);
-      } catch {
-        // Invalid backlog health must remain outside approval control flow.
-      }
-    };
   const coreJourneys = new Map<string, { journey: NonNullable<ReturnType<ReturnType<typeof createJourneyTelemetryV1>["resumeJourney"]>>; content_sequence: number }>();
   const coreEmitter = createJourneyTelemetryV1(observer, {}, vocabulary);
   const coreRuntime: CoreRuntimeObservationScopeV1 = {
@@ -358,9 +312,6 @@ export function createJourneyTelemetryTransportV1(
     environment: deploymentEnvironment,
     enabled: true,
     core_runtime: coreRuntime,
-    // This seam has one fixed origin. Never inspect or copy a runtime argument,
-    // even if an untyped caller supplies injected fields or throwing getters.
-    observation_failure: () => { reject("meeting_approval_observer", "observation_callback_failure"); },
     identity: immutableIdentity,
     start(): void {
       if (closed || started) return;
@@ -378,7 +329,6 @@ export function createJourneyTelemetryTransportV1(
       }
     },
     observer,
-    approved_search_backlog_observer: approvedSearchBacklogObserver,
     content_enabled: contentEnabled,
     content_observer: contentObserver,
     close(): void {

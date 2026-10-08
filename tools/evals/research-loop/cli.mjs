@@ -28,7 +28,6 @@ const USAGE = `Research loop evaluation (docs/product/2026-10-06-research-loop-e
   trace --run --trigger-run-id <run_…> --out <dir>
                                              Capture one existing pending approval run; never approves or retries.
   trace --capture-id <cap_…> --out <dir>     Resume reading a capture without repeating the product request.
-  trace --run-id <rr_…> --out <dir>           Read an existing legacy staging evaluation; never starts one.
   grade --out <dir> (--judge-model <openrouter-slug> --judge-credential-file <path> | --no-judge)
   report --out <dir>
   calibrate sheet --out <dir>                 Write a blind 15-run sheet for the founder.

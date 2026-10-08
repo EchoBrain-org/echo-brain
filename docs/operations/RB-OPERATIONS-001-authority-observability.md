@@ -305,8 +305,8 @@ erases content. Payloads never enter CloudWatch or immutable audit/run storage.
 Use the [research trace exporter](../../tools/evals/research-loop/README.md#one-ordinary-request-diagnostic-trace)
 to save the receipt before execution and export private files. Resume reads
 with the saved capture ID after a lost response; do not repeat the Ask to
-recover its trace. The staging evaluator retains its compatibility capture
-field but shares this collector and core instrumentation.
+recover its trace. The staging evaluator uses the same operational spans;
+payload capture has one API and collector, on ordinary product requests.
 
 #### Staging journey overview and Explorer
 
@@ -326,12 +326,12 @@ create a production journey resource, permission, dashboard, alarm, retention
 change, or deployment path.
 
 The overview emits content-free CloudWatch Embedded Metric Format (EMF) records
-beside the canonical raw `echo-authority-journey-stage-v1`, liveness, and
-approved-search-backlog log records. EMF is a projection of the same event,
+beside the canonical raw `echo-authority-journey-stage-v1` and liveness records.
+EMF is a projection of the same event,
 not a second ingestion path and requires no application-managed browser
 credential. Within this
 dedicated stack, `WorkerCycleCompleted` is the only log metric filter. All
-journey, LLM, retrieval, liveness, and backlog metrics are EMF. Recent-run and
+journey, LLM, retrieval, and liveness metrics are EMF. Recent-run and
 Logs Insights views are bounded by the existing 14-day Authority log retention.
 A result older than that bound is unavailable rather than inferred.
 
@@ -352,9 +352,8 @@ build number, and every business or person identifier are never dimensions.
 | `LlmInputTokens`, `LlmOutputTokens`, `LlmTotalTokens`, `LlmCachedInputTokens`, `LlmReasoningTokens` | the respective non-null provider-reported value only | `stage`, `provider`, `model` |
 | `LlmTotalTokensAvailable` | `1` only when that attempt has a non-null total-token value | `stage`, `provider`, `model` |
 | `RetrievalPlannedQueries`, `RetrievalQueryHits`, `RetrievalReleasedAtoms`, `RetrievalContextAtoms`, `RetrievalCitations` | the respective non-null counter once per `research_run`; historical journey events retain their original projection | `workflow`, `stage` |
-| `ApprovalHumanWaitMs` | `queue_age_ms` from card staging to verified action | `workflow`, `stage` |
+| `ApprovalHumanWaitMs` | retained historical `queue_age_ms` from card staging to verified action | `workflow`, `stage` |
 | `JourneyTelemetryAlive`, `WorkerCycleCompleted` | `1` for liveness output and a completed worker cycle, respectively | none |
-| `ApprovedSearchPendingCount`, `ApprovedSearchStuckCount`, `ApprovedSearchBacklogCheck`, `ApprovedSearchOldestAgeMs` | explicit-zero durable backlog gauge, stuck-gauge, scan heartbeat, and oldest pending age | none |
 
 `tokens per total-token-available LLM attempt` means the sum of `LlmTotalTokens`
 divided by `LlmTotalTokensAvailable` within the displayed grouping and period.
@@ -392,26 +391,24 @@ machine percentiles, availability calculations, or a latency alarm.
 The dashboard layout is deliberately small:
 
 1. alarm status and telemetry heartbeat;
-2. Ask response and meeting stage outcomes plus the meeting funnel;
+2. current core approval/search phases, plus clearly labeled historical Ask and meeting outcomes;
 3. stage p50/p95/p99 machine latency plus full and wait-excluded end-to-end
    p50/p95/p99 wall-clock;
 4. LLM token totals by step, tokens per total-token-available attempt, usage coverage,
    completed-request token totals, and retries;
-5. approved-search pending count/oldest age and four bounded Logs Insights
-   tables for recent safe failures, full/service wall-clock, completed-journey
+5. telemetry and worker liveness plus four bounded Logs Insights tables for
+   recent safe failures, full/service wall-clock, completed-journey
    token totals, and per-stage success/failure/retry rates.
 
-The initial quick-detection alarms are: successful worker cycles missing in two
-of three one-minute periods; two Ask retrieval failures in five minutes; and a
-durable approved-search backlog whose age is at least five minutes and whose
-stuck gauge is at least one for two of three one-minute periods. The final
-alarm consumes the explicit pending-work observation above, not a best-effort
-join in a dashboard query. Latency and token anomaly alarms are explicitly
-deferred until a measured staging baseline exists.
+The initial quick-detection alarms are successful worker cycles missing in two
+of three one-minute periods and two Ask retrieval failures in five minutes.
+The obsolete approved-search backlog alarm and gauges were retired because the
+approved-search backlog observer has no runtime caller. This does not establish
+that a stuck approval is covered by another alarm. Latency and token anomaly
+alarms are explicitly deferred until a measured staging baseline exists.
 
 Local verification covers formatter, transport, template/query, and
-deterministic fixture reconciliation: dashboard aggregates reconcile with the
-fixture's raw canonical journey events and approved-search state.
+deterministic fixture reconciliation against raw canonical journey events.
 
 #### Explorer backend
 

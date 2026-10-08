@@ -317,7 +317,7 @@ export function scriptedGate(replies: readonly unknown[], budget: AgenticResearc
     },
     desk_revalidate: async () => { trace.push("revalidate"); return checked; }, on_checked: () => undefined,
     budget, now: () => 0, deadline: budget.deadline_ms,
-    signal: new AbortController().signal, is_deadline_expired: () => false, content_sensitive: () => false,
+    signal: new AbortController().signal, is_deadline_expired: () => false,
   });
   return { gate, inputs };
 }

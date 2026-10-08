@@ -16,7 +16,7 @@ import type { BegunPersonOidcLogin } from '../src/application/person-identity-se
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from '../src/composition/person-onboarding-service.js';
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
-import { createStagingJourneyTelemetryTransportV1 } from '../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js';
+import { createJourneyTelemetryTransportV1 } from '../src/composition/observability/journey-telemetry-transport-v1.js';
 import { FIXTURE_JIRA_CLOUD_V1 as CLOUD, FIXTURE_JIRA_SITE_V1 as SITE, fakeJiraCloudFetchV1, fakeJiraNangoV1 } from './fixtures/fake-jira-v1.js';
 
 const EMAIL = 'founder@example.test';
@@ -81,7 +81,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
   });
   const privateFile = (name: string, value: string) => { const path = join(root, name); writeFileSync(path, value, { mode: 0o600 }); return path; };
   const telemetry: string[] = [];
-  const transport = createStagingJourneyTelemetryTransportV1({ release_sha: 'a'.repeat(40), build_number: 1 }, { write: line => { telemetry.push(line); } });
+  const transport = createJourneyTelemetryTransportV1('staging', { release_sha: 'a'.repeat(40), build_number: 1 }, { write: line => { telemetry.push(line); } });
   const events = () => telemetry.map(line => JSON.parse(line)).filter(event => event.kind === 'echo-authority-journey-stage-v1');
   const runtime = await openOrganizationAuthorityService({
     core_runtime_observation: transport.core_runtime,

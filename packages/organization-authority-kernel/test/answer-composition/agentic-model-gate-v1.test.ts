@@ -40,7 +40,6 @@ function harness(options: {
     deadline: 90_000,
     signal: new AbortController().signal,
     is_deadline_expired: () => false,
-    content_sensitive: () => false,
   });
   return { gate, trace, inputs, checked };
 }
@@ -118,7 +117,7 @@ describe("agentic model gate", () => {
       },
       desk_revalidate: async () => ({ checked_at: '2026-10-06T00:00:00.000Z' }), on_checked: () => undefined,
       budget: { max_model_calls: 24 }, now: () => 0, deadline: 90_000,
-      signal: new AbortController().signal, is_deadline_expired: () => false, content_sensitive: () => false,
+      signal: new AbortController().signal, is_deadline_expired: () => false,
     });
     const pending = withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => gate.withRepair(STEP, 'system', {}, schema, () => 20_000, value => value));
     if (finish_reason === 'length') await expect(pending).resolves.toEqual({ good: true });

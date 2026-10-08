@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeDetailV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { createJourneyTelemetryEventV1 } from '@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1';
 import { createJourneyTelemetryTransportFromEnvironmentV1, createJourneyTelemetryTransportV1 } from '../../src/composition/observability/journey-telemetry-transport-v1.js';
 import { AUTHORITY_JOURNEY_METRICS_NAMESPACE_V1, formatJourneyTelemetryMetricsV1, STAGING_JOURNEY_METRICS_NAMESPACE_V1 } from '../../src/composition/observability/journey-metrics-v1.js';
@@ -8,10 +8,16 @@ const identity = { release_sha: 'a'.repeat(40), build_number: 42 };
 const observedAt = '2026-10-08T20:00:00.000Z';
 const baked = { ECHO_STAGING_JOURNEY_TELEMETRY_V1: 'true', ECHO_SOURCE_SHA: identity.release_sha, ECHO_BUILD_NUMBER: String(identity.build_number) };
 const scheduler = { set_interval: () => 1, clear_interval: () => undefined };
+const diagnostic = (): CoreRuntimeDetailV1 => ({
+  operation_id: '10000000-0000-4000-8000-000000000001', span_id: '20000000-0000-4000-8000-000000000001', parent_span_id: null,
+  phase: 'research_run', purpose: 'research_run', root: true, linked_journey_ids: [], counts: {}, result: 'answered', generation: null,
+  source_revision: null, cursor: null, action: null, provider: null, model: null, finish_reason: null, provider_request: null,
+  resource_scope: 'process_overlap', sqlite_lock_time: 'unavailable', disk_io_latency: 'unavailable', event_loop_delay: 'unavailable',
+});
 const event = (environment: 'staging' | 'production') => createJourneyTelemetryEventV1({
   journey_id: '00000000-0000-4000-8000-000000000001', sequence: 1, observed_at: observedAt,
-  context: { environment, workflow: 'ask', ...identity },
-  event: { stage: 'ask_response', event: 'succeeded', outcome: 'answered', elapsed_ms: 52 },
+  context: { environment, workflow: 'core_runtime', ...identity },
+  event: { stage: 'core_operation', event: 'succeeded', elapsed_ms: 52, diagnostic: diagnostic() },
 });
 
 describe('shared operational telemetry transport', () => {
@@ -38,7 +44,7 @@ describe('shared operational telemetry transport', () => {
     transport.close();
   });
 
-  it('emits production liveness, backlog and core resource spans, never model payloads', async () => {
+  it('emits production liveness and core resource spans, never model payloads', async () => {
     const lines: string[] = [];
     const transport = createJourneyTelemetryTransportFromEnvironmentV1('production', {
       ...baked, ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: 'true',
@@ -49,12 +55,10 @@ describe('shared operational telemetry transport', () => {
     await observeCoreRuntimeV1('ask_request', async () => {
       captureCoreRuntimeContentV1('model_request', { question: 'NEVER-PRODUCTION-CONTENT' });
     }, transport.core_runtime);
-    transport.approved_search_backlog_observer({ observed_at: observedAt, pending_count: 0, stuck_count: 0, oldest_age_ms: null });
     transport.close();
     const records = lines.map(line => JSON.parse(line));
     expect(records).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'echo-authority-journey-telemetry-liveness-v1', environment: 'production', ...identity }),
-      expect.objectContaining({ kind: 'echo-authority-approved-search-backlog-v1', environment: 'production', pending_count: 0 }),
       expect.objectContaining({ kind: 'echo-authority-journey-stage-v1', environment: 'production', workflow: 'core_runtime', event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'ask_request', root: true, counts: expect.objectContaining({ rss_bytes: expect.any(Number) }) }) }),
     ]));
     expect(records.filter(record => record._aws).every(record => record._aws.CloudWatchMetrics[0].Namespace === AUTHORITY_JOURNEY_METRICS_NAMESPACE_V1)).toBe(true);

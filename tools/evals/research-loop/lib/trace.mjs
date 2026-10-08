@@ -3,13 +3,12 @@ import { join } from "node:path";
 import { pollDeadlineMs } from "./requests.mjs";
 import { privateDirectory, readJson, writePrivateJson, writePrivateText } from "./private-files.mjs";
 
-const RUN_ID = /^rr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const CAPTURE_ID = /^cap_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const TRIGGER_RUN_ID = /^run_[A-Za-z0-9-]{4,60}$/u;
 const PROJECT_ID = /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const EVENT_KINDS = new Set(["model_request", "model_response", "model_error", "tool_request", "tool_response", "tool_error", "lifecycle", "capture_error"]);
 const ERROR_CODES = new Set(["conflict", "invalid_request", "invalid_output", "not_found", "stale_access_state", "unauthorized", "rate_limited", "quota_exceeded", "unavailable", "timed_out"]);
-const callKey = (event, key) => `${event.operation_id ?? "legacy"}:${event[key]}`;
+const callKey = (event, key) => `${event.operation_id ?? "unscoped"}:${event[key]}`;
 
 /** A successful product request and a complete capture are separate outcomes. */
 export function traceCompleteness(trace) {
@@ -111,15 +110,14 @@ function failureReceipt(error) {
 }
 
 function selection(args) {
-  const resume = args["capture-id"] ?? args["run-id"];
+  const resume = args["capture-id"];
   if (resume !== undefined) {
-    if ((args["capture-id"] !== undefined && args["run-id"] !== undefined) ||
-        !(args["capture-id"] === undefined ? RUN_ID.test(resume) : CAPTURE_ID.test(resume)) ||
-        args.run !== undefined || args.question !== undefined || args["project-id"] !== undefined || args["trigger-run-id"] !== undefined) {
-      throw new Error("Resume needs either --capture-id cap_… or legacy --run-id rr_… and cannot start another request.");
+    if (args["run-id"] !== undefined || !CAPTURE_ID.test(resume) || args.run !== undefined || args.question !== undefined || args["project-id"] !== undefined || args["trigger-run-id"] !== undefined) {
+      throw new Error("Resume needs --capture-id cap_… and cannot start another request.");
     }
-    return { resume, legacy: args["run-id"] !== undefined };
+    return { resume };
   }
+  if (args["run-id"] !== undefined) throw new Error("Resume needs --capture-id cap_…; --run-id is no longer supported.");
   if (args.run !== true) throw new Error("pass --run to capture one ordinary product request");
   if (args["trigger-run-id"] !== undefined) {
     if (!TRIGGER_RUN_ID.test(args["trigger-run-id"]) || args.question !== undefined || args["project-id"] !== undefined) throw new Error("--trigger-run-id needs one existing run and cannot be combined with question or project-id");
@@ -136,10 +134,10 @@ export async function runTrace(args, { client, get_client, poll_ms = 2_000, sour
   if (existsSync(join(out, "result.json")) || (chosen.resume === undefined && ["request.json", "receipt.json", "execution-request.json"].some(name => existsSync(join(out, name))))) throw new Error("Use a fresh output directory; an existing diagnostic request must not be overwritten or started again.");
   if (chosen.resume !== undefined && existsSync(join(out, "receipt.json"))) {
     const saved = readJson(join(out, "receipt.json"));
-    if ((saved.capture_id ?? saved.run_id) !== chosen.resume) throw new Error("Resume id does not match this output directory's saved receipt");
+    if (saved.capture_id !== chosen.resume) throw new Error("Resume id does not match this output directory's saved receipt");
   }
   const selected = client ?? await get_client();
-  let receipt = chosen.legacy ? { run_id: chosen.resume } : { capture_id: chosen.resume };
+  let receipt = { capture_id: chosen.resume };
   if (chosen.resume === undefined) {
     const prepare = { schema_version: 1, operation: "prepare", target: chosen.target };
     writePrivateJson(out, "request.json", { started_at: new Date().toISOString(), source_sha, request: prepare,
@@ -159,20 +157,19 @@ export async function runTrace(args, { client, get_client, poll_ms = 2_000, sour
       writePrivateJson(out, "product-response.json", response);
     } catch (error) { writePrivateJson(out, "product-error.json", failureReceipt(error)); }
   }
-  const id = receipt.capture_id ?? receipt.run_id;
-  const resumeFlag = chosen.legacy ? "--run-id" : "--capture-id";
-  const deadline = Date.now() + pollDeadlineMs(chosen.target?.kind === "trigger_run" || (chosen.resume !== undefined && !chosen.legacy) ? "background" : "live");
+  const id = receipt.capture_id;
+  const resumeFlag = "--capture-id";
+  const deadline = Date.now() + pollDeadlineMs(chosen.target?.kind === "trigger_run" || chosen.resume !== undefined ? "background" : "live");
   for (;;) {
     await new Promise(resolve => setTimeout(resolve, poll_ms));
     let result;
     try {
-      result = chosen.legacy ? await selected.readResearchEval(id)
-        : await selected.diagnostics({ schema_version: 1, operation: "read", capture_id: id });
+      result = await selected.diagnostics({ schema_version: 1, operation: "read", capture_id: id });
     } catch (error) {
       writePrivateJson(out, "capture-read-error.json", failureReceipt(error));
       throw new Error(`Capture ${id} is unavailable or its read failed; exact payloads may have expired or been lost on restart. Resume only with trace ${resumeFlag} ${id} --out ${out}; do not repeat the product request.`);
     }
-    if ((chosen.legacy ? result.run_id : result.capture_id) !== id) throw new Error("The diagnostic response does not match the saved capture identity.");
+    if (result.capture_id !== id) throw new Error("The diagnostic response does not match the saved capture identity.");
     if (result.status === "completed" || result.status === "failed") {
       const summary = saveTrace(out, result);
       if (!summary.complete) throw new Error(`Saved incomplete diagnostic evidence in ${out}: ${summary.problems.join(" ")}`);
