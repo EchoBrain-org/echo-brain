@@ -354,6 +354,33 @@ function materialize(database: Database.Database): MaterializedSnapshot {
   }
 }
 
+/**
+ * One verified log row as the snapshot hands it on. Key order is part of
+ * `upstream_input_preimage`, so it must not change.
+ */
+function sourceRow(
+  position: number,
+  row: StoredRecordRow,
+  classification: RecordRetrievalSourceRowV1["classification"],
+): RecordRetrievalSourceRowV1 {
+  return Object.freeze({
+    position,
+    envelope_id: requiredText(row.envelope_id, "row envelope_id"),
+    event_kind: classification.kind,
+    approval_id: requiredText(row.approval_id, "row approval_id"),
+    action: classification.kind === "approved" ? "approve" : "reject",
+    semantic_idempotency_key: requiredDigest(
+      row.semantic_idempotency_key,
+      "row semantic idempotency key",
+    ),
+    envelope_sha256: requiredDigest(row.envelope_sha256, "row envelope digest"),
+    predecessor_position: row.predecessor_position,
+    predecessor_record_sha256: row.predecessor_record_sha256,
+    record_sha256: requiredDigest(row.record_sha256, "row record digest"),
+    classification,
+  });
+}
+
 function asJsonObject(value: unknown, label: string): JsonObject {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     invalid(`${label} must be a JSON object`);
@@ -517,30 +544,7 @@ export class RecordRetrievalSourceSnapshotPortV1 {
       if (body.event.kind === "rejected") {
         if (recordFacts.length !== 0)
           invalid("rejection must contribute no Person atoms");
-        rows.push(
-          Object.freeze({
-            position,
-            envelope_id: requiredText(row.envelope_id, "row envelope_id"),
-            event_kind: "rejected",
-            approval_id: requiredText(row.approval_id, "row approval_id"),
-            action: "reject",
-            semantic_idempotency_key: requiredDigest(
-              row.semantic_idempotency_key,
-              "row semantic idempotency key",
-            ),
-            envelope_sha256: requiredDigest(
-              row.envelope_sha256,
-              "row envelope digest",
-            ),
-            predecessor_position: row.predecessor_position,
-            predecessor_record_sha256: row.predecessor_record_sha256,
-            record_sha256: requiredDigest(
-              row.record_sha256,
-              "row record digest",
-            ),
-            classification: Object.freeze({ kind: "rejected" }),
-          }),
-        );
+        rows.push(sourceRow(position, row, Object.freeze({ kind: "rejected" })));
         prior = row;
         continue;
       }
@@ -719,29 +723,15 @@ export class RecordRetrievalSourceSnapshotPortV1 {
         );
       }
       rows.push(
-        Object.freeze({
+        sourceRow(
           position,
-          envelope_id: requiredText(row.envelope_id, "row envelope_id"),
-          event_kind: "approved",
-          approval_id: requiredText(row.approval_id, "row approval_id"),
-          action: "approve",
-          semantic_idempotency_key: requiredDigest(
-            row.semantic_idempotency_key,
-            "row semantic idempotency key",
-          ),
-          envelope_sha256: requiredDigest(
-            row.envelope_sha256,
-            "row envelope digest",
-          ),
-          predecessor_position: row.predecessor_position,
-          predecessor_record_sha256: row.predecessor_record_sha256,
-          record_sha256: requiredDigest(row.record_sha256, "row record digest"),
-          classification: Object.freeze({
+          row,
+          Object.freeze({
             kind: "approved",
             policy_id: binding.policy_id,
             atom_count: signals.length,
           }),
-        }),
+        ),
       );
       prior = row;
     }

@@ -147,9 +147,6 @@ function admissionFrom(
  * one SQLite transaction, so no runner can overwrite a newer checkpoint.
  */
 export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeetingProcessingStateV1, ApprovalWorkflowStateV1 {
-  private readonly expectedProcessorAdapterId: string;
-  private readonly now: () => string;
-
   constructor(
     private readonly database: Database.Database,
     private readonly sourceCursorPolicy: AdmittedMeetingSourceCursorPolicyV1,
@@ -158,8 +155,8 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
      * bundle. An admitted source cannot be reopened through a different
      * decision processor implementation by accident.
      */
-    expectedProcessorAdapterId: string,
-    now: () => string = () => new Date().toISOString(),
+    private readonly expectedProcessorAdapterId: string,
+    private readonly now: () => string = () => new Date().toISOString(),
     /** The personal source this state reads and writes; every source names its own key. */
     private readonly sourceKey: string,
     private readonly requireSourceCurrent: () => void = () => {},
@@ -174,16 +171,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
         "admitted meeting-processing expected processor adapter identity is invalid",
       );
     }
-    this.expectedProcessorAdapterId = expectedProcessorAdapterId;
-    this.now = now;
   }
 
   async readAdmission(): Promise<AdmittedMeetingProcessingAdmissionV1> {
     return this.database.transaction(() => {
-      const admission = this.admission();
-      if (admission.membership_status !== "active") {
-        throw new AuthorityMeetingProcessingRevokedError();
-      }
+      const admission = this.activeAdmission();
       this.database
         .prepare(
           `INSERT INTO authority_live_source_progress_v2 (
@@ -228,8 +220,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
   assertCurrentSourceAdmission(expectedSource: AdapterIdentity): void {
     if (!this.database.inTransaction) throw new Error("source admission guard requires the custody transaction");
     this.requireSourceCurrent();
-    const admission = this.admission();
-    if (admission.membership_status !== "active") throw new AuthorityMeetingProcessingRevokedError();
+    const admission = this.activeAdmission();
     const current = admissionFrom(
       admission,
       this.progress(admission.semantic_input_sha256),
@@ -249,10 +240,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
   ): Promise<MeetingProcessingCandidateV1> {
     return this.database.transaction(() => {
       this.requireSourceCurrent();
-      const admission = this.admission();
-      if (admission.membership_status !== "active") {
-        throw new AuthorityMeetingProcessingRevokedError();
-      }
+      const admission = this.activeAdmission();
       const progress = this.progress(admission.semantic_input_sha256);
       const current = admissionFrom(
         admission,
@@ -348,8 +336,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           ? `pas_${candidateSemanticSha256.slice("sha256:".length)}`
           : null;
 
-      const now = this.now();
-      assertCanonicalUtcMillis(now);
+      const now = this.canonicalNow();
       this.database
         .prepare(
           `INSERT INTO authority_live_source_candidates_v2 (
@@ -423,10 +410,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     readonly canonical_revision: string;
   }): Promise<FrozenMeetingProcessingCandidateSnapshotV1 | undefined> {
     return this.database.transaction(() => {
-      const admission = this.admission();
-      if (admission.membership_status !== "active") {
-        throw new AuthorityMeetingProcessingRevokedError();
-      }
+      const admission = this.activeAdmission();
       assertAdmissionAdapterIdentity(
         admission,
         this.sourceCursorPolicy,
@@ -450,10 +434,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     readonly review_input_sha256: string;
   }): Promise<FrozenMeetingProcessingCandidateSnapshotV1 | undefined> {
     return this.database.transaction(() => {
-      const admission = this.admission();
-      if (admission.membership_status !== "active") {
-        throw new AuthorityMeetingProcessingRevokedError();
-      }
+      const admission = this.activeAdmission();
       assertAdmissionAdapterIdentity(
         admission,
         this.sourceCursorPolicy,
@@ -530,8 +511,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       const snapshotJson = canonicalJson(input.approved_snapshot);
       const snapshotSha256 = canonicalSha256(input.approved_snapshot);
       if (current.state === "queued") {
-        const now = this.now();
-        assertCanonicalUtcMillis(now);
+        const now = this.canonicalNow();
         const update = this.database
           .prepare(
             `UPDATE authority_live_approval_outbox_v2
@@ -573,8 +553,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
         "admitted meeting-processing cursor advance must change the cursor",
       );
     }
-    const updatedAt = this.now();
-    assertCanonicalUtcMillis(updatedAt);
+    const updatedAt = this.canonicalNow();
     return this.database.transaction(() => {
       this.requireSourceCurrent();
       const update = this.database
@@ -762,6 +741,21 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       throw new Error("admitted meeting-processing has not been admitted");
     }
     return admission;
+  }
+
+  private activeAdmission(): AdmissionRow {
+    const admission = this.admission();
+    if (admission.membership_status !== "active") {
+      throw new AuthorityMeetingProcessingRevokedError();
+    }
+    return admission;
+  }
+
+  /** The store clock, rejected unless it is a canonical UTC-millisecond timestamp. */
+  private canonicalNow(): string {
+    const now = this.now();
+    assertCanonicalUtcMillis(now);
+    return now;
   }
 
   private progress(admissionSemanticSha256: string): ProgressRow {
@@ -1016,22 +1010,20 @@ function assertAdmissionSnapshot(
   sourceCursorPolicy: AdmittedMeetingSourceCursorPolicyV1,
   expectedProcessorAdapterId: string,
 ): void {
-  if (admission.source.adapter_id !== sourceCursorPolicy.source_adapter_id) {
-    throw new Error(
-      "admitted meeting-processing admission adapter differs from its configured boundary",
-    );
-  }
-  if (admission.processor.adapter_id !== expectedProcessorAdapterId) {
-    throw new Error(
-      "admitted meeting-processing admission processor differs from its configured processor",
-    );
-  }
+  assertAdmissionAdapterIdentity(
+    {
+      source_adapter_id: admission.source.adapter_id,
+      processor_adapter_id: admission.processor.adapter_id,
+    },
+    sourceCursorPolicy,
+    expectedProcessorAdapterId,
+  );
   assertCanonicalUtcMillis(admission.source.cutoff_at);
   sourceCursorPolicy.assert_live_cursor(admission.source.cursor);
 }
 
 function assertAdmissionAdapterIdentity(
-  row: AdmissionRow,
+  row: Pick<AdmissionRow, "source_adapter_id" | "processor_adapter_id">,
   sourceCursorPolicy: AdmittedMeetingSourceCursorPolicyV1,
   expectedProcessorAdapterId: string,
 ): void {

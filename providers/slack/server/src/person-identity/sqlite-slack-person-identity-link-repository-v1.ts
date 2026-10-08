@@ -10,7 +10,7 @@ import { type SlackIdentityProviderV1 } from "../organization-control-plane/adap
 import { readActiveSlackConnectionV1, type StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import type Database from "better-sqlite3";
 import { ReadableSearchAuthorizationFence } from "@echo-brain/organization-authority-kernel/application/readable-search-authorization-fence";
-import { SlackPersonIdentityLinkWorkflowV1, type SlackPersonIdentityLinkAuthenticationPort, type SlackPersonIdentityLinkRepositoryPort } from "./slack-person-identity-link-workflow-v1.js";
+import { sameTool, SlackPersonIdentityLinkWorkflowV1, type SlackPersonIdentityLinkAuthenticationPort, type SlackPersonIdentityLinkRepositoryPort } from "./slack-person-identity-link-workflow-v1.js";
 
 const CHALLENGE_LIFETIME_MS = 15 * 60 * 1000;
 const DELIVERY_ADMISSION_COOLDOWN_MS = 60 * 1000;
@@ -79,16 +79,10 @@ interface ChallengeRow {
   readonly expires_at: string;
 }
 
-function addChallengeLifetime(now: string): string {
+function offsetTime(now: string, offsetMs: number): string {
   const milliseconds = Date.parse(now);
   if (!Number.isFinite(milliseconds)) throw new Error("invalid current time");
-  return new Date(milliseconds + CHALLENGE_LIFETIME_MS).toISOString();
-}
-
-function deliveryAdmissionCutoff(now: string): string {
-  const milliseconds = Date.parse(now);
-  if (!Number.isFinite(milliseconds)) throw new Error("invalid current time");
-  return new Date(milliseconds - DELIVERY_ADMISSION_COOLDOWN_MS).toISOString();
+  return new Date(milliseconds + offsetMs).toISOString();
 }
 
 function personSessionSha256(
@@ -146,18 +140,6 @@ function identityLinkId(verificationEventId: string): string {
   return `clm_${verificationEventId.slice(4)}`;
 }
 
-function sameTool(
-  left: ActiveSlackOrganizationTool,
-  right: ActiveSlackOrganizationTool | null,
-): boolean {
-  return right !== null && canonicalJson(left) === canonicalJson(right);
-}
-
-/**
- * SQLite repository adapter. It persists only challenge and identity-link
- * state in the frozen D2 baseline; authentication and token retrieval remain
- * Authority/runtime ports.
- */
 export interface CompleteBrowserSlackIdentityLinkInputV1 {
   readonly attempt_id: string;
   readonly person_session: PersonSlackIdentityLinkSession;
@@ -167,6 +149,11 @@ export interface CompleteBrowserSlackIdentityLinkInputV1 {
   readonly now: string;
 }
 
+/**
+ * SQLite repository adapter. It persists only challenge and identity-link
+ * state in the frozen D2 baseline; authentication and token retrieval remain
+ * Authority/runtime ports.
+ */
 export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLinkRepositoryPort {
   constructor(
     private readonly options: CreateSqliteSlackPersonIdentityLinkWorkflowV1Input,
@@ -302,7 +289,7 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
       const active = this.requireSameActiveTool(input.organization_tool);
       this.admitDeliveryCooldown(input.person_session.membership_id, input.now);
       const challengeAttemptId = `cat_${randomUUID()}`;
-      const expiresAt = addChallengeLifetime(input.now);
+      const expiresAt = offsetTime(input.now, CHALLENGE_LIFETIME_MS);
       this.options.database
         .prepare(
           `UPDATE organization_person_slack_link_challenges
@@ -377,13 +364,7 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
   }): PendingPersonSlackIdentityLinkChallenge {
     const row = this.challenge(input.challenge_attempt_id);
     if (row.status === "pending" && input.now >= row.expires_at) {
-      this.options.database
-        .prepare(
-          `UPDATE organization_person_slack_link_challenges
-         SET status = 'expired', completed_at = ?
-         WHERE challenge_attempt_id = ? AND status = 'pending'`,
-        )
-        .run(input.now, input.challenge_attempt_id);
+      this.failSlackIdentityLinkChallenge(input.challenge_attempt_id, input.now);
       throw new PersonSlackIdentityLinkConflictError(
         "Person Slack identity link challenge expired",
       );
@@ -804,7 +785,7 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
         `SELECT 1 FROM organization_person_slack_link_challenges
          WHERE membership_id = ? AND created_at > ? LIMIT 1`,
       )
-      .get(membershipId, deliveryAdmissionCutoff(now));
+      .get(membershipId, offsetTime(now, -DELIVERY_ADMISSION_COOLDOWN_MS));
     if (recent !== undefined) {
       throw new PersonSlackIdentityLinkConflictError(
         "A Slack identity-link challenge was requested recently; try again shortly",

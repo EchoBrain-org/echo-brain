@@ -1,5 +1,4 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { canonicalJson } from "@echo-brain/federation-protocol";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { validateOrganizationPersonSlackBrowserLinkAttemptRequest, validateOrganizationPersonSlackBrowserLinkBeginRequest, validateOrganizationPersonSlackBrowserLinkBeginResponse, validateOrganizationPersonSlackBrowserLinkStatusResponse, type OrganizationPersonSlackBrowserLinkBeginResponseV1, type OrganizationPersonSlackBrowserLinkStatusResponseV1 } from "@echo-brain/provider-slack-client/organization-api/person-slack-browser-link";
 import type { ActiveSlackOrganizationTool, PersonSlackIdentityLinkSession } from "../organization-control-plane/application/slack-integration-contracts.js";
@@ -7,6 +6,7 @@ import type { PersonAccessAuthorization } from "@echo-brain/organization-authori
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { SlackBrowserIdentityProvider } from "../adapters/oidc/slack-browser-identity-provider.js";
 import type { CompleteBrowserSlackIdentityLinkInputV1, SqliteSlackPersonIdentityLinkRepositoryV1 } from "./sqlite-slack-person-identity-link-repository-v1.js";
+import { personSession, sameTool } from "./slack-person-identity-link-workflow-v1.js";
 
 const ATTEMPT_LIFETIME_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 500;
@@ -47,17 +47,6 @@ export interface SlackPersonBrowserIdentityLinkWorkflowOptionsV1 {
   readonly now?: () => string;
 }
 
-function personSession(authorization: PersonAccessAuthorization, authorityId: string): PersonSlackIdentityLinkSession {
-  return Object.freeze({
-    authority_id: authorityId,
-    organization_id: authorization.organization_id,
-    principal_id: authorization.principal_id,
-    membership_id: authorization.membership_id,
-    identity_binding_id: authorization.identity_binding_id,
-    session_family_id: authorization.session_family_id,
-  });
-}
-
 function sameSession(left: PersonSlackIdentityLinkSession, right: PersonSlackIdentityLinkSession): boolean {
   return left.authority_id === right.authority_id && left.organization_id === right.organization_id &&
     left.principal_id === right.principal_id && left.membership_id === right.membership_id &&
@@ -68,10 +57,6 @@ function sameLinkOwner(left: PersonSlackIdentityLinkSession, right: PersonSlackI
   return left.authority_id === right.authority_id && left.organization_id === right.organization_id &&
     left.principal_id === right.principal_id && left.membership_id === right.membership_id &&
     left.identity_binding_id === right.identity_binding_id;
-}
-
-function sameTool(left: ActiveSlackOrganizationTool, right: ActiveSlackOrganizationTool | null): right is ActiveSlackOrganizationTool {
-  return right !== null && canonicalJson(left) === canonicalJson(right);
 }
 
 function randomSecret(): string {

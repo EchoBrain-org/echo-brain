@@ -286,6 +286,12 @@ function inputFingerprint(
   ])}`;
 }
 
+function operationContext(
+  signal: AbortSignal | undefined,
+): { readonly signal: AbortSignal } | undefined {
+  return signal === undefined ? undefined : { signal };
+}
+
 function rebindDecisionsToRevision(
   frozen: DecisionSet,
   frozenMeeting: MeetingDocument,
@@ -367,14 +373,10 @@ export class AdmittedMeetingProcessingCycleV1 {
     if (this.running !== undefined) return this.running;
     const run = this.run(signal);
     this.running = run;
-    void run.then(
-      () => {
-        if (this.running === run) this.running = undefined;
-      },
-      () => {
-        if (this.running === run) this.running = undefined;
-      },
-    );
+    const release = (): void => {
+      if (this.running === run) this.running = undefined;
+    };
+    void run.then(release, release);
     return run;
   }
 
@@ -385,7 +387,7 @@ export class AdmittedMeetingProcessingCycleV1 {
     try { result = await this.processSource(signal); }
     catch (error) {
       if (error instanceof AdapterError && signal?.aborted !== true) {
-        await this.options.stager.reconcilePendingDeliveries(signal === undefined ? undefined : { signal });
+        await this.options.stager.reconcilePendingDeliveries(operationContext(signal));
       }
       throw error;
     }
@@ -394,10 +396,7 @@ export class AdmittedMeetingProcessingCycleV1 {
     // this cycle from durably admitting the next unrelated meeting first.
     await this.phase(
       "approval_staging",
-      () =>
-        this.options.stager.reconcilePendingDeliveries(
-          signal === undefined ? undefined : { signal },
-        ),
+      () => this.options.stager.reconcilePendingDeliveries(operationContext(signal)),
       signal,
     );
     return result;
@@ -424,7 +423,7 @@ export class AdmittedMeetingProcessingCycleV1 {
         source: new MeetingSourceBridgeV1(this.options.source),
         request: { cursor: admission.source.cursor, limit: MAXIMUM_PULL_LIMIT },
         admission: automaticMeetingSourceAdmission(this.options.source_ingestion),
-        context: signal === undefined ? undefined : { signal },
+        context: operationContext(signal),
       }));
       const batch = { meetings: sourceBatch.sources.map(meetingFromSourceEnvelopeV1), next_cursor: sourceBatch.next_cursor };
       const meeting = batch.meetings[0];
@@ -496,9 +495,7 @@ export class AdmittedMeetingProcessingCycleV1 {
             );
           }
           if (frozen.disposition === "no_signals") {
-            await this.options.stager.reconcileSuperseded(
-              signal === undefined ? undefined : { signal },
-            );
+            await this.options.stager.reconcileSuperseded(operationContext(signal));
           }
           return this.finishWithoutStage(
             "already_processed",
@@ -576,7 +573,7 @@ export class AdmittedMeetingProcessingCycleV1 {
             processor_version: this.options.processor.identity.version,
             input_fingerprint: inputFingerprint(meeting, this.options.processor),
           },
-          signal === undefined ? undefined : { signal },
+          operationContext(signal),
         );
         receivedOutput = true;
         assertCanonicalDecisionSet(
@@ -616,9 +613,7 @@ export class AdmittedMeetingProcessingCycleV1 {
           review_policy: reviewPolicy,
         });
         if (candidate.disposition !== "actionable") {
-          await this.options.stager.reconcileSuperseded(
-            signal === undefined ? undefined : { signal },
-          );
+          await this.options.stager.reconcileSuperseded(operationContext(signal));
           return candidate.disposition === "no_signals"
             ? this.finishWithoutStage(
                 "no_signals",
@@ -656,7 +651,7 @@ export class AdmittedMeetingProcessingCycleV1 {
     try {
       staged = await this.options.stager.stage(
         { admission, candidate, meeting, decisions },
-        signal === undefined ? undefined : { signal },
+        operationContext(signal),
       );
     } catch (error) {
       // The candidate/outbox is already durable and stays queued. Preserve a

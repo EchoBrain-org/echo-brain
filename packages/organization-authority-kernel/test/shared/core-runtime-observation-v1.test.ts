@@ -25,6 +25,26 @@ describe("core runtime observations", () => {
     expect(() => normalizeCoreRuntimeDetailV1({ ...events[1]!, evidence_source: "private-provider-url" as "ticket" })).toThrow("invalid core runtime observation");
   });
 
+  it("admits only bounded upstream rate-limit attribution and numeric hints", async () => {
+    const events: CoreRuntimeObservationV1[] = [];
+    await observeCoreRuntimeV1("http_request", async () => {
+      annotateCoreRuntimeV1({
+        upstream_service: "nango",
+        upstream_operation: "connection_read",
+        upstream_rate_limit_reason: "burst",
+        counts: { upstream_retry_after_seconds: 30, upstream_rate_limit: 100, upstream_rate_remaining: 0, upstream_rate_reset_unix_seconds: 1_790_000_000 },
+      });
+    }, { observer: event => { events.push(event); } });
+    expect(normalizeCoreRuntimeDetailV1(events.at(-1)!)).toMatchObject({
+      upstream_service: "nango", upstream_operation: "connection_read", upstream_rate_limit_reason: "burst",
+      counts: { upstream_retry_after_seconds: 30, upstream_rate_limit: 100, upstream_rate_remaining: 0, upstream_rate_reset_unix_seconds: 1_790_000_000 },
+    });
+    expect(() => normalizeCoreRuntimeDetailV1({ ...events.at(-1)!, upstream_service: "https://private.example" as "nango" })).toThrow("invalid core runtime observation");
+    expect(() => normalizeCoreRuntimeDetailV1({ ...events.at(-1)!, upstream_operation: "raw_header" as "connection_read" })).toThrow("invalid core runtime observation");
+    expect(() => normalizeCoreRuntimeDetailV1({ ...events.at(-1)!, upstream_rate_limit_reason: "X-RateLimit-Reason: private" as "burst" })).toThrow("invalid core runtime observation");
+    expect(() => normalizeCoreRuntimeDetailV1({ ...events.at(-1)!, counts: { ...events.at(-1)!.counts, upstream_retry_after_seconds: 1.5 } })).toThrow("invalid core runtime count");
+  });
+
   it("keeps concurrent operations separate, links shared work, and isolates throwing observers", async () => {
     const events: CoreRuntimeObservationV1[] = [];
     const scope = { observer: (event: CoreRuntimeObservationV1) => { events.push(event); } };

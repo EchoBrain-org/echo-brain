@@ -85,7 +85,7 @@ export async function createCoreApproval({ context, input, owner, employee, sess
     if (context[field] === undefined) throw new TypeError(`context.${field} is required`);
   }
   const ownerActor = person(owner, "owner");
-  const employeeActor = employee === undefined ? undefined : person(employee, "employee");
+  const employeeActor = person(employee, "employee");
   const database = context.authority_database;
   const authenticate = personToolAuthenticationV1(sessions);
   const audience_project_id = createAudienceProject({ database, sessions, owner: ownerActor, employee: employeeActor });

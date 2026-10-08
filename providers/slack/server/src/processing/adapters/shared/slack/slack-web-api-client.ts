@@ -560,15 +560,15 @@ export class SlackWebApiClient {
       const [seconds, micros] = value.split(".") as [string, string];
       return BigInt(seconds) * 1_000_000n + BigInt(micros);
     };
-    if (timestampMicros(input.oldest) > timestampMicros(input.latest)) {
+    const oldestMicros = timestampMicros(input.oldest);
+    const latestMicros = timestampMicros(input.latest);
+    if (oldestMicros > latestMicros) {
       throw new SlackApiError(
         "invalid",
         "Slack conversations.history bounds are reversed",
         false,
       );
     }
-    const oldestMicros = timestampMicros(input.oldest);
-    const latestMicros = timestampMicros(input.latest);
     const messages: SlackChannelMessage[] = [];
     const seenCursors = new Set<string>();
     const seenTimestamps = new Set<string>();
@@ -675,6 +675,10 @@ export class SlackWebApiClient {
       options.unknownOutcomeOnTransportFailure === true
         ? "unknown_outcome"
         : "transient";
+    const responseFailureCode: SlackApiErrorCode =
+      options.unknownOutcomeOnTransportFailure === true
+        ? "unknown_outcome"
+        : "invalid";
     const controller = new AbortController();
     const abortUpstream = () => controller.abort(options.signal?.reason);
     options.signal?.addEventListener("abort", abortUpstream, { once: true });
@@ -748,56 +752,28 @@ export class SlackWebApiClient {
         response,
         method,
         transportFailureCode,
-        options.unknownOutcomeOnTransportFailure === true
-          ? "unknown_outcome"
-          : "invalid",
+        responseFailureCode,
       );
       if (!isPlainObject(body)) {
-        const responseShapeCode: SlackApiErrorCode =
-          options.unknownOutcomeOnTransportFailure === true
-            ? "unknown_outcome"
-            : "invalid";
         throw new SlackApiError(
-          responseShapeCode,
+          responseFailureCode,
           `Slack ${method} returned an unexpected body`,
-          responseShapeCode === "unknown_outcome",
+          responseFailureCode === "unknown_outcome",
         );
       }
       if (body["ok"] !== true) {
         const error = isNonEmptyString(body["error"])
           ? body["error"]
           : "unknown_error";
-        if (AUTH_ERRORS.has(error)) {
-          throw new SlackApiError(
-            "auth",
-            `Slack ${method} failed: ${error}`,
-            false,
-            undefined,
-            error,
-          );
-        }
-        if (RATE_LIMIT_ERRORS.has(error)) {
-          throw new SlackApiError(
-            "rate_limited",
-            `Slack ${method} failed: ${error}`,
-            true,
-            undefined,
-            error,
-          );
-        }
-        if (TRANSIENT_ERRORS.has(error)) {
-          throw new SlackApiError(
-            transportFailureCode,
-            `Slack ${method} failed: ${error}`,
-            true,
-            undefined,
-            error,
-          );
-        }
+        const [code, retryable]: [SlackApiErrorCode, boolean] =
+          AUTH_ERRORS.has(error) ? ["auth", false]
+          : RATE_LIMIT_ERRORS.has(error) ? ["rate_limited", true]
+          : TRANSIENT_ERRORS.has(error) ? [transportFailureCode, true]
+          : ["invalid", false];
         throw new SlackApiError(
-          "invalid",
+          code,
           `Slack ${method} failed: ${error}`,
-          false,
+          retryable,
           undefined,
           error,
         );

@@ -307,10 +307,6 @@ function reviewLines(item: PrivateSlackApprovalReviewItemV1): string[] {
   return [`• ${escapeMrkdwn(item.text)}`];
 }
 
-function actionLines(item: PrivateSlackApprovalActionItemV1): string[] {
-  return [`• ${escapeMrkdwn(item.text)}`];
-}
-
 function decisionContainer(
   input: PrivateSlackApprovalBlockKitCardInputV1,
   group: PrivateSlackApprovalDecisionGroupV1,
@@ -360,7 +356,7 @@ function meetingFollowUp(
   if (hasActions) {
     childBlocks.push({
       type: "section",
-      text: mrkdwnText(section("Next steps", actions.flatMap(actionLines))),
+      text: mrkdwnText(section("Next steps", actions.flatMap(reviewLines))),
     });
   }
   if (hasContext) {

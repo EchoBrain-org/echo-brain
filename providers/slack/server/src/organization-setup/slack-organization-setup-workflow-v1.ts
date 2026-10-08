@@ -116,13 +116,13 @@ async function missingNangoConnectionV1(nango: NangoConnectionClientV1, connecti
   }
 }
 
-function failureOf(error: unknown): { reason: OrganizationSlackInstallFailureReasonV1 } {
-  if (error instanceof SlackConnectionRefusedErrorV1) return { reason: error.reason };
+function failureReason(error: unknown): OrganizationSlackInstallFailureReasonV1 {
+  if (error instanceof SlackConnectionRefusedErrorV1) return error.reason;
   if ((error instanceof NangoClientErrorV1 && error.code === "unauthorized") || error instanceof SlackAppManifestProviderErrorV1 ||
     (error instanceof SlackIdentityProviderErrorV1 && error.code === "unauthorized")) {
-    return { reason: "provider_rejected" };
+    return "provider_rejected";
   }
-  return { reason: "provider_unavailable" };
+  return "provider_unavailable";
 }
 
 function disconnectsBoundConnection(reason: OrganizationSlackInstallFailureReasonV1): boolean {
@@ -330,7 +330,7 @@ export class SlackOrganizationSetupWorkflowV1 {
       // The rebind's final old-connection read is still provider observation:
       // a Nango outage leaves the attempt pending, just like the status read.
       if (error instanceof NangoClientErrorV1 && error.code === "unavailable") return statusResponse(attempt);
-      const { reason } = failureOf(error);
+      const reason = failureReason(error);
       // The active connection's Nango connection now holds another workspace or bot, or is gone.
       const bound = attempt.reconnect ?? attempt.rebind;
       if (bound !== null && (

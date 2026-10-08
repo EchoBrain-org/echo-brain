@@ -27,8 +27,7 @@ import {
   readableSearchGenerationContractV1,
   type ReadableSearchRelatedAtomProjectorBindingV1,
 } from "./readable-search-generation-composition.js";
-import type { OrganizationAuthorityApiRuntimeConfig } from "./organization-authority-api-runtime.js";
-import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
+import type { OrganizationAuthorityApiRuntimeConfig, OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 

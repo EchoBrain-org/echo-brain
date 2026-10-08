@@ -279,11 +279,11 @@ export class OrganizationRecordAppenderV4 {
       );
       const canonical_envelope = canonicalJson(envelope);
       const envelope_sha256 = sha256Digest(canonical_envelope);
-      const projected = this.projectPolicyFacts(
+      const projected = this.policyProjectors.project({
         envelope,
-        position,
-        input.authorization_witness,
-      );
+        record_position: position,
+        witness: input.authorization_witness,
+      });
       const receipt_seed = input.receipt_factory.createSeed({
         envelope,
         position,
@@ -388,18 +388,6 @@ export class OrganizationRecordAppenderV4 {
         input.receipt_payload,
         input.input.receipt_issued_at,
       );
-  }
-
-  private projectPolicyFacts(
-    envelope: V4RecordEnvelopeView,
-    record_position: number,
-    witness: unknown,
-  ): PersonPolicyFactProjectionV2 {
-    return this.policyProjectors.project({
-      envelope,
-      record_position,
-      witness,
-    });
   }
 
   private insertFacts(

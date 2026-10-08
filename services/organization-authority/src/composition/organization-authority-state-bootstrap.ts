@@ -94,7 +94,7 @@ export interface AuthorityStateSeedV1 {
   readonly control_plane_id: string;
 }
 
-function generatedAuthorityStateSeed(): AuthorityStateSeedV1 {
+export function generatedAuthorityStateSeed(): AuthorityStateSeedV1 {
   return Object.freeze({
     authority_id: federationId("oau"),
     organization_id: federationId("org"),
@@ -105,7 +105,7 @@ function generatedAuthorityStateSeed(): AuthorityStateSeedV1 {
   });
 }
 
-function validateAuthorityStateSeed(
+export function validateAuthorityStateSeed(
   seed: AuthorityStateSeedV1,
 ): AuthorityStateSeedV1 {
   const value = seed as unknown as Record<string, unknown>;

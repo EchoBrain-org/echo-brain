@@ -130,7 +130,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     const cited = answer.citations[0]!.citation; if (cited.kind !== 'ticket') throw new Error('Expected fixture ticket citation');
     expect(() => validatePersonAnswerResponseV4(response.body)).toThrow();
     expect(generate).toHaveBeenCalledTimes(4);
-    const completed = events().find(event => event.diagnostic?.phase === 'http_request' && event.event === 'succeeded');
+    const completed = events().find(event => event.diagnostic?.phase === 'http_request' && event.diagnostic.root === true && event.event === 'succeeded');
     expect(completed).toMatchObject({ diagnostic: { result: 'answered', counts: { ticket_retrieved_items: 1, ticket_context_items: 1, ticket_citations: 1 } } });
     expect(events()).toEqual(expect.arrayContaining([
       expect.objectContaining({ journey_id: completed.journey_id, event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'verified' }) }),

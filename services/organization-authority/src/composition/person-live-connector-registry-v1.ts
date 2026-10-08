@@ -9,10 +9,6 @@ export const LEGACY_PAGE_CONNECTOR_V1 = Object.freeze({
   descriptor: liveSourceDescriptorV2({ source: 'page' }),
   scopes: Object.freeze(['global', 'project'] as const), minimum_response_version: 6 as const,
 });
-export const LEGACY_SLACK_CONNECTOR_V1 = Object.freeze({
-  descriptor: liveSourceDescriptorV2({ source: 'slack' }),
-  scopes: Object.freeze(['global'] as const), minimum_response_version: 5 as const,
-});
 export const JIRA_LIVE_CONNECTOR_V1 = Object.freeze({
   ...LEGACY_TICKET_CONNECTOR_V1,
   descriptor: Object.freeze({ ...LEGACY_TICKET_CONNECTOR_V1.descriptor, source_id: 'jira', tool_id: 'jira', description: `${LEGACY_TICKET_CONNECTOR_V1.descriptor.description} Date filters select ticket creation dates.` }),

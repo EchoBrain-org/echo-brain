@@ -32,6 +32,7 @@ import {
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import type Database from "better-sqlite3";
 import { captureRecordProjectsV1, type CaptureRecordProjectsV1, type RecordProjectAuthorizationV1 } from "./person-record-project-scope-v1.js";
+import { readReadableSearchRecordHeadV1 as recordHead, type ReadableSearchRecordHeadV1 } from "./readable-search-generation-reconciler.js";
 import { boundedTextV1 } from "../application/person-item-text-v1.js";
 import {
   RecordMetadataCacheV1,
@@ -82,11 +83,6 @@ interface ActiveGenerationRow {
   readonly retrieval_contract_sha256: Sha256Digest;
   readonly record_head_position: number;
   readonly record_head_hash: Sha256Digest | null;
-}
-
-interface RecordHead {
-  readonly position: number;
-  readonly record_sha256: Sha256Digest | null;
 }
 
 type SearchGeneration = typeof searchReadableSearchGenerationV1;
@@ -347,23 +343,7 @@ function activeGeneration(
   );
 }
 
-function recordHead(record: Database.Database): RecordHead {
-  const row = record
-    .prepare(
-      `SELECT position, record_sha256
-         FROM organization_record_log
-        ORDER BY position DESC
-        LIMIT 1`,
-    )
-    .get() as
-    | { readonly position: number; readonly record_sha256: Sha256Digest }
-    | undefined;
-  return row === undefined
-    ? Object.freeze({ position: 0, record_sha256: null })
-    : Object.freeze({ ...row });
-}
-
-function sameHead(pointer: ActiveGenerationRow, head: RecordHead): boolean {
+function sameHead(pointer: ActiveGenerationRow, head: ReadableSearchRecordHeadV1): boolean {
   return (
     pointer.record_head_position === head.position &&
     pointer.record_head_hash === head.record_sha256
@@ -373,7 +353,7 @@ function sameHead(pointer: ActiveGenerationRow, head: RecordHead): boolean {
 function isVerifiedIndexLag(
   record: Database.Database,
   pointer: ActiveGenerationRow | null,
-  head: RecordHead,
+  head: ReadableSearchRecordHeadV1,
   options: Pick<CreatePersonRecordSearchRouteV1Options, "organization_id" | "retrieval_contract_sha256">,
 ): boolean {
   if (pointer === null) return true;
@@ -436,7 +416,7 @@ function validBatchQuery(query: string): boolean {
 /** Mine narrows to the caller's own approvals; it is never combined with a project. */
 function assertValidMine(input: { readonly mine?: unknown; readonly project_id?: unknown }): void {
   if ((input.mine !== undefined && input.mine !== true) || (input.mine === true && input.project_id !== undefined)) {
-    throw new AuthorityOperationError("invalid_request", "request is invalid");
+    invalidRequest();
   }
 }
 
@@ -455,7 +435,7 @@ function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
         input.limit < 1 ||
         input.limit > 10))
   ) {
-    throw new AuthorityOperationError("invalid_request", "request is invalid");
+    invalidRequest();
   }
 }
 
@@ -504,7 +484,7 @@ function deskLabel(title: string | undefined, time: { readonly scheduled_start_a
 
 /** Store-raw: only the list route collapses these tokens (ADR-0024). */
 function recordVisibility(policy_id: ReadableSearchResultItemV1["policy_id"], audience_project_count: number): Exclude<PersonStoreVisibilityV1, "only_me"> {
-  if (policy_id === "project-members-readable-person-v1" && audience_project_count < 1) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+  if (policy_id === "project-members-readable-person-v1" && audience_project_count < 1) metadataUnavailable();
   return policy_id === "restricted-reviewer-person-v2" ? "approver_only" : policy_id === "project-members-readable-person-v1" ? (audience_project_count === 1 ? "project" : "projects") : "team";
 }
 
@@ -512,16 +492,16 @@ function deskItems(record: Database.Database, items: readonly ReadableSearchResu
   const statement = record.prepare(`SELECT canonical_envelope, envelope_sha256, record_sha256 FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'`);
   return Object.freeze(items.map((item) => {
     const row = statement.get(item.record_position, item.record_sha256) as { readonly canonical_envelope: string; readonly envelope_sha256: Sha256Digest; readonly record_sha256: Sha256Digest } | undefined;
-    if (row === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+    if (row === undefined) metadataUnavailable();
     let envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
-    try { envelope = validateOrganizationRecordEnvelopeV4(parseCanonicalJson(row.canonical_envelope), codecs); } catch { throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable"); }
-    if (row.envelope_sha256 !== item.envelope_sha256 || sha256Digest(row.canonical_envelope) !== row.envelope_sha256 || envelope.record_sha256 !== item.record_sha256 || envelope.body.event.kind !== "approved") throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+    try { envelope = validateOrganizationRecordEnvelopeV4(parseCanonicalJson(row.canonical_envelope), codecs); } catch { metadataUnavailable(); }
+    if (row.envelope_sha256 !== item.envelope_sha256 || sha256Digest(row.canonical_envelope) !== row.envelope_sha256 || envelope.record_sha256 !== item.record_sha256 || envelope.body.event.kind !== "approved") metadataUnavailable();
     const brief = envelope.body.event.approved_snapshot.approved_payload.brief;
-    if (item.atom_order === undefined || item.audience_project_count === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+    if (item.atom_order === undefined || item.audience_project_count === undefined) metadataUnavailable();
     const signal = [...brief.decisions, ...brief.actions, ...brief.rationales][item.atom_order];
     const owner = signal?.kind === "action" ? confirmedOwners(envelope.body.human_act_resolution_ref).get(signal.id) : undefined;
     const indexedText = signal === undefined ? undefined : owner === undefined ? signal.text : `${signal.text} Owner: ${owner}.`;
-    if (signal === undefined || signal.kind !== item.item_kind || indexedText !== item.text) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+    if (signal === undefined || signal.kind !== item.item_kind || indexedText !== item.text) metadataUnavailable();
     const attributes = signal.kind === "decision" ? { status: signal.status } : signal.kind === "action" ? { ...(owner === undefined ? {} : { owner }), ...(signal.due_at === null ? {} : { due_at: signal.due_at }) } : undefined;
     const visibility = recordVisibility(item.policy_id, item.audience_project_count);
     return Object.freeze({ atom_id: item.atom_id, record_sha256: item.record_sha256, item_kind: item.item_kind, text: item.text, policy_id: item.policy_id, record_position: item.record_position, envelope_sha256: item.envelope_sha256, atom_order: item.atom_order, audience_project_count: item.audience_project_count, label: deskLabel(brief.meeting.title, brief.meeting.time), visibility, ...(attributes === undefined || Object.keys(attributes).length === 0 ? {} : { attributes: Object.freeze(attributes) }) });
@@ -536,10 +516,10 @@ function boundedDeskItems(items: readonly ReadableSearchResultItemV1[]): readonl
 
 function approvedRecordAtomCount(record: Database.Database, position: number, recordSha256: Sha256Digest, codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4): number {
   const row = record.prepare(`SELECT canonical_envelope FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'`).get(position, recordSha256) as { readonly canonical_envelope: string } | undefined;
-  if (row === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+  if (row === undefined) metadataUnavailable();
   let envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
-  try { envelope = validateOrganizationRecordEnvelopeV4(parseCanonicalJson(row.canonical_envelope), codecs); } catch { throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable"); }
-  if (envelope.record_sha256 !== recordSha256 || envelope.body.event.kind !== "approved") throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+  try { envelope = validateOrganizationRecordEnvelopeV4(parseCanonicalJson(row.canonical_envelope), codecs); } catch { metadataUnavailable(); }
+  if (envelope.record_sha256 !== recordSha256 || envelope.body.event.kind !== "approved") metadataUnavailable();
   const brief = envelope.body.event.approved_snapshot.approved_payload.brief;
   return brief.decisions.length + brief.actions.length + brief.rationales.length;
 }
@@ -566,6 +546,16 @@ function isUnavailableGenerationError(error: unknown): boolean {
     error instanceof Error &&
     error.message.endsWith("active-generation handle is unavailable")
   );
+}
+
+/** A dropped process handle reads as the same unavailable generation. */
+function readGeneration<T>(read: () => T): T {
+  try {
+    return read();
+  } catch (error) {
+    if (isUnavailableGenerationError(error)) unavailable();
+    throw error;
+  }
 }
 
 const MEETING_COLLECT_MAX = 26;
@@ -689,6 +679,10 @@ export function createPersonRecordSearchRouteV1(
     return { principal_id: authorization.principal_id, membership_id: authorization.membership_id, ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }) };
   }
 
+  function assertGeneration(result: Pick<ReadableSearchResultV1, "generation_id" | "exact_head">, pointer: ActiveGenerationRow): void {
+    if (!hasExpectedGenerationIdentity({ result, pointer, authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id })) unavailable();
+  }
+
   /** Commits the audited bytes before admitting a route-local batch witness. */
   function commitBatchRelease(input: {
     readonly initial_authorization: PersonRecordSearchReleaseAuthorizationV1;
@@ -790,7 +784,7 @@ export function createPersonRecordSearchRouteV1(
         listed = list();
       } catch { unavailable(); }
     }
-    if (!hasExpectedGenerationIdentity({ result: listed, pointer, authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id })) unavailable();
+    assertGeneration(listed, pointer);
     return listed.records;
   }
 
@@ -906,12 +900,7 @@ export function createPersonRecordSearchRouteV1(
   function assertExpectedOrganization(
     authorization: PersonAccessAuthorization,
   ): void {
-    if (authorization.organization_id !== options.organization_id) {
-      throw new AuthorityOperationError(
-        "unauthorized",
-        "person authentication failed",
-      );
-    }
+    if (authorization.organization_id !== options.organization_id) personDenied();
   }
 
   function searchBatch(
@@ -949,10 +938,8 @@ export function createPersonRecordSearchRouteV1(
       unavailable();
     }
     const mine = input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined;
-    let results;
-    try {
-      results = input.queries.map((query) =>
-        search({
+    const results = readGeneration(() => input.queries.map((query) =>
+      search({
         state_directory: options.state_directory,
         active_generation: activeGenerationAt(pointer),
         reader: readerOf(authorization, projects),
@@ -961,26 +948,9 @@ export function createPersonRecordSearchRouteV1(
         query,
         ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
         ...(input.limit === undefined ? {} : { limit: input.limit }),
-        }),
-      );
-    } catch (error) {
-      if (isUnavailableGenerationError(error))
-        unavailable();
-      throw error;
-    }
-    for (const result of results) {
-      if (
-        !hasExpectedGenerationIdentity({
-          result,
-          pointer,
-          authority_id: options.authority_id,
-          organization_id: options.organization_id,
-          state_lineage_id: options.state_lineage_id,
-        })
-      ) {
-        unavailable();
-      }
-    }
+      }),
+    ));
+    for (const result of results) assertGeneration(result, pointer);
     // Preserve the answer-composition plan's order while giving every focused query one
     // result per round. This is deterministic breadth without pretending that
     // the Layer 3 boundary has a cross-query reranker.
@@ -1031,34 +1001,17 @@ export function createPersonRecordSearchRouteV1(
       ].slice(0, 3);
       if (anchors.length > 0) {
         const relatedLimit = RELATED_ATOM_PACKET_MAX_ITEMS_V1 - anchors.length;
-        let related: ReadableSearchResultV1;
-        try {
-          related = options.expand_related_atoms({
-            state_directory: options.state_directory,
-            active_generation: activeGenerationAt(pointer),
-            reader: readerOf(authorization, projects),
-            ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
-            ...(mine === undefined ? {} : { record_sha256s: mine }),
-            anchor_atom_ids: anchors.map((item) => item.atom_id),
-            limit: relatedLimit,
-            include_anchor_records: true,
-          });
-        } catch (error) {
-          if (isUnavailableGenerationError(error))
-            unavailable();
-          throw error;
-        }
-        if (
-          !hasExpectedGenerationIdentity({
-            result: related,
-            pointer,
-            authority_id: options.authority_id,
-            organization_id: options.organization_id,
-            state_lineage_id: options.state_lineage_id,
-          })
-        ) {
-          unavailable();
-        }
+        const related = readGeneration(() => options.expand_related_atoms!({
+          state_directory: options.state_directory,
+          active_generation: activeGenerationAt(pointer),
+          reader: readerOf(authorization, projects),
+          ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
+          ...(mine === undefined ? {} : { record_sha256s: mine }),
+          anchor_atom_ids: anchors.map((item) => item.atom_id),
+          limit: relatedLimit,
+          include_anchor_records: true,
+        }));
+        assertGeneration(related, pointer);
         // Expansion is bounded to three anchors, not three relevant records.
         // Give independent lexical evidence a turn before related facts fill
         // the packet. Reuse the multiple-hit support preference above so an
@@ -1100,10 +1053,7 @@ export function createPersonRecordSearchRouteV1(
       captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256 ||
       released.organization_id !== options.organization_id
     ) {
-      throw new AuthorityOperationError(
-        "unauthorized",
-        "person authentication failed",
-      );
+      personDenied();
     }
     // This selector is a relevance narrowing only. It runs after the existing
     // generation, head, and second current-Person checks, and falls back to
@@ -1153,22 +1103,16 @@ export function createPersonRecordSearchRouteV1(
   }): PersonRecordSearchBatchResultV1 {
     if (options.expand_related_atoms === undefined) unavailable();
     const mine = input.mine === true ? mineRecordSet(input.current, input.projects, input.pointer) : undefined;
-    let resolvedAnchor: ReadableSearchResultItemV1 | undefined;
-    try {
-      const anchors = readReadableSearchGenerationAtomsV1({
-        state_directory: options.state_directory,
-        active_generation: activeGenerationAt(input.pointer),
-        reader: readerOf(input.current, input.projects),
-        ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
-        ...(mine === undefined ? {} : { record_sha256s: mine }),
-        atom_ids: [input.anchor.atom_id],
-      });
-      if (!hasExpectedGenerationIdentity({ result: anchors, pointer: input.pointer, authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id })) unavailable();
-      resolvedAnchor = anchors.items[0];
-    } catch (error) {
-      if (isUnavailableGenerationError(error)) unavailable();
-      throw error;
-    }
+    const anchors = readGeneration(() => readReadableSearchGenerationAtomsV1({
+      state_directory: options.state_directory,
+      active_generation: activeGenerationAt(input.pointer),
+      reader: readerOf(input.current, input.projects),
+      ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
+      ...(mine === undefined ? {} : { record_sha256s: mine }),
+      atom_ids: [input.anchor.atom_id],
+    }));
+    assertGeneration(anchors, input.pointer);
+    const resolvedAnchor = anchors.items[0];
     if (resolvedAnchor === undefined ||
       resolvedAnchor.record_sha256 !== input.anchor.record_sha256 ||
       resolvedAnchor.record_position !== input.anchor.record_position ||
@@ -1178,26 +1122,20 @@ export function createPersonRecordSearchRouteV1(
       resolvedAnchor.item_kind !== input.anchor.item_kind ||
       resolvedAnchor.text !== input.anchor.text ||
       resolvedAnchor.policy_id !== input.anchor.policy_id) unavailable();
-    let related: ReadableSearchResultV1;
-    try {
-      related = options.expand_related_atoms({
-        state_directory: options.state_directory,
-        active_generation: activeGenerationAt(input.pointer),
-        reader: readerOf(input.current, input.projects),
-        ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
-        ...(mine === undefined ? {} : { record_sha256s: mine }),
-        anchor_atom_ids: [resolvedAnchor.atom_id],
-        include_anchor_records: true,
-        limit: 9,
-      });
-    } catch (error) {
-      if (isUnavailableGenerationError(error)) unavailable();
-      throw error;
-    }
-    if (!hasExpectedGenerationIdentity({ result: related, pointer: input.pointer, authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id })) unavailable();
+    const related = readGeneration(() => options.expand_related_atoms!({
+      state_directory: options.state_directory,
+      active_generation: activeGenerationAt(input.pointer),
+      reader: readerOf(input.current, input.projects),
+      ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
+      ...(mine === undefined ? {} : { record_sha256s: mine }),
+      anchor_atom_ids: [resolvedAnchor.atom_id],
+      include_anchor_records: true,
+      limit: 9,
+    }));
+    assertGeneration(related, input.pointer);
     const items = [resolvedAnchor, ...related.items.filter((item) => item.record_sha256 === resolvedAnchor.record_sha256)].slice(0, 10);
     const released = options.sessions.authenticateAccess({ access_token: input.access_token });
-    if (!samePersonReleaseAuthorizationV1(input.current, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== input.projects.grants_sha256 || !samePointer(input.pointer, activeGeneration(options.authority)) || !sameHead(input.pointer, recordHead(options.record))) throw new AuthorityOperationError("unauthorized", "person authentication failed");
+    if (!samePersonReleaseAuthorizationV1(input.current, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== input.projects.grants_sha256 || !samePointer(input.pointer, activeGeneration(options.authority)) || !sameHead(input.pointer, recordHead(options.record))) personDenied();
     const deskSourceItems = boundedDeskItems(items);
     const response = asResponse({ items: deskSourceItems });
     const projection = deskItems(options.record, deskSourceItems, options.record_input_codecs);
@@ -1254,7 +1192,7 @@ export function createPersonRecordSearchRouteV1(
     }): PersonRecordSearchBatchResultV1 {
       assertValidMine(input);
       const limit = input.limit ?? 50;
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new AuthorityOperationError("invalid_request", "request is invalid");
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) invalidRequest();
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
       assertExpectedOrganization(authorization);
       const projects = captureRecordProjectsV1(options.capture_projects, authorization, input.project_id);
@@ -1262,20 +1200,17 @@ export function createPersonRecordSearchRouteV1(
       const pointer = activeGeneration(options.authority);
       if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 || !sameHead(pointer, head) || (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer))) unavailable();
       const mine = input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined;
-      let inventory: ReadableSearchResultV1;
-      try {
-        inventory = listReadableSearchGenerationV1({
-          state_directory: options.state_directory,
-          active_generation: activeGenerationAt(pointer),
-          reader: readerOf(authorization, projects),
-          ...(input.project_id === undefined ? {} : { project_id: input.project_id }), limit,
-          ...(mine === undefined ? {} : { record_sha256s: mine }),
-          ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
-        });
-      } catch (error) { if (isUnavailableGenerationError(error)) unavailable(); throw error; }
-      if (!hasExpectedGenerationIdentity({ result: inventory, pointer, authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id })) unavailable();
+      const inventory = readGeneration(() => listReadableSearchGenerationV1({
+        state_directory: options.state_directory,
+        active_generation: activeGenerationAt(pointer),
+        reader: readerOf(authorization, projects),
+        ...(input.project_id === undefined ? {} : { project_id: input.project_id }), limit,
+        ...(mine === undefined ? {} : { record_sha256s: mine }),
+        ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
+      }));
+      assertGeneration(inventory, pointer);
       const released = options.sessions.authenticateAccess({ access_token: input.access_token });
-      if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) throw new AuthorityOperationError("unauthorized", "person authentication failed");
+      if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) personDenied();
       const deskSourceItems = boundedDeskItems(inventory.items);
       const response = asResponse({ items: deskSourceItems });
       const projection = deskItems(options.record, deskSourceItems, options.record_input_codecs);
@@ -1301,15 +1236,12 @@ export function createPersonRecordSearchRouteV1(
       const pointer = activeGeneration(options.authority);
       if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 || !sameHead(pointer, head)) unavailable();
       const mine = input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined;
-      let found: ReadableSearchResultV1;
-      try {
-        found = readReadableSearchGenerationAtomsV1({ state_directory: options.state_directory, active_generation: activeGenerationAt(pointer), reader: readerOf(authorization, projects), ...(input.project_id === undefined ? {} : { project_id: input.project_id }), ...(mine === undefined ? {} : { record_sha256s: mine }), atom_ids: [input.atom_id] });
-      } catch (error) { if (isUnavailableGenerationError(error)) unavailable(); throw error; }
-      if (!hasExpectedGenerationIdentity({ result: found, pointer, authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id })) unavailable();
+      const found = readGeneration(() => readReadableSearchGenerationAtomsV1({ state_directory: options.state_directory, active_generation: activeGenerationAt(pointer), reader: readerOf(authorization, projects), ...(input.project_id === undefined ? {} : { project_id: input.project_id }), ...(mine === undefined ? {} : { record_sha256s: mine }), atom_ids: [input.atom_id] }));
+      assertGeneration(found, pointer);
       const anchor = found.items[0];
       if (anchor === undefined || anchor.record_sha256 !== input.record_sha256 || anchor.policy_id !== input.policy_id) throw new AuthorityOperationError("not_found", "record evidence is not available");
       const released = options.sessions.authenticateAccess({ access_token: input.access_token });
-      if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) throw new AuthorityOperationError("unauthorized", "person authentication failed");
+      if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) personDenied();
       // Resolving a citation is an internal lookup, not a content release.
       // `finalizeDeskOpen` performs the sole audit after the expanded packet
       // and its metadata have passed the final Person and snapshot fence.
@@ -1516,12 +1448,7 @@ export function createPersonRecordSearchRouteV1(
       readonly access_token: string;
       readonly release: PersonRecordSearchBatchReleaseV1;
     }): PersonRecordSearchReleaseAuthorizationV1 {
-      if (!releaseWitnesses.has(input.release)) {
-        throw new AuthorityOperationError(
-          "unauthorized",
-          "person authentication failed",
-        );
-      }
+      if (!releaseWitnesses.has(input.release)) personDenied();
       const current = options.sessions.authenticateAccess({
         access_token: input.access_token,
       });
@@ -1545,10 +1472,7 @@ export function createPersonRecordSearchRouteV1(
         !matchesReleasePointer(pointer, input.release.active_pointer) ||
         !sameHead(pointer, head)
       ) {
-        throw new AuthorityOperationError(
-          "unauthorized",
-          "person authentication failed",
-        );
+        personDenied();
       }
       return releaseAuthorization(current);
     },

@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { readJson } from "./private-files.mjs";
 
 /** The committed THERM world and cases (research loop evaluation v1). */
 export const DATASET_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -14,10 +14,6 @@ const PART_TYPES = new Set(["fact", "date", "owner", "status", "conflict", "chan
 const MEETING_ITEMS = new Set(["decision", "action", "rationale", "transcript"]);
 const VERDICTS = new Set(["landed", "not_landed", "no_evidence"]);
 const RELATIONS = new Set(["confirms", "conflicts", "needs_updating"]);
-
-function readJson(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
-}
 
 /** Deep-replaces the signed-in person placeholder with their directory display name. */
 export function substitutePerson(value, name) {

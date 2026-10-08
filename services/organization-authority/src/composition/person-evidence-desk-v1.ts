@@ -13,19 +13,18 @@ import {
   type EvidenceDeskOpenInputV1,
   type EvidenceDeskScopeV1,
 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
-import type { PersonOpenRefV1 } from "@echo-brain/organization-api";
-import type { PersonAnswerCitationV3 } from "@echo-brain/organization-api";
+import type { PersonAnswerCitationV3, PersonOpenRefV1 } from "@echo-brain/organization-api";
 import type {
   OriginalContextDeskReleaseV1,
   PersonAskScopeV2,
   PersonOriginalContextEvidenceDeskPortV1,
 } from "../application/ports/person-original-context-retrieval-v1.js";
-import type {
-  PersonEvidenceDeskRecordsV1,
-  PersonRecordSearchBatchReleaseV1,
-  PersonRecordSearchReleasePointerV1,
+import {
+  PersonRecordSearchIndexLagV1,
+  type PersonEvidenceDeskRecordsV1,
+  type PersonRecordSearchBatchReleaseV1,
+  type PersonRecordSearchReleasePointerV1,
 } from "./person-record-search-route.js";
-import { PersonRecordSearchIndexLagV1 } from "./person-record-search-route.js";
 
 /** The V3 route creates one desk per request; actor, bearer and scope never
  * enter the model-facing methods. */
@@ -100,6 +99,16 @@ function recordCitation(item: { readonly atom_id: Sha256Digest; readonly record_
   return Object.freeze({ kind: "approved_record", atom_id: item.atom_id, record_sha256: item.record_sha256, policy_id: item.policy_id });
 }
 
+/** The requested kinds the records route serves; undefined when the request names none. */
+function recordKindsOf(kinds: readonly EvidenceDeskKindV1[] | undefined) {
+  return kinds?.filter((kind): kind is "decision" | "action" | "rationale" => kind === "decision" || kind === "action" || kind === "rationale");
+}
+
+/** The requested kinds the originals port serves; undefined when the request names none. */
+function sourceKindsOf(kinds: readonly EvidenceDeskKindV1[] | undefined) {
+  return kinds?.filter((kind): kind is "note" | "document_passage" | "imported_meeting" => kind === "note" || kind === "document_passage" || kind === "imported_meeting");
+}
+
 function itemId(citation: EvidenceDeskCitationV1): string {
   return `desk_${canonicalSha256(citation).slice(7)}`;
 }
@@ -166,7 +175,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   const searchRecords = (query: string, kinds?: readonly EvidenceDeskKindV1[]): readonly EvidenceDeskItemV1[] => {
     if (recordsUnavailableAtStart) return [];
     try {
-      const recordKinds = kinds?.filter((kind): kind is "decision" | "action" | "rationale" => kind === "decision" || kind === "action" || kind === "rationale");
+      const recordKinds = recordKindsOf(kinds);
       if (recordKinds !== undefined && recordKinds.length === 0) return [];
       return records(options.records.searchBatch({ access_token: options.access_token, queries: [query], limit: 10, desk: true, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }));
     } catch (error) {
@@ -207,7 +216,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     const limit = input.limit ?? (input.query === undefined ? 50 : 10);
     if (input.query === undefined) {
       latestRecordTruncated = false;
-      const sourceKinds = input.kinds?.filter((kind): kind is "note" | "document_passage" | "imported_meeting" => kind === "note" || kind === "document_passage" || kind === "imported_meeting");
+      const sourceKinds = sourceKindsOf(input.kinds);
       const released = options.originals.deskSearch({
         access_token: options.access_token,
         scope: options.scope,
@@ -216,13 +225,13 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
         ...(input.inventory_mode === "items" ? { inventory_mode: "items" } : {}),
       });
       const beforeRecords = recordReleases.length;
-      const recordKinds = input.kinds?.filter((kind): kind is "decision" | "action" | "rationale" => kind === "decision" || kind === "action" || kind === "rationale");
+      const recordKinds = recordKindsOf(input.kinds);
       const recordInventory = recordsUnavailableAtStart ? [] : records(options.records.listDeskBatch({ access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
       const items = balanced(originals(released), recordInventory).filter((item) => input.kinds === undefined || input.kinds.includes(item.kind));
       return result(items.slice(0, limit), released.truncated || latestRecordTruncated || items.length > limit, [released.receipt, ...recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256)]);
     }
     latestRecordTruncated = false;
-    const sourceKinds = input.kinds?.filter((kind): kind is "note" | "document_passage" | "imported_meeting" => kind === "note" || kind === "document_passage" || kind === "imported_meeting");
+    const sourceKinds = sourceKindsOf(input.kinds);
     const released = options.originals.deskSearch({ access_token: options.access_token, scope: options.scope, query: input.query, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }) });
     const beforeRecords = recordReleases.length;
     const echoItems = [originals(released), searchRecords(input.query, input.kinds)].map((list) => list.filter((item) => input.kinds === undefined || input.kinds.includes(item.kind)));
@@ -238,14 +247,14 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     // Meetings and documents: the existing inventory reads, one source each. Items carry no text.
     if (input.source === "meeting") {
       if (recordsUnavailableAtStart) return result([], false, []);
-      const recordKinds = input.kinds?.filter((kind): kind is "decision" | "action" | "rationale" => kind === "decision" || kind === "action" || kind === "rationale");
+      const recordKinds = recordKindsOf(input.kinds);
       if (recordKinds !== undefined && recordKinds.length === 0) return result([], false, []);
       latestRecordTruncated = false;
       const beforeRecords = recordReleases.length;
       const items = records(options.records.listDeskBatch({ access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
       return result(items.slice(0, limit), latestRecordTruncated || items.length > limit, recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256));
     }
-    const sourceKinds = input.kinds?.filter((kind): kind is "note" | "document_passage" | "imported_meeting" => kind === "note" || kind === "document_passage" || kind === "imported_meeting");
+    const sourceKinds = sourceKindsOf(input.kinds);
     if (sourceKinds !== undefined && sourceKinds.length === 0) return result([], false, []);
     const released = options.originals.deskSearch({ access_token: options.access_token, scope: options.scope, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }) });
     const items = originals(released);

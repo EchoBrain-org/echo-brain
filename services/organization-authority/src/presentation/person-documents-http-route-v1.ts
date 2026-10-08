@@ -77,7 +77,12 @@ function json(response: ServerResponse, status: number, value: unknown, check: (
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': String(bytes.length), 'cache-control': 'no-store' });
   response.end(bytes);
 }
-function jsonInput(bytes: Buffer): unknown {
+/**
+ * Strict UTF-8 JSON. JSON.parse accepts duplicate members, so scan the
+ * already-valid JSON tokens: escaped equivalent names and duplicates in nested
+ * objects also fail. Callers map every throw to their closed request error.
+ */
+export function uniqueMemberJsonV1(bytes: Uint8Array): unknown {
   const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   const input: unknown = JSON.parse(text);
   const objects: (Set<string> | undefined)[] = [];
@@ -88,7 +93,7 @@ function jsonInput(bytes: Buffer): unknown {
     else if (token[1] !== undefined) {
       const key = JSON.parse(token[0].slice(0, -token[1].length)) as string;
       const keys = objects.at(-1)!;
-      if (keys.has(key)) invalid();
+      if (keys.has(key)) throw new Error('duplicate JSON member');
       keys.add(key);
     }
   }
@@ -149,7 +154,7 @@ export function createPersonDocumentsHttpHandlerV1(
       if (header(request, 'content-type')?.split(';')[0]?.trim() !== 'application/json') invalid();
       const id = validate(() => validatePersonDocumentIdV1(path[0]));
       const bytes = await smallBody(request, 4096);
-      const input = validate(() => jsonInput(bytes));
+      const input = validate(() => uniqueMemberJsonV1(bytes));
       const command = validate(() => path[1] === 'associate' ? validatePersonDocumentAssociateV1(input) : validatePersonDocumentDissociateV1(input));
       if (command.document_id !== id) invalid();
       current();
@@ -161,7 +166,7 @@ export function createPersonDocumentsHttpHandlerV1(
     if (search) {
       if (header(request, 'content-type')?.split(';')[0]?.trim() !== 'application/json') invalid();
       const bytes = await smallBody(request, 4096);
-      const input = validate(() => jsonInput(bytes));
+      const input = validate(() => uniqueMemberJsonV1(bytes));
       current();
       const value = v2 ? application.searchV2(token, input) : application.search(token, input);
       json(response, 200, value, v2 ? validatePersonDocumentSearchResultV2 : validatePersonDocumentSearchResultV1);

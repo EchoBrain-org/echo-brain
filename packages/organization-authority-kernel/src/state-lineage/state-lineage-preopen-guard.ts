@@ -125,6 +125,11 @@ interface InspectedDatabase {
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 
+/** One opened source of lineage identity, named for coherence refusals. */
+interface LineageBinding extends StateLineageExpectedBindingV1 {
+  readonly label: string;
+}
+
 function validatedExpectation(
   expectation: StateLineagePreopenExpectationV1,
 ): void {
@@ -329,12 +334,7 @@ function verifyDatabase(
 }
 
 function checkCoherence(
-  bindings: ReadonlyArray<{
-    readonly label: string;
-    readonly authority_id: string;
-    readonly organization_id: string;
-    readonly state_lineage_id: string;
-  }>,
+  bindings: readonly LineageBinding[],
   expected: StateLineageExpectedBindingV1,
 ): void {
   for (const dimension of [
@@ -419,12 +419,7 @@ interface RetrievalScan {
 function scanRetrievalTree(
   stateDirectory: string,
   expectation: StateLineagePreopenExpectationV1,
-  bindings: Array<{
-    label: string;
-    authority_id: string;
-    organization_id: string;
-    state_lineage_id: string;
-  }>,
+  bindings: LineageBinding[],
 ): RetrievalScan {
   const retrievalRoot = join(stateDirectory, STATE_LINEAGE_RETRIEVAL_DIRECTORY);
   if (!existsSync(retrievalRoot)) {
@@ -534,12 +529,7 @@ export function verifyStateLineageBeforeOpen(
   }
   scanStateRootDebris(stateDirectory);
   const root = readRootManifest(stateDirectory);
-  const bindings: Array<{
-    label: string;
-    authority_id: string;
-    organization_id: string;
-    state_lineage_id: string;
-  }> = [
+  const bindings: LineageBinding[] = [
     {
       label: "root manifest",
       authority_id: root.authority_id,

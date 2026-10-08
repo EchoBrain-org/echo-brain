@@ -1,6 +1,6 @@
 import { verifyAuthorityStateLineage } from '@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage';
 import type Database from 'better-sqlite3';
-import { assertPrivatePersonProviderDatabaseV1, bindPersonProviderStateV1 } from './person-provider-state-v1.js';
+import { bindPersonProviderStateV1 } from './person-provider-state-v1.js';
 
 const CLOUD_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const INTEGRATION = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -16,7 +16,6 @@ export interface ConfluencePersonLiveStateBindingV1 {
 }
 
 function invalid(message: string): never { throw new Error(`Confluence live state ${message}`); }
-export const assertPrivateConfluencePersonLiveDatabaseV1 = assertPrivatePersonProviderDatabaseV1;
 function expected(stateDirectory: string, cloud_id: string, integration_id: string): ConfluencePersonLiveStateBindingV1 {
   if (!CLOUD_ID.test(cloud_id) || !INTEGRATION.test(integration_id)) invalid('selection is invalid');
   const lineage = verifyAuthorityStateLineage(stateDirectory).root;

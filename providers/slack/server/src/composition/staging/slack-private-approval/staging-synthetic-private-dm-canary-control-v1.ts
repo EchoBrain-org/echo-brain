@@ -118,16 +118,8 @@ function receipt(
   response.end(body);
 }
 
-function badRequest(response: ServerResponse): void {
-  response.writeHead(400, {
-    "cache-control": "no-store",
-    "content-length": "0",
-  });
-  response.end();
-}
-
-function internalError(response: ServerResponse): void {
-  response.writeHead(500, {
+function emptyResponse(response: ServerResponse, status: 400 | 500): void {
+  response.writeHead(status, {
     "cache-control": "no-store",
     "content-length": "0",
   });
@@ -206,14 +198,14 @@ export async function openStagingSyntheticPrivateDmCanaryControlV1(
       return;
     }
     if (request.headers["transfer-encoding"] !== undefined) {
-      badRequest(response);
+      emptyResponse(response, 400);
       request.resume();
       return;
     }
     if (request.headers["content-length"] !== undefined) {
       const length = Number(request.headers["content-length"]);
       if (!Number.isSafeInteger(length) || length !== 0) {
-        badRequest(response);
+        emptyResponse(response, 400);
         request.resume();
         return;
       }
@@ -241,7 +233,7 @@ export async function openStagingSyntheticPrivateDmCanaryControlV1(
       controller.signal.throwIfAborted();
       if (!response.destroyed) receipt(response, input.release_id, result);
     } catch {
-      if (!response.destroyed) internalError(response);
+      if (!response.destroyed) emptyResponse(response, 500);
     } finally {
       clearTimeout(timer);
       request.off("aborted", abort);

@@ -23,25 +23,13 @@ export class SqlitePersonAgenticAskAuditV1 {
   constructor(private readonly database: Database.Database, private readonly now: () => string = () => new Date().toISOString()) {}
 
   forRequest(context: AgenticAskAuditRequestContextV1): AgenticAskAuditPortV1 {
-    if (![context.authority_id, context.organization_id, context.state_lineage_id, context.principal_id, context.membership_id, context.session_family_id, context.request_id]
-      .every((value) => typeof value === "string" && value.length > 0 && value.length <= 512)) throw new Error("Agentic Ask audit context is invalid");
-    const boundContext = Object.freeze({
-      authority_id: context.authority_id,
-      organization_id: context.organization_id,
-      state_lineage_id: context.state_lineage_id,
-      principal_id: context.principal_id,
-      membership_id: context.membership_id,
-      session_family_id: context.session_family_id,
-      request_id: context.request_id,
-    });
+    const boundContext = this.bind(context);
     return Object.freeze({ append: (entry: AgenticAskAuditEntryV1) => this.appendBound(boundContext, entry) });
   }
 
   /** A minimized pre-model release witness. The audited reader has already normalized its citations. */
   forLiveRequest<C extends PersonLiveEvidenceCitationV1>(context: AgenticAskAuditRequestContextV1): PersonLiveEvidenceAuditV1<C> {
-    this.forRequest(context); // Same trusted session/context validation as terminal Ask audits.
-    const bound = Object.freeze({ authority_id: context.authority_id, organization_id: context.organization_id, state_lineage_id: context.state_lineage_id,
-      principal_id: context.principal_id, membership_id: context.membership_id, session_family_id: context.session_family_id, request_id: context.request_id });
+    const bound = this.bind(context); // Same trusted session/context validation as terminal Ask audits.
     // Research may release the same tickets repeatedly within one clock tick.
     let releaseSequence = 0;
     return Object.freeze<PersonLiveEvidenceAuditV1<C>>({ record: async (release) => {
@@ -66,6 +54,21 @@ export class SqlitePersonAgenticAskAuditV1 {
         VALUES (?, ?, 'answer_composition', ?, ?, ?)`).run(receipt, canonicalJson(body), prompt_sha256, answer_sha256, recorded_at);
       return receipt;
     } });
+  }
+
+  /** Validates the trusted request context and copies exactly its fields. */
+  private bind(context: AgenticAskAuditRequestContextV1): AgenticAskAuditRequestContextV1 {
+    if (![context.authority_id, context.organization_id, context.state_lineage_id, context.principal_id, context.membership_id, context.session_family_id, context.request_id]
+      .every((value) => typeof value === "string" && value.length > 0 && value.length <= 512)) throw new Error("Agentic Ask audit context is invalid");
+    return Object.freeze({
+      authority_id: context.authority_id,
+      organization_id: context.organization_id,
+      state_lineage_id: context.state_lineage_id,
+      principal_id: context.principal_id,
+      membership_id: context.membership_id,
+      session_family_id: context.session_family_id,
+      request_id: context.request_id,
+    });
   }
 
   private appendBound(context: AgenticAskAuditRequestContextV1, entry: AgenticAskAuditEntryV1): Sha256Digest {

@@ -767,6 +767,8 @@ function personPolicyEnvelope(
       readonly provider_action_schema_version: 2;
     };
   const event = envelope.body.event as PersonPolicyEventV4View;
+  const view = (signals: readonly PersonPolicySignalV2View[]) =>
+    signals.map((signal) => ({ id: signal.id, kind: signal.kind }));
   const projectedEvent: PersonPolicyEventV4View =
     event.kind === 'rejected'
       ? { kind: 'rejected' }
@@ -775,17 +777,9 @@ function personPolicyEnvelope(
           approved_snapshot: {
             approved_payload: {
               brief: {
-                decisions:
-                  event.approved_snapshot.approved_payload.brief.decisions.map(
-                    (signal) => ({ id: signal.id, kind: signal.kind }),
-                  ),
-                actions: event.approved_snapshot.approved_payload.brief.actions.map(
-                  (signal) => ({ id: signal.id, kind: signal.kind }),
-                ),
-                rationales:
-                  event.approved_snapshot.approved_payload.brief.rationales.map(
-                    (signal) => ({ id: signal.id, kind: signal.kind }),
-                  ),
+                decisions: view(event.approved_snapshot.approved_payload.brief.decisions),
+                actions: view(event.approved_snapshot.approved_payload.brief.actions),
+                rationales: view(event.approved_snapshot.approved_payload.brief.rationales),
               },
             },
           },
