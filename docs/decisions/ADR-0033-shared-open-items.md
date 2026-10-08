@@ -66,8 +66,9 @@ As specified in
 - The latest sweep result is one shared value per item; newest wins. Sweep is
   a second trigger in `authority_trigger_runs_v1`.
 - Rows follow the decision's audience plus the owner. Item titles, text and
-  check lines follow each tool's live access. An ECHO `expected` line is
-  written from the decision so the decision's audience may see it.
+  current details follow each tool's live access; a sweep keeps only its
+  verdict. An ECHO `expected` phrase is written from the decision so the
+  decision's audience may see it.
 - The run's `view` widens from the approver to everyone who can read the
   decision (updates ADR-0032).
 - Every see and act question is answered by one access policy function, and

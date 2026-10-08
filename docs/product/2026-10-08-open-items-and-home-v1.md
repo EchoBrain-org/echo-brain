@@ -1,13 +1,14 @@
 # Open items and Home v1
 
-Status: designed with the founder on 2026-10-08; awaiting the founder's review
-of this written spec. Decision record:
+Status: designed with the founder on 2026-10-08 and approved by the founder the
+same day; rulings 18–23 were added while planning. Decision record:
 [ADR-0033](../decisions/ADR-0033-shared-open-items.md). Builds on
 [runs store and impact card v1](2026-10-07-runs-store-and-impact-card-v1.md),
 [unified meeting approval v1](2026-10-07-unified-meeting-approval-v1.md) and
 the [research trigger contract v1](2026-10-06-research-trigger-contract-v1.md).
 Design canvas, row 9:
 https://claude.ai/code/artifact/ffa8478f-578d-40d0-bc7a-578a66f4adb0.
+Implementation plan: `docs/superpowers/plans/2026-10-08-open-items-and-home.md`.
 
 ## Goal
 
@@ -101,15 +102,19 @@ One row per affected item, written when its impact run finishes.
 | `organization_id` | |
 | `approver_principal_id`, `approver_membership_id` | The run's actor. |
 | `relation` | `conflicts`, `needs_updating`, or empty when the card was not assessed. |
-| `expected` | ECHO's line: what the decision requires of this item, written from the decision (section 3). Empty when not assessed. |
+| `expected` | ECHO's short phrase (at most 120 characters): what the decision requires of this item, written from the decision (section 3). Empty when not assessed. |
 | `owner_membership_id` | The person it waits on. Never empty: the matched owner, or the approver. |
 | `owner_match` | `jira_account`, `name`, `picked`, `approver` (no match), `reassigned`. |
+| `owner_set_by`, `owner_set_at` | Who last picked or reassigned the owner, and when. |
 | `state` | `unsent`, `open`, `done`, `not_relevant`. |
 | `state_set_by`, `state_set_at` | Who last clicked, and when. |
 | `sent_at`, `send_command_id` | Set by Send. |
 | `checked_verdict` | Latest check: `landed`, `still_open`, `changed`, `unreadable`. |
-| `checked_line` | ECHO's one line about that check. |
 | `checked_by`, `checked_at`, `checked_run_id` | Who ran the latest check, when, and which sweep. |
+
+A check keeps only its verdict. ECHO's sentence about what an item says now
+summarizes outside text, which no stored row keeps (ADR-0032); a view shows the
+item's current details from a live read instead.
 | `created_at`, `updated_at` | |
 
 Indexes: `(organization_id, owner_membership_id, state)`,
@@ -141,13 +146,15 @@ The database keeps structure only. Who may click is the access policy's call
 
 ## 3. The impact run, changed
 
-The impact-card renderer also writes, for each affected item, an `expected`
-line: what the decision requires of the item, in the decision's terms ("The
-display shows two decimals from DVT"), never what the item says now ("THERM-46
-is due Oct 13"). It passes the same screens as the card's other lines: no
-instructions or suggested edits, no ownership claims, and every outside title
-replaced by "a cited item". Because it is written from the decision, anyone
-who can read the decision may see it.
+The impact-card renderer also writes, for each `conflicts` or
+`needs_updating` item, an `expected` phrase of at most 120 characters: what
+the decision requires of the item, in the decision's terms ("launch next
+week", "two decimals from DVT"), never what the item says now ("due Oct 30").
+Rows show it beside the item's live details ("due Oct 30 → next week"). It
+passes the same screens as the card's other lines: no instructions or
+suggested edits, no ownership claims, and every outside title replaced by "a
+cited item". Because it is written from the decision, anyone who can read the
+decision may see it.
 
 When the run finishes, in the same transaction that stores the card:
 
@@ -155,9 +162,11 @@ When the run finishes, in the same transaction that stores the card:
   `needs_updating`, or that was not assessed. `confirms` rows make no item:
   they already agree.
 - **Owner matching**, exact only:
-  - A Jira assignee: the Jira reader adds `owner_account_id` (the assignee's
-    Atlassian account id) to the item's details. The owner is the member
-    whose active Jira connection has that account id on the same site.
+  - A Jira assignee: the run reads the affected tickets' assignee account ids
+    in one bulk read with the approver's Jira connection. The owner is the
+    one active member whose active Jira connection has that account id on the
+    same site. Account ids never reach a model, an item's details or an API
+    response; the research desk is unchanged.
   - An owner on an ECHO record's action: the one active member whose display
     name equals it, ignoring case and extra spaces. Two or more such members,
     or none, is no match.
@@ -201,7 +210,7 @@ exact check the record reader uses), or when it was sent to them as owner.
 | --- | --- |
 | Decision line, `expected`, owner, approver, stage, age | everyone who sees the row |
 | Last check: verdict and time | everyone who sees the row |
-| Item title and current text, last check line | only viewers who can open the item in its tool right now (live read) |
+| Item title, what it says now, its current assignee, status and due date | only viewers who can open the item in its tool right now (live read) |
 
 A viewer who cannot open the item sees "A Jira ticket you can't open" (or
 page, or Slack message) with the rest of the row. An owner who cannot read the
@@ -248,7 +257,9 @@ storage rules. It acts as the person who asked, with their access.
   again fresh, and an item that cannot be read is reported, not fatal.
 - **Sweep renderer** (new). For each item: `landed`, `still_open`, `changed`
   or `unreadable`, and one ECHO line, under the same screens as the card
-  (titles replaced, no instructions, no ownership claims).
+  (titles replaced, no instructions, no ownership claims). The line serves
+  the evaluation and the staging endpoint; the product stores only the
+  verdict.
 - **Finish.** In one transaction, each item's last check is replaced if this
   one is newer and the caller can still see the item. The run's stored result
   is the counts by verdict. A sweep never sets `state`.
@@ -280,8 +291,8 @@ All on `POST /v1/person/runs`, one envelope `{schema_version: 1, operation,
 | Operation | Input | Result | Allowed |
 | --- | --- | --- | --- |
 | `view` | `run_id` | card (unchanged shape) | anyone who can read the decision (was: approver only) |
-| `home` | — | Send, Update and Check rows; `landed_count`, `waiting_count`, `last_checked_at`, `sweep_due` | the caller's own |
-| `items` | `scope: mine \| run \| record \| project`, `id?`, `cursor?` | open and unsent items the caller can see, 50 per page, with each decision's check stage | per section 4 |
+| `home` | — | Send rows; the open items that wait on the caller (Update, or Check once their last check is `changed`) and open items the caller sent whose last check is `changed`; `landed`, `waiting`, `last_checked_at`, `sweep_due` | the caller's own |
+| `items` | `scope: mine \| run \| record \| project`, `id?`, `cursor?` | unsent, open and closed items the caller can see, 50 per page, oldest first; a summary of the whole scope (counts by state and last check, decisions, latest check, and per decision its open count); and each decision's impact run stage | per section 4 |
 | `item` | `item_id` | one item rebuilt for the caller | per section 4 |
 | `send` | `run_id`, `command_id`, `items: [{item_id, include, owner_membership_id?}]` | `{sent, not_relevant}` | the approver |
 | `set_state` | `item_id`, `state: open \| done \| not_relevant` | `{state}` | the approver or the owner |
@@ -292,39 +303,72 @@ Every item read rebuilds outside parts with one live open per item shown, at
 most 50 per call. A row's own fields never include a word read from outside
 ECHO.
 
-`meetings.reviews` rows gain `first_line` (the proposal's first decision, ECHO
-text) and, while pending, `project_ids` from the suggested projects, so a Home
-row names the decision, not only the meeting.
+`meetings.reviews` rows (and `review_open`'s review) gain `first_line` (the
+proposal's first decision, else its first action; ECHO text), `action_count`
+and `meeting_at` (when the meeting started, when known), so a Home row names
+the decision, not only the meeting. Pending rows already carry the suggested
+projects in `project_ids`.
 
 ## 8. Desktop
 
-**Home** shows only rows that wait on the viewer:
+The design is the canvas's row 9 (artboards 9.1 to 9.7); copy below is
+quoted from it where it gives one.
 
-| Row | From | Opens |
-| --- | --- | --- |
-| Approve | `meetings.reviews` (pending) | Approve this decision? |
-| Send | `home` | Tell the owners? (or the failure and Try again) |
-| Update | `home` | the item, `expected`, Open in tool, Done |
-| Check | `home` (last check `changed`) | the item, the check line, Done, Not relevant |
-| Checking | runs `list` (pending, running) | nothing; not counted in the badge |
+**Home (9.1, 9.5)** shows only rows that wait on the viewer, under "Needs you
+· N". Each row is a verb, a title, a muted line, and on the right its age and
+its decision's first project:
+
+| Row | From | Title / muted line | Action |
+| --- | --- | --- | --- |
+| Approve | `meetings.reviews` (pending) | the first decision line / "Decision · 2 actions · Pilot planning meeting, Oct 6" | opens Approve this decision? (9.2) |
+| Send | `home` | "<first decided line> — 2 tickets need updating" / "Impact of Pilot planning · owners Mina, Rafael" | opens Tell the owners? (9.3) |
+| Update | `home` | "<item> · due Oct 30 → next week" (live details → `expected`) / "Jira ticket you own · from Pilot planning" | inline: "Open in Jira" and Done, no page |
+| Check | `home` (last check `changed`) | "<item> · <live details> — not what was decided" / "Jira ticket · now <assignee> · from Kickoff review" | opens the item: `expected`, live details, Open in tool, Done, Not relevant |
+| Checking | runs `list` (pending, running) | "Approved · checking what it changes" | none; not counted in the badge |
+| Check failed | runs `list` (failed impact run) | "Approved · the check did not finish" | opens the reason and Try again |
 
 An item is at most one row per person. Its owner sees Update, or Check once
 its last check is `changed`; its approver, when not the owner, sees Check only
-when it is `changed`. "Landed" counts open items the viewer sent or owns whose
-last check is `landed`; "with others" counts open items the viewer sent that
-wait on someone else.
+when it is `changed`. A viewer who cannot open the item in its tool sees "A
+Jira ticket you can't open" (or page, or Slack message) for its title and no
+live details. A viewer who cannot read the decision sees "from Ari" (who sent
+it) instead of the meeting.
 
-The footer reads "N landed · Mark done" (opens "Did it land?": Landed, Still
-open, Couldn't read, landed pre-ticked, "Mark N done") and "M with others ·
-checked X ago". First-run Home is unchanged. The `echo.seenImpact` browser
-storage goes away: a sent run leaves Home by its items' state.
+Footer, under the rows and also on an empty Home (9.5): "2 landed since
+yesterday · 1 with others · checked 2 h ago" and "Mark done" when anything
+landed. "Landed" counts open items the viewer sent or owns whose last check is
+`landed`; "with others" counts open items the viewer sent that wait on
+someone else; parts that are zero are left out. "Mark done" opens Did it land?
+for the viewer's own items. First-run Home is otherwise unchanged. The
+`echo.seenImpact` browser storage goes away: a sent run leaves Home by its
+items' state.
 
-**Reader**: an approved record shows an Impact line ("3 open · 1 not sent ·
-checked 2 h ago", or "Not checked yet" / "Check failed") that opens the
-record's items, and "Check now".
+**Tell the owners? (9.3)**: "You approved Pilot planning on Oct 6. ECHO found
+what it changes.", the first decided line large, a "Must change" list (one
+checkbox per item, ticked: the item's title and its live details → `expected`,
+and the owner as a chip, or "Pick a person" where there is no match), "Untick
+anything that's wrong. Owners get it on their Home.", "Details" (the full
+impact card), and "Send to Mina and Rafael" / "Not now". With no one but you to
+tell, the button reads "Keep on my Home"; with nothing ticked, "None of these
+need changing".
 
-**Project page**: an "Open items" line that opens the project's items grouped
-by owner, oldest first, with stage and age, and "Check now".
+**Did it land? (9.4)**: "<meeting> · checked just now · 3 items", the decided
+line large when the scope is one decision, then "Landed · N" (ticked
+checkboxes), "Still open · N" and "Couldn't read · N" ("you don't have
+access"), each line with the item, its live details and its owner chip, and
+"Mark N done". The canvas's "Remind" is not built: an owner already has the
+item on their Home.
+
+**Reader, an approved decision (9.6)**: an Impact line under the title,
+"Impact · 1 open · 1 handled · 1 couldn't read · checked just now" (or "Not
+checked yet", "Checking…", "Check failed · Try again", "Nothing to change"),
+with "Send" when it waits on you and "Check now". The line opens the
+decision's items.
+
+**Project page (9.7)**: a line above the feed, "4 open items · from 2
+decisions · checked today", with "Check now", and "N open" on each decision's
+row in the feed. The line opens the project's open items grouped by owner,
+oldest first, each with its stage and age.
 
 **Runs**: `driveRuns` starts pending impact runs first, then sweeps; it asks
 for a `mine` sweep when `home` says `sweep_due`.
@@ -354,8 +398,9 @@ with a stop between them:
 - Someone who can read the decision sees its items, unsent included; someone
   who cannot sees none, except items sent to them; an owner never receives the
   decision itself.
-- A viewer who cannot open an item in its tool gets no title, text or check
-  line for it, but does get its stage, owner, age and verdict.
+- A viewer who cannot open an item in its tool gets no title, text or live
+  details for it, but does get its stage, owner, age and verdict.
+- No stored row holds a check sentence; a check stores its verdict only.
 - Only the approver or the owner changes `state`; only the approver, owner or
   a project lead reassigns; every operation gets these answers from the one
   access policy (a test table covers each role), and the database refuses any
@@ -416,7 +461,8 @@ Made with the founder on 2026-10-08:
    "verdicts are private to whoever swept".)
 10. Rows follow the decision's audience plus the owner; outside parts follow
     the tool's access live. A viewer who cannot open an item still sees its
-    verdict, never the check line.
+    verdict, never the check line. (Ruling 18 keeps no check sentence at all;
+    the item's live details follow the same rule.)
 11. The approver, the owner or a project lead can reassign an item at any
     time.
 
@@ -439,3 +485,22 @@ Made while writing:
 17. Permissions are a foundation, not final (founder, 2026-10-08): one access
     policy function decides every see and act question; the database enforces
     structure only; outside words stay behind a live access check.
+
+Made while planning, after reading the code and folding in the canvas's row 9
+(founder, 2026-10-08: "fold the UI design as well"):
+
+18. A check stores only its verdict, not a sentence: ECHO's sentence about
+    what an item says now summarizes outside text, as an impact card's
+    `says_now` does, and ADR-0032 keeps neither. Rows show live details.
+19. Jira owners are matched by a separate bulk assignee read with the
+    approver's connection at the end of the run, not by adding the account id
+    to item details: those details are part of Ask's evidence and its model
+    prompts, which stay unchanged.
+20. Update rows act in place on Home ("Open in Jira", Done), as the canvas
+    draws them; Check rows open the item first (ruling 3).
+21. "Remind" on Did it land? is not built: an owner already has the item on
+    their Home, and ECHO sends nothing else this round.
+22. `expected` is a short phrase (at most 120 characters), so a row can read
+    "due Oct 30 → next week": live details, then what the decision requires.
+23. Approve rows show the proposal's first decision line, action count and
+    meeting date, which the meetings API adds to its review rows.
