@@ -12,6 +12,14 @@ export interface OpenItemFactsV1 {
   readonly owner: string;
   readonly approver_active: boolean;
   readonly owner_active: boolean;
+  /**
+   * The item has gone to its owner: it is `open`, or was before it closed.
+   * Send opens the items it ticks, and a later click can open one too. False
+   * while the item is `unsent`, and for an item Send left unticked that no
+   * one has opened since. Send closes those as `not_relevant` but still sets
+   * their `sent_at`, so `sent_at` alone does not answer this.
+   */
+  readonly sent_to_owner: boolean;
   /** The viewer passes the exact record check for the item's decision now. */
   readonly reads_decision: boolean;
   /** The viewer is an active lead of one of the decision's projects. */
@@ -31,7 +39,7 @@ export interface OpenItemAccessV1 {
 export function openItemAccessV1(facts: OpenItemFactsV1): OpenItemAccessV1 {
   const owner = facts.viewer === facts.owner;
   const approver = facts.viewer === facts.approver;
-  const see_row = facts.reads_decision || owner;
+  const see_row = facts.reads_decision || (owner && facts.sent_to_owner);
   const waits_on = facts.owner_active ? 'owner' as const : facts.approver_active ? 'approver' as const : 'leads' as const;
   return Object.freeze({
     see_row,
