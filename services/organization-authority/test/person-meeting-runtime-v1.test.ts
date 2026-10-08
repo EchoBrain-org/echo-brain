@@ -18,7 +18,7 @@ import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_FOLDER_CURSO
 import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
-import type { AfterApprovedRecordEventV1 } from '../src/composition/approval-core-v1.js';
+import { validateApprovalDecisionRequestV1, type AfterApprovedRecordEventV1 } from '../src/composition/approval-core-v1.js';
 import { authorization, addMembership } from './fixtures/project-context-sqlite.js';
 import { meeting as original, decisions } from '../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
 const id = '00000000-0000-4000-8000-000000000001';
@@ -653,8 +653,9 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.processUntilIdle(runtime);
     const [pending] = (await f.call(runtime, { operation: 'reviews' })).reviews;
     const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
-    (await runtime.approvals()).decide('slack', { approval_id: pending!.approval_id, command_id: 'slack:k', snapshot_sha256: opened.snapshot_sha256,
-      action: 'approve', project_ids: [], share_transcript: false, owners: [] }, () => ({ actor: f.person, evidence: { kind: 'slack-click', sha256: canonicalSha256('slack click') } }));
+    const slackReview = validateApprovalDecisionRequestV1('slack', { approval_id: pending!.approval_id, command_id: 'slack:k', snapshot_sha256: opened.snapshot_sha256,
+      action: 'approve', project_ids: [], share_transcript: false, owners: [] });
+    (await runtime.approvals()).decide('slack', slackReview, () => ({ actor: f.person, evidence: { kind: 'slack-click', sha256: canonicalSha256('slack click') } }));
     expect((await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id })).review.decided_on).toBe('slack');
     await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, command_id: 'c2', snapshot_sha256: opened.snapshot_sha256,
       action: 'reject', project_ids: [], share_transcript: false, owners: [] })).resolves.toEqual({ status: 'publishing', decided_on: 'slack' });
