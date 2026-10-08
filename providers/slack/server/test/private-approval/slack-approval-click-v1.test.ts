@@ -4,6 +4,10 @@ import {
   approvalCoreFixture,
   PROJECT_A,
 } from "../../../../../services/organization-authority/test/fixtures/approval-core.js";
+import {
+  enqueueApprovedRecordRunV1,
+  SqliteTriggerRunsV1,
+} from "../../../../../services/organization-authority/src/adapters/persistence/sqlite/trigger-runs-v1.js";
 import { createSlackApprovalClickV1 } from "../../src/private-approval/slack-approval-click-v1.js";
 
 const TARGET = {
@@ -75,6 +79,25 @@ async function fixture() {
       core: f.core,
       link,
       redraw,
+    }),
+  };
+}
+
+async function fixtureWithRuns() {
+  const f = await fixture();
+  const runs = new SqliteTriggerRunsV1(f.db);
+  const core = await f.create({}, {
+    after_record: [enqueueApprovedRecordRunV1(runs)],
+  });
+  return {
+    ...f,
+    core,
+    runs,
+    decide: createSlackApprovalClickV1({
+      database: f.db,
+      core,
+      link: f.link,
+      redraw: f.redraw,
     }),
   };
 }
@@ -170,29 +193,55 @@ describe("Slack approval click V1", () => {
     expect(ownerProposals).not.toHaveBeenCalled();
     expect(f.decisionCount()).toBe(0);
   });
-  it("makes a desktop click race produce exactly one decision and one published record", async () => {
-    const f = await fixture(),
+  it.each(["desktop", "slack"] as const)("makes a %s-first desktop/Slack race produce one record and one approver-owned run", async (first) => {
+    const f = await fixtureWithRuns(),
       slack = click(f.approvalId, f.snapshotOf(f.approvalId)!);
-    const results = await Promise.all([
-      Promise.resolve().then(() =>
-        f.core.decide(
-          "desktop",
-          f.approve({ command_id: "desk-1" }),
-          () => f.session,
-        ),
-      ),
-      Promise.resolve().then(() => f.decide(slack)),
-    ]);
+    const desktop = () =>
+      f.core.decide(
+        "desktop",
+        f.approve({ command_id: "desk-1" }),
+        () => f.session,
+      );
+    const results = await Promise.all(
+      first === "desktop"
+        ? [Promise.resolve().then(desktop), Promise.resolve().then(() => f.decide(slack))]
+        : [Promise.resolve().then(() => f.decide(slack)), Promise.resolve().then(desktop)],
+    );
     expect(f.decisionCount()).toBe(1);
     await f.core.processing.appendFinalizedApprovalsToV4(
       new AbortController().signal,
     );
     expect(f.recordCount()).toBe(1);
+    expect(f.runs.list(f.person, 10)).toEqual([
+      expect.objectContaining({
+        event_ref: f.approvalId,
+        actor: f.person,
+        state: "pending",
+      }),
+    ]);
     expect(
       results
         .map((result) => ("kind" in result ? result.kind : result.outcome))
         .sort(),
     ).toEqual(["already_decided", "decided"]);
+  });
+  it("does not queue a run for a rejected Slack decision", async () => {
+    const f = await fixtureWithRuns();
+    expect(
+      f.decide(
+        click(f.approvalId, f.snapshotOf(f.approvalId)!, {
+          action: "reject" as const,
+          audience: "only_me" as const,
+          project_ids: [],
+          owners: [],
+        }),
+      ),
+    ).toEqual({ outcome: "decided" });
+    await f.core.processing.appendFinalizedApprovalsToV4(
+      new AbortController().signal,
+    );
+    expect(f.recordCount()).toBe(0);
+    expect(f.runs.list(f.person, 10)).toEqual([]);
   });
   it("redraws a stale snapshot without a decision", async () => {
     const f = await fixture();
