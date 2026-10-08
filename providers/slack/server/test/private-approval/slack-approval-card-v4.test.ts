@@ -16,6 +16,29 @@ const review = {
 };
 
 describe("Slack approval card V4", () => {
+  it("keeps a fresh organization's card usable without an empty project picker", () => {
+    const card = buildSlackApprovalCardV4({
+      approval_id: "apr_test",
+      snapshot_sha256: `sha256:${"a".repeat(64)}`,
+      review,
+      projects: [],
+      suggested_project_ids: ["prj_no_longer_available"],
+      owners: [],
+    });
+    const controls = card.blocks.flatMap((block) => {
+      const element = block.element as
+        | { type: string; options?: readonly { value: string }[]; initial_option?: { value: string } }
+        | undefined;
+      return element === undefined ? [] : [element];
+    });
+    expect(controls.some((control) => control.type === "multi_static_select")).toBe(false);
+    const audience = controls.find((control) => control.type === "static_select")!;
+    expect(audience.options?.map((option) => option.value)).toEqual(["only-me"]);
+    expect(audience.initial_option?.value).toBe("only-me");
+    expect(JSON.stringify(card.blocks)).toContain("You have no active projects available to share with.");
+    expect(JSON.stringify(card.blocks)).toContain("Approve meeting");
+    expect(JSON.stringify(card.blocks)).toContain("Reject");
+  });
   it("offers only project-or-person audience, safe suggested projects, and snapshot-bound actions", () => {
     const card = buildSlackApprovalCardV4({
       approval_id: "apr_test",
