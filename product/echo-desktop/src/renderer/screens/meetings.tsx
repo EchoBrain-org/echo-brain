@@ -1,6 +1,29 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { PersonMeetingHomeV2, PersonMeetingResultsV2, PersonMeetingReviewV2 } from '@echo-brain/organization-api';
+import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol.js';
 import { loadProjects, meetingCommand, useStore } from '../store.js';
+import { ProjectPicker } from './project-picker.js';
+
+type ReviewState = Omit<PersonMeetingResultsV2['review_open'], 'owners'> & {
+  readonly command: string;
+  readonly audience: 'only-me' | 'projects';
+  readonly project_ids: readonly string[];
+  readonly owners: readonly { readonly signal_id: string; readonly action: string; readonly owner: string }[];
+};
+
+function decisionStatus(review: PersonMeetingReviewV2): string {
+  if (review.decided_on === null) return review.status;
+  const action = review.status === 'rejected' ? 'Rejected' : 'Approved';
+  return `${review.status} · ${action} ${review.decided_on === 'slack' ? 'in Slack' : 'on the desktop'}`;
+}
+
+function reviewProjects(projects: readonly ProjectSummary[], suggested: ReviewState['suggested_projects']): readonly ProjectSummary[] {
+  const choices = new Map(projects.map(project => [project.project_id, project]));
+  for (const project of suggested) if (!choices.has(project.project_id)) {
+    choices.set(project.project_id, { ...project, role: 'member', created_at: '', status: 'active' });
+  }
+  return [...choices.values()];
+}
 
 /** Provider browsing is transient. Only checked retention actions enter ECHO. */
 export function Meetings() {
@@ -10,8 +33,8 @@ export function Meetings() {
   const [reviews, setReviews] = useState<readonly PersonMeetingReviewV2[]>([]);
   const [meetings, setMeetings] = useState<PersonMeetingResultsV2['browse']['meetings']>([]);
   const [preview, setPreview] = useState<PersonMeetingResultsV2['open'] | null>(null);
-  const [review, setReview] = useState<(PersonMeetingResultsV2['review_open'] & { command: string }) | null>(null);
-  const [folder, setFolder] = useState(''), [project, setProject] = useState(''), [reviewProject, setReviewProject] = useState('');
+  const [review, setReview] = useState<ReviewState | null>(null);
+  const [folder, setFolder] = useState(''), [project, setProject] = useState('');
   const [retain, setRetain] = useState(false), [share, setShare] = useState(false);
   const [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
   async function refresh(initialize = false) {
@@ -74,15 +97,48 @@ export function Meetings() {
     <h3>Review</h3><p>You approve these meetings in ECHO. A Slack connection is not required.</p>
     <ul>{reviews.map(item => <li key={item.approval_id}><button class="plain-button" disabled={busy} onClick={() => void run(async () => {
       const result = await meetingCommand({ operation: 'review_open', approval_id: item.approval_id });
-      if (alive.current) { setReview({ ...result, command: crypto.randomUUID() }); setReviewProject(result.review.project_ids[0] ?? ''); setShare(false); setPreview(null); }
-    })}>{item.title}</button> · {item.status}</li>)}</ul>
+      if (alive.current) {
+        setReview({ ...result, command: crypto.randomUUID(), audience: result.suggested_projects.length > 0 ? 'projects' : 'only-me',
+          project_ids: result.suggested_projects.map(project => project.project_id),
+          owners: result.owners.map(owner => ({ signal_id: owner.signal_id, action: owner.action, owner: owner.proposed })) });
+        setShare(false); setPreview(null);
+      }
+    })}>{item.title}</button> · {decisionStatus(item)}</li>)}</ul>
     {review && <article><h4>{review.review.title}</h4><pre>{review.content}</pre>
-      {review.review.status === 'pending' && <>{audience(reviewProject, setReviewProject)}
+      {review.review.status === 'pending' && <>
+        <fieldset class="review-readers"><legend>Who can read it</legend>
+          <label><input type="radio" name="review-audience" checked={review.audience === 'only-me'} disabled={busy}
+            onChange={() => setReview(current => current && { ...current, audience: 'only-me' })} /> Only me</label>
+          <label><input type="radio" name="review-audience" checked={review.audience === 'projects'} disabled={busy}
+            onChange={() => setReview(current => current && { ...current, audience: 'projects' })} /> Projects</label>
+        </fieldset>
+        {review.audience === 'projects' && <div class="review-project-picker"><ProjectPicker
+          projects={reviewProjects(projects, review.suggested_projects)} ticked={review.project_ids} max={MAX_CAPTURE_PROJECTS}
+          onTick={id => setReview(current => {
+            if (!current) return current;
+            const ticked = current.project_ids.includes(id);
+            if (!ticked && current.project_ids.length >= MAX_CAPTURE_PROJECTS) return current;
+            return { ...current, project_ids: ticked ? current.project_ids.filter(projectId => projectId !== id) : [...current.project_ids, id].sort() };
+          })}
+          more={state.projects.next !== null && !state.projects.loading} onMore={() => void loadProjects(true)}
+        /></div>}
         <label><input type="checkbox" checked={share} disabled={busy} onChange={e => setShare(e.currentTarget.checked)} /> Share the transcript with the selected audience</label>
-        <div class="choices">{(['reject', 'approve'] as const).map(action => <button class={action === 'approve' ? 'primary-button small' : 'plain-button'} disabled={busy} onClick={() => void run(async () => {
+        {review.owners.map(owner => <label class="review-owner" key={owner.signal_id}>Owner for: {owner.action}
+          <input class="field" type="text" value={owner.owner} disabled={busy} onInput={event => setReview(current => current && {
+            ...current, owners: current.owners.map(item => item.signal_id === owner.signal_id ? { ...item, owner: event.currentTarget.value } : item),
+          })} />
+        </label>)}
+        <div class="choices">{(['reject', 'approve'] as const).map(action => <button class={action === 'approve' ? 'primary-button small' : 'plain-button'}
+          disabled={busy || action === 'approve' && review.audience === 'projects' && review.project_ids.length === 0} onClick={() => void run(async () => {
           const result = await meetingCommand({ operation: 'review', approval_id: review.review.approval_id, command_id: review.command, snapshot_sha256: review.snapshot_sha256,
-            action, project_ids: action === 'approve' && reviewProject ? [reviewProject] : [], share_transcript: action === 'approve' && share, owners: [] });
-          if (alive.current) { setReview(null); setNotice(result.status === 'publishing' ? 'Approved. Publishing to ECHO…' : result.status); } await refresh();
+            action, project_ids: action === 'approve' && review.audience === 'projects' ? review.project_ids : [], share_transcript: action === 'approve' && share,
+            owners: action === 'approve' ? review.owners.flatMap(owner => owner.owner.trim() ? [{ signal_id: owner.signal_id, owner: owner.owner.trim() }] : []) : [] });
+          if (alive.current) {
+            setReview(null);
+            setNotice(result.decided_on === 'desktop' ? result.status === 'publishing' ? 'Approved. Publishing to ECHO…' : result.status
+              : `Already ${result.status === 'rejected' ? 'rejected' : 'approved'} in Slack`);
+          }
+          await refresh();
         })}>{action === 'approve' ? 'Approve' : 'Reject'}</button>)}</div>
       </>}
     </article>}

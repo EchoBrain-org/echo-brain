@@ -144,12 +144,57 @@ test('Granola browsing requires explicit retention, then offers personal review 
   await expect(meetings.getByRole('button', { name: 'Pilot planning', exact: true })).toHaveCount(2);
   await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).last().click();
   await expect(meetings.getByLabel('Share the transcript with the selected audience')).not.toBeChecked();
+  await meetings.getByRole('radio', { name: 'Only me' }).check();
   await meetings.getByRole('button', { name: 'Approve', exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('granola-review.png') });
   await meetings.getByRole('button', { name: 'Approve', exact: true }).click();
   await expect.poll(() => run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
   expect(run.calls().find(call => call.body?.operation === 'import')?.body).toMatchObject({ retain: true, project_id: null });
-  expect(run.calls().find(call => call.body?.operation === 'review')?.body).toMatchObject({ action: 'approve', share_transcript: false, project_ids: [], owners: [] });
+  expect(run.calls().find(call => call.body?.operation === 'review')?.body).toMatchObject({
+    action: 'approve', share_transcript: false, project_ids: [], owners: [
+      { signal_id: 'act-1', owner: 'Rafael Moreno' },
+      { signal_id: 'act-2', owner: 'Mina Patel' },
+    ],
+  });
+});
+
+test('approves a meeting into two projects with an edited owner', async () => {
+  run = await launch('granola');
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
+  const meetings = page.getByRole('region', { name: 'Personal meetings' });
+  await meetings.getByLabel('Granola folder').selectOption({ label: 'ECHO (1)' });
+  await meetings.getByRole('button', { name: 'Browse meetings' }).click();
+  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
+  await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
+  await meetings.getByRole('button', { name: 'Add to ECHO', exact: true }).click();
+  await expect(meetings.getByRole('button', { name: 'Pilot planning', exact: true })).toHaveCount(2);
+  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).last().click();
+
+  await meetings.getByRole('radio', { name: 'Projects' }).check();
+  await expect(meetings.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
+  await meetings.getByRole('checkbox', { name: 'Supplier review' }).check();
+  await meetings.getByLabel('Owner for: Send the revised quote').fill('Rafael M.');
+  await meetings.getByLabel('Owner for: Confirm the trace').fill('');
+  await meetings.getByRole('button', { name: 'Approve', exact: true }).click();
+
+  await expect.poll(() => run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
+  const body = run.calls().find(call => call.body?.operation === 'review')?.body;
+  expect(body).toMatchObject({ action: 'approve', share_transcript: false, owners: [{ signal_id: 'act-1', owner: 'Rafael M.' }] });
+  expect(body?.project_ids).toHaveLength(2);
+});
+
+test('shows that the meeting was already approved in Slack', async () => {
+  run = await launch('granola-decided-in-slack');
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
+  const meetings = page.getByRole('region', { name: 'Personal meetings' });
+  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
+  await meetings.getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect(meetings.getByRole('status')).toHaveText('Already approved in Slack');
+  await expect(meetings).toContainText('approved · Approved in Slack');
 });
 
 test('Granola saves a selected folder while its initial baseline is preparing', async () => {

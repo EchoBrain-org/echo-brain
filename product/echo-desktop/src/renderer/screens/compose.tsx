@@ -8,6 +8,7 @@ import {
 } from '../store.js';
 import { useDropTarget } from './drop.js';
 import { Caret, Clip, Close } from './icons.js';
+import { ProjectPicker } from './project-picker.js';
 
 const SAVE_HINT = navigator.userAgent.includes('Mac') ? '⌘↩' : 'Ctrl+↩';
 
@@ -34,8 +35,6 @@ function readersLine(compose: ComposeState): string {
   return rest.length === 0 ? `${first.name} members can read this.` : `Members of ${projectNames(compose.projects)} can read this.`;
 }
 
-/** Past this many projects, a field finds one by name. */
-const FIND_AFTER = 8;
 /** Who can read, in order. */
 const CHOICES: readonly Readers[] = ['only-me', 'projects', 'team'];
 /** Arrow keys move through Who can read, and pick as they go. */
@@ -77,12 +76,6 @@ function ProjectList({ state, compose, projects, anchor }: {
   state: State; compose: ComposeState; projects: readonly ProjectSummary[]; anchor: { current: HTMLButtonElement | null };
 }) {
   const list = useRef<HTMLDivElement>(null);
-  const [find, setFind] = useState('');
-  const finding = projects.length > FIND_AFTER;
-  const query = finding ? find.trim().toLocaleLowerCase() : '';
-  const shown = query ? projects.filter(project => project.name.toLocaleLowerCase().includes(query)) : projects;
-  const ticked = new Set(compose.projects.map(project => project.project_id));
-  const full = ticked.size >= MAX_CAPTURE_PROJECTS;
 
   // It opens over the note, lined up with Projects and inside the window, with the caret in it.
   useLayoutEffect(() => {
@@ -119,38 +112,12 @@ function ProjectList({ state, compose, projects, anchor }: {
         if (next && !list.current?.contains(next) && !choices()?.contains(next)) closeProjects();
       }}
     >
-      {finding && (
-        <input
-          type="text" class="field find" data-testid="projects-find" placeholder="Find a project" aria-label="Find a project" spellcheck={false}
-          value={find} onInput={event => setFind((event.target as HTMLInputElement).value)}
-          onKeyDown={event => {
-            // ⌘↩ still saves: only a plain Enter is the field's, and it ticks the first match.
-            if (event.key !== 'Enter' || event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
-            event.preventDefault();
-            const match = shown[0];
-            if (query && match && !ticked.has(match.project_id)) tickProject(match);
-          }}
-        />
-      )}
-      <div class="project-ticks">
-        {shown.map(project => {
-          const on = ticked.has(project.project_id);
-          return (
-            <label class="project-tick" key={project.project_id} data-testid="projects-row">
-              <input type="checkbox" checked={on} disabled={!on && full} onChange={() => tickProject(project)} />
-              <span>{project.name}</span>
-            </label>
-          );
-        })}
-        {shown.length === 0 && <div class="project-note" data-testid="projects-none">{query ? 'No project matches.' : 'No projects yet.'}</div>}
-        {state.projects.next && (
-          <button type="button" class="link-button" data-testid="projects-more" disabled={state.projects.loading}
-            onClick={() => void loadProjects(true)}>More projects</button>
-        )}
-      </div>
+      <ProjectPicker
+        projects={projects} ticked={compose.projects.map(project => project.project_id)} max={MAX_CAPTURE_PROJECTS}
+        onTick={id => { const project = projects.find(candidate => candidate.project_id === id); if (project) tickProject(project); }}
+        more={state.projects.next !== null && !state.projects.loading} onMore={() => void loadProjects(true)}
+      />
       <div class="project-list-foot">
-        {/* Always there, so ticking the last one a screen reader hears says why the rest are off. */}
-        <div aria-live="polite">{full && <span class="project-note" data-testid="projects-limit">Up to {MAX_CAPTURE_PROJECTS} projects.</span>}</div>
         <button type="button" class="plain-button small" data-testid="projects-done" onClick={closeProjects}>Done</button>
       </div>
     </div>

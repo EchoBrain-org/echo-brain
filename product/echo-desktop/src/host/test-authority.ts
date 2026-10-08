@@ -126,6 +126,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const contract = () => import(pathToFileURL(join(repository, 'packages/organization-api/dist/index.js')).href) as Promise<Contract>;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
   let granolaImported = false, granolaApproved = false, granolaWatch = false, granolaBaselineHomeReads = 0;
+  let granolaReview: Record<string, unknown> | undefined;
   // Thirteen people: the organization's directory comes in two pages.
   if (mode === 'many-people') {
     desktop.people.push(...Array.from({ length: 9 }, (_, index) => ({
@@ -340,6 +341,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   };
   /** Your projects, in the list's order, as the mode has them. */
   const listed = (): { project_id: string; name: string; role: 'lead' | 'member' }[] => {
+    if (mode === 'granola') return [
+      { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign', role: 'lead' },
+      { project_id: 'prj_44444444-4444-4444-8444-444444444444', name: 'Supplier review', role: 'member' },
+    ];
     const numbered = (count: number, digit: string, name: (index: number) => string) => Array.from({ length: count }, (_, index) => ({
       project_id: `prj_${String(index + 1).padStart(8, '0')}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}`,
       name: name(index), role: 'member' as const,
@@ -491,7 +496,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (method === 'POST' && path === '/v1/person/meetings' && mode.startsWith('granola')) {
       const meetingId = '00000000-0000-4000-8000-000000000010';
       const folderId = '00000000-0000-4000-8000-000000000011';
-      const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning', project_ids: [], status: granolaApproved ? 'approved' : 'pending', decided_on: granolaApproved ? 'desktop' : null };
+      const decidedOn = granolaApproved ? mode === 'granola-decided-in-slack' ? 'slack' : 'desktop' : null;
+      const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning',
+        project_ids: Array.isArray(granolaReview?.project_ids) ? granolaReview.project_ids : [], status: granolaApproved ? 'approved' : 'pending', decided_on: decidedOn };
       switch (body?.operation) {
         case 'home': return mode === 'granola-browse-unavailable' ? failure('unavailable', 503) : json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64),
           sources: mode === 'granola-preparing' && granolaWatch ? [{ source_key: 'pms_fixture', folder_id: folderId, folder_project_id: 'prj_11111111-1111-4111-8111-111111111111', baseline: granolaBaselineHomeReads++ > 0, pending_imports: [], checked_at: null, error: null }] : [] });
@@ -499,9 +506,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         case 'open': return json({ id: meetingId, title: 'Pilot planning', notes: 'Launch the pilot next week.', summary: 'Decision: launch.', truncated: false });
         case 'watch': granolaWatch = true; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
-        case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' ? [review] : [] });
-        case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.', owners: [], suggested_projects: [] });
-        case 'review': granolaApproved = true; return json({ status: 'publishing', decided_on: 'desktop' });
+        case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' ? [review] : [] });
+        case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.',
+          owners: [{ signal_id: 'act-1', action: 'Send the revised quote', proposed: 'Rafael Moreno' }, { signal_id: 'act-2', action: 'Confirm the trace', proposed: 'Mina Patel' }],
+          suggested_projects: [{ project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign' }] });
+        case 'review': granolaReview = body; granolaApproved = true;
+          return json(mode === 'granola-decided-in-slack' ? { status: 'approved', decided_on: 'slack' } : { status: 'publishing', decided_on: 'desktop' });
       }
     }
     // Jira: the browser consent is never shown; the second status read finds it done,

@@ -431,3 +431,9 @@ button.toast:hover { background: #211f1f; }
 .personal-meetings select { margin-left: 8px; max-width: 95%; }
 .personal-meetings pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; font: inherit; }
 .personal-meetings ul { padding-left: 20px; }
+.review-readers { display: flex; gap: 14px; margin: 12px 0; padding: 0; border: 0; }
+.review-readers legend { width: 100%; margin-bottom: 2px; font-size: 13px; color: var(--faint); }
+.review-readers label { margin: 0; }
+.review-readers input { margin-right: 6px; accent-color: var(--accent); }
+.review-project-picker { max-width: 360px; margin: 8px 0 12px; padding: 8px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel); }
+.review-owner .field { display: block; width: min(100%, 400px); margin-top: 5px; }
