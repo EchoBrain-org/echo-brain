@@ -66,6 +66,7 @@ function body(response_url?: string) {
       {
         type: "button",
         action_id: id("approve"),
+        text: { type: "plain_text", text: "Approve", emoji: false },
         value: JSON.stringify({
           schema_version: 2,
           approval_id: APPROVAL,

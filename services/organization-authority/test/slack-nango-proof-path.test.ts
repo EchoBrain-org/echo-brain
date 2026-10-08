@@ -839,6 +839,7 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
           type: "button",
           action_id: slackApprovalActionIdV4(approval_id, "approve"),
           block_id: "actions",
+          text: { type: "plain_text", text: "Approve meeting", emoji: false },
           action_ts: "1727700001.000001",
           value: JSON.stringify({
             schema_version: 2,

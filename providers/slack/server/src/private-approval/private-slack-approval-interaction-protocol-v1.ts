@@ -141,6 +141,20 @@ function string(
     invalid(stage);
   return value;
 }
+function plainText(
+  value: unknown,
+  stage: PrivateSlackApprovalInteractionRejectionStageV1,
+): void {
+  const text = exact(value, ["type", "text"], ["type", "text", "emoji"], stage);
+  if (
+    text.type !== "plain_text" ||
+    typeof text.text !== "string" ||
+    text.text.length === 0 ||
+    text.text.length > 75 ||
+    (text.emoji !== undefined && typeof text.emoji !== "boolean")
+  )
+    invalid(stage);
+}
 function form(body: Uint8Array): unknown {
   let source: string;
   try {
@@ -330,13 +344,9 @@ function selectedProjectId(option: unknown): string {
     ["text", "value", "description"],
     "state",
   );
+  plainText(selected.text, "state");
   if (selected.description !== undefined)
-    exact(
-      selected.description,
-      ["type", "text", "emoji"],
-      ["type", "text", "emoji"],
-      "state",
-    );
+    plainText(selected.description, "state");
   return string(selected.value, PROJECT, "state");
 }
 function state(
@@ -371,6 +381,7 @@ function state(
         ["text", "value"],
         "state",
       );
+      plainText(option.text, "state");
       if (option.value !== "only-me" && option.value !== "projects")
         invalid("state");
       audience = option.value;
@@ -399,14 +410,17 @@ function state(
         control.selected_options.length > 1
       )
         invalid("state");
-      share_transcript =
-        control.selected_options.length === 1 &&
-        exact(
-          control.selected_options[0],
-          ["text", "value"],
-          ["text", "value"],
-          "state",
-        ).value === "share-transcript-v1";
+      const selected =
+        control.selected_options[0] === undefined
+          ? undefined
+          : exact(
+              control.selected_options[0],
+              ["text", "value"],
+              ["text", "value"],
+              "state",
+            );
+      if (selected !== undefined) plainText(selected.text, "state");
+      share_transcript = selected?.value === "share-transcript-v1";
       if (share_transcript === false && control.selected_options.length === 1)
         invalid("state");
       continue;
@@ -536,6 +550,7 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
         lookup: hints,
       });
     }
+    plainText(selected.text, "action");
     const button = value(selected);
     const expected =
       selected.action_id ===
