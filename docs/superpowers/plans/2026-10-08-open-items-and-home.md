@@ -22,6 +22,7 @@
 - Validation cadence (`AGENTS.md`): focused tests while working; one `npm run check` on the finished Part 1 candidate (at the stop) and one on the finished Part 2 candidate; push once, at the end. Never use pushes as the debugging loop. `tests/architecture/*` can time out under other worktrees' load: rerun alone and report, never skip.
 - After adding or renaming a source file, update its package's `source-boundary.v1.json` and `tools/workspace-source-boundaries.v1.json` when listed; `npm run check:architecture-boundaries` enforces them.
 - Fresh state only: Authority baseline V13. No migration code.
+- Every task leaves `npm run build`, the root `tsc --noEmit -p tsconfig.json` and the desktop `npm run typecheck` passing, so the next task starts from a building tree. A task that widens an API union adds a temporary branch where a consumer cannot compile yet (named in the task) and the later task replaces it.
 - No stored row holds text, a title or a name read from Slack, Jira or Confluence. Item rows hold pointers, ECHO's `expected` phrase, ECHO member ids and verdicts. A check stores its verdict only (ruling 18).
 - Every see and act decision comes from `openItemAccessV1` (Task 3). Database triggers enforce structure only.
 - Runs API envelope stays `schema_version: 1` at `POST /v1/person/runs`; new operations are additive.
@@ -163,7 +164,7 @@ CREATE TABLE authority_trigger_runs_v1 (
   UNIQUE (trigger, event_ref),
   CHECK ((trigger = 'approved_record') = (record_sha256 IS NOT NULL)),
   CHECK ((trigger = 'sweep') = (scope_kind IS NOT NULL)),
-  CHECK ((scope_kind IN ('record', 'project')) IS (scope_id IS NOT NULL)),
+  CHECK ((scope_kind IS NOT NULL AND scope_kind IN ('record', 'project')) = (scope_id IS NOT NULL)),
   CHECK ((lease_token IS NULL) = (lease_expires_at IS NULL)),
   CHECK ((state = 'running') = (lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)),
   CHECK ((result_json IS NULL) = (result_sha256 IS NULL)),
@@ -211,7 +212,7 @@ CREATE TABLE authority_impact_items_v1 (
   created_at TEXT NOT NULL CHECK (unixepoch(created_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
   UNIQUE (run_id, item_key),
-  CHECK ((relation IS NULL) = (expected IS NULL)),
+  CHECK (relation IS NOT NULL OR expected IS NULL),
   CHECK ((state = 'unsent') = (sent_at IS NULL)),
   CHECK ((sent_at IS NULL) = (send_command_id IS NULL)),
   CHECK ((state_set_by IS NULL) = (state_set_at IS NULL)),
@@ -250,7 +251,7 @@ BEFORE DELETE ON authority_impact_items_v1
 BEGIN SELECT RAISE(ABORT, 'open item deletion is denied'); END;
 ```
 
-Timestamps are written with `Date.toISOString()` everywhere, so string order is time order (the runs DAO already relies on this). The `IS` in the scope CHECK makes a NULL `scope_kind` compare false, not NULL.
+Timestamps are written with `Date.toISOString()` everywhere, so string order is time order (the runs DAO already relies on this). The scope CHECK tests `scope_kind IS NOT NULL` first, so an approved-record row (no scope) passes; an `expected` phrase needs a relation, but a relation may come without one (the model gave no usable phrase).
 
 **Interfaces:**
 
@@ -517,13 +518,13 @@ it.each([
 
 ---
 
-### Task 4: API contract for open items and review rows
+### Task 4: API contract for open items
 
 **Files:**
 - Modify: `packages/organization-api/src/person-runs-v1.ts` (requests, results, validators)
-- Modify: `packages/organization-api/src/person-meetings-v1.ts` (`PersonMeetingReviewV2` gains three fields)
 - Modify: `packages/organization-api/src/index.ts` (exports)
-- Test: `packages/organization-api/test/person-runs-v1.test.ts`, `packages/organization-api/test/person-meetings-v1.test.ts`
+- Modify (temporary, keeps the tree building until Task 7 and Task 9): `services/organization-authority/src/presentation/organization-authority-http-server.ts` — the runs route's `switch` gains a `default` that throws `AuthorityOperationError('unavailable', 'This operation is not available yet')`; `product/echo-desktop/src/shared/protocol.ts` — `RunsResults` gains the new operations' raw API result types (`home: PersonRunsResultsV1['home']`, and so on), which Task 9 replaces with views.
+- Test: `packages/organization-api/test/person-runs-v1.test.ts`
 
 **Interfaces** (all exported):
 
@@ -603,25 +604,11 @@ export const PERSON_OPEN_ITEMS_PAGE_V1 = 50;
 export const PERSON_HOME_ROWS_V1 = 20;
 ```
 
-```ts
-// person-meetings-v1.ts
-export interface PersonMeetingReviewV2 {
-  readonly approval_id: string; readonly title: string; readonly project_ids: readonly string[];
-  readonly status: 'pending' | 'publishing' | 'approved' | 'rejected' | 'superseded'; readonly decided_on: 'desktop' | 'slack' | null;
-  /** The proposal's first decision, else its first action: one line of ECHO text, or null. */
-  readonly first_line: string | null;
-  readonly action_count: number;
-  /** When the meeting started, when the meeting tool says. */
-  readonly meeting_at: string | null;
-}
-```
-
 **Validation rules** (follow the file's existing style: `assertExactKeys`, frozen output, `fail` on anything else):
 - Ids: `run_id` as today; `item_id` `/^itm_[A-Za-z0-9-]{4,60}$/`; membership ids with the existing membership id check used by `project-context-v1.ts`; project ids with `validateProjectIdV1`-style check; record ids `/^sha256:[0-9a-f]{64}$/`; `command_id` `/^[A-Za-z0-9_-]{1,128}$/`; `cursor` `/^[A-Za-z0-9_-]{1,256}$/`.
 - `items`: `id` is required for `run`, `record` and `project` and absent for `mine`.
 - `send.items`: 1 to 20 entries, unique `item_id`s, `include` boolean, `owner_membership_id` only with `include: true`.
 - Results: `items` at most 50 per page, `home.send` and `home.items` at most 20 each, `by_decision` and `stages` at most 100; counts are safe non-negative integers; names 1–200 characters on one line; `expected` and `first_line` validated like the impact card's lines (`expected` at most 120, `first_line` at most 300); `says_now` at most 300; `current.citation` with `validatePersonAnswerCitationV6`; `decision` and `current` optional keys; `check.verdict` one of four; `waits_on` one of three; the existing 1 MiB response cap.
-- Review rows: `first_line` null or a line of 1–300 characters; `action_count` 0–40; `meeting_at` null or a timestamp.
 
 - [ ] **Step 1: Write the failing tests:**
 
@@ -641,17 +628,12 @@ it('validates an open item with and without the parts a viewer may not see', () 
   expect(() => validatePersonRunsResultV1('item', { item: { ...seen, pointer: {} } })).toThrow();      // no extra key ever
   expect(() => validatePersonRunsResultV1('home', { send: [], items: Array.from({ length: 21 }, () => seen), landed: 0, waiting: 0, last_checked_at: null })).toThrow();
 });
-it('requires the three new review fields', () => {
-  expect(() => validatePersonMeetingResultV2('reviews', { reviews: [{ approval_id: APR, title: 'Pilot planning', project_ids: [], status: 'pending', decided_on: null }] })).toThrow();
-  expect(validatePersonMeetingResultV2('reviews', { reviews: [{ approval_id: APR, title: 'Pilot planning', project_ids: [], status: 'pending', decided_on: null,
-    first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' }] }).reviews[0]!.action_count).toBe(2);
-});
 ```
 
 - [ ] **Step 2:** `npm run test:protocols` → FAIL.
 - [ ] **Step 3:** Implement types and validators; export from `index.ts`.
-- [ ] **Step 4:** `npm run test:protocols` → PASS. (The desktop and service will not compile against the review change until Task 8 and Task 9; run only the API package here.)
-- [ ] **Step 5: Commit** `feat: runs API operations for open items and review row summaries`.
+- [ ] **Step 4:** `npm run test:protocols` → PASS; `npm run build`, root `tsc --noEmit -p tsconfig.json` and `cd product/echo-desktop && npm run typecheck` → PASS.
+- [ ] **Step 5: Commit** `feat: runs API operations for open items`.
 
 ---
 
@@ -683,11 +665,11 @@ it('requires the three new review fields', () => {
 - Layout: carry `expected` onto the affected row.
 - The no-model fallback writes no `expected`.
 
-- [ ] **Step 1: Write the failing tests:**
+- [ ] **Step 1: Write the failing tests** (`renderWith(reply)` runs the renderer with a fake gate that answers `reply` and returns `{ card, calls }`):
 
 ```ts
 it('keeps the expected phrase for a conflict and drops it for a confirmation', async () => {
-  const card = await renderWith({ affected: [
+  const { card } = await renderWith({ affected: [
     { id: 'E2', says_now: 'THERM-46 asks for one decimal', relation: 'conflicts', date_at_risk: '', milestone: '', expected: 'two decimals from DVT' },
     { id: 'E3', says_now: 'The PRD already says two decimals', relation: 'confirms', date_at_risk: '', milestone: '', expected: 'two decimals' },
   ] });
@@ -895,7 +877,7 @@ export function createPersonOpenItemsV1(options: {
 2. `openItemAccessV1` per row without `opens_item`; drop rows without `see_row`.
 3. One desk for the request (global scope, the caller's token); `desk.openCitation({ citation: pointer })` for each kept row, at most 50, once per item key; a throw or an empty result means "cannot open". Then `desk.revalidate`.
 4. `current` only when the open succeeded: `citation` as released now, `says_now = currentImpactLineV1(opened)`, `assignee`/`status`/`due_at` from the opened item's attributes.
-5. `decision` only when `reads_decision`: `readableDecisions`' entry plus `first_line` = the run's stored card's first decided line (parse `result_json` with the existing `stored()` reader; null when it has none).
+5. `decision` only when `reads_decision`: `readableDecisions`' entry plus `first_line` = the run's stored card's first decided line (parse `result_json` with the existing private `stored()` reader in `person-trigger-runs-v1.ts`, exported as `readStoredImpactCardV1`; null when it has none).
 6. `kind` from the pointer kind (`approved_record` → `record`, `source_revision` → `document`); `can` from the policy.
 
 *`home`*:
@@ -972,12 +954,28 @@ it('lists Send rows only to the approver and counts what waits on others', async
 ### Task 8: Review rows: first decision line, action count, meeting time
 
 **Files:**
+- Modify: `packages/organization-api/src/person-meetings-v1.ts` (`PersonMeetingReviewV2` gains three fields; validator) and its test `packages/organization-api/test/person-meetings-v1.test.ts`
 - Modify: `services/organization-authority/src/composition/approval-core-v1.ts` (export `approvalProposalSummaryV1`)
 - Modify: `services/organization-authority/src/composition/person-meeting-runtime-v1.ts` (`reviewView`)
 - Modify: `product/echo-desktop/src/host/test-authority.ts` (the fixture's review object carries the three fields, or the host's validator refuses it)
 - Test: `services/organization-authority/test/approval-core-v1.test.ts` (or the file that tests `approvalProposalTextV1`), `services/organization-authority/test/person-meeting-runtime-v1.test.ts`
 
 **Interfaces:**
+
+```ts
+// person-meetings-v1.ts
+export interface PersonMeetingReviewV2 {
+  readonly approval_id: string; readonly title: string; readonly project_ids: readonly string[];
+  readonly status: 'pending' | 'publishing' | 'approved' | 'rejected' | 'superseded'; readonly decided_on: 'desktop' | 'slack' | null;
+  /** The proposal's first decision, else its first action: one line of ECHO text, or null. */
+  readonly first_line: string | null;
+  readonly action_count: number;
+  /** When the meeting started, when the meeting tool says. */
+  readonly meeting_at: string | null;
+}
+```
+
+  Validation: `first_line` null or a line of 1–300 characters; `action_count` an integer 0–40; `meeting_at` null or a timestamp; exact keys, as the file does today. `review_open.review` uses the same row validator.
 
 ```ts
 /** What a Home row shows of a proposal: its first decision (else first action) on one line, how many actions it has, and when the meeting started. */
@@ -996,9 +994,17 @@ it('summarizes a proposal for its Home row', () => {
 });
 ```
 
-  and in the meetings runtime test: `reviews` rows carry the three fields.
+  and in the meetings runtime test: `reviews` rows carry the three fields; and in the API test:
+
+```ts
+it('requires the three new review fields', () => {
+  expect(() => validatePersonMeetingResultV2('reviews', { reviews: [{ approval_id: APR, title: 'Pilot planning', project_ids: [], status: 'pending', decided_on: null }] })).toThrow();
+  expect(validatePersonMeetingResultV2('reviews', { reviews: [{ approval_id: APR, title: 'Pilot planning', project_ids: [], status: 'pending', decided_on: null,
+    first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' }] }).reviews[0]!.action_count).toBe(2);
+});
+```
 - [ ] **Step 2:** Run → FAIL. **Step 3:** Implement; update the desktop fixture's review object (`first_line: 'Launch the pilot next week.'`, `action_count: 2`, `meeting_at: '2026-10-06T16:00:00.000Z'`).
-- [ ] **Step 4:** `npm run test:authority`; desktop `npx vitest run` and `npx playwright test test/e2e/impact.spec.ts`. Expected: PASS.
+- [ ] **Step 4:** `npm run test:protocols`, `npm run test:authority`; desktop `npm run typecheck`, `npx vitest run` and `npx playwright test test/e2e/impact.spec.ts`. Expected: PASS.
 - [ ] **Step 5: Commit** `feat: review rows name their first decision`.
 
 ---
@@ -1163,11 +1169,10 @@ test('an approved decision shows its Impact line and the project shows its open 
 **Files:**
 - Create: `packages/organization-api/src/person-sweep-result-v1.ts` (+ export)
 - Modify: `packages/organization-api/src/person-research-eval-v1.ts` (`rendered` is an impact card or a sweep result)
-- Modify: `packages/organization-api/src/person-runs-v1.ts` (`PersonRunV1.trigger: 'approved_record' | 'sweep'`, `sweep` operation, `home.sweep_due`)
 - Create: `packages/organization-authority-kernel/src/answer-composition/renderers/sweep-renderer-v1.ts`
 - Modify: `packages/organization-authority-kernel/src/answer-composition/agentic-trigger-definitions-v1.ts` (`sweep.renderer = SWEEP_RENDERER_V1`)
 - Modify: `services/organization-authority/src/composition/person-research-eval-v1.ts` (validate `rendered` by trigger)
-- Test: `packages/organization-api/test/person-sweep-result-v1.test.ts`, `packages/organization-authority-kernel/test/answer-composition/renderers/sweep-renderer-v1.test.ts`, `packages/organization-api/test/person-runs-v1.test.ts`, `services/organization-authority/test/person-research-eval-v1.test.ts`
+- Test: `packages/organization-api/test/person-sweep-result-v1.test.ts`, `packages/organization-authority-kernel/test/answer-composition/renderers/sweep-renderer-v1.test.ts`, `services/organization-authority/test/person-research-eval-v1.test.ts`
 
 **Interfaces:**
 
@@ -1189,14 +1194,6 @@ export interface PersonSweepResultV1 {
   readonly citations: readonly PersonAnswerCitationV6[];
 }
 export function validatePersonSweepResultV1(value: unknown, findingCount?: number): PersonSweepResultV1;
-```
-
-```ts
-// person-runs-v1.ts (Part 2 additions)
-| { readonly schema_version: 1; readonly operation: 'sweep'; readonly scope: 'mine' | 'record' | 'project'; readonly id?: string }
-sweep: { readonly run_id: string } | { readonly state: 'nothing_to_check' };
-home: { …; readonly sweep_due: boolean };
-PersonRunV1: { …; readonly trigger: 'approved_record' | 'sweep' }
 ```
 
 **Renderer** (`SWEEP_RENDERER_V1: AgenticRendererV1<SweepEventV1, PersonSweepResultV1>`):
@@ -1230,15 +1227,26 @@ it('sends an instruction back for one repair', async () => { /* line "Update THE
 ### Task 11: Sweep runs in the service
 
 **Files:**
+- Modify: `packages/organization-api/src/person-runs-v1.ts` (`PersonRunV1.trigger: 'approved_record' | 'sweep'`, the `sweep` operation, `home.sweep_due`) and its test; the desktop `RunsResults` gains the raw `sweep` result type (Task 12 replaces it)
 - Modify: `services/organization-authority/src/composition/person-trigger-runs-v1.ts` (`launch` dispatches on `row.trigger`; the sweep path)
 - Modify: `services/organization-authority/src/composition/person-open-items-v1.ts` (`sweep` operation; `home.sweep_due`)
 - Modify: the route and the port (`sweep`)
 - Test: `services/organization-authority/test/person-sweep-runs-v1.test.ts` (new), `services/organization-authority/test/person-runs-http.test.ts`
 
+**API additions:**
+
+```ts
+// person-runs-v1.ts (Part 2 additions)
+| { readonly schema_version: 1; readonly operation: 'sweep'; readonly scope: 'mine' | 'record' | 'project'; readonly id?: string }
+sweep: { readonly run_id: string } | { readonly state: 'nothing_to_check' };
+home: { …; readonly sweep_due: boolean };
+PersonRunV1: { …; readonly trigger: 'approved_record' | 'sweep' }
+```
+
 **Behavior:**
 - `sweep {scope, id?}`: the caller's open items in scope that pass `see_row` (`mine`: items they sent or own; `record`/`project`: as `items` does). None → `{ state: 'nothing_to_check' }`. Else `runs.enqueueSweep(actor, scope)` → `{ run_id }`.
 - `start` on a sweep run claims it as today; `launch` dispatches on `row.trigger`.
-- Sweep work: at start, read the scope's open items again (oldest `checked_at` first, never-checked first), keep up to 20 that the caller still sees; findings = `{ finding: "<relation as words> <kind> from <decision title>", expected: item.expected ?? decision first line ?? "the approved decision", citations: [pointer, record citation when the caller can read the decision] }`; bind the desk with the caller's token (scope: the project for a project sweep, the record's project for a record sweep, else global); `renderWithResearch` with the `sweep` definition and `SWEEP_RENDERER_V1`; validate with `validatePersonSweepResultV1(result, findings.length)`.
+- Sweep work: at start, read the scope's open items again and sort them in the service (never-checked first, then oldest `checked_at`; `forRecords` orders by `created_at`), keep up to 20 that the caller still sees; findings = `{ finding: "<relation as words> <kind> from <decision title>", expected: item.expected ?? decision first line ?? "the approved decision", citations: [pointer, record citation when the caller can read the decision] }`; bind the desk with the caller's token (scope: the project for a project sweep, the record's project for a record sweep, else global); `renderWithResearch` with the `sweep` definition and `SWEEP_RENDERER_V1`; validate with `validatePersonSweepResultV1(result, findings.length)`.
 - Finish: `runs.finish(run_id, lease, counts, tx => …)` where `counts = { schema_version: 1, landed, still_open, changed, unreadable, not_assessed }` and the callback calls `items.recordCheck(tx, { item_id, verdict, by: caller, at: now, run_id })` for each finding with a verdict whose item the caller still sees (`see_row` checked again just before finishing). A sweep never calls `setState`.
 - No items left at start (all closed meanwhile): finish with zero counts.
 - Errors map as for impact runs.
