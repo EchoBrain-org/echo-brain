@@ -109,6 +109,11 @@
         "name": "Trigger run persistence",
         "path": "services/organization-authority/src/adapters/persistence/sqlite/trigger-runs-v1.ts",
         "export": "SqliteTriggerRunsV1"
+      },
+      {
+        "name": "Open item access policy",
+        "path": "services/organization-authority/src/composition/open-items-policy-v1.ts",
+        "export": "openItemAccessV1"
       }
     ],
     "compatibility_entrypoints": [
