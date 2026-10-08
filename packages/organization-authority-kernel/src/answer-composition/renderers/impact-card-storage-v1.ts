@@ -1,3 +1,4 @@
+import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
   PERSON_IMPACT_CARD_LIMITS_V1 as LIMITS,
   validatePersonImpactCardV1,
@@ -37,8 +38,46 @@ function positions(keep: readonly boolean[]): readonly number[] {
   return keep.map(kept => (kept ? next++ : -1));
 }
 
-/** A note compared by its words: NFC, one space between words, no case. */
-const folded = (value: string): string => value.normalize("NFC").replace(/\s+/gu, " ").trim().toLowerCase();
+/** What a stored line says in place of an outside item's title. */
+const CITED_ITEM = "a cited item";
+/** A renderer note cut short by `cleanLine` still carries this many leading characters of the title it names. */
+const LABEL_PREFIX_CHARS = 200;
+
+/** Finds, and removes, the titles of outside items in a line of ECHO's own writing. */
+interface LabelScreen {
+  /** The line names an outside item. */
+  readonly names: (line: string) => boolean;
+  /** The line with each named title replaced by "a cited item". */
+  readonly scrub: (line: string) => string;
+}
+
+/**
+ * Titles match whatever their case, spacing or Unicode form, whole or by their
+ * first 200 characters (a note cut short by `cleanLine` keeps no more than
+ * that). A blank title matches nothing.
+ */
+function screenFor(labels: readonly string[]): LabelScreen {
+  const parts = new Map<string, string>();
+  for (const raw of labels) {
+    const label = raw.normalize("NFC").replace(/\s+/gu, " ").trim();
+    if (label.length === 0) continue;
+    for (const part of [label, [...label].slice(0, LABEL_PREFIX_CHARS).join("").trim()]) {
+      parts.set(part.split(" ").map(word => word.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("\\s+"), part);
+    }
+  }
+  if (parts.size === 0) return { names: () => false, scrub: line => line };
+  // A longer title is tried first, so a whole title wins over its own prefix.
+  const source = [...parts].sort((left, right) => [...right[1]].length - [...left[1]].length).map(([pattern]) => pattern).join("|");
+  const find = new RegExp(source, "iu");
+  const every = new RegExp(source, "giu");
+  return {
+    names: line => find.test(line.normalize("NFC")),
+    scrub: line => {
+      const text = line.normalize("NFC");
+      return find.test(text) ? cleanLine(text.replace(every, CITED_ITEM), LIMITS.line_chars) : line;
+    },
+  };
+}
 
 /** Removes every word read from outside ECHO. `outsideLabels` are the bundle's labels of non-ECHO items. */
 export function storableImpactCardV1(input: PersonImpactCardV1, outsideLabels: readonly string[]): StoredImpactCardV1 {
@@ -49,39 +88,57 @@ export function storableImpactCardV1(input: PersonImpactCardV1, outsideLabels: r
   const used = card.citations.map((_, at) => decided.some(entry => entry.citation_index === at) || card.affected.some(entry => entry.citation_index === at));
   const at = positions(used);
 
-  // A note that names an outside item (by a label the caller gave or one this card cites) becomes one count.
-  const labels = [...outsideLabels, ...card.citations.filter((_, index) => !local[index]).map(entry => entry.label)].map(folded).filter(label => label.length > 0);
-  const named = (note: string): boolean => labels.some(label => folded(note).includes(label));
-  const unread = card.unconfirmed.filter(named).length;
+  // Every line a model wrote is screened against the titles of outside items: the caller's, and those this card cites.
+  const screen = screenFor([...outsideLabels, ...card.citations.filter((_, index) => !local[index]).map(entry => entry.label)]);
+  // A note that names an outside item becomes one count.
+  const unread = card.unconfirmed.filter(screen.names).length;
   const countNote = unread === 1 ? "1 item could not be read." : `${unread} items could not be read.`;
   const unconfirmed: string[] = [];
   for (const note of card.unconfirmed) {
-    const kept = named(note) ? countNote : note;
+    const kept = screen.names(note) ? countNote : note;
     if (!unconfirmed.includes(kept)) unconfirmed.push(kept);
   }
 
   return Object.freeze({
     schema_version: 1 as const,
     status: card.status,
-    decided: Object.freeze(decided.map(entry => Object.freeze({ text: entry.text, citation_index: at[entry.citation_index]! }))),
+    decided: Object.freeze(decided.map(entry => Object.freeze({ text: screen.scrub(entry.text), citation_index: at[entry.citation_index]! }))),
     affected: Object.freeze(card.affected.map(entry => Object.freeze({
       citation_index: at[entry.citation_index]!,
       ...(entry.relation === undefined ? {} : { relation: entry.relation }),
-      ...(entry.date_at_risk === undefined ? {} : { date_at_risk: Object.freeze({ date: entry.date_at_risk.date, milestone: entry.date_at_risk.milestone }) }),
+      // A milestone that names an outside item loses its date; the row stays.
+      ...(entry.date_at_risk === undefined || screen.names(entry.date_at_risk.milestone) ? {} : { date_at_risk: Object.freeze({ date: entry.date_at_risk.date, milestone: entry.date_at_risk.milestone }) }),
       // What an outside item says is read again on every view; only ECHO's own text is kept.
-      ...(local[entry.citation_index] === true ? { says_now: entry.says_now } : {}),
+      ...(local[entry.citation_index] === true ? { says_now: screen.scrub(entry.says_now) } : {}),
     }))),
     unconfirmed: Object.freeze(unconfirmed),
     citations: Object.freeze(card.citations.filter((_, index) => used[index]).map(entry => entry.citation)),
   });
 }
 
-/** One cited item as the viewer can open it now. */
+/** One cited item as the viewer can open it now. Whether it is ECHO's own is read from its citation. */
 export interface FreshImpactItemV1 {
   readonly citation: PersonAnswerCitationV6;      // as released to this viewer now
   readonly text?: string; readonly label: string;
   readonly attributes?: { readonly owner?: string; readonly due_at?: string; readonly status?: string };
-  readonly local: boolean;                        // approved_record or source_revision
+}
+
+/** The fields that name the item a pointer opens, per kind. A section or a version may move on; the item may not. */
+const PRIMARY_ID: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  ticket: ["tool_id", "external_scope_id", "ticket_id"],
+  page: ["tool_id", "external_scope_id", "page_id"],
+  slack_message: ["team_id", "channel_id", "message_ts"],
+  approved_record: ["atom_id", "record_sha256"],
+  source_revision: ["source_id", "revision_id"],
+});
+
+/** The item a citation names: its kind and primary id, or undefined for a pointer that names none. */
+function itemOf(citation: unknown): string | undefined {
+  if (typeof citation !== "object" || citation === null) return undefined;
+  const pointer = citation as Readonly<Record<string, unknown>>;
+  const fields = typeof pointer.kind === "string" && Object.hasOwn(PRIMARY_ID, pointer.kind) ? PRIMARY_ID[pointer.kind]! : undefined;
+  if (fields === undefined || fields.some(field => typeof pointer[field] !== "string")) return undefined;
+  return JSON.stringify([pointer.kind, ...fields.map(field => pointer[field])]);
 }
 
 /** What an outside item says now: the first characters of its current text on one line, else its title and details. */
@@ -90,14 +147,28 @@ function currentLine(item: FreshImpactItemV1): string {
   return text.length > 0 ? text : detailsOfImpactItemV1(item);
 }
 
-/** Rebuilds the viewer's card from the stored form and fresh reads (null = could not open). */
+/**
+ * Rebuilds the viewer's card from the stored form and fresh reads (null = could not open).
+ * A read that opened a different item than its stored pointer names, or one
+ * that opened the same pointer as an earlier row, counts as one that could not
+ * be opened: it is hidden and counted in `hidden`.
+ */
 export function refreshImpactCardV1(stored: StoredImpactCardV1, fresh: readonly (FreshImpactItemV1 | null)[]): { readonly card: PersonImpactCardV1; readonly hidden: number } {
   if (fresh.length !== stored.citations.length) throw new Error("refreshing an impact card needs one entry per stored citation");
   for (const entry of [...stored.decided, ...stored.affected]) {
     if (!Number.isSafeInteger(entry.citation_index) || entry.citation_index < 0 || entry.citation_index >= fresh.length) throw new Error("a stored impact card row points at no stored citation");
   }
   // What the viewer can no longer open is hidden with the rows that cite it.
-  const opened = fresh.map(item => item !== null);
+  const shown = new Set<string>();
+  const opened = fresh.map((item, index) => {
+    if (item === null) return false;
+    const named = itemOf(stored.citations[index]);
+    if (named === undefined || named !== itemOf(item.citation.citation)) return false;
+    const pointer = canonicalJson(item.citation.citation as never);
+    if (shown.has(pointer)) return false;
+    shown.add(pointer);
+    return true;
+  });
   const at = positions(opened);
   const item = (index: number): FreshImpactItemV1 => fresh[index]!;
 
@@ -107,7 +178,7 @@ export function refreshImpactCardV1(stored: StoredImpactCardV1, fresh: readonly 
     const owner = ownerOfImpactItemV1(current);
     return {
       citation_index: at[entry.citation_index]!,
-      says_now: current.local && entry.says_now !== undefined ? entry.says_now : currentLine(current),
+      says_now: isLocal(current.citation.citation) && entry.says_now !== undefined ? entry.says_now : currentLine(current),
       ...(entry.relation === undefined ? {} : { relation: entry.relation }),
       ...(owner === undefined ? {} : { owner }),
       // A date the item no longer states is dropped; the row stays.
@@ -120,7 +191,7 @@ export function refreshImpactCardV1(stored: StoredImpactCardV1, fresh: readonly 
   // The validator returns the card in its fixed shape, or throws on a bug here.
   const card = validatePersonImpactCardV1({
     decided, affected, unconfirmed: stored.unconfirmed, people: [...people].map(([name, owned]) => ({ name, items: owned })),
-    status: stored.status, citations: fresh.flatMap(current => (current === null ? [] : [current.citation])),
+    status: stored.status, citations: fresh.flatMap((current, index) => (opened[index] ? [current!.citation] : [])),
   });
   return Object.freeze({ card, hidden: opened.filter(kept => !kept).length });
 }

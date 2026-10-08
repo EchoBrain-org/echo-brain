@@ -1,6 +1,7 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { validatePersonImpactCardV1, type PersonAnswerCitationV6, type PersonImpactAffectedV1, type PersonImpactCardV1 } from "@echo-brain/organization-api";
 import { describe, expect, it } from "vitest";
+import { cleanLine } from "../../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import {
   refreshImpactCardV1,
   storableImpactCardV1,
@@ -53,9 +54,7 @@ function cardWith(input: { readonly rows: readonly Row[]; readonly unconfirmed?:
   });
 }
 
-const fresh = (citation: PersonAnswerCitationV6, rest: Partial<FreshImpactItemV1> = {}): FreshImpactItemV1 => ({
-  citation, label: citation.label, local: citation.citation.kind === "approved_record" || citation.citation.kind === "source_revision", ...rest,
-});
+const fresh = (citation: PersonAnswerCitationV6, rest: Partial<FreshImpactItemV1> = {}): FreshImpactItemV1 => ({ citation, label: citation.label, ...rest });
 
 describe("storable impact card", () => {
   it("stores no outside text, label or owner", () => {
@@ -152,6 +151,69 @@ describe("storable impact card", () => {
     expect(stored.decided).toEqual([{ text: "Show two decimals on the display from DVT.", citation_index: 0 }]);
     expect(stored.affected).toEqual([{ citation_index: 1, relation: "confirms", says_now: "The display plan shows one decimal." }]);
     expect(stored.citations).toEqual([recordCitation("display").citation, otherRecordCitation("display-plan").citation]);
+  });
+});
+
+describe("storable impact card: every line a model wrote is screened for outside titles", () => {
+  const TITLE = "THERM-46: Display precision";
+
+  it("replaces an outside title in a decided line with 'a cited item'", () => {
+    const card = validatePersonImpactCardV1({
+      decided: [{ text: `The display plan still matches ${TITLE}`, citation_index: 0 }, { text: `${TITLE.toLowerCase()} and ${TITLE} both change.`, citation_index: 0 }],
+      affected: [{ citation_index: 1, says_now: "x", relation: "confirms" }],
+      unconfirmed: [], people: [], status: "assessed", citations: [recordCitation("display"), ticketCitation("THERM-46", TITLE)],
+    });
+    expect(storableImpactCardV1(card, []).decided.map(entry => entry.text)).toEqual([
+      "The display plan still matches a cited item",
+      "a cited item and a cited item both change.",
+    ]);
+    // A title the caller names, though the card cites no such item, is screened the same way.
+    expect(storableImpactCardV1(card, ["The display plan"]).decided[0]!.text).toBe("a cited item still matches a cited item");
+  });
+
+  it("drops the date of a row whose milestone is an outside title, and keeps the row", () => {
+    const card = cardWith({ rows: [
+      { citation: ticketCitation("THERM-46", TITLE), says_now: "x", relation: "conflicts", date_at_risk: { date: "2026-10-15", milestone: TITLE } },
+      { citation: pageCitation("1441793", "PRD: Display"), says_now: "y", relation: "needs_updating", date_at_risk: { date: "2026-10-20", milestone: "DVT gate" } },
+    ] });
+    const stored = storableImpactCardV1(card, []);
+    expect(stored.affected[0]).toEqual({ citation_index: 1, relation: "conflicts" });
+    expect(stored.affected[1]).toEqual({ citation_index: 2, relation: "needs_updating", date_at_risk: { date: "2026-10-20", milestone: "DVT gate" } });
+    // A milestone that only contains the title loses its date too.
+    const inside = cardWith({ rows: [{ citation: ticketCitation("THERM-46", TITLE), says_now: "x", relation: "conflicts", date_at_risk: { date: "2026-10-15", milestone: `before ${TITLE.toUpperCase()} ships` } }] });
+    expect(storableImpactCardV1(inside, []).affected[0]).toEqual({ citation_index: 1, relation: "conflicts" });
+  });
+
+  it("scrubs an outside title out of an ECHO-local line", () => {
+    const card = cardWith({ rows: [
+      { citation: otherRecordCitation("display-plan"), says_now: `The plan restates ${TITLE} word for word.`, relation: "needs_updating" },
+      { citation: ticketCitation("THERM-46", TITLE), says_now: TITLE, relation: "conflicts" },
+    ] });
+    const stored = storableImpactCardV1(card, []);
+    expect(stored.affected[0]!.says_now).toBe("The plan restates a cited item word for word.");
+    expect(JSON.stringify(stored)).not.toContain("Display precision");
+  });
+
+  it.each([290, 320])("still catches a %i-character title in a note that cleanLine cut short", length => {
+    const title = (`${OUTSIDE} `).repeat(12).slice(0, length).trim();
+    const note = cleanLine(`${title} could not be read.`, 300);
+    // The renderer's note is cut at 300 characters: its tail, and for a very long title the title itself.
+    expect(note.endsWith("…")).toBe(true);
+    expect(note.includes(title)).toBe(length < 299);
+    const card = cardWith({
+      rows: [{ citation: ticketCitation("THERM-46", "THERM-46: Display precision"), says_now: "x", relation: "confirms" }],
+      unconfirmed: [note, "The tickets list was cut short at 25 items."],
+    });
+    const stored = storableImpactCardV1(card, [title]);
+    expect(stored.unconfirmed).toEqual(["1 item could not be read.", "The tickets list was cut short at 25 items."]);
+    expect(JSON.stringify(stored)).not.toContain("0xC0FFEE");
+  });
+
+  it("keeps a line that names no outside title exactly as written", () => {
+    const card = cardWith({ rows: [{ citation: otherRecordCitation("display-plan"), says_now: "The  display plan is unchanged.", relation: "confirms" }] });
+    const stored = storableImpactCardV1(card, [TITLE, "Unrelated title"]);
+    expect(stored.decided).toEqual(card.decided);
+    expect(stored.affected[0]!.says_now).toBe("The  display plan is unchanged.");
   });
 });
 
@@ -276,6 +338,59 @@ describe("refreshed impact card", () => {
     const moved = { ...ticket, citation: { ...ticket.citation, text_sha256: canonicalSha256({ ticket: "edited" }) }, visibility: "project" } as PersonAnswerCitationV6;
     const result = refreshImpactCardV1(stored, [fresh(record), fresh(moved, { text: "THERM-46 formats one decimal." }), fresh(page, { text: "x" })]);
     expect(result.card.citations[1]).toEqual(moved);
+  });
+
+  it("hides a row whose fresh read is a different item than its stored pointer names", () => {
+    const other = ticketCitation("THERM-99", "THERM-99: Something else");
+    const result = refreshImpactCardV1(stored, [fresh(record), fresh(other, { text: "Unrelated." }), fresh(page, { text: "The PRD specifies one decimal." })]);
+    expect(result.hidden).toBe(1);
+    expect(result.card.citations).toEqual([record, page]);
+    expect(JSON.stringify(result.card)).not.toContain("THERM-99");
+    // A different kind, a different page, a different tool and a different record atom are all different items.
+    const pageElsewhere = { ...page, citation: { ...page.citation, page_id: "999" } } as PersonAnswerCitationV6;
+    const pageOtherTool = { ...page, citation: { ...page.citation, tool_id: "other-knowledge" } } as PersonAnswerCitationV6;
+    expect(refreshImpactCardV1(stored, [fresh(record), fresh(ticket, { text: "x" }), fresh(pageElsewhere)]).hidden).toBe(1);
+    expect(refreshImpactCardV1(stored, [fresh(record), fresh(ticket, { text: "x" }), fresh(pageOtherTool)]).hidden).toBe(1);
+    expect(refreshImpactCardV1(stored, [fresh(record), fresh(page), fresh(ticket)]).hidden).toBe(2);
+    const otherAtom = recordCitation("another-atom");
+    const lost = refreshImpactCardV1(stored, [fresh(otherAtom), fresh(ticket, { text: "x" }), fresh(page, { text: "x" })]);
+    expect(lost.hidden).toBe(1);
+    expect(lost.card.decided).toEqual([]);
+  });
+
+  it("accepts a fresh read whose section or version moved on, and shows its current pointer", () => {
+    const moved = { ...page, citation: { ...page.citation, section_id: "s7", version: "4" } } as PersonAnswerCitationV6;
+    const result = refreshImpactCardV1(stored, [fresh(record), fresh(ticket, { text: "x" }), fresh(moved, { text: "x" })]);
+    expect(result.hidden).toBe(0);
+    expect(result.card.citations[2]).toEqual(moved);
+  });
+
+  it("does not throw when two stored sections of one page re-open as the same pointer: one row stays, one is hidden", () => {
+    const sectionOne = pageCitation("1441793", "PRD: Display, section one");
+    const sectionTwo = { ...sectionOne, citation: { ...sectionOne.citation, section_id: "s2" }, label: "PRD: Display, section two" } as PersonAnswerCitationV6;
+    const card = cardWith({ rows: [
+      { citation: sectionOne, says_now: "Section one says one decimal.", relation: "needs_updating" },
+      { citation: sectionTwo, says_now: "Section two says one decimal.", relation: "conflicts" },
+    ] });
+    const twoSections = storableImpactCardV1(card, []);
+    // The page was edited: both stale sections re-open as the current page from the top.
+    const current = { ...sectionOne, citation: { ...sectionOne.citation, section_id: "s1", version: "4" } } as PersonAnswerCitationV6;
+    const result = refreshImpactCardV1(twoSections, [fresh(record), fresh(current, { text: "Display: two decimals." }), fresh(current, { text: "Display: two decimals." })]);
+    expect(result.hidden).toBe(1);
+    expect(result.card.citations).toEqual([record, current]);
+    expect(result.card.affected).toEqual([{ citation_index: 1, says_now: "Display: two decimals.", relation: "needs_updating" }]);
+    // A hidden duplicate hides the row that cited it, not the other way round.
+    const reversed = refreshImpactCardV1(twoSections, [fresh(record), null, fresh(current, { text: "Display: two decimals." })]);
+    expect(reversed.card.affected).toEqual([{ citation_index: 1, says_now: "Display: two decimals.", relation: "conflicts" }]);
+  });
+
+  it("decides what is ECHO's own from the citation kind, never from a stored line", () => {
+    const tampered = { ...stored, affected: stored.affected.map(entry => ({ ...entry, says_now: "A stored line about an outside item." })) } as StoredImpactCardV1;
+    const result = refreshImpactCardV1(tampered, [fresh(record), fresh(ticket, { text: "THERM-46 formats two decimals." }), fresh(page, { text: "Display: two decimals." })]);
+    expect(result.card.affected.map(entry => entry.says_now)).toEqual(["THERM-46 formats two decimals.", "Display: two decimals."]);
+    const localCard = cardWith({ rows: [{ citation: otherRecordCitation("display-plan"), says_now: "The display plan still shows one decimal.", relation: "needs_updating" }] });
+    const local = refreshImpactCardV1(storableImpactCardV1(localCard, []), [fresh(record), fresh(otherRecordCitation("display-plan"), { text: "Something else now." })]);
+    expect(local.card.affected[0]!.says_now).toBe("The display plan still shows one decimal.");
   });
 
   it("refuses fresh reads that do not match the stored citations", () => {
