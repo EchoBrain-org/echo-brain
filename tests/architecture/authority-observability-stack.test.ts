@@ -261,10 +261,10 @@ describe("Authority minimal observability stack", () => {
     );
   });
 
-  it("documents the content-free staging journey heartbeat in the owned log group", () => {
+  it("documents the shared content-free heartbeat and production metadata boundary", () => {
     const runbook = readFileSync(RUNBOOK, "utf8");
     const heartbeat = runbook.slice(
-      runbook.indexOf("#### Inspect the staging journey transport heartbeat"),
+      runbook.indexOf("#### Inspect the shared trace transport heartbeat"),
       runbook.indexOf("### 6. Rehearse the sanitized worker-failure signal"),
     );
 
@@ -277,6 +277,7 @@ describe("Authority minimal observability stack", () => {
     expect(heartbeat).toContain("approximately every 60 seconds");
     expect(heartbeat).toContain("content-free and best effort");
     expect(heartbeat).toContain("log-stream-only permission");
-    expect(heartbeat).toMatch(/Do not\s+enable or rehearse this transport against/);
+    expect(heartbeat).toContain("Staging and production use the same core context and transport implementation.");
+    expect(heartbeat).toContain("Production never enables the legacy global development-content logger.");
   });
 });

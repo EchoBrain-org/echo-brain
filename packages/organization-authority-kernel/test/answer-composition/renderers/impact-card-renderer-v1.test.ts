@@ -124,7 +124,7 @@ describe("impact card renderer", () => {
     const events: CoreRuntimeObservationV1[] = [];
     await observeCoreRuntimeV1("ask_request", () => run.render(), { observer: event => { events.push(event); } });
     expect(run.trace).toEqual(["context:E1,E2,E3,E4,E6,E8,E7,E5", "revalidate", "generate"]);
-    expect(events.filter(event => !event.root && event.event === "started").map(event => event.stage)).toEqual(["research_render"]);
+    expect(events.filter(event => !event.root && event.event === "started").map(event => event.stage)).toEqual(["research_revalidation", "research_render"]);
     expect(run.gate.stats().generations.map(entry => entry.role)).toEqual(["answer"]);
     expect(run.inputs[0]!.system_prompt).toBe(IMPACT_CARD_PROMPT);
     const user = run.prompt(0);
