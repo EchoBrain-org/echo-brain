@@ -190,4 +190,18 @@ describe("private Slack interaction handler", () => {
     expect(click).not.toHaveBeenCalled();
     expect(feedback).not.toHaveBeenCalled();
   });
+  it("refuses safely when no active Slack connection can supply a signing secret", async () => {
+    const click = vi.fn();
+    const handler = createPrivateSlackApprovalInteractionHandlerV1({
+      signing_secret: () => {
+        throw new Error("inactive");
+      },
+      now_unix_seconds: () => NOW,
+      click,
+    });
+    await expect(handler.accept(request(body()))).rejects.toMatchObject({
+      code: "unauthorized",
+    });
+    expect(click).not.toHaveBeenCalled();
+  });
 });

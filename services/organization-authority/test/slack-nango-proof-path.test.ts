@@ -680,6 +680,114 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
       organization_setup: null,
     });
 
+    // This service started before Slack was connected. The route must still be
+    // mounted so a just-linked owner can use the card without a restart.
+    const approval_id = "apr_00000000-0000-4000-8000-000000000001";
+    const interaction_state = {
+      audience: {
+        [slackApprovalActionIdV4(approval_id, "audience-select")]: {
+          type: "static_select",
+          selected_option: {
+            text: { type: "plain_text", text: "Only me", emoji: false },
+            value: "only-me",
+          },
+        },
+      },
+      projects: {
+        [slackApprovalActionIdV4(approval_id, "projects-select")]: {
+          type: "multi_static_select",
+          selected_options: [],
+        },
+      },
+      transcript: {
+        [slackApprovalActionIdV4(approval_id, "transcript-checkbox")]: {
+          type: "checkboxes",
+          selected_options: [],
+        },
+      },
+    };
+    const interaction = {
+      type: "block_actions",
+      user: {
+        id: OWNER_SLACK,
+        team_id: ECHO_BOT.team_id,
+        username: "founder",
+        name: "Founder",
+      },
+      api_app_id: APP.app_id,
+      trigger_id: "1234567890.1234567890.abcdefghijklmnopqrstuvwxyzABCD",
+      container: {
+        type: "message",
+        channel_id: `D${OWNER_SLACK.slice(1)}`,
+        message_ts: "1727700000.000001",
+        is_ephemeral: false,
+      },
+      team: { id: ECHO_BOT.team_id, domain: "proof" },
+      channel: { id: `D${OWNER_SLACK.slice(1)}`, name: "directmessage" },
+      message: {
+        type: "message",
+        user: ECHO_BOT.bot_user_id,
+        username: "echo",
+        text: "Review this meeting",
+        ts: "1727700000.000001",
+        app_id: APP.app_id,
+        bot_id: ECHO_BOT.bot_id,
+        bot_profile: { id: ECHO_BOT.bot_id, app_id: APP.app_id, name: "echo" },
+        blocks: [],
+      },
+      state: { values: interaction_state },
+      hash: "156dd7a1b8c6a7bdf070d9c5d5b02a86",
+      token: "deprecated-provider-token",
+      response_url: "https://hooks.slack.com/actions/T0PROOF/B0PROOF/proof",
+      actions: [
+        {
+          type: "button",
+          action_id: slackApprovalActionIdV4(approval_id, "approve"),
+          block_id: "actions",
+          text: { type: "plain_text", text: "Approve meeting", emoji: false },
+          action_ts: "1727700001.000001",
+          value: JSON.stringify({
+            schema_version: 2,
+            approval_id,
+            snapshot_sha256: `sha256:${"a".repeat(64)}`,
+          }),
+        },
+      ],
+    };
+    const sendInteraction = async () => {
+      const raw = new TextEncoder().encode(
+        new URLSearchParams({
+          payload: JSON.stringify(interaction),
+        }).toString(),
+      );
+      const timestamp = String(Math.floor(Date.now() / 1_000));
+      const signature = createHmac("sha256", APP.signing_secret)
+        .update(`v0:${timestamp}:`)
+        .update(raw)
+        .digest("hex");
+      const response = await fetch(
+        `${origin()}/v2/integrations/slack/interactions`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            "x-slack-request-timestamp": timestamp,
+            "x-slack-signature": `v0=${signature}`,
+          },
+          body: raw,
+        },
+      );
+      return { status: response.status, body: await response.text() };
+    };
+    await expect(sendInteraction()).resolves.toEqual({ status: 200, body: "" });
+    expect(feedback).toEqual([
+      {
+        response_type: "ephemeral",
+        replace_original: false,
+        text: "This approval is no longer available. Open the ECHO desktop app to review it.",
+      },
+    ]);
+
     // 6. The owner reconnects: Nango keeps the connection, Slack rotates the bot token and
     // Nango bumps updated_at. The connection state hash does not change.
     const before = connectionState();
@@ -774,149 +882,151 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
       external_subject_id: EMPLOYEE_SLACK,
     });
     expect(connectionState()).toEqual(before);
-    // The restarted production composition has an active connection, so it
-    // mounts the Slack interaction route and resolves its signing credential
-    // from the configured app reference. This is a real signed V4 request;
-    // there is no presentation for it, so the target-bound click path safely
-    // refuses it and sends only the provider-safe stale/refused feedback.
-    const approval_id = "apr_00000000-0000-4000-8000-000000000001";
-    const interaction_state = {
-      audience: {
-        [slackApprovalActionIdV4(approval_id, "audience-select")]: {
-          type: "static_select",
-          selected_option: {
-            text: { type: "plain_text", text: "Only me", emoji: false },
-            value: "only-me",
+    {
+      // The restarted production composition has an active connection, so it
+      // mounts the Slack interaction route and resolves its signing credential
+      // from the configured app reference. This is a real signed V4 request;
+      // there is no presentation for it, so the target-bound click path safely
+      // refuses it and sends only the provider-safe stale/refused feedback.
+      const approval_id = "apr_00000000-0000-4000-8000-000000000001";
+      const interaction_state = {
+        audience: {
+          [slackApprovalActionIdV4(approval_id, "audience-select")]: {
+            type: "static_select",
+            selected_option: {
+              text: { type: "plain_text", text: "Only me", emoji: false },
+              value: "only-me",
+            },
           },
         },
-      },
-      projects: {
-        [slackApprovalActionIdV4(approval_id, "projects-select")]: {
-          type: "multi_static_select",
-          selected_options: [],
+        projects: {
+          [slackApprovalActionIdV4(approval_id, "projects-select")]: {
+            type: "multi_static_select",
+            selected_options: [],
+          },
         },
-      },
-      transcript: {
-        [slackApprovalActionIdV4(approval_id, "transcript-checkbox")]: {
-          type: "checkboxes",
-          selected_options: [],
+        transcript: {
+          [slackApprovalActionIdV4(approval_id, "transcript-checkbox")]: {
+            type: "checkboxes",
+            selected_options: [],
+          },
         },
-      },
-    };
-    const interaction = {
-      type: "block_actions",
-      user: {
-        id: OWNER_SLACK,
-        team_id: ECHO_BOT.team_id,
-        username: "founder",
-        name: "Founder",
-      },
-      api_app_id: APP.app_id,
-      trigger_id: "1234567890.1234567890.abcdefghijklmnopqrstuvwxyzABCD",
-      container: {
-        type: "message",
-        channel_id: `D${OWNER_SLACK.slice(1)}`,
-        message_ts: "1727700000.000001",
-        is_ephemeral: false,
-      },
-      team: { id: ECHO_BOT.team_id, domain: "proof" },
-      channel: { id: `D${OWNER_SLACK.slice(1)}`, name: "directmessage" },
-      message: {
-        type: "message",
-        user: ECHO_BOT.bot_user_id,
-        username: "echo",
-        text: "Review this meeting",
-        ts: "1727700000.000001",
-        app_id: APP.app_id,
-        bot_id: ECHO_BOT.bot_id,
-        bot_profile: { id: ECHO_BOT.bot_id, app_id: APP.app_id, name: "echo" },
-        blocks: [],
-      },
-      state: { values: interaction_state },
-      response_url: "https://hooks.slack.com/actions/T0PROOF/B0PROOF/proof",
-      actions: [
-        {
-          type: "button",
-          action_id: slackApprovalActionIdV4(approval_id, "approve"),
-          block_id: "actions",
-          text: { type: "plain_text", text: "Approve meeting", emoji: false },
-          action_ts: "1727700001.000001",
-          value: JSON.stringify({
-            schema_version: 2,
-            approval_id,
-            snapshot_sha256: `sha256:${"a".repeat(64)}`,
+      };
+      const interaction = {
+        type: "block_actions",
+        user: {
+          id: OWNER_SLACK,
+          team_id: ECHO_BOT.team_id,
+          username: "founder",
+          name: "Founder",
+        },
+        api_app_id: APP.app_id,
+        trigger_id: "1234567890.1234567890.abcdefghijklmnopqrstuvwxyzABCD",
+        container: {
+          type: "message",
+          channel_id: `D${OWNER_SLACK.slice(1)}`,
+          message_ts: "1727700000.000001",
+          is_ephemeral: false,
+        },
+        team: { id: ECHO_BOT.team_id, domain: "proof" },
+        channel: { id: `D${OWNER_SLACK.slice(1)}`, name: "directmessage" },
+        message: {
+          type: "message",
+          user: ECHO_BOT.bot_user_id,
+          username: "echo",
+          text: "Review this meeting",
+          ts: "1727700000.000001",
+          app_id: APP.app_id,
+          bot_id: ECHO_BOT.bot_id,
+          bot_profile: {
+            id: ECHO_BOT.bot_id,
+            app_id: APP.app_id,
+            name: "echo",
+          },
+          blocks: [],
+        },
+        state: { values: interaction_state },
+        response_url: "https://hooks.slack.com/actions/T0PROOF/B0PROOF/proof",
+        actions: [
+          {
+            type: "button",
+            action_id: slackApprovalActionIdV4(approval_id, "approve"),
+            block_id: "actions",
+            text: { type: "plain_text", text: "Approve meeting", emoji: false },
+            action_ts: "1727700001.000001",
+            value: JSON.stringify({
+              schema_version: 2,
+              approval_id,
+              snapshot_sha256: `sha256:${"a".repeat(64)}`,
+            }),
+          },
+        ],
+      };
+      const raw_interaction = new TextEncoder().encode(
+        new URLSearchParams({
+          payload: JSON.stringify(interaction),
+        }).toString(),
+      );
+      const interaction_timestamp = String(Math.floor(Date.now() / 1_000));
+      const interaction_signature = createHmac("sha256", APP.signing_secret)
+        .update(`v0:${interaction_timestamp}:`)
+        .update(raw_interaction)
+        .digest("hex");
+      try {
+        parseVerifiedPrivateSlackApprovalInteractionV1(
+          verifyPrivateSlackApprovalRequestV1({
+            raw_body: raw_interaction,
+            signing_secret: APP.signing_secret,
+            headers: {
+              "x-slack-request-timestamp": interaction_timestamp,
+              "x-slack-signature": `v0=${interaction_signature}`,
+            },
+            now_unix_seconds: Number(interaction_timestamp),
           }),
-        },
-      ],
-    };
-    const raw_interaction = new TextEncoder().encode(
-      new URLSearchParams({ payload: JSON.stringify(interaction) }).toString(),
-    );
-    const interaction_timestamp = String(Math.floor(Date.now() / 1_000));
-    const interaction_signature = createHmac("sha256", APP.signing_secret)
-      .update(`v0:${interaction_timestamp}:`)
-      .update(raw_interaction)
-      .digest("hex");
-    try {
-      parseVerifiedPrivateSlackApprovalInteractionV1(
-        verifyPrivateSlackApprovalRequestV1({
-          raw_body: raw_interaction,
-          signing_secret: APP.signing_secret,
+        );
+      } catch (error) {
+        if (error instanceof PrivateSlackApprovalInteractionError)
+          throw new Error(
+            `interaction parser rejection: ${error.rejection_stage}`,
+          );
+        throw error;
+      }
+      const interaction_response = await fetch(
+        `${origin()}/v2/integrations/slack/interactions`,
+        {
+          method: "POST",
           headers: {
+            "content-type": "application/x-www-form-urlencoded",
             "x-slack-request-timestamp": interaction_timestamp,
             "x-slack-signature": `v0=${interaction_signature}`,
           },
-          now_unix_seconds: Number(interaction_timestamp),
-        }),
+          body: raw_interaction,
+        },
       );
-    } catch (error) {
-      if (error instanceof PrivateSlackApprovalInteractionError)
-        throw new Error(
-          `interaction parser rejection: ${error.rejection_stage}`,
-        );
-      throw error;
+      expect({
+        status: interaction_response.status,
+        body: await interaction_response.text(),
+      }).toEqual({ status: 200, body: "" });
+      expect(feedback).toHaveLength(2);
+      feedback_status = 500;
+      const rejected_feedback_response = await fetch(
+        `${origin()}/v2/integrations/slack/interactions`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            "x-slack-request-timestamp": interaction_timestamp,
+            "x-slack-signature": `v0=${interaction_signature}`,
+          },
+          body: raw_interaction,
+        },
+      );
+      expect({
+        status: rejected_feedback_response.status,
+        body: await rejected_feedback_response.text(),
+      }).toEqual({ status: 200, body: "" });
+      expect(feedback).toHaveLength(3);
     }
-    const interaction_response = await fetch(
-      `${origin()}/v2/integrations/slack/interactions`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/x-www-form-urlencoded",
-          "x-slack-request-timestamp": interaction_timestamp,
-          "x-slack-signature": `v0=${interaction_signature}`,
-        },
-        body: raw_interaction,
-      },
-    );
-    expect({
-      status: interaction_response.status,
-      body: await interaction_response.text(),
-    }).toEqual({ status: 200, body: "" });
-    expect(feedback).toEqual([
-      {
-        response_type: "ephemeral",
-        replace_original: false,
-        text: "This approval is no longer available. Open the ECHO desktop app to review it.",
-      },
-    ]);
-    feedback_status = 500;
-    const rejected_feedback_response = await fetch(
-      `${origin()}/v2/integrations/slack/interactions`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/x-www-form-urlencoded",
-          "x-slack-request-timestamp": interaction_timestamp,
-          "x-slack-signature": `v0=${interaction_signature}`,
-        },
-        body: raw_interaction,
-      },
-    );
-    expect({
-      status: rejected_feedback_response.status,
-      body: await rejected_feedback_response.text(),
-    }).toEqual({ status: 200, body: "" });
-    expect(feedback).toHaveLength(2);
     expect(errors).toEqual([]);
     for (const name of readdirSync(state).filter((file) =>
       file.includes(".sqlite"),

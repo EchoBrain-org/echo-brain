@@ -48,6 +48,7 @@ function payload(
     readonly owners?: Readonly<Record<string, string | null>>;
     readonly snapshot?: string | null;
     readonly response_url?: string;
+    readonly provider_metadata?: boolean;
     readonly state?: Record<string, unknown>;
   } = {},
 ) {
@@ -125,6 +126,12 @@ function payload(
       blocks: [],
     },
     state: { values: state },
+    ...(input.provider_metadata
+      ? {
+          hash: "156dd7a1b8c6a7bdf070d9c5d5b02a86",
+          token: "deprecated-provider-token",
+        }
+      : {}),
     ...(input.response_url === undefined
       ? {}
       : { response_url: input.response_url }),
@@ -174,6 +181,11 @@ describe("private Slack approval interaction V4", () => {
       owners: [{ signal_id: "act_alpha", owner: "Ada Lovelace" }],
     });
     expect(JSON.stringify(result)).not.toContain("response_url");
+  });
+  it("accepts signed Slack hash and token envelope metadata without retaining it", () => {
+    const result = parse(payload({ provider_metadata: true }));
+    expect(result).toMatchObject({ disposition: "resolution" });
+    expect(JSON.stringify(result)).not.toContain("deprecated-provider-token");
   });
   it("round-trips the complete V4 project option emitted by the card", () => {
     const card = buildSlackApprovalCardV4({
@@ -328,5 +340,27 @@ describe("private Slack approval interaction V4", () => {
     expect(parse(payload({ action: "audience-select" }))).toMatchObject({
       disposition: "presentation_change",
     });
+  });
+  it("accepts only the expected Slack type for each V4 no-op control", () => {
+    const cases: readonly [string, string][] = [
+      ["audience-select", "static_select"],
+      ["projects-select", "multi_static_select"],
+      ["transcript-checkbox", "checkboxes"],
+      ["owner-act_alpha", "plain_text_input"],
+    ];
+    for (const [name, type] of cases) {
+      const interaction = payload({ action: "audience-select" });
+      interaction.actions[0]!.action_id = slackApprovalActionIdV4(
+        APPROVAL_ID,
+        name as "audience-select",
+      );
+      interaction.actions[0]!.type = type;
+      expect(parse(interaction)).toMatchObject({
+        disposition: "presentation_change",
+      });
+    }
+    const malformed = payload({ action: "audience-select" });
+    malformed.actions[0]!.type = "plain_text_input";
+    rejected(malformed);
   });
 });

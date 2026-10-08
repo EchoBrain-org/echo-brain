@@ -23,9 +23,7 @@ function formContentType(value: string | undefined): boolean {
 }
 export interface PrivateSlackApprovalInteractionHandlerInputV1 {
   readonly signing_secret: () => string;
-  readonly click: (
-    click: VerifiedSlackApprovalClickV1,
-  ) =>
+  readonly click: (click: VerifiedSlackApprovalClickV1) =>
     | { readonly outcome: "decided" | "already_decided" | "stale" | "refused" }
     | Promise<{
         readonly outcome: "decided" | "already_decided" | "stale" | "refused";
@@ -78,11 +76,20 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
           "invalid_request",
           "Slack interaction content type is invalid",
         );
+      let signing_secret: string;
+      try {
+        signing_secret = input.signing_secret();
+      } catch {
+        throw new AuthorityOperationError(
+          "unauthorized",
+          "Slack interaction authentication failed",
+        );
+      }
       let verified;
       try {
         verified = verifyPrivateSlackApprovalRequestV1({
           raw_body: request.raw_body,
-          signing_secret: input.signing_secret(),
+          signing_secret,
           headers: {
             "x-slack-request-timestamp": request.slack_request_timestamp,
             "x-slack-signature": request.slack_signature,

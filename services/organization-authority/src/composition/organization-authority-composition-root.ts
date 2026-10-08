@@ -366,13 +366,7 @@ export async function openOrganizationAuthorityService(
           processor: dependencies.person_meeting_processor ?? decisionProcessor,
           projectors: policyProjectors,
           nango_authorization: () => slack_nango.secret_key,
-          provider_applications:
-            readActiveSlackConnectionV1(
-              openedControl,
-              resources.coordinates,
-            ) === undefined
-              ? []
-              : [interaction],
+          provider_applications: [interaction],
           approval_core: {
             presenters: [
               (core) =>

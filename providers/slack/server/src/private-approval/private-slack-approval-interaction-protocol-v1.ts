@@ -23,6 +23,7 @@ const BOT = /^B[A-Z0-9]{2,255}$/;
 const CHANNEL = /^[CDG][A-Z0-9]{2,255}$/;
 const TS = /^[0-9]{1,16}\.[0-9]{1,9}$/;
 const TRIGGER = /^[A-Za-z0-9._-]{16,512}$/;
+const TOKEN = /^[\x21-\x7e]{1,4096}$/;
 const PROJECT =
   /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 type RecordValue = Record<string, unknown>;
@@ -466,9 +467,16 @@ function state(
     owners: Object.freeze(owners),
   });
 }
-function presentationChangeAction(actionId: string): boolean {
-  return /^echo-approval-v4-[0-9a-f]{32}-(audience-select|projects-select|transcript-checkbox|owner-[A-Za-z0-9._:-]{1,255})$/.test(
-    actionId,
+function presentationChangeAction(actionId: string, type: unknown): boolean {
+  const control =
+    /^echo-approval-v4-[0-9a-f]{32}-(audience-select|projects-select|transcript-checkbox|owner-[A-Za-z0-9._:-]{1,255})$/.exec(
+      actionId,
+    )?.[1];
+  return (
+    (control === "audience-select" && type === "static_select") ||
+    (control === "projects-select" && type === "multi_static_select") ||
+    (control === "transcript-checkbox" && type === "checkboxes") ||
+    (control?.startsWith("owner-") === true && type === "plain_text_input")
   );
 }
 function providerKey(input: {
@@ -527,10 +535,16 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
         "actions",
         "enterprise",
         "is_enterprise_install",
+        "hash",
         "response_url",
+        "token",
       ],
       "envelope",
     );
+    if (payload.hash !== undefined)
+      string(payload.hash, IDENTIFIER, "envelope");
+    if (payload.token !== undefined)
+      string(payload.token, TOKEN, "envelope", 4096);
     const hints = lookup(payload);
     const actions = payload.actions;
     if (!Array.isArray(actions) || actions.length !== 1) invalid("action");
@@ -543,7 +557,8 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
     const action_id = string(selected.action_id, IDENTIFIER, "action");
     const trigger_id = string(payload.trigger_id, TRIGGER, "action", 512);
     if (selected.type !== "button") {
-      if (!presentationChangeAction(action_id)) invalid("action");
+      if (!presentationChangeAction(action_id, selected.type))
+        invalid("action");
       return Object.freeze({
         schema_version: 4,
         disposition: "presentation_change",
