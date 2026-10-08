@@ -72,3 +72,29 @@ npx vitest run --config vitest.config.ts providers/slack/server/test/private-app
 ```
 
 The failures are meaningful behavior gaps: normal and late-linked first delivery calls `reconcileMarker` after opening the DM rather than `postMarker`; `retry_allowed` therefore never reaches the safe first-marker retry; an `openDirectMessage` exception escapes instead of recording retry state; post cannot begin after the durable channel reservation; and thrown reconciliation/publish exceptions escape without durable backoff. The uncertain-marker, stale-target, oversized-card, terminal-redraw/starvation, and additional-lane lifecycle cases are already green. This is an intentional RED stopping point pending the controller's explicit Stage B authorization.
+
+## Fix round 2, Stage B: durable delivery and credential binding
+
+The presentation row now persists `marker_state`: `not_started` after the concrete DM channel commits, and `in_flight` after an atomic compare-and-set claims the one first-marker request. A crash before that claim can safely start the marker; a crash or exception after it only reconciles. A provider `retry_allowed` resets the claim so a later attempt may post again; `uncertain` and thrown provider failures retain `in_flight` and never blindly repost. Every non-abort provider failure records exponential retry state, and the fifth terminal redraw failure becomes `failed` without discarding its known timestamp. The schema allows pre-DM failures and failed in-flight markers, and all V12 pins were updated to `sha256:d5baba4f9f3e6d52fa6cea427d86e5eb45f100a1643b8c69152959da42329886`.
+
+Credential selection is now a per-target Slack poster. It validates the active connection, workspace, app, and current identity link before obtaining the token and repeats that validation after the asynchronous token lookup. The adapter-level connection-switch test proves no Slack request starts when the active connection changes during selection.
+
+GREEN:
+
+```text
+npx vitest run --config vitest.config.ts \
+  providers/slack/server/test/private-approval/slack-approval-presenter-v1.test.ts \
+  providers/slack/server/test/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.test.ts \
+  services/organization-authority/test/organization-authority-service-lifecycle.test.ts \
+  packages/organization-authority-kernel/test/adapters/persistence/sqlite/authority-baseline-v12.test.ts \
+  services/organization-authority/test/approval-decision-schema.test.ts \
+  services/organization-authority/test/current-storage-schema.test.ts \
+  services/organization-authority/test/person-read-decision-audit-schema.test.ts \
+  services/organization-authority/test/admitted-meeting-source-schema.test.ts
+# 8 files, 80 passed
+npx tsc -b providers/slack/server services/organization-authority
+npx eslint [Task 11 touched TypeScript files]
+npm run check:architecture-boundaries
+```
+
+No full repository check ran; the controller retains the serialized full-gate and Task 12 remains deferred.

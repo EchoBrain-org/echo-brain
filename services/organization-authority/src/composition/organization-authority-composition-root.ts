@@ -16,8 +16,7 @@ import { SlackWebAppManifestProviderV1, type SlackAppManifestProviderV1 } from "
 import { SlackWebIdentityProviderV1, type SlackIdentityProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-web-identity-provider-v1";
 import { createSlackBotTokenSourceV1, type SlackBotTokenSourceV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-bot-token-source-v1";
 import { SlackConnectionHealthV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-connection-health-v1";
-import { PrivateSlackApprovalCardPosterV1 } from '@echo-brain/provider-slack-server/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1';
-import { createSlackApprovalPresenterV1 } from '@echo-brain/provider-slack-server/private-approval/slack-approval-presenter-v1';
+import { createSlackApprovalPresenterV1, createTargetBoundSlackApprovalPosterV1 } from '@echo-brain/provider-slack-server/private-approval/slack-approval-presenter-v1';
 import { openOrganizationControlDatabase, readActiveSlackConnectionV1, resolveCurrentSlackDmApprovalReviewerTargetV1 } from '@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1';
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { join } from "node:path";
@@ -143,12 +142,11 @@ export async function openOrganizationAuthorityService(
       try {
         if (existing?.processing !== undefined) throw new Error('Personal meeting processing is already selected');
         const openedControl = openOrganizationControlDatabase(join(sharedConfig.state_directory, 'integrations.sqlite'), { fileMustExist: true }); control = openedControl;
-        const poster = new PrivateSlackApprovalCardPosterV1(async options => {
+        const targetCurrent = (target: { readonly connection_id: string; readonly external_identity_link_id: string; readonly external_identity_link_contract_sha256: string; readonly slack_workspace_id: string; readonly slack_subject_id: string; readonly api_app_id: string }): boolean => {
           const active = readActiveSlackConnectionV1(openedControl, resources.coordinates);
-          if (active === undefined) throw new Error('Slack is not connected');
-          return slack.bot_token_source.botToken(active, options);
-        }, { needs_reinstall: () => slack.connection_health.needsReinstall(readActiveSlackConnectionV1(openedControl, resources.coordinates)?.state_sha256),
-          on_auth_failure: () => { const active = readActiveSlackConnectionV1(openedControl, resources.coordinates); if (active !== undefined) slack.connection_health.markNeedsReinstall(active.state_sha256); } });
+          if (active === undefined || active.connection.connection_id !== target.connection_id || active.connection.provider_tenant_id !== target.slack_workspace_id || active.connection.provider_app_id !== target.api_app_id) return false;
+          return openedControl.prepare(`SELECT 1 FROM organization_external_human_link_current WHERE external_identity_link_id=? AND contract_sha256=? AND current_status='active' AND provider_subject_id=?`).get(target.external_identity_link_id, target.external_identity_link_contract_sha256, target.slack_subject_id) !== undefined;
+        };
         const granola = openGranolaPersonLiveRuntimeV1({ state_directory: sharedConfig.state_directory, sessions, resources,
           processor: dependencies.person_meeting_processor ?? decisionProcessor, projectors: policyProjectors, nango_authorization: () => slack_nango.secret_key,
           approval_core: { presenters: [core => createSlackApprovalPresenterV1({ database: resources.database, core,
@@ -163,11 +161,12 @@ export async function openOrganizationAuthorityService(
                 external_identity_link_contract_sha256: resolved.current_slack_identity_link.external_identity_link_contract_sha256,
                 slack_workspace_id: active.connection.provider_tenant_id, slack_subject_id: resolved.current_slack_identity_link.provider_subject_id, api_app_id: active.connection.provider_app_id,
                 };
-            }, targetCurrent: target => {
-              const active = readActiveSlackConnectionV1(openedControl, resources.coordinates);
-              if (active === undefined || active.connection.connection_id !== target.connection_id || active.connection.provider_tenant_id !== target.slack_workspace_id || active.connection.provider_app_id !== target.api_app_id) return false;
-              return openedControl.prepare(`SELECT 1 FROM organization_external_human_link_current WHERE external_identity_link_id=? AND contract_sha256=? AND current_status='active' AND provider_subject_id=?`).get(target.external_identity_link_id, target.external_identity_link_contract_sha256, target.slack_subject_id) !== undefined;
-            }, poster, projects: reviewer => resources.database.prepare(`SELECT p.project_id,p.name FROM authority_projects_v1 p JOIN authority_project_memberships_v1 m ON m.project_id=p.project_id WHERE p.organization_id=? AND p.status='active' AND m.principal_id=? AND m.membership_id=? AND m.status='active' ORDER BY p.project_id LIMIT 100`).all(reviewer.organization_id, reviewer.principal_id, reviewer.membership_id) as readonly { readonly project_id: string; readonly name: string }[] })] },
+            }, targetCurrent, poster: target => createTargetBoundSlackApprovalPosterV1({ target,
+              activeConnection: () => readActiveSlackConnectionV1(openedControl, resources.coordinates),
+              targetCurrent, botToken: slack.bot_token_source,
+              needsReinstall: active => slack.connection_health.needsReinstall(active.state_sha256),
+              markNeedsReinstall: active => slack.connection_health.markNeedsReinstall(active.state_sha256),
+            }), projects: reviewer => resources.database.prepare(`SELECT p.project_id,p.name FROM authority_projects_v1 p JOIN authority_project_memberships_v1 m ON m.project_id=p.project_id WHERE p.organization_id=? AND p.status='active' AND m.principal_id=? AND m.membership_id=? AND m.status='active' ORDER BY p.project_id LIMIT 100`).all(reviewer.organization_id, reviewer.principal_id, reviewer.membership_id) as readonly { readonly project_id: string; readonly name: string }[] })] },
           ...(stagingSynthetic === undefined ? {} : { providers: [stagingSynthetic] }) });
         if (stagingSynthetic !== undefined) stagingCanary = (release_id, signal) => runStagingSyntheticPersonalCanaryV1({ database: resources.database, runtime: granola, release_id, signal });
         return { applications: [...(existing?.applications ?? []), ...granola.applications], processing: granola.processing,

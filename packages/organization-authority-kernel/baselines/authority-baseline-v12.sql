@@ -692,6 +692,7 @@ CREATE TABLE authority_approval_presentations_v1 (
   target_json TEXT NOT NULL CHECK (json_valid(target_json) AND json_type(target_json) = 'object'),
   dm_channel_id TEXT CHECK (dm_channel_id IS NULL OR length(dm_channel_id) BETWEEN 1 AND 256),
   delivery TEXT NOT NULL CHECK (delivery IN ('opening', 'posting', 'posted', 'unrepresentable', 'failed')),
+  marker_state TEXT CHECK (marker_state IS NULL OR marker_state IN ('not_started', 'in_flight')),
   message_ts TEXT CHECK (message_ts IS NULL OR length(message_ts) BETWEEN 1 AND 64),
   card_sha256 TEXT CHECK (card_sha256 IS NULL OR card_sha256 LIKE 'sha256:%'),
   shows TEXT NOT NULL CHECK (shows IN ('open', 'approved', 'rejected', 'superseded')),
@@ -701,7 +702,9 @@ CREATE TABLE authority_approval_presentations_v1 (
   updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
   PRIMARY KEY (approval_id, surface),
   CHECK (message_ts IS NULL OR delivery IN ('posted', 'failed')),
-  CHECK (delivery IN ('opening', 'unrepresentable') OR dm_channel_id IS NOT NULL),
+  CHECK (delivery IN ('opening', 'unrepresentable', 'failed') OR dm_channel_id IS NOT NULL),
+  CHECK (delivery != 'posting' OR marker_state IS NOT NULL),
+  CHECK (marker_state IS NULL OR delivery IN ('posting', 'failed')),
   CHECK (delivery NOT IN ('opening', 'unrepresentable') OR shows = 'open')
 ) STRICT;
 CREATE TRIGGER authority_approval_presentation_target_immutable_v1
