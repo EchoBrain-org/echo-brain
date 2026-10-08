@@ -63,7 +63,7 @@ The worktree is fresh: no `node_modules`, no builds.
 - [ ] **Step 1:** Confirm the base:
 
 ```bash
-cd /Users/zhenye/Desktop/echo-brain/.worktrees/home-needs-you
+cd "$(git rev-parse --show-toplevel)"    # the worktree root: .worktrees/home-needs-you
 git log --oneline -4    # docs commits on top of 814470f feat(desktop): move meeting decisions and impact checks to Home
 ```
 
@@ -79,7 +79,7 @@ cd product/echo-desktop && npm ci && npm run build && npx vitest run
 - [ ] **Step 3:** Prove the starting point is green on the code this plan changes:
 
 ```bash
-cd /Users/zhenye/Desktop/echo-brain/.worktrees/home-needs-you
+cd "$(git rev-parse --show-toplevel)"    # the worktree root: .worktrees/home-needs-you
 npx vitest run --config vitest.config.ts services/organization-authority/test/trigger-runs-v1.test.ts services/organization-authority/test/person-trigger-runs-v1.test.ts
 cd product/echo-desktop && npx playwright test test/e2e/impact.spec.ts
 ```
