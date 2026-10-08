@@ -52,10 +52,10 @@ test('a file dropped on a sidebar project, with another app in front, is capture
 test('Home rows take a drop while another app is in front, and a file dropped on the sheet keeps who can read it', async () => {
   run = await launch();
   const { page, app } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await emit(app, 'echo-test:conceal');
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
-  await drop(page, page.getByTestId('project-row').nth(0), onDisk('Pricing.txt'));
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await drop(page, page.getByTestId('sidebar-project').nth(0), onDisk('Pricing.txt'));
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
   await emit(app, 'echo-test:resume');
   await page.getByTestId('readers-team').click();
@@ -72,7 +72,7 @@ test('Home rows take a drop while another app is in front, and a file dropped on
 test('a file dropped anywhere else on the window is captured for the page: Only me on Home, the project on screen in one', async () => {
   run = await launch();
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await drop(page, page.getByTestId('title'), onDisk('Notes.md'));
   await expect(page.getByTestId('compose-file')).toHaveText('Notes.md · 15 bytes');
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
@@ -95,7 +95,7 @@ test('a file dropped anywhere else on the window is captured for the page: Only 
 test('a drop never changes a draft with words in it, or a save not yet settled', async () => {
   run = await launch('write-unavailable');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Half a thought');
   // Words dragged in are not a file: the note takes them as usual.
@@ -127,8 +127,8 @@ test('a drop never changes a draft with words in it, or a save not yet settled',
 test('a drop main cannot vouch for is refused: a file made in the page, or a link', async () => {
   run = await launch();
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
-  await drop(page, page.getByTestId('project-row').nth(0), null);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await drop(page, page.getByTestId('sidebar-project').nth(0), null);
   await expect(page.getByTestId('compose-notice')).toHaveText('Choose a TXT, Markdown, PDF or Word file up to 25 MB.');
   await expect(page.getByTestId('compose-file')).toHaveCount(0);
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');

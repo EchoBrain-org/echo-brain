@@ -7,6 +7,18 @@ Windows packaging is not implemented.
 Global Ask includes live Jira reads through the person's connected account and
 shows ticket citations that open directly in Jira. Project Ask includes Jira only through a saved project mapping. Mine excludes Jira.
 
+Home shows meeting decisions waiting for approval and the impact of approved
+decisions. Open a decision to choose its audience, owners and transcript sharing.
+After approval, Home keeps the meeting visible while its record publishes and
+its impact check runs. Finished checks open an impact card; **Got it** dismisses
+that card on this computer. Projects and archived projects live in the sidebar.
+
+Tools → Granola manages folder watching and individual meeting imports. Review
+and impact cards live on Home. Home and decision content is covered while another
+app is in front, and unfinished checks refresh when ECHO returns. This desktop
+pass uses the existing meetings and runs APIs; owner notifications, shared item
+status and sweep actions are not included.
+
 ## Build
 
 Use the repository's pinned Node and npm versions. From the repository root:

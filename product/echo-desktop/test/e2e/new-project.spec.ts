@@ -274,7 +274,7 @@ test('with another app in front New project hides its people but takes a drop; a
   run = await launch('document-reply-lost');
   const { page, app } = run;
   // Opened over a project, whose page another app in front covers.
-  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await page.getByTestId('sidebar-new-project').click();
   await page.getByTestId('new-project-name').fill('Cedar');

@@ -14,7 +14,7 @@ const settingCalls = () => run.calls().filter(call => call.path === '/v1/person/
 test('a lead renames then archives and restores a project while its existing feed remains readable', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
 
   await page.getByTestId('project-settings').click();
   await page.getByTestId('project-rename').click();
@@ -62,14 +62,14 @@ test('a sidebar action targets its row without navigating and preserves member p
   await expect(page.getByTestId('project-archive')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Actions for Beacon' })).toBeFocused();
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
   await page.getByRole('button', { name: 'Actions for Beacon' }).click();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await page.getByTestId('project-leave').click();
   await expect(page.getByRole('heading', { name: 'Leave Beacon?' })).toBeVisible();
   await page.getByTestId('project-settings-confirm').click();
   await expect(page.getByTestId('title')).toHaveText('ECHO');
-  await expect(page.getByTestId('project-row')).toHaveCount(1);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(1);
   await expect(page.getByTestId('sidebar-project')).toHaveCount(1);
   expect(settingCalls().at(-1)?.body).toMatchObject({ kind: 'echo-project-leave-v1', project_id: BEACON });
 });
@@ -78,7 +78,7 @@ for (const origin of ['sidebar', 'header'] as const) {
   test(`Capture dismisses the ${origin} project menu and keeps its keyboard focus`, async () => {
     run = await launch();
     const { page } = run;
-    if (origin === 'header') await page.getByTestId('project-row').first().click();
+    if (origin === 'header') await page.getByTestId('sidebar-project').first().click();
     const opener = origin === 'header' ? page.getByTestId('project-settings')
       : page.getByRole('button', { name: 'Actions for Apollo' });
     await opener.click();
@@ -117,7 +117,7 @@ for (const tool of ['jira', 'confluence']) {
   test(`Capture preserves the open ${tool} project setting`, async () => {
     run = await launch();
     const { page } = run;
-    await page.getByTestId('project-row').first().click();
+    await page.getByTestId('sidebar-project').first().click();
     await page.getByTestId('project-settings').click();
     await page.getByTestId(`project-${tool}`).click();
     await expect(page.getByTestId(`project-${tool}-current`)).toBeVisible();
@@ -162,7 +162,7 @@ for (const role of ['member', 'lead'] as const) {
 test('a last lead is told to promote another lead before leaving', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
   await page.getByTestId('project-settings').click();
   await page.getByTestId('project-leave').click();
   await page.getByTestId('project-settings-confirm').click();
@@ -173,7 +173,7 @@ test('a last lead is told to promote another lead before leaving', async () => {
 test('an unconfirmed rename is retried with its same request instead of being called successful', async () => {
   run = await launch('change-reply-lost');
   const { page } = run;
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
   await page.getByTestId('project-settings').click();
   await page.getByTestId('project-rename').click();
   await page.getByTestId('project-rename-input').fill('Apollo retry');
@@ -193,7 +193,7 @@ test('an unconfirmed rename is retried with its same request instead of being ca
 test('rename does not submit an empty or unchanged name', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
   await page.getByTestId('project-settings').click();
   await page.getByTestId('project-rename').click();
   await expect(page.getByTestId('project-rename-save')).toBeDisabled();
@@ -205,7 +205,7 @@ test('rename does not submit an empty or unchanged name', async () => {
 test('switching away conceals a project settings draft and returning preserves it', async () => {
   run = await launch();
   const { page, app } = run;
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
   await page.getByTestId('project-settings').click();
   await page.getByTestId('project-rename').click();
   await page.getByTestId('project-rename-input').fill('Private draft name');
@@ -221,7 +221,7 @@ test('switching away conceals a project settings draft and returning preserves i
 test('a lead maps a Jira project, asks in that scope, and removes the mapping', async () => {
   run = await launch('ask-ticket');
   const { page } = run;
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
   await page.getByTestId('project-settings').click();
   await page.getByTestId('project-jira').click();
   await expect(page.getByTestId('project-jira-current')).toHaveText('No Jira project mapped');
@@ -260,7 +260,7 @@ test('a lead maps accessible Confluence spaces, loads another page, asks with a 
     shell.openExternal = async url => { (globalThis as { openedPages?: string[] }).openedPages!.push(url); };
   });
   const opened = () => app.evaluate(() => (globalThis as { openedPages?: string[] }).openedPages);
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
   await page.getByTestId('project-settings').click();
   await page.getByTestId('project-confluence').click();
   await expect(page.getByTestId('project-confluence-current')).toHaveText('No Confluence spaces mapped');
@@ -323,7 +323,7 @@ test('a member reads the saved Confluence mapping without loading a personal spa
 test('a lead keeps a saved Confluence mapping and can remove it when the personal picker is unavailable', async () => {
   run = await launch('confluence-spaces-unavailable');
   const { page } = run;
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
   await page.getByTestId('project-settings').click();
   await page.getByTestId('project-confluence').click();
   await expect(page.getByTestId('project-confluence-current')).toHaveText('1 space mapped');
@@ -338,7 +338,7 @@ for (const mode of ['confluence-project-conflict', 'confluence-project-reply-los
   test(`${mode}: reloads the saved mapping after an unconfirmed change without resubmitting`, async () => {
     run = await launch(mode);
     const { page } = run;
-    await page.getByTestId('project-row').first().click();
+    await page.getByTestId('sidebar-project').first().click();
     await page.getByTestId('project-settings').click();
     await page.getByTestId('project-confluence').click();
     await page.getByLabel(/ECHO product/).check();
@@ -355,7 +355,7 @@ for (const mode of ['jira-project-conflict', 'jira-project-reply-lost']) {
   test(`${mode}: reloads the current setting after a failed save without silently resubmitting`, async () => {
     run = await launch(mode);
     const { page } = run;
-    await page.getByTestId('project-row').first().click();
+    await page.getByTestId('sidebar-project').first().click();
     await page.getByTestId('project-settings').click();
     await page.getByTestId('project-jira').click();
     await page.getByTestId('project-jira-input').fill('ECHO');
@@ -372,7 +372,7 @@ for (const mode of ['jira-project-conflict', 'jira-project-reply-lost']) {
 test('a Jira mapping save stays visible until its reply and Escape closes the settled sheet', async () => {
   run = await launch('jira-project-slow');
   const { page } = run;
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
   await page.getByTestId('project-settings').click();
   await page.getByTestId('project-jira').click();
   await page.getByTestId('project-jira-input').fill('ECHO');

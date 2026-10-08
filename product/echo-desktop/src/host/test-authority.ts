@@ -126,6 +126,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const contract = () => import(pathToFileURL(join(repository, 'packages/organization-api/dist/index.js')).href) as Promise<Contract>;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
   let granolaImported = false, granolaApproved = false, granolaWatch = false, granolaBaselineHomeReads = 0;
+  let granolaPublicationReads = 0;
   let granolaReview: Record<string, unknown> | undefined;
   // The impact check of the approved meeting: none until it is approved.
   let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; lists: number; retried: boolean } | null = null;
@@ -500,7 +501,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const folderId = '00000000-0000-4000-8000-000000000011';
       const decidedOn = granolaApproved ? mode === 'granola-decided-in-slack' ? 'slack' : 'desktop' : null;
       const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning',
-        project_ids: Array.isArray(granolaReview?.project_ids) ? granolaReview.project_ids : [], status: granolaApproved ? 'approved' : 'pending', decided_on: decidedOn };
+        project_ids: Array.isArray(granolaReview?.project_ids) ? granolaReview.project_ids : [],
+        status: granolaApproved ? mode === 'granola-publishing' && granolaRun === null ? 'publishing' : 'approved' : 'pending', decided_on: decidedOn };
       switch (body?.operation) {
         case 'home': return mode === 'granola-browse-unavailable' ? failure('unavailable', 503) : json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64),
           sources: mode === 'granola-preparing' && granolaWatch ? [{ source_key: 'pms_fixture', folder_id: folderId, folder_project_id: 'prj_11111111-1111-4111-8111-111111111111', baseline: granolaBaselineHomeReads++ > 0, pending_imports: [], checked_at: null, error: null }] : [] });
@@ -513,7 +515,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           owners: [{ signal_id: 'act-1', action: 'Send the revised quote', proposed: 'Rafael Moreno' }, { signal_id: 'act-2', action: 'Confirm the trace', proposed: 'Mina Patel' }],
           suggested_projects: [{ project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign' }] });
         case 'review': granolaReview = body; granolaApproved = true;
-          if (body?.action === 'approve' && granolaRun === null) granolaRun = { state: 'pending', error_code: null, lists: 0, retried: false };
+          if (body?.action === 'approve' && granolaRun === null && mode !== 'granola-publishing') granolaRun = { state: 'pending', error_code: null, lists: 0, retried: false };
           return json(mode === 'granola-decided-in-slack' ? { status: 'approved', decided_on: 'slack' } : { status: 'publishing', decided_on: 'desktop' });
       }
     }
@@ -521,6 +523,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // list after that finds it done (in granola-run-failed, failed until Try again).
     if (method === 'POST' && path === '/v1/person/runs' && mode.startsWith('granola')) {
       const runId = 'run_00000000-0000-4000-8000-000000000020';
+      // Real publication is asynchronous: the first post-approval list can have no run yet.
+      if (mode === 'granola-publishing' && granolaApproved && granolaRun === null && body?.operation === 'list' && ++granolaPublicationReads >= 2) {
+        granolaRun = { state: 'pending', error_code: null, lists: 0, retried: false };
+      }
       const run = granolaRun;
       const row = (value: NonNullable<typeof run>) => ({ run_id: runId, trigger: 'approved_record', event_ref: 'apr_' + 'a'.repeat(64), state: value.state,
         error_code: value.error_code, created_at: '2026-10-07T10:00:00.000Z', updated_at: '2026-10-07T10:05:00.000Z' });

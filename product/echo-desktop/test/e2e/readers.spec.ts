@@ -36,7 +36,7 @@ test('Who can read is Only me, Projects and Organization on one row: arrow keys 
   const { page, app } = run;
   await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(800, 560); });
   await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([800, 560]);
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await expect(radios(page)).toHaveText(['Only me', 'Projects', 'Organization']);
   await oneRow(page);
@@ -113,7 +113,7 @@ test('Who can read is Only me, Projects and Organization on one row: arrow keys 
 test('Projects holds several: the list closes with nothing ticked back to what it was, and two ticked are saved for both', async () => {
   run = await launch();
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
   await page.getByTestId('compose-body').fill('Pricing for both teams');
@@ -159,7 +159,7 @@ test('Projects holds several: the list closes with nothing ticked back to what i
 test('projects unticked in the list stay unticked when Only me or Organization is chosen next', async () => {
   run = await launch();
   const { page, app } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await emit(app, 'echo-test:capture');
   await page.getByTestId('compose-body').fill('Not for either team');
   const choose = async (names: string[]) => {
@@ -194,7 +194,7 @@ test('projects unticked in the list stay unticked when Only me or Organization i
 test('⌘⇧E starts as Only me with nothing ticked, a drop on a row starts with it ticked, and Start over keeps the choice', async () => {
   run = await launch('write-unavailable');
   const { page, app } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await emit(app, 'echo-test:capture');
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
   await expect(projects(page)).toHaveText('Projects');
@@ -205,7 +205,7 @@ test('⌘⇧E starts as Only me with nothing ticked, a drop on a row starts with
   const folder = mkdtempSync(join(tmpdir(), 'echo-drop-'));
   folders.push(folder);
   writeFileSync(join(folder, 'Brief.md'), 'Annual pricing.');
-  await drop(page, page.getByTestId('project-row').nth(1), join(folder, 'Brief.md'));
+  await drop(page, page.getByTestId('sidebar-project').nth(1), join(folder, 'Brief.md'));
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Beacon');
   await projects(page).click();
   await expect(list(page).getByTestId('projects-row')).toHaveText(['Beacon', 'Apollo']);
@@ -228,7 +228,7 @@ test('⌘⇧E starts as Only me with nothing ticked, a drop on a row starts with
 test('an unconfirmed save to two projects is locked, and Try again resends the identical audience', async () => {
   run = await launch('write-unavailable-once');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await projects(page).click();
   await tick(page, 'Apollo').click();
@@ -251,7 +251,7 @@ test('an unconfirmed save to two projects is locked, and Try again resends the i
 test('at most twenty projects: past eight a field finds one, More projects reads on, and the rest are off with a line saying so', async () => {
   run = await launch('over-twenty-projects');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(10);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(10);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Quarterly numbers');
   await projects(page).click();
@@ -305,7 +305,7 @@ test('at most twenty projects: past eight a field finds one, More projects reads
 test('the list read again while Capture is open moves no project: one new to it joins at the end', async () => {
   run = await launch('project-added');
   const { page, app } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Pilot notes');
   await projects(page).click();
@@ -314,8 +314,8 @@ test('the list read again while Capture is open moves no project: one new to it 
 
   // The window comes forward with Capture open: Home reads its list again, and Comet, the newest, leads it.
   await emit(app, 'echo-test:shown');
-  await expect(page.getByTestId('project-row')).toHaveCount(3);
-  await expect(page.getByTestId('project-row').first()).toContainText('Comet');
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(3);
+  await expect(page.getByTestId('sidebar-project').first()).toContainText('Comet');
   // In Capture every project stays where it was, so a click lands where it was aimed.
   await expect(rows).toHaveText(['Apollo', 'Beacon', 'Comet']);
   await tick(page, 'Beacon').click();
@@ -335,7 +335,7 @@ test('at the smallest window a very long name is cut off in Projects only, and t
   const { page, app } = run;
   await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(800, 560); });
   await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([800, 560]);
-  await expect(page.getByTestId('project-row')).toHaveCount(10);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(10);
   await page.getByTestId('write-button').click();
   await projects(page).click();
   await list(page).getByTestId('projects-more').click();

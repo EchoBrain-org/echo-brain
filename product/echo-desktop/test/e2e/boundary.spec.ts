@@ -12,7 +12,7 @@ type DropFile = (file: unknown) => Promise<{ ok: boolean; failure?: { code: stri
 test('the page can never name a file path', async () => {
   run = await launch();
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   const replies = await page.evaluate(async () => {
     const { rpc, dropFile } = (window as unknown as { echo: { rpc: Rpc; dropFile: DropFile } }).echo;
     const expect = { authority: 'https://authority.example', membership_id: 'mem_22222222-2222-4222-8222-222222222222' };
@@ -61,7 +61,7 @@ test('the page can never name a file path', async () => {
 test('a note that starts with a dash is sent as text, not read as an option', async () => {
   run = await launch();
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('--audience=team\nstill only for me');
   await page.getByTestId('compose-send').click();
@@ -74,7 +74,7 @@ test('a note that starts with a dash is sent as text, not read as an option', as
 test('a long title is cut to what the API takes, and a long question is capped', async () => {
   run = await launch();
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill(`${'é'.repeat(150)}\tend`);
   await page.getByTestId('compose-send').click();

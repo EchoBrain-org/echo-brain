@@ -43,9 +43,9 @@ test('the sidebar pages with More, sharing the list Home loaded', async () => {
   await expect(page.getByTestId('sidebar-project')).toHaveCount(10);
   await page.getByTestId('sidebar-more').click();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
-  await expect(page.getByTestId('project-row')).toHaveCount(13);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
   await expect(page.getByTestId('sidebar-more')).toHaveCount(0);
-  await expect(page.getByTestId('more-projects')).toHaveCount(0);
+  await expect(page.getByTestId('sidebar-more')).toHaveCount(0);
   expect(lists()).toBe(2);
 });
 
@@ -77,13 +77,14 @@ test('the sidebar is on by default, and the toggle only hides it', async () => {
   run = await launch();
   const { page } = run;
   await expect(page.getByTestId('sidebar')).toBeVisible();
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('sidebar-toggle').click();
   await expect(page.getByTestId('sidebar')).toHaveCount(0);
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('home-clear')).toBeVisible();
   await expect(page.getByTestId('ask-field')).toBeVisible();
   // Remembered on this computer.
   await page.reload();
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('home-clear')).toBeVisible();
   await expect(page.getByTestId('sidebar')).toHaveCount(0);
   await page.getByTestId('sidebar-toggle').click();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);

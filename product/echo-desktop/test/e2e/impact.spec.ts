@@ -6,21 +6,32 @@ test.afterEach(async () => { await run?.close(); });
 
 const runOperations = () => run.calls().filter(call => call.path === '/v1/person/runs').map(call => call.body?.operation);
 
-/** Opens the Granola sheet, imports the fixture meeting and approves it for Only me. */
-async function approveMeeting(page: Page) {
+/** Adds the fixture meeting through Granola and approves it from Home for Only me. */
+async function approveFromHome(page: Page) {
   await page.getByTestId('sidebar-tools').click();
   await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
   const meetings = page.getByRole('region', { name: 'Personal meetings' });
   await meetings.getByLabel('Granola folder').selectOption({ label: 'ECHO (1)' });
-  await meetings.getByRole('button', { name: 'Browse meetings' }).click();
   await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
   await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
   await meetings.getByRole('button', { name: 'Add to ECHO', exact: true }).click();
-  await expect(meetings.getByRole('button', { name: 'Pilot planning', exact: true })).toHaveCount(2);
-  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).last().click();
-  await meetings.getByRole('radio', { name: 'Only me' }).check();
-  await meetings.getByRole('button', { name: 'Approve', exact: true }).click();
-  return meetings;
+  await expect(meetings.getByRole('status')).toContainText('Added.');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('sidebar-home').click();
+  await page.getByTestId('need-row').click();
+  const card = page.getByTestId('decision');
+  await card.getByRole('radio', { name: 'Only me' }).check();
+  await card.getByTestId('decision-approve').click();
+  await expect(page.getByTestId('toast')).toContainText('Approved');
+  return page.getByTestId('need-row');
+}
+
+async function approveMeeting(page: Page) {
+  const row = await approveFromHome(page);
+  // The check runs by itself; its row becomes Impact and opens the card.
+  await expect(row).toHaveAttribute('data-kind', 'impact', { timeout: 30_000 });
+  await row.click();
+  return page.getByTestId('decision');
 }
 
 test('approving a meeting shows its impact card once the check finishes', async ({}, testInfo) => {
@@ -33,7 +44,6 @@ test('approving a meeting shows its impact card once the check finishes', async 
   });
   const meetings = await approveMeeting(page);
   const impact = meetings.getByRole('region', { name: 'Impact' });
-  await expect(impact.getByText('Impact check queued.').or(impact.getByText('Checking what this changes. This can take a few minutes.'))).toBeVisible();
   await expect(impact.getByRole('heading', { name: 'Affected items' })).toBeVisible({ timeout: 30_000 });
   await expect(impact.getByRole('heading', { name: 'What was decided' })).toBeVisible();
   await expect(impact).toContainText('Launch the pilot next week.');
@@ -51,6 +61,18 @@ test('approving a meeting shows its impact card once the check finishes', async 
   await impact.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('impact-card.png') });
   expect(runOperations()).toEqual(expect.arrayContaining(['list', 'start', 'view']));
+  expect(runOperations().filter(operation => operation === 'start')).toHaveLength(1);
+});
+
+test('a publishing approval stays on Home until its impact run arrives and finishes', async () => {
+  run = await launch('granola-publishing');
+  const row = await approveFromHome(run.page);
+  await expect(row).toContainText('publishing to ECHO');
+  await expect(row).toHaveAttribute('data-kind', 'checking');
+  await expect(run.page.getByTestId('home-clear')).toHaveCount(0);
+  await expect(row).toHaveAttribute('data-kind', 'impact', { timeout: 30_000 });
+  await row.click();
+  await expect(run.page.getByRole('heading', { name: 'Affected items' })).toBeVisible();
   expect(runOperations().filter(operation => operation === 'start')).toHaveLength(1);
 });
 

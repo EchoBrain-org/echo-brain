@@ -1,4 +1,3 @@
-import { Meetings } from './meetings.js';
 import { useEffect, useRef } from 'preact/hooks';
 import type { ConnectedTool, ToolStatus } from '../../shared/protocol.js';
 import { message, toolMessage } from '../messages.js';
@@ -8,6 +7,7 @@ import {
 } from '../store.js';
 import { trapTab } from './compose.js';
 import { Close } from './icons.js';
+import { Meetings } from './meetings.js';
 
 /** Sections in the order they show; an empty one is left out. */
 const SECTIONS: readonly { label: string; status: ToolStatus }[] = [
@@ -113,28 +113,30 @@ function expiresIn(expiresAt: string): string {
   return `expires in ${minutes} min`;
 }
 
-/** Manage: Disconnect removes only your own connection. */
+/** Manage: Disconnect removes only your own connection. Granola's sheet also sets up the folder ECHO watches. */
 export function ToolManage({ sheet }: { sheet: ToolManageSheet }) {
   const box = useRef<HTMLDivElement>(null);
   const done = useRef<HTMLButtonElement>(null);
-  useEffect(() => { done.current?.focus(); }, []);
+  useEffect(() => { (done.current ?? box.current)?.focus(); }, []);
   const { tool } = sheet;
+  const meetings = tool.tool_id === 'granola';
   return (
     <div class="overlay" onClick={closeSheet}>
-      <div class={`sheet confirm${tool.tool_id === 'granola' ? ' meeting-manage' : ''}`} role="dialog" aria-labelledby="tool-manage-title" data-testid="tool-manage-sheet" ref={box}
+      <div class={`sheet confirm${meetings ? ' meetings' : ''}`} role="dialog" aria-labelledby="tool-manage-title" data-testid="tool-manage-sheet" ref={box} tabIndex={-1}
         onClick={event => event.stopPropagation()} onKeyDown={event => trapTab(event, box.current)}>
         <div class="sheet-head">
           <h2 id="tool-manage-title">{tool.name}</h2>
-          <button type="button" class="circle" aria-label="Close" onClick={closeSheet} disabled={sheet.busy}><Close /></button>
+          <button type="button" class="circle small" aria-label="Close" onClick={closeSheet} disabled={sheet.busy}><Close /></button>
         </div>
-        {tool.tool_id === 'granola' && <Meetings />}
-        <p>{tool.tool_id === 'granola' ? 'Disconnecting stops new imports. Retained meetings and approved records keep their existing audience. You can reconnect later.' : <>Disconnecting removes only your own {tool.name} connection; you can connect again later.</>}</p>
+        {meetings ? <div class="sheet-scroll"><Meetings /></div>
+          : <p>Disconnecting removes only your own {tool.name} connection; you can connect again later.</p>}
         {sheet.failure && <p class="error" aria-live="polite">{message(sheet.failure)}</p>}
-        <div class="choices">
-          <button type="button" class="plain-button danger" data-testid="tool-disconnect" disabled={sheet.busy} onClick={() => void disconnectTool()}>
-            {sheet.busy ? 'Disconnecting…' : 'Disconnect'}
+        <div class={`choices${meetings ? ' between' : ''}`}>
+          {meetings && <span class="notice-line">Disconnecting stops new imports. Retained meetings keep their audience.</span>}
+          <button type="button" class={`${meetings ? 'link-button' : 'plain-button'} danger`} data-testid="tool-disconnect" disabled={sheet.busy} onClick={() => void disconnectTool()}>
+            {sheet.busy ? 'Disconnecting…' : meetings ? 'Disconnect Granola' : 'Disconnect'}
           </button>
-          <button type="button" class="plain-button" ref={done} disabled={sheet.busy} onClick={closeSheet}>Done</button>
+          {!meetings && <button type="button" class="plain-button" ref={done} disabled={sheet.busy} onClick={closeSheet}>Done</button>}
         </div>
       </div>
     </div>

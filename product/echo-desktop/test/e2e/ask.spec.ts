@@ -12,7 +12,7 @@ const evidenceReads = () => run.calls().filter(call => call.path === '/v2/person
 const questions = () => run.calls().filter(call => call.path === '/v5/person/ask').map(call => call.body?.question);
 
 async function askFromHome(page: Page, question: string): Promise<void> {
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('ask-field').fill(question);
   await page.getByTestId('ask-field').press('Enter');
 }
@@ -77,7 +77,7 @@ for (const [tool, label] of [['notion', 'Notion'], ['knowledge-base', 'Knowledge
 test('follow-ups stack in a thread, newest at the bottom: earlier answers collapse, five at most, and Back leaves the thread', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('sidebar-project').nth(0).click();
   await page.getByTestId('ask-field').fill('Question 1');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('answer')).toBeVisible();
@@ -112,7 +112,7 @@ test('a question asked over an open match goes Back to that match', async () => 
   run = await launch();
   const { page } = run;
   const field = page.getByTestId('ask-field');
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await field.fill('ship');
   await page.getByTestId('match-row').click();
   await expect(page.getByTestId('reader-text')).toHaveText('We agreed to ship.');
@@ -180,7 +180,7 @@ test('a project question that finds nothing says so and offers, never makes, one
   run = await launch('ask-project-empty');
   const { page } = run;
   const asks = () => run.calls().filter(call => /^\/v5\/person\/ask$/.test(call.path)).map(call => ({ question: call.body?.question, project: call.body?.project_id }));
-  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('sidebar-project').nth(0).click();
   await page.getByTestId('ask-field').fill('What did we agree on pricing?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('answer-gap')).toHaveText("I couldn't find this in the sources you can access.");
@@ -208,7 +208,7 @@ test('a project question that finds nothing says so and offers, never makes, one
 test('a project question about another subject offers no wider ask', async () => {
   run = await launch('ask-project-empty');
   const { page } = run;
-  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('sidebar-project').nth(0).click();
   await page.getByTestId('ask-field').fill('What is the weather in Lisbon?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('answer-off-scope')).toHaveText('The accessible evidence may be about a different subject.');
@@ -271,7 +271,7 @@ test('an approved record opens beside the answer: who approved it, who was there
   // Escape leaves the answer, and its sources with it.
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('ask-view')).toHaveCount(0);
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
 });
 
 test('a cited record the person can no longer read says so, with no Try again that cannot work', async () => {
