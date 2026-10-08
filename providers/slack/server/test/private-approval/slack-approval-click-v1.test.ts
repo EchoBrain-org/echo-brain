@@ -13,7 +13,7 @@ async function fixture() {
   const f = await approvalCoreFixture({ owners: { 'act-1': 'Rafael Moreno' }, projects: 2 });
   f.db.prepare("INSERT INTO authority_approval_presentations_v1(approval_id,surface,target_json,dm_channel_id,delivery,marker_state,marker_started_at,message_ts,card_sha256,shows,attempts,retry_at,created_at,updated_at) VALUES (?,'slack',?,'D012ABCDEF','posted',NULL,NULL,'1712345678.123456',NULL,'open',0,NULL,?,?)")
     .run(f.approvalId, JSON.stringify(TARGET), '2026-10-07T09:00:00.000Z', '2026-10-07T09:00:00.000Z');
-  const link = vi.fn(() => ({ ...f.person, external_identity_link_id: TARGET.external_identity_link_id, contract_sha256: TARGET.external_identity_link_contract_sha256 }));
+  const link = vi.fn(() => ({ ...f.person, connection_id: TARGET.connection_id, api_app_id: TARGET.api_app_id, external_identity_link_id: TARGET.external_identity_link_id, contract_sha256: TARGET.external_identity_link_contract_sha256 }));
   const redraw = vi.fn();
   return { ...f, link, redraw, decide: createSlackApprovalClickV1({ database: f.db, core: f.core, link, redraw }) };
 }
@@ -37,9 +37,9 @@ describe('Slack approval click V1', () => {
     const f = await fixture(), source = click(f.approvalId, f.snapshotOf(f.approvalId)!);
     f.link.mockReturnValueOnce(null as never);
     expect(f.decide(source)).toEqual({ outcome: 'refused' }); expect(f.decisionCount()).toBe(0);
-    f.link.mockReset(); f.link.mockReturnValue({ ...f.person, external_identity_link_id: TARGET.external_identity_link_id, contract_sha256: TARGET.external_identity_link_contract_sha256 });
+    f.link.mockReset(); f.link.mockReturnValue({ ...f.person, connection_id: TARGET.connection_id, api_app_id: TARGET.api_app_id, external_identity_link_id: TARGET.external_identity_link_id, contract_sha256: TARGET.external_identity_link_contract_sha256 });
     expect(f.decide({ ...source, owners: [{ signal_id: 'act_unknown', owner: 'Ada' }] })).toEqual({ outcome: 'refused' }); expect(f.decisionCount()).toBe(0);
-    let calls = 0; f.link.mockImplementation(() => (++calls === 1 ? ({ ...f.person, external_identity_link_id: TARGET.external_identity_link_id, contract_sha256: TARGET.external_identity_link_contract_sha256 }) : null) as never);
+    let calls = 0; f.link.mockImplementation(() => (++calls === 1 ? ({ ...f.person, connection_id: TARGET.connection_id, api_app_id: TARGET.api_app_id, external_identity_link_id: TARGET.external_identity_link_id, contract_sha256: TARGET.external_identity_link_contract_sha256 }) : null) as never);
     expect(f.decide(source)).toEqual({ outcome: 'refused' }); expect(f.decisionCount()).toBe(0);
   });
   it('makes a desktop click race produce exactly one decision and one published record', async () => {

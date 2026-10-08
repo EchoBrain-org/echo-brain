@@ -4,7 +4,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import type { VerifiedSlackApprovalClickV1 } from './private-slack-approval-interaction-protocol-v1.js';
 
 export interface ApprovalActorV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
-type LinkV1 = ApprovalActorV1 & { readonly external_identity_link_id: string; readonly contract_sha256: string };
+type LinkV1 = ApprovalActorV1 & { readonly external_identity_link_id: string; readonly contract_sha256: string; readonly connection_id: string; readonly api_app_id: string };
 type TargetV1 = { readonly connection_id: string; readonly external_identity_link_id: string; readonly external_identity_link_contract_sha256: string; readonly slack_workspace_id: string; readonly slack_subject_id: string; readonly api_app_id: string };
 type CoreV1 = {
   decide(surface: 'slack', request: { readonly approval_id: string; readonly command_id: string; readonly snapshot_sha256: Sha256Digest; readonly action: 'approve' | 'reject'; readonly project_ids: readonly string[]; readonly share_transcript: boolean; readonly owners: readonly { readonly signal_id: string; readonly owner: string }[] }, authorize: () => { readonly actor: ApprovalActorV1; readonly evidence: { readonly kind: 'slack-click'; readonly sha256: Sha256Digest } }): { readonly kind: 'decided' | 'replayed' | 'already_decided' | 'stale' };
@@ -37,7 +37,7 @@ export function createSlackApprovalClickV1(options: {
     const evidence = canonicalSha256({ provider_action_key_sha256: click.provider_action_key_sha256, workspace: click.lookup.workspace_id, subject: click.lookup.slack_user_id, channel: click.lookup.channel_id, message_ts: click.lookup.message_ts, link_id: posted.external_identity_link_id, link_contract_sha256: posted.external_identity_link_contract_sha256 });
     const authorize = () => {
       const current = options.link({ workspace_id: click.lookup.workspace_id, subject_id: click.lookup.slack_user_id });
-      if (current === null || !sameActor(current, proposal.reviewer) || current.external_identity_link_id !== posted.external_identity_link_id || current.contract_sha256 !== posted.external_identity_link_contract_sha256) throw new AuthorityOperationError('unauthorized', 'Slack approval link is no longer current');
+      if (current === null || !sameActor(current, proposal.reviewer) || current.connection_id !== posted.connection_id || current.api_app_id !== posted.api_app_id || current.external_identity_link_id !== posted.external_identity_link_id || current.contract_sha256 !== posted.external_identity_link_contract_sha256) throw new AuthorityOperationError('unauthorized', 'Slack approval link is no longer current');
       return { actor: { organization_id: current.organization_id, principal_id: current.principal_id, membership_id: current.membership_id }, evidence: { kind: 'slack-click' as const, sha256: evidence } };
     };
     try {

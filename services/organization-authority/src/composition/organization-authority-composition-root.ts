@@ -172,7 +172,7 @@ export async function openOrganizationAuthorityService(
                   return target === undefined || target.current_slack_identity_link.provider_subject_id !== hint.subject_id ? [] : [{ actor, target }];
                 });
                 if (matches.length !== 1 || matches[0] === undefined) return null;
-                const match = matches[0]; return { organization_id: match.actor.organization_id, principal_id: match.actor.principal_id, membership_id: match.actor.membership_id, external_identity_link_id: match.target.current_slack_identity_link.external_identity_link_id, contract_sha256: match.target.current_slack_identity_link.external_identity_link_contract_sha256 };
+                const match = matches[0]; return { organization_id: match.actor.organization_id, principal_id: match.actor.principal_id, membership_id: match.actor.membership_id, connection_id: active.connection.connection_id, api_app_id: active.connection.provider_app_id, external_identity_link_id: match.target.current_slack_identity_link.external_identity_link_id, contract_sha256: match.target.current_slack_identity_link.external_identity_link_contract_sha256 };
               }, redraw: () => { resources.on_processing_queued?.(); },
             })(click);
           },
