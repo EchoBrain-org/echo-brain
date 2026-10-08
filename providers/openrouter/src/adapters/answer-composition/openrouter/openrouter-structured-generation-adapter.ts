@@ -252,6 +252,8 @@ function fail(
   message: "OpenRouter request failed" | "OpenRouter response is invalid",
   input: Parameters<typeof failureDiagnostic>[0],
 ): never {
+  const observation = failureGenerationObservation(input);
+  annotateCoreRuntimeV1({ counts: { ...observation.usage, provider_latency_ms: observation.provider_latency_ms } });
   annotateCoreRuntimeV1({ result: input.failure_class === "adapter_timeout" ? "timeout" :
     input.response?.status === 429 ? "rate_limited" : input.failure_class === "adapter_json" ? "parse_failure" :
     ["adapter_finish", "adapter_refusal", "adapter_response"].includes(input.failure_class) ? "invalid_output" : "provider_failure" });
@@ -259,7 +261,7 @@ function fail(
   throw new OpenRouterStructuredGenerationError(
     message,
     failureDiagnostic(input),
-    failureGenerationObservation(input),
+    observation,
   );
 }
 
@@ -400,7 +402,7 @@ export function createOpenRouterStructuredGenerationAdapter(
     }
     const root = object(payload);
     const generationUsage = successfulUsage(root?.usage);
-    annotateCoreRuntimeV1({ counts: { input_tokens: generationUsage?.input_tokens ?? null, output_tokens: generationUsage?.output_tokens ?? null, total_tokens: generationUsage?.total_tokens ?? null, provider_latency_ms: providerLatency } });
+    annotateCoreRuntimeV1({ counts: { input_tokens: generationUsage?.input_tokens ?? null, output_tokens: generationUsage?.output_tokens ?? null, total_tokens: generationUsage?.total_tokens ?? null, cached_input_tokens: generationUsage?.cached_input_tokens ?? null, reasoning_tokens: generationUsage?.reasoning_tokens ?? null, provider_latency_ms: providerLatency } });
     const rootError = root === null ? null : object(root.error);
     if (!response.ok) {
       fail("OpenRouter request failed", {

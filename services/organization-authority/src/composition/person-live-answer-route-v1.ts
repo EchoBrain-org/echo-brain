@@ -9,8 +9,9 @@ import { askerOf, scopeOf, type CreatePersonAnswerV3RouteOptions } from './perso
 import { createPersonEvidenceDeskV1 } from './person-evidence-desk-v1.js';
 import { createRegisteredPersonLiveEvidenceDeskV2, type RegisteredPersonLiveEvidenceSourceV2 } from './person-live-evidence-desk-v2.js';
 import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-v1.js';
+import { observePersonResearchV1 } from './person-research-observation-v1.js';
 
-export interface CreatePersonLiveAnswerRouteOptionsV1 extends Omit<CreatePersonAnswerV3RouteOptions, 'ask_journey_telemetry'> {
+export interface CreatePersonLiveAnswerRouteOptionsV1 extends CreatePersonAnswerV3RouteOptions {
   readonly live_sources?: readonly PersonLiveConnectorSourceV1[];
 }
 
@@ -70,15 +71,20 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
         principal_id: authorization.principal_id, membership_id: authorization.membership_id,
         session_family_id: authorization.session_family_id, request_id: `ask_${randomUUID()}`,
       };
-      const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, ...(input.signal === undefined ? {} : { signal: input.signal }) }, context);
-      const asker = askerOf(options, authorization);
+      const capture = input.request.capture_id === undefined ? undefined : options.diagnostics?.claim({
+        access_token: input.access_token, capture_id: input.request.capture_id, target: { kind: 'ask' },
+      });
+      if (input.request.capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
       try {
-        const create = response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
-        const response = await create({ desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
-          ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
-        }).answer({ question: input.request.question, ...(input.signal === undefined ? {} : { signal: input.signal }) });
-        annotateCoreRuntimeV1({ result: response.outcome });
-        return response;
+        return await observePersonResearchV1({ trigger: 'ask', run_id: context.request_id, ...(capture === undefined ? {} : { capture }) }, async () => {
+          const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, ...(input.signal === undefined ? {} : { signal: input.signal }) }, context);
+          capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
+          const asker = askerOf(options, authorization);
+          const create = response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
+          return create({ desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
+            ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+          }).answer({ question: input.request.question, ...(input.signal === undefined ? {} : { signal: input.signal }) });
+        });
       } catch (error) {
         if (error instanceof AgenticAskDeadlineErrorV1 && input.signal?.aborted !== true) throw new AuthorityOperationError('unavailable', 'Ask deadline exhausted');
         throw error;

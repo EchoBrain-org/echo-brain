@@ -1,6 +1,6 @@
 # CloudFormation Guard 3.2.1 policy for the staging Journey Explorer backend.
-# The stack may query only the existing staging journey log group and exposes
-# no public, cross-account, dashboard, production, or mutation surface.
+# The stack may query only one explicitly selected Authority log group (staging by default).
+# It exposes no public, cross-account, dashboard, or mutation surface.
 
 let all_resources = Resources.*
 let functions = Resources.*[ Type == 'AWS::Lambda::Function' ]
@@ -47,8 +47,9 @@ rule staging_log_group_is_the_only_input {
         "StagingLogGroupName": {
             "Type": "String",
             "Default": "/echo-brain/authority/authority-staging.echobrain.org",
-            "AllowedValues": [ "/echo-brain/authority/authority-staging.echobrain.org" ],
-            "ConstraintDescription": "must be the one owned Authority staging runtime log group"
+            "AllowedPattern": "^/echo-brain/authority/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:[.][a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$",
+            "MaxLength": 275,
+            "ConstraintDescription": "must be one explicitly selected Authority runtime log group with a DNS hostname"
         }
     }
 }

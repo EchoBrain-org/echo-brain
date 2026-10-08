@@ -20,7 +20,6 @@ const runtimeState = vi.hoisted(() => ({
   confluence_person_live: undefined as object | undefined,
   openrouter_credential_file: undefined as string | undefined,
   staging_synthetic_meetings_directory: undefined as string | undefined,
-  ask_journey_telemetry: undefined as object | undefined,
   core_runtime_observation: undefined as CoreRuntimeObservationScopeV1 | undefined,
   /** Every config key the CLI passed, so removed organization-lane options stay absent. */
   config_keys: [] as string[],
@@ -57,7 +56,6 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
   openOrganizationAuthorityService: async (config: {
     readonly on_worker_error?: WorkerErrorObserver;
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
-    readonly ask_journey_telemetry?: object;
     readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
     readonly agentic_ask_v1_enabled?: true;
     readonly agentic_ask_v1_small_scope_shortcut?: true;
@@ -73,7 +71,6 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.worker_error = config.on_worker_error;
     runtimeState.worker_telemetry = config.on_worker_telemetry;
     runtimeState.config_keys = Object.keys(config);
-    runtimeState.ask_journey_telemetry = config.ask_journey_telemetry;
     runtimeState.core_runtime_observation = config.core_runtime_observation;
     runtimeState.agentic_ask_v1_enabled = config.agentic_ask_v1_enabled;
     runtimeState.agentic_ask_v1_small_scope_shortcut =
@@ -108,23 +105,25 @@ vi.mock(
 );
 
 vi.mock(
-  "../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js",
+  "../src/composition/observability/journey-telemetry-transport-v1.js",
   async (importOriginal) => {
     const actual =
       await importOriginal<
-        typeof import("../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js")
+        typeof import("../src/composition/observability/journey-telemetry-transport-v1.js")
       >();
     return {
       ...actual,
-      createStagingJourneyTelemetryTransportFromEnvironmentV1(
+      createJourneyTelemetryTransportFromEnvironmentV1(
+        deploymentEnvironment: Parameters<typeof actual.createJourneyTelemetryTransportFromEnvironmentV1>[0],
         environment: Readonly<Record<string, string | undefined>>,
         dependencies: Parameters<
-          typeof actual.createStagingJourneyTelemetryTransportFromEnvironmentV1
-        >[1],
-        vocabulary: Parameters<typeof actual.createStagingJourneyTelemetryTransportFromEnvironmentV1>[2],
+          typeof actual.createJourneyTelemetryTransportFromEnvironmentV1
+        >[2],
+        vocabulary: Parameters<typeof actual.createJourneyTelemetryTransportFromEnvironmentV1>[3],
       ) {
         const transport =
-          actual.createStagingJourneyTelemetryTransportFromEnvironmentV1(
+          actual.createJourneyTelemetryTransportFromEnvironmentV1(
+            deploymentEnvironment,
             environment,
             dependencies,
             vocabulary,
@@ -168,7 +167,6 @@ afterEach(() => {
   runtimeState.confluence_person_live = undefined;
   runtimeState.openrouter_credential_file = undefined;
   runtimeState.staging_synthetic_meetings_directory = undefined;
-  runtimeState.ask_journey_telemetry = undefined;
   runtimeState.config_keys = [];
   runtimeState.agentic_ask_v1_enabled = undefined;
   runtimeState.agentic_ask_v1_small_scope_shortcut = undefined;
@@ -404,7 +402,7 @@ describe("admitted runtime CLI events", () => {
     ]);
   });
 
-  it("emits identity-bound liveness only for the exact staging Authority", async () => {
+  it("emits identity-bound operational metadata in staging and production without enabling production payload capture", async () => {
     const releaseSha = "a".repeat(40);
     process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1 = "true";
     process.env.ECHO_SOURCE_SHA = releaseSha;
@@ -437,13 +435,15 @@ describe("admitted runtime CLI events", () => {
     expect(new Date(String(liveness?.observed_at)).toISOString()).toBe(
       liveness?.observed_at,
     );
-    expect(runtimeState.ask_journey_telemetry).toBeDefined();
+    expect(runtimeState.config_keys).not.toContain("ask_journey_telemetry");
     // The meeting-approval journey sidecar observed only the removed organization source lane.
     expect(runtimeState.config_keys).not.toContain("meeting_approval_journey_telemetry");
     expect(runtimeState.config_keys).not.toContain("staging_meeting_approval_journey_telemetry_enabled");
 
     runtimeState.worker_error = undefined;
     runtimeState.authority_url = "https://authority.example";
+    // A historical staging content switch must never widen production logging.
+    process.env.ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1 = "true";
     const nonStagingStderr: string[] = [];
     const nonStaging = start({
       stderr: (value) => {
@@ -451,12 +451,23 @@ describe("admitted runtime CLI events", () => {
       },
     });
     await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+    expect(runtimeState.core_runtime_observation).toBeDefined();
+    expect(runtimeState.core_runtime_observation?.content_observer).toBeUndefined();
+    expect(runtimeState.config_keys).not.toContain("staging_research_eval_v1");
+    await observeCoreRuntimeV1("ask_planner", async () => {
+      captureCoreRuntimeContentV1("model_request", { question: "PRODUCTION-PAYLOAD-MUST-STAY-PRIVATE" });
+    }, runtimeState.core_runtime_observation);
     process.emit("SIGTERM");
     await expect(nonStaging).resolves.toBe(0);
-    expect(runtimeState.ask_journey_telemetry).toBeUndefined();
-    expect(nonStagingStderr.join("")).not.toContain(
-      "echo-authority-journey-telemetry-liveness-v1",
-    );
+    expect(runtimeState.config_keys).not.toContain("ask_journey_telemetry");
+    const productionEvents = nonStagingStderr.map(line => JSON.parse(line) as Record<string, unknown>);
+    expect(productionEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "echo-authority-journey-telemetry-liveness-v1", environment: "production", release_sha: releaseSha, build_number: 33_689_731_778 }),
+      expect.objectContaining({ kind: "echo-authority-journey-stage-v1", environment: "production", workflow: "core_runtime" }),
+    ]));
+    expect(nonStagingStderr.join("")).not.toContain("PRODUCTION-PAYLOAD-MUST-STAY-PRIVATE");
+    expect(nonStagingStderr.join("")).not.toContain("echo-authority-journey-content-v1");
+    expect(nonStagingStderr.join("")).toContain("EchoBrain/AuthorityJourneyV1");
   });
 
   it("writes content records to stderr only when the staging content switch is on", async () => {
@@ -522,7 +533,7 @@ describe("admitted runtime CLI events", () => {
     process.emit("SIGTERM");
 
     await expect(running).resolves.toBe(0);
-    expect(runtimeState.ask_journey_telemetry).toBeUndefined();
+    expect(runtimeState.config_keys).not.toContain("ask_journey_telemetry");
     expect(stderr.join("")).not.toContain(
       "echo-authority-journey-telemetry-liveness-v1",
     );

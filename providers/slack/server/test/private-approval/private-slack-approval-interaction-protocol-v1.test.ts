@@ -272,6 +272,16 @@ describe("private Slack approval interaction V4", () => {
       owners: [],
     });
   });
+  it("accepts an Only me card with the unavailable project picker omitted", () => {
+    const { projects: _projects, ...state } = payload().state.values;
+    expect(parse(payload({ state }))).toMatchObject({
+      disposition: "resolution",
+      action: "approve",
+      audience: "only-me",
+      project_ids: [],
+      share_transcript: false,
+    });
+  });
   it("canonicalizes Slack selection order but refuses missing snapshots, legacy controls, unknown owners, duplicate or 21 project choices, and incomplete state", () => {
     rejected(payload({ snapshot: null }));
     rejected(

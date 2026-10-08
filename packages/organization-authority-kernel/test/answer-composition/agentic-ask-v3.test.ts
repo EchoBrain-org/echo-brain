@@ -36,8 +36,8 @@ describe('Agentic Ask V3 live pages', () => {
     const ask = createAgenticAskV3({ desk, model: { generate }, audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 } });
     await observeCoreRuntimeV1('ask_request', () => ask.answer({ question: 'When does EVT start?' }), { observer: () => undefined, content_observer: capture });
     expect(generate).toHaveBeenCalledTimes(4);
-    // Only the initial question-only planner call may reach content capture.
-    expect(capture).toHaveBeenCalledTimes(1);
+    // Research content uses only the selected diagnostic sink, including the initial question.
+    expect(capture).not.toHaveBeenCalled();
     expect(JSON.stringify(capture.mock.calls)).not.toContain(inventory.label);
     expect(JSON.stringify(capture.mock.calls)).not.toContain(text);
   });
@@ -182,7 +182,7 @@ it('concurrently reads same-kind registered sources and admits exact passages wi
   ]);
   expect(research.last_results.every((result: { results: Record<string, unknown>[] }) => result.results.every(item => !('text' in item) && !('preview' in item)))).toBe(true);
   expect(desk.open).not.toHaveBeenCalled();
-  expect(capture).toHaveBeenCalledTimes(1);
+  expect(capture).not.toHaveBeenCalled();
   expect(JSON.stringify(capture.mock.calls)).not.toContain('Private knowledge-');
 });
 

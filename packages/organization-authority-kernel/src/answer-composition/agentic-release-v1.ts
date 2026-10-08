@@ -2,6 +2,7 @@ import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-proto
 import type { PersonAnswerResponseV4 } from "@echo-brain/organization-api";
 import type { StructuredGenerationUsageV1 } from "./structured-generation-v1.js";
 import { raceAbort, type AgenticAskGenerationObservationV1, type AgenticModelGateStatsV1 } from "./agentic-model-gate-v1.js";
+import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 
 /**
  * The shared release step (research trigger contract v1, section 4): every
@@ -77,9 +78,6 @@ export interface ReleaseAgenticResultV1Options<R> extends AgenticAuditContextV1 
   readonly on_checked: (checked_at: string) => void;
   /** The audit record is durable; the request must not write a terminal witness after this. */
   readonly on_audited: () => void;
-  readonly now: () => number;
-  /** Content-free timings of the final check and the audit write. */
-  readonly on_stage?: (event: { readonly stage: "revalidation" | "audit"; readonly elapsed_ms: number }) => void;
 }
 
 function auditEntry(context: AgenticAuditContextV1, outcome: AgenticAskAuditEntryV1["outcome"], citations: number, checkedAt: string | null, released: { readonly answer_sha256: Sha256Digest; readonly result: unknown } | null): AgenticAskAuditEntryV1 {
@@ -105,34 +103,35 @@ function auditEntry(context: AgenticAuditContextV1, outcome: AgenticAskAuditEntr
 
 /** Final check, one audit record, the check after it, then the result. Any failure releases nothing. */
 export async function releaseAgenticResultV1<R>(options: ReleaseAgenticResultV1Options<R>): Promise<R> {
+  return observeAgenticLifecycleV1('release', 'research_release', { outcome: options.outcome }, async () => {
   const { desk, signal, assert_live: assertLive } = options;
-  const elapsed = (startedAt: number) => options.now() - startedAt;
   // 1. Final access check: the person can still see everything the result cites.
   assertLive();
-  const fenceStartedAt = options.on_stage === undefined ? 0 : options.now();
-  const fenced = await raceAbort(signal, desk.revalidate({ signal }));
+  const fenced = await observeAgenticLifecycleV1('revalidation', 'research_revalidation', { purpose: 'before_audit' },
+    () => raceAbort(signal, desk.revalidate({ signal })), value => ({ checked_at: value.checked_at }));
   options.on_checked(fenced.checked_at);
-  options.on_stage?.({ stage: "revalidation", elapsed_ms: elapsed(fenceStartedAt) });
   // 2. One content-free audit record for the whole request.
-  const auditStartedAt = options.on_stage === undefined ? 0 : options.now();
-  await options.audit.append(auditEntry(options, options.outcome, options.citation_count, fenced.checked_at, options));
+  await observeAgenticLifecycleV1('audit', 'research_audit', { outcome: options.outcome },
+    async () => { await options.audit.append(auditEntry(options, options.outcome, options.citation_count, fenced.checked_at, options)); });
   options.on_audited();
-  options.on_stage?.({ stage: "audit", elapsed_ms: elapsed(auditStartedAt) });
   // 3. A disconnect or membership change during the durable append still
   // suppresses release. Checking liveness first never leaves a desk call
   // started on an already-stopped request.
   if (options.fence_after_audit) {
     assertLive();
-    const released = await raceAbort(signal, desk.revalidate({ signal }));
+    const released = await observeAgenticLifecycleV1('revalidation', 'research_revalidation', { purpose: 'after_audit' },
+      () => raceAbort(signal, desk.revalidate({ signal })), value => ({ checked_at: value.checked_at }));
     options.on_checked(released.checked_at);
   }
   // An abort that races the terminal audit still suppresses publication.
   assertLive();
   // 4. Hand over.
   return options.result;
+  }, result => ({ outcome: options.outcome, result }));
 }
 
 /** The witness a request that timed out or was cancelled writes in place of a release. */
 export async function auditAgenticTerminalV1(kind: "timed_out" | "cancelled", context: AgenticAuditContextV1 & { readonly checked_at: string | null }): Promise<void> {
-  await context.audit.append(auditEntry(context, kind, 0, context.checked_at, null));
+  await observeAgenticLifecycleV1('audit', 'research_audit', { outcome: kind },
+    async () => { await context.audit.append(auditEntry(context, kind, 0, context.checked_at, null)); });
 }

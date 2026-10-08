@@ -8,7 +8,7 @@ export function createStagingJourneyExplorerModuleV1({ providers = [], models = 
   }
 
 
-// This Lambda exposes fixed, staging-only query shapes. Callers can select a
+// This Lambda exposes fixed query shapes for one deployment-configured Authority log group. Callers can select a
 // bounded time range or canonical journey UUID, but never query text, a query
 // ID, a source log group, or raw log content.
 const KIND = "echo-authority-journey-stage-v1";
@@ -25,13 +25,15 @@ const MAX_RENDERED_BYTES = 1024 * 1024;
 const MAX_MACHINE_DURATION = 31 * 24 * HOUR;
 const MAX_ATTEMPT = 100;
 
-const CORE_PHASES = new Set(["person_tools_status", "person_tool_delivery", "person_tool_completion", "worker_request", "worker_gate", "worker_execution", "worker_timer", "source_poll", "source_cursor", "source_intake", "extraction", "candidate_persist", "approval_staging", "recovery", "approval_observation", "record_append", "approval_action", "approval_terminal_update", "search_reconciliation", "search_snapshot", "search_enrichment", "search_build", "search_validation", "search_publication", "related_projection", "model_call", "model_parse", "model_schema", "model_grounding", "ask_request", "http_request", "ask_planner", "ask_answer", "research_render", "evidence_search", "evidence_open", "evidence_list", "evidence_revalidate", "evidence_connection"]);
+const CORE_PHASES = new Set(["person_tools_status", "person_tool_delivery", "person_tool_completion", "worker_request", "worker_gate", "worker_execution", "worker_timer", "source_poll", "source_cursor", "source_intake", "extraction", "candidate_persist", "approval_staging", "recovery", "approval_observation", "record_append", "approval_action", "approval_terminal_update", "search_reconciliation", "search_snapshot", "search_enrichment", "search_build", "search_validation", "search_publication", "related_projection", "model_call", "model_parse", "model_schema", "model_grounding", "ask_request", "http_request", "ask_planner", "ask_answer", "research_render", "research_run", "research_brief", "research_starting_read", "research_preload", "research_loop", "research_output", "research_output_view", "research_revalidation", "research_audit", "research_release", "evidence_search", "evidence_open", "evidence_list", "evidence_revalidate", "evidence_connection"]);
 for (const phase of legacy_phases) CORE_PHASES.add(phase);
-const CORE_COUNTS = ["event_loop_delay_max_us", "active_models", "gate_wait_ms", "pending_depth", "oldest_age_ms", "scheduled_delay_ms", "wake_lateness_ms", "unchanged_group_count", "changed_group_count", "newly_observed_group_count", "input_bytes", "output_bytes", "record_count", "atom_count", "visibility_groups", "included_count", "excluded_count", "recomputed_count", "reused_count", "captured_head", "current_head", "published_head", "http_status", "active_http", "input_tokens", "output_tokens", "total_tokens", "provider_latency_ms", "rss_bytes", "heap_used_bytes", "cpu_user_us", "cpu_system_us", "fs_read_count", "fs_write_count", "meeting_items", "document_items", "transcript_items", "slack_items", "ticket_retrieved_items", "ticket_context_items", "ticket_citations", "upstream_retry_after_seconds", "upstream_rate_limit", "upstream_rate_remaining", "upstream_rate_reset_unix_seconds"];
-const CORE_RESULTS = new Set(["current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure", "verified", "unlinked", "not_configured", "out_of_scope", "empty", "returned", "answered", "partial", "not_found", "off_scope"]);
+const CORE_COUNTS = ["event_loop_delay_max_us", "active_models", "gate_wait_ms", "pending_depth", "oldest_age_ms", "scheduled_delay_ms", "wake_lateness_ms", "unchanged_group_count", "changed_group_count", "newly_observed_group_count", "input_bytes", "output_bytes", "record_count", "atom_count", "visibility_groups", "included_count", "excluded_count", "recomputed_count", "reused_count", "captured_head", "current_head", "published_head", "http_status", "active_http", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens", "planned_query_count", "query_hit_count", "released_atom_count", "context_atom_count", "citation_count", "provider_latency_ms", "rss_bytes", "heap_used_bytes", "cpu_user_us", "cpu_system_us", "fs_read_count", "fs_write_count", "meeting_items", "document_items", "transcript_items", "slack_items", "ticket_retrieved_items", "ticket_context_items", "ticket_citations", "upstream_retry_after_seconds", "upstream_rate_limit", "upstream_rate_remaining", "upstream_rate_reset_unix_seconds"];
+const CORE_RESULTS = new Set(["current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "invalid_request", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure", "verified", "unlinked", "not_configured", "out_of_scope", "empty", "returned", "answered", "partial", "not_found", "off_scope"]);
 const CORE_UPSTREAM_SERVICES = new Set(["nango", "jira", "confluence", "granola", "other"]);
 const CORE_UPSTREAM_OPERATIONS = new Set(["connection_read", "connection_list", "connect_session", "connection_delete", "provider_read"]);
 const CORE_UPSTREAM_RATE_LIMIT_REASONS = new Set(["burst", "global_quota", "tenant_quota", "per_issue_write", "other"]);
+// Historical trigger labels are checked against the registered definitions in the reader contract test.
+const TRIGGERS = new Set(["ask", "approved_record", "sweep", "other"]);
 const RESEARCH_STOP_REASONS = new Set(["finished", "empty_catalog", "no_progress", "step_limit", "budget", "unusable_step"]);
 const RESEARCH_ADMISSIONS = new Set(["post_revalidation_no_time"]);
 const WORKFLOWS = new Set(["ask", "meeting_approval", "core_runtime"]);
@@ -166,22 +168,22 @@ const BASE =
   "journey_id, environment, schema_version, sequence, release_sha, build_number, workflow, stage, event, outcome, retryable, observed_at, elapsed_ms, attempt, failure_class, queue_age_ms, accounting.kind as accounting_kind, accounting.execution_attempt as execution_attempt, accounting.retry_count as retry_count, accounting.retry_of_attempt as retry_of_attempt, jsonStringify(parsed.diagnostic) as diagnostic_json";
 const BASE_DISPLAY =
   "journey_id, environment, schema_version, sequence, release_sha, build_number, workflow, stage, event, outcome, retryable, observed_at, elapsed_ms, attempt, failure_class, queue_age_ms, accounting_kind, execution_attempt, retry_count, retry_of_attempt, diagnostic_json";
-function listIndexQuery(limit) {
+function listIndexQuery(limit, environment) {
   return (
     'filter kind = "' +
     KIND +
-    '" and environment = "staging" and ispresent(journey_id) | stats min(toMillis(@timestamp)) as first_observed_ms, max(toMillis(@timestamp)) as last_observed_ms, count(*) as event_count by journey_id | sort last_observed_ms desc, journey_id asc | limit ' +
+    '" and environment = "' + environment + '" and ispresent(journey_id) | stats min(toMillis(@timestamp)) as first_observed_ms, max(toMillis(@timestamp)) as last_observed_ms, count(*) as event_count by journey_id | sort last_observed_ms desc, journey_id asc | limit ' +
     limit
   );
 }
-function listPageQuery(ids) {
+function listPageQuery(ids, environment) {
   if (!Array.isArray(ids) || ids.length < 1 || ids.length > MAX_PAGE || ids.some((id) => uuid(id) === null))
     throw new Error("list page ids");
   return (
     PARSED_EVENT +
     ' | filter kind = "' +
     KIND +
-    '" and environment = "staging" and journey_id in [' +
+    '" and environment = "' + environment + '" and journey_id in [' +
     ids.map((id) => `"${id}"`).join(",") +
     "] | fields " +
     BASE +
@@ -193,12 +195,12 @@ function listPageQuery(ids) {
 }
 let cached;
 
-function detailQuery(id) {
+function detailQuery(id, environment) {
   return (
     PARSED_EVENT +
     ' | filter kind = "' +
     KIND +
-    '" and environment = "staging" and journey_id = "' +
+    '" and environment = "' + environment + '" and journey_id = "' +
     id +
     '" | fields ' +
     BASE +
@@ -334,7 +336,7 @@ function stage(raw) {
   if (
     journey_id === null ||
     observed_ms === null ||
-    raw.environment !== "staging" ||
+    !["staging", "production"].includes(raw.environment) ||
     ![1, 2].includes(schema_version) ||
     sequence === null ||
     build_number === null ||
@@ -391,7 +393,7 @@ function stage(raw) {
     ...(accounting ? { accounting } : {}),
     ...(diagnostic ? { diagnostic } : {}),
     journey_id,
-    environment: "staging",
+    environment: raw.environment,
     schema_version,
     sequence,
     release_sha: raw.release_sha,
@@ -420,6 +422,12 @@ function diagnosticDetail(value) {
       (input.upstream_service !== undefined && !CORE_UPSTREAM_SERVICES.has(input.upstream_service)) ||
       (input.upstream_operation !== undefined && !CORE_UPSTREAM_OPERATIONS.has(input.upstream_operation)) ||
       (input.upstream_rate_limit_reason !== undefined && !CORE_UPSTREAM_RATE_LIMIT_REASONS.has(input.upstream_rate_limit_reason)) ||
+      (input.trigger !== undefined && !TRIGGERS.has(input.trigger)) ||
+      (input.parent_operation_id !== undefined && !uuid(input.parent_operation_id)) ||
+      (["run_id", "event_id", "output_id", "attempt_id"].some(key => input[key] !== undefined && digestOrNull(input[key]) === null)) ||
+      (input.attempt !== undefined && uint(input.attempt, 1, 1000000) === null) ||
+      (input.research_stop_reason !== undefined && !RESEARCH_STOP_REASONS.has(input.research_stop_reason)) ||
+      (input.research_admission !== undefined && !RESEARCH_ADMISSIONS.has(input.research_admission)) ||
       (input.result !== null && !CORE_RESULTS.has(input.result)) || (input.generation !== null && !/^sha256:[0-9a-f]{64}$/.test(input.generation))) return null;
     const counts = {};
     for (const key of CORE_COUNTS) {
@@ -431,6 +439,7 @@ function diagnosticDetail(value) {
     return { operation_id: input.operation_id, span_id: input.span_id, parent_span_id: input.parent_span_id,
       phase: input.phase, purpose: input.purpose, root: input.root, linked_journey_ids: input.linked_journey_ids, counts,
       result: input.result, generation: input.generation,
+      ...Object.fromEntries(["trigger", "parent_operation_id", "run_id", "event_id", "output_id", "attempt_id", "attempt", "research_stop_reason", "research_admission"].filter(key => input[key] !== undefined).map(key => [key, input[key]])),
       ...(input.evidence_source === undefined ? {} : { evidence_source: input.evidence_source }),
       ...(input.upstream_service === undefined ? {} : { upstream_service: input.upstream_service }),
       ...(input.upstream_operation === undefined ? {} : { upstream_operation: input.upstream_operation }),
@@ -540,6 +549,14 @@ function nested(raw, item) {
       finish_reason,
     };
   }
+  const diagnostic = item.diagnostic;
+  const closed = item.event === "succeeded" || item.event === "failed";
+  if (closed && diagnostic?.phase === "model_call") {
+    for (const key of Object.keys(llm)) llm[key] = diagnostic[key] ?? diagnostic.counts[key] ?? null;
+    llm.usage_status = ["input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens"].some(key => llm[key] !== null) ? "reported" : "unavailable";
+  }
+  const research = closed && diagnostic?.phase === "research_run" ? diagnostic : undefined;
+  if (research) for (let index = 0; index < retrievalKeys.length; index++) retrievalValues[index] = research.counts[retrievalKeys[index].slice(10)] ?? null;
   return {
     retrieval: {
       planned_query_count: retrievalValues[0],
@@ -547,8 +564,8 @@ function nested(raw, item) {
       released_atom_count: retrievalValues[2],
       context_atom_count: retrievalValues[3],
       citation_count: retrievalValues[4],
-      research_stop_reason: researchStopReason,
-      research_admission: researchAdmission,
+      research_stop_reason: research?.research_stop_reason ?? researchStopReason,
+      research_admission: research?.research_admission ?? researchAdmission,
     },
     llm,
   };
@@ -972,7 +989,7 @@ function renderList(data, parsed, endpointArn) {
     ? `<p>${action(endpointArn, "Next page", { operation: "list", cursor: data.next_cursor, page_size: parsed.pageSize, render: true })}</p>`
     : "";
   return frame(
-    "Staging Journey Explorer",
+    "Authority Journey Explorer",
     `${range}${browseBound}<table><thead><tr><th>Journey</th><th>Workflow</th><th>Status</th><th>Outcome</th><th>Closed events</th><th>Observed range</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="7">No validated journeys in this selected range.</td></tr>'}</tbody></table>${next}`,
   );
 }
@@ -999,8 +1016,8 @@ function machineWaterfall(item, origin, span) {
   );
   return `<div class="waterfall-track" aria-label="${escapeHtml(`${item.elapsed_ms} ms machine latency at ${item.observed_at}`)}"><span class="waterfall-bar" style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%"></span></div>${milliseconds(item.elapsed_ms)}`;
 }
-function renderDetail(data, parsed, endpointArn) {
-  const range = `<p class="notice">List selection: ${escapeHtml(new Date(parsed.start).toISOString())} to ${escapeHtml(new Date(parsed.end).toISOString())}. Detail is verified against the retained 14-day staging history; a missing canonical start fails closed instead of showing a partial timeline.</p>`;
+function renderDetail(data, parsed, endpointArn, environment) {
+  const range = `<p class="notice">List selection: ${escapeHtml(new Date(parsed.start).toISOString())} to ${escapeHtml(new Date(parsed.end).toISOString())}. Detail is verified against the retained 14-day history; a missing canonical start fails closed instead of showing a partial timeline.</p>`;
   const origin = Math.min(
     ...data.stages.map((item) => iso(item.observed_at) - item.elapsed_ms),
   );
@@ -1021,7 +1038,7 @@ function renderDetail(data, parsed, endpointArn) {
   const humanWait = `<p class="human-wait"><strong>Human approval wait:</strong> ${milliseconds(data.human_wait_ms)}. This business interval is separate from the machine-stage bars and excluded from service wall-clock.</p>`;
   const diagnostics = action(endpointArn, "Transport health", { operation: "health", render: true }) + `<p>Observed interval union: ${milliseconds(data.observed_interval_union_ms)}; unaccounted interval: ${milliseconds(data.unaccounted_interval_ms)}; missing sequences: ${escapeHtml(data.missing_sequence_count)}. Overlapping spans count once. Legacy retry counts remain unknown.</p>` +
     action(endpointArn, "Related core operations", { operation: "related", journey_id: data.journey_id, render: true }) +
-    action(endpointArn, "Captured development content", { operation: "content", journey_id: data.journey_id, render: true });
+    (environment === "staging" ? action(endpointArn, "Captured development content", { operation: "content", journey_id: data.journey_id, render: true }) : "");
   const back = action(endpointArn, "Back to recent runs", {
     operation: "list",
     from: parsed.start,
@@ -1049,13 +1066,13 @@ function renderError(code, operation, reason) {
           ? "The retained 14-day history for this journey returned too many events to verify safely. No partial timeline is shown. Choose another journey or investigate its telemetry in CloudWatch Logs."
           : "The selected range returned too many events. Narrow the range.",
       journey_not_found:
-        "No validated journey was found in the retained 14-day staging history.",
+        "No validated journey was found in the retained 14-day history.",
       journey_history_incomplete:
-        "The retained staging history does not contain this journey's canonical start, so no partial timeline is shown.",
+        "The retained history does not contain this journey's canonical start, so no partial timeline is shown.",
       journey_explorer_unavailable:
         "The Journey Explorer is temporarily unavailable.",
     }[code] || "The Journey Explorer is temporarily unavailable.";
-  return frame("Staging Journey Explorer", `<p>${message}</p>`);
+  return frame("Authority Journey Explorer", `<p>${message}</p>`);
 }
 function createStagingJourneyExplorerHandlerV1(options) {
   const endpointArn = options && endpoint(options.endpointArn);
@@ -1063,10 +1080,12 @@ function createStagingJourneyExplorerHandlerV1(options) {
     !options ||
     !options.logsClient ||
     typeof options.logsClient.send !== "function" ||
-    options.logGroupName !== LOG_GROUP ||
+    typeof options.logGroupName !== "string" || options.logGroupName.length > 275 ||
+    !/^\/echo-brain\/authority\/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:[.][a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/.test(options.logGroupName) ||
     endpointArn === null
   )
-    throw new TypeError("exact staging explorer configuration is required");
+    throw new TypeError("exact Authority explorer configuration is required");
+  const environment = options.logGroupName === LOG_GROUP ? "staging" : "production";
   const commands = options.commands || sdk(),
     now = typeof options.now === "function" ? options.now : () => Date.now(),
     clock =
@@ -1163,7 +1182,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
     if (startRemaining <= 0) throw queryTimeoutError();
     const started = await sendBounded(
       new commands.StartQueryCommand({
-        logGroupName: LOG_GROUP,
+        logGroupName: options.logGroupName,
         startTime: Math.floor(start / 1000),
         endTime: Math.ceil(end / 1000),
         queryString,
@@ -1184,8 +1203,11 @@ function createStagingJourneyExplorerHandlerV1(options) {
           remaining,
           queryTimeoutError,
         );
-        if (result && result.status === "Complete")
-          return Array.isArray(result.results) ? result.results : [];
+        if (result && result.status === "Complete") {
+          const results = Array.isArray(result.results) ? result.results : [];
+          if (results.some(fields => row(fields).environment !== undefined && row(fields).environment !== environment)) throw new Error("query environment");
+          return results;
+        }
         if (result && result.status === "Timeout") throw queryTimeoutError();
         if (
           result &&
@@ -1215,13 +1237,13 @@ function createStagingJourneyExplorerHandlerV1(options) {
       if (parsed.operation === "describe")
         return {
           markdown:
-            "# Staging Journey Explorer\n\nRead-only staging telemetry. Select a dashboard time range, list journeys, then request a canonical UUID detail timeline.\n\n## Parameters\n\n```yaml\noperation: list # list, detail, related, content, or health\nrender: true # render the safe interactive view\npage_size: 20 # list only, 1-25\njourney_id: 00000000-0000-4000-8000-000000000000 # detail, related, content\nfrom: 2026-09-02T00:00:00.000Z # optional bounded range\nto: 2026-09-02T08:00:00.000Z # optional bounded range\ncursor: opaque-cursor # list pagination only\n```",
+            "# Authority Journey Explorer\n\nRead-only telemetry from one deployment-configured Authority log group. Select a dashboard time range, list journeys, then request a canonical UUID detail timeline.\n\n## Parameters\n\n```yaml\noperation: list # list, detail, related, content, or health\nrender: true # render the safe interactive view\npage_size: 20 # list only, 1-25\njourney_id: 00000000-0000-4000-8000-000000000000 # detail, related, content\nfrom: 2026-09-02T00:00:00.000Z # optional bounded range\nto: 2026-09-02T08:00:00.000Z # optional bounded range\ncursor: opaque-cursor # list pagination only\n```",
         };
       if (parsed.operation === "list") {
         const deadline = clock() + deadlineMs;
         const indexLimit = Math.min(LIST_LIMIT, parsed.offset + parsed.pageSize + 1);
         const indexRows = await run(
-          listIndexQuery(indexLimit),
+          listIndexQuery(indexLimit, environment),
           parsed.start,
           parsed.end,
           indexLimit,
@@ -1235,7 +1257,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
         const selection = selectListPage(items, parsed.offset, parsed.pageSize);
         const pageRows = selection.selected.length === 0
           ? []
-          : await run(listPageQuery(selection.selected.map((item) => item.journey_id)), parsed.start, parsed.end, DETAIL_LIMIT, deadline);
+          : await run(listPageQuery(selection.selected.map((item) => item.journey_id), environment), parsed.start, parsed.end, DETAIL_LIMIT, deadline);
         if (pageRows.length >= DETAIL_LIMIT) throw resultLimitError();
         const summaries = new Map(
           summarizeListPage(pageRows, selection.selected).map((item) => [item.journey_id, item]),
@@ -1275,7 +1297,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
           : data;
       }
       if (parsed.operation === "health") {
-        const rows = await run(`${PARSED_EVENT} | filter kind = "echo-authority-journey-telemetry-liveness-v1" and environment = "staging" | fields observed_at, release_sha, build_number, jsonStringify(parsed.delivery) as delivery_json, jsonStringify(parsed.rejection_counts) as rejection_counts_json | display observed_at, release_sha, build_number, delivery_json, rejection_counts_json | sort observed_at desc | limit 25`, parsed.start, parsed.end, 25);
+        const rows = await run(`${PARSED_EVENT} | filter kind = "echo-authority-journey-telemetry-liveness-v1" and environment = "${environment}" | fields observed_at, release_sha, build_number, jsonStringify(parsed.delivery) as delivery_json, jsonStringify(parsed.rejection_counts) as rejection_counts_json | display observed_at, release_sha, build_number, delivery_json, rejection_counts_json | sort observed_at desc | limit 25`, parsed.start, parsed.end, 25);
         const health = rows.map((fields) => {
           const raw = row(fields); if (iso(raw.observed_at) === null) return null;
           let delivery; try { delivery = JSON.parse(raw.delivery_json); } catch { delivery = {}; }
@@ -1298,7 +1320,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
         return parsed.render ? rendered(frame("Transport health", `<p>Cumulative per process. Rejection counts describe local observation rejection, separately from writes_failed, writes_dropped, and writes_pending. Null means unknown or unavailable in historical heartbeats. These counters cannot prove downstream log ingestion.</p><pre>${escapeHtml(JSON.stringify(health, null, 2))}</pre>`)) : { health };
       }
       if (parsed.operation === "related") {
-        const results = await run(`${PARSED_EVENT} | filter kind = "${KIND}" and environment = "staging" and jsonStringify(parsed.diagnostic.linked_journey_ids) like /${parsed.journeyId}/ | fields ${BASE} | display ${BASE_DISPLAY} | sort observed_at asc | limit ${DETAIL_LIMIT}`, Math.max(0, current - MAX_RANGE), current, DETAIL_LIMIT);
+        const results = await run(`${PARSED_EVENT} | filter kind = "${KIND}" and environment = "${environment}" and jsonStringify(parsed.diagnostic.linked_journey_ids) like /${parsed.journeyId}/ | fields ${BASE} | display ${BASE_DISPLAY} | sort observed_at asc | limit ${DETAIL_LIMIT}`, Math.max(0, current - MAX_RANGE), current, DETAIL_LIMIT);
         if (results.length >= DETAIL_LIMIT) throw resultLimitError();
         const operations = new Map();
         for (const fields of results) { const item = stage(row(fields)); if (item?.diagnostic) operations.set(item.diagnostic.operation_id, item.diagnostic.phase); }
@@ -1306,6 +1328,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
         return parsed.render ? rendered(frame("Related core operations", data.related_operations.map((item) => `<p>${escapeHtml(item.phase)} ${action(endpointArn, "View operation", { operation: "detail", journey_id: item.journey_id, render: true })}</p>`).join("") || "No linked observations in retained history; coverage is unknown.")) : data;
       }
       if (parsed.operation === "content") {
+        if (environment !== "staging") return parsed.render ? rendered(frame("Captured development content", "Development content capture is unavailable for this environment.")) : { captures: [] };
         const query = `fields journey_id, sequence, schema_version, stage, content_kind, observed_at, span_id, capture_id, truncated, chunk_index, chunk_count, captured_bytes, content, jsonStringify(content) as content_json | filter kind = "echo-authority-journey-content-v1" and environment = "staging" and journey_id = "${parsed.journeyId}"${parsed.captureSequence ? ` and sequence = ${parsed.captureSequence}` : ""} | sort sequence asc, chunk_index asc | limit ${DETAIL_LIMIT}`;
         const rows = await run(query, Math.max(0, current - MAX_RANGE), current, DETAIL_LIMIT);
         if (rows.length >= DETAIL_LIMIT) throw resultLimitError();
@@ -1313,7 +1336,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
         return parsed.render ? rendered(frame("Captured development content", captures.map((item) => `<p>${escapeHtml(item.content_kind)}: ${escapeHtml(item.status)} ${action(endpointArn, "Read capture", { operation: "content", journey_id: parsed.journeyId, capture_sequence: item.sequence, render: true })}</p>${item.content === undefined ? "" : `<pre>${escapeHtml(item.content)}</pre>`}`).join("") || "No captured content in retained history. Capture may be disabled, missing, or dropped.")) : { captures };
       }
       const results = await run(
-        detailQuery(parsed.journeyId),
+        detailQuery(parsed.journeyId, environment),
         Math.max(0, current - MAX_RANGE),
         current,
         DETAIL_LIMIT,
@@ -1323,7 +1346,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
       if (detail.stages.length === 0) throw notFoundError();
       if (!detail.history_complete) throw incompleteHistoryError();
       return parsed.render
-        ? rendered(renderDetail(detail, parsed, endpointArn))
+        ? rendered(renderDetail(detail, parsed, endpointArn, environment))
         : detail;
     } catch (caught) {
       const output = safe(caught);

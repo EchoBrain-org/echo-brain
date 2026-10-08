@@ -1,82 +1,22 @@
-import { createTelemetryVocabularyV1, EMPTY_TELEMETRY_VOCABULARY_V1, type TelemetryVocabularyV1 } from "./telemetry-vocabulary-v1.js";
 import { normalizeCoreRuntimeDetailV1, type CoreRuntimeDetailV1 } from "./core-runtime-observation-v1.js";
-import { randomUUID } from "node:crypto";
+import {
+  createTelemetryVocabularyV1,
+  EMPTY_TELEMETRY_VOCABULARY_V1,
+  type TelemetryVocabularyV1,
+} from "./telemetry-vocabulary-v1.js";
 
-/**
- * Content-free, provider-neutral telemetry for an Authority business journey.
- * This contract never admits arbitrary metadata, prompts, answers, meeting
- * content, person or provider identifiers, Authority IDs, errors, or credentials.
- */
-export const JOURNEY_TELEMETRY_SCHEMA_VERSION_V1 = 1 as const;
+/** Content-free operational event emitted by the sole live Authority producer. */
+export const JOURNEY_TELEMETRY_SCHEMA_VERSION_V1 = 2 as const;
 export const JOURNEY_TELEMETRY_KIND_V1 = "echo-authority-journey-stage-v1" as const;
 
-export const JOURNEY_ENVIRONMENTS_V1 = Object.freeze([
-  "development",
-  "test",
-  "staging",
-  "production",
-] as const);
+export const JOURNEY_ENVIRONMENTS_V1 = Object.freeze(["staging", "production"] as const);
 export type JourneyEnvironmentV1 = (typeof JOURNEY_ENVIRONMENTS_V1)[number];
-
-export const JOURNEY_WORKFLOWS_V1 = Object.freeze(["ask", "meeting_approval", "core_runtime"] as const);
+export const JOURNEY_WORKFLOWS_V1 = Object.freeze(["core_runtime"] as const);
 export type JourneyWorkflowV1 = (typeof JOURNEY_WORKFLOWS_V1)[number];
-
-export const JOURNEY_STAGES_V1 = Object.freeze([
-  "core_operation",
-  "ask_validation",
-  "ask_authorization",
-  "ask_planner",
-  "ask_retrieval",
-  "ask_context",
-  "ask_answer",
-  "ask_revalidation",
-  "ask_audit",
-  "ask_response",
-  "meeting_source_intake",
-  "meeting_extraction",
-  "meeting_candidate_persist",
-  "meeting_approval_staging",
-  "meeting_approval_action_verify",
-  "meeting_approval_action_queue",
-  "meeting_terminal_persist",
-  "meeting_record_append",
-  "meeting_search_publication",
-] as const);
+export const JOURNEY_STAGES_V1 = Object.freeze(["core_operation"] as const);
 export type JourneyStageV1 = (typeof JOURNEY_STAGES_V1)[number];
-
-export const JOURNEY_EVENTS_V1 = Object.freeze([
-  "started",
-  "succeeded",
-  "failed",
-  "skipped",
-] as const);
+export const JOURNEY_EVENTS_V1 = Object.freeze(["started", "succeeded", "failed"] as const);
 export type JourneyEventV1 = (typeof JOURNEY_EVENTS_V1)[number];
-
-export const JOURNEY_OUTCOMES_V1 = Object.freeze([
-  "completed",
-  "answered",
-  "insufficient_evidence",
-  "authorship_unsupported",
-  // Agentic Ask (RFC-0003) V4 outcomes.
-  "partial",
-  "not_found",
-  "off_scope",
-  "actionable",
-  "no_signals",
-  "coalesced",
-  "staged",
-  "delivery_pending",
-  "quarantined",
-  "approved",
-  "rejected",
-  "denied",
-  "current",
-  "published",
-  "superseded",
-  "skipped",
-] as const);
-export type JourneyOutcomeV1 = (typeof JOURNEY_OUTCOMES_V1)[number];
-
 export const JOURNEY_FAILURE_CLASSES_V1 = Object.freeze([
   "authorization",
   "invalid_request",
@@ -90,237 +30,68 @@ export const JOURNEY_FAILURE_CLASSES_V1 = Object.freeze([
 ] as const);
 export type JourneyFailureClassV1 = (typeof JOURNEY_FAILURE_CLASSES_V1)[number];
 
-export type JourneyLlmProviderV1 = string;
-export type JourneyLlmModelV1 = string;
-
-export const JOURNEY_LLM_FINISH_REASONS_V1 = Object.freeze([
-  "completed",
-  "length",
-  "stop",
-  "content_filter",
-  "tool_call",
-  "unknown",
-] as const);
-export type JourneyLlmFinishReasonV1 =
-  (typeof JOURNEY_LLM_FINISH_REASONS_V1)[number];
-
-export const JOURNEY_LLM_USAGE_STATUSES_V1 = Object.freeze([
-  "reported",
-  "unavailable",
-] as const);
-export type JourneyLlmUsageStatusV1 =
-  (typeof JOURNEY_LLM_USAGE_STATUSES_V1)[number];
-
 declare const journeyIdV1Brand: unique symbol;
-/** A canonical UUID v4 generated only for telemetry correlation. */
-export type JourneyIdV1 = string & {
-  readonly [journeyIdV1Brand]: "JourneyIdV1";
-};
+export type JourneyIdV1 = string & { readonly [journeyIdV1Brand]: "JourneyIdV1" };
 
-export interface JourneyLlmUsageV1 {
-  readonly usage_status: JourneyLlmUsageStatusV1;
-  readonly provider: JourneyLlmProviderV1;
-  readonly model: JourneyLlmModelV1;
-  /** Provider round-trip duration, distinct from enclosing stage latency. */
-  readonly provider_latency_ms: number;
-  readonly input_tokens: number | null;
-  readonly output_tokens: number | null;
-  /** Provider total when supplied, otherwise normalized input plus output. */
-  readonly total_tokens: number | null;
-  readonly cached_input_tokens: number | null;
-  readonly reasoning_tokens: number | null;
-  readonly finish_reason: JourneyLlmFinishReasonV1;
-}
-
-export interface JourneyLlmUsageInputV1 {
-  readonly usage_status?: JourneyLlmUsageStatusV1;
-  readonly provider: JourneyLlmProviderV1;
-  readonly model: JourneyLlmModelV1;
-  readonly provider_latency_ms: number;
-  readonly input_tokens?: number | null;
-  readonly output_tokens?: number | null;
-  readonly total_tokens?: number | null;
-  readonly cached_input_tokens?: number | null;
-  readonly reasoning_tokens?: number | null;
-  readonly finish_reason: JourneyLlmFinishReasonV1;
-}
-
-export interface JourneyRetrievalCountersV1 {
-  readonly planned_query_count: number | null;
-  readonly query_hit_count: number | null;
-  readonly released_atom_count: number | null;
-  readonly context_atom_count: number | null;
-  readonly citation_count: number | null;
-  readonly research_stop_reason: JourneyResearchStopReasonV1 | null;
-  readonly research_admission: JourneyResearchAdmissionV1 | null;
-}
-
-export const JOURNEY_RESEARCH_STOP_REASONS_V1 = Object.freeze([
-  "finished", "empty_catalog", "no_progress", "step_limit", "budget", "unusable_step",
-] as const);
-export type JourneyResearchStopReasonV1 = (typeof JOURNEY_RESEARCH_STOP_REASONS_V1)[number];
-export const JOURNEY_RESEARCH_ADMISSIONS_V1 = Object.freeze([
-  "post_revalidation_no_time",
-] as const);
-export type JourneyResearchAdmissionV1 = (typeof JOURNEY_RESEARCH_ADMISSIONS_V1)[number];
-
-export interface JourneyRetrievalCountersInputV1 {
-  readonly planned_query_count?: number | null;
-  readonly query_hit_count?: number | null;
-  readonly released_atom_count?: number | null;
-  readonly context_atom_count?: number | null;
-  readonly citation_count?: number | null;
-  readonly research_stop_reason?: JourneyResearchStopReasonV1 | null;
-  readonly research_admission?: JourneyResearchAdmissionV1 | null;
-}
-
-/** Immutable context supplied by trusted composition once for the whole journey. */
 export interface JourneyTelemetryContextInputV1 {
   readonly environment: JourneyEnvironmentV1;
   readonly workflow: JourneyWorkflowV1;
-  /** Deploy artifact identity, never a business or Authority release ID. */
-  readonly release_sha?: string | null;
-  readonly build_number?: number | null;
+  readonly release_sha: string;
+  readonly build_number: number;
 }
 
-export interface JourneyTelemetryContextV1 {
-  readonly environment: JourneyEnvironmentV1;
-  readonly workflow: JourneyWorkflowV1;
-  readonly release_sha: string | null;
-  readonly build_number: number | null;
-}
-
-/** Only stage-local fields are accepted after a journey has started. */
-export interface JourneyExecutionAccountingV2 {
-  readonly kind: "execution" | "skip" | "recovery" | "competing_action" | "legacy" | "shared_reference";
-  readonly execution_attempt: number;
-  readonly retry_count: number;
-  readonly retry_of_attempt?: number | null;
-}
+export type JourneyTelemetryContextV1 = JourneyTelemetryContextInputV1;
 
 export interface JourneyStageEventInputV1 {
-  readonly accounting?: JourneyExecutionAccountingV2;
-  readonly diagnostic?: CoreRuntimeDetailV1;
   readonly stage: JourneyStageV1;
   readonly event: JourneyEventV1;
-  readonly outcome?: JourneyOutcomeV1 | null;
+  readonly elapsed_ms: number;
+  readonly diagnostic: CoreRuntimeDetailV1;
   readonly failure_class?: JourneyFailureClassV1 | null;
   readonly retryable?: boolean | null;
-  readonly attempt?: number;
-  readonly elapsed_ms: number;
-  /** Durable business wait, intentionally not capped like machine latency. */
-  readonly queue_age_ms?: number | null;
-  readonly retrieval?: JourneyRetrievalCountersInputV1 | null;
-  readonly llm_usage?: JourneyLlmUsageInputV1 | null;
 }
 
 export interface JourneyTelemetryEventV1 extends JourneyTelemetryContextV1 {
-  readonly schema_version: 1 | 2;
-  readonly accounting?: JourneyExecutionAccountingV2;
-  readonly diagnostic?: CoreRuntimeDetailV1;
+  readonly schema_version: typeof JOURNEY_TELEMETRY_SCHEMA_VERSION_V1;
   readonly kind: typeof JOURNEY_TELEMETRY_KIND_V1;
   readonly observed_at: string;
   readonly journey_id: JourneyIdV1;
-  /** Monotonic within an emitter; callers provide the prior value when resuming. */
   readonly sequence: number;
   readonly stage: JourneyStageV1;
   readonly event: JourneyEventV1;
-  readonly outcome: JourneyOutcomeV1 | null;
+  /** Preserved null fields keep the live core record shape compatible with existing queries. */
+  readonly outcome: null;
   readonly failure_class: JourneyFailureClassV1 | null;
   readonly retryable: boolean | null;
-  readonly attempt: number;
+  readonly attempt: 1;
   readonly elapsed_ms: number;
-  readonly queue_age_ms: number | null;
-  readonly retrieval: JourneyRetrievalCountersV1 | null;
-  readonly llm_usage: JourneyLlmUsageV1 | null;
+  readonly queue_age_ms: null;
+  readonly retrieval: null;
+  readonly llm_usage: null;
+  readonly diagnostic: CoreRuntimeDetailV1;
 }
 
-export type JourneyTelemetryObserverV1 = (
-  event: JourneyTelemetryEventV1,
-) => void | Promise<void>;
+export type JourneyTelemetryObserverV1 = (event: JourneyTelemetryEventV1) => void | Promise<void>;
 
 export interface JourneyTelemetryDependenciesV1 {
   readonly now?: () => string;
-  readonly create_uuid?: () => string;
 }
 
 export interface JourneyTelemetryJourneyV1 {
   readonly journey_id: JourneyIdV1;
-  /** Fail-open production API. Invalid telemetry returns null. */
   emit(input: JourneyStageEventInputV1): JourneyTelemetryEventV1 | null;
 }
 
 export interface JourneyTelemetryV1 {
-  startJourney(context: JourneyTelemetryContextInputV1): JourneyTelemetryJourneyV1 | null;
   resumeJourney(input: JourneyTelemetryContextInputV1 & {
     readonly journey_id: string;
     readonly previous_sequence: number;
   }): JourneyTelemetryJourneyV1 | null;
 }
 
-const UUID_V4 =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const GIT_COMMIT_SHA = /^[0-9a-f]{40}$/;
 const MAX_MACHINE_DURATION_MS = 31 * 24 * 60 * 60 * 1_000;
-const MAX_ATTEMPT = 100;
-const LLM_STAGES = new Set<JourneyStageV1>([
-  "ask_planner",
-  "ask_answer",
-  "meeting_extraction",
-]);
-const ASK_COUNT_STAGES = new Set<JourneyStageV1>([
-  "ask_planner",
-  "ask_retrieval",
-  "ask_context",
-  "ask_answer",
-  "ask_audit",
-  "ask_response",
-]);
-const STAGES_BY_WORKFLOW = Object.freeze({
-    core_runtime: Object.freeze(["core_operation"] as const),
-    ask: Object.freeze([
-      "ask_validation",
-      "ask_authorization",
-      "ask_planner",
-      "ask_retrieval",
-      "ask_context",
-      "ask_answer",
-      "ask_revalidation",
-      "ask_audit",
-      "ask_response",
-    ] as const),
-    meeting_approval: Object.freeze([
-      "meeting_source_intake",
-      "meeting_extraction",
-      "meeting_candidate_persist",
-      "meeting_approval_staging",
-      "meeting_approval_action_verify",
-      "meeting_approval_action_queue",
-      "meeting_terminal_persist",
-      "meeting_record_append",
-      "meeting_search_publication",
-    ] as const),
-  } satisfies Readonly<Record<JourneyWorkflowV1, readonly JourneyStageV1[]>>);
-/** The outcomes each stage may close with; the staging Explorer must accept every one. */
-export const JOURNEY_TERMINAL_OUTCOMES_V1 = Object.freeze({
-    ask_response: Object.freeze([
-      "answered",
-      "insufficient_evidence",
-      "authorship_unsupported",
-      "completed",
-      "partial",
-      "not_found",
-      "off_scope",
-    ] as const),
-    meeting_candidate_persist: Object.freeze(["actionable", "no_signals", "coalesced"] as const),
-    meeting_approval_staging: Object.freeze([
-      "staged",
-      "delivery_pending",
-      "quarantined",
-    ] as const),
-    meeting_terminal_persist: Object.freeze(["approved", "rejected", "denied"] as const),
-    meeting_search_publication: Object.freeze(["current", "published", "superseded"] as const),
-  } satisfies Readonly<Partial<Record<JourneyStageV1, readonly JourneyOutcomeV1[]>>>);
 
 function includes<T extends string>(values: readonly T[], value: unknown): value is T {
   return typeof value === "string" && values.includes(value as T);
@@ -328,36 +99,6 @@ function includes<T extends string>(values: readonly T[], value: unknown): value
 
 function invalid(message: string): never {
   throw new TypeError(`invalid journey telemetry: ${message}`);
-}
-
-function nullableReleaseSha(value: unknown): string | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "string" || !GIT_COMMIT_SHA.test(value)) {
-    invalid("release_sha is not a canonical Git commit SHA");
-  }
-  return value;
-}
-
-function nullableCount(value: unknown, name: string): number | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    invalid(`${name} is invalid`);
-  }
-  return value;
-}
-
-function nullableDuration(value: unknown, name: string): number | null {
-  const normalized = nullableCount(value, name);
-  if (normalized !== null && normalized > MAX_MACHINE_DURATION_MS) {
-    invalid(`${name} is invalid`);
-  }
-  return normalized;
-}
-
-function nullableBuildNumber(value: unknown): number | null {
-  const normalized = nullableCount(value, "build_number");
-  if (normalized === 0) invalid("build_number is invalid");
-  return normalized;
 }
 
 function timestamp(value: unknown): string {
@@ -369,254 +110,115 @@ function timestamp(value: unknown): string {
   return value;
 }
 
-function validSequence(value: unknown, name: string, minimum: number): number {
-  if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    value < minimum
-  ) {
+function positiveInteger(value: unknown, name: string, minimum: number): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
     invalid(`${name} is invalid`);
   }
   return value;
 }
 
+function duration(value: unknown, name: string): number {
+  const normalized = positiveInteger(value, name, 0);
+  if (normalized > MAX_MACHINE_DURATION_MS) invalid(`${name} is invalid`);
+  return normalized;
+}
+
 function normalizeContext(input: JourneyTelemetryContextInputV1): JourneyTelemetryContextV1 {
   if (!includes(JOURNEY_ENVIRONMENTS_V1, input.environment)) invalid("environment is invalid");
-  if (!includes(JOURNEY_WORKFLOWS_V1, input.workflow)) invalid("workflow is invalid");
-  const releaseSha = nullableReleaseSha(input.release_sha);
-  const buildNumber = nullableBuildNumber(input.build_number);
-  if (input.environment === "staging" && releaseSha === null) {
-    invalid("staging release_sha is required");
+  if (input.workflow !== "core_runtime") invalid("workflow is invalid");
+  if (typeof input.release_sha !== "string" || !GIT_COMMIT_SHA.test(input.release_sha)) {
+    invalid("release_sha is invalid");
   }
-  if (input.environment === "staging" && buildNumber === null) {
-    invalid("staging build_number is required");
+  if (typeof input.build_number !== "number" || !Number.isSafeInteger(input.build_number) || input.build_number < 1) {
+    invalid("build_number is invalid");
   }
   return Object.freeze({
     environment: input.environment,
-    workflow: input.workflow,
-    release_sha: releaseSha,
-    build_number: buildNumber,
+    workflow: "core_runtime",
+    release_sha: input.release_sha,
+    build_number: input.build_number,
   });
 }
 
-function normalizeRetrieval(
-  input: JourneyRetrievalCountersInputV1 | null | undefined,
-): JourneyRetrievalCountersV1 | null {
-  if (input === undefined || input === null) return null;
-  return Object.freeze({
-    planned_query_count: nullableCount(input.planned_query_count, "planned_query_count"),
-    query_hit_count: nullableCount(input.query_hit_count, "query_hit_count"),
-    released_atom_count: nullableCount(input.released_atom_count, "released_atom_count"),
-    context_atom_count: nullableCount(input.context_atom_count, "context_atom_count"),
-    citation_count: nullableCount(input.citation_count, "citation_count"),
-    research_stop_reason: input.research_stop_reason === undefined || input.research_stop_reason === null
-      ? null
-      : includes(JOURNEY_RESEARCH_STOP_REASONS_V1, input.research_stop_reason)
-        ? input.research_stop_reason
-        : invalid("research_stop_reason is invalid"),
-    research_admission: input.research_admission === undefined || input.research_admission === null
-      ? null
-      : includes(JOURNEY_RESEARCH_ADMISSIONS_V1, input.research_admission)
-        ? input.research_admission
-        : invalid("research_admission is invalid"),
-  });
-}
-
-/** Returns null rather than exposing malformed or non-telemetry IDs. */
 export function parseJourneyIdV1(value: string): JourneyIdV1 | null {
-  return typeof value === "string" && UUID_V4.test(value) ? (value as JourneyIdV1) : null;
+  return typeof value === "string" && UUID_V4.test(value) ? value as JourneyIdV1 : null;
 }
 
-/** Strict constructor. The fail-open API below catches its errors for product code. */
-export function createJourneyIdV1(createUuid: () => string = randomUUID): JourneyIdV1 {
-  const journeyId = parseJourneyIdV1(createUuid());
-  if (journeyId === null) invalid("create_uuid did not return a UUID v4");
-  return journeyId;
-}
-
-function normalizeLlmUsage(input: JourneyLlmUsageInputV1, vocabulary: TelemetryVocabularyV1): JourneyLlmUsageV1 {
-  const provider = input.provider;
-  const model = input.model;
-  const finishReason = input.finish_reason;
-  const providerLatency = nullableDuration(
-    input.provider_latency_ms,
-    "llm provider_latency_ms",
-  );
-  const inputTokens = nullableCount(input.input_tokens, "llm input_tokens");
-  const outputTokens = nullableCount(input.output_tokens, "llm output_tokens");
-  const reportedTotal = nullableCount(input.total_tokens, "llm total_tokens");
-  const cachedInputTokens = nullableCount(input.cached_input_tokens, "llm cached_input_tokens");
-  const reasoningTokens = nullableCount(input.reasoning_tokens, "llm reasoning_tokens");
-  const hasReportedUsage =
-    inputTokens !== null ||
-    outputTokens !== null ||
-    reportedTotal !== null ||
-    cachedInputTokens !== null ||
-    reasoningTokens !== null;
-  const usageStatus = input.usage_status ?? (hasReportedUsage ? "reported" : "unavailable");
-  if (!includes(vocabulary.providers, provider)) {
-    invalid("llm provider is invalid");
-  }
-  if (!includes(vocabulary.models, model)) {
-    invalid("llm model is invalid");
-  }
-  if (!includes(JOURNEY_LLM_FINISH_REASONS_V1, finishReason)) {
-    invalid("llm finish_reason is invalid");
-  }
-  if (providerLatency === null) invalid("llm provider_latency_ms is required");
-  if (!includes(JOURNEY_LLM_USAGE_STATUSES_V1, usageStatus)) invalid("llm usage_status is invalid");
-  if (usageStatus === "unavailable" && hasReportedUsage) {
-    invalid("unavailable llm usage cannot include token counts");
-  }
-  if (usageStatus === "reported" && !hasReportedUsage) {
-    invalid("reported llm usage requires at least one token count");
-  }
-  const totalTokens =
-    reportedTotal ??
-    (inputTokens === null || outputTokens === null ? null : inputTokens + outputTokens);
-  if (totalTokens !== null && !Number.isSafeInteger(totalTokens)) invalid("llm total_tokens is invalid");
-  return Object.freeze({
-    usage_status: usageStatus,
-    provider,
-    model,
-    provider_latency_ms: providerLatency,
-    input_tokens: inputTokens,
-    output_tokens: outputTokens,
-    total_tokens: totalTokens,
-    cached_input_tokens: cachedInputTokens,
-    reasoning_tokens: reasoningTokens,
-    finish_reason: finishReason,
-  });
-}
-
-function normalizeAccounting(input: JourneyExecutionAccountingV2): JourneyExecutionAccountingV2 {
-  if (!["execution", "skip", "recovery", "competing_action", "legacy", "shared_reference"].includes(input.kind)) invalid("accounting kind");
-  const execution_attempt = validSequence(input.execution_attempt, "execution_attempt", 0);
-  const retry_count = validSequence(input.retry_count, "retry_count", 0);
-  if (retry_count > Math.max(0, execution_attempt - 1)) invalid("retry count exceeds executions");
-  return Object.freeze({ kind: input.kind, execution_attempt, retry_count, ...(input.retry_of_attempt === undefined ? {} : { retry_of_attempt: input.retry_of_attempt === null ? null : validSequence(input.retry_of_attempt, "retry_of_attempt", 1) }) });
-}
-
-function normalizeOutcome(
-  stage: JourneyStageV1,
-  event: JourneyEventV1,
-  outcome: JourneyOutcomeV1 | null,
-): JourneyOutcomeV1 | null {
-  if (outcome !== null && !includes(JOURNEY_OUTCOMES_V1, outcome)) invalid("outcome is invalid");
-  if (event === "skipped") {
-    if (outcome !== "skipped") invalid("skipped outcome is invalid");
-    return outcome;
-  }
-  if (event !== "succeeded") {
-    if (outcome !== null) invalid("non-succeeded outcome must be null");
-    return null;
-  }
-  const allowed = (
-    JOURNEY_TERMINAL_OUTCOMES_V1 as Readonly<
-      Partial<Record<JourneyStageV1, readonly JourneyOutcomeV1[]>>
-    >
-  )[stage];
-  if (allowed === undefined) {
-    if (outcome !== null) invalid("intermediate outcome must be null");
-    return null;
-  }
-  if (outcome === null || !allowed.includes(outcome)) invalid("stage outcome is invalid");
-  return outcome;
-}
-
-/**
- * Strict constructor for contract tests and adapters. It reconstructs an exact
- * allowlisted object, dropping unknown fields at every level.
- */
-export function createJourneyTelemetryEventV1(input: {
-  readonly journey_id: string;
-  readonly sequence: number;
-  readonly observed_at: string;
-  readonly context: JourneyTelemetryContextInputV1;
-  readonly event: JourneyStageEventInputV1;
-}, vocabulary: TelemetryVocabularyV1 = EMPTY_TELEMETRY_VOCABULARY_V1): JourneyTelemetryEventV1 {
-  const admitted = createTelemetryVocabularyV1(vocabulary);
+/** Rebuilds one exact live core event, dropping unknown fields before it reaches a log writer. */
+export function createJourneyTelemetryEventV1(
+  input: {
+    readonly journey_id: string;
+    readonly sequence: number;
+    readonly observed_at: string;
+    readonly context: JourneyTelemetryContextInputV1;
+    readonly event: JourneyStageEventInputV1;
+  },
+  vocabulary: TelemetryVocabularyV1 = EMPTY_TELEMETRY_VOCABULARY_V1,
+): JourneyTelemetryEventV1 {
   const journeyId = parseJourneyIdV1(input.journey_id);
   if (journeyId === null) invalid("journey_id is not a UUID v4");
   const context = normalizeContext(input.context);
-  const stage = input.event.stage;
-  if (!includes(JOURNEY_STAGES_V1, stage)) invalid("stage is invalid");
-  const workflowStages = STAGES_BY_WORKFLOW[
-    context.workflow
-  ] as readonly JourneyStageV1[];
-  if (!workflowStages.includes(stage)) {
-    invalid("stage does not belong to workflow");
-  }
+  if (input.event.stage !== "core_operation") invalid("stage is invalid");
   if (!includes(JOURNEY_EVENTS_V1, input.event.event)) invalid("event is invalid");
+
   const event = input.event.event;
-  const outcome = normalizeOutcome(stage, event, input.event.outcome ?? null);
   const failureClass = input.event.failure_class ?? null;
   const retryable = input.event.retryable ?? null;
   if (event === "failed") {
-    if (!includes(JOURNEY_FAILURE_CLASSES_V1, failureClass)) invalid("failed failure_class is invalid");
-    if (typeof retryable !== "boolean") invalid("failed retryable is invalid");
+    if (!includes(JOURNEY_FAILURE_CLASSES_V1, failureClass) || typeof retryable !== "boolean") {
+      invalid("failed failure fields are invalid");
+    }
   } else if (failureClass !== null || retryable !== null) {
     invalid("non-failed failure fields must be null");
   }
-  const isLlmStage = LLM_STAGES.has(stage);
-  const hasLlmUsage = input.event.llm_usage !== undefined && input.event.llm_usage !== null;
-  if (isLlmStage && (event === "succeeded" || event === "failed") && !hasLlmUsage) {
-    invalid("llm_usage is required for a closed LLM stage");
-  }
-  if ((!isLlmStage || event === "started" || event === "skipped") && hasLlmUsage) {
-    invalid("llm_usage is not allowed for this stage event");
-  }
-  const llmUsage = hasLlmUsage ? normalizeLlmUsage(input.event.llm_usage!, admitted) : null;
-  const retrieval = normalizeRetrieval(input.event.retrieval);
-  if (retrieval !== null && (!ASK_COUNT_STAGES.has(stage) || event !== "succeeded")) {
-    invalid("Ask counters are not allowed for this stage event");
-  }
-  const elapsed = nullableDuration(input.event.elapsed_ms, "elapsed_ms");
-  if (elapsed === null || ((event === "started" || event === "skipped") && elapsed !== 0)) {
-    invalid("elapsed_ms is invalid for event");
-  }
-  const queueAge = nullableCount(input.event.queue_age_ms, "queue_age_ms");
-  if (queueAge !== null && stage !== "meeting_approval_action_verify") {
-    invalid("queue_age_ms is only allowed for approval action verification");
-  }
+
+  const elapsed = duration(input.event.elapsed_ms, "elapsed_ms");
+  if (event === "started" && elapsed !== 0) invalid("elapsed_ms is invalid for event");
+
   return Object.freeze({
-    schema_version: input.event.accounting === undefined && input.event.diagnostic === undefined ? JOURNEY_TELEMETRY_SCHEMA_VERSION_V1 : 2,
-    ...(input.event.diagnostic === undefined ? {} : { diagnostic: normalizeCoreRuntimeDetailV1(input.event.diagnostic, admitted) }),
-    ...(input.event.accounting === undefined ? {} : { accounting: normalizeAccounting(input.event.accounting) }),
+    schema_version: JOURNEY_TELEMETRY_SCHEMA_VERSION_V1,
     kind: JOURNEY_TELEMETRY_KIND_V1,
     observed_at: timestamp(input.observed_at),
     journey_id: journeyId,
-    sequence: validSequence(input.sequence, "sequence", 1),
+    sequence: positiveInteger(input.sequence, "sequence", 1),
     ...context,
-    stage,
+    stage: "core_operation",
     event,
-    outcome,
+    outcome: null,
     failure_class: failureClass,
     retryable,
-    attempt: (() => {
-      const value = validSequence(input.event.attempt ?? 1, "attempt", 1);
-      if (value > MAX_ATTEMPT) invalid("attempt is invalid");
-      return value;
-    })(),
+    attempt: 1,
     elapsed_ms: elapsed,
-    queue_age_ms: queueAge,
-    retrieval,
-    llm_usage: llmUsage,
+    queue_age_ms: null,
+    retrieval: null,
+    llm_usage: null,
+    diagnostic: normalizeCoreRuntimeDetailV1(
+      input.event.diagnostic,
+      createTelemetryVocabularyV1(vocabulary),
+    ),
   });
 }
 
-/** Revalidate observer input through the same strict allowlist as new events. */
-export function recanonicalizeJourneyTelemetryEventV1(event: JourneyTelemetryEventV1, vocabulary: TelemetryVocabularyV1 = EMPTY_TELEMETRY_VOCABULARY_V1): JourneyTelemetryEventV1 {
+export function recanonicalizeJourneyTelemetryEventV1(
+  event: JourneyTelemetryEventV1,
+  vocabulary: TelemetryVocabularyV1 = EMPTY_TELEMETRY_VOCABULARY_V1,
+): JourneyTelemetryEventV1 {
   return createJourneyTelemetryEventV1({
     journey_id: event.journey_id,
     sequence: event.sequence,
     observed_at: event.observed_at,
     context: event,
-    event,
+    event: {
+      stage: event.stage,
+      event: event.event,
+      elapsed_ms: event.elapsed_ms,
+      diagnostic: event.diagnostic,
+      ...(event.failure_class === null ? {} : { failure_class: event.failure_class }),
+      ...(event.retryable === null ? {} : { retryable: event.retryable }),
+    },
   }, vocabulary);
 }
 
-/** Observer delivery is deliberately outside application control flow. */
 export function observeJourneyTelemetryBestEffortV1(
   observer: JourneyTelemetryObserverV1 | undefined,
   event: JourneyTelemetryEventV1,
@@ -659,10 +261,7 @@ function createJourneyEmitter(
   });
 }
 
-/**
- * Creates request-local, fail-open emitters. It has no durable state: an async
- * journey resumes with the prior sequence supplied by its durable caller.
- */
+/** Creates fail-open, per-operation emitters for the sole live core-runtime log producer. */
 export function createJourneyTelemetryV1(
   observer: JourneyTelemetryObserverV1 | undefined,
   dependencies: JourneyTelemetryDependenciesV1 = {},
@@ -670,15 +269,7 @@ export function createJourneyTelemetryV1(
 ): JourneyTelemetryV1 {
   const admitted = createTelemetryVocabularyV1(vocabulary);
   const now = dependencies.now ?? (() => new Date().toISOString());
-  const createUuid = dependencies.create_uuid ?? randomUUID;
   return Object.freeze({
-    startJourney(context: JourneyTelemetryContextInputV1): JourneyTelemetryJourneyV1 | null {
-      try {
-        return createJourneyEmitter(createJourneyIdV1(createUuid), 0, normalizeContext(context), now, observer, admitted);
-      } catch {
-        return null;
-      }
-    },
     resumeJourney(input: JourneyTelemetryContextInputV1 & {
       readonly journey_id: string;
       readonly previous_sequence: number;
@@ -686,8 +277,14 @@ export function createJourneyTelemetryV1(
       try {
         const journeyId = parseJourneyIdV1(input.journey_id);
         if (journeyId === null) invalid("journey_id is not a UUID v4");
-        const previousSequence = validSequence(input.previous_sequence, "previous_sequence", 0);
-        return createJourneyEmitter(journeyId, previousSequence, normalizeContext(input), now, observer, admitted);
+        return createJourneyEmitter(
+          journeyId,
+          positiveInteger(input.previous_sequence, "previous_sequence", 0),
+          normalizeContext(input),
+          now,
+          observer,
+          admitted,
+        );
       } catch {
         return null;
       }

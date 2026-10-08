@@ -1,7 +1,7 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import { AgenticAskPostRevalidationNoTimeErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
-import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
+import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, repairPrompt } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import type { StructuredGenerationInput, StructuredGenerationJsonSchema } from "../../src/answer-composition/structured-generation-v1.js";
 
@@ -40,7 +40,6 @@ function harness(options: {
     deadline: 90_000,
     signal: new AbortController().signal,
     is_deadline_expired: () => false,
-    content_sensitive: () => false,
   });
   return { gate, trace, inputs, checked };
 }
@@ -105,6 +104,37 @@ describe("agentic model gate", () => {
     expect(gate.stats()).toMatchObject({ calls: 1, stopped: true, generations: [{ role: "answer", finish_reason: null, usage: null }] });
   });
 
+  it.each(['length', 'content_filter'] as const)('captures one terminal response for a %s finish while preserving repair or fallback', async finish_reason => {
+    const events: CoreRuntimeDiagnosticObservationV1[] = [];
+    const replies = [{ partial: true }, { good: true }];
+    const usage = { input_tokens: 10, output_tokens: 5, total_tokens: 15, cached_input_tokens: null, reasoning_tokens: null };
+    let calls = 0;
+    const gate = createAgenticModelGateV1({
+      generation,
+      model: {
+        generate: async () => { throw new Error('value-only method must not be used'); },
+        generate_with_observation: async () => ({ value: replies[calls++], usage, provider_latency_ms: 1, finish_reason: calls === 1 ? finish_reason : 'stop' }),
+      },
+      desk_revalidate: async () => ({ checked_at: '2026-10-06T00:00:00.000Z' }), on_checked: () => undefined,
+      budget: { max_model_calls: 24 }, now: () => 0, deadline: 90_000,
+      signal: new AbortController().signal, is_deadline_expired: () => false,
+    });
+    const pending = withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => gate.withRepair(STEP, 'system', {}, schema, () => 20_000, value => value));
+    if (finish_reason === 'length') await expect(pending).resolves.toEqual({ good: true });
+    else await expect(pending).rejects.toMatchObject({ recovery: 'fallback' });
+    const requests = events.filter(event => event.kind === 'model_request');
+    const terminals = events.filter(event => event.kind === 'model_response' || event.kind === 'model_error');
+    expect(requests).toHaveLength(finish_reason === 'length' ? 2 : 1);
+    // The exporter pairs each admitted call with exactly one terminal event.
+    for (const request of requests) {
+      expect(terminals.filter(event => event.call_id === request.call_id)).toEqual([
+        expect.objectContaining({ kind: 'model_response', span_id: request.span_id, value: replies[request.call_id - 1], usage }),
+      ]);
+    }
+    expect(terminals[0]).toMatchObject({ finish_reason });
+    expect(gate.stats()).toMatchObject({ calls: requests.length, repairs: finish_reason === 'length' ? 1 : 0, stopped: finish_reason === 'content_filter' });
+  });
+
   it("repairs once with the validation error and the rejected reply", async () => {
     const { gate, inputs } = harness({ replies: [{ bad: true }, { good: true }] });
     const rejections: string[] = [];
@@ -137,7 +167,7 @@ describe("agentic model gate", () => {
       await gate.call({ role: "step", span: "ask_answer" }, "system", {}, schema, () => 20_000);
       await gate.call({ role: "answer", span: "ask_planner" }, "system", {}, schema, () => 20_000);
     }, { observer: event => { events.push(event); } });
-    expect(events.filter(event => !event.root && event.event === "started").map(event => event.stage)).toEqual(["ask_answer", "ask_planner"]);
+    expect(events.filter(event => !event.root && event.event === "started").map(event => event.stage)).toEqual(["research_revalidation", "ask_answer", "research_revalidation", "ask_planner"]);
     expect(gate.stats().generations.map(entry => entry.role)).toEqual(["step", "answer"]);
   });
 

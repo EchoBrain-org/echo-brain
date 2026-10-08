@@ -25,4 +25,16 @@ describe("deployment telemetry vocabulary", () => {
     expect(observations.filter((event) => event.event === "succeeded").map(({ provider, model }) => ({ provider, model })))
       .toEqual([{ provider: "fixture-a", model: "other" }, { provider: "fixture-b", model: "other" }]);
   });
+
+  it('snapshots registered triggers without changing legacy configuration requirements', () => {
+    expect(createTelemetryVocabularyV1({ providers: [], models: [] }).triggers).toEqual(['other']);
+    const triggers = ['ask', 'future_trigger'];
+    const vocabulary = createTelemetryVocabularyV1({ providers: [], models: [], triggers });
+    triggers.push('private-request-name');
+    expect(vocabulary.triggers).toEqual(['ask', 'future_trigger', 'other']);
+    expect(Object.isFrozen(vocabulary.triggers)).toBe(true);
+    expect(createTelemetryVocabularyV1(vocabulary)).toEqual(vocabulary);
+    expect(() => createTelemetryVocabularyV1({ providers: [], models: [], triggers: ['private title here'] })).toThrow('bounded');
+    expect(() => createTelemetryVocabularyV1({ providers: [], models: [], triggers: Array.from({ length: 64 }, (_, i) => `trigger${i}`) })).toThrow('bounded');
+  });
 });
