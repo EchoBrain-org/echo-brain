@@ -93,6 +93,23 @@ describe('personal meeting intake: one source per person and tool account', () =
     expect(() => w.db.prepare('UPDATE authority_person_meeting_sources_v2 SET folder_id=?,settings_revision=settings_revision+1 WHERE source_key=?').run(FOLDER, granola.source_key)).toThrow('CHECK');
   });
 
+  it('records the watched folder project for meetings the folder delivers, not for queued imports', () => {
+    const w = world(), setting = w.ensure();
+    w.intake.recordDelivery(setting, NOTE_1);
+    expect(w.count('authority_person_meeting_suggestions_v1')).toBe(0);
+    w.intake.watch(setting, FOLDER, PROJECT_ALPHA, () => undefined);
+    w.intake.enqueue(w.intake.list(person(OWNER))[0]!, NOTE_2, null, () => undefined);
+    const watched = w.intake.list(person(OWNER))[0]!;
+    w.intake.recordDelivery(watched, NOTE_1);
+    w.intake.recordDelivery(watched, NOTE_1);
+    w.intake.recordDelivery(watched, NOTE_2);
+    expect(w.intake.suggestions(setting.source_key, NOTE_1)).toEqual([PROJECT_ALPHA]);
+    expect(w.intake.suggestions(setting.source_key, NOTE_2)).toEqual([]);
+    w.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA);
+    expect(() => w.intake.recordDelivery(watched, NOTE_3)).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+    expect(w.intake.suggestions(setting.source_key, NOTE_3)).toEqual([]);
+  });
+
   it('checks the person, not a project, before using a stored setting', () => {
     const w = world(), setting = w.ensure();
     w.intake.watch(setting, FOLDER, PROJECT_ALPHA, () => undefined);

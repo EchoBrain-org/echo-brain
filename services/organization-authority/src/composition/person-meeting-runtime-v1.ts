@@ -144,9 +144,11 @@ export function createPersonMeetingRuntimeV1(options: {
         const { provider, intake: sourceIntake } = ownerOf(setting.source_adapter_id);
         const outcome = await new AdmittedMeetingProcessingCycleV1({ source, state, processor: processor.create_processor(admission), extraction_attempts: options.extraction_attempts,
           source_cursor_policy: provider.cursor.policy, stager: review.stager,
-          source_ingestion: { store: new SqliteSourceAdmissionStoreV1(db, () => {
+          source_ingestion: { store: new SqliteSourceAdmissionStoreV1(db, delivered => {
             source.requireCurrent(); state.assertCurrentSourceAdmission(source.identity);
             if (provider.cursor.write(sourceIntake.checkpoint(setting.source_key)) !== admission.source.cursor) throw new AuthorityOperationError('stale_access_state', 'Meeting intake changed during acquisition');
+            // Same transaction as the admission: a folder delivery keeps the folder's project as its suggestion.
+            sourceIntake.recordDelivery(setting, delivered.item.external_id);
           }),
             scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
         }).runOnce(signal);
@@ -163,7 +165,7 @@ export function createPersonMeetingRuntimeV1(options: {
     },
   };
   function reviewRows(person: MeetingIntakePersonV1, approvalId?: string) {
-    return db.prepare(`SELECT o.approval_id,o.state,o.approved_snapshot_sha256,o.approved_snapshot_json,s.source_key,s.folder_project_id,
+    return db.prepare(`SELECT o.approval_id,o.state,o.approved_snapshot_sha256,o.approved_snapshot_json,s.source_key,
       json_extract(c.meeting_json,'$.provenance.external_id') AS external_id,
       coalesce(json_extract(c.meeting_json,'$.title'),'Untitled meeting') AS title,h.body_json,h.receipt_json FROM authority_person_meeting_sources_v2 s
       JOIN authority_live_source_admission_v2 a ON a.source_key=s.source_key
@@ -172,13 +174,13 @@ export function createPersonMeetingRuntimeV1(options: {
       LEFT JOIN authority_person_meeting_approval_actions_v1 h ON h.approval_id=o.approval_id
       WHERE a.organization_id=? AND a.principal_id=? AND a.membership_id=? AND o.approved_snapshot_sha256 IS NOT NULL AND (? IS NULL OR o.approval_id=?)
       ORDER BY CASE WHEN h.body_json IS NULL AND o.state='staged' THEN 0 ELSE 1 END,c.created_at DESC,o.approval_id LIMIT 100`).all(person.organization_id, person.principal_id, person.membership_id, approvalId ?? null, approvalId ?? null) as {
-        approval_id: string; state: string; approved_snapshot_sha256: string; approved_snapshot_json: string; source_key: string; folder_project_id: string | null; external_id: string; title: string; body_json: string | null; receipt_json: string | null;
+        approval_id: string; state: string; approved_snapshot_sha256: string; approved_snapshot_json: string; source_key: string; external_id: string; title: string; body_json: string | null; receipt_json: string | null;
       }[];
   }
   // Until the meetings API carries several projects, a review names the first suggested project the person can still read.
+  // Imports and folder deliveries both record per-meeting suggestions.
   function suggestedProject(person: MeetingIntakePersonV1, row: ReturnType<typeof reviewRows>[number]): string | null {
-    const suggested = [...new Set([...intake.suggestions(row.source_key, row.external_id), ...(row.folder_project_id === null ? [] : [row.folder_project_id])])].sort();
-    return suggested.find(project => { try { intake.currentPerson(person, project); return true; } catch { return false; } }) ?? null;
+    return intake.suggestions(row.source_key, row.external_id).find(project => { try { intake.currentPerson(person, project); return true; } catch { return false; } }) ?? null;
   }
   function reviewView(person: MeetingIntakePersonV1, row: ReturnType<typeof reviewRows>[number]): PersonMeetingReviewV1 {
     const action = row.body_json === null ? null : (JSON.parse(row.body_json) as { request: { action: string } }).request.action;

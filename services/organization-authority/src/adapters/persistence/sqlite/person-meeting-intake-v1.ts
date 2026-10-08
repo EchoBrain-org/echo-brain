@@ -16,7 +16,8 @@ function denied(): never { throw new AuthorityOperationError('unauthorized', 'Pe
 
 /**
  * Personal configuration and progress use the existing Authority admission/cursor owner.
- * A project chosen on import or watch is only a suggestion for review; it is never part of the source.
+ * A project chosen on import or watch is never part of the source. It becomes a per-meeting
+ * suggestion: the review offers it, and its current members may read the meeting's imported notes.
  */
 export class SqlitePersonMeetingIntakeV1 {
   constructor(private readonly db: Database.Database, private readonly cursor: PersonalMeetingCheckpointCodecV1) {}
@@ -72,7 +73,7 @@ export class SqlitePersonMeetingIntakeV1 {
     const next = this.cursor.write(checkpoint);
     this.db.prepare('UPDATE authority_live_source_progress_v2 SET cursor=?,cursor_version=cursor_version+1,updated_at=? WHERE source_key=? AND cursor!=?').run(next, new Date().toISOString(), sourceKey, next);
   }
-  /** Sorted project ids suggested for one meeting by its imports. */
+  /** Sorted project ids suggested for one meeting by its imports and folder deliveries. */
   suggestions(sourceKey: string, externalId: string): readonly string[] {
     return this.db.prepare('SELECT project_id FROM authority_person_meeting_suggestions_v1 WHERE source_key=? AND external_id=? ORDER BY project_id')
       .pluck().all(sourceKey, externalId) as string[];
@@ -106,14 +107,25 @@ export class SqlitePersonMeetingIntakeV1 {
   enqueue(setting: MeetingIntakeSettingV1, meetingId: string, projectId: string | null, current: () => void): void {
     this.db.transaction(() => {
       current(); this.requireCurrent(setting);
-      if (projectId !== null) {
-        this.currentPerson(setting, projectId);
-        this.db.prepare('INSERT OR IGNORE INTO authority_person_meeting_suggestions_v1(source_key,external_id,project_id,created_at) VALUES (?,?,?,?)')
-          .run(setting.source_key, meetingId, projectId, new Date().toISOString());
-      }
+      if (projectId !== null) this.suggest(setting, meetingId, projectId);
       const old = this.checkpoint(setting.source_key);
       this.write(setting.source_key, { ...old, manual: [...new Set([...old.manual, meetingId])] });
       current();
     }).immediate();
+  }
+  /**
+   * Called inside the transaction that admits a meeting. A meeting the watched folder delivers (not a
+   * queued import) keeps the folder's current project as its suggestion, so it stays readable by that
+   * project's members after the watch moves. The person must still be an active member, as on import.
+   */
+  recordDelivery(setting: MeetingIntakeSettingV1, externalId: string): void {
+    if (setting.folder_project_id === null || this.checkpoint(setting.source_key).manual.includes(externalId)) return;
+    this.requireCurrent(setting);
+    this.suggest(setting, externalId, setting.folder_project_id);
+  }
+  private suggest(setting: MeetingIntakeSettingV1, externalId: string, projectId: string): void {
+    this.currentPerson(setting, projectId);
+    this.db.prepare('INSERT OR IGNORE INTO authority_person_meeting_suggestions_v1(source_key,external_id,project_id,created_at) VALUES (?,?,?,?)')
+      .run(setting.source_key, externalId, projectId, new Date().toISOString());
   }
 }
