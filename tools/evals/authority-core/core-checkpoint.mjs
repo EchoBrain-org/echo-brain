@@ -11,7 +11,8 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { analyzeDocument, analyzeQuery } from "./corpus-v1.mjs";
 import { bm25Score, compareCandidates } from "./oracle-v1.mjs";
 
-const POLICIES = ["organization-member-readable-person-v2", "restricted-reviewer-person-v2"];
+// The audience a person can choose: the members of a project, or only themselves.
+const POLICIES = ["project-members-readable-person-v1", "restricted-reviewer-person-v2"];
 const directory = realpathSync(mkdtempSync(join(tmpdir(), "echo-core-stage1-")));
 chmodSync(directory, 0o700);
 const reportPath = join(directory, "report.json");
@@ -134,15 +135,19 @@ async function until(read, accepts, label, timeout = 40_000) {
 function verifyStoppedState(stateDirectory, input, response, answers, policy) {
   const databases = ["authority.sqlite", "integrations.sqlite", "record-log.sqlite"].map((name) =>
     new Database(join(stateDirectory, name), { readonly: true, fileMustExist: true }));
-  const [authority, control, record] = databases;
+  const [authority, , record] = databases;
   try {
     for (const database of databases) assert.equal(database.pragma("integrity_check", { simple: true }), "ok");
     const candidates = authority.prepare("SELECT meeting_json, decisions_json FROM authority_live_source_candidates_v2").all();
     assert.equal(candidates.length, 1);
     assert.deepEqual(JSON.parse(candidates[0].meeting_json), input.meeting);
     assert.deepEqual(JSON.parse(candidates[0].decisions_json), input.decisions);
-    assert.equal(control.prepare("SELECT COUNT(*) AS n FROM organization_private_approval_terminal_evidence_v2 WHERE outcome = 'approved'").get().n, 1);
-    assert.equal(control.prepare("SELECT COUNT(*) AS n FROM organization_private_approval_denied_action_receipts_v2").get().n, 1);
+    // Only the owner's action exists: the refused wrong-reviewer attempt left nothing behind.
+    const actions = authority.prepare("SELECT json_extract(body_json, '$.request.action') AS action, json_extract(body_json, '$.request.project_id') AS project_id, receipt_json FROM authority_person_meeting_approval_actions_v1").all();
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0].action, "approve");
+    assert.equal(actions[0].project_id === null, policy === POLICIES[1], "the action names the audience its policy requires");
+    assert.notEqual(actions[0].receipt_json, null, "the approved action carries its signed record receipt");
     assert.equal(record.prepare("SELECT COUNT(*) AS n FROM organization_record_log").get().n, 1);
     assert.equal(record.prepare("SELECT COUNT(*) AS n FROM organization_record_signed_receipt").get().n, 1);
     const log = record.prepare("SELECT position, record_sha256 FROM organization_record_log").get();
@@ -150,7 +155,7 @@ function verifyStoppedState(stateDirectory, input, response, answers, policy) {
     const pointer = authority.prepare("SELECT generation_id, record_head_position, record_head_hash FROM authority_readable_search_active_generation").get();
     assert.equal(pointer.record_head_position, log.position);
     assert.equal(pointer.record_head_hash, log.record_sha256);
-    const facts = record.prepare(`SELECT atom_id, policy_id FROM organization_record_${policy === POLICIES[0] ? "member_readable" : "restricted_reviewer"}_person_fact`).all();
+    const facts = record.prepare(`SELECT atom_id, policy_id FROM organization_record_${policy === POLICIES[0] ? "project_members_readable" : "restricted_reviewer"}_person_fact`).all();
     assert.equal(facts.length, 5);
     assert.deepEqual(facts.map((fact) => fact.atom_id).sort(), response.items.map((item) => item.atom_id).sort());
     const audits = authority.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").all().map((row) => JSON.parse(row.body_json));
@@ -165,6 +170,7 @@ function verifyStoppedState(stateDirectory, input, response, answers, policy) {
       assert.ok(matches[0].receipt_digests.length > 0, `${actor} answer audit binds no released evidence`);
       assert.equal(matches[0].citation_count, answer.citations.length);
     }
+    // `denied_wrong_reviewer` is the one refused attempt the driver observed; the single action above proves it left no durable trace.
     return { candidates: 1, approved_records: 1, signed_record_receipts: 1, atoms: facts.length, denied_wrong_reviewer: 1, matched_answer_audits: answers.length };
   } finally { for (const database of databases) database.close(); }
 }
@@ -185,12 +191,16 @@ async function scenario(policy, index) {
     const candidateMs = performance.now() - inputOffered;
     assert.deepEqual(frozen.decisions, input.decisions);
     const presentation = await candidate.call("presentation", { approval_id: frozen.approval_id });
-    assert.ok(presentation, "staged candidate has no delivered presentation");
-    for (const signal of input.decisions.signals) assert.ok(JSON.stringify(presentation).includes(signal.text), "delivered candidate is not content-complete");
+    assert.ok(presentation, "staged candidate has no review presentation");
+    for (const signal of input.decisions.signals) assert.ok(JSON.stringify(presentation).includes(signal.text), "the review shown to the person is not content-complete");
     const beforeApproval = await candidate.call("search", { actor: "owner", query: "launch" });
     assert.equal(beforeApproval.items.length, 0, "unapproved content was searchable");
-    await candidate.call("approve", { input: { approval_id: frozen.approval_id, actor: "employee", policy_id: policy, offer_id: "wrong-reviewer" } });
-    const denied = await until(() => candidate.call("status", { approval_id: frozen.approval_id }), (result) => result.denied === 1, "wrong reviewer denial", 5_000);
+    await assert.rejects(
+      candidate.call("approve", { input: { approval_id: frozen.approval_id, actor: "employee", policy_id: policy, offer_id: "wrong-reviewer" } }),
+      /not available/,
+    );
+    const denied = await candidate.call("status", { approval_id: frozen.approval_id });
+    assert.equal(denied.actions, 0);
     assert.equal(denied.terminal, null);
     assert.equal(denied.record_count, 0);
     const approval = { approval_id: frozen.approval_id, actor: "owner", policy_id: policy, offer_id: "owner-approval" };

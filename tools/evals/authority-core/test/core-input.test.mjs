@@ -30,6 +30,19 @@ test("statically admits the authenticated owner and replays immutable offered ev
       authority, coordinates: { organization_id: initialized.organization_id }, owner: identity.owner, sessions: identity.sessions,
     });
     assert.equal(authority.prepare("SELECT count(*) FROM authority_live_source_admission_v2").pluck().get(), 1);
+    // The benchmark input is a fictional person's own source, admitted through the personal intake.
+    const admission = authority.prepare("SELECT source_key, organization_id, principal_id, membership_id, membership_type FROM authority_live_source_admission_v2").get();
+    assert.match(admission.source_key, /^pms_[0-9a-f]{64}$/);
+    assert.deepEqual(
+      { organization_id: admission.organization_id, principal_id: admission.principal_id, membership_id: admission.membership_id },
+      { organization_id: initialized.organization_id, principal_id: identity.owner.principal_id, membership_id: identity.owner.membership_id },
+    );
+    assert.equal(input.source_key, admission.source_key);
+    assert.equal(
+      authority.prepare("SELECT count(*) FROM authority_person_meeting_sources_v1 WHERE source_key = ? AND project_id IS NULL").pluck().get(admission.source_key),
+      1,
+      "the admission is a personal meeting source with no project",
+    );
     const text = "Core input preserves the source cursor on retry.";
     const meeting = {
       schema_version: 1, id: "core-input:meeting-1", title: "Core input meeting",
