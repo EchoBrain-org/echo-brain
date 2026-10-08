@@ -55,6 +55,7 @@ separately.
 | [ADR-0030](ADR-0030-personal-meeting-custody-and-review.md) | Personal Granola custody and shared in-app meeting review | accepted |
 | [ADR-0031](ADR-0031-unified-meeting-approval-core.md) | One meeting approval core with optional surfaces | accepted |
 | [ADR-0032](ADR-0032-stored-trigger-runs.md) | Stored trigger runs keep pointers and judgments, not outside text | accepted |
+| [ADR-0033](ADR-0033-shared-open-items.md) | Open items are one shared row per affected item, seen by the decision's audience | proposed |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary
