@@ -26,7 +26,8 @@ const folder = '00000000-0000-4000-8000-000000000002';
 const project = 'prj_00000000-0000-4000-8000-000000000003';
 const projectB = 'prj_00000000-0000-4000-8000-000000000013';
 const foreignProject = 'prj_00000000-0000-4000-8000-000000000023';
-async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly started?: string } = {}) {
+/** `actions` adds that many unowned actions (act-2, act-3, …) to what the extractor finds. */
+async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly actions?: number; readonly started?: string } = {}) {
   const f = await approvalContextFixture();
   f.db.prepare('INSERT INTO authority_project_authorization_state_v1 VALUES (?,0,?)').run(f.actor.organization_id, new Date().toISOString());
   const person = { organization_id: f.actor.organization_id, principal_id: f.actor.principal_id, membership_id: f.actor.membership_id };
@@ -96,7 +97,9 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
             if (failExtraction) { failExtraction = false; throw new Error('extraction failed'); }
             return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
             signals: [...decisions.signals, ...(options.ownedAction ? [{ id: 'act-1', kind: 'action' as const, text: 'Send the pilot plan.', subject: null, confidence: 1, owner: 'Rafael Moreno', due_at: null,
-              evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }] : [])].map(signal => ({ ...signal, evidence: signal.evidence.map(evidence => ({ ...evidence, meeting_id: meeting.id })) })) }; } };
+              evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }] : []),
+              ...Array.from({ length: options.actions ?? 0 }, (_, i) => ({ id: `act-${i + 2}`, kind: 'action' as const, text: `Follow up on item ${i + 2}.`, subject: null, confidence: 1, owner: null, due_at: null,
+                evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }))].map(signal => ({ ...signal, evidence: signal.evidence.map(evidence => ({ ...evidence, meeting_id: meeting.id })) })) }; } };
       },
     },
     extraction_attempts: { reserve: () => ({ status: 'reserved', attempt: 1, claim_id: 'claim' }), complete() {} },
@@ -672,6 +675,14 @@ describe('personal meeting intake uses the shared processing path', () => {
     await g.call(plain, { operation: 'import', meeting_id: id, project_id: null, retain: true });
     await g.processUntilIdle(plain);
     expect((await g.call(plain, { operation: 'reviews' })).reviews).toEqual([expect.objectContaining({ first_line: 'Ship the cohort onboarding.', action_count: 0, meeting_at: null })]);
+  });
+  it('counts every action on a review row, past 40, and the Authority still accepts its own list', async () => {
+    const f = await fixture({ actions: 41 }), runtime = f.create();
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await f.processUntilIdle(runtime);
+    const [row] = (await f.call(runtime, { operation: 'reviews' })).reviews;
+    expect(row).toMatchObject({ first_line: 'Ship the cohort onboarding.', action_count: 41 });
+    expect((await f.call(runtime, { operation: 'review_open', approval_id: row!.approval_id })).review).toEqual(row);
   });
   it('approvals() returns one core per runtime', async () => {
     const f = await fixture(), runtime = f.create();

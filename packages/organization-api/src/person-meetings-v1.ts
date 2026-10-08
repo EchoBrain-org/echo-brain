@@ -100,7 +100,7 @@ export function validatePersonMeetingResultV2<K extends keyof PersonMeetingResul
     const item = object(value, ['approval_id','title','project_ids','status','decided_on','first_line','action_count','meeting_at']); text(item.approval_id); text(item.title, 1024); projectIds(item.project_ids);
     if (!['pending','publishing','approved','rejected','superseded'].includes(String(item.status)) || ![null, 'desktop', 'slack'].includes(item.decided_on as string | null)) fail('Invalid meeting review state');
     if (item.first_line !== null) text(item.first_line, 300);
-    if (!Number.isSafeInteger(item.action_count) || (item.action_count as number) < 0 || (item.action_count as number) > 40) fail('Invalid meeting review action count');
+    if (!Number.isSafeInteger(item.action_count) || (item.action_count as number) < 0) fail('Invalid meeting review action count');
     if (item.meeting_at !== null) assertTimestamp(item.meeting_at, 'Meeting review time');
   };
   if (operation === 'home') {

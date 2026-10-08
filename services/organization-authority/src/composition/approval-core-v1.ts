@@ -207,12 +207,12 @@ export function approvalProposalTextV1(snapshotJson: string): string {
 }
 
 /** What a Home row shows of a proposal: its first decision (else first action) on one line, how many actions it has, and when the meeting started.
- *  The line collapses whitespace and control characters and keeps at most 300 characters, never half of one; the count stops at 40, the API's bound. */
+ *  The line collapses whitespace and control characters and keeps at most 300 characters, never half of one. */
 export function approvalProposalSummaryV1(snapshotJson: string): { readonly first_line: string | null; readonly action_count: number; readonly meeting_at: string | null } {
   const brief = (JSON.parse(snapshotJson) as { approved_payload: { brief: DecisionBrief } }).approved_payload.brief;
   const line = (brief.decisions[0]?.text ?? brief.actions[0]?.text)?.replace(/[\s\p{Cc}]+/gu, ' ').trim().slice(0, 300).replace(/[\uD800-\uDBFF]$/, '');
   const time = brief.meeting.time, started = new Date(time?.actual_start_at ?? time?.scheduled_start_at ?? NaN);
-  return { first_line: line || null, action_count: Math.min(brief.actions.length, 40), meeting_at: Number.isNaN(started.getTime()) ? null : started.toISOString() };
+  return { first_line: line || null, action_count: brief.actions.length, meeting_at: Number.isNaN(started.getTime()) ? null : started.toISOString() };
 }
 
 interface ProposalRow {

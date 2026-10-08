@@ -58,7 +58,7 @@ describe('person meetings v2', () => {
     ['a first line over 300 characters', { first_line: 'L'.repeat(301) }],
     ['a first line of two lines', { first_line: 'Launch the pilot.\nNext week.' }],
     ['a negative action count', { action_count: -1 }],
-    ['more than forty actions', { action_count: 41 }],
+    ['an action count past the safe integers', { action_count: 2 ** 53 }],
     ['a fractional action count', { action_count: 1.5 }],
     ['an action count as text', { action_count: '2' }],
     ['a meeting time that is not a timestamp', { meeting_at: 'Oct 6' }],
@@ -68,9 +68,9 @@ describe('person meetings v2', () => {
     expect(() => validatePersonMeetingResultV2('review_open', { review: { ...review, ...value }, snapshot_sha256: digest, content: 'Review', owners: [], suggested_projects: [] })).toThrow();
   });
 
-  it('accepts a review row without a decision line or meeting time, and the bounds themselves', () => {
+  it('accepts a review row without a decision line or meeting time, the bounds themselves, and more than 40 actions', () => {
     expect(validatePersonMeetingResultV2('reviews', { reviews: [{ ...review, first_line: null, action_count: 0, meeting_at: null },
-      { ...review, first_line: 'L'.repeat(300), action_count: 40 }] }).reviews).toHaveLength(2);
+      { ...review, first_line: 'L'.repeat(300), action_count: 41 }, { ...review, action_count: Number.MAX_SAFE_INTEGER }] }).reviews).toHaveLength(3);
     expect(() => validatePersonMeetingResultV2('review_open', { review: { ...review, first_line: null, action_count: 0, meeting_at: null }, snapshot_sha256: digest,
       content: 'Review', owners: [], suggested_projects: [] })).not.toThrow();
   });

@@ -449,10 +449,10 @@ describe('approval core: the Home row summary', () => {
       .toEqual({ first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' });
     expect(approvalProposalSummaryV1(snapshot({ decisions: [], actions: ['Book the lab'] })).first_line).toBe('Book the lab');
   });
-  it('keeps the line to one line of at most 300 characters and the count to 40', () => {
+  it('keeps the line to one line of at most 300 characters and counts every action', () => {
     expect(approvalProposalSummaryV1(snapshot({ decisions: ['  Launch the\n\tpilot\u0007 next week.  '], actions: [] })).first_line).toBe('Launch the pilot next week.');
     expect(approvalProposalSummaryV1(snapshot({ decisions: ['L'.repeat(400)], actions: Array.from({ length: 41 }, (_, i) => `Action ${i + 1}`) })))
-      .toMatchObject({ first_line: 'L'.repeat(300), action_count: 40 });
+      .toMatchObject({ first_line: 'L'.repeat(300), action_count: 41 });
     // The cut never leaves half of a character.
     expect(approvalProposalSummaryV1(snapshot({ decisions: ['x'.repeat(299) + '🚀'], actions: [] })).first_line).toBe('x'.repeat(299));
   });
