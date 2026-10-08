@@ -25,7 +25,8 @@ export function buildSlackApprovalCardV4(input: SlackApprovalCardInputV4): Slack
   if (input.projects.length > 100 || input.owners.length > 40) throw new Error('Slack approval card exceeds Slack limits');
   const base = buildPrivateSlackApprovalBlockKitCardV1(input.review);
   const retained = base.blocks.filter(block => !['policy', 'comment', 'actions', 'footer', 'divider'].some(name => (block as { block_id?: string }).block_id?.endsWith(`-${name}-v1`) === true));
-  const projects = input.projects.map(project => Object.freeze({ text: plain(project.name), value: project.project_id, description: plain('Current project members can read this record') }));
+  const projectLabel = (name: string) => name.length <= 75 ? name : `${name.slice(0, 74).trimEnd()}…`;
+  const projects = input.projects.map(project => Object.freeze({ text: plain(projectLabel(project.name)), value: project.project_id, description: plain('Current project members can read this record') }));
   const suggested = projects.filter(project => input.suggested_project_ids.includes(project.value));
   const blocks: Readonly<Record<string, unknown>>[] = [
     ...retained,

@@ -690,7 +690,8 @@ CREATE TABLE authority_approval_presentations_v1 (
   approval_id TEXT NOT NULL REFERENCES authority_live_approval_outbox_v2(approval_id),
   surface TEXT NOT NULL CHECK (surface = 'slack'),
   target_json TEXT NOT NULL CHECK (json_valid(target_json) AND json_type(target_json) = 'object'),
-  delivery TEXT NOT NULL CHECK (delivery IN ('posting', 'posted', 'unrepresentable', 'failed')),
+  dm_channel_id TEXT CHECK (dm_channel_id IS NULL OR length(dm_channel_id) BETWEEN 1 AND 256),
+  delivery TEXT NOT NULL CHECK (delivery IN ('opening', 'posting', 'posted', 'unrepresentable', 'failed')),
   message_ts TEXT CHECK (message_ts IS NULL OR length(message_ts) BETWEEN 1 AND 64),
   card_sha256 TEXT CHECK (card_sha256 IS NULL OR card_sha256 LIKE 'sha256:%'),
   shows TEXT NOT NULL CHECK (shows IN ('open', 'approved', 'rejected', 'superseded')),
@@ -699,12 +700,14 @@ CREATE TABLE authority_approval_presentations_v1 (
   created_at TEXT NOT NULL CHECK (unixepoch(created_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
   PRIMARY KEY (approval_id, surface),
-  CHECK ((delivery = 'posted') = (message_ts IS NOT NULL)),
-  CHECK (delivery = 'posted' OR shows = 'open')
+  CHECK (message_ts IS NULL OR delivery IN ('posted', 'failed')),
+  CHECK (delivery IN ('opening', 'unrepresentable') OR dm_channel_id IS NOT NULL),
+  CHECK (delivery NOT IN ('opening', 'unrepresentable') OR shows = 'open')
 ) STRICT;
 CREATE TRIGGER authority_approval_presentation_target_immutable_v1
 BEFORE UPDATE ON authority_approval_presentations_v1
 WHEN NEW.approval_id != OLD.approval_id OR NEW.surface != OLD.surface OR NEW.target_json != OLD.target_json
+  OR (OLD.dm_channel_id IS NOT NULL AND NEW.dm_channel_id IS NOT OLD.dm_channel_id)
   OR (OLD.message_ts IS NOT NULL AND NEW.message_ts IS NOT OLD.message_ts)
 BEGIN SELECT RAISE(ABORT, 'approval presentation target is immutable'); END;
 CREATE TRIGGER authority_approval_presentation_delete_denied_v1

@@ -30,3 +30,32 @@ The first SQLite test attempt was blocked by the isolated `npm ci --ignore-scrip
 - V1/V2/V3 card/parser modules remain deliberately because Task 12 still consumes them. V4 is exported separately; Task 12 should migrate parsing/click validation before deleting the retired builders.
 - Task 12 must bind a click against the persisted target's workspace, user, app, channel and timestamp, then call `decide`. This task stores the resolved `dm_channel_id` in the immutable JSON before marker posting.
 - The reviewer should scrutinize the presentation retry semantics and the composition-root control-database lifetime; no full `npm run check` was run here because the controller owns the serialized full gate.
+
+## Fix round 1
+
+Addressed every review finding in one batch:
+
+- The service lifecycle now invokes presentation reconciliation from both its primary and `additional_processing` lanes, and its wake guard recognizes either lane.
+- Presentation work selection excludes settled rows and orders opening/marker work ahead of redraws, so 25 completed rows cannot starve later work.
+- The table now reserves immutable identity in `target_json`, assigns `dm_channel_id` once before a marker post, and permits a known `message_ts` to survive a terminal `failed` state. Opening, marker recovery, and message updates all persist exponential retry state and stop at five attempts.
+- Provider work revalidates the active connection/workspace/app and active link commitment before and after awaits. A stale target becomes failed without mutating the target, channel, or message timestamp.
+- Claim insertion is conflict-tolerant and happens before opening a DM. Only the successful claimant can post the marker.
+- `publishing` draws as an approved terminal card; long project names are bounded to Slack's 75-character option-label limit.
+- The composition root closes the control database both during construction failure and shutdown, including when Granola shutdown throws.
+
+This round did not have clean RED-before-implementation chronology: the review supplied concrete failing scenarios and the schema/presenter redesign began before the added label/lifecycle-focused checks. The prior report's TDD caveat remains applicable.
+
+Focused GREEN after the batch:
+
+```text
+npx vitest run --config vitest.config.ts \
+  packages/organization-authority-kernel/test/adapters/persistence/sqlite/authority-baseline-v12.test.ts \
+  services/organization-authority/test/approval-decision-schema.test.ts \
+  services/organization-authority/test/approval-core-v1.test.ts \
+  providers/slack/server/test/private-approval/slack-approval-card-v4.test.ts \
+  providers/slack/server/test/private-approval/slack-approval-presenter-v1.test.ts
+# 67 passed
+npx vitest run --config vitest.config.ts providers/slack/server/test/private-approval/slack-approval-card-v4.test.ts providers/slack/server/test/private-approval/slack-approval-presenter-v1.test.ts services/organization-authority/test/organization-authority-service-lifecycle.test.ts
+# 36 passed
+npx tsc -b packages/organization-authority-kernel providers/slack/server services/organization-authority
+```

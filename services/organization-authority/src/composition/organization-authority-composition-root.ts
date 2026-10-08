@@ -138,37 +138,42 @@ export async function openOrganizationAuthorityService(
     ...dependencies.api,
     person_http_runtime_factory: (sessions, resources) => {
       const existing = dependencies.api?.person_http_runtime_factory?.(sessions, resources);
+      let control: ReturnType<typeof openOrganizationControlDatabase> | undefined;
       // This root selects one personal intake runtime; a caller cannot silently replace its worker.
       try {
         if (existing?.processing !== undefined) throw new Error('Personal meeting processing is already selected');
-        const control = openOrganizationControlDatabase(join(sharedConfig.state_directory, 'integrations.sqlite'), { fileMustExist: true });
+        const openedControl = openOrganizationControlDatabase(join(sharedConfig.state_directory, 'integrations.sqlite'), { fileMustExist: true }); control = openedControl;
         const poster = new PrivateSlackApprovalCardPosterV1(async options => {
-          const active = readActiveSlackConnectionV1(control, resources.coordinates);
+          const active = readActiveSlackConnectionV1(openedControl, resources.coordinates);
           if (active === undefined) throw new Error('Slack is not connected');
           return slack.bot_token_source.botToken(active, options);
-        }, { needs_reinstall: () => slack.connection_health.needsReinstall(readActiveSlackConnectionV1(control, resources.coordinates)?.state_sha256),
-          on_auth_failure: () => { const active = readActiveSlackConnectionV1(control, resources.coordinates); if (active !== undefined) slack.connection_health.markNeedsReinstall(active.state_sha256); } });
+        }, { needs_reinstall: () => slack.connection_health.needsReinstall(readActiveSlackConnectionV1(openedControl, resources.coordinates)?.state_sha256),
+          on_auth_failure: () => { const active = readActiveSlackConnectionV1(openedControl, resources.coordinates); if (active !== undefined) slack.connection_health.markNeedsReinstall(active.state_sha256); } });
         const granola = openGranolaPersonLiveRuntimeV1({ state_directory: sharedConfig.state_directory, sessions, resources,
           processor: dependencies.person_meeting_processor ?? decisionProcessor, projectors: policyProjectors, nango_authorization: () => slack_nango.secret_key,
           approval_core: { presenters: [core => createSlackApprovalPresenterV1({ database: resources.database, core,
             target: reviewer => {
-              const active = readActiveSlackConnectionV1(control, resources.coordinates); if (active === undefined) return null;
+              const active = readActiveSlackConnectionV1(openedControl, resources.coordinates); if (active === undefined) return null;
               const membership_type = resources.database.prepare('SELECT membership_type FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND status=\'active\'')
                 .pluck().get(reviewer.organization_id, reviewer.principal_id, reviewer.membership_id);
               if (membership_type !== 'owner' && membership_type !== 'employee') return null;
-              const resolved = resolveCurrentSlackDmApprovalReviewerTargetV1(control, resources.coordinates, active.connection.connection_id, { ...reviewer, membership_type });
+              const resolved = resolveCurrentSlackDmApprovalReviewerTargetV1(openedControl, resources.coordinates, active.connection.connection_id, { ...reviewer, membership_type });
               if (resolved === undefined) return null;
               return { connection_id: active.connection.connection_id, external_identity_link_id: resolved.current_slack_identity_link.external_identity_link_id,
                 external_identity_link_contract_sha256: resolved.current_slack_identity_link.external_identity_link_contract_sha256,
                 slack_workspace_id: active.connection.provider_tenant_id, slack_subject_id: resolved.current_slack_identity_link.provider_subject_id, api_app_id: active.connection.provider_app_id,
-                dm_channel_id: '' };
+                };
+            }, targetCurrent: target => {
+              const active = readActiveSlackConnectionV1(openedControl, resources.coordinates);
+              if (active === undefined || active.connection.connection_id !== target.connection_id || active.connection.provider_tenant_id !== target.slack_workspace_id || active.connection.provider_app_id !== target.api_app_id) return false;
+              return openedControl.prepare(`SELECT 1 FROM organization_external_human_link_current WHERE external_identity_link_id=? AND contract_sha256=? AND current_status='active' AND provider_subject_id=?`).get(target.external_identity_link_id, target.external_identity_link_contract_sha256, target.slack_subject_id) !== undefined;
             }, poster, projects: reviewer => resources.database.prepare(`SELECT p.project_id,p.name FROM authority_projects_v1 p JOIN authority_project_memberships_v1 m ON m.project_id=p.project_id WHERE p.organization_id=? AND p.status='active' AND m.principal_id=? AND m.membership_id=? AND m.status='active' ORDER BY p.project_id LIMIT 100`).all(reviewer.organization_id, reviewer.principal_id, reviewer.membership_id) as readonly { readonly project_id: string; readonly name: string }[] })] },
           ...(stagingSynthetic === undefined ? {} : { providers: [stagingSynthetic] }) });
         if (stagingSynthetic !== undefined) stagingCanary = (release_id, signal) => runStagingSyntheticPersonalCanaryV1({ database: resources.database, runtime: granola, release_id, signal });
         return { applications: [...(existing?.applications ?? []), ...granola.applications], processing: granola.processing,
           tools: async token => [...await (existing?.tools?.(token) ?? []), ...await granola.tools(token)],
-          close() { granola.close(); control.close(); existing?.close(); } };
-      } catch (error) { existing?.close(); throw error; }
+          close() { try { granola.close(); } finally { try { openedControl.close(); } finally { existing?.close(); } } } };
+      } catch (error) { control?.close(); existing?.close(); throw error; }
     },
     live_connectors: [
       ...(dependencies.api?.live_connectors ?? []),

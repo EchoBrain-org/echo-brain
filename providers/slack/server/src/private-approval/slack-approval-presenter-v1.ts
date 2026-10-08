@@ -1,89 +1,20 @@
 import Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, type JsonValue } from '@echo-brain/federation-protocol';
-import { buildSlackApprovalCardV4, buildClosedApprovalCardV4, type SlackApprovalCardV4 } from './slack-approval-card-v4.js';
-
-export interface SlackApprovalTargetV1 {
-  readonly connection_id: string; readonly external_identity_link_id: string; readonly external_identity_link_contract_sha256: string;
-  readonly slack_workspace_id: string; readonly slack_subject_id: string; readonly api_app_id: string;
-  /** Resolved before INSERT so later click matching cannot drift to another DM. */
-  readonly dm_channel_id: string;
-}
-export interface SlackApprovalPosterV1 {
-  openDirectMessage(subject: string, signal?: AbortSignal): Promise<{ readonly kind: 'opened'; readonly channel_id: string } | { readonly kind: 'retry_allowed' }>;
-  postMarker(input: { readonly approval_id: string; readonly dm_channel_id: string }, signal?: AbortSignal): Promise<{ readonly kind: 'posted'; readonly provider_message_ts: string } | { readonly kind: 'retry_allowed' } | { readonly kind: 'uncertain' }>;
-  reconcileMarker(input: { readonly approval_id: string; readonly dm_channel_id: string; readonly post_started_at: string; readonly reconciliation_started_at: string }, signal?: AbortSignal): Promise<{ readonly kind: 'posted'; readonly provider_message_ts: string } | { readonly kind: 'retry_allowed' } | { readonly kind: 'uncertain' }>;
-  publish(input: { readonly approval_id: string; readonly dm_channel_id: string; readonly provider_message_ts: string; readonly card: SlackApprovalCardV4 }, signal?: AbortSignal): Promise<{ readonly kind: 'done' } | { readonly kind: 'uncertain' }>;
-}
-export interface ApprovalPresenterV1 { reconcile(signal: AbortSignal): Promise<'rendered' | 'idle' | 'uncertain'> }
-export interface ApprovalActorV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
-export interface ApprovalOwnerProposalV1 { readonly signal_id: string; readonly action: string; readonly proposed: string }
-export interface ApprovalProposalViewV1 { readonly approval_id: string; readonly reviewer: ApprovalActorV1; readonly reviewer_active: boolean; readonly title: string; readonly status: 'pending'|'publishing'|'approved'|'rejected'|'superseded'; readonly decided_on: 'desktop'|'slack'|null; readonly project_ids: readonly string[]; readonly snapshot_sha256: string; readonly snapshot_json: string }
-type Core = Pick<{ proposal(id: string): ApprovalProposalViewV1 | undefined; ownerProposals(id: string): readonly ApprovalOwnerProposalV1[] }, 'proposal' | 'ownerProposals'>;
-interface Row { approval_id: string; target_json: string; delivery: 'posting'|'posted'|'unrepresentable'|'failed'; message_ts: string|null; card_sha256: string|null; shows: 'open'|'approved'|'rejected'|'superseded'; attempts: number; retry_at: string|null; created_at: string }
-const utc = (date: Date) => date.toISOString();
-const retry = (now: Date, attempts: number) => new Date(now.getTime() + Math.min(60_000, 1000 * 2 ** Math.min(attempts, 6))).toISOString();
-function review(view: ApprovalProposalViewV1) {
-  const brief = (JSON.parse(view.snapshot_json) as { approved_payload: { brief: { meeting: { title?: string }; decisions: unknown[]; actions: unknown[]; rationales: unknown[] } } }).approved_payload.brief;
-  const item = (signal: any) => ({ text: signal.text, evidence_reference: `Transcript block ${signal.evidence?.[0]?.block_id ?? 'unknown'}` });
-  return { schema_version: 1 as const, approval_id: view.approval_id, meeting_title: brief.meeting.title ?? view.title,
-    decision_groups: brief.decisions.map((decision: any, index: number) => ({ id: `decision-${index}`, decision: { ...item(decision), status: decision.status }, rationales: brief.rationales.filter((r: any) => r.supports_signal_ids?.includes(decision.id)).map(item) })),
-    ...(brief.actions.length === 0 ? {} : { ungrouped_actions: brief.actions.map(item) }),
-    ...(brief.rationales.length === 0 ? {} : { ungrouped_rationales: brief.rationales.map(item) }),
-  };
-}
-function targetOf(value: string): SlackApprovalTargetV1 { return JSON.parse(value) as SlackApprovalTargetV1; }
-
-export function createSlackApprovalPresenterV1(options: { readonly database: Database.Database; readonly core: Core; readonly target: (reviewer: ApprovalActorV1) => SlackApprovalTargetV1 | null; readonly poster: SlackApprovalPosterV1; readonly projects: (reviewer: ApprovalActorV1) => readonly { readonly project_id: string; readonly name: string }[]; readonly now?: () => Date }): ApprovalPresenterV1 {
-  const now = options.now ?? (() => new Date());
-  const rows = () => options.database.prepare(`SELECT approval_id,target_json,delivery,message_ts,card_sha256,shows,attempts,retry_at,created_at FROM authority_approval_presentations_v1 WHERE surface='slack' ORDER BY created_at LIMIT 25`).all() as Row[];
-  const insert = options.database.prepare(`INSERT INTO authority_approval_presentations_v1(approval_id,surface,target_json,delivery,message_ts,card_sha256,shows,attempts,retry_at,created_at,updated_at) VALUES(?,'slack',?,'posting',NULL,NULL,'open',0,NULL,?,?)`);
-  const posted = options.database.prepare(`UPDATE authority_approval_presentations_v1 SET delivery='posted',message_ts=?,card_sha256=NULL,updated_at=? WHERE approval_id=? AND surface='slack' AND delivery='posting'`);
-  const update = options.database.prepare(`UPDATE authority_approval_presentations_v1 SET delivery=?,attempts=?,retry_at=?,updated_at=? WHERE approval_id=? AND surface='slack'`);
-  const shown = options.database.prepare(`UPDATE authority_approval_presentations_v1 SET shows=?,card_sha256=?,updated_at=? WHERE approval_id=? AND surface='slack' AND delivery='posted'`);
-  const candidates = options.database.prepare(`SELECT o.approval_id FROM authority_live_approval_outbox_v2 o LEFT JOIN authority_approval_decisions_v1 d ON d.approval_id=o.approval_id WHERE o.state='staged' AND d.approval_id IS NULL AND NOT EXISTS (SELECT 1 FROM authority_approval_presentations_v1 p WHERE p.approval_id=o.approval_id AND p.surface='slack') ORDER BY o.updated_at LIMIT 25`).pluck();
-  const fail = (row: Row, definite = false) => { const time = now(), attempts = row.attempts + 1; update.run(definite && attempts >= 5 ? 'failed' : row.delivery, attempts, retry(time, attempts), utc(time), row.approval_id); };
-  const openCard = (view: ApprovalProposalViewV1) => buildSlackApprovalCardV4({ approval_id: view.approval_id, snapshot_sha256: view.snapshot_sha256, review: review(view), projects: options.projects(view.reviewer), suggested_project_ids: view.project_ids, owners: options.core.ownerProposals(view.approval_id) });
-  return Object.freeze({ async reconcile(signal: AbortSignal) {
-    let changed = false;
-    const begun = new Set<string>();
-    for (const id of candidates.all() as string[]) {
-      const view = options.core.proposal(id); if (!view || !view.reviewer_active || view.status !== 'pending') continue;
-      let representable = true;
-      try { openCard(view); } catch (error) {
-        if (!(error instanceof Error) || !error.message.includes('exceeds Slack limits')) throw error;
-        representable = false;
-      }
-      const resolved = options.target(view.reviewer); if (!resolved) continue;
-      const opened = await options.poster.openDirectMessage(resolved.slack_subject_id, signal); if (opened.kind !== 'opened') continue;
-      const target = { ...resolved, dm_channel_id: opened.channel_id }; const time = utc(now());
-      insert.run(id, canonicalJson(target as unknown as JsonValue), time, time); begun.add(id); changed = true;
-      if (!representable) update.run('unrepresentable', 0, null, time, id);
-    }
-    for (const row of rows()) {
-      signal.throwIfAborted(); const view = options.core.proposal(row.approval_id); const target = targetOf(row.target_json);
-      if (row.retry_at !== null && new Date(row.retry_at).getTime() > now().getTime()) continue;
-      if (row.delivery === 'posting') {
-        const outcome = begun.has(row.approval_id)
-          ? await options.poster.postMarker({ approval_id: row.approval_id, dm_channel_id: target.dm_channel_id }, signal)
-          : await options.poster.reconcileMarker({ approval_id: row.approval_id, dm_channel_id: target.dm_channel_id, post_started_at: row.created_at, reconciliation_started_at: utc(now()) }, signal);
-        if (outcome.kind === 'posted') {
-          const card = view && view.status === 'pending' ? openCard(view) : buildClosedApprovalCardV4({ title: view?.title ?? 'Meeting', outcome: 'superseded' });
-          posted.run(outcome.provider_message_ts, utc(now()), row.approval_id);
-          const result = await options.poster.publish({ approval_id: row.approval_id, dm_channel_id: target.dm_channel_id, provider_message_ts: outcome.provider_message_ts, card }, signal);
-          if (result.kind === 'done') shown.run(view && view.status === 'pending' ? 'open' : 'superseded', canonicalSha256(card as unknown as JsonValue), utc(now()), row.approval_id);
-          else return 'uncertain';
-          changed = true;
-        }
-        else if (outcome.kind === 'uncertain') return 'uncertain'; else fail(row, true);
-        continue;
-      }
-      if (row.delivery !== 'posted' || !view) continue;
-      const outcome = view.status === 'superseded' ? 'superseded' : view.status === 'rejected' ? 'rejected' : view.status === 'pending' || view.status === 'publishing' ? 'open' : 'approved';
-      if (outcome === row.shows && row.card_sha256 !== null) continue;
-      const card = outcome === 'open' ? openCard(view) : buildClosedApprovalCardV4({ title: view.title, outcome, ...(outcome === 'superseded' ? {} : { surface: view.decided_on ?? 'desktop', audience_label: view.project_ids.length === 0 ? 'Only me' : 'Projects' }) });
-      const result = await options.poster.publish({ approval_id: row.approval_id, dm_channel_id: target.dm_channel_id, provider_message_ts: row.message_ts!, card }, signal);
-      if (result.kind === 'done') { shown.run(outcome, canonicalSha256(card as unknown as JsonValue), utc(now()), row.approval_id); changed = true; } else return 'uncertain';
-    }
-    return changed ? 'rendered' : 'idle';
-  }});
-}
+import { buildClosedApprovalCardV4, buildSlackApprovalCardV4, type SlackApprovalCardV4 } from './slack-approval-card-v4.js';
+export interface SlackApprovalTargetV1 { readonly connection_id:string; readonly external_identity_link_id:string; readonly external_identity_link_contract_sha256:string; readonly slack_workspace_id:string; readonly slack_subject_id:string; readonly api_app_id:string }
+export interface SlackApprovalPosterV1 { openDirectMessage(s:string,a?:AbortSignal):Promise<{kind:'opened';channel_id:string}|{kind:'retry_allowed'}>; postMarker(i:{approval_id:string;dm_channel_id:string},a?:AbortSignal):Promise<{kind:'posted';provider_message_ts:string}|{kind:'retry_allowed'}|{kind:'uncertain'}>; reconcileMarker(i:{approval_id:string;dm_channel_id:string;post_started_at:string;reconciliation_started_at:string},a?:AbortSignal):Promise<{kind:'posted';provider_message_ts:string}|{kind:'retry_allowed'}|{kind:'uncertain'}>; publish(i:{approval_id:string;dm_channel_id:string;provider_message_ts:string;card:SlackApprovalCardV4},a?:AbortSignal):Promise<{kind:'done'}|{kind:'uncertain'}> }
+export interface ApprovalPresenterV1 { reconcile(s:AbortSignal):Promise<'rendered'|'idle'|'uncertain'> }
+export interface ApprovalActorV1 { readonly organization_id:string;readonly principal_id:string;readonly membership_id:string }
+export interface ApprovalOwnerProposalV1 { readonly signal_id:string;readonly action:string;readonly proposed:string }
+export interface ApprovalProposalViewV1 { readonly approval_id:string;readonly reviewer:ApprovalActorV1;readonly reviewer_active:boolean;readonly title:string;readonly status:'pending'|'publishing'|'approved'|'rejected'|'superseded';readonly decided_on:'desktop'|'slack'|null;readonly project_ids:readonly string[];readonly snapshot_sha256:string;readonly snapshot_json:string }
+type Core=Pick<{proposal(id:string):ApprovalProposalViewV1|undefined;ownerProposals(id:string):readonly ApprovalOwnerProposalV1[]},'proposal'|'ownerProposals'>;
+type Row={approval_id:string;target_json:string;dm_channel_id:string|null;delivery:'opening'|'posting'|'posted'|'unrepresentable'|'failed';message_ts:string|null;card_sha256:string|null;shows:'open'|'approved'|'rejected'|'superseded';attempts:number;retry_at:string|null;created_at:string};
+const MAX=5,iso=(d:Date)=>d.toISOString(),later=(d:Date,n:number)=>new Date(d.getTime()+Math.min(60000,1000*2**n)).toISOString();
+function makeReview(v:ApprovalProposalViewV1) { const b=(JSON.parse(v.snapshot_json) as any).approved_payload.brief, i=(x:any)=>({text:x.text,evidence_reference:`Transcript block ${x.evidence?.[0]?.block_id??'unknown'}`}); return {schema_version:1 as const,approval_id:v.approval_id,meeting_title:b.meeting.title??v.title,decision_groups:b.decisions.map((d:any,n:number)=>({id:`decision-${n}`,decision:{...i(d),status:d.status},rationales:b.rationales.filter((r:any)=>r.supports_signal_ids?.includes(d.id)).map(i)})),...(b.actions.length?{ungrouped_actions:b.actions.map(i)}:{}),...(b.rationales.length?{ungrouped_rationales:b.rationales.map(i)}:{})}; }
+export function createSlackApprovalPresenterV1(o:{readonly database:Database.Database;readonly core:Core;readonly target:(r:ApprovalActorV1)=>SlackApprovalTargetV1|null;readonly targetCurrent:(t:SlackApprovalTargetV1)=>boolean;readonly poster:SlackApprovalPosterV1;readonly projects:(r:ApprovalActorV1)=>readonly {project_id:string;name:string}[];readonly now?:()=>Date}):ApprovalPresenterV1 {
+ const now=o.now??(()=>new Date()), db=o.database;
+ const rows=db.prepare(`SELECT p.approval_id,p.target_json,p.dm_channel_id,p.delivery,p.message_ts,p.card_sha256,p.shows,p.attempts,p.retry_at,p.created_at FROM authority_approval_presentations_v1 p JOIN authority_live_approval_outbox_v2 o ON o.approval_id=p.approval_id LEFT JOIN authority_approval_decisions_v1 d ON d.approval_id=p.approval_id WHERE p.surface='slack' AND (p.delivery IN('opening','posting') OR(p.delivery='posted' AND(p.card_sha256 IS NULL OR(p.shows='open' AND(o.state='superseded' OR d.approval_id IS NOT NULL)) OR(p.shows='approved' AND(o.state='superseded' OR d.action='reject')) OR(p.shows='rejected' AND o.state='superseded')))) ORDER BY CASE p.delivery WHEN 'opening' THEN 0 WHEN 'posting' THEN 1 ELSE 2 END,p.created_at LIMIT 25`);
+ const candidates=db.prepare(`SELECT o.approval_id FROM authority_live_approval_outbox_v2 o LEFT JOIN authority_approval_decisions_v1 d ON d.approval_id=o.approval_id WHERE o.state='staged' AND d.approval_id IS NULL AND NOT EXISTS(SELECT 1 FROM authority_approval_presentations_v1 p WHERE p.approval_id=o.approval_id AND p.surface='slack') ORDER BY o.updated_at LIMIT 25`).pluck();
+ const claim=db.prepare(`INSERT INTO authority_approval_presentations_v1(approval_id,surface,target_json,dm_channel_id,delivery,message_ts,card_sha256,shows,attempts,retry_at,created_at,updated_at)VALUES(?,'slack',?,NULL,'opening',NULL,NULL,'open',0,NULL,?,?) ON CONFLICT(approval_id,surface)DO NOTHING`), opened=db.prepare(`UPDATE authority_approval_presentations_v1 SET dm_channel_id=?,delivery='posting',updated_at=? WHERE approval_id=? AND delivery='opening' AND dm_channel_id IS NULL`), marked=db.prepare(`UPDATE authority_approval_presentations_v1 SET delivery='posted',message_ts=?,updated_at=? WHERE approval_id=? AND delivery='posting'`), drawn=db.prepare(`UPDATE authority_approval_presentations_v1 SET shows=?,card_sha256=?,retry_at=NULL,updated_at=? WHERE approval_id=? AND delivery='posted'`), unrepr=db.prepare(`UPDATE authority_approval_presentations_v1 SET delivery='unrepresentable',updated_at=? WHERE approval_id=? AND delivery='opening'`), failed=db.prepare(`UPDATE authority_approval_presentations_v1 SET delivery=CASE WHEN ?>=? THEN 'failed' ELSE delivery END,attempts=?,retry_at=?,updated_at=? WHERE approval_id=?`);
+ const backoff=(r:Row)=>{const n=r.attempts+1,t=now();failed.run(n,MAX,n,n>=MAX?null:later(t,n),iso(t),r.approval_id)},card=(v:ApprovalProposalViewV1)=>buildSlackApprovalCardV4({approval_id:v.approval_id,snapshot_sha256:v.snapshot_sha256,review:makeReview(v),projects:o.projects(v.reviewer),suggested_project_ids:v.project_ids,owners:o.core.ownerProposals(v.approval_id)}),want=(v:ApprovalProposalViewV1):Row['shows']=>v.status==='superseded'?'superseded':v.status==='rejected'?'rejected':v.status==='pending'?'open':'approved';
+ return Object.freeze({async reconcile(signal:AbortSignal){let changed=false;const fresh=new Set<string>();for(const id of candidates.all() as string[]){const v=o.core.proposal(id),t=v&&v.reviewer_active&&v.status==='pending'?o.target(v.reviewer):null;if(!t)continue;const n=iso(now());if(claim.run(id,canonicalJson(t as unknown as JsonValue),n,n).changes){fresh.add(id);changed=true}}for(const r of rows.all() as Row[]){if(r.retry_at&&new Date(r.retry_at)>now())continue;const t=JSON.parse(r.target_json) as SlackApprovalTargetV1;if(!o.targetCurrent(t)){backoff({...r,attempts:MAX-1});continue}const v=o.core.proposal(r.approval_id);if(r.delivery==='opening'){if(!v||v.status!=='pending'){unrepr.run(iso(now()),r.approval_id);changed=true;continue}try{card(v)}catch(e){if(!(e instanceof Error)||!e.message.includes('exceeds Slack limits'))throw e;unrepr.run(iso(now()),r.approval_id);changed=true;continue}const x=await o.poster.openDirectMessage(t.slack_subject_id,signal);if(!o.targetCurrent(t)||x.kind!=='opened'){backoff(r);continue}if(opened.run(x.channel_id,iso(now()),r.approval_id).changes){fresh.add(r.approval_id);changed=true}continue}if(r.delivery==='posting'){if(!r.dm_channel_id)throw new Error('posting presentation has no DM');const x=fresh.has(r.approval_id)?await o.poster.postMarker({approval_id:r.approval_id,dm_channel_id:r.dm_channel_id},signal):await o.poster.reconcileMarker({approval_id:r.approval_id,dm_channel_id:r.dm_channel_id,post_started_at:r.created_at,reconciliation_started_at:iso(now())},signal);if(!o.targetCurrent(t)||x.kind!=='posted'){backoff(r);continue}marked.run(x.provider_message_ts,iso(now()),r.approval_id);const out=v?want(v):'superseded',c=out==='open'?card(v!):buildClosedApprovalCardV4({title:v?.title??'Meeting',outcome:out,surface:v?.decided_on??'desktop',audience_label:v?.project_ids.length?'Projects':'Only me'}),u=await o.poster.publish({approval_id:r.approval_id,dm_channel_id:r.dm_channel_id,provider_message_ts:x.provider_message_ts,card:c},signal);if(!o.targetCurrent(t)||u.kind!=='done'){backoff(r);continue}drawn.run(out,canonicalSha256(c as unknown as JsonValue),iso(now()),r.approval_id);changed=true;continue}if(r.delivery!=='posted'||!v||!r.dm_channel_id||!r.message_ts)continue;const out=want(v);if(out===r.shows&&r.card_sha256)continue;const c=out==='open'?card(v):buildClosedApprovalCardV4({title:v.title,outcome:out,surface:v.decided_on??'desktop',audience_label:v.project_ids.length?'Projects':'Only me'}),u=await o.poster.publish({approval_id:r.approval_id,dm_channel_id:r.dm_channel_id,provider_message_ts:r.message_ts,card:c},signal);if(!o.targetCurrent(t)||u.kind!=='done'){backoff(r);continue}drawn.run(out,canonicalSha256(c as unknown as JsonValue),iso(now()),r.approval_id);changed=true}return changed?'rendered':'idle'}}); }

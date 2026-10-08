@@ -24,4 +24,10 @@ describe('Slack approval card V4', () => {
     expect(buildClosedApprovalCardV4({ title: 'Roadmap', outcome: 'rejected', surface: 'slack' }).text).toContain('Rejected in Slack');
     expect(buildClosedApprovalCardV4({ title: 'Roadmap', outcome: 'superseded' }).text).toContain('Replaced by a newer version of this meeting');
   });
+  it('bounds a valid Authority project name to Slack option text limits', () => {
+    const card = buildSlackApprovalCardV4({ approval_id: 'apr_test', snapshot_sha256: `sha256:${'a'.repeat(64)}`, review,
+      projects: [{ project_id: 'prj_a', name: 'A'.repeat(200) }], suggested_project_ids: [], owners: [] });
+    const option = (card.blocks.find(block => (block as { block_id?: string }).block_id?.endsWith('-projects')) as { element: { options: readonly { text: { text: string } }[] } }).element.options[0]!;
+    expect(option.text.text).toHaveLength(75);
+  });
 });

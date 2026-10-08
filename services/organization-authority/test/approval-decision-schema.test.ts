@@ -8,7 +8,7 @@ import {
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
 const AUTHORITY_BASELINE_SHA256_V12 =
-  "sha256:2cbdcedf13960a6e6e096842d86dbb5a00d3f48c0b422271bbe32b9ffbc5309f";
+  "sha256:80d867f932d8a15ecf18ddde137e85a09276e8eedf4f1adddb7016b6f88968e4";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-30T00:00:00.000Z";
 
