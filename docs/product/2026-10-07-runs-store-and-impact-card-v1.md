@@ -8,6 +8,7 @@ writing". Decision record:
 [unified meeting approval v1](2026-10-07-unified-meeting-approval-v1.md) and
 the [research trigger contract v1](2026-10-06-research-trigger-contract-v1.md).
 Implementation plan: `docs/superpowers/plans/2026-10-07-unified-approval-and-runs.md`.
+Implementation plan executed; see the plan's As built section.
 
 ## Goal
 

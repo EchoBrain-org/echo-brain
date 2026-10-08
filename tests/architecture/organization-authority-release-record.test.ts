@@ -595,7 +595,7 @@ describe("Organization Authority clean-v1 release record", () => {
     expect(source).toContain("update-clean-v1.sh canary");
     expect(source).toContain("run_staging_private_dm_canary");
     expect(source).toContain(
-      "stop for founder Slack approval and the exact candidate-client record and answer checks",
+      "stop for founder approval of the canary meeting and the exact candidate-client record and answer checks",
     );
     expect(source).toContain("authority-staging.echobrain.org");
     expect(source).toContain("compose_clean exec -T authority node");
@@ -1788,8 +1788,8 @@ fi
 
   it.each([
     ["delivery_pending", "delivery is still pending", '"approval_outcome":"delivery_pending","approval_id":"approval-canary"'],
-    ["quarantined", "did not stage a private approval card: quarantined", '"approval_outcome":"quarantined","approval_id":"approval-canary"'],
-    ["not_actionable", "did not stage a private approval card: not_actionable", '"approval_outcome":"not_actionable"'],
+    ["quarantined", "did not stage an approval proposal: quarantined", '"approval_outcome":"quarantined","approval_id":"approval-canary"'],
+    ["not_actionable", "did not stage an approval proposal: not_actionable", '"approval_outcome":"not_actionable"'],
   ])("aborts a first-deployment candidate after a %s canary and permits a new stage", (_outcome, expectedFailure, outcomeFields) => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-first-deploy-abort-"));
     roots.push(root);

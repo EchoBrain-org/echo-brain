@@ -1,8 +1,8 @@
 # Organization control plane
 
 **Status:** current organization-owned Slack onboarding through Nango and
-Person Slack identity linking. Slack DM approvals are paused, and the control
-plane stores no approval state.
+Person Slack identity linking. The Slack approval DM copy is a plug-in on the
+Authority's approval core, and the control plane stores no approval state.
 
 The control plane is a library linked into the Organization Authority. It owns
 no HTTP listener. The Authority composes neutral control contracts with the
@@ -19,7 +19,7 @@ paths below are relative to its `organization-control-plane/` folder:
 | Slack provider `adapters/slack/slack-web-identity-provider-v1` | Slack `auth.test` checks of an install and the DM-code person link |
 | Slack provider `application/organization-tool-connection-contracts-v2` | External human-link and organization-tool connection contracts |
 | `security/file-secret-store` | The private secret store for the organization's Slack app credential bundle: client ID/secret, signing secret, and Nango connection ID ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)) |
-| Slack provider `slack-approval-integration-v1` | The control database opener, visibility policy and tool connection contracts, and the Slack identity-link lookup (`resolveCurrentSlackDmApprovalReviewerTargetV1`) kept for the Slack approval plug-in |
+| Slack provider `slack-approval-integration-v1` | The control database opener, visibility policy and tool connection contracts, and the Slack identity-link lookup (`resolveCurrentSlackDmApprovalReviewerTargetV1`) used by the Slack approval plug-in |
 | `organization-control-database-v1` | Opening the control database and applying the current V4 baseline |
 | `record-visibility-policy-contracts-v1` | Provider-neutral Person visibility policy identifiers and contract digests |
 
@@ -32,7 +32,8 @@ paths below are relative to its `organization-control-plane/` folder:
    it to their current ECHO membership, review that link under Connected
    tools, and disconnect it. Linking creates no approval capability, role, or
    permission grant.
-3. Slack DM approvals are paused. The control plane stores no approval state;
+3. The Slack approval DM copy is a plug-in on the Authority's approval core.
+   The control plane stores no approval state;
    meeting approval decisions are Authority state (see
    [Private DM approvals](#private-dm-approvals)).
 
@@ -96,8 +97,7 @@ per-connection override. Nango runs the OAuth install and returns the bot
 token; the Authority never
 asks the owner for it directly. The install requests exactly four bot
 scopes: `chat:write`, `im:history`, `im:write`, and `users:read`. The bot only
-delivers private DMs: the DM-code link challenge today, and approval cards
-once the Slack approval plug-in returns. The bot reads
+delivers private DMs: the DM-code link challenge and approval cards. The bot reads
 no channel; reading Slack for Ask is a person's own grant, not the bot's. The
 stored connection contract names those four scopes as required. Install and
 reconnect accept a granted superset, because a token installed before the
@@ -191,8 +191,8 @@ The `slack-organization-tool-v1` ready state is accepted only while its opaque
 credential reference resolves to a private readable secret during Authority
 startup. The Slack app recipe sets the Interactivity Request URL
 `/v2/integrations/slack/interactions`, so no operator saves it by hand. That
-route is not mounted while Slack approvals are paused; the Slack approval
-plug-in will verify each click there with the same bundle's signing secret.
+route verifies each click with the same bundle's signing secret and hands it to
+the approval core.
 Event Subscriptions and Socket Mode are not used.
 
 ## Person Slack identity link
@@ -249,22 +249,22 @@ credentials, or provider response bodies.
 
 ## Private DM approvals
 
-Slack DM approvals are paused. The control plane stores no approval state:
-control-plane baseline V4 removed the pending contracts, signed and denied
-action receipts, and terminal evidence, together with the Slack-bound policy
-resolutions. The Slack connection, the bot token source, connection health and
-the identity-link lookup (`resolveCurrentSlackDmApprovalReviewerTargetV1`)
-stay for the Slack approval plug-in
+Slack DM approvals are a plug-in on the Authority's approval core. The control
+plane stores no approval state: control-plane baseline V4 removed the pending
+contracts, signed and denied action receipts, and terminal evidence, together
+with the Slack-bound policy resolutions. The Slack connection, the bot token
+source, connection health and the identity-link lookup
+(`resolveCurrentSlackDmApprovalReviewerTargetV1`) serve the plug-in
 ([unified meeting approval](../product/2026-10-07-unified-meeting-approval-v1.md),
-sections 3 and 5). That plug-in will post a copy of each proposal to a
-reviewer who linked Slack and decide a click through the same approval core as
-the desktop. Its decision will be Authority state, written once to the
-decision table the spec defines (`authority_approval_decisions_v1`), never to
-the control plane, and a click will count only when the clicker's active
-identity link maps to the reviewer's membership, read again inside that
-transaction. Until then the Interactivity route is not mounted, and a verified
-Approve or Reject click would write nothing and get a fixed ephemeral reply
-pointing to the ECHO desktop app.
+sections 3 and 5). The presenter posts a copy of each proposal to a reviewer
+who linked Slack and redraws it once the proposal is decided or replaced, and a
+verified click is decided through the same approval core as the desktop. The
+decision is Authority state, written once to the decision table
+(`authority_approval_decisions_v1`), never to the control plane, and a click
+counts only when the clicker's active identity link maps to the reviewer's
+membership, read again inside that transaction. A click on a proposal that was
+already decided or has changed writes nothing: the card is redrawn and the
+clicker gets an ephemeral reply pointing to the ECHO desktop app.
 [INV-IDENTITY-005](../invariants/INV-IDENTITY-005-adapter-to-echo-identity-chain.md)
 governs the identity chain.
 
@@ -307,11 +307,12 @@ those facts.
   handle, never token bytes, authorization codes, or raw OAuth state, nonce, or
   PKCE material.
 - Commit the link before publishing success.
-- Never reuse a provider event as authorization. While Slack approvals are
-  paused, a verified Slack click decides nothing.
-- Meeting approvals are decided only in the Authority's review (today the
-  desktop app's in-app review). The Person CLI ships no approve or reject
-  command.
+- Never reuse a provider event as authorization. A verified Slack click decides
+  only when the clicker's active identity link maps to the reviewer's
+  membership, read again inside the decision transaction.
+- Meeting approvals are decided only through the Authority's approval core,
+  from the desktop app or the Slack DM copy. The Person CLI ships no approve or
+  reject command.
 
 The Authority and control plane run in one process. No positive authorization
 result is cached.

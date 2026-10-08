@@ -6,6 +6,7 @@ Decisions made while writing are listed at the end under "Rulings made while
 writing". Decision record: [ADR-0031](../decisions/ADR-0031-unified-meeting-approval-core.md).
 Companion spec: [runs store and impact card](2026-10-07-runs-store-and-impact-card-v1.md).
 Implementation plan: `docs/superpowers/plans/2026-10-07-unified-approval-and-runs.md`.
+Implementation plan executed; see the plan's As built section.
 
 ## Goal
 

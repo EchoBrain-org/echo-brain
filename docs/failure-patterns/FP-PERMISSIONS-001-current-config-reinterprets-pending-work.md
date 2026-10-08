@@ -77,9 +77,8 @@ the stored Slack approval card check. Both tests were deleted in `a254232c`.
 
 At the reviewed ref, frozen private Slack approval resolution was
 source-tested by the four `private-approval` regression refs above. They were
-removed with the Slack approval internals on 2026-10-07 (Slack approvals are
-paused until the approval core's Slack plug-in), so they remain readable only
-at that ref:
+removed with the Slack approval internals on 2026-10-07 (the approval core's
+Slack plug-in replaced them), so they remain readable only at that ref:
 
 - `private-slack-dm-approval-stager-v2.test.ts`
   freezes the pending contract before Slack I/O, resolves a retry from it

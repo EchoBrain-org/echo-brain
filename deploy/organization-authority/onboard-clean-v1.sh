@@ -2128,15 +2128,15 @@ resume() {
       ready_to_start)
         start_runtime
         if [[ -n "$(staging_meetings_directory)" ]]; then
-          printf 'FOUNDER ACTION: Approve the four synthetic meeting cards in Slack, selecting Team for the first three and Only me for the commercial exception.\n'
-          printf 'OPERATOR ACTION: Verify the release-installed owner client can list and search the approved meetings; then verify the employee can read Team records and cannot read the commercial exception.\n'
+          printf 'FOUNDER ACTION: Approve the four synthetic meetings on the desktop (or in Slack, if linked): share the first three with a project the employee belongs to and choose Only me for the commercial exception.\n'
+          printf 'OPERATOR ACTION: Verify the release-installed owner client can list and search the approved meetings; then verify the employee can read the project records and cannot read the commercial exception.\n'
           printf 'HOST ACTION: Rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status after the approved head and search generation are current.\n'
           printf 'PROOF: Terminal green requires all four published fixture approvals and current owner reads; the visibility choices and employee permission checks require separate manual verification.\n'
           print_status "$(setup_status)"
           return
         fi
         printf 'HOST ACTION: On the exact staging host, run ./update-clean-v1.sh canary.\n'
-        printf 'FOUNDER ACTION: Approve its private Slack card.\n'
+        printf 'FOUNDER ACTION: Approve the canary meeting on the desktop (or in Slack, if linked).\n'
         printf 'OPERATOR ACTION: After the founder approves, on the initial-owner machine verify the installed client matches the accepted release, then run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person records --limit 20 and "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY".\n'
         printf 'HOST ACTION: On the exact staging host, rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status. The staging-only synthetic receipt is release-bound; terminal green still requires one positive Layer 1 read and one positive Layer 2 search after the approved record and current generation.\n'
         print_status "$(setup_status)"

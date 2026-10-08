@@ -132,8 +132,8 @@ reject V1/V2 profiles; a selected older profile requires a fresh rehearsal with
 reviewed V3 inputs and new sidecar bindings. No retained rows are silently
 migrated or purged. Jira is read live through `verify-read`; all capture
 requests are rejected before provider I/O and retain no pointers or bodies.
-Slack approval qualification uses the separate synthetic release canary, whose
-staging-only source never discovers provider data. Slack setup asks
+Approval qualification uses the separate synthetic release canary, whose
+staging-only personal source never discovers provider data. Slack setup asks
 only for the four delivery scopes (`chat:write`, `im:write`, `im:history`,
 `users:read`). A bot token installed before that keeps the two retired channel
 scopes until the app is reinstalled from scratch; nothing uses them. Jira's
@@ -370,11 +370,13 @@ rerun `resume`:
 ```
 
 On the exact `authority-staging.echobrain.org` host, the human runs
-`./update-clean-v1.sh canary` and approves its private Slack card. The local
+`./update-clean-v1.sh canary` and approves the canary meeting on the desktop
+(or on the Slack DM copy, if the owner linked Slack). The local
 operator on the initial-owner Mac verifies the accepted release's installed
 client and completes the two Person reads printed by `resume`. This synthetic
-path is staging-only. A non-staging deployment still needs durable progress from
-its admitted live source before it can become terminal green.
+path is staging-only and runs on the owner's synthetic personal source. A
+non-staging deployment admits no meeting source at setup: it completes without
+meeting qualification and its status reports `not_required`.
 
 The endpoint intentionally returns `503` before finalization. Do not attempt to
 validate it against a pre-finalize runtime. No Socket Mode, Event
@@ -457,11 +459,11 @@ re-stage it under a new operation ID, and delete any leftover captured
 ### Fresh four-meeting staging rehearsal
 
 Use the normal clean Authority for a fresh staging rehearsal with the four
-synthetic meeting notes. This is a selected staging source in the normal
-runtime, not a separate demo service. It is available only for
-`authority-staging.echobrain.org`.
+synthetic meeting notes. The notes are queued into the owner's synthetic
+personal source in the normal runtime, not a separate demo service. They are
+available only for `authority-staging.echobrain.org`.
 
-The source and its admission are frozen at finalization. To replace these notes
+Finalization queues the notes. To replace these notes
 or start with a clean corpus, first use `replace-rehearsal` to archive the
 unreleased state, then prepare again. There is no selective corpus reset or
 post-finalize source change.
@@ -490,22 +492,24 @@ The four required filenames are
 into `clean-data/meetings`, binds the normal Compose environment to it, and
 keeps the normal release profile, AWS logs, and runtime observability. The
 credential bundle requires no Granola inputs. Without the optional directory,
-the staging runtime selects empty synthetic canary infrastructure; content enters
-only through its explicit release-bound canary request. The wrapper carries the
+the owner's synthetic source holds no fixture notes; content enters
+only through the explicit release-bound canary request. The wrapper carries the
 same selected directory through setup finalization and normal service startup;
 the Compose default is empty.
 
 Continue the usual human browser login and Slack-link steps with `resume`.
 When the selected source becomes ready, `resume` starts the normal runtime and
-prints the four-card proof: approve the first three records as Team and the
-commercial exception as Only me; verify the release-installed owner client can
-list and search the approved notes; then verify the employee can read Team
-records and cannot read the commercial exception. Rerun `resume` and `status`
-after the approved head and search generation are current. Terminal green
-requires all four distinct admitted fixture meetings to have published approval
+prints the four-meeting proof: approve the first three meetings on the desktop
+(or in Slack, if linked), sharing them with a project the employee belongs to,
+and the commercial exception as Only me; verify the release-installed owner
+client can list and search the approved notes; then verify the employee can
+read the project's records and cannot read the commercial exception. Rerun
+`resume` and `status` after the approved head and search generation are
+current. Terminal green
+requires all four distinct fixture meetings to have published approval
 records, a current search generation, and later owner list and search reads.
 It does not verify the chosen visibility policies or employee access: the
-three-Team/one-Only-me choices and employee read/denial checks are separate
+three-project/one-Only-me choices and employee read/denial checks are separate
 required manual rehearsal evidence. Do not run the
 single-record `update-clean-v1.sh canary` for this initial fixture proof. It
 does not change the separate final approval required to promote a candidate
@@ -586,7 +590,7 @@ retry. The wrapper still requires the running value to match the verified
 Compose setting. Duplicate or malformed settings, or a new profile unable to
 support content telemetry, stop replacement before data is reset. No old
 environment file is copied into the new rehearsal. Continue with the browser
-login, Slack link and four-card permission proof above.
+login, Slack link and four-meeting permission proof above.
 
 ## Resumable initial-owner onboarding
 
@@ -613,7 +617,7 @@ chat or a terminal. Continue until `resume` reports completion, then run
 `status`. Terminal green also requires a healthy Authority container on the
 exact accepted image.
 
-After human Slack-card approval, the local operator may run both authenticated
+After the human approves the canary meeting, the local operator may run both authenticated
 Person reads on the designated initial-owner Mac. Verify the client against
 the accepted release before reading; a matching version string alone is not
 sufficient. Use the kit-installed absolute path printed by `resume`, and retain
@@ -871,12 +875,12 @@ procedure in [the clean-v1 release loop](../release/README.md), including
 [update-clean-v1.sh](./update-clean-v1.sh). Ordinary `stage` supports baseline-preserving `clean-v1` replacements
 and never migrates state; a schema change requires fresh state. Client updates
 remain explicit. This routine path preserves the existing Google identity,
-Slack link and configuration, provider credentials, private-DM assignment, and
+Slack link and configuration, provider credentials, and
 Authority data; do not rerun initial-owner onboarding for an ordinary update. Use
-`update-clean-v1.sh canary` to create the release-bound synthetic private-DM
-rehearsal instead of making a new Granola note. A routine promotion is refused
+`update-clean-v1.sh canary` to create the release-bound synthetic canary
+meeting instead of making a new Granola note. A routine promotion is refused
 until that exact candidate has a persisted `staged` receipt and the operator
-confirms the Slack approval plus permission-aware reads. The recovery unit is
+confirms the canary approval plus permission-aware reads. The recovery unit is
 the accepted image, its exact runtime profile, and the saved environment tuple;
 the release wrapper restores those together before it claims a recovered public
 Authority.

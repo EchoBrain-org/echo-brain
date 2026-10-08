@@ -42,7 +42,7 @@ describe("Authority operator playbook", () => {
     expect(PLAYBOOK).toContain("local operator on the designated owner Mac");
     expect(PLAYBOOK).toContain("verifies the kit-installed client against the accepted release");
     expect(PLAYBOOK).toContain('Library/Application Support/ECHO/cli/bin/echo-brain" person records');
-    expect(PLAYBOOK).toContain("above applies to the reads only, never the Slack approval or host commands");
+    expect(PLAYBOOK).toContain("above applies to the reads only, never the canary approval or host commands");
     expect(PLAYBOOK).not.toContain("Granola note and Approve DM");
     expect(PLAYBOOK).not.toContain("Google / `echo-brain person login`");
   });
@@ -52,7 +52,7 @@ describe("Authority operator playbook", () => {
       "../../deploy/release/README.md#ec2-authority-replacement",
     );
     expect(PLAYBOOK).toContain(
-      "After `stage` and synthetic `canary`, stop for the founder's private Slack-card approval.",
+      "After `stage` and synthetic `canary`, stop for the founder's approval of the canary meeting, on the desktop or in Slack if linked.",
     );
     expect(PLAYBOOK).toContain(
       "Only after both checks pass, show their evidence and ask the founder for the final decision on that exact candidate.",

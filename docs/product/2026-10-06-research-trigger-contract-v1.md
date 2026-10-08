@@ -295,3 +295,12 @@ One commit per phase. The golden replay and `npm run check` pass after each.
   to it; no project, several readable projects, or only unreadable linked
   projects mean everything the approver can read (the desk is still
   access-checked). Graders should not read wider results as a bug.
+- Implementation note, 2026-10-08: the approved-record trigger now fires from
+  real approvals, and its results are stored. The after-record hook enqueues one
+  run per approved record in `authority_trigger_runs_v1`; the runs API
+  (`POST /v1/person/runs`) starts, retries and views it as the approver, and a
+  stored run keeps pointers and ECHO's own judgments only, re-released through
+  a fresh desk on every view
+  ([runs store spec](2026-10-07-runs-store-and-impact-card-v1.md),
+  [ADR-0032](../decisions/ADR-0032-stored-trigger-runs.md)). "Not in this round"
+  above describes this round only.

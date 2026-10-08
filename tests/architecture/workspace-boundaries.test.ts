@@ -436,7 +436,6 @@ describe("workspace source boundaries", () => {
         "@echo-brain/organization-control-plane",
         "@echo-brain/organization-processing",
         "@echo-brain/organization-protocol",
-        "@echo-brain/organization-record",
         "@echo-brain/provider-runtime",
         "@echo-brain/provider-slack-client"
       ],

@@ -749,7 +749,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         "HOST ACTION: On the exact staging host, run ./update-clean-v1.sh canary.\n",
       );
       expect(result.stdout).toContain(
-        "FOUNDER ACTION: Approve its private Slack card.\n",
+        "FOUNDER ACTION: Approve the canary meeting on the desktop (or in Slack, if linked).\n",
       );
       expect(result.stdout).toContain(
         'OPERATOR ACTION: After the founder approves, on the initial-owner machine verify the installed client matches the accepted release, then run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person records --limit 20',
@@ -805,7 +805,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(finalizations[0]?.includes("--staging-synthetic-meetings-dir /echo-clean/meetings"))
         .toBe(synthetic);
       if (synthetic) {
-        expect(waiting.stdout).toContain("Approve the four synthetic meeting cards");
+        expect(waiting.stdout).toContain("Approve the four synthetic meetings on the desktop");
         expect(waiting.stdout).not.toContain("./update-clean-v1.sh canary");
       } else {
         expect(waiting.stdout).toContain("./update-clean-v1.sh canary");

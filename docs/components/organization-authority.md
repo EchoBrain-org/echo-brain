@@ -81,7 +81,7 @@ under
 | `organization-authority`        | Organization identity, access, HTTP boundary, and composition                         |
 | `organization-authority-kernel` | Authority SQL baselines, persistence adapters, and state lineage                      |
 | `organization-processing`       | Provider-neutral meeting processing and admitted-meeting workflow                     |
-| `organization-control-plane`    | Verified provider connection, Person identity links, and private approval persistence |
+| `organization-control-plane`    | Verified provider connection and Person identity links; no approval state             |
 | `organization-record`           | Append-only approved record and deterministic append-side projections                 |
 | `organization-retrieval`        | Rebuildable permission-aware retrieval generations                                    |
 

@@ -1,8 +1,8 @@
 # ECHO customer-value demo
 
 This is a synthetic, production-shaped proof of ECHO's approved organizational
-knowledge flow. The customer sees two surfaces: a private Slack approval card
-and Ask ECHO before and after approval. Ingestion, extraction, V4 publication,
+knowledge flow. The customer sees two surfaces: the owner's approval card (on
+the desktop, or its Slack DM copy) and Ask ECHO before and after approval. Ingestion, extraction, V4 publication,
 permission filtering, retrieval, and answer composition use the normal runtime
 paths.
 
@@ -21,6 +21,11 @@ omitted required scope and follow-on pricing conditions. Those are Layer-4
 retrieval and answer-composition gaps; the approved records already contain the
 required facts. See [RUNBOOK.md](RUNBOOK.md) for the pass gate.
 
+Implementation note, 2026-10-08: unified meeting approval replaced the Team
+audience with projects, and the four fixtures now reach the owner through the
+staging synthetic personal source. The results above describe the earlier
+organization-source run.
+
 Claude Sonnet 4.6 remains the accepted pre-Slack extraction baseline. Ordinary
 recall variation is deferred unless a run introduces a hard fact, status, date,
 privacy, schema, or grounding failure.
@@ -32,14 +37,14 @@ different parts of the answer; no single meeting contains the complete truth.
 
 | Meeting | Approved knowledge | Policy |
 | --- | --- | --- |
-| Revenue signal calibration | Start with 10 locations; expansion requires four weeks of adoption evidence. | Team |
-| Data handling review | Production requires a revised DPA and verified security contact. | Team |
-| Implementation capacity triage | September 16 is conditional onboarding for 10, not an all-28 launch. | Team |
+| Revenue signal calibration | Start with 10 locations; expansion requires four weeks of adoption evidence. | Team project |
+| Data handling review | Production requires a revised DPA and verified security contact. | Team project |
+| Implementation capacity triage | September 16 is conditional onboarding for 10, not an all-28 launch. | Team project |
 | Commercial exception review | The first 10 receive a private, time-bounded price exception. | Only me |
 
 Audrey, a team member who attended none of the meetings, asks the hero
-question. Zhen is the canonical meeting owner and receives the private
-approval cards. The authenticated human who approves a record is preserved as
+question. Zhen is the canonical meeting owner and reviews the proposals on the
+desktop or in the Slack DM copy. The authenticated human who approves a record is preserved as
 its V4 `final_approver`; ECHO does not infer a decision maker or action assignee
 from transcript speakers.
 
@@ -65,16 +70,12 @@ creating a parallel demo application:
 ```text
 providers/synthetic-demo/src/
 ├── source/synthetic-demo-meeting-source-v1.ts
-├── synthetic-demo-admitted-meeting-source-cursor-policy-v1.ts
-├── synthetic-demo-meeting-source-admission.ts
-├── synthetic-demo-meeting-source-bundle-v1.ts
-├── synthetic-demo-pre-slack-evaluator-v1.ts
-└── synthetic-demo-setup-evidence-v1.ts
+├── staging-synthetic-personal-meeting-provider-v1.ts
+└── synthetic-demo-pre-slack-evaluator-v1.ts
 
-services/organization-authority/src/
-├── composition/synthetic-demo-organization-authority-cli.ts
-├── composition/synthetic-demo-organization-authority-composition-root-v1.ts
-└── synthetic-demo-main.ts
+services/organization-authority/src/composition/
+├── staging/staging-synthetic-meeting-source-selection-v1.ts
+└── synthetic-demo-pre-slack-evaluator-cli-v1.ts
 ```
 
 Tests mirror those paths. The synthetic source changes the input

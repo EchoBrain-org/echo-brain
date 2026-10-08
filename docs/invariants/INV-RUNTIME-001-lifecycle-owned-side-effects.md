@@ -37,9 +37,10 @@ adapter cursors.
 
 The Organization Authority service lifecycle in
 [`organization-authority-service-lifecycle.ts`](../../services/organization-authority/src/composition/organization-authority-service-lifecycle.ts)
-implements this bounded path. A durably queued terminal approval requests one
-coalesced publication pass that runs only finalize and append; every periodic
-cycle first replays finalized actions not yet appended to V4. Close cancels a
+implements this bounded path. A durably recorded approval decision requests one
+coalesced publication pass that runs only the publisher (record append, receipt
+and after-record hooks); every periodic cycle first replays decided approvals
+whose record was not yet appended to V4. Close cancels a
 deferred pass, aborts and drains worker and search work, and only then closes
 the API handles.
 [`organization-authority-service-lifecycle.test.ts`](../../services/organization-authority/test/organization-authority-service-lifecycle.test.ts)

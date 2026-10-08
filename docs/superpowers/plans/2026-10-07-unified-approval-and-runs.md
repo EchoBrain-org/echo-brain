@@ -1196,7 +1196,7 @@ Tasks run in order; each depends on the one before it. Slack approvals are unava
 
 ## As built (Tasks 1–8)
 
-Tasks 1–8 and the runs side track (Task 13a) were executed with subagent-driven development: one implementer per task, a task review, and fix rounds until clean. Tasks 7 and 8 ran as multi-agent workflows: a design panel (three designs, a judge, a synthesis, adversarial critics, a revision), one implementer, four reviewers with distinct lenses, and independent verification of each serious finding. Tasks 9–16 are not built yet; the founder takes them from here.
+Tasks 1–8 and the runs side track (Task 13a) were executed with subagent-driven development: one implementer per task, a task review, and fix rounds until clean. Tasks 7 and 8 ran as multi-agent workflows: a design panel (three designs, a judge, a synthesis, adversarial critics, a revision), one implementer, four reviewers with distinct lenses, and independent verification of each serious finding. Codex then built Tasks 9–14; see "As built (Tasks 9–14)" at the end of this plan.
 
 Commits (oldest first):
 
@@ -1406,3 +1406,90 @@ Found in task reviews, judged minor, and left for the final whole-branch review.
 - Task 14 adds word boundaries to the outside-label screen (R24) and follows the Task 13a notes above.
 - Task 12 should send the stale-card reply through `response_url` or `chat.postEphemeral`; Slack ignores the HTTP body for block actions (Task 5 minor).
 - Task 16 updates ADR-0030's readability sentence (R26), the operator runbook, deploy and service READMEs, and removes stale lane prose listed in the deferred minors.
+
+## As built (Tasks 9–14)
+
+Codex built Tasks 9–14 on the three tracks of ruling R16 (9→10, 11→12, 13→14) and merged them onto the Task 8 branch (PR #295, stacked on PR #294). Only what differs from the Task 9–14 text above is listed.
+
+### Task 9 (meetings API v2)
+
+- The path constant is `PERSON_MEETINGS_PATH_V2`, and the row and home types are exported as `PersonMeetingRowV2` and `PersonMeetingHomeV2` as well. No V1 name is left.
+- `suggested_projects` is the proposal's `project_ids` (an undecided proposal's frozen suggestions the reviewer can still read, or a decided one's project choices) filtered to the reviewer's active joined projects, with names read through `SqlitePersonListDirectoryV1.joinedProjects`.
+- `createPersonMeetingRuntimeV1` and `openGranolaPersonLiveRuntimeV1` gained a `provider_applications` option, and the `approval_core` passthrough now allows `presenters` beside `after_record` (for Tasks 11 and 12).
+
+### Task 10 (desktop card)
+
+- Who can read it starts on Projects when the proposal has suggested projects, otherwise on Only me. The plan's existing review test therefore checks the Only me radio before approving.
+- Approve is disabled while Projects is chosen and no project is ticked (not in the plan).
+- The picker's project list is the loaded projects plus any suggested project not yet loaded (`reviewProjects`), so a suggested project always shows ticked.
+- The list status reads `<status> · Approved in Slack` or `· Approved on the desktop` (or `Rejected …`). The notice after a click on a proposal decided in Slack reads "Already approved in Slack" or "Already rejected in Slack", in a status region.
+- The test authority's `granola` mode now lists two projects (Thermostat redesign, Supplier review) for the picker.
+
+### Task 11 (Slack presenter)
+
+- `authority_approval_presentations_v1` has three more columns than the plan SQL (`dm_channel_id`, `marker_state` with `not_started` or `in_flight`, `marker_started_at`), an extra delivery state `opening`, and extra CHECKs. The row is inserted as `opening` before the DM is opened, then `posting` with the channel and marker state, then `posted` with `message_ts`; `card_sha256` stays null until the card is published. The immutability trigger also covers `dm_channel_id`.
+- `createSlackApprovalPresenterV1` takes `core` (only the `proposal` and `ownerProposals` views), `targetCurrent(target)` and `poster: (target) => SlackApprovalPosterV1`, not one `poster`. `createTargetBoundSlackApprovalPosterV1` binds the poster to a target and refuses a token read across a connection switch. `SlackApprovalPosterV1` has `openDirectMessage`, `postMarker`, `reconcileMarker` and `publish`.
+- A presentation whose proposal closes before the first marker is made terminal as `unrepresentable` without a terminal-only card, and a stale target fails the row at once (`attempts` set to the maximum of 5).
+- Presenters bind as factories `(core) => ApprovalPresenterV1` through `ApprovalCoreOptionsV1.presenters` (R30(e)); the core runs them in order from `processing.reconcileApprovalPresentations`, and the lifecycle runs the personal processing's presenters after the primary's.
+- The poster's `reconcileMarker` now answers `uncertain` instead of `retry_allowed` for a rate limit or a blocked retry, so a marker is never reposted blindly.
+- The V1 and V2/V3 card builders were not deleted. Card V4 reuses `buildPrivateSlackApprovalBlockKitCardV1` for the review blocks and rewrites its fallback text. `private-slack-approval-block-kit-card-v2.ts`, `slack-approval-card-input-v1.ts` and `private-slack-approval-project-eligibility-v2.ts` now have no caller outside their tests (left for the final review).
+- `slack-approval-integration-v1.ts` also exports `readActiveSlackConnectionV1`, and the package exports `slack-app-credentials-v1` plus the card, presenter, click, handler and HTTP adapter modules.
+
+### Task 12 (Slack click)
+
+- The parsed click is `VerifiedSlackApprovalClickV1` with `schema_version: 4` (the card version) and `lookup` hints (workspace, user, channel, message timestamp, app and message app); the button value keeps `schema_version: 2` as planned. A checkbox or select change parses as `presentation_change` and is only acknowledged.
+- The `link` callback also returns `connection_id` and `api_app_id`, and both the first read and the authorizer compare them, the link id and the link contract digest to the posted row's target. The click also compares the click's app and message app to the row's.
+- A click may carry only owners from the proposal's `ownerProposals`; any other signal id is `refused`. `replayed` maps to `decided`. `redraw` is wired to wake processing, not to a per-proposal call.
+- Slack's HTTP answer stays an empty acknowledgment. `stale`, `already_decided` and `refused` send a best-effort ephemeral note through the verified `response_url` (4 s bound), pointing to the ECHO desktop app; the Task 5 placeholder reply is gone.
+- The interaction route is mounted whenever the personal runtime is composed, not only with an active Slack connection (48229b5); the signing secret is read from the active connection per request and the click fails closed without one.
+
+### Task 13 (runs store)
+
+- The DAO declares `ApprovalActorV1`, `AfterApprovedRecordEventV1` and `AfterApprovedRecordHookV1` structurally, so the persistence adapter imports nothing from composition.
+- `SqliteTriggerRunsV1` refuses construction unless `user_version` is 12 and foreign keys are on, and `enqueueApprovedRecord` throws unless it is given the caller's own open transaction handle.
+- `list` caps its limit at 100 and orders newest first. `release`, `finish` and `fail` do nothing once the lease has expired (1b8cf02).
+- The V12 table has two more CHECKs than the plan SQL (`(lease_token IS NULL) = (lease_expires_at IS NULL)` and `(result_json IS NULL) = (result_sha256 IS NULL)`), and its done rule reads `(state = 'done') = (result_json IS NOT NULL)`.
+- The receipt path in the approved-record trigger is `$.record_sha256`, as ruled in R30(c). The hook is registered in the composition root through `approval_core.after_record`.
+
+### Task 14 (runs service and API)
+
+- `createPersonTriggerRunsV1` takes `bind_options`, an optional `live_sources` list (only sources with `minimum_response_version <= 6`) and `audit: SqlitePersonAgenticAskAuditV1`, and `records: PersonRecordAnchorV1 & PersonRecordProjectsV1`; `research` returns only `renderWithResearch`.
+- Error mapping adds `not_found` to the `no_access` failures, and treats an abort or `AgenticAskDeadlineErrorV1` as the counted `timed_out` release. `view` answers `not_found` for a run that is not `done` or has no stored result.
+- The route is always composed: without an answer model a stub authenticates the token and then answers `unavailable` for every operation (the plan composed it only when `answerOptions` existed).
+- The CLI reads its JSON through a separate `RUNS_OPTIONS` object so the meetings `--request` option does not leak into other verbs (0115cfa). `PERSON_RUNS_MAX_RESPONSE_BYTES_V1` is exported beside the path.
+- R24 as built: the word-boundary screen adds the 200-character prefix pattern only for labels longer than 200 characters; shorter labels use the full-label pattern with both boundaries.
+
+### Closed by these commits
+
+- The Task 8 weakened Race acceptance test (8a48a83) and the Task 5 placeholder Slack reply.
+
+### Codex commits (oldest first, `0c71523..f3a005e`)
+
+- `9a21c51 feat: add Slack approval presentation presenter`
+- `00a0805 feat: add durable approved-record runs`
+- `1b8cf02 fix: fence trigger run release leases`
+- `abcd2e1 feat: meetings API v2 for multi-project audiences, owners and decided_on`
+- `a91fc7d fix: make Slack presentation retries durable`
+- `0b81a97 feat: meetings API v2 for multi-project audiences, owners and decided_on`
+- `945da81 Merge reviewed Task 9 implementation to preserve review history`
+- `827cc61 test: validate Slack meeting snapshot before core decision`
+- `fac9faa feat: add durable approved-record runs API`
+- `81c2727 test: cover Slack approval presentation retries`
+- `b8efa24 test: cover durable approved-record runs`
+- `76ddd73 fix: make Slack approval delivery recoverable`
+- `1a0e06f feat: desktop meeting card with project audience and confirmed owners`
+- `c930e90 fix: preserve Slack marker recovery timing`
+- `0936637 fix: harden durable approved-record runs`
+- `df1285f test: type Slack presenter proposal fixture`
+- `0115cfa fix: scope runs CLI request option`
+- `23b94bd feat: Slack clicks decide through approval core`
+- `5f549bb fix: recheck Slack connection on approval click`
+- `8a48a83 test: restore approval publisher race assertions`
+- `ce62efa fix: harden Slack approval interaction path`
+- `c3f704c fix: validate Slack card text fields`
+- `48229b5 fix: mount Slack interaction after setup`
+- `ae94204 merge: integrate Slack approval decisions`
+- `69f777b merge: integrate durable approval runs`
+- `6c1305f test: cover Slack approval run enqueue races`
+- `0c4483a fix: skip Slack card after desktop decision`
+- `f3a005e test(desktop): wait for tools reread`

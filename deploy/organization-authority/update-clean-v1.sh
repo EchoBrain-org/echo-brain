@@ -951,7 +951,7 @@ PY
       ;;
     quarantined|not_actionable|not_staged)
       printf '%s\n' "$normalized"
-      fail "staging canary did not stage a private approval card: $outcome"
+      fail "staging canary did not stage an approval proposal: $outcome"
       ;;
   esac
 }
@@ -1052,7 +1052,7 @@ case "$command" in
       fail 'could not persist the staged candidate setup class'
     fi
     if activate_release_tuple "$CANDIDATE_RECORD" && start_and_check "$CANDIDATE_RECORD" "$expected_setup_class" false; then
-      next_action='Run one bounded post-update canary, stop for founder Slack approval and the exact candidate-client record and answer checks, then promote with --canary-passed or run rollback.'
+      next_action='Run one bounded post-update canary, stop for founder approval of the canary meeting and the exact candidate-client record and answer checks, then promote with --canary-passed or run rollback.'
       if [[ "$expected_setup_class" == initial_onboarding ]]; then
         next_action='Install the exact candidate Person kit, complete Slack setup and the owner Slack link, then have the human host operator run onboard-clean-v1.sh continue-staged-initial-onboarding before the candidate canary and approval checks.'
       fi
