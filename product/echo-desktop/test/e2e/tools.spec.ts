@@ -25,7 +25,7 @@ test('Tools lists every tool by your connection, from the sidebar or the Account
   await expect(page.getByTestId('tools')).toHaveCount(0);
   await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Connected tools…');
   await expect(page.getByTestId('tools')).toBeVisible();
-  expect(run.calls().filter(call => call.path === '/v4/person/tools')).toHaveLength(2);
+  await expect.poll(() => run.calls().filter(call => call.path === '/v4/person/tools')).toHaveLength(2);
 });
 
 test('Tools is covered while ECHO is concealed and returns on resume', async () => {
