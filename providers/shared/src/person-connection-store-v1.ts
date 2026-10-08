@@ -56,6 +56,18 @@ export class PersonConnectionStoreV1 {
     const value = JSON.parse(row.body_json) as StoredPersonConnectionV1;
     return Object.freeze({ ...value, binding: this.provider.copyBinding(value.binding) });
   }
+  /** The people whose active binding is this external account on this site. */
+  peopleForSubject(externalScopeId: string, externalSubjectId: string): readonly ConnectedPersonV1[] {
+    const rows = this.db.prepare(`SELECT body_json FROM ${this.bindingTable}
+      WHERE json_extract(body_json, '$.binding.external_scope_id')=? AND json_extract(body_json, '$.binding.external_subject_id')=? ORDER BY person_key`)
+      .all(externalScopeId, externalSubjectId) as { body_json: string }[];
+    return Object.freeze(rows.flatMap(row => {
+      const value = JSON.parse(row.body_json) as StoredPersonConnectionV1;
+      if (value.active !== true) return [];
+      const binding = this.provider.copyBinding(value.binding);
+      return [Object.freeze({ organization_id: binding.organization_id, principal_id: binding.principal_id, membership_id: binding.membership_id })];
+    }));
+  }
   begin(person: ConnectedPersonV1): PersonConnectionAttemptV1 {
     return this.db.transaction(() => {
       const old = this.current(person); this.revoke(person);
