@@ -3,7 +3,7 @@ import {
   OrganizationRecordAppenderV4,
   PersonRecordReaderV1,
 } from "@echo-brain/organization-record/organization-record-api-v1";
-import { applyAuthorityBaselineV11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV12 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -15,7 +15,7 @@ import {
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { createPersonRecordReadRouteV1 } from "../src/composition/person-record-read-route.js";
 import type { PersonRecordReadResponseV1 } from "../src/presentation/person-record-read-http-application.js";
-import { SIGNED_APPROVAL_PROJECTORS, approveSignedSlackV2 } from "./fixtures/signed-slack-approval-v2.js";
+import { SIGNED_APPROVAL_PROJECTORS, appendSignedApprovalV1 } from "./fixtures/signed-approval-decision-v1.js";
 
 /**
  * Characterizes what the Layer 1 record list discloses beyond the records a
@@ -63,13 +63,13 @@ describe("Person Layer 1 record list disclosure", () => {
   let response: PersonRecordReadResponseV1;
 
   beforeAll(async () => {
-    applyAuthorityBaselineV11(authorityDatabase);
+    applyAuthorityBaselineV12(authorityDatabase);
     const authority = protocolAuthority();
     const app = new OrganizationRecordAppenderV4(record, COORDINATES, SIGNED_APPROVAL_PROJECTORS);
     // Positions 1 and 3 are released to the member; position 2 is the owner's Only me record.
-    await approveSignedSlackV2(app, authority, { approval_id: "approval-shared-and-unjoined", audit_sequence: 1, projects: [SHARED_PROJECT, UNJOINED_PROJECT], final_approver: OWNER });
-    await approveSignedSlackV2(app, authority, { approval_id: "approval-owner-only", audit_sequence: 2, projects: [], final_approver: OWNER });
-    await approveSignedSlackV2(app, authority, { approval_id: "approval-shared", audit_sequence: 3, projects: [SHARED_PROJECT], final_approver: OWNER });
+    await appendSignedApprovalV1(app, authority, { approval_id: "approval-shared-and-unjoined", audit_sequence: 1, projects: [SHARED_PROJECT, UNJOINED_PROJECT], final_approver: OWNER });
+    await appendSignedApprovalV1(app, authority, { approval_id: "approval-owner-only", audit_sequence: 2, projects: [], final_approver: OWNER });
+    await appendSignedApprovalV1(app, authority, { approval_id: "approval-shared", audit_sequence: 3, projects: [SHARED_PROJECT], final_approver: OWNER });
     const route = createPersonRecordReadRouteV1({
       ...COORDINATES,
       sessions: { authenticateAccess: () => member },

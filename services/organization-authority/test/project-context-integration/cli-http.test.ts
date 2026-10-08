@@ -108,7 +108,7 @@ async function search(person: Person) {
   return (await ok(person, ['updates', 'search-v3', '--query', 'meridian'])).results as { context_id: string; audience: unknown }[];
 }
 
-describe('PC-06 real CLI -> loopback HTTP -> application -> V11, fixture authentication/model', () => {
+describe('PC-06 real CLI -> loopback HTTP -> application -> V12, fixture authentication/model', () => {
   it('preserves disjoint project visibility, private/team audience and cross-project coordinates', async () => {
     const alpha = await create('Synthetic Alpha'); const beta = await create('Synthetic Beta');
     await member(alpha, 'bob'); await member(beta, 'carol');

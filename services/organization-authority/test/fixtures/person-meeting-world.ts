@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
-import { applyAuthorityBaselineV11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV12 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import type { AuthorityPersonMembershipBinding } from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -25,14 +25,15 @@ import {
   SIGNED_APPROVAL_APPROVER,
   SIGNED_APPROVAL_CODECS,
   SIGNED_APPROVAL_PROJECTORS,
-  approveSignedSlackV2,
+  appendSignedApprovalV1,
   generationFromRecordDatabase,
-  type SignedSlackApprovalV2Input,
-} from "./signed-slack-approval-v2.js";
+  type SignedApprovalInputV1,
+} from "./signed-approval-decision-v1.js";
 
 /**
- * A small organization with real signed Slack approvals, for the meeting
- * list and open (ADR-0024). OWNER and EMP_A hold SHARED; EMP_A has left
+ * A small organization with real signed approvals, for the meeting list and
+ * open (ADR-0024). Array audiences are approval decisions; Team approvals and
+ * rejections are generic human acts, which name no approver. OWNER and EMP_A hold SHARED; EMP_A has left
  * PROJ_X; nobody who reads holds UNJOINED; EMP_B and EMP_C hold nothing.
  */
 const person = (name: string, membership_type: "owner" | "employee"): AuthorityPersonMembershipBinding => ({
@@ -55,7 +56,7 @@ const NOW = "2026-09-01T00:00:00.000Z";
 export const T = (day: number): string => `2026-09-${String(day).padStart(2, "0")}T10:00:00.000Z`;
 export const RETRIEVAL_CONTRACT = readableSearchGenerationContractV1().retrieval_contract_sha256;
 
-type WorldApprovalV1 = Omit<SignedSlackApprovalV2Input, "audit_sequence"> & { readonly name: string };
+export type WorldApprovalV1 = Omit<SignedApprovalInputV1, "audit_sequence"> & { readonly name: string };
 
 const meeting = (title: string | undefined, time: OrganizationRecordMeetingTimeV1) => (brief: OrganizationRecordDecisionBriefV1): OrganizationRecordDecisionBriefV1 =>
   ({ ...brief, meeting: { ...brief.meeting, ...(title === undefined ? {} : { title }), time } });
@@ -130,11 +131,13 @@ export interface MeetingWorldV1 {
 
 export async function meetingWorld(options: {
   /** Admits r4's shared transcript into the Authority before r4 is approved; returns its exact revision. */
-  readonly r4_transcript?: (authority: Database.Database) => Promise<NonNullable<SignedSlackApprovalV2Input["transcript_source"]>>;
+  readonly r4_transcript?: (authority: Database.Database) => Promise<NonNullable<SignedApprovalInputV1["transcript_source"]>>;
+  /** Appended after STANDARD_RECORDS, before the first generation is built. */
+  readonly extra?: readonly WorldApprovalV1[];
 } = {}): Promise<MeetingWorldV1> {
   const authority: Database.Database = new Database(":memory:");
   authority.pragma("foreign_keys = ON");
-  applyAuthorityBaselineV11(authority);
+  applyAuthorityBaselineV12(authority);
   authority.prepare(`INSERT INTO authority_metadata
     (singleton, authority_id, organization_id, organization_display_name, descriptor_json, created_at, last_observed_at)
     VALUES (1, ?, ?, 'Meetings', '{}', ?, ?)`).run(COORDINATES.authority_id, COORDINATES.organization_id, NOW, NOW);
@@ -163,7 +166,7 @@ export async function meetingWorld(options: {
   let sequence = 0;
   const digests = new Map<string, Sha256Digest>();
   const approve = async (input: WorldApprovalV1): Promise<Sha256Digest> => {
-    await approveSignedSlackV2(app, signer, { ...input, audit_sequence: sequence += 1 });
+    await appendSignedApprovalV1(app, signer, { ...input, audit_sequence: sequence += 1 });
     const row = record.prepare("SELECT record_sha256 FROM organization_record_log WHERE approval_id = ?").get(input.approval_id) as { readonly record_sha256: Sha256Digest };
     digests.set(input.name, row.record_sha256);
     return row.record_sha256;
@@ -171,6 +174,7 @@ export async function meetingWorld(options: {
   for (const input of STANDARD_RECORDS) {
     await approve(input.name === "r4" && r4TranscriptSource !== undefined ? { ...input, transcript_source: r4TranscriptSource } : input);
   }
+  for (const input of options.extra ?? []) await approve(input);
   // EMP_A left PROJ_X after approving r6.
   const leave = (projectId: string, actor: AuthorityPersonMembershipBinding): void => {
     authority.prepare("UPDATE authority_project_memberships_v1 SET status='revoked', revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'").run(NOW, projectId, actor.membership_id);

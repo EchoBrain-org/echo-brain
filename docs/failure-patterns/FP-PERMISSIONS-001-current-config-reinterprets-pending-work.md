@@ -75,20 +75,22 @@ The `4b505021` and `2fab8152` implementation refs pin the original `doctor`
 parity repair. The `4b505021` and `8d61edad` regression refs pin its tests and
 the stored Slack approval card check. Both tests were deleted in `a254232c`.
 
-At the reviewed ref, frozen private Slack approval resolution is source-tested
-by the four `private-approval` regression refs above:
+At the reviewed ref, frozen private Slack approval resolution was
+source-tested by the four `private-approval` regression refs above. They were
+removed with the Slack approval internals on 2026-10-07 (the approval core's
+Slack plug-in replaced them), so they remain readable only at that ref:
 
-- [`private-slack-dm-approval-stager-v2.test.ts`](../../providers/slack/server/test/private-approval/private-slack-dm-approval-stager-v2.test.ts)
+- `private-slack-dm-approval-stager-v2.test.ts`
   freezes the pending contract before Slack I/O, resolves a retry from it
   after current project state changes, and refuses recipient drift or a
   missing retained source before provider I/O;
-- [`sqlite-private-slack-approval-assignment-state-v1.test.ts`](../../providers/slack/server/test/private-approval/sqlite-private-slack-approval-assignment-state-v1.test.ts)
+- `sqlite-private-slack-approval-assignment-state-v1.test.ts`
   keeps the frozen delivery and assignment immutable across restart and
   completes a terminal from the frozen tuple after supersession;
-- [`sqlite-stable-private-approval-authority-fence-v1.test.ts`](../../providers/slack/server/test/private-approval/sqlite-stable-private-approval-authority-fence-v1.test.ts)
+- `sqlite-stable-private-approval-authority-fence-v1.test.ts`
   fails closed at tap time on a card binding that differs from the stored
   one, a stale candidate, or a revoked owner membership; and
-- [`sqlite-private-slack-approval-terminal-authority-v1.test.ts`](../../providers/slack/server/test/private-approval/sqlite-private-slack-approval-terminal-authority-v1.test.ts)
+- `sqlite-private-slack-approval-terminal-authority-v1.test.ts`
   rejects a missing commitment or a presentation spliced from another frozen
   tuple before V4.
 

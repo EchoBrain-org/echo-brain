@@ -127,8 +127,8 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
     private readonly organizationId: string,
   ) {
     this.imported = new SqlitePersonImportedMeetingsV1(database);
-    if (database.pragma("user_version", { simple: true }) !== 11 || database.pragma("foreign_keys", { simple: true }) !== 1) {
-      throw new Error("Person items require Authority V11 with foreign keys enabled");
+    if (database.pragma("user_version", { simple: true }) !== 12 || database.pragma("foreign_keys", { simple: true }) !== 1) {
+      throw new Error("Person items require Authority V12 with foreign keys enabled");
     }
   }
 
@@ -292,7 +292,7 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
     }));
     const imported = this.imported.rows(actor, scope, 'ids' in selection ? { ids: selection.ids } : undefined).map(item => ({
       row: { kind: 'imported_meeting' as const, id: item.context_id, title: item.title, added_at: item.received_at, visibility: item.visibility,
-        association_project_ids: item.project_id === null ? [] : [item.project_id as ProjectIdV1] }, text: item.text,
+        association_project_ids: item.project_ids as readonly ProjectIdV1[] }, text: item.text,
     })).filter(({ row }) => 'ids' in selection || selection.after === null || row.added_at < selection.after.added_at || (row.added_at === selection.after.added_at && row.id > selection.after.id));
     return [...notes, ...imported].sort((a, b) => b.row.added_at.localeCompare(a.row.added_at) || a.row.id.localeCompare(b.row.id)).slice(0, 'ids' in selection ? selection.ids.length : selection.limit);
   }

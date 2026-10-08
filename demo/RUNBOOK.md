@@ -6,27 +6,29 @@ Show four things in one closed loop:
 
 1. Realistic meeting intake.
 2. Reasoning across related meetings the user did not need to locate or search.
-3. Evidence-backed record approval and visibility selection in a private Slack approval.
+3. Evidence-backed record approval and visibility selection on the owner's approval card (the desktop, or its Slack DM copy).
 4. High-quality, cited, permission-aware retrieval in Ask ECHO.
 
-The customer sees Slack and Ask ECHO only. Do not show fixture files, extraction
+The customer sees the approval card (in Slack or the desktop) and Ask ECHO only. Do not show fixture files, extraction
 logs, state databases, indexing commands, or an internal approval dashboard.
 
 ## Prerequisites
 
 - Run only in the isolated staging environment.
-- Use the runtime containing canonical `context.owner_participant_id`, private
-  owner-DM approval, approved V4 record publication, search reconciliation, and
-  Ask ECHO answer composition.
+- Use the runtime containing canonical `context.owner_participant_id`, the
+  approval core (desktop card and Slack DM copy), approved V4 record
+  publication, search reconciliation, and Ask ECHO answer composition.
 - Configure the synthetic source identity as
   `synthetic-demo-source/customer-demo/1.0.0`.
 - Replace `owner@example.test` in all meetings with one lowercase staging member
-  email that resolves to an active Authority membership and linked Slack user.
+  email that resolves to an active Authority membership (and a linked Slack
+  user, if the cards are shown in Slack).
 - Keep the real meeting provider cursor untouched.
 - Rerun a completed demo with fresh unreleased staging state through the linked
   rehearsal procedure. The four fixture IDs and revisions stay fixed; replay in
   the same admitted state is idempotent.
-- Verify the Ask ECHO team user is an active organization member. That identity
+- Verify the Ask ECHO team user is an active member of the project that the
+  three team meetings are shared with. That identity
   plays Audrey, the account newcomer, in every team-visible ask. For the
   privacy proof, use that team user and the exact owner/approver as two distinct
   principals.
@@ -43,38 +45,16 @@ The wording intentionally omits the meeting titles and internal phrases such as
 ## Runtime commands
 
 For a new rehearsal, use [Fresh four-meeting staging rehearsal](../deploy/organization-authority/README.md#fresh-four-meeting-staging-rehearsal).
-It selects the four notes in the normal Authority runtime and retains its
-observability, approval, and read paths. Continue with the customer-facing
-sequence below once onboarding is ready.
+It queues the four notes into the owner's synthetic personal source in the
+normal Authority runtime and retains its observability, approval, and read
+paths. Continue with the customer-facing sequence below once onboarding is
+ready.
 
-The direct commands below run the synthetic demo composition against an
-isolated demo state whose manifest Authority URL is exactly
-`https://authority-staging.echobrain.org`. Other origins are rejected.
-
-Use the same absolute isolated state and personalized meeting-copy paths for
-admission and service startup:
-
-```sh
-npm run build
-
-node services/organization-authority/dist/synthetic-demo-main.js admit \
-  --state-dir /absolute/path/to/demo-state \
-  --meetings-dir /absolute/path/to/personalized-meetings
-
-node services/organization-authority/dist/synthetic-demo-main.js serve \
-  --state-dir /absolute/path/to/demo-state \
-  --meetings-dir /absolute/path/to/personalized-meetings \
-  --host 127.0.0.1 \
-  --port 8787 \
-  --nango-secret-key-file /absolute/path/to/nango-secret-key \
-  --nango-integration slack
-```
-
-If that state's OIDC manifest uses client-secret authentication, also pass
-`--client-secret-file /absolute/path/to/oidc-client-secret` to `serve`. The state
-must already be bootstrapped and onboarded with its own setup manifest, owner,
-Slack connection, and identity link. A startup result other than
-`processing: "active"` is a stop condition.
+The standalone synthetic demo composition (`synthetic-demo-main.js` with
+`admit` and `serve`) is removed. Meetings reach the demo only through the staging
+synthetic personal source. The state must already be bootstrapped and onboarded
+with its own setup manifest, owner, Slack connection, and identity link. A
+startup result other than `processing: "active"` is a stop condition.
 
 ## Preparation before the customer joins
 
@@ -83,16 +63,16 @@ Slack connection, and identity link. A startup result other than
 2. Confirm every transcript block's speaker reference resolves to one participant.
 3. Confirm `zhen` has exactly one canonical email and is the
    `context.owner_participant_id` in every meeting.
-4. Confirm the three Team meetings and the Only-me meeting use distinct stable
-   external IDs and revisions.
+4. Confirm the three team-shared meetings and the Only-me meeting use distinct
+   stable external IDs and revisions.
 5. Confirm no expected signal or expected answer from `expectations.json` enters
    the extraction, retrieval, or answer context.
-6. Confirm each Slack DM groups decisions with linked **Why** rationale, keeps
+6. Confirm each approval card (and its Slack DM copy, if linked) groups decisions with linked **Why** rationale, keeps
    owner-neutral actions under **Next steps from this meeting** without a
    duplicate machine-formatted due-date row, labels any unlinked rationale as
    **Additional meeting context**,
    preserves evidence and the non-release statement in the complete plain-text
-   alternative, and retains the Only me/Team selector.
+   alternative, and retains the Only me/Projects selector.
 7. Confirm Ask ECHO exposes human-readable source context for cited facts.
 
 ## Customer-facing sequence
@@ -115,10 +95,10 @@ existence, and no exact keywords.
 
 ### Step 2: ingest in the background
 
-Admit the four canonical meeting documents through the synthetic meeting-source
-adapter. The shared production Claude processor extracts candidates and the
-normal private-DM stager resolves the meeting owner through the canonical owner
-identity.
+Queue the four canonical meeting documents into the owner's synthetic personal
+source (setup finalize does this on staging). The shared production Claude
+processor extracts candidates and the approval core freezes one proposal per
+meeting for the owner.
 
 Nothing from this step is customer-facing.
 
@@ -127,8 +107,9 @@ real provider; only the source and meeting content are synthetic.
 
 ### Step 3: glimpse the pending approvals
 
-Open the meeting owner's private Slack DMs just long enough to show that four
-approval cards have arrived, then close them without approving anything.
+Open the meeting owner's approval list (the desktop meetings sheet, or their
+private Slack DMs if linked) just long enough to show that four approval cards
+have arrived, then close them without approving anything.
 
 Value shown: the knowledge already exists — extracted and waiting for approval —
 but no human has admitted it as organizational truth yet. This framing makes the
@@ -149,20 +130,20 @@ Value shown: unapproved meeting content is not organizational knowledge. Because
 the customer has just seen the pending cards, the empty answer reads as truth
 withheld pending human approval, not as a product with nothing to say.
 
-### Step 5: review the private Slack DMs and approve
+### Step 5: review the approval cards and approve
 
-Return to the linked meeting owner/approver's private Slack DM. For each meeting,
-verify that the card shows:
+Return to the linked meeting owner/approver's approval card (desktop, or the
+Slack DM copy). For each meeting, verify that the card shows:
 
 - meeting title;
 - exact extracted decisions, actions, and rationales;
 - action dates;
 - a short evidence excerpt or transcript-turn reference;
 - a clear statement that raw transcript and rejected suggestions are not released;
-- Only me and Team visibility choices;
+- Only me or project visibility choices;
 - Approve and Reject controls.
 
-Approve these records for **Team**:
+Approve these records for the project the team belongs to:
 
 1. Revenue signal calibration.
 2. Data handling review.
@@ -189,7 +170,7 @@ The answer must communicate all of the following without inventing facts:
 - Later expansion requires at least 8 of 10 locations to complete four
   consecutive weekly workflows without manual correction.
 
-Every material claim must cite the correct one of the three Team meetings.
+Every material claim must cite the correct one of the three team-shared meetings.
 
 Value shown: ECHO combines complementary facts across meetings and different
 vocabularies into a current, actionable answer.
@@ -238,7 +219,7 @@ hero answer and this claim, not a prompt parade.
 
 ## The approval-cost objection
 
-Expect the question: "So I have to approve every meeting by hand in Slack?"
+Expect the question: "So I have to approve every meeting by hand?"
 Answer it directly rather than deflecting:
 
 - Approval is per-decision knowledge admission, not meeting review. The card
@@ -268,11 +249,11 @@ The demo passes only when all checks below are true:
 - [ ] Four canonical meetings validate without a demo-only runtime schema.
 - [ ] Every meeting contains 3-5 participants and natural attributed dialogue.
 - [ ] No runtime meeting contains extraction labels or expected outputs.
-- [ ] The correct canonical owner receives each private DM.
-- [ ] Each DM displays the complete approval bundle and evidence.
+- [ ] The correct canonical owner receives each proposal (and its Slack DM copy, if linked).
+- [ ] Each card displays the complete approval bundle and evidence.
 - [ ] The all-28 suggestions are not represented as approved/current decisions.
 - [ ] Before approval, the main question returns no facts or citations.
-- [ ] After Team approval, the main answer contains every required proposition.
+- [ ] After the team-shared approval, the main answer contains every required proposition.
 - [ ] Each proposition cites the correct source meeting.
 - [ ] No answer uses an unapproved transcript or fixture-only retrieval atom.
 - [ ] The normal team member cannot learn the private price or that it exists.

@@ -5,7 +5,7 @@ import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../../src/organization-contr
 import { canonicalJson, canonicalSha256 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
 import { resolveCurrentSlackDmApprovalReviewerTargetV1, type CurrentSlackDmApprovalReviewerV1, type SlackDmApprovalReviewerTargetCoordinatesV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
 import { slackNangoAppPublicConfigurationSha256V1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
-import { applyOrganizationControlBaselineV3 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
+import { applyOrganizationControlBaselineV4 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 
 const CONNECTION_ID = "con_00000000-0000-4000-8000-000000000001";
 const COORDINATES = Object.freeze({
@@ -33,7 +33,7 @@ function scopes(without?: string): readonly string[] {
 
 function openDatabase(): Database.Database {
   const database = new Database(":memory:");
-  applyOrganizationControlBaselineV3(database);
+  applyOrganizationControlBaselineV4(database);
   databases.push(database);
   return database;
 }

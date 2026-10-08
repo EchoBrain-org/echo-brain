@@ -35,7 +35,7 @@ if args[0] == 'pull' and args[1] in config['images']:
     finish()
 if args[0] == 'run' and '--network' in args and args[args.index('--network') + 1] == 'none' and '--read-only' in args:
     assert any(image in args for image in config['images'])
-    assert 'verifyPersistedOpenRouterDecisionProcessorAdmissionV1' in args[-1]
+    assert 'verifyAuthorityStateLineage' in args[-1]
     bridge('verify')
 if args[0] == 'compose':
     assert args[1:3] == ['--env-file', str(root / 'host/.env.clean-v1')]

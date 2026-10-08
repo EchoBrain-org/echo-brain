@@ -101,6 +101,13 @@ it"). The model's judgment alone never sets an owner.
 - Search indexes an owned action as "<action> Owner: <name>.", and the source
   pane shows the owner beside the action.
 
+Update, 2026-10-08 ([ADR-0031](ADR-0031-unified-meeting-approval-core.md)): the
+rule above is unchanged, but the mechanism moved. The desktop and Slack offer
+the same pre-filled owner fields, and the Slack V3 card, signed V3 action,
+receipt and resolution are gone. The confirmed owners are recorded in
+`action_owners` of the neutral `echo-approval-decision-ref-v1` reference, by the
+approved action's signal ID in brief order. The snapshot still carries no owner.
+
 V1 and V2 cards, receipts, resolutions and records keep their meaning and
 bytes. Extraction's prompt and schema versions change (processor identity
 changes; signal IDs do not), so meetings processed again after deploy produce

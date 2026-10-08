@@ -9,6 +9,17 @@ Live verification target: Granola folder **ECHO**, with **ECHO** also treated as
 the target project name. Resolve and verify their actual accessible identifiers
 through the connected person's account before enabling the mapping.
 
+Implementation note, 2026-10-08: unified meeting approval
+([spec](2026-10-07-unified-meeting-approval-v1.md),
+[ADR-0031](../decisions/ADR-0031-unified-meeting-approval-core.md)) removed the
+organization meeting source lane. The synthetic approval qualification, the
+release canary and the four-meeting fixtures now run on a synthetic personal
+source for the owner, and the canary meeting is approved on the desktop or in
+Slack like any other proposal. A personal source is now one per person and tool
+account: "Save to" on import or folder watch records a project suggestion that
+pre-ticks the approval card instead of creating a source per project. Text
+below that names the organization source lane describes the sprint as planned.
+
 Granola becomes a personal connection that follows an ECHO person across their
 devices. Slack's bot remains the only connector with organization-level setup.
 Authority identity, membership, signing, model configuration, and hosting remain

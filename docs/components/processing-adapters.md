@@ -85,7 +85,7 @@ local durable state are distinct evidence. Any adapter that causes an external
 effect requires explicit retry, crash, concurrency, and reconciliation
 semantics.
 
-The private Slack approval surface's terminal and card-redraw ordering is
+The Slack approval surface's publication and card-redraw ordering is
 defined in [adapter responsibilities](../architecture/meeting-processing-core-and-adapters.md#adapter-responsibilities).
 
 ## Current references

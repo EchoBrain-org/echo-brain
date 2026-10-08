@@ -11,10 +11,10 @@ import {
   type OrganizationAuthorityDescriptorV1,
 } from "@echo-brain/organization-protocol";
 import {
-  applyOrganizationControlBaselineV3,
+  applyOrganizationControlBaselineV4,
   openOrganizationControlDatabase,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
-  organizationControlBaselineSha256V3,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4,
+  organizationControlBaselineSha256V4,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
   applyOrganizationRecordLogBaselineV4,
@@ -30,9 +30,9 @@ import {
   readableSearchPlaneBaselineSha256,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import {
-  applyAuthorityBaselineV11,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
-  authorityBaselineSha256V11,
+  applyAuthorityBaselineV12,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V12,
+  authorityBaselineSha256V12,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
@@ -345,13 +345,13 @@ export function bootstrapOrganizationAuthorityState(
     creating_artifact_revision: input.creating_artifact_revision,
     schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
-        schema_sha256: authorityBaselineSha256V11(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V12,
+        schema_sha256: authorityBaselineSha256V12(),
       },
       "control-plane": {
         database_schema_version:
-          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
-        schema_sha256: organizationControlBaselineSha256V3(),
+          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4,
+        schema_sha256: organizationControlBaselineSha256V4(),
       },
       "record-log": {
         database_schema_version:
@@ -379,8 +379,8 @@ export function bootstrapOrganizationAuthorityState(
       },
     },
     top_level_appliers: {
-      authority: { apply: applyAuthorityBaselineV11 },
-      "control-plane": { apply: applyOrganizationControlBaselineV3 },
+      authority: { apply: applyAuthorityBaselineV12 },
+      "control-plane": { apply: applyOrganizationControlBaselineV4 },
       "record-log": { apply: applyOrganizationRecordLogBaselineV4 },
     },
     open_writable_database: (path, role) => {

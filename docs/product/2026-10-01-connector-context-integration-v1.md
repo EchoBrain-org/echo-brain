@@ -228,6 +228,11 @@ The staging canary has its own admitted synthetic infrastructure. Its source
 returns no meetings and reads no provider. The existing explicit release-bound
 canary request exercises shared custody, extraction, approval and retrieval.
 
+Implementation note, 2026-10-08: the canary no longer has an organization-level
+admitted source. It runs on the owner's synthetic personal source and its
+proposal is approved on the desktop or in Slack
+([unified meeting approval](2026-10-07-unified-meeting-approval-v1.md)).
+
 Jira bindings come from verified connections: Jira uses the initial owner's
 existing connection and current grant. A working token or Nango tag does not
 grant custody. Current membership, connection and grant checks apply around live

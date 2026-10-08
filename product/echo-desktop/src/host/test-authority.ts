@@ -126,6 +126,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const contract = () => import(pathToFileURL(join(repository, 'packages/organization-api/dist/index.js')).href) as Promise<Contract>;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
   let granolaImported = false, granolaApproved = false, granolaWatch = false, granolaBaselineHomeReads = 0;
+  let granolaReview: Record<string, unknown> | undefined;
+  // The impact check of the approved meeting: none until it is approved.
+  let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; lists: number; retried: boolean } | null = null;
   // Thirteen people: the organization's directory comes in two pages.
   if (mode === 'many-people') {
     desktop.people.push(...Array.from({ length: 9 }, (_, index) => ({
@@ -340,6 +343,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   };
   /** Your projects, in the list's order, as the mode has them. */
   const listed = (): { project_id: string; name: string; role: 'lead' | 'member' }[] => {
+    if (mode === 'granola') return [
+      { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign', role: 'lead' },
+      { project_id: 'prj_44444444-4444-4444-8444-444444444444', name: 'Supplier review', role: 'member' },
+    ];
     const numbered = (count: number, digit: string, name: (index: number) => string) => Array.from({ length: count }, (_, index) => ({
       project_id: `prj_${String(index + 1).padStart(8, '0')}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}`,
       name: name(index), role: 'member' as const,
@@ -491,17 +498,69 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (method === 'POST' && path === '/v1/person/meetings' && mode.startsWith('granola')) {
       const meetingId = '00000000-0000-4000-8000-000000000010';
       const folderId = '00000000-0000-4000-8000-000000000011';
-      const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning', project_id: null, status: granolaApproved ? 'approved' : 'pending' };
+      const decidedOn = granolaApproved ? mode === 'granola-decided-in-slack' ? 'slack' : 'desktop' : null;
+      const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning',
+        project_ids: Array.isArray(granolaReview?.project_ids) ? granolaReview.project_ids : [], status: granolaApproved ? 'approved' : 'pending', decided_on: decidedOn };
       switch (body?.operation) {
         case 'home': return mode === 'granola-browse-unavailable' ? failure('unavailable', 503) : json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64),
-          sources: mode === 'granola-preparing' && granolaWatch ? [{ source_key: 'pms_fixture', folder_id: folderId, project_id: 'prj_11111111-1111-4111-8111-111111111111', baseline: granolaBaselineHomeReads++ > 0, pending_imports: [], checked_at: null, error: null }] : [] });
+          sources: mode === 'granola-preparing' && granolaWatch ? [{ source_key: 'pms_fixture', folder_id: folderId, folder_project_id: 'prj_11111111-1111-4111-8111-111111111111', baseline: granolaBaselineHomeReads++ > 0, pending_imports: [], checked_at: null, error: null }] : [] });
         case 'browse': return json({ meetings: [{ id: meetingId, title: 'Pilot planning', date: '2026-10-06' }] });
         case 'open': return json({ id: meetingId, title: 'Pilot planning', notes: 'Launch the pilot next week.', summary: 'Decision: launch.', truncated: false });
         case 'watch': granolaWatch = true; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
-        case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' ? [review] : [] });
-        case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.' });
-        case 'review': granolaApproved = true; return json({ status: 'publishing' });
+        case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' ? [review] : [] });
+        case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.',
+          owners: [{ signal_id: 'act-1', action: 'Send the revised quote', proposed: 'Rafael Moreno' }, { signal_id: 'act-2', action: 'Confirm the trace', proposed: 'Mina Patel' }],
+          suggested_projects: [{ project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign' }] });
+        case 'review': granolaReview = body; granolaApproved = true;
+          if (body?.action === 'approve' && granolaRun === null) granolaRun = { state: 'pending', error_code: null, lists: 0, retried: false };
+          return json(mode === 'granola-decided-in-slack' ? { status: 'approved', decided_on: 'slack' } : { status: 'publishing', decided_on: 'desktop' });
+      }
+    }
+    // Impact checks: approving queues one run; a start runs it, and the second
+    // list after that finds it done (in granola-run-failed, failed until Try again).
+    if (method === 'POST' && path === '/v1/person/runs' && mode.startsWith('granola')) {
+      const runId = 'run_00000000-0000-4000-8000-000000000020';
+      const run = granolaRun;
+      const row = (value: NonNullable<typeof run>) => ({ run_id: runId, trigger: 'approved_record', event_ref: 'apr_' + 'a'.repeat(64), state: value.state,
+        error_code: value.error_code, created_at: '2026-10-07T10:00:00.000Z', updated_at: '2026-10-07T10:05:00.000Z' });
+      switch (body?.operation) {
+        case 'list':
+          if (run?.state === 'running' && ++run.lists >= 2) {
+            Object.assign(run, mode === 'granola-run-failed' && !run.retried ? { state: 'failed', error_code: 'research_failed' } : { state: 'done' });
+          }
+          return json({ runs: run ? [row(run)] : [] });
+        case 'start':
+          if (!run || body.run_id !== runId) return failure('not_found', 404);
+          if (run.state === 'pending') Object.assign(run, { state: 'running', lists: 0 });
+          return json({ state: run.state });
+        case 'retry':
+          if (run?.state !== 'failed' || body.run_id !== runId) return failure('not_found', 404);
+          Object.assign(run, { state: 'pending', error_code: null, retried: true });
+          return json({ state: 'pending' });
+        case 'view': {
+          if (run?.state !== 'done' || body.run_id !== runId) return failure('not_found', 404);
+          const record = (record_sha256: string, label: string) => ({ kind: 'decision', label, visibility: 'only_me',
+            citation: { kind: 'approved_record', atom_id: sha(`atom:${label}`), record_sha256, policy_id: 'restricted-reviewer-person-v2' } });
+          return json({ checked_at: '2026-10-07T10:05:00.000Z', hidden: 1, card: {
+            status: 'assessed',
+            decided: [{ text: 'Launch the pilot next week.', citation_index: 0 }],
+            affected: [
+              { citation_index: 1, says_now: 'The pilot launch is planned for the end of the month.', relation: 'conflicts', owner: 'Mina Patel',
+                date_at_risk: { date: '2026-10-30', milestone: 'Pilot launch' } },
+              { citation_index: 2, says_now: 'The pricing review approved the pilot budget.', relation: 'confirms' },
+            ],
+            unconfirmed: ['No supplier contract for the pilot was found.'],
+            people: [{ name: 'Mina Patel', items: [1] }],
+            citations: [
+              record(sha('record:Pilot planning'), 'Pilot planning'),
+              { kind: 'ticket', label: 'ECHO-12 · Pilot launch', visibility: 'only_me', citation: {
+                kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: '10012',
+                permalink: 'https://example.atlassian.net/browse/ECHO-12', text_sha256: sha('ECHO-12: Pilot launch') } },
+              record(PRICING_REVIEW, 'Pricing review'),
+            ],
+          } });
+        }
       }
     }
     // Jira: the browser consent is never shown; the second status read finds it done,

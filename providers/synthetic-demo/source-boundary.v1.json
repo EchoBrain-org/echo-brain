@@ -7,12 +7,9 @@
   "source_root": "providers/synthetic-demo/src",
   "package_json": "providers/synthetic-demo/package.json",
   "entry_points": [
-    "providers/synthetic-demo/src/synthetic-demo-meeting-source-bundle-v1.ts",
     "providers/synthetic-demo/src/source/synthetic-demo-meeting-source-v1.ts",
     "providers/synthetic-demo/src/synthetic-demo-pre-slack-evaluator-v1.ts",
-    "providers/synthetic-demo/src/synthetic-demo-meeting-source-admission.ts",
-    "providers/synthetic-demo/src/synthetic-demo-admitted-meeting-source-cursor-policy-v1.ts",
-    "providers/synthetic-demo/src/staging-canary-meeting-source-v1.ts"
+    "providers/synthetic-demo/src/staging-synthetic-personal-meeting-provider-v1.ts"
   ],
   "owned_source_paths": [
     "providers/synthetic-demo/src/**"

@@ -2,15 +2,19 @@ import { afterEach, describe, expect, it } from "vitest";
 import type {
   ActionableMeetingProcessingCandidateV1
 } from "../../src/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
   AuthorityMeetingProcessingRevokedError,
+  SqliteApprovalWorkflowStateV1,
   SqliteAuthorityMeetingProcessingStateV1,
 } from "../../src/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
+import type Database from "better-sqlite3";
+import type { AdmittedMeetingProcessingAdmissionV1 } from "../../src/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import type {
   DecisionSet,
   MeetingDocument,
 } from "../../src/core/index.js";
-import { ADMITTED_AT, ADVANCED_AT, assertActionable, database, databases, decisions, FIXTURE_PROCESSOR_VERSION, fixtureCursorPolicy, meeting, NEXT_CUTOFF, nextCursor, REVIEW_POLICY, SHA, sourceCursor } from './fixtures/sqlite-meeting-state.js';
+import { ADMITTED_AT, ADVANCED_AT, assertActionable, database, databases, decisions, FIXTURE_PROCESSOR_VERSION, FIXTURE_SOURCE_KEY, fixtureCursorPolicy, meeting, NEXT_CUTOFF, nextCursor, REVIEW_POLICY, SHA, sourceCursor } from './fixtures/sqlite-meeting-state.js';
 afterEach(() => { for (const value of databases.splice(0)) value.close(); });
 
 function stateFixture() {
@@ -20,6 +24,7 @@ function stateFixture() {
     fixtureCursorPolicy,
     "llm",
     () => ADVANCED_AT,
+    FIXTURE_SOURCE_KEY,
   );
   return { value, state };
 }
@@ -35,6 +40,34 @@ async function actionableFixture() {
   });
   assertActionable(candidate);
   return { value, state, current, candidate };
+}
+
+const PROJECT_A = "prj_00000000-0000-4000-8000-0000000000a1";
+const PROJECT_B = "prj_00000000-0000-4000-8000-0000000000b1";
+const PROJECT_C = "prj_00000000-0000-4000-8000-0000000000c1";
+function addProjects(value: Database.Database, ...ids: readonly string[]) {
+  for (const id of ids) value.prepare("INSERT INTO authority_projects_v1 VALUES (?, 'org_test', ?, 'active', ?, 'prn_test', 'mem_test', 'owner')").run(id, `Project ${id.slice(-2)}`, ADMITTED_AT);
+}
+/** A minimal frozen proposal snapshot; the outbox only pins its approval_id. */
+function snapshotFor(candidate: ActionableMeetingProcessingCandidateV1) {
+  return { approval_id: candidate.approval_id, kind: "fixture-proposal" };
+}
+/** One decision row as the approval core writes it. */
+function insertDecision(value: Database.Database, approvalId: string, snapshotSha256: string, surface: "desktop" | "slack", action: "approve" | "reject") {
+  const command_id = surface === "slack" ? `slack:${action}` : `desk-${action}`;
+  const body = { request: { approval_id: approvalId, command_id, snapshot_sha256: snapshotSha256, action, project_ids: [], share_transcript: false, owners: [] }, surface,
+    actor: { organization_id: "org_test", principal_id: "prn_test", membership_id: "mem_test" }, evidence: { kind: surface === "desktop" ? "person-session" : "slack-click", sha256: SHA },
+    decided_at: ADVANCED_AT };
+  value.prepare("INSERT INTO authority_approval_decisions_v1 (approval_id, command_id, surface, action, body_json) VALUES (?,?,?,?,?)").run(approvalId, command_id, surface, action, canonicalJson(body));
+}
+/** A semantic change of the fixture meeting on the same lineage. */
+async function stageRevision(state: SqliteAuthorityMeetingProcessingStateV1, admission: AdmittedMeetingProcessingAdmissionV1, label: string) {
+  const revised: MeetingDocument = { ...meeting, provenance: { ...meeting.provenance, canonical_revision: `sha256:note-${label}` },
+    content: [{ id: "block-revised", kind: "note", text: `A ${label} revision.` }] };
+  const successor = await state.stageCandidate({ admission, meeting: revised, review_policy: REVIEW_POLICY, decisions: { ...decisions, meeting_revision: revised.provenance.canonical_revision,
+    signals: [{ ...decisions.signals[0]!, text: revised.content[0]!.text, evidence: [{ meeting_id: revised.id, block_id: "block-revised" }] }] } });
+  assertActionable(successor);
+  return successor;
 }
 
 describe("SQLite admitted meeting-processing state", () => {
@@ -55,7 +88,7 @@ describe("SQLite admitted meeting-processing state", () => {
   });
   it("fences source custody with current identity and owner membership inside the retaining transaction", async () => {
     const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(value, fixtureCursorPolicy, "llm");
+    const state = new SqliteAuthorityMeetingProcessingStateV1(value, fixtureCursorPolicy, "llm", undefined, FIXTURE_SOURCE_KEY);
     await state.readAdmission();
     const identity = meeting.provenance.source;
     expect(() => state.assertCurrentSourceAdmission(identity)).toThrow("custody transaction");
@@ -72,7 +105,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const state = new SqliteAuthorityMeetingProcessingStateV1(value, {
       source_adapter_id: "synthetic-fixture",
       assert_live_cursor: fixtureCursorPolicy.assert_live_cursor,
-    }, "llm");
+    }, "llm", undefined, FIXTURE_SOURCE_KEY);
 
     await expect(state.readAdmission()).rejects.toThrow(
       "admission adapter differs from its configured boundary",
@@ -85,6 +118,8 @@ describe("SQLite admitted meeting-processing state", () => {
       value,
       fixtureCursorPolicy,
       "synthetic-processor",
+      undefined,
+      FIXTURE_SOURCE_KEY,
     );
 
     await expect(state.readAdmission()).rejects.toThrow(
@@ -130,48 +165,24 @@ describe("SQLite admitted meeting-processing state", () => {
     ).toBe(0);
   });
 
-it.each(["approved", "rejected"] as const)(
-    "keeps a completed %s private approval terminal when a later revision arrives",
-    async (outcome) => {
+it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["slack", "reject"]] as const)(
+    "keeps a proposal decided on %s (%s) when a later revision arrives",
+    async (surface, action) => {
       const { value, state, current, candidate: first } = await actionableFixture();
-
-      // This source-state boundary does not need a full private-assignment
-      // fixture; constrain the FK exception to the terminal receipt insert.
-      value.pragma("foreign_keys = OFF");
-      try {
-        value
-          .prepare(
-            `INSERT INTO authority_private_approval_terminal_receipts_v3 (
-               approval_id, candidate_id, outcome, resolution_json,
-               resolution_sha256, v4_receipt_json, v4_receipt_sha256,
-               card_render_state, card_rendered_at, recorded_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, 'unrendered', NULL, ?)`,
-          )
-          .run(
-            first.approval_id,
-            first.candidate_id,
-            outcome,
-            JSON.stringify({ approval_id: first.approval_id, outcome }),
-            `sha256:${outcome === "approved" ? "a".repeat(64) : "b".repeat(64)}`,
-            outcome === "approved" ? "{}" : null,
-            outcome === "approved" ? `sha256:${"c".repeat(64)}` : null,
-            ADVANCED_AT,
-          );
-      } finally {
-        value.pragma("foreign_keys = ON");
-      }
+      const frozen = state.freezeProposal({ candidate_id: first.candidate_id, approved_snapshot: snapshotFor(first), suggested_project_ids: [] });
+      insertDecision(value, first.approval_id, frozen.approved_snapshot_sha256!, surface, action);
 
       const revised: MeetingDocument = {
         ...meeting,
         provenance: {
           ...meeting.provenance,
-          canonical_revision: `sha256:note-terminal-${outcome}`,
+          canonical_revision: `sha256:note-terminal-${surface}-${action}`,
         },
         content: [
           {
             id: "block-terminal",
             kind: "note",
-            text: `A ${outcome} terminal must remain final.`,
+            text: `A ${action} decision must remain final.`,
           },
         ],
       };
@@ -194,144 +205,93 @@ it.each(["approved", "rejected"] as const)(
       assertActionable(successor);
 
       expect(state.readCandidateByApprovalId(first.approval_id)).toMatchObject({
-        state: "queued",
+        state: "staged",
+        approved_snapshot_sha256: frozen.approved_snapshot_sha256,
         superseded_by_candidate_id: null,
       });
       expect(state.readCandidateByApprovalId(successor.approval_id)).toMatchObject({
         state: "queued",
       });
+      expect(() => value.prepare(`UPDATE authority_live_approval_outbox_v2 SET state = 'superseded', superseded_by_candidate_id = ?,
+        superseded_at = ?, updated_at = ? WHERE approval_id = ?`).run(successor.candidate_id, ADVANCED_AT, ADVANCED_AT, first.approval_id))
+        .toThrow("a decided approval proposal is final");
     },
   );
 
-  it("freezes exactly one durable post intent", async () => {
-    const { state, candidate } = await actionableFixture();
-    const prepared = state.prepareApprovalPost({
-      candidate_id: candidate.candidate_id,
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { candidate_id: candidate.candidate_id },
+  it("freezes a proposal once with its suggestions", async () => {
+    const { value, state, candidate } = await actionableFixture();
+    addProjects(value, PROJECT_A, PROJECT_B);
+    const snapshot = snapshotFor(candidate);
+    for (const invalid of [
+      { approved_snapshot: { ...snapshot, approval_id: "apr_other" }, suggested_project_ids: [] },
+      { approved_snapshot: snapshot, suggested_project_ids: [PROJECT_B, PROJECT_A] },
+      { approved_snapshot: snapshot, suggested_project_ids: [PROJECT_A, PROJECT_A] },
+      { approved_snapshot: snapshot, suggested_project_ids: Array.from({ length: 21 }, (_, i) => `prj_${i}`) },
+    ]) {
+      expect(() => state.freezeProposal({ candidate_id: candidate.candidate_id, ...invalid })).toThrow("approval proposal freeze input is invalid");
+    }
+    expect(() => state.freezeProposal({ candidate_id: candidate.candidate_id, approved_snapshot: snapshot, suggested_project_ids: [PROJECT_C] }))
+      .toThrow("suggested projects must be sorted, unique, existing projects");
+    const frozen = state.freezeProposal({ candidate_id: candidate.candidate_id, approved_snapshot: snapshot, suggested_project_ids: [PROJECT_A, PROJECT_B] });
+    expect(frozen).toMatchObject({
+      state: "staged",
+      approved_snapshot_json: canonicalJson(snapshot),
+      approved_snapshot_sha256: canonicalSha256(snapshot),
+      suggested_project_ids: [PROJECT_A, PROJECT_B],
     });
-    expect(prepared).toMatchObject({
-      created: true,
-      outbox: { state: "posting", post_started_at: ADVANCED_AT },
+    expect(state.readFrozenCandidateForApproval(candidate.approval_id)).toMatchObject({
+      approved_snapshot: snapshot,
+      suggested_project_ids: [PROJECT_A, PROJECT_B],
     });
-    expect(
-      state.prepareApprovalPost({
-        candidate_id: candidate.candidate_id,
-        frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-        approved_snapshot: { candidate_id: candidate.candidate_id },
-      }),
-    ).toMatchObject({
-      created: false,
-      outbox: { state: "posting", post_started_at: ADVANCED_AT },
-    });
-    expect(
-      state.releaseApprovalPostAttempt({
-        candidate_id: candidate.candidate_id,
-        post_started_at: ADVANCED_AT,
-      }),
-    ).toMatchObject({
-      state: "queued",
-      frozen_card_sha256: null,
-      approved_snapshot_json: null,
-      post_started_at: null,
-    });
-    expect(
-      state.releaseApprovalPostAttempt({
-        candidate_id: candidate.candidate_id,
-        post_started_at: ADVANCED_AT,
-      }),
-    ).toMatchObject({ state: "queued" });
-    expect(
-      state.prepareApprovalPost({
-        candidate_id: candidate.candidate_id,
-        frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-        approved_snapshot: { candidate_id: candidate.candidate_id },
-      }),
-    ).toMatchObject({
-      created: true,
-      outbox: { state: "posting", post_started_at: ADVANCED_AT },
-    });
+    expect(state.listPendingApprovalDeliveries()).toEqual([]);
+    expect(() => value.prepare("UPDATE authority_live_approval_outbox_v2 SET suggested_projects_json = ? WHERE approval_id = ?")
+      .run(JSON.stringify([PROJECT_A]), candidate.approval_id)).toThrow("only permits queued-staged-superseded");
   });
 
-  it("durably fences an unrepresentable approval package without retrying delivery", async () => {
+  it("returns a staged proposal unchanged for the same snapshot and refuses another", async () => {
+    const { value, state, candidate } = await actionableFixture();
+    addProjects(value, PROJECT_A);
+    const snapshot = snapshotFor(candidate);
+    const frozen = state.freezeProposal({ candidate_id: candidate.candidate_id, approved_snapshot: snapshot, suggested_project_ids: [PROJECT_A] });
+    expect(state.freezeProposal({ candidate_id: candidate.candidate_id, approved_snapshot: snapshot, suggested_project_ids: [] })).toEqual(frozen);
+    expect(() => state.freezeProposal({ candidate_id: candidate.candidate_id, approved_snapshot: { ...snapshot, kind: "changed" }, suggested_project_ids: [PROJECT_A] }))
+      .toThrow("approval proposal conflicts with its frozen snapshot");
+    expect(state.readCandidateByApprovalId(candidate.approval_id)).toEqual(frozen);
+  });
+
+  it("returns a superseded proposal unchanged", async () => {
     const { state, current, candidate } = await actionableFixture();
+    const successor = await stageRevision(state, current, "superseding");
+    const superseded = state.readCandidateByApprovalId(candidate.approval_id)!;
+    expect(superseded).toMatchObject({ state: "superseded", superseded_by_candidate_id: successor.candidate_id, approved_snapshot_json: null, suggested_project_ids: null });
+    expect(state.freezeProposal({ candidate_id: candidate.candidate_id, approved_snapshot: snapshotFor(candidate), suggested_project_ids: [] })).toEqual(superseded);
+  });
 
-    const expected = {
-      candidate_id: candidate.candidate_id,
-      reason_code: "approval_package_unrepresentable",
-      quarantined_at: ADVANCED_AT,
-    } as const;
-    expect(
-      state.quarantineApprovalDelivery({
-        candidate_id: candidate.candidate_id,
-        reason_code: "approval_package_unrepresentable",
-      }),
-    ).toEqual(expected);
-    expect(
-      state.quarantineApprovalDelivery({
-        candidate_id: candidate.candidate_id,
-        reason_code: "approval_package_unrepresentable",
-      }),
-    ).toEqual(expected);
-    expect(state.readApprovalDeliveryQuarantine(candidate.candidate_id)).toEqual(
-      expected,
-    );
-    expect(state.listPendingApprovalDeliveries()).toEqual([]);
-    expect(state.approvalIsCurrent(candidate.approval_id)).toBe(false);
-    expect(state.readFrozenCandidateForApproval(candidate.approval_id)).toBeUndefined();
-    expect(() =>
-      state.prepareApprovalPost({
-        candidate_id: candidate.candidate_id,
-        frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-        approved_snapshot: { candidate_id: candidate.candidate_id },
-      }),
-    ).toThrow(/approval delivery is quarantined/);
-    expect(state.readCandidateByApprovalId(candidate.approval_id)).toMatchObject({
-      state: "queued",
-    });
-
-    const revisedMeeting: MeetingDocument = {
-      ...meeting,
-      provenance: {
-        ...meeting.provenance,
-        canonical_revision: "sha256:note-2",
-      },
-      content: [
-        { id: "block-2", kind: "note", text: "Ship the revised onboarding." },
-      ],
-    };
-    const successor = await state.stageCandidate({
-      admission: current,
-      meeting: revisedMeeting,
-      decisions: {
-        ...decisions,
-        meeting_revision: revisedMeeting.provenance.canonical_revision,
-        signals: [{
-          ...decisions.signals[0]!,
-          text: revisedMeeting.content[0]!.text,
-          evidence: [{ meeting_id: revisedMeeting.id, block_id: "block-2" }],
-        }],
-      },
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(successor);
+  it("supersedes an undecided frozen proposal and keeps its snapshot", async () => {
+    const { value, state, current, candidate } = await actionableFixture();
+    addProjects(value, PROJECT_A);
+    const frozen = state.freezeProposal({ candidate_id: candidate.candidate_id, approved_snapshot: snapshotFor(candidate), suggested_project_ids: [PROJECT_A] });
+    const successor = await stageRevision(state, current, "after-freeze");
     expect(state.readCandidateByApprovalId(candidate.approval_id)).toMatchObject({
       state: "superseded",
       superseded_by_candidate_id: successor.candidate_id,
+      approved_snapshot_json: frozen.approved_snapshot_json,
+      approved_snapshot_sha256: frozen.approved_snapshot_sha256,
+      suggested_project_ids: [PROJECT_A],
     });
-    expect(state.listPendingApprovalDeliveries()).toHaveLength(1);
-    expect(state.listPendingApprovalDeliveries()[0]?.candidate_id).toBe(
-      successor.candidate_id,
-    );
+    expect(state.approvalIsCurrent(candidate.approval_id)).toBe(false);
+    expect(state.listPendingApprovalDeliveries().map(item => item.approval_id)).toEqual([successor.approval_id]);
   });
 
-  it("lists only current actionable approvals that still need delivery", async () => {
+  it("lists only current actionable approvals that still need a frozen proposal", async () => {
     let tick = 0;
+    const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
-      database(),
+      value,
       fixtureCursorPolicy,
       "llm",
       () => new Date(Date.parse(ADVANCED_AT) + tick++ * 1_000).toISOString(),
+      FIXTURE_SOURCE_KEY,
     );
     const current = await state.readAdmission();
     const forMeeting = (suffix: string): MeetingDocument => ({
@@ -342,166 +302,64 @@ it.each(["approved", "rejected"] as const)(
         external_id: `note-${suffix}`,
         canonical_revision: `sha256:note-${suffix}`,
       },
-      content: [
-        {
-          id: `block-${suffix}`,
-          kind: "note",
-          text: `Decision ${suffix}.`,
-        },
-      ],
+      content: [{ id: `block-${suffix}`, kind: "note", text: `Decision ${suffix}.` }],
     });
     const forDecisions = (candidateMeeting: MeetingDocument): DecisionSet => ({
       ...decisions,
       meeting_id: candidateMeeting.id,
       meeting_revision: candidateMeeting.provenance.canonical_revision,
-      signals: [
-        {
-          ...decisions.signals[0]!,
-          id: `decision-${candidateMeeting.id}`,
-          text: candidateMeeting.content[0]!.text,
-          evidence: [
-            {
-              meeting_id: candidateMeeting.id,
-              block_id: candidateMeeting.content[0]!.id,
-            },
-          ],
-        },
-      ],
+      signals: [{
+        ...decisions.signals[0]!,
+        id: `decision-${candidateMeeting.id}`,
+        text: candidateMeeting.content[0]!.text,
+        evidence: [{ meeting_id: candidateMeeting.id, block_id: candidateMeeting.content[0]!.id }],
+      }],
     });
     const stage = async (suffix: string) => {
       const candidateMeeting = forMeeting(suffix);
-      const candidate = await state.stageCandidate({
-        admission: current,
-        meeting: candidateMeeting,
-        decisions: forDecisions(candidateMeeting),
-        review_policy: REVIEW_POLICY,
-      });
+      const candidate = await state.stageCandidate({ admission: current, meeting: candidateMeeting, decisions: forDecisions(candidateMeeting), review_policy: REVIEW_POLICY });
       assertActionable(candidate);
       return candidate;
     };
-
-    let providerMessage = 5;
-    const stageOut = (
-      candidate: ActionableMeetingProcessingCandidateV1,
-      token: string,
-    ) => {
-      const frozen_card_sha256 = `sha256:${token.repeat(64)}`;
-      const approved_snapshot = { candidate_id: candidate.candidate_id };
-      const prepared = state.prepareApprovalPost({
-        candidate_id: candidate.candidate_id,
-        frozen_card_sha256,
-        approved_snapshot,
-      });
-      state.recordPostedApprovalCard({
-        candidate_id: candidate.candidate_id,
-        post_started_at: prepared.outbox.post_started_at!,
-        presentation_external_id: `1724292304.00${providerMessage++}000`,
-        frozen_card_sha256,
-        approved_snapshot,
-      });
-      state.markControlPlaneStaged({
-        candidate_id: candidate.candidate_id,
-        control_approval_sha256: `sha256:${token.repeat(64)}`,
-      });
-    };
+    const freeze = (candidate: ActionableMeetingProcessingCandidateV1) =>
+      state.freezeProposal({ candidate_id: candidate.candidate_id, approved_snapshot: snapshotFor(candidate), suggested_project_ids: [] });
 
     const queued = await stage("queued");
-    const posting = await stage("posting");
-    state.prepareApprovalPost({
-      candidate_id: posting.candidate_id,
-      frozen_card_sha256: `sha256:${"p".repeat(64)}`,
-      approved_snapshot: { candidate_id: posting.candidate_id },
-    });
-    const posted = await stage("posted");
-    const postedDigest = `sha256:${"d".repeat(64)}`;
-    const postedSnapshot = { candidate_id: posted.candidate_id };
-    const postedPrepared = state.prepareApprovalPost({
-      candidate_id: posted.candidate_id,
-      frozen_card_sha256: postedDigest,
-      approved_snapshot: postedSnapshot,
-    });
-    state.recordPostedApprovalCard({
-      candidate_id: posted.candidate_id,
-      post_started_at: postedPrepared.outbox.post_started_at!,
-      presentation_external_id: "1724292304.004000",
-      frozen_card_sha256: postedDigest,
-      approved_snapshot: postedSnapshot,
-    });
-
+    const later = await stage("later");
     const stale = await stage("stale");
     const staleRevision = forMeeting("stale-revision");
     const staleHead = await state.stageCandidate({
       admission: current,
-      meeting: {
-        ...staleRevision,
-        provenance: {
-          ...staleRevision.provenance,
-          external_id: "note-stale",
-        },
-      },
+      meeting: { ...staleRevision, provenance: { ...staleRevision.provenance, external_id: "note-stale" } },
       decisions: {
         ...forDecisions(staleRevision),
         meeting_revision: "sha256:note-stale-revision",
-        signals: [
-          {
-            ...forDecisions(staleRevision).signals[0]!,
-            text: "A changed stale decision.",
-          },
-        ],
+        signals: [{ ...forDecisions(staleRevision).signals[0]!, text: "A changed stale decision." }],
       },
       review_policy: REVIEW_POLICY,
     });
     assertActionable(staleHead);
-    stageOut(staleHead, "h");
-
-    const staged = await stage("staged");
-    stageOut(staged, "s");
-
+    freeze(staleHead);
+    freeze(await stage("staged"));
     const coalescedBase = await stage("coalesced");
-    stageOut(coalescedBase, "b");
+    freeze(coalescedBase);
     const coalescedSource = forMeeting("coalesced");
-    const coalescedMeeting: MeetingDocument = {
-      ...coalescedSource,
-      provenance: {
-        ...coalescedSource.provenance,
-        canonical_revision: "sha256:note-coalesced-revision",
-      },
-      time: { actual_start_at: "2026-08-22T01:04:04.005Z" },
-    };
     const coalesced = await state.stageCandidate({
       admission: current,
-      meeting: coalescedMeeting,
-      decisions: {
-        ...forDecisions(coalescedMeeting),
-      },
+      meeting: { ...coalescedSource, provenance: { ...coalescedSource.provenance, canonical_revision: "sha256:note-coalesced-revision" }, time: { actual_start_at: "2026-08-22T01:04:04.005Z" } },
+      decisions: { ...forDecisions(coalescedSource), meeting_revision: "sha256:note-coalesced-revision" },
       review_policy: REVIEW_POLICY,
     });
 
-    expect(
-      state
-        .listPendingApprovalDeliveries()
-        .map(({ approval_id }) => approval_id),
-    ).toEqual([queued.approval_id, posting.approval_id, posted.approval_id]);
-    expect(state.listPendingApprovalDeliveries()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          candidate_id: queued.candidate_id,
-          state: "queued",
-        }),
-        expect.objectContaining({
-          candidate_id: posting.candidate_id,
-          state: "posting",
-        }),
-        expect.objectContaining({
-          candidate_id: posted.candidate_id,
-          state: "posted",
-        }),
-      ]),
-    );
-    expect(state.readCandidateByApprovalId(stale.approval_id)).toMatchObject({
-      state: "superseded",
-    });
+    expect(state.listPendingApprovalDeliveries().map(({ approval_id }) => approval_id)).toEqual([queued.approval_id, later.approval_id]);
+    expect(state.listPendingApprovalDeliveries({ limit: 1 }).map(({ approval_id }) => approval_id)).toEqual([queued.approval_id]);
+    expect(state.listPendingApprovalDeliveries({ source_key: FIXTURE_SOURCE_KEY })).toHaveLength(2);
+    expect(state.listPendingApprovalDeliveries({ source_key: "pms_other" })).toEqual([]);
+    expect(state.listPendingApprovalDeliveries()[0]).toMatchObject({ candidate_id: queued.candidate_id, state: "queued", meeting: forMeeting("queued") });
+    expect(state.readCandidateByApprovalId(stale.approval_id)).toMatchObject({ state: "superseded" });
     expect(coalesced).toMatchObject({ disposition: "coalesced" });
+    value.prepare("UPDATE authority_memberships SET status = 'revoked', revoked_at = ?, revocation_reason = 'fixture' WHERE membership_id = 'mem_test'").run(ADVANCED_AT);
+    expect(state.listPendingApprovalDeliveries()).toEqual([]);
   });
 
   it("materializes one progress row from the immutable admission and advances it by CAS", async () => {
@@ -554,6 +412,28 @@ it.each(["approved", "rejected"] as const)(
     });
   });
 
+  it("runs the after-advance hook inside a successful advance only, and rolls the advance back when it throws", async () => {
+    const value = database();
+    const seen: unknown[] = [];
+    let fail = true;
+    const state = new SqliteAuthorityMeetingProcessingStateV1(value, fixtureCursorPolicy, "llm", () => ADVANCED_AT, FIXTURE_SOURCE_KEY, () => {}, (transition) => {
+      seen.push({ ...transition, in_transaction: value.inTransaction });
+      if (fail) throw new Error("hook refused");
+    });
+    await state.readAdmission();
+    const cursor = () => value.prepare("SELECT cursor FROM authority_live_source_progress_v2").pluck().get();
+    await expect(state.advanceCursor({ expected_cursor: sourceCursor, next_cursor: nextCursor })).rejects.toThrow("hook refused");
+    expect(cursor()).toBe(sourceCursor);
+    fail = false;
+    await expect(state.advanceCursor({ expected_cursor: sourceCursor, next_cursor: nextCursor })).resolves.toBe("advanced");
+    await expect(state.advanceCursor({ expected_cursor: sourceCursor, next_cursor: nextCursor })).resolves.toBe("state_drift");
+    expect(cursor()).toBe(nextCursor);
+    expect(seen).toEqual([
+      { expected_cursor: sourceCursor, next_cursor: nextCursor, in_transaction: true },
+      { expected_cursor: sourceCursor, next_cursor: nextCursor, in_transaction: true },
+    ]);
+  });
+
   it("will not initialize or advance a source after its owner is revoked", async () => {
     const { value, state } = stateFixture();
     await state.readAdmission();
@@ -594,8 +474,8 @@ it.each(["approved", "rejected"] as const)(
     ).toThrow("progress deletion is denied");
   });
 
-  it("freezes one candidate before the post-once Slack/D2 handoff", async () => {
-    const { value, state, current, candidate } = await actionableFixture();
+  it("freezes one candidate before the approval core's proposal freeze", async () => {
+    const { state, current, candidate } = await actionableFixture();
     expect(candidate).toMatchObject({
       candidate_id: expect.stringMatching(/^cnd_/),
       approval_id: expect.stringMatching(/^apr_/),
@@ -606,7 +486,7 @@ it.each(["approved", "rejected"] as const)(
       review_policy_consequence_text: REVIEW_POLICY.policy_consequence_text,
       review_policy_consequence_sha256: REVIEW_POLICY.policy_consequence_sha256,
     });
-    expect(state.readDurableCardStagedAt(candidate.approval_id)).toBeNull();
+    expect(candidate).not.toHaveProperty("durable_staged_at");
     await expect(
       state.stageCandidate({
         admission: current,
@@ -615,55 +495,15 @@ it.each(["approved", "rejected"] as const)(
         review_policy: REVIEW_POLICY,
       }),
     ).resolves.toEqual(candidate);
-    const prepared = state.prepareApprovalPost({
-      candidate_id: candidate.candidate_id,
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: {
-        kind: "approved",
-        candidate_id: candidate.candidate_id,
-      },
-    });
-    const posted = state.recordPostedApprovalCard({
-      candidate_id: candidate.candidate_id,
-      post_started_at: prepared.outbox.post_started_at!,
-      presentation_external_id: "1724292304.005000",
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: {
-        kind: "approved",
-        candidate_id: candidate.candidate_id,
-      },
-    });
-    expect(posted.state).toBe("posted");
-    const staged = state.markControlPlaneStaged({
-      candidate_id: candidate.candidate_id,
-      control_approval_sha256: `sha256:${"e".repeat(64)}`,
-    });
-    expect(staged).toMatchObject({
-      state: "staged",
-      approval_id: candidate.approval_id,
-    });
-    expect(state.readDurableCardStagedAt(candidate.approval_id)).toBe(ADVANCED_AT);
-    expect(state.readCandidateByApprovalId(candidate.approval_id)).toEqual(
-      staged,
-    );
-    expect(
-      state.readFrozenCandidateForApproval(candidate.approval_id),
-    ).toMatchObject({
+    const staged = state.freezeProposal({ candidate_id: candidate.candidate_id, approved_snapshot: snapshotFor(candidate), suggested_project_ids: [] });
+    expect(staged).toMatchObject({ state: "staged", approval_id: candidate.approval_id });
+    expect(state.readCandidateByApprovalId(candidate.approval_id)).toEqual(staged);
+    expect(state.readFrozenCandidateForApproval(candidate.approval_id)).toMatchObject({
       candidate_id: candidate.candidate_id,
       meeting,
       decisions,
-      approved_snapshot: {
-        kind: "approved",
-        candidate_id: candidate.candidate_id,
-      },
+      approved_snapshot: snapshotFor(candidate),
     });
-    value.exec("DROP TRIGGER authority_live_approval_outbox_v2_ordered_transition");
-    value
-      .prepare("UPDATE authority_live_approval_outbox_v2 SET updated_at = '2026-08-22 02:04:04'")
-      .run();
-    expect(() => state.readDurableCardStagedAt(candidate.approval_id)).toThrow(
-      "timestamp must be UTC milliseconds",
-    );
   });
 
   it("rejects a candidate policy that differs from the provider-neutral default", async () => {
@@ -833,22 +673,7 @@ it.each(["approved", "rejected"] as const)(
       },
       review_policy: REVIEW_POLICY,
     });
-    state.prepareApprovalPost({
-      candidate_id: first.candidate_id,
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
-    });
-    const posted = state.recordPostedApprovalCard({
-      candidate_id: first.candidate_id,
-      post_started_at: ADVANCED_AT,
-      presentation_external_id: "1724292304.005000",
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
-    });
-    const staged = state.markControlPlaneStaged({
-      candidate_id: posted.candidate_id,
-      control_approval_sha256: `sha256:${"e".repeat(64)}`,
-    });
+    const staged = state.freezeProposal({ candidate_id: first.candidate_id, approved_snapshot: snapshotFor(first), suggested_project_ids: [] });
     expect(duplicate).toMatchObject({
       disposition: "coalesced",
       state: "coalesced",
@@ -995,325 +820,7 @@ it.each(["approved", "rejected"] as const)(
     });
   });
 
-  it("retains a Slack post that returns after its queued candidate was superseded", async () => {
-    const { state, current, candidate: first } = await actionableFixture();
-    state.prepareApprovalPost({
-      candidate_id: first.candidate_id,
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
-    });
-    const revisedMeeting: MeetingDocument = {
-      ...meeting,
-      provenance: {
-        ...meeting.provenance,
-        canonical_revision: "sha256:note-during-post",
-      },
-    };
-    await state.stageCandidate({
-      admission: current,
-      meeting: revisedMeeting,
-      decisions: {
-        ...decisions,
-        meeting_revision: revisedMeeting.provenance.canonical_revision,
-        signals: [
-          {
-            ...decisions.signals[0]!,
-            id: "decision-during-post",
-            text: "A revision arrived while Slack was posting.",
-          },
-        ],
-      },
-      review_policy: REVIEW_POLICY,
-    });
-    expect(state.listPendingSupersededApprovalCards()).toContainEqual(
-      expect.objectContaining({
-        approval_id: first.approval_id,
-        presentation_external_id: null,
-        post_started_at: ADVANCED_AT,
-      }),
-    );
-    const latePost = {
-      candidate_id: first.candidate_id,
-      post_started_at: ADVANCED_AT,
-      presentation_external_id: "1724292304.005000",
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
-    };
-
-    expect(state.recordPostedApprovalCard(latePost)).toMatchObject({
-      state: "superseded",
-      presentation_external_id: latePost.presentation_external_id,
-    });
-    expect(state.recordPostedApprovalCard(latePost)).toMatchObject({
-      state: "superseded",
-      presentation_external_id: latePost.presentation_external_id,
-    });
-    expect(state.listPendingSupersededApprovalCards()).toContainEqual(
-      expect.objectContaining({
-        approval_id: first.approval_id,
-        presentation_external_id: latePost.presentation_external_id,
-      }),
-    );
-    expect(state.readCandidateByApprovalId(first.approval_id)).toMatchObject({
-      approved_snapshot_json: expect.any(String),
-      approved_snapshot_sha256: expect.stringMatching(/^sha256:/),
-    });
-    expect(() =>
-      state.recordPostedApprovalCard({
-        ...latePost,
-        presentation_external_id: "1724292304.006000",
-      }),
-    ).toThrow("conflicts with its durable outbox");
-  });
-
-  it("releases a superseded post attempt after a definitive provider rejection", async () => {
-    const { state, current, candidate: first } = await actionableFixture();
-    state.prepareApprovalPost({
-      candidate_id: first.candidate_id,
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { candidate_id: first.candidate_id },
-    });
-    const revisedMeeting: MeetingDocument = {
-      ...meeting,
-      provenance: {
-        ...meeting.provenance,
-        canonical_revision: "sha256:definitive-post-failure",
-      },
-    };
-    await state.stageCandidate({
-      admission: current,
-      meeting: revisedMeeting,
-      decisions: {
-        ...decisions,
-        meeting_revision: revisedMeeting.provenance.canonical_revision,
-        signals: [
-          {
-            ...decisions.signals[0]!,
-            id: "decision-after-definitive-failure",
-            text: "Retry only the provider-rejected post.",
-          },
-        ],
-      },
-      review_policy: REVIEW_POLICY,
-    });
-
-    expect(
-      state.releaseApprovalPostAttempt({
-        candidate_id: first.candidate_id,
-        post_started_at: ADVANCED_AT,
-      }),
-    ).toMatchObject({
-      state: "superseded",
-      presentation_external_id: null,
-      frozen_card_sha256: null,
-      approved_snapshot_json: null,
-      post_started_at: null,
-    });
-    expect(state.listPendingSupersededApprovalCards()).not.toContainEqual(
-      expect.objectContaining({ approval_id: first.approval_id }),
-    );
-    expect(
-      state.releaseApprovalPostAttempt({
-        candidate_id: first.candidate_id,
-        post_started_at: ADVANCED_AT,
-      }),
-    ).toMatchObject({
-      state: "superseded",
-      post_started_at: null,
-    });
-  });
-
-  it("releases only the exact unresolved delivery attempt", async () => {
-    const { state, candidate } = await actionableFixture();
-    state.prepareApprovalPost({
-      candidate_id: candidate.candidate_id,
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { candidate_id: candidate.candidate_id },
-    });
-
-    expect(() =>
-      state.releaseApprovalPostAttempt({
-        candidate_id: candidate.candidate_id,
-        post_started_at: "2026-08-22T02:05:03.000Z",
-      }),
-    ).toThrow("is stale");
-    expect(
-      state.readCandidateByApprovalId(candidate.approval_id),
-    ).toMatchObject({
-      state: "posting",
-      post_started_at: ADVANCED_AT,
-    });
-
-    state.recordPostedApprovalCard({
-      candidate_id: candidate.candidate_id,
-      post_started_at: ADVANCED_AT,
-      presentation_external_id: "1724292304.005000",
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { candidate_id: candidate.candidate_id },
-    });
-    expect(() =>
-      state.releaseApprovalPostAttempt({
-        candidate_id: candidate.candidate_id,
-        post_started_at: ADVANCED_AT,
-      }),
-    ).toThrow("is externally visible");
-  });
-
-  it("rejects a late post result after the same approval starts a new attempt", async () => {
-    let now = ADVANCED_AT;
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      database(),
-      fixtureCursorPolicy,
-      "llm",
-      () => now,
-    );
-    const current = await state.readAdmission();
-    const candidate = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(candidate);
-    const frozen_card_sha256 = `sha256:${"c".repeat(64)}`;
-    const approved_snapshot = { candidate_id: candidate.candidate_id };
-    const firstAttempt = state.prepareApprovalPost({
-      candidate_id: candidate.candidate_id,
-      frozen_card_sha256,
-      approved_snapshot,
-    });
-    const firstStartedAt = firstAttempt.outbox.post_started_at!;
-
-    state.releaseApprovalPostAttempt({
-      candidate_id: candidate.candidate_id,
-      post_started_at: firstStartedAt,
-    });
-    now = NEXT_CUTOFF;
-    const secondAttempt = state.prepareApprovalPost({
-      candidate_id: candidate.candidate_id,
-      frozen_card_sha256,
-      approved_snapshot,
-    });
-    const secondStartedAt = secondAttempt.outbox.post_started_at!;
-    expect(secondStartedAt).not.toBe(firstStartedAt);
-
-    expect(() =>
-      state.recordPostedApprovalCard({
-        candidate_id: candidate.candidate_id,
-        post_started_at: firstStartedAt,
-        presentation_external_id: "1724292304.005000",
-        frozen_card_sha256,
-        approved_snapshot,
-      }),
-    ).toThrow("post result is stale");
-    expect(
-      state.readCandidateByApprovalId(candidate.approval_id),
-    ).toMatchObject({
-      state: "posting",
-      post_started_at: secondStartedAt,
-      presentation_external_id: null,
-    });
-  });
-
-  it("retains every stale posted card through an A-to-B-to-C no-signals lineage", async () => {
-    const { state, current, candidate: first } = await actionableFixture();
-    state.prepareApprovalPost({
-      candidate_id: first.candidate_id,
-      frozen_card_sha256: `sha256:${"a".repeat(64)}`,
-      approved_snapshot: { candidate_id: first.candidate_id },
-    });
-    state.recordPostedApprovalCard({
-      candidate_id: first.candidate_id,
-      post_started_at: ADVANCED_AT,
-      presentation_external_id: "1724292304.005000",
-      frozen_card_sha256: `sha256:${"a".repeat(64)}`,
-      approved_snapshot: { candidate_id: first.candidate_id },
-    });
-    const revisedMeeting: MeetingDocument = {
-      ...meeting,
-      provenance: {
-        ...meeting.provenance,
-        canonical_revision: "sha256:note-b",
-      },
-    };
-    const second = await state.stageCandidate({
-      admission: current,
-      meeting: revisedMeeting,
-      decisions: {
-        ...decisions,
-        meeting_revision: revisedMeeting.provenance.canonical_revision,
-        signals: [{ ...decisions.signals[0]!, id: "decision-b", text: "B" }],
-      },
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(second);
-    state.prepareApprovalPost({
-      candidate_id: second.candidate_id,
-      frozen_card_sha256: `sha256:${"b".repeat(64)}`,
-      approved_snapshot: { candidate_id: second.candidate_id },
-    });
-    state.recordPostedApprovalCard({
-      candidate_id: second.candidate_id,
-      post_started_at: ADVANCED_AT,
-      presentation_external_id: "1724292304.006000",
-      frozen_card_sha256: `sha256:${"b".repeat(64)}`,
-      approved_snapshot: { candidate_id: second.candidate_id },
-    });
-    const noSignalsMeeting: MeetingDocument = {
-      ...revisedMeeting,
-      provenance: {
-        ...revisedMeeting.provenance,
-        canonical_revision: "sha256:note-c",
-      },
-    };
-    const third = await state.stageCandidate({
-      admission: current,
-      meeting: noSignalsMeeting,
-      decisions: {
-        ...decisions,
-        meeting_revision: noSignalsMeeting.provenance.canonical_revision,
-        signals: [],
-      },
-      review_policy: REVIEW_POLICY,
-    });
-    expect(third.disposition).toBe("no_signals");
-
-    const stale = state.listPendingSupersededApprovalCards();
-    expect(stale).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          approval_id: first.approval_id,
-          superseded_by_candidate_id: second.candidate_id,
-        }),
-        expect.objectContaining({
-          approval_id: second.approval_id,
-          superseded_by_candidate_id: third.candidate_id,
-        }),
-      ]),
-    );
-    for (const card of stale) {
-      if (card.presentation_external_id === null) {
-        throw new Error("posted stale fixture has no provider timestamp");
-      }
-      const postedCard = {
-        approval_id: card.approval_id,
-        presentation_external_id: card.presentation_external_id,
-      };
-      state.recordSupersededApprovalCardTombstoned(postedCard);
-      state.recordSupersededApprovalCardTombstoned(postedCard);
-    }
-    expect(state.listPendingSupersededApprovalCards()).toEqual([]);
-    expect(state.readCandidateByApprovalId(first.approval_id)).toMatchObject({
-      state: "superseded",
-      tombstoned_at: ADVANCED_AT,
-    });
-    expect(state.readCandidateByApprovalId(second.approval_id)).toMatchObject({
-      state: "superseded",
-      tombstoned_at: ADVANCED_AT,
-    });
-  });
-
-  it("rejects impossible supersession evidence transitions", async () => {
+  it("rejects impossible proposal transitions", async () => {
     const { value, state, current, candidate: first } = await actionableFixture();
     const otherMeeting: MeetingDocument = {
       ...meeting,
@@ -1341,58 +848,58 @@ it.each(["approved", "rejected"] as const)(
       review_policy: REVIEW_POLICY,
     });
     assertActionable(queued);
-    expect(() =>
-      value
-        .prepare(
-          `UPDATE authority_live_approval_outbox_v2
-          SET state = 'superseded', provider_message_ts = '1724292304.005000',
-              frozen_card_sha256 = ?, approved_snapshot_json = '{}',
-              approved_snapshot_sha256 = ?, superseded_by_candidate_id = ?,
-              superseded_at = ?, updated_at = ?
-        WHERE candidate_id = ?`,
-        )
-        .run(
-          `sha256:${"a".repeat(64)}`,
-          `sha256:${"b".repeat(64)}`,
-          first.candidate_id,
-          ADVANCED_AT,
-          ADVANCED_AT,
-          queued.candidate_id,
-        ),
-    ).toThrow("only permits queued-posting-posted-staged-superseded");
+    const update = (sql: string, ...args: unknown[]) => () => value.prepare(`UPDATE authority_live_approval_outbox_v2 SET ${sql} WHERE candidate_id = ?`).run(...args, queued.candidate_id);
+    const snapshot = canonicalJson(snapshotFor(queued));
+    expect(update("state = 'superseded', approved_snapshot_json = ?, approved_snapshot_sha256 = ?, suggested_projects_json = '[]', superseded_by_candidate_id = ?, superseded_at = ?, updated_at = ?",
+      snapshot, canonicalSha256(snapshotFor(queued)), first.candidate_id, ADVANCED_AT, ADVANCED_AT)).toThrow("only permits queued-staged-superseded");
+    expect(update("state = 'staged', updated_at = ?", ADVANCED_AT)).toThrow("CHECK constraint failed");
+    expect(update("state = 'staged', approved_snapshot_json = '{}', approved_snapshot_sha256 = ?, suggested_projects_json = '[]', updated_at = ?",
+      canonicalSha256({}), ADVANCED_AT)).toThrow("CHECK constraint failed");
+    state.freezeProposal({ candidate_id: queued.candidate_id, approved_snapshot: snapshotFor(queued), suggested_project_ids: [] });
+    expect(update("state = 'queued', approved_snapshot_json = NULL, approved_snapshot_sha256 = NULL, suggested_projects_json = NULL, updated_at = ?", ADVANCED_AT))
+      .toThrow("only permits queued-staged-superseded");
+    expect(update("approved_snapshot_json = ?, approved_snapshot_sha256 = ?, updated_at = ?", canonicalJson({ ...snapshotFor(queued), kind: "x" }), canonicalSha256({ ...snapshotFor(queued), kind: "x" }), ADVANCED_AT))
+      .toThrow("only permits queued-staged-superseded");
+    expect(update("state = 'superseded', superseded_by_candidate_id = ?, superseded_at = ?, updated_at = ?", queued.candidate_id, ADVANCED_AT, ADVANCED_AT))
+      .toThrow("CHECK constraint failed");
+    expect(update("state = 'superseded', approved_snapshot_json = NULL, approved_snapshot_sha256 = NULL, suggested_projects_json = NULL, superseded_by_candidate_id = ?, superseded_at = ?, updated_at = ?",
+      first.candidate_id, ADVANCED_AT, ADVANCED_AT)).toThrow("only permits queued-staged-superseded");
+    update("state = 'superseded', superseded_by_candidate_id = ?, superseded_at = ?, updated_at = ?", first.candidate_id, ADVANCED_AT, ADVANCED_AT)();
+    expect(update("state = 'staged', superseded_by_candidate_id = NULL, superseded_at = NULL, updated_at = ?", ADVANCED_AT)).toThrow("only permits queued-staged-superseded");
+    expect(update("state = 'superseded', updated_at = ?", ADVANCED_AT)).toThrow("only permits queued-staged-superseded");
+  });
 
-    const directQueuedPost = {
-      candidate_id: queued.candidate_id,
-      post_started_at: ADVANCED_AT,
-      presentation_external_id: "1724292304.005001",
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { candidate_id: queued.candidate_id },
-    };
-    expect(() => state.recordPostedApprovalCard(directQueuedPost)).toThrow(
-      "conflicts with its durable outbox",
-    );
-    state.prepareApprovalPost({
-      candidate_id: directQueuedPost.candidate_id,
-      frozen_card_sha256: directQueuedPost.frozen_card_sha256,
-      approved_snapshot: directQueuedPost.approved_snapshot,
-    });
-    state.recordPostedApprovalCard(directQueuedPost);
-    expect(() =>
-      value
-        .prepare(
-          `UPDATE authority_live_approval_outbox_v2
-          SET state = 'superseded', control_approval_sha256 = ?,
-              superseded_by_candidate_id = ?, superseded_at = ?, updated_at = ?
-        WHERE candidate_id = ?`,
-        )
-        .run(
-          `sha256:${"d".repeat(64)}`,
-          first.candidate_id,
-          ADVANCED_AT,
-          ADVANCED_AT,
-          queued.candidate_id,
-        ),
-    ).toThrow("only permits queued-posting-posted-staged-superseded");
+  it("SqliteApprovalWorkflowStateV1 reads proposals across configured sources and hides unconfigured ones", async () => {
+    const { value, state, candidate: first } = await actionableFixture();
+    const columns = (value.pragma("table_info(authority_live_source_admission_v2)") as { name: string }[]).map(row => row.name).filter(name => name !== "source_key");
+    const row = value.prepare("SELECT * FROM authority_live_source_admission_v2").get() as Record<string, unknown>;
+    value.prepare(`INSERT INTO authority_live_source_admission_v2 (${columns.join(",")}, source_key) VALUES (${columns.map(() => "?").join(",")}, ?)`)
+      .run(...columns.map(column => column === "semantic_input_sha256" ? `sha256:${"b".repeat(64)}` : column === "source_adapter_id" ? "other-source" : column === "source_adapter_instance_id" ? "second-person-source" : row[column]), "pms_second");
+    const otherPolicy = { source_adapter_id: "other-source", assert_live_cursor: fixtureCursorPolicy.assert_live_cursor };
+    const second = new SqliteAuthorityMeetingProcessingStateV1(value, otherPolicy, "llm", () => ADVANCED_AT, "pms_second");
+    const secondAdmission = await second.readAdmission();
+    const secondMeeting: MeetingDocument = { ...meeting, id: "meeting-second", provenance: { ...meeting.provenance, source: { ...meeting.provenance.source, adapter_id: "other-source", instance_id: "second-person-source" }, external_id: "note-second" } };
+    const secondDecisions: DecisionSet = { ...decisions, meeting_id: secondMeeting.id, signals: [{ ...decisions.signals[0]!, evidence: [{ meeting_id: secondMeeting.id, block_id: "block-1" }] }] };
+    const other = await second.stageCandidate({ admission: secondAdmission, meeting: secondMeeting, decisions: secondDecisions, review_policy: REVIEW_POLICY });
+    assertActionable(other);
+
+    expect(() => new SqliteApprovalWorkflowStateV1(value, { source_cursor_policies: [fixtureCursorPolicy, fixtureCursorPolicy], processor_adapter_id: "llm" }))
+      .toThrow("distinct source adapters");
+    const one = new SqliteApprovalWorkflowStateV1(value, { source_cursor_policies: [fixtureCursorPolicy], processor_adapter_id: "llm", now: () => ADVANCED_AT });
+    expect(one.readCandidateByApprovalId(first.approval_id)).toEqual(state.readCandidateByApprovalId(first.approval_id));
+    expect(one.readCandidateByApprovalId(other.approval_id)).toBeUndefined();
+    expect(one.readFrozenCandidateForApproval(other.approval_id)).toBeUndefined();
+    expect(one.listPendingApprovalDeliveries().map(item => item.approval_id)).toEqual([first.approval_id]);
+    expect(() => one.freezeProposal({ candidate_id: other.candidate_id, approved_snapshot: snapshotFor(other), suggested_project_ids: [] }))
+      .toThrow("approval proposal source is not configured in this runtime");
+    expect(one.readCandidateByApprovalId("apr_" + "0".repeat(64))).toBeUndefined();
+
+    const both = new SqliteApprovalWorkflowStateV1(value, { source_cursor_policies: [fixtureCursorPolicy, otherPolicy], processor_adapter_id: "llm", now: () => ADVANCED_AT });
+    expect(both.listPendingApprovalDeliveries().map(item => item.approval_id).sort()).toEqual([first.approval_id, other.approval_id].sort());
+    expect(both.listPendingApprovalDeliveries({ source_key: "pms_second" }).map(item => item.approval_id)).toEqual([other.approval_id]);
+    expect(both.freezeProposal({ candidate_id: other.candidate_id, approved_snapshot: snapshotFor(other), suggested_project_ids: [] })).toMatchObject({ state: "staged" });
+    expect(second.readCandidateByApprovalId(other.approval_id)).toMatchObject({ state: "staged" });
+    expect(both.readFrozenCandidateForApproval(first.approval_id)).toMatchObject({ meeting, decisions, approved_snapshot: null });
   });
 
   it("keeps separate source meetings on independent review lineages", async () => {

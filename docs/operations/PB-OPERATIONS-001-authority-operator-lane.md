@@ -50,7 +50,7 @@ then review their evidence. A release that ships ADR-0024 has no compatible
 transition; follow its
 [release note](../../deploy/release/README.md#prepare-the-transition-before-staging)
 for the update window, the desktop reinstalls and the added list and open
-checks. After the existing private Slack-card approval and
+checks. After the canary meeting's approval and
 candidate-client checks, a human makes the final decision on the exact release.
 Only then may the operator promote the server and publish the signed feed using
 their existing, separate commands. A staged candidate never implies permission
@@ -60,8 +60,8 @@ One final human review may approve the exact release and Person-client hashes
 together with the prepared manifest hash, channel, both targets, and the
 expected predecessor feed hash when there is one. Record those approvals using
 the existing release authorization and exact digest approvals required by the
-server and feed CLIs. The review does not replace the separate private
-Slack-card approval, create either authorization automatically, or turn general
+server and feed CLIs. The review does not replace the separate canary
+approval, create either authorization automatically, or turn general
 workflow approval into consent for a different candidate, manifest or feed
 predecessor.
 
@@ -87,8 +87,8 @@ entry in its signed feed.
 | Inspect staging | `authority:staging status` for the slot; the release CLI's fresh `status` action for a current-host release; human host-wrapper `status` during initial onboarding. |
 | Rehearse staged connector intake | After deploying the explicit staging connector profile through the existing release/onboarding lanes, use the [staging connector runner](../../services/organization-authority/README.md#staging-connector-rehearsal) from the owner Mac. It uses the existing Person session for bounded, release/profile-bound observations. It neither deploys nor resets the host, enables Jira Ask, or grants provider qualification. |
 | Move staging off the retired connector profiles | With no live users, follow the ordered [fresh connector rehearsal](../../deploy/organization-authority/README.md#moving-off-the-retired-v1-profile-or-v2-rebind): confirm the old wrapper reports no interrupted rebind, install the target release's reviewed host tooling while the old rehearsal is in place, disconnect the retired Jira connection in Nango, run the human `replace-rehearsal --confirm-no-live-users` without provider reuse, transfer the full seven-file input carrying the single profile, then repeat Slack setup and Jira consent on the owner Mac. The offline whole-volume verifier refuses any selected rehearsal; same-volume host reconstruction accepts only the fixed profile and its bound sidecar. |
-| Update the current accepted host | Follow the [automated release lane](../../deploy/release/README.md#automated-current-host-staging-lane): install reviewed tooling, stage, canary, human Slack approval, operator client checks, human final decision, promote. For a matching client release, also follow [coordinated server and client release](../../deploy/release/README.md#coordinated-server-and-client-release). Execute reviewed merged tooling from a clean checkout. `stage` accepts only the current persisted baseline and never migrates older state. |
-| Move staging from an older baseline to a V11 release | V11 is fresh-state only; no migration reaches it ([release guide](../../deploy/release/README.md)). With no live users, the human host operator runs the [authorized reset](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state) `./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users`, then prepares the organization again with the V11 release record and matching runtime profile. To keep provider credentials, use the provider-reuse row below instead; a host prepared before Slack moved to Nango follows the next row. Continue with onboarding and the canary gates. |
+| Update the current accepted host | Follow the [automated release lane](../../deploy/release/README.md#automated-current-host-staging-lane): install reviewed tooling, stage, canary, human approval of the canary meeting (desktop or Slack), operator client checks, human final decision, promote. For a matching client release, also follow [coordinated server and client release](../../deploy/release/README.md#coordinated-server-and-client-release). Execute reviewed merged tooling from a clean checkout. `stage` accepts only the current persisted baseline and never migrates older state. |
+| Move staging from an older baseline to a V12 release | Authority V12 and control-plane V4 are fresh-state only; no migration reaches them ([release guide](../../deploy/release/README.md)). With no live users, the human host operator runs the [authorized reset](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state) `./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users`, then prepares the organization again with the V12 release record and matching runtime profile. The reset empties the record log too, so earlier approvals do not carry over, and no organization meeting source is prepared: meetings come only from a person's own sources. To keep provider credentials, use the provider-reuse row below instead; a host prepared before Slack moved to Nango follows the next row. Continue with onboarding and the canary gates. |
 | Move a host prepared before Slack moved to Nango | Follow the [ordered reset](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state): first install the target release's reviewed host tooling through the automated release lane while the old rehearsal is still present, then the human `replace-rehearsal --confirm-no-live-users` without provider reuse, then transfer the full seven-file input, which prepares the host. The transfer runs the installed wrapper, and the lane refuses to install after the reset. |
 | First onboarding | Follow [resumable onboarding](../../deploy/organization-authority/README.md#resumable-initial-owner-onboarding) and the actor table below. Host-local onboarding remains in the human Session Manager lane. An original pre-Slack candidate staged during initial onboarding may use the documented human-only continuation after Slack setup and personal linking; ordinary `resume` remains blocked while any candidate is staged. |
 | Transfer initial inputs | Onboarding-transfer `preflight`, `plan`, review the named change set, then `execute`. Run `cleanup` only when execute retains the receipt and reports `cleanup_required`. |
@@ -132,9 +132,9 @@ Use the actor below; preserve the underlying identity, approval and health check
 | Inspect or retry a held extraction | Human in Session Manager through the installed `onboard-clean-v1.sh extraction-attempts` and `retry-extraction` commands; follow the [exact recovery procedure](../../deploy/organization-authority/README.md#inspect-and-retry-a-held-extraction). A retry explicitly authorizes one additional model call. |
 | Organization Slack setup token | Human generates a setup token from Slack's "Your App Configuration Tokens" page and pastes it at the hidden prompt of `person tools setup --tool slack`, or pipes it in (for example `pbpaste \| "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack`); neither echoes the token. Before an active organization Slack connection exists, the human may use the [existing-app setup option](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection) with its named hidden prompts. ECHO passes the saved app credentials to Nango; the human does not copy them into Nango's integration settings. To resume an unfinished install, or reconnect after Slack was uninstalled, after Nango lost the connection, or after an install landed in another workspace, without a new setup token, add `--reconnect`. |
 | Unreleased rehearsal replacement and `prepare-rehearsal` using retained provider inputs | Human in Session Manager after the nonsecret transfer completes. Credentials stay on the host; use the exact operation ID from its receipt. |
-| Private Slack-card approval | Human, for each card. |
+| Approval of the canary or a fixture meeting | Human, for each proposal: on the desktop meetings sheet, or on the Slack DM copy when the owner linked Slack. The first decision wins, wherever it is made. |
 | Infrastructure change set or private handoff not yet approved for its exact scope | Human reviews the prepared result once. |
-| Final decision on the exact candidate release and, when applicable, its exact signed-feed inputs | Human, after successful candidate-client checks. The existing private Slack-card approval remains separate. |
+| Final decision on the exact candidate release and, when applicable, its exact signed-feed inputs | Human, after successful candidate-client checks. The canary approval remains separate. |
 
 For browser onboarding, the local operator privately transfers the invitation
 and accepted record through the reviewed export CLI, verifies the matching
@@ -167,14 +167,14 @@ version string alone is not exact-client evidence. If the local operator cannot
 access that Mac, provide these commands to the human once. The human host
 operator then runs `./onboard-clean-v1.sh resume` and `./onboard-clean-v1.sh status`.
 Older installed wrappers may label these reads `FOUNDER ACTION`; the delegation
-above applies to the reads only, never the Slack approval or host commands.
+above applies to the reads only, never the canary approval or host commands.
 For the fresh four-meeting source, use the linked rehearsal's four approvals
 and owner/employee read checks instead of this single-canary query.
 
 For an update, use the candidate's two checks in the
 [release loop](../../deploy/release/README.md#ec2-authority-replacement), which
 include a cited Ask. After `stage` and synthetic `canary`, stop for the founder's
-private Slack-card approval. The local operator installs the verified candidate
+approval of the canary meeting, on the desktop or in Slack if linked. The local operator installs the verified candidate
 client and runs its checks. Only after both checks pass, show their evidence
 and ask the founder for the final decision on that exact candidate.
 Preserve the separate release- and client-digest-bound authorization before
@@ -187,8 +187,10 @@ the exact candidate.
 
 ## Evidence and completion
 
-The staging canary is synthetic and staging-only. Do not create a live Granola
-note for this flow. Ordinary initial terminal green requires the release-bound
+The staging canary is synthetic and staging-only. It runs on the owner's
+synthetic personal source, which replaces the removed organization meeting
+source, and its proposal is approved like any other meeting. Do not create a
+live Granola note for this flow. Ordinary initial terminal green requires the release-bound
 synthetic receipt. A [fresh four-meeting rehearsal](../../deploy/organization-authority/README.md#fresh-four-meeting-staging-rehearsal)
 instead requires all four admitted fixture meetings to have published approvals.
 Both require positive Layer 1 and Layer 2 owner reads after the approved

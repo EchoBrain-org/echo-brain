@@ -8,19 +8,19 @@ import type Database from "better-sqlite3";
 /** `ECAU` is stable for the Authority database role. */
 export const AUTHORITY_BASELINE_APPLICATION_ID_V1 = 0x45434155;
 /** The only Authority schema; earlier baselines remain in Git history. */
-export const AUTHORITY_BASELINE_SCHEMA_VERSION_V11 = 11;
+export const AUTHORITY_BASELINE_SCHEMA_VERSION_V12 = 12;
 
-export function authorityBaselineSqlV11(): string {
-  return readFileSync(new URL("../../../../baselines/authority-baseline-v11.sql", import.meta.url), "utf8");
+export function authorityBaselineSqlV12(): string {
+  return readFileSync(new URL("../../../../baselines/authority-baseline-v12.sql", import.meta.url), "utf8");
 }
 
-export function authorityBaselineSha256V11(): Sha256Digest {
-  return sha256Digest(authorityBaselineSqlV11());
+export function authorityBaselineSha256V12(): Sha256Digest {
+  return sha256Digest(authorityBaselineSqlV12());
 }
 
-/** V11 applies only to a completely empty fresh Authority database. */
-export function applyAuthorityBaselineV11(database: Database.Database): void {
-  applyEmptyAuthorityBaseline(database, authorityBaselineSqlV11(), AUTHORITY_BASELINE_SCHEMA_VERSION_V11);
+/** V12 applies only to a completely empty fresh Authority database. */
+export function applyAuthorityBaselineV12(database: Database.Database): void {
+  applyEmptyAuthorityBaseline(database, authorityBaselineSqlV12(), AUTHORITY_BASELINE_SCHEMA_VERSION_V12);
 }
 
 /**

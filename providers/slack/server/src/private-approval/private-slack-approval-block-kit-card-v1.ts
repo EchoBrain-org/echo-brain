@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-  PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PersonApprovalPolicyId,
 } from "../organization-control-plane/slack-approval-integration-v1.js";
+
+/** Longest approval note a card accepts, in UTF-16 code units. */
+export const PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS = 1000;
 
 export const PRIVATE_SLACK_APPROVAL_BLOCK_KIT_CARD_KIND =
   "echo-private-approval-block-kit-card-v1" as const;

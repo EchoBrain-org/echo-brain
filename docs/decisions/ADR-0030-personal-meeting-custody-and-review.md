@@ -80,11 +80,23 @@ factories also used by Slack. Retrying or recovering an accepted act produces
 one signed record, even after disconnect. Recovery precedes startup search
 readiness. Slack consent is not required.
 
+Update, 2026-10-08 ([ADR-0031](ADR-0031-unified-meeting-approval-core.md)): the
+in-app review module and its native human-act reference are replaced by the
+shared approval core and the neutral `echo-approval-decision-ref-v1` reference,
+used by the desktop and by Slack alike. There is one source per person and tool
+account. The project chosen at import or folder watch is now a per-meeting
+suggestion that pre-ticks the approval card and is what lets suggested-project
+members read the unapproved notes. State is Authority baseline V12 (fresh state
+only), not V11.
+
 Imported notes and provider summaries enter the existing original-context
 list/open/Ask/citation boundary with the explicit `imported_meeting` kind and
-an unapproved label. They do not become signed decisions. Private imports are
-readable only by their importing person; project imports by current project
-members. Mine additionally requires the importing person. Exact citations pin
+an unapproved label. They do not become signed decisions. The importing person
+always reads their own imports, including after leaving a project. Members of a
+project suggested for that meeting (suggestions are per meeting) read its
+imported notes while they are members. A private import, with no project, is
+readable by the importing person only. Mine additionally requires the importing
+person. Exact citations pin
 an immutable source revision; every release rechecks current authorization and
 uses the existing read audit and content-integrity checks. This reader does not
 activate the separate proposed V2 general capture contracts.

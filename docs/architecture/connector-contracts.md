@@ -124,8 +124,10 @@ continues to bind custody, audience, immutable revisions and approval policy.
 An export grant does not automatically authorize retention or sharing.
 
 The ordinary runtime no longer selects an organization Granola export bridge
-or requires its credentials. Generic source admission and approval remain, as
-does staging-only synthetic meeting infrastructure. Personal Granola OAuth and
+or requires its credentials. Generic source admission and the approval core
+remain, as does the staging-only synthetic personal meeting source. Meetings
+enter only through a person's own sources; no organization meeting source
+exists. Personal Granola OAuth and
 selected-folder intake are specified by the
 [Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md)
 and implemented through [ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md).

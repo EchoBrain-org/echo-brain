@@ -130,20 +130,13 @@ try {
     return result;
   };
   const success = result => assert.equal(result.state, 'succeeded', JSON.stringify(result.outcome));
-  const runCanary = () => {
-    const sourcePulls = read(join(root, 'provider-evidence.json')).source_pulls;
-    const result = action('canary');
-    assert.equal(read(join(root, 'provider-evidence.json')).source_pulls, sourcePulls,
-      'canary must not poll the admitted meeting source');
-    return result;
-  };
+  const runCanary = () => action('canary');
   const rows = (database, sql) => {
     const db = new Database(join(host, 'clean-data/state', database), { readonly: true });
     try { return db.prepare(sql).all(); } finally { db.close(); }
   };
   const noApproval = () => {
-    assert.deepEqual(rows('integrations.sqlite', 'SELECT * FROM organization_private_approval_signed_action_receipts_v2'), []);
-    assert.deepEqual(rows('integrations.sqlite', 'SELECT * FROM organization_private_approval_terminal_evidence_v2'), []);
+    assert.deepEqual(rows('authority.sqlite', 'SELECT * FROM authority_approval_decisions_v1'), []);
     assert.deepEqual(rows('record-log.sqlite', 'SELECT * FROM organization_record_log'), []);
   };
   const noEngineCalls = () => existsSync(join(root, 'engine-calls.jsonl')) ? readFileSync(join(root, 'engine-calls.jsonl'), 'utf8') : '';
@@ -158,41 +151,19 @@ try {
   success(action('install'));
   assert.equal(noEngineCalls(), '', 'inspection/install must never invoke container actions');
   success(action('stage'));
-  const admittedSourceCursor = rows('authority.sqlite', 'SELECT cursor FROM authority_live_source_progress_v2');
-  assert.equal(admittedSourceCursor.length, 1);
-  const beforeFailure = read(join(root, 'provider-evidence.json'));
-  // Source staging now reconciles pending delivery once before returning. Hold
-  // both attempts so this operation proves the durable pending path.
-  write(join(root, 'provider-evidence.json'), { ...beforeFailure, publish_failures_remaining: 2 });
-  const pending = runCanary();
-  assert.equal(pending.state, 'failed');
-  assert.equal(pending.outcome.code, 'delivery_pending');
-  assert.equal(existsSync(join(release, 'canary-receipts', candidate.release_id + '.json')), false);
-  const afterFailure = read(join(root, 'provider-evidence.json'));
-  assert.equal(afterFailure.extraction_calls, 1);
-  assert.equal(afterFailure.messages.length, 1);
-  assert.deepEqual(afterFailure.messages[0].blocks, [], 'failed publication leaves only an inert marker');
-  const custody = rows('authority.sqlite', "SELECT source_id, adapter_id, instance_id, external_id FROM authority_sources_v1");
-  assert.deepEqual(custody.map(row => ({ ...row })), [{ source_id: custody[0].source_id, adapter_id: 'synthetic-staging-canary', instance_id: 'staging', external_id: `synthetic-staging-canary:${candidate.release_id}` }]);
-  const sourceRevisions = rows('authority.sqlite', 'SELECT source_id, revision_id, content_sha256 FROM authority_source_revisions_v1');
-  const sourceContents = rows('authority.sqlite', 'SELECT source_id, revision_id, content_json FROM authority_source_contents_v1');
-  assert.equal(sourceRevisions.length, 1);
-  assert.equal(sourceContents.length, 1);
-  assert.equal(sourceRevisions[0].source_id, sourceContents[0].source_id);
-  assert.equal(sourceRevisions[0].revision_id, sourceContents[0].revision_id);
-  assert.match(sourceContents[0].content_json, /Synthetic staging canary transcript/);
-  const frozenBeforeReplay = rows('authority.sqlite', 'SELECT private_approval_card_v2_json FROM authority_live_approval_outbox_v2');
-  assert.equal(frozenBeforeReplay.length, 1);
-  assert.equal(typeof frozenBeforeReplay[0].private_approval_card_v2_json, 'string');
-  noApproval();
-  await stop();
-  await start(candidate.release_id);
   success(runCanary());
   const receipt = read(join(release, 'canary-receipts', candidate.release_id + '.json'));
   assert.equal(receipt.approval_outcome, 'staged');
   assert.equal(receipt.release_id, candidate.release_id);
-  // A fresh canary operation after a second runtime restart must observe the
-  // durable delivery acknowledgment without re-extracting or posting again.
+  assert.equal(read(join(root, 'provider-evidence.json')).extraction_calls, 1);
+  const custody = rows('authority.sqlite', "SELECT source_id, adapter_id, external_id FROM authority_sources_v1");
+  assert.deepEqual(custody.map(row => ({ ...row })), [{ source_id: custody[0].source_id, adapter_id: 'staging-synthetic-meeting', external_id: 'synthetic-release-canary' }]);
+  const sourceContents = rows('authority.sqlite', 'SELECT content_json FROM authority_source_contents_v1');
+  assert.equal(sourceContents.length, 1);
+  assert.match(sourceContents[0].content_json, /Synthetic staging canary transcript/);
+  noApproval();
+  // A fresh canary operation after a runtime restart reuses the frozen proposal
+  // without extracting again.
   await stop();
   await start(candidate.release_id);
   success(runCanary());
@@ -200,34 +171,19 @@ try {
   assert.deepEqual(read(join(release, 'current.clean-v1.json')), accepted, 'must not promote');
   assert.deepEqual(read(join(release, 'candidate.clean-v1.json')), candidate);
   const providers = read(join(root, 'provider-evidence.json'));
-  assert.equal(providers.messages.length, 1);
   assert.equal(providers.extraction_calls, 1);
   assert.deepEqual(providers.worker_errors, []);
-  assert.ok(providers.messages[0].blocks.length > 0, 'real card publication required');
-  const card = JSON.stringify(providers.messages[0].blocks);
-  for (const label of ['Approve meeting', 'Reject', 'Only me', 'Team', 'Projects', 'Projects to share with', 'Transcript', 'Share transcript with the selected audience']) assert.ok(card.includes(label), 'missing human card control: ' + label);
-  const outbox = rows('authority.sqlite', 'SELECT approval_id, state, provider_message_ts, frozen_card_sha256, private_approval_card_v2_json FROM authority_live_approval_outbox_v2');
-  assert.equal(outbox.length, 1);
-  assert.equal(outbox[0].state, 'staged');
-  assert.equal(outbox[0].approval_id, receipt.approval_id);
-  assert.equal(outbox[0].provider_message_ts, providers.messages[0].ts);
-  assert.equal(outbox[0].private_approval_card_v2_json, frozenBeforeReplay[0].private_approval_card_v2_json, 'restart must replay the exact frozen V2 delivery contract');
-  const frozen = JSON.parse(outbox[0].private_approval_card_v2_json);
-  assert.equal(frozen.schema_version, 2);
-  assert.equal(frozen.kind, 'echo-private-approval-pending-v2');
-  assert.deepEqual(frozen.eligible_projects.map(project => project.project_id), ['prj_00000000-0000-4000-8000-000000000001']);
-  assert.ok(frozen.transcript_source);
-  const contracts = rows('integrations.sqlite', 'SELECT approval_id, dm_channel_id, provider_message_ts, card_sha256 FROM organization_private_approval_pending_contracts_v2');
-  assert.equal(contracts.length, 1);
-  assert.equal(contracts[0].approval_id, receipt.approval_id);
-  assert.equal(contracts[0].dm_channel_id, providers.messages[0].channel);
-  assert.equal(contracts[0].provider_message_ts, providers.messages[0].ts);
-  assert.equal(contracts[0].card_sha256, outbox[0].frozen_card_sha256);
-  assert.deepEqual(rows('authority.sqlite', 'SELECT cursor FROM authority_live_source_progress_v2'), admittedSourceCursor, 'canary must not advance the admitted source cursor');
+  const outbox = rows('authority.sqlite', 'SELECT approval_id, state FROM authority_live_approval_outbox_v2');
+  assert.deepEqual(outbox.map(row => ({ ...row })), [{ approval_id: receipt.approval_id, state: 'staged' }]);
+  const admissions = rows('authority.sqlite', 'SELECT source_key, source_adapter_id, source_custodian_assurance, principal_id FROM authority_live_source_admission_v2');
+  assert.equal(admissions.length, 1);
+  assert.notEqual(admissions[0].source_key, '1');
+  assert.equal(admissions[0].source_adapter_id, 'staging-synthetic-meeting');
+  assert.equal(admissions[0].source_custodian_assurance, 'staging_synthetic');
   noApproval();
   assert.equal(readFileSync(join(release, 'runtime-environments', accepted.release_id + '.env'), 'utf8'), acceptedEnv);
   assert.equal(existsSync(join(host, '.staging-release-guard')), false);
-  process.stdout.write(JSON.stringify({ result: 'awaiting_human_slack_approval', simulated_boundaries: ['AWS/SSM', 'container engine and identity', 'public TLS routing', 'OIDC/LLM/Slack HTTP'] }) + '\n');
+  process.stdout.write(JSON.stringify({ result: 'awaiting_human_approval', simulated_boundaries: ['AWS/SSM', 'container engine and identity', 'public TLS routing', 'OIDC/LLM HTTP'] }) + '\n');
 } catch (error) {
   for (const name of ['wrapper-output.jsonl', 'provider-evidence.json', 'runtime-error.txt']) if (existsSync(join(root, name))) process.stderr.write(name + ':\n' + readFileSync(join(root, name), 'utf8').slice(-18000) + '\n');
   process.stderr.write(runtimeError);

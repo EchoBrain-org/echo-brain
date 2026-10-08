@@ -426,6 +426,29 @@ describe("Organization Authority service lifecycle", () => {
     }
   });
 
+  it("invokes the additional processing lane's approval presenter", async () => {
+    vi.useFakeTimers();
+    const presented: string[] = [];
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 30_000 },
+      {
+        processing: processing([]),
+        additional_processing: {
+          ...processing([]),
+          reconcileApprovalPresentations: async () => { presented.push("personal"); return "idle"; },
+        },
+        start_api_runtime: async () => apiRuntime([]),
+      },
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      await runtime.drain(new AbortController().signal);
+      expect(presented).toEqual(["personal"]);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it("reports a presentation failure without skipping search or the next cycle", async () => {
     vi.useFakeTimers();
     const errors: Error[] = [];

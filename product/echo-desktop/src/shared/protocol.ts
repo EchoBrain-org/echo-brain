@@ -1,4 +1,4 @@
-import type { PersonMeetingRequestV1, PersonMeetingResultsV1 } from '@echo-brain/organization-api';
+import type { PersonImpactCardV1, PersonMeetingRequestV2, PersonMeetingResultsV2, PersonRunsRequestV1, PersonRunsResultsV1 } from '@echo-brain/organization-api';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
 // validated output, and the renderer never sees a token, a path or a
@@ -395,8 +395,27 @@ export interface ProjectConfluenceMapping {
 }
 export interface ConfluenceSpacesPage { items: readonly ConfluenceSpace[]; next_cursor: string | null }
 
+/**
+ * A finished impact check, as an approved meeting's card shows it: the card
+ * rebuilt for you when it was opened, its citations as sources by index, when
+ * the check ran, and how many cited items you can no longer open.
+ */
+export interface ImpactView extends Omit<PersonImpactCardV1, 'citations'> {
+  readonly sources: readonly AnswerSource[];
+  readonly checked_at: string;
+  readonly hidden: number;
+}
+/** The impact checks of your own approvals: list, start, retry, and view a finished one. */
+export interface RunsResults {
+  list: PersonRunsResultsV1['list'];
+  start: PersonRunsResultsV1['start'];
+  retry: PersonRunsResultsV1['retry'];
+  view: ImpactView;
+}
+
 export interface HostMethods {
-  'tools.meetings': { params: { expect: Expect; request: PersonMeetingRequestV1 }; result: PersonMeetingResultsV1[keyof PersonMeetingResultsV1] };
+  'runs': { params: { expect: Expect; request: PersonRunsRequestV1 }; result: RunsResults[keyof RunsResults] };
+  'tools.meetings': { params: { expect: Expect; request: PersonMeetingRequestV2 }; result: PersonMeetingResultsV2[keyof PersonMeetingResultsV2] };
 
   'app.status': { params: Record<string, never>; result: AppStatus };
   'signin.begin': { params: { authority_url: string }; result: AppStatus };
@@ -518,7 +537,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'notes.submit', 'documents.upload', 'ask.run', 'ask.cancel', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'documents.save', 'projects.read',
   'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
-  'employees.reissue', 'employees.revoke', 'tools.meetings', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet', 'projects.confluenceRead', 'projects.confluenceSet', 'projects.confluenceSpaces',
+  'employees.reissue', 'employees.revoke', 'tools.meetings', 'runs', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet', 'projects.confluenceRead', 'projects.confluenceSet', 'projects.confluenceSpaces',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'source.openSlack', 'source.openTicket', 'source.openPage', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
@@ -527,7 +546,7 @@ export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
   'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.invite', 'employees.reissue',
-  'employees.revoke', 'tools.meetings', 'tools.disconnect', 'projects.jiraSet', 'projects.confluenceSet',
+  'employees.revoke', 'tools.meetings', 'runs', 'tools.disconnect', 'projects.jiraSet', 'projects.confluenceSet',
 ]);
 /** Host methods whose reply is the account status: main keeps the Account menu current from them. */
 export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'signin.invitation', 'account.signOut']);

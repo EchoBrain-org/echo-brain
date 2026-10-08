@@ -1,4 +1,13 @@
-import { admitStagingCanaryMeetingSourceV1, stagingCanaryMeetingSourceIdentityV1 } from "@echo-brain/provider-synthetic-demo/staging-canary-meeting-source-v1";
+import {
+  createStagingSyntheticPersonalMeetingProviderV1,
+  readStagingSyntheticCheckpointV1,
+  readStagingSyntheticMeetingFixturesV1,
+  stagingSyntheticCanaryMeetingV1,
+  stagingSyntheticCanaryReleaseV1,
+  STAGING_SYNTHETIC_CANARY_MEETING_ID_V1,
+  STAGING_SYNTHETIC_CUSTODIAN_ASSURANCE_V1,
+  STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1,
+} from "@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1";
 /**
  * Stopped-state bootstrap for the shipped OpenRouter/Slack profile.
  * Finalization intentionally requires Slack, which an owner sets up in the
@@ -29,7 +38,6 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import {
   canonicalJson,
-  canonicalSha256,
   sha256Digest,
 } from "@echo-brain/federation-protocol";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
@@ -48,7 +56,6 @@ import {
   validateAuthorityStateSeed,
   type AuthorityStateSeedV1,
 } from "./organization-authority-state-bootstrap.js";
-import { admitSyntheticDemoMeetingSource } from "@echo-brain/provider-synthetic-demo/synthetic-demo-meeting-source-admission";
 import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-admission-commitment";
 import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
@@ -59,15 +66,9 @@ import {
 } from "./organization-authority-person-administration-cli.js";
 import { reissueLegacyPersonOnboardingInvitation } from "./person-onboarding-service.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
-import {
-  isStagingSyntheticMeetingCanaryEnvelope,
-  stagingSyntheticMeetingCanaryCursorFromEnvelope,
-  stagingSyntheticMeetingCanaryCursorV1,
-  stagingSyntheticMeetingCanaryCursorV2,
-  stagingSyntheticMeetingCanaryInputFromEnvelope,
-} from "@echo-brain/organization-authority-kernel/shared/staging-synthetic-meeting-canary-envelope-v1";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
-import { syntheticFixtureApprovalEvidence, isSyntheticDemoSetupAdmissionV1 } from '@echo-brain/provider-synthetic-demo/synthetic-demo-setup-evidence-v1';
+import { queueStagingSyntheticMeetingsV1 } from "./staging/staging-synthetic-personal-canary-v1.js";
 
 const MANIFEST_DIRECTORY = "onboarding";
 const MANIFEST_FILENAME = "clean-founder-v1.json";
@@ -167,9 +168,11 @@ export interface OrganizationAuthoritySetupCliDependencies {
     readonly authority_url: string;
     readonly output_path: string;
   }) => Promise<void>;
-  readonly admit_staging_synthetic_source: (input: {
+  /** Test seam only; production queues into the owner's staging synthetic source. */
+  readonly queue_staging_synthetic_meetings?: (input: {
     readonly state_directory: string;
-    readonly meetings_directory: string;
+    /** Absent for the release canary alone. */
+    readonly meetings_directory?: string;
     readonly llm_credential_file: string;
   }) => Promise<void>;
   /** Test seam only; production derives these facts from durable state. */
@@ -226,17 +229,41 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
       ),
     );
   },
-  admit_staging_synthetic_source: async (input) => {
-    await admitSyntheticDemoMeetingSource({
-      state_directory: input.state_directory,
-      meetings_directory: input.meetings_directory,
-      processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({
-        instance_id: PROCESSOR_INSTANCE_ID,
-        credential_reference: `file:${input.llm_credential_file}`,
-      }),
-    });
-  },
 };
+
+/**
+ * Ensures the owner's staging synthetic personal source with the current
+ * OpenRouter commitments and queues each fixture meeting into it. Queueing is
+ * idempotent: a retry re-queues meetings whose frozen proposals are reused.
+ */
+async function queueStagingSyntheticSetupMeetings(input: {
+  readonly state_directory: string;
+  readonly meetings_directory?: string;
+  readonly llm_credential_file: string;
+}): Promise<void> {
+  const credentialReference = `file:${input.llm_credential_file}`;
+  await createOpenRouterDecisionProcessorAdmissionCommitmentV1({ instance_id: PROCESSOR_INSTANCE_ID, credential_reference: credentialReference }).preflight();
+  const meetingIds = input.meetings_directory === undefined
+    ? []
+    : (await readStagingSyntheticMeetingFixturesV1(input.meetings_directory)).map((meeting) => meeting.id);
+  const database = openAuthorityDatabase(join(input.state_directory, "authority.sqlite"), { fileMustExist: true });
+  try {
+    await queueStagingSyntheticMeetingsV1({
+      database,
+      provider: createStagingSyntheticPersonalMeetingProviderV1(
+        input.meetings_directory === undefined ? {} : { fixtures_directory: input.meetings_directory },
+      ),
+      meeting_ids: meetingIds,
+      commitments: (instance_id) => {
+        const { adapter_id, version, configuration_sha256, credential_reference_sha256 } =
+          createOpenRouterDecisionProcessorAdmissionCommitmentV1({ instance_id, credential_reference: credentialReference });
+        return { adapter_id, instance_id, version, configuration_sha256, credential_reference_sha256 };
+      },
+    });
+  } finally {
+    database.close();
+  }
+}
 
 function absolutePath(value: string, label: string): string {
   if (
@@ -913,7 +940,7 @@ function organizationAuthoritySetupInstruction(
       "The owner runs person tools connect --tool slack to link their own Slack.",
     install_provider_credentials:
       "Run credentials-install with the private LLM credential file.",
-    run_finalize: "Run finalize to admit the selected staging synthetic infrastructure.",
+    run_finalize: "Run finalize to set up the owner's staging synthetic meeting source.",
     ready_to_start:
       "Start or restart the Authority runtime, then check setup status.",
     complete: "Organization setup is complete.",
@@ -1095,83 +1122,102 @@ function ownerReadAfter(
     ) !== undefined);
 }
 
+interface StagingSyntheticSourceState {
+  /** Fixture meetings queued into the owner's synthetic source, still pending or already proposed. */
+  readonly fixtures: ReadonlySet<string>;
+  readonly fixture_pending: boolean;
+  readonly proposals: readonly { readonly meeting_id: string; readonly revision: unknown; readonly approval_id: string }[];
+}
+
 /**
- * The staging rehearsal deliberately never advances the admitted provider
- * cursor. Its durable substitute is an approved record tied to the exact
- * synthetic candidate for the release currently running on the fixed staging
- * origin. Production and every other host continue to require source cursor
- * progress.
+ * The owner's staging synthetic personal source as setup finalize and the
+ * release canary leave it, on the exact staging origin only.
  */
-function stagingSyntheticCanaryObserved(
+function readStagingSyntheticSource(
+  manifest: OrganizationAuthoritySetupManifestV3,
+  authority: Database.Database,
+): StagingSyntheticSourceState | undefined {
+  if (manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN) return undefined;
+  const sources = authority
+    .prepare(
+      `SELECT admission.semantic_input_sha256, progress.cursor
+         FROM authority_live_source_admission_v2 AS admission
+         JOIN authority_person_meeting_sources_v2 AS person_source
+           ON person_source.source_key = admission.source_key
+         JOIN authority_live_source_progress_v2 AS progress
+           ON progress.source_key = admission.source_key
+        WHERE admission.organization_id = ? AND admission.principal_id = ?
+          AND admission.membership_id = ? AND admission.membership_type = 'owner'
+          AND admission.source_adapter_id = ? AND admission.source_custodian_assurance = ?
+        ORDER BY admission.source_key`,
+    )
+    .all(
+      manifest.organization_id,
+      manifest.owner_principal_id,
+      manifest.owner_membership_id,
+      STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1,
+      STAGING_SYNTHETIC_CUSTODIAN_ASSURANCE_V1,
+    ) as readonly { readonly semantic_input_sha256: string; readonly cursor: string }[];
+  if (sources.length === 0) return undefined;
+  const proposalsOf = authority.prepare(
+    `SELECT json_extract(candidate.meeting_json, '$.id') AS meeting_id,
+            json_extract(candidate.meeting_json, '$.provenance.canonical_revision') AS revision, outbox.approval_id
+       FROM authority_live_source_candidates_v2 AS candidate
+       JOIN authority_live_approval_outbox_v2 AS outbox
+         ON outbox.candidate_id = candidate.candidate_id
+      WHERE candidate.admission_semantic_input_sha256 = ?
+        AND candidate.disposition = 'actionable'`,
+  );
+  const fixtures = new Set<string>();
+  const proposals: { meeting_id: string; revision: unknown; approval_id: string }[] = [];
+  let fixturePending = false;
+  for (const source of sources) {
+    for (const id of readStagingSyntheticCheckpointV1(source.cursor).manual) {
+      if (stagingSyntheticCanaryReleaseV1(id) !== undefined) continue;
+      fixtures.add(id);
+      fixturePending = true;
+    }
+    for (const row of proposalsOf.all(source.semantic_input_sha256) as readonly { readonly meeting_id: unknown; readonly revision: unknown; readonly approval_id: string }[]) {
+      if (typeof row.meeting_id !== "string") continue;
+      if (row.meeting_id !== STAGING_SYNTHETIC_CANARY_MEETING_ID_V1) fixtures.add(row.meeting_id);
+      proposals.push({ meeting_id: row.meeting_id, revision: row.revision, approval_id: row.approval_id });
+    }
+  }
+  return Object.freeze({ fixtures, fixture_pending: fixturePending, proposals });
+}
+
+/**
+ * Durable synthetic-source evidence: the owner's proposals and the published
+ * records that approved them. With fixture meetings, every one must be
+ * approved and none still queued; otherwise the release canary must be. Only
+ * the canary revision for the release running on the exact staging host counts.
+ */
+function stagingSyntheticSourceEvidence(
   manifest: OrganizationAuthoritySetupManifestV3,
   authority: Database.Database,
   record: Database.Database,
-): boolean {
+): { readonly proposal_staged: boolean; readonly fixture_mode: boolean; readonly fixtures_approved: boolean; readonly canary_approved: boolean } | undefined {
+  const source = readStagingSyntheticSource(manifest, authority);
+  if (source === undefined) return undefined;
+  const approved = record.prepare(
+    `SELECT 1 FROM organization_record_log
+      WHERE event_kind = 'approved' AND action = 'approve' AND approval_id = ?
+      LIMIT 1`,
+  );
+  const approvedProposals = source.proposals.filter((proposal) => approved.get(proposal.approval_id) !== undefined);
+  const approvedMeetings = new Set(approvedProposals.map((proposal) => proposal.meeting_id));
   const releaseId = process.env.ECHO_CLEAN_RELEASE_ID;
-  if (
-    manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN ||
-    process.env.ECHO_CLEAN_AUTHORITY_HOST !== STAGING_SYNTHETIC_CANARY_HOST ||
-    releaseId === undefined ||
-    !CLEAN_V1_RELEASE_ID.test(releaseId)
-  ) {
-    return false;
-  }
-  const cursors = [
-    stagingSyntheticMeetingCanaryCursorV1(releaseId),
-    stagingSyntheticMeetingCanaryCursorV2(releaseId),
-  ];
-  const candidates = authority
-    .prepare(
-      `SELECT candidate.meeting_json, candidate.meeting_sha256,
-              candidate.source_cursor, outbox.approval_id
-         FROM authority_live_source_candidates_v2 AS candidate
-         JOIN authority_live_approval_outbox_v2 AS outbox
-           ON outbox.candidate_id = candidate.candidate_id
-        WHERE candidate.disposition = 'actionable'
-          AND candidate.source_cursor IN (?, ?)
-          AND outbox.state = 'staged'`,
-    )
-    .all(...cursors) as readonly {
-    readonly meeting_json: string;
-    readonly meeting_sha256: string;
-    readonly source_cursor: string;
-    readonly approval_id: string;
-  }[];
-  for (const candidate of candidates) {
-    try {
-      const meeting = JSON.parse(candidate.meeting_json) as unknown;
-      const input = stagingSyntheticMeetingCanaryInputFromEnvelope(meeting);
-      // Verify the immutable bytes and digest before the neutral contract
-      // rebuilds the complete envelope from release, owner, and observation.
-      if (
-        input === undefined ||
-        input.canary_id !== releaseId ||
-        input.owner_email !== manifest.owner_email ||
-        canonicalJson(meeting as never) !== candidate.meeting_json ||
-        canonicalSha256(meeting as never) !== candidate.meeting_sha256 ||
-        !isStagingSyntheticMeetingCanaryEnvelope(meeting, input) ||
-        stagingSyntheticMeetingCanaryCursorFromEnvelope(meeting, input) !==
-          candidate.source_cursor
-      ) {
-        continue;
-      }
-      if (
-        record
-          .prepare(
-            `SELECT 1 FROM organization_record_log
-              WHERE event_kind = 'approved' AND action = 'approve'
-                AND approval_id = ?
-              LIMIT 1`,
-          )
-          .get(candidate.approval_id) !== undefined
-      ) {
-        return true;
-      }
-    } catch {
-      // A malformed frozen snapshot cannot become staging evidence.
-    }
-  }
-  return false;
+  const currentCanaryRevision =
+    process.env.ECHO_CLEAN_AUTHORITY_HOST === STAGING_SYNTHETIC_CANARY_HOST && releaseId !== undefined && CLEAN_V1_RELEASE_ID.test(releaseId)
+      ? stagingSyntheticCanaryMeetingV1(releaseId).provenance.canonical_revision
+      : undefined;
+  return Object.freeze({
+    proposal_staged: source.proposals.length > 0,
+    fixture_mode: source.fixtures.size > 0,
+    fixtures_approved: source.fixtures.size > 0 && !source.fixture_pending && [...source.fixtures].every((id) => approvedMeetings.has(id)),
+    canary_approved: currentCanaryRevision !== undefined && approvedProposals.some((proposal) =>
+      proposal.meeting_id === STAGING_SYNTHETIC_CANARY_MEETING_ID_V1 && proposal.revision === currentCanaryRevision),
+  });
 }
 
 /**
@@ -1196,34 +1242,11 @@ function setupCanaryEvidence(
     });
     const initialHead = currentRecordHead(record);
     const initialPointer = activeGenerationPointer(authority);
-    const sourceProgressObserved = authority
-      .prepare(
-        `SELECT 1
-           FROM authority_live_source_progress_v2 AS progress
-           JOIN authority_live_source_admission_v2 AS admission
-             ON admission.source_key = 1
-            AND admission.semantic_input_sha256 =
-                progress.admission_semantic_input_sha256
-          WHERE progress.source_key = 1
-            AND progress.cursor_version > 0
-          LIMIT 1`,
-      )
-      .get() !== undefined;
-    const syntheticStagingCanaryObserved = stagingSyntheticCanaryObserved(
-      manifest,
-      authority,
-      record,
-    );
-    // The fixed fixture source cannot use a one-record canary as completion
-    // evidence. Each candidate must belong to the singleton's admitted source,
-    // preserve its canonical bytes, name one of the four fixed revisions, and
-    // have a corresponding published approval record. Distinct meeting IDs keep
-    // retries and duplicate approvals from inflating the count.
-    const syntheticFixtureApproval = syntheticFixtureApprovalEvidence(
-      manifest,
-      authority,
-      record,
-    );
+    // Meetings enter only through personal sources; on staging the owner's
+    // synthetic source is the one whose progress setup can prove.
+    const synthetic = stagingSyntheticSourceEvidence(manifest, authority, record);
+    const sourceProgressObserved = synthetic?.proposal_staged ?? false;
+    const syntheticStagingCanaryObserved = synthetic?.canary_approved ?? false;
     const approvedRecordPresent = record
       .prepare(
         `SELECT 1 FROM organization_record_log
@@ -1261,13 +1284,10 @@ function setupCanaryEvidence(
       sameRecordHead(initialHead, currentRecordHead(record)) &&
       sameGenerationPointer(initialPointer, activeGenerationPointer(authority));
     if (!stable) return EMPTY_SETUP_CANARY_EVIDENCE;
-    const canarySourceAdmitted = authority.prepare(
-      "SELECT 1 FROM authority_live_source_admission_v2 WHERE source_key = 1 AND source_adapter_id = ?",
-    ).get(stagingCanaryMeetingSourceIdentityV1.adapter_id) !== undefined;
+    const sourceEvidence = synthetic !== undefined &&
+      (synthetic.fixture_mode ? synthetic.fixtures_approved : synthetic.canary_approved);
     const complete =
-      (syntheticFixtureApproval.source_admitted
-        ? syntheticFixtureApproval.all_fixture_meetings_approved
-        : canarySourceAdmitted ? syntheticStagingCanaryObserved : sourceProgressObserved || syntheticStagingCanaryObserved) &&
+      sourceEvidence &&
       approvedRecordPresent &&
       activeGenerationCurrent &&
       ownerLayer1ReadAfterHead &&
@@ -1328,35 +1348,9 @@ function initialOwnerSetupStatus(
         manifest.owner_principal_id,
         manifest.owner_membership_id,
       ) !== undefined;
-      const admission = authority.prepare(
-        `SELECT source_adapter_id, source_adapter_instance_id,
-                source_custodian_assurance, source_custodian_observed_at
-           FROM authority_live_source_admission_v2
-          WHERE source_key = 1 AND organization_id = ? AND principal_id = ?
-            AND membership_id = ? AND membership_type = 'owner'
-            AND processor_adapter_id = 'llm'
-            AND processor_instance_id = ?
-          LIMIT 1`,
-      ).get(
-        manifest.organization_id,
-        manifest.owner_principal_id,
-        manifest.owner_membership_id,
-        PROCESSOR_INSTANCE_ID,
-      ) as
-        | {
-            readonly source_adapter_id: unknown;
-            readonly source_adapter_instance_id: unknown;
-            readonly source_custodian_assurance: unknown;
-            readonly source_custodian_observed_at: unknown;
-          }
-        | undefined;
-      if (isSyntheticDemoSetupAdmissionV1(admission) && manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN) {
-        admittedSourceMode = 'staging_synthetic';
-      } else if (manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN &&
-        admission?.source_adapter_id === stagingCanaryMeetingSourceIdentityV1.adapter_id &&
-        admission.source_adapter_instance_id === stagingCanaryMeetingSourceIdentityV1.instance_id &&
-        admission.source_custodian_assurance === "authority_initial_owner_identity") {
-        admittedSourceMode = 'staging_canary';
+      const synthetic = readStagingSyntheticSource(manifest, authority);
+      if (synthetic !== undefined) {
+        admittedSourceMode = synthetic.fixtures.size > 0 ? "staging_synthetic" : "staging_canary";
       }
     } finally {
       authority.close();
@@ -1517,7 +1511,7 @@ async function resume(
   });
   if (
     setupStep === "ready_to_start" &&
-    ((manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN && !full.source_admission_present) ||
+    (manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN ||
       readSetupCanaryEvidence(manifest, dependencies).complete)
   ) {
     status(input, io, dependencies);
@@ -1584,35 +1578,14 @@ async function finalize(
           authority_url: manifest.authority_url,
           meetings_directory: input.staging_synthetic_meetings_directory,
         });
-  if (full.source_admission_present) {
-    const admittedMode = full.source_mode ?? "none";
-    if (
-      stagingSyntheticMeetingsDirectory !== undefined &&
-      admittedMode !== "staging_synthetic"
-    ) {
-      throw new Error("staging synthetic finalization conflicts with the admitted source");
-    }
-    if (stagingSyntheticMeetingsDirectory === undefined && admittedMode !== "staging_canary") {
-      throw new Error("the admitted staging synthetic source requires its fixture selector at runtime");
-    }
-  }
-  if (stagingSyntheticMeetingsDirectory !== undefined) {
-    // For an admitted source, admission is idempotent only when the current
-    // bounded corpus and its processor commitment still match the immutable singleton.
-    await dependencies.admit_staging_synthetic_source({
+  const staging = manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN;
+  if (staging) {
+    // Staging admits no organization source: the owner's synthetic personal
+    // source carries the release canary and, when selected, the fixture meetings.
+    await (dependencies.queue_staging_synthetic_meetings ?? queueStagingSyntheticSetupMeetings)({
       state_directory: manifest.state_directory,
-      meetings_directory: stagingSyntheticMeetingsDirectory,
+      ...(stagingSyntheticMeetingsDirectory === undefined ? {} : { meetings_directory: stagingSyntheticMeetingsDirectory }),
       llm_credential_file: manifest.llm_credential_file,
-    });
-  }
-  if (stagingSyntheticMeetingsDirectory === undefined && manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN) {
-    await admitStagingCanaryMeetingSourceV1({
-      authority_url: manifest.authority_url,
-      state_directory: manifest.state_directory,
-      processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({
-        instance_id: PROCESSOR_INSTANCE_ID,
-        credential_reference: `file:${manifest.llm_credential_file}`,
-      }),
     });
   }
   io.stdout(
@@ -1620,16 +1593,15 @@ async function finalize(
       ok: true,
       runtime_status: "ready_to_start",
       runtime_observation: "not_observed",
-      canary_status: manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN ? "not_complete" : "not_required",
-      source_mode:
-        stagingSyntheticMeetingsDirectory !== undefined ? "staging_synthetic" : manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN ? "staging_canary" : "none",
-      source_admission_present: stagingSyntheticMeetingsDirectory !== undefined || manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN,
+      canary_status: staging ? "not_complete" : "not_required",
+      source_mode: !staging ? "none" : stagingSyntheticMeetingsDirectory === undefined ? "staging_canary" : "staging_synthetic",
+      source_admission_present: staging,
       next_instruction:
-        stagingSyntheticMeetingsDirectory === undefined
-          ? manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN
-            ? "Restart the Authority runtime, then run the release-bound synthetic canary."
-            : "Start or restart the Authority runtime. Meeting intake remains idle until a personal source is connected."
-          : "Restart the same echo-organization-authority-serve serve command with the same staging synthetic fixture selector.",
+        !staging
+          ? "Start or restart the Authority runtime. Meeting intake remains idle until a personal source is connected."
+          : stagingSyntheticMeetingsDirectory === undefined
+            ? "Restart the Authority runtime, then run the synthetic canary."
+            : "Restart the same echo-organization-authority-serve serve command with the same staging synthetic fixture selector.",
     } as never)}\n`,
   );
 }
@@ -1696,12 +1668,14 @@ function status(
   const canary = nextStep === "ready_to_start"
     ? readSetupCanaryEvidence(setup.manifest, dependencies)
     : EMPTY_SETUP_CANARY_EVIDENCE;
-  const ordinarySourceFree = nextStep === "ready_to_start" &&
-    setup.manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN && !full.source_admission_present;
-  const terminalStep: OrganizationAuthoritySetupNextStep = canary.complete || ordinarySourceFree
+  // Outside staging no organization source exists to rehearse, so setup
+  // completes source-free; only staging proves its synthetic canary or fixtures.
+  const canaryNotRequired = nextStep === "ready_to_start" &&
+    setup.manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN;
+  const terminalStep: OrganizationAuthoritySetupNextStep = canary.complete || canaryNotRequired
     ? "complete"
     : nextStep;
-  const canaryStatus = ordinarySourceFree ? "not_required" : terminalStep === "complete"
+  const canaryStatus = canaryNotRequired ? "not_required" : terminalStep === "complete"
     ? "complete"
     : nextStep === "ready_to_start"
       ? "not_complete"

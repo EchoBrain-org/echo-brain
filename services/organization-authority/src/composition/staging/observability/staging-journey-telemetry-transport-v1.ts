@@ -1,5 +1,4 @@
 import { createTelemetryVocabularyV1, EMPTY_TELEMETRY_VOCABULARY_V1, type TelemetryVocabularyV1 } from "@echo-brain/organization-authority-kernel/shared/telemetry-vocabulary-v1";
-import type { MeetingApprovalObservationFailureV1 } from "../../meeting-approval-journey-telemetry-v1.js";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { canonicalJson } from "@echo-brain/federation-protocol";
@@ -27,6 +26,12 @@ export const STAGING_JOURNEY_TELEMETRY_HEARTBEAT_INTERVAL_MS_V1 = 60_000;
 export const STAGING_APPROVED_SEARCH_BACKLOG_SCHEMA_VERSION_V1 = 1 as const;
 export const STAGING_APPROVED_SEARCH_BACKLOG_KIND_V1 =
   "echo-authority-approved-search-backlog-v1" as const;
+
+/** The meeting-approval observer's closed rejection; liveness keeps counting it. */
+export interface MeetingApprovalObservationFailureV1 {
+  readonly emitter: "meeting_approval_observer";
+  readonly reason: "observation_callback_failure";
+}
 
 export interface StagingJourneyTelemetryIdentityV1 {
   readonly release_sha: string;

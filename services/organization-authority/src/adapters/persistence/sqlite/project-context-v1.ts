@@ -131,8 +131,8 @@ function binary(a: string, b: string): number { return Buffer.compare(Buffer.fro
 export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositoryV1 {
   private readonly issued = new WeakMap<ProjectAuthorizationSnapshotV1, Issued>();
   constructor(private readonly database: Database.Database, private readonly now: () => string = () => new Date().toISOString()) {
-    if (database.pragma('user_version', { simple: true }) !== 11 || database.pragma('foreign_keys', { simple: true }) !== 1) {
-      throw new Error('Project context requires Authority V11 with foreign keys enabled');
+    if (database.pragma('user_version', { simple: true }) !== 12 || database.pragma('foreign_keys', { simple: true }) !== 1) {
+      throw new Error('Project context requires Authority V12 with foreign keys enabled');
     }
   }
 

@@ -33,16 +33,17 @@ import {
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { applyAuthorityBaselineV11 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV12 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
-import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
+import { createPersonRecordSearchRouteV1, PersonRecordSearchIndexLagV1 } from "../src/composition/person-record-search-route.js";
 import { createRecordProjectAuthorizationV1 } from "../src/composition/person-record-project-scope-v1.js";
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { addMembership } from "./fixtures/project-context-sqlite.js";
-import { OWNER, SHARED, UNJOINED, meetingWorld } from "./fixtures/person-meeting-world.js";
+import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
+import { EMP_A, OWNER, SHARED, T, UNJOINED, meetingWorld } from "./fixtures/person-meeting-world.js";
 
 import { independentRecordCoverageFixture, rolloutCoverageFixture } from "./retrieval-coverage-fixture.js";
 
@@ -247,7 +248,7 @@ afterEach(() => {
 
 function setup(pointer = true) {
   const authority = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV11(authority);
+  applyAuthorityBaselineV12(authority);
   authority
     .prepare(
       `INSERT INTO authority_metadata
@@ -1924,6 +1925,96 @@ describe("Person Layer 2 route: an approved record's projects (research trigger 
       expect(() => route.recordProjects({ access_token: "owner", record_sha256: canonicalSha256("missing") })).toThrow(notFound);
       expect(() => route.recordProjects({ access_token: "nobody", record_sha256: w.digest("r4") })).toThrow(expect.objectContaining({ code: "unauthorized" }));
       expect(audited()).toBe(before);
+    } finally { w.close(); }
+  });
+});
+
+describe("Person Layer 2 route: an approved record's anchor (runs store v1)", () => {
+  const trigger = AGENTIC_TRIGGER_DEFINITIONS_V1.find((definition) => definition.name === "approved_record")!;
+
+  it("returns the record's first atom as an approved-record citation that the desk and the trigger accept", async () => {
+    const w = await meetingWorld();
+    try {
+      const route = w.route();
+      const anchor = route.recordAnchor({ access_token: "emp_a", record_sha256: w.digest("r4") });
+      expect(Object.keys(anchor).sort()).toEqual(["atom_id", "kind", "policy_id", "record_sha256"]);
+      expect(anchor).toMatchObject({ kind: "approved_record", record_sha256: w.digest("r4"), policy_id: "project-members-readable-person-v1" });
+
+      // With several atoms it is the first in the record's own order.
+      const many = await w.approve({ name: "r9", approval_id: "apr_r9", projects: [SHARED], final_approver: EMP_A, issued_at: T(9), signals: { decisions: 2, actions: 2, rationales: 1 } });
+      w.rebuild();
+      const atoms = route.listDeskBatch({ access_token: "emp_a" }).desk_items!.filter((item) => item.record_sha256 === many);
+      expect(atoms.map((item) => item.atom_order).sort()).toEqual([0, 1, 2, 3, 4]);
+      const first = route.recordAnchor({ access_token: "emp_a", record_sha256: many });
+      expect(first.atom_id).toBe(atoms.find((item) => item.atom_order === 0)!.atom_id);
+      expect(atoms.find((item) => item.atom_order === 0)!.item_kind).toBe("decision");
+
+      // The desk opens it, and the approved-record trigger takes it as its event.
+      const opened = route.openDeskCitation({ access_token: "emp_a", atom_id: anchor.atom_id, record_sha256: anchor.record_sha256, policy_id: anchor.policy_id });
+      expect([...new Set(opened.response.items.map((item) => item.record_sha256))]).toEqual([w.digest("r4")]);
+      expect(trigger.parseEvent({ record: anchor })).toEqual({ record: anchor });
+
+      // The same record anchors the same way for another reader who can read it, and a team record anchors too.
+      expect(route.recordAnchor({ access_token: "owner", record_sha256: w.digest("r4") })).toEqual(anchor);
+      expect(route.recordAnchor({ access_token: "emp_c", record_sha256: w.digest("r1") })).toMatchObject({ kind: "approved_record", record_sha256: w.digest("r1"), policy_id: "organization-member-readable-person-v2" });
+    } finally { w.close(); }
+  });
+
+  it("is a lookup: it audits nothing", async () => {
+    const w = await meetingWorld();
+    try {
+      const audited = () => (w.authority.prepare("SELECT count(*) AS count FROM authority_person_read_decision_audit_v2").get() as { readonly count: number }).count;
+      const before = audited();
+      w.route().recordAnchor({ access_token: "emp_a", record_sha256: w.digest("r4") });
+      expect(audited()).toBe(before);
+    } finally { w.close(); }
+  });
+
+  it("throws index lag for a record the active generation does not include yet, and finds it once it does", async () => {
+    const w = await meetingWorld();
+    try {
+      const route = w.route();
+      const digest = await w.approve({ name: "r8", approval_id: "apr_r8", projects: [SHARED], final_approver: EMP_A, issued_at: T(8) });
+      expect(() => route.recordAnchor({ access_token: "emp_a", record_sha256: digest })).toThrow(PersonRecordSearchIndexLagV1);
+      expect(() => route.recordAnchor({ access_token: "emp_a", record_sha256: digest })).toThrow(expect.objectContaining({ code: "unavailable" }));
+      // The older records stay behind the same lag: the generation is not at the log's head.
+      expect(() => route.recordAnchor({ access_token: "emp_a", record_sha256: w.digest("r4") })).toThrow(PersonRecordSearchIndexLagV1);
+      w.rebuild();
+      expect(route.recordAnchor({ access_token: "emp_a", record_sha256: digest })).toMatchObject({ kind: "approved_record", record_sha256: digest });
+    } finally { w.close(); }
+  });
+
+  it("answers not_found, indexed or not, to a reader who cannot see the record", async () => {
+    const w = await meetingWorld();
+    try {
+      const route = w.route();
+      const notFound = expect.objectContaining({ code: "not_found" });
+      // r4 is in SHARED only; emp_c holds nothing. r3 is also in a project nobody reading holds.
+      expect(() => route.recordAnchor({ access_token: "emp_c", record_sha256: w.digest("r4") })).toThrow(notFound);
+      expect(() => route.recordAnchor({ access_token: "emp_b", record_sha256: w.digest("r4") })).toThrow(notFound);
+      // A record that does not exist, and a malformed digest, are the same miss.
+      expect(() => route.recordAnchor({ access_token: "owner", record_sha256: canonicalSha256("missing") })).toThrow(notFound);
+      expect(() => route.recordAnchor({ access_token: "owner", record_sha256: "sha256:nope" as Sha256Digest })).toThrow(notFound);
+      // A rejected approval writes no readable record.
+      expect(() => route.recordAnchor({ access_token: "owner", record_sha256: w.digest("r5") })).toThrow(notFound);
+      expect(() => route.recordAnchor({ access_token: "nobody", record_sha256: w.digest("r4") })).toThrow(expect.objectContaining({ code: "unauthorized" }));
+
+      // Not seeing a record outranks its index lag: nothing about it leaks.
+      const lagging = await w.approve({ name: "r8", approval_id: "apr_r8", projects: [SHARED], final_approver: EMP_A, issued_at: T(8) });
+      expect(() => route.recordAnchor({ access_token: "emp_c", record_sha256: lagging })).toThrow(notFound);
+      expect(() => route.recordAnchor({ access_token: "emp_a", record_sha256: lagging })).toThrow(PersonRecordSearchIndexLagV1);
+    } finally { w.close(); }
+  });
+
+  it("follows the reader's current grants", async () => {
+    const w = await meetingWorld();
+    try {
+      const route = w.route();
+      expect(route.recordAnchor({ access_token: "emp_a", record_sha256: w.digest("r4") })).toMatchObject({ kind: "approved_record" });
+      w.leave(SHARED, EMP_A);
+      expect(() => route.recordAnchor({ access_token: "emp_a", record_sha256: w.digest("r4") })).toThrow(expect.objectContaining({ code: "not_found" }));
+      // The owner still holds the project.
+      expect(route.recordAnchor({ access_token: "owner", record_sha256: w.digest("r4") })).toMatchObject({ kind: "approved_record" });
     } finally { w.close(); }
   });
 });

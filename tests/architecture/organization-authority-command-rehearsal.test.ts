@@ -29,7 +29,6 @@ import {
 import type { PersonSessionOidcAuthorizationProvider } from "../../services/organization-authority/src/composition/lazy-person-session-oidc-provider.js";
 import { openOrganizationAuthorityService, type OrganizationAuthorityServiceConfig } from "../../services/organization-authority/src/composition/organization-authority-composition-root.js";
 import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
-import type { OrganizationAuthorityProcessingCycleV1 } from "../../services/organization-authority/src/composition/organization-authority-service-lifecycle.js";
 import { runPersonClientCli } from "../../src/product/person-client/composition.js";
 
 const roots: string[] = [];
@@ -181,14 +180,6 @@ function fakeNango() {
   return { client, finishConnect };
 }
 
-const inactiveWorker: OrganizationAuthorityProcessingCycleV1 = {
-  recoverV4Appends: async () => undefined,
-  pollAndStageAdmittedMeetings: async () => undefined,
-  observeAndFinalizePendingApprovals: async () => undefined,
-  appendFinalizedApprovalsToV4: async () => undefined,
-  reconcileReadableSearchGeneration: async () => undefined,
-};
-
 function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
   return {
     now: () => "2026-08-22T12:00:00.000Z",
@@ -209,7 +200,7 @@ function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
         output_path: input.output_path,
       });
     },
-    admit_staging_synthetic_source: async () => { throw new Error("ordinary onboarding has no organization meeting source"); },
+    queue_staging_synthetic_meetings: async () => { throw new Error("ordinary onboarding has no staging synthetic source"); },
   };
 }
 
@@ -381,11 +372,11 @@ describe("Organization Authority command rehearsal", () => {
     expect(finalizeStatus, finalized.values.join("")).toBe(0);
     expect(oneJson<{ ok: boolean }>(finalized).ok).toBe(true);
 
-    // The source-free restart keeps meeting polling idle while the normal API
-    // and source-independent worker services remain available.
+    // The source-free restart keeps meeting intake idle until a person connects
+    // a source, while the normal API and source-independent worker services remain available.
     const active = await openOrganizationAuthorityService(
       { ...config, port: await availablePort() },
-      { slack, active_processing: inactiveWorker },
+      { slack },
     );
     try {
       expect(active.processing).toBe("active");

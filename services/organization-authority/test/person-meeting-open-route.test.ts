@@ -15,7 +15,7 @@ import { releasableBodyV1 } from "../src/application/person-item-text-v1.js";
 import { validatePersonOpenResponseV1 } from "@echo-brain/organization-api";
 import { COORDINATES } from "../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import { EMP_A, EMP_B, OWNER, SHARED, T, UNJOINED, admittedTranscriptV1, meetingWorld, type ReaderToken } from "./fixtures/person-meeting-world.js";
-import { SIGNED_APPROVAL_SLACK_SUBJECT } from "./fixtures/signed-slack-approval-v2.js";
+import { SIGNED_APPROVAL_PRIVATE_MARKER } from "./fixtures/signed-approval-decision-v1.js";
 
 type World = Awaited<ReturnType<typeof meetingWorld>>;
 const worlds: World[] = [];
@@ -38,7 +38,7 @@ async function world(options: { readonly long?: boolean } = {}) {
   const w = await meetingWorld({ r4_transcript: admittedTranscriptV1(TRANSCRIPT) });
   worlds.push(w);
   await w.approve({
-    name: "detail", approval_id: "apr_detail", projects: "team", final_approver: OWNER, issued_at: T(11),
+    name: "detail", approval_id: "apr_detail", projects: [SHARED], final_approver: OWNER, issued_at: T(11),
     signals: { decisions: 2, actions: 1, rationales: 1 },
     action_owners: [{ signal_id: "action-apr_detail-0", owner: "Jules" }],
     brief: withMeeting((brief) => ({
@@ -66,19 +66,18 @@ async function world(options: { readonly long?: boolean } = {}) {
     name: "budget", approval_id: "apr_budget", projects: "team", final_approver: EMP_B, issued_at: T(13), signals: { decisions: 12 },
     brief: withMeeting((brief) => ({ decisions: brief.decisions.map((signal, index) => ({ ...signal, text: `${index}`.padEnd(3_000, "x") })) })),
   });
-  // A V2 brief may carry an owner the approver never confirmed; it is not released.
+  // A generic human-act brief may carry an owner no approver confirmed; it is never released.
   await w.approve({
     name: "mallory", approval_id: "apr_mallory", projects: "team", final_approver: EMP_B, issued_at: T(14), signals: { decisions: 0, actions: 1 },
     brief: withMeeting((brief) => ({ actions: brief.actions.map((signal) => ({ ...signal, owner: "Mallory" })) })),
   });
   await w.approve({ name: "emp_a_only", approval_id: "apr_emp_a_only", projects: [], final_approver: EMP_A, issued_at: T(15) });
-  await w.approve({ name: "zero", approval_id: "apr_zero", projects: [SHARED], final_approver: EMP_A, issued_at: T(16), signals: { decisions: 0 } });
   // Shared, but its revision was never admitted to this Authority's custody.
-  await w.approve({ name: "unadmitted", approval_id: "apr_unadmitted", projects: "team", final_approver: EMP_B, issued_at: T(17), share_transcript: true });
+  await w.approve({ name: "unadmitted", approval_id: "apr_unadmitted", projects: [], final_approver: EMP_B, issued_at: T(17), share_transcript: true });
   w.rebuild();
   if (options.long === true) {
     await w.approve({
-      name: "long", approval_id: "apr_long", projects: "team", final_approver: EMP_A, issued_at: T(18), signals: { decisions: 0, actions: 1 },
+      name: "long", approval_id: "apr_long", projects: [SHARED], final_approver: EMP_A, issued_at: T(18), signals: { decisions: 0, actions: 1 },
       action_owners: [{ signal_id: "action-apr_long-0", owner: "Jules" }],
       brief: withMeeting((brief) => ({ actions: brief.actions.map((signal) => ({ ...signal, text: LONG_ACTION, due_at: "2026-10-01T00:00:00.000Z" })) })),
     });
@@ -142,7 +141,7 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
     const w = await world();
     const route = w.route();
     const opened = route.openMeeting({ access_token: "emp_a", record_sha256: w.digest("detail") });
-    expect(opened.row).toEqual({ kind: "meeting", id: w.digest("detail"), title: "Pricing review", added_at: T(11), visibility: "team", association_project_ids: [], meeting_date: "2026-09-21" });
+    expect(opened.row).toEqual({ kind: "meeting", id: w.digest("detail"), title: "Pricing review", added_at: T(11), visibility: "project", association_project_ids: [SHARED], meeting_date: "2026-09-21" });
     expect(opened.meeting).toEqual({
       started_at: "2026-09-21T20:00:00.000Z", ended_at: "2026-09-21T21:00:00.000Z", timezone: "America/Los_Angeles", all_day: false,
       participants: ["Ari Employee", "Maya Chen"], participants_more: false, approved_by: "Olive Owner",
@@ -158,7 +157,7 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
     const serialized = JSON.stringify(opened);
     for (const hidden of [
       "participant-", "ari-identity", "host", "Acme Org", "META-SECRET", "meeting-apr", "brief-apr", "decision-apr", "action-apr", "block-",
-      QUOTE, "granola", "external-approval", "decision-processor", "prn_", "mem_", "apr_", UNJOINED, "source-apr", "revision-1", SIGNED_APPROVAL_SLACK_SUBJECT,
+      QUOTE, "granola", "external-approval", "decision-processor", "prn_", "mem_", "apr_", UNJOINED, "source-apr", "revision-1", SIGNED_APPROVAL_PRIVATE_MARKER,
     ]) expect(serialized).not.toContain(hidden);
     const [audit] = w.audits("person_open");
     expect(w.audits("person_open")).toHaveLength(1);
@@ -189,16 +188,12 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
     expect(budget.map((page) => page.atoms.length)).toEqual([10, 2]);
     expect(budget[0]!.next).toEqual({ atom_order: 10, part: 1 });
     for (const page of budget) expect(Buffer.byteLength(JSON.stringify(page.atoms))).toBeLessThanOrEqual(32 * 1024);
-    // A zero-signal record opens with its meeting and no atoms; it has no second page.
-    const zero = route.openMeeting({ access_token: "emp_a", record_sha256: w.digest("zero") });
-    expect(zero).toMatchObject({ atoms: [], next: null, meeting: { participants: [] }, row: { visibility: "project", association_project_ids: [SHARED] } });
-    expect(failure(() => route.openMeeting({ access_token: "emp_a", record_sha256: w.digest("zero"), from: { atom_order: 0, part: 1 } }))).toEqual(NOT_FOUND);
   });
 
   it("splits an atom over 3,072 bytes into parts that join exactly, with owners only from the signed act", async () => {
     const w = await world({ long: true });
     const route = w.route();
-    const [page] = pages(route, "emp_b", w.digest("long"));
+    const [page] = pages(route, "emp_a", w.digest("long"));
     expect(page!.atoms.map((atom) => Buffer.byteLength(atom.text))).toEqual([3_072, 3_072, 856]);
     expect(page!.atoms.map((atom) => atom.text).join("")).toBe(LONG_ACTION);
     expect(page!.atoms[0]).toMatchObject({ kind: "action", owner: "Jules", due_at: "2026-10-01T00:00:00.000Z", part: { index: 1, count: 3 } });
@@ -206,7 +201,7 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
       { kind: "action", text: page!.atoms[1]!.text, part: { index: 2, count: 3 } },
       { kind: "action", text: page!.atoms[2]!.text, part: { index: 3, count: 3 } },
     ]);
-    const rest = route.openMeeting({ access_token: "emp_b", record_sha256: w.digest("long"), from: { atom_order: 0, part: 2 } });
+    const rest = route.openMeeting({ access_token: "emp_a", record_sha256: w.digest("long"), from: { atom_order: 0, part: 2 } });
     expect(rest.atoms.map((atom) => atom.part)).toEqual([{ index: 2, count: 3 }, { index: 3, count: 3 }]);
     // A split part that straddles the 25-part page end resumes at its next part (N-15).
     const walked = pages(route, "emp_b", w.digest("boundary"));

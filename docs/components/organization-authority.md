@@ -11,6 +11,8 @@ created_at: 2026-08-13
 reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
+  - ADR-0032
+  - ADR-0031
   - ADR-0030
   - ADR-0026
   - ADR-0012
@@ -79,7 +81,7 @@ under
 | `organization-authority`        | Organization identity, access, HTTP boundary, and composition                         |
 | `organization-authority-kernel` | Authority SQL baselines, persistence adapters, and state lineage                      |
 | `organization-processing`       | Provider-neutral meeting processing and admitted-meeting workflow                     |
-| `organization-control-plane`    | Verified provider connection, Person identity links, and private approval persistence |
+| `organization-control-plane`    | Verified provider connection and Person identity links; no approval state             |
 | `organization-record`           | Append-only approved record and deterministic append-side projections                 |
 | `organization-retrieval`        | Rebuildable permission-aware retrieval generations                                    |
 

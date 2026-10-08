@@ -10,7 +10,6 @@
     "services/organization-authority/src/clean-extraction-attempts-main.ts",
     "services/organization-authority/src/clean-reset-main.ts",
     "services/organization-authority/src/clean-live-main.ts",
-    "services/organization-authority/src/synthetic-demo-main.ts",
     "services/organization-authority/src/clean-founder-main.ts"
   ],
   "owned_source_paths": [
@@ -105,6 +104,11 @@
         "name": "Person upload search enrichment",
         "path": "services/organization-authority/src/composition/person-update-processing-v1.ts",
         "export": "PersonUpdateProcessingV1"
+      },
+      {
+        "name": "Trigger run persistence",
+        "path": "services/organization-authority/src/adapters/persistence/sqlite/trigger-runs-v1.ts",
+        "export": "SqliteTriggerRunsV1"
       }
     ],
     "compatibility_entrypoints": [
@@ -128,6 +132,7 @@
       }
     ],
     "retired_source_paths": [
+      "services/organization-authority/src/composition/person-meeting-approval-projection-v1.ts",
       "services/organization-authority/src/composition/slack-context-capture-runtime-v1.ts",
       "services/organization-authority/src/application/ports/runtime-ports.ts",
       "services/organization-authority/src/adapters/runtime/system-runtime-ports.ts",
@@ -345,16 +350,6 @@
       "from": "services/organization-authority/src/clean-live-main.ts",
       "allowed_imports": [
         "services/organization-authority/src/composition/organization-authority-service-cli.ts"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "authority-synthetic-demo-entrypoint-calls-composition",
-      "from": "services/organization-authority/src/synthetic-demo-main.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/composition/synthetic-demo-organization-authority-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],

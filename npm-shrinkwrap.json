@@ -4908,7 +4908,6 @@
         "@echo-brain/organization-control-plane": "0.0.0-dev.0",
         "@echo-brain/organization-processing": "0.0.0-dev.0",
         "@echo-brain/organization-protocol": "0.0.0-dev.0",
-        "@echo-brain/organization-record": "0.0.0-dev.0",
         "@echo-brain/provider-runtime": "0.0.0-dev.0",
         "@echo-brain/provider-slack-client": "0.0.0-dev.0",
         "better-sqlite3": "12.10.0",
@@ -4963,8 +4962,7 @@
       "bin": {
         "echo-organization-authority-serve": "dist/clean-live-main.js",
         "echo-organization-authority-setup": "dist/clean-founder-main.js",
-        "echo-organization-authority-state-bootstrap": "dist/clean-reset-main.js",
-        "echo-synthetic-demo": "dist/synthetic-demo-main.js"
+        "echo-organization-authority-state-bootstrap": "dist/clean-reset-main.js"
       },
       "devDependencies": {
         "@types/yauzl": "3.4.0"

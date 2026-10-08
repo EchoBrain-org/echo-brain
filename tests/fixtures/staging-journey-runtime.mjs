@@ -1,5 +1,5 @@
-// Synthetic fixture only. Real Authority/SQLite/canary/Slack adapter code,
-// with deny-by-default external-provider responses. Never reads live state.
+// Synthetic fixture only. Real Authority/SQLite/setup/canary code with a
+// provider-free decision processor and deny-by-default network. Never reads live state.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -19,7 +19,7 @@ const socket = join(root, 'canary.sock');
 const NOW = '2026-09-06T00:00:00.000Z';
 const ORIGIN = 'https://authority-staging.echobrain.org';
 const OWNER = 'owner@example.test';
-const SLACK = { workspace: 'T012JOURNEY', app: 'A012JOURNEY', bot: 'B012JOURNEY', botUser: 'U012BOT', owner: 'U012OWNER', dm: 'D012JOURNEY' };
+const SLACK = { workspace: 'T012JOURNEY', app: 'A012JOURNEY', bot: 'B012JOURNEY', botUser: 'U012BOT', owner: 'U012OWNER' };
 const SCOPES = ['chat:write', 'im:history', 'im:write', 'users:read'];
 const OIDC = { issuer: 'https://issuer.example.test', client_id: 'journey-client', redirect_uri: `${ORIGIN}/v2/session/oidc/callback`, tenant: { kind: 'issuer' }, id_token_algorithms: ['RS256'] };
 const product = suffix => import(pathToFileURL(join(REPO, 'services/organization-authority/dist', suffix)));
@@ -112,75 +112,42 @@ if (mode === 'init') {
   const owner = await seedOwner(initialized);
   const canary_project_id = await seedCanaryProject(initialized);
   const llm = write(join(root, 'llm.fixture'), 'synthetic-not-a-provider-credential-000000');
-  const meetings = join(REPO, 'demo/meetings');
-  const { admitSyntheticDemoMeetingSource } = await import(pathToFileURL(join(REPO, 'providers/synthetic-demo/dist/synthetic-demo-meeting-source-admission.js')));
-  const { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } = await import(pathToFileURL(join(REPO, 'providers/openrouter/dist/openrouter-decision-processor-admission-commitment.js')));
-  const admitted = await admitSyntheticDemoMeetingSource({ state_directory: state, meetings_directory: meetings, processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({ instance_id: 'founder-llm-v1', credential_reference: `file:${llm}` }), now: () => NOW });
   await seedSlack(initialized);
   const oidcPath = write(join(root, 'oidc.json'), { ...OIDC, client_authentication: 'none' });
   const manifest = { schema_version: 3, kind: 'echo-clean-founder-onboarding-manifest-v3', state_directory: state, created_at: NOW, artifact_revision: 'staging-journey-fixture', authority_url: ORIGIN, oidc_config_path: oidcPath, pkce_key_file: owner.pkce_key_file, invitation_path: owner.invitationPath, authority_id: initialized.authority_id, organization_id: initialized.organization_id, state_lineage_id: initialized.state_lineage_id, owner_principal_id: initialized.owner_principal_id, owner_membership_id: initialized.owner_membership_id, llm_credential_file: llm, setup_seed: Object.fromEntries(['authority_id', 'organization_id', 'state_lineage_id', 'owner_principal_id', 'owner_membership_id', 'control_plane_id'].map(key => [key, initialized[key]])), owner_email: OWNER, organization_name: 'Synthetic staging rehearsal', owner_display_name: 'Synthetic founder' };
   mkdirSync(join(state, 'onboarding'), { recursive: true, mode: 0o700 });
   write(join(state, 'onboarding/clean-founder-v1.json'), manifest);
-  // Explicit canary calls drive this test. Keep periodic provider retries out
-  // of its fault-injection window even on a slow CI host.
-  write(metadataPath, { initialized, admitted, canary_project_id, config: { state_directory: state, host: '127.0.0.1', port: await port(), authority_url: ORIGIN, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: owner.pkce_key_file, slack_nango: { secret_key: 'synthetic-not-a-nango-secret-key-000000', integration_key: 'slack' }, staging_synthetic_meetings_directory: meetings, staging_synthetic_owner_email: OWNER, openrouter_credential_file: llm, worker_interval_ms: 3_600_000 } });
-  write(evidencePath, { extraction_calls: 0, source_pulls: 0, requests: [], messages: [], publish_failures_remaining: 0, worker_errors: [] });
+  // The real stopped-state finalize sets up the owner's staging synthetic source.
+  const { runOrganizationAuthoritySetupCli } = await product('composition/organization-authority-setup-cli.js');
+  assert.equal(await runOrganizationAuthoritySetupCli(['finalize', '--state-dir', state], { stdout: () => undefined, stderr: value => process.stderr.write(value) }), 0);
+  // Explicit canary calls drive this test. Keep periodic work out of its window
+  // even on a slow CI host.
+  write(metadataPath, { initialized, canary_project_id, config: { state_directory: state, host: '127.0.0.1', port: await port(), authority_url: ORIGIN, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: owner.pkce_key_file, slack_nango: { secret_key: 'synthetic-not-a-nango-secret-key-000000', integration_key: 'slack' }, openrouter_credential_file: llm, worker_interval_ms: 3_600_000 } });
+  write(evidencePath, { extraction_calls: 0, worker_errors: [] });
 } else if (mode === 'serve') {
   const metadata = read(metadataPath);
-  const { PrivateSlackApprovalCardPosterV1 } = await import(pathToFileURL(join(REPO, 'providers/slack/server/dist/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js')));
-  const fetchImpl = async (url, options) => {
-    assert.ok(String(url).startsWith('https://slack.com/api/'));
-    const method = new URL(url).pathname.split('/').at(-1);
-    const body = options.body ? JSON.parse(options.body) : Object.fromEntries(new URL(url).searchParams);
-    const evidence = read(evidencePath);
-    evidence.requests.push({ method, body });
-    let response;
-    if (method === 'conversations.open') {
-      assert.equal(body.users, SLACK.owner);
-      response = { ok: true, channel: { id: SLACK.dm, is_im: true, user: SLACK.owner } };
-    } else if (method === 'chat.postMessage') {
-      assert.equal(body.channel, SLACK.dm);
-      assert.deepEqual(body.blocks, []);
-      const ts = `1788652800.${String(evidence.messages.length + 1).padStart(6, '0')}`;
-      evidence.messages.push({ ...body, ts, bot_id: SLACK.bot });
-      response = { ok: true, channel: SLACK.dm, ts };
-    } else if (method === 'chat.update') {
-      assert.equal(body.channel, SLACK.dm);
-      const message = evidence.messages.find(message => message.ts === body.ts);
-      assert.ok(message);
-      if (evidence.publish_failures_remaining > 0) {
-        evidence.publish_failures_remaining--;
-        response = { ok: false, error: 'service_unavailable' };
-      } else {
-        Object.assign(message, body);
-        response = { ok: true, channel: SLACK.dm, ts: body.ts, message: body };
-      }
-    } else if (method === 'auth.test') {
-      response = { ok: true, team_id: SLACK.workspace, enterprise_id: null, user_id: SLACK.botUser, bot_id: SLACK.bot };
-    } else if (method === 'bots.info') {
-      response = { ok: true, bot: { id: SLACK.bot, app_id: SLACK.app, user_id: SLACK.botUser, deleted: false } };
-    } else if (method === 'conversations.history') {
-      assert.equal(body.channel, SLACK.dm);
-      response = { ok: true, messages: evidence.messages, has_more: false };
-    } else throw new Error(`unexpected simulated Slack method: ${method}`);
-    write(evidencePath, evidence);
-    return new Response(JSON.stringify(response), { status: 200, headers: { 'content-type': 'application/json', 'x-oauth-scopes': SCOPES.join(',') } });
+  // Provider-free extraction for the personal meeting runtime; it accepts the admitted commitments.
+  const person_meeting_processor = {
+    processor_adapter_id: 'llm',
+    current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: 'journey-fixture', configuration_sha256: canonicalSha256({ fixture: 'configuration' }), credential_reference_sha256: canonicalSha256({ fixture: 'credential' }) }),
+    assert_admission_commitments() {},
+    create_processor(admission) {
+      const identity = { kind: 'decision-processor', adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
+      return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: NOW }), async extract(meeting) {
+        const evidence = read(evidencePath); evidence.extraction_calls++; write(evidencePath, evidence);
+        return { schema_version: 1, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity, generated_at: NOW, signals: [{ id: 'fixture-decision', kind: 'decision', status: 'decided', text: 'Rehearse the exact candidate and await human approval.', subject: 'staging', confidence: 1, evidence: [{ meeting_id: meeting.id, block_id: 'synthetic-decision' }] }] };
+      } };
+    },
   };
-  const identity = { kind: 'decision-processor', adapter_id: 'llm', instance_id: metadata.admitted.processor.instance_id, version: metadata.admitted.processor.version };
-  const processor = { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: NOW }), async extract(meeting) {
-    const evidence = read(evidencePath); evidence.extraction_calls++; write(evidencePath, evidence);
-    return { schema_version: 1, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity, generated_at: NOW, signals: [{ id: 'fixture-decision', kind: 'decision', status: 'decided', text: 'Rehearse the exact candidate and await human approval.', subject: 'staging', confidence: 1, evidence: [{ meeting_id: meeting.id, block_id: 'synthetic-decision' }] }] };
-  } };
-  const source = { identity: { kind: 'meeting-source', adapter_id: metadata.admitted.source.adapter_id, instance_id: metadata.admitted.source.instance_id, version: metadata.admitted.source.version }, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: NOW }), async pull(request) { const evidence = read(evidencePath); evidence.source_pulls++; write(evidencePath, evidence); return { meetings: [], next_cursor: request.cursor }; } };
   const { openOrganizationAuthorityService } = await product('composition/organization-authority-composition-root.js');
-  const runtime = await openOrganizationAuthorityService({ ...metadata.config, on_worker_error(error) { const evidence = read(evidencePath); evidence.worker_errors.push(error.message); write(evidencePath, evidence); } }, { processing_adapter_overrides: { source, processor, private_approval_card_poster: new PrivateSlackApprovalCardPosterV1(async () => 'synthetic-provider-token', { fetchImpl }) } });
+  const runtime = await openOrganizationAuthorityService({ ...metadata.config, on_worker_error(error) { const evidence = read(evidencePath); evidence.worker_errors.push(error.message); write(evidencePath, evidence); } }, { person_meeting_processor });
   assert.equal(runtime.processing, 'active');
   const { openStagingSyntheticPrivateDmCanaryControlV1 } = await import(pathToFileURL(join(REPO, 'providers/slack/server/dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.js')));
-  const observedRuntime = { ...runtime, async run_staging_synthetic_private_dm_canary(...args) {
-    try { return await runtime.run_staging_synthetic_private_dm_canary(...args); }
+  const observedRuntime = { ...runtime, async run_staging_synthetic_canary(...args) {
+    try { return await runtime.run_staging_synthetic_canary(...args); }
     catch (error) { write(join(root, 'runtime-error.txt'), String(error.stack)); throw error; }
   } };
-  const control = await openStagingSyntheticPrivateDmCanaryControlV1({ authority_url: ORIGIN, authority_host: 'authority-staging.echobrain.org', release_id: releaseId, owner_email: OWNER, runtime: observedRuntime, socket_path: socket, now: () => NOW });
+  const control = await openStagingSyntheticPrivateDmCanaryControlV1({ authority_url: ORIGIN, authority_host: 'authority-staging.echobrain.org', release_id: releaseId, runtime: observedRuntime, socket_path: socket });
   process.stdout.write('ready\n');
   await new Promise(resolve => { process.once('SIGTERM', resolve); process.once('SIGINT', resolve); });
   await control.close(); await runtime.close();
@@ -189,8 +156,7 @@ if (mode === 'init') {
   process.stdout.write(JSON.stringify(await requestStagingSyntheticPrivateDmCanaryV1({ release_id: releaseId, socket_path: socket })) + '\n');
 } else if (mode === 'verify') {
   const { verifyAuthorityStateLineage } = await import(pathToFileURL(join(REPO, 'packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js')));
-  const { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } = await import(pathToFileURL(join(REPO, 'providers/openrouter/dist/verify-openrouter-decision-processor-admission-v1.js')));
-  verifyAuthorityStateLineage(state); verifyPersistedOpenRouterDecisionProcessorAdmissionV1(state);
+  verifyAuthorityStateLineage(state);
 } else if (mode === 'setup-status') {
   const { runOrganizationAuthoritySetupCli } = await product('composition/organization-authority-setup-cli.js');
   process.exitCode = await runOrganizationAuthoritySetupCli(['status', '--state-dir', state]);

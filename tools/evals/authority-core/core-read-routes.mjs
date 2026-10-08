@@ -10,7 +10,9 @@ import { openAuthorityDatabase } from "../../../packages/organization-authority-
 import { SqlitePersonAgenticAskAuditV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/person-record-read-audit-v1.js";
+import { SqliteProjectContextRepositoryV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/project-context-v1.js";
 import { createPersonAnswerV3Route } from "../../../services/organization-authority/dist/composition/person-answer-v3-route.js";
+import { createRecordProjectAuthorizationV1 } from "../../../services/organization-authority/dist/composition/person-record-project-scope-v1.js";
 import { createPersonRecordSearchRouteV1 } from "../../../services/organization-authority/dist/composition/person-record-search-route.js";
 import { readableSearchGenerationContractV1 } from "../../../services/organization-authority/dist/composition/readable-search-generation-composition.js";
 import { verifyAuthorityStateLineage } from "../../../packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js";
@@ -145,6 +147,8 @@ export function createCoreReadRoutes({ state_directory, sessions, record_input_c
       authority,
       record: recordDatabase,
       audit: new SqlitePersonRecordReadAuditV1(authority),
+      // A project-audience record is readable only by the project's current members.
+      capture_projects: createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(authority)),
       expand_related_atoms: expandReadableSearchRelatedAtomsV1,
       ...(record_input_codecs === undefined ? {} : { record_input_codecs }),
     });

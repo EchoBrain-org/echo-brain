@@ -12,12 +12,12 @@ Staging alone does not finish that workflow or make a client available to
 The runtime-profile field is current-only. A pre-beta Authority prepared with
 an older release record has no compatibility bridge. `clean-v1` describes an
 artifact replacement loop, not a database migration: it accepts only the
-current Authority V11, private-approval control-plane V3, record-log V4,
+current Authority V12, control-plane V4, record-log V4,
 retrieval facts V3, retrieval content/lexical V2, and six-role V2 root lineage.
 For populated state, `stage` pulls the immutable
 candidate and runs its state-lineage and admitted-processor verifiers in an
 isolated read-only container before any runtime, configuration, or state
-mutation. V11 is fresh-state only: the founder confirmed that existing
+mutation. V12 is fresh-state only: the founder confirmed that existing
 development data is disposable and there are no live users, so the earlier
 pre-V10 staging conversions and offline copiers were removed (git history keeps
 them). The historical project-context sprint used fresh V7 state and PC-06 reset/reseed,
@@ -122,8 +122,9 @@ A release that ships [ADR-0024](../../docs/decisions/ADR-0024-person-list-open-a
 ### Qualify and review the exact release once
 
 Use the [automated current-host lane](#automated-current-host-staging-lane) to
-stage, run the synthetic canary, obtain the human's private Slack-card approval,
-and install/check the exact candidate client. Preserve the candidate's positive
+stage, run the synthetic canary, obtain the human's approval of the canary
+meeting (on the desktop, or in Slack if the owner linked it), and install/check
+the exact candidate client. Preserve the candidate's positive
 record search and cited Ask evidence. A failing required check stops acceptance.
 
 After those checks, present one final review containing the candidate release
@@ -132,7 +133,7 @@ hash, channel, sequence, expiry, both platform targets, and expected predecessor
 hash for a replacement. Include the compatibility plan and any affected desktop
 artifact identity. The human may approve server acceptance and these exact feed
 inputs together; reuse that approval while its scope and bytes remain unchanged.
-The earlier Slack-card approval remains a separate human action.
+The earlier canary approval remains a separate human action.
 
 Only after that decision create the existing release authorization JSON shown
 in the automated lane. Keep its schema unchanged. The separate manifest digest
@@ -373,14 +374,18 @@ request covers both values. Rollback restores the accepted tuple verbatim,
 including earlier flag values or legacy absence. No command accepts arbitrary
 environment names or values.
 
-Run the bounded private-DM canary through the selected running release. It
-prefers a staged candidate, otherwise uses the accepted release. It refuses any
-host except Authority staging, verifies the exact running release, and calls
-only the in-container private socket. The printed receipt has only the release
-identity, outcome, and opaque approval identity. A `delivery_pending` outcome
-is safe to retry; every release uses one stable canary and one Slack message.
-Only `staged` succeeds. Other outcomes stop the command without creating
-promotion evidence. During a replacement, the accepted image must also
+Run the bounded canary through the selected running release. It prefers a
+staged candidate, otherwise uses the accepted release. It refuses any host
+except Authority staging, verifies the exact running release, and calls only
+the in-container private socket. It queues the release's canary meeting into
+the owner's synthetic personal source (no organization meeting source exists),
+runs one processing pass and reports the staged proposal. The printed receipt
+has only the release identity, outcome, and opaque approval identity. The
+receipt kind and field names are unchanged from the earlier private-DM canary.
+Every release uses one stable canary meeting with one new revision per release,
+so a later release supersedes an earlier undecided canary. Only `staged`
+succeeds. Other outcomes (`not_actionable`, `not_staged`) stop the command
+without creating promotion evidence. During a replacement, the accepted image must also
 advertise `org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1=true`
 before the candidate can create synthetic canary state, so the rollback image
 can read that state if recovery is needed.
@@ -389,13 +394,13 @@ On the designated canary Mac, build and install the candidate release's
 verified offline bundle using
 [Advanced client-only install or reinstall](#advanced-client-only-install-or-reinstall).
 Its default installer exposes the exact candidate binary at
-`$HOME/.local/bin/echo-brain`. Approve the resulting private card, then use
-that binary to search for the exact release ID and ask one cited question
+`$HOME/.local/bin/echo-brain`. Approve the canary meeting on the desktop (or in
+the Slack DM copy if the owner linked Slack), then use that binary to search for the exact release ID and ask one cited question
 before making the human promotion confirmation explicit:
 
 ```sh
 ./update-clean-v1.sh canary
-"$HOME/.local/bin/echo-brain" person records --query '<candidate-release-id> private owner approval delivery'
+"$HOME/.local/bin/echo-brain" person records --query '<candidate-release-id> verify owner approval of a staged meeting'
 "$HOME/.local/bin/echo-brain" person ask --question 'What did we decide for synthetic staging release <candidate-release-id>?'
 ./update-clean-v1.sh promote --release /absolute/private/candidate-release.json --canary-passed
 ```
@@ -403,7 +408,7 @@ before making the human promotion confirmation explicit:
 The canary command stores a private receipt bound to the exact selected release.
 Every candidate staged by the update tool requires its own `staged` receipt
 before promotion. The `--canary-passed` flag remains the operator's explicit
-confirmation that the card was approved and both permission-aware reads
+confirmation that the canary meeting was approved and both permission-aware reads
 succeeded; a receipt from the currently accepted release cannot promote a
 different candidate.
 
@@ -434,7 +439,7 @@ recovery as unconfirmed.
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
 does not query SQLite or print credentials. No state migration operation
 exists; a schema change requires fresh state.
-If persisted state lacks the candidate's exact V11/V3/V4 databases, current retrieval schemas, and
+If persisted state lacks the candidate's exact V12/V3/V4 databases, current retrieval schemas, and
 V2 root lineage, `stage` refuses before activating or recording the candidate. It does
 not attempt to repair, infer, or migrate the state.
 
@@ -458,10 +463,10 @@ change once. Local tests do not require a merge or permission to deploy.
 
 The rehearsal starts with the reviewed tooling installed, executes the real
 release planner, host runner and updater, and connects their canary to a real
-local Authority, SQLite state, private socket, card builder and Slack delivery
-adapter. It proves unknown-tool refusal, candidate staging, failed-card
-publication followed by restart-safe retry, and a durable pending approval
-bound to one published card. It never clicks approval, appends an approved
+local Authority, SQLite state, private socket and the owner's synthetic personal
+meeting source. It proves unknown-tool refusal, candidate staging, a canary that
+stages one proposal, a restart-safe rerun that reuses that proposal, and no
+decision row until a person decides. It never approves, appends an approved
 record, or promotes the candidate. The test is included in `npm run check`.
 
 AWS/SSM, container lifecycle/image identity, public TLS routing and provider
@@ -469,7 +474,7 @@ responses are simulated. This is an offline integration gate, not proof of an
 ECR artifact, real Slack scopes/delivery, live credentials, host state or the
 Cloudflare edge. CI retains the separate real-POSIX isolation proof and image
 checks. After review/merge, perform one live validation and stop at the actual
-human Slack approval boundary. Keep environment-only failures distinct from
+human approval boundary. Keep environment-only failures distinct from
 code defects; do not claim all external failures can be ruled out locally.
 
 ### Live operator boundary
@@ -626,7 +631,7 @@ is installed; the new installed tools must match the executing reviewed source.
 | `inspect-install` | Checks the actual install guards and old-or-new reviewed tooling hashes without replacing tools or invoking runtime behavior. Returns a strictly allowlisted readiness/refusal diagnostic. |
 | `status` | Fresh installed-wrapper runtime check, not a cached polling receipt. |
 | `stage` | No staged candidate; uses exact candidate/profile. A drifted environment returns `environment_drift`. |
-| `canary` | Requires the exact staged candidate; stops for the human to approve its private Slack card. `delivery_pending` is safe to retry with a new canary operation after the first invocation has definitively completed. |
+| `canary` | Requires the exact staged candidate; stops for the human to approve the canary meeting on the desktop or in Slack. A rerun for the same release reuses its proposal. |
 | `rollback` | Requires the exact staged candidate and unchanged accepted record; existing wrapper recovery semantics apply. |
 | `promote` | Requires the exact staged candidate, its stored canary receipt, successful exact-client checks, and the separate final founder authorization below. |
 
@@ -674,7 +679,7 @@ Never delete a lock or journal to force progress. Unknown
 tooling, state mismatch, unsupported environment syntax, unconfirmed execution,
 and destructive/infrastructure changes require investigation outside this lane.
 
-After the canary, the human approves the Slack card. The local operator can
+After the canary, the human approves the canary meeting. The local operator can
 install the already-built, checksum-verified offline Person bundle on the
 designated canary Mac and run both exact absolute-path Person commands above.
 The client's authenticated permission checks remain intact; login/MFA stays
@@ -695,7 +700,9 @@ candidate. Only after that decision create a private authorization JSON:
 ```
 
 This records operator-attested evidence and the human decision; it is not a
-cryptographic signature or a replacement for doing the checks. The CLI never
+cryptographic signature or a replacement for doing the checks. The field name
+`slack_approved` is kept for compatibility; it now confirms the canary approval
+from either surface. The CLI never
 creates it automatically. `plan --action promote` additionally requires
 `--approval /absolute/private/releases/founder-authorization.json`. A mismatched
 digest or false/missing confirmation refuses before any host command. Blanket

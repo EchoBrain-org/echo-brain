@@ -35,9 +35,6 @@
       "path": "../../../packages/organization-protocol"
     },
     {
-      "path": "../../../packages/organization-record"
-    },
-    {
       "path": "../../../packages/organization-api"
     },
     {

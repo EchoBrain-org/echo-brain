@@ -56,7 +56,7 @@ Tokens are never printed by successful commands.
 - deterministic, permission-aware record reads and cited answers.
 
 The server starts only from six byte-pinned baseline schemas, one per state
-role: Authority V10, control-plane V3, record-log V4, retrieval facts V3,
+role: Authority V12, control-plane V4, record-log V4, retrieval facts V3,
 retrieval lexical V2 and retrieval content V2. Startup refuses older state
 instead of migrating it; historical baselines and converters remain in Git
 history. Released retrieval
@@ -222,11 +222,11 @@ before any staging, onboarding, or deploy command.
 For an existing accepted staging host, the reviewed
 [`authority:staging-release` lane](deploy/release/README.md#automated-current-host-staging-lane)
 automates non-secret artifact transfer and named release-wrapper actions without
-Session Manager copying. Login/MFA, Slack approval, and the exact candidate's
-final release decision remain human inputs. Initial onboarding retains human
-host-wrapper actions; the local operator can verify the release-installed client
-and run its authenticated Person reads. Infrastructure changes retain their
-plan-review gate.
+Session Manager copying. Login/MFA, approval of the canary meeting (desktop or
+Slack), and the exact candidate's final release decision remain human inputs.
+Initial onboarding retains human host-wrapper actions; the local operator can
+verify the release-installed client and run its authenticated Person reads.
+Infrastructure changes retain their plan-review gate.
 
 The staging controller holds one fixed Cloudflare edge and retained EBS data
 volume around a disposable EC2 host. Its initial host onboarding and three

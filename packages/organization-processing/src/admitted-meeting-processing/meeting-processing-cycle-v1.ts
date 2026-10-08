@@ -19,13 +19,6 @@ import type {
   MeetingProcessingWorkerPhaseRunnerV1,
   MeetingProcessingWorkerPhaseV1,
 } from "./meeting-processing-worker-lifecycle.js";
-import type {
-  MeetingApprovalJourneyRefV1,
-  MeetingApprovalJourneyStageAttemptV1,
-  MeetingApprovalJourneyStageV1,
-  MeetingApprovalJourneyTelemetryPortV1,
-} from "./meeting-approval-journey-telemetry-port-v1.js";
-import type { DecisionExtractionGenerationObservation } from "../core/contracts/decision.js";
 import type { AdmittedMeetingSourceCursorPolicyV1 } from "./admitted-meeting-source-cursor-policy-v1.js";
 import type { ExtractionAttemptStoreV1 } from "./extraction-attempt-store-v1.js";
 import {
@@ -36,12 +29,6 @@ import {
 } from "./review-lineage-semantics.js";
 
 const MAXIMUM_PULL_LIMIT = 1;
-
-export const APPROVAL_DELIVERY_QUARANTINE_REASON_V1 =
-  "approval_package_unrepresentable" as const;
-
-export type ApprovalDeliveryQuarantineReasonV1 =
-  typeof APPROVAL_DELIVERY_QUARANTINE_REASON_V1;
 
 export interface AdmittedMeetingProcessingAdmissionV1 {
   readonly source: {
@@ -112,9 +99,7 @@ export interface ActionableMeetingProcessingCandidateV1
   readonly disposition: "actionable";
   readonly approval_id: string;
   readonly stage_command_id: string;
-  readonly state: "queued" | "posting" | "posted" | "staged" | "superseded";
-  /** Present only on a frozen staged outbox snapshot. */
-  readonly durable_staged_at?: string | null;
+  readonly state: "queued" | "staged" | "superseded";
 }
 
 /** An immutable source revision that intentionally creates no approval card. */
@@ -145,38 +130,27 @@ export interface ApprovalWorkflowStageInputV1 {
 }
 
 export type ApprovalWorkflowStageResultV1 =
+  /** The proposal is frozen; `stage_id` is its approval_id. */
   | { readonly kind: "staged"; readonly stage_id: string }
-  | { readonly kind: "delivery_pending" }
-  | {
-      readonly kind: "quarantined";
-      readonly reason_code: ApprovalDeliveryQuarantineReasonV1;
-    }
   | { readonly kind: "revoked" }
   | { readonly kind: "state_drift" };
 
-type DurableApprovalDeliveryOutcomeV1 = Extract<
-  ApprovalWorkflowStageResultV1,
-  { readonly kind: "delivery_pending" | "quarantined" }
->;
-
 /**
- * This is deliberately a narrow handoff. The eventual control-plane adapter
- * owns the durable approval card and returns `staged` only once it is
- * committed. A known revoked or drifted control-plane state is a safe no-op.
+ * This is deliberately a narrow handoff. `staged` means the approval proposal
+ * is frozen and committed. A known revoked or drifted state is a safe no-op.
+ * `stage` runs after the candidate commits and before the cursor advance, so a
+ * stager must not rely on rows that advance writes.
  */
 export interface ApprovalWorkflowStagerV1 {
   stage(
     input: ApprovalWorkflowStageInputV1,
     context?: { readonly signal: AbortSignal },
   ): Promise<ApprovalWorkflowStageResultV1>;
-  /**
-   * Reconciles durable approval delivery work independently of source intake.
-   * A provider-ambiguous post remains frozen and is never blindly repeated.
-   */
+  /** Freezes queued proposals independently of source intake. */
   reconcilePendingDeliveries(
     context?: { readonly signal: AbortSignal },
   ): Promise<void>;
-  /** Reconciles every durable obsolete provider presentation. */
+  /** Reconciles obsolete presentations; may be a no-op when presenters redraw from the proposal. */
   reconcileSuperseded(
     context?: { readonly signal: AbortSignal },
   ): Promise<void>;
@@ -215,26 +189,6 @@ export type AdmittedMeetingProcessingCycleResultV1 =
       readonly cursor_advanced: boolean;
     }
   | {
-      readonly kind: "delivery_pending";
-      readonly cursor_advanced: boolean;
-    }
-  | {
-      readonly kind: "delivery_pending_cursor_not_advanced";
-      readonly reason: "revoked" | "state_drift";
-      readonly cursor_advanced: false;
-    }
-  | {
-      readonly kind: "quarantined";
-      readonly reason_code: ApprovalDeliveryQuarantineReasonV1;
-      readonly cursor_advanced: boolean;
-    }
-  | {
-      readonly kind: "quarantined_cursor_not_advanced";
-      readonly reason_code: ApprovalDeliveryQuarantineReasonV1;
-      readonly reason: "revoked" | "state_drift";
-      readonly cursor_advanced: false;
-    }
-  | {
       readonly kind: "not_staged";
       readonly reason: "revoked" | "state_drift";
       readonly cursor_advanced: false;
@@ -266,8 +220,6 @@ export interface AdmittedMeetingProcessingCycleV1Options {
   readonly source_cursor_policy: AdmittedMeetingSourceCursorPolicyV1;
   /** Live composition supplies the durable, one-attempt automatic spend guard. */
   readonly extraction_attempts?: ExtractionAttemptStoreV1;
-  /** Optional, staging-owned journey detail. It must never affect processing. */
-  readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
 }
 
 function automaticMeetingSourceAdmission(
@@ -338,17 +290,6 @@ function operationContext(
   signal: AbortSignal | undefined,
 ): { readonly signal: AbortSignal } | undefined {
   return signal === undefined ? undefined : { signal };
-}
-
-function canonicalDurableTimestamp(
-  value: string | null | undefined,
-): string | undefined {
-  if (typeof value !== "string") return undefined;
-  try {
-    return new Date(value).toISOString() === value ? value : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function rebindDecisionsToRevision(
@@ -469,10 +410,6 @@ export class AdmittedMeetingProcessingCycleV1 {
         ? signal.reason
         : new Error("admitted meeting-processing cycle was cancelled");
     }
-    // The source-stage clock deliberately starts before admission and pull,
-    // but a durable journey is created only after a canonical source identity
-    // and revision are available.
-    const sourceStarted = this.captureTelemetryClock();
     const intake = await this.phase("source_intake", async () => {
       const admission = await this.options.state.readAdmission();
       assertAdmissionMatchesAdapters(
@@ -523,62 +460,30 @@ export class AdmittedMeetingProcessingCycleV1 {
       }
       assertCanonicalMeetingDocument(meeting, this.options.source.identity);
       const reviewPolicy = legacyRestrictedReviewerReviewPolicySnapshotV1;
-      const sourceAttempt = this.safely(
-        () =>
-          this.options.journey_telemetry?.beginOrResumeSource(
-            {
-              source_adapter_id: meeting.provenance.source.adapter_id,
-              source_instance_id: meeting.provenance.source.instance_id,
-              external_id: meeting.provenance.external_id,
-              canonical_revision: meeting.provenance.canonical_revision,
-            },
-            sourceStarted,
-          ) ?? null,
-        null,
-      ) ?? null;
-      try {
-        const frozen =
-          await this.options.state.readFrozenCandidateForSourceRevision({
-          external_id: meeting.provenance.external_id,
-          canonical_revision: meeting.provenance.canonical_revision,
-          });
-        this.safely(() => {
-          this.options.journey_telemetry?.succeedStage(sourceAttempt);
+      const frozen =
+        await this.options.state.readFrozenCandidateForSourceRevision({
+        external_id: meeting.provenance.external_id,
+        canonical_revision: meeting.provenance.canonical_revision,
         });
-        return {
-          kind: "meeting" as const,
-          admission,
-          batch,
-          meeting,
-          reviewPolicy,
-          frozen,
-          journey: sourceAttempt,
-        };
-      } catch (error) {
-        this.safely(() => {
-          this.options.journey_telemetry?.failStage(sourceAttempt, error);
-        });
-        throw error;
-      }
+      return {
+        kind: "meeting" as const,
+        admission,
+        batch,
+        meeting,
+        reviewPolicy,
+        frozen,
+      };
     }, signal);
     if (intake.kind === "complete") return intake.result;
-    const { admission, batch, meeting, reviewPolicy, frozen, journey } = intake;
+    const { admission, batch, meeting, reviewPolicy, frozen } = intake;
     annotateCoreRuntimeV1({ source_revision: coreRuntimeIdentityV1("source_revision", JSON.stringify([meeting.provenance.external_id, meeting.provenance.canonical_revision])) });
-    if (journey) annotateCoreRuntimeV1({ linked_journey_ids: [journey.journey_id] });
     if (frozen !== undefined) {
-      this.bindCandidate(journey, frozen);
-      this.reconcileFrozenCandidateStages(journey, frozen);
-      if (frozen.disposition !== "actionable") {
-        this.skipApprovalStages(journey);
-      }
       return this.phase(
         "approval_staging",
         async () => {
           if (
             frozen.disposition === "actionable" &&
-            (frozen.state === "queued" ||
-              frozen.state === "posting" ||
-              frozen.state === "posted")
+            frozen.state === "queued"
           ) {
             return this.stageAndAdvance(
               frozen,
@@ -588,9 +493,6 @@ export class AdmittedMeetingProcessingCycleV1 {
               batch.next_cursor,
               signal,
             );
-          }
-          if (frozen.disposition === "actionable" && frozen.state === "staged") {
-            this.reconcileStagedApproval(journey, frozen);
           }
           if (frozen.disposition === "no_signals") {
             await this.options.stager.reconcileSuperseded(operationContext(signal));
@@ -625,7 +527,6 @@ export class AdmittedMeetingProcessingCycleV1 {
           review_input_sha256: reviewInputSha256,
         });
       if (reusable !== undefined) {
-        this.skipStageIfMissing(journey, "meeting_extraction");
         const rebound = rebindDecisionsToRevision(
           reusable.decisions,
           reusable.meeting,
@@ -663,9 +564,6 @@ export class AdmittedMeetingProcessingCycleV1 {
       if (claim?.status === "blocked") {
         throw new AdapterError("permanently_rejected", "extraction_on_hold", false);
       }
-      const extractionAttempt = this.beginStage(journey, "meeting_extraction");
-      const extractionStartedAt = Date.now();
-      let observation: DecisionExtractionGenerationObservation | null = null;
       let receivedOutput = false;
       let extracted: DecisionSet;
       try {
@@ -674,9 +572,6 @@ export class AdmittedMeetingProcessingCycleV1 {
           {
             processor_version: this.options.processor.identity.version,
             input_fingerprint: inputFingerprint(meeting, this.options.processor),
-            on_generation: (event) => {
-              observation = event;
-            },
           },
           operationContext(signal),
         );
@@ -687,24 +582,15 @@ export class AdmittedMeetingProcessingCycleV1 {
           this.options.processor.identity,
         );
       } catch (error) {
-        try {
-          if (claim !== undefined) attempts!.complete({
-            key: extractionKey,
-            attempt: claim.attempt,
-            claim_id: claim.claim_id,
-            outcome: "failed",
-            failure_code: signal?.aborted === true ? "cancelled"
-              : receivedOutput ? "invalid_output"
-              : error instanceof AdapterError ? error.code : "unknown",
-          });
-        } finally {
-          this.closeExtractionFailure(
-            extractionAttempt,
-            error,
-            observation,
-            extractionStartedAt,
-          );
-        }
+        if (claim !== undefined) attempts!.complete({
+          key: extractionKey,
+          attempt: claim.attempt,
+          claim_id: claim.claim_id,
+          outcome: "failed",
+          failure_code: signal?.aborted === true ? "cancelled"
+            : receivedOutput ? "invalid_output"
+            : error instanceof AdapterError ? error.code : "unknown",
+        });
         throw error;
       }
       // A failure after this point (including candidate persistence) must not
@@ -715,38 +601,18 @@ export class AdmittedMeetingProcessingCycleV1 {
         claim_id: claim.claim_id,
         outcome: "succeeded",
       });
-      this.closeExtractionSuccess(extractionAttempt, observation, extractionStartedAt);
       return extracted;
     }, signal);
     return this.phase(
       "approval_staging",
       async () => {
-        const candidateAttempt = this.beginStage(
-          journey,
-          "meeting_candidate_persist",
-        );
-        let candidate: MeetingProcessingCandidateV1;
-        try {
-          candidate = await this.options.state.stageCandidate({
-            admission,
-            meeting,
-            decisions,
-            review_policy: reviewPolicy,
-          });
-          this.safely(() => {
-            this.options.journey_telemetry?.succeedStage(candidateAttempt, {
-              outcome: candidate.disposition,
-            });
-          });
-        } catch (error) {
-          this.safely(() => {
-            this.options.journey_telemetry?.failStage(candidateAttempt, error);
-          });
-          throw error;
-        }
-        this.bindCandidate(journey, candidate);
+        const candidate: MeetingProcessingCandidateV1 = await this.options.state.stageCandidate({
+          admission,
+          meeting,
+          decisions,
+          review_policy: reviewPolicy,
+        });
         if (candidate.disposition !== "actionable") {
-          this.skipApprovalStages(journey);
           await this.options.stager.reconcileSuperseded(operationContext(signal));
           return candidate.disposition === "no_signals"
             ? this.finishWithoutStage(
@@ -788,18 +654,15 @@ export class AdmittedMeetingProcessingCycleV1 {
         operationContext(signal),
       );
     } catch (error) {
-      // The candidate/outbox is already durable. Preserve a visible delivery
-      // failure, but release source intake so one presentation defect cannot
-      // cork every later meeting.
+      // The candidate/outbox is already durable and stays queued. Preserve a
+      // visible failure, but release source intake so one proposal defect
+      // cannot cork every later meeting; reconcile retries the freeze.
+      // A failed advance leaves the import queued for the next cycle; the
+      // freeze failure stays the error this cycle reports.
       if (signal?.aborted !== true) {
-        await this.advanceAfterDurableDelivery(admission, nextCursor, {
-          kind: "delivery_pending",
-        });
+        await this.advanceAfterStageFailure(admission, nextCursor).catch(() => undefined);
       }
       throw error;
-    }
-    if (staged.kind === "delivery_pending" || staged.kind === "quarantined") {
-      return this.advanceAfterDurableDelivery(admission, nextCursor, staged);
     }
     if (staged.kind !== "staged") {
       return {
@@ -833,33 +696,15 @@ export class AdmittedMeetingProcessingCycleV1 {
     return { kind: "staged", stage_id: staged.stage_id, cursor_advanced: true };
   }
 
-  private async advanceAfterDurableDelivery(
+  private async advanceAfterStageFailure(
     admission: AdmittedMeetingProcessingAdmissionV1,
     nextCursor: string | undefined,
-    outcome: DurableApprovalDeliveryOutcomeV1,
-  ): Promise<AdmittedMeetingProcessingCycleResultV1> {
-    if (nextCursor === undefined || nextCursor === admission.source.cursor) {
-      return { ...outcome, cursor_advanced: false };
-    }
-    const advanced = await this.advanceCursor({
+  ): Promise<void> {
+    if (nextCursor === undefined || nextCursor === admission.source.cursor) return;
+    await this.advanceCursor({
       expected_cursor: admission.source.cursor,
       next_cursor: nextCursor,
     });
-    if (advanced === "advanced") {
-      return { ...outcome, cursor_advanced: true };
-    }
-    return outcome.kind === "delivery_pending"
-      ? {
-          kind: "delivery_pending_cursor_not_advanced",
-          reason: advanced,
-          cursor_advanced: false,
-        }
-      : {
-          kind: "quarantined_cursor_not_advanced",
-          reason_code: outcome.reason_code,
-          reason: advanced,
-          cursor_advanced: false,
-        };
   }
 
   private async finishWithoutStage(
@@ -908,151 +753,5 @@ export class AdmittedMeetingProcessingCycleV1 {
     signal?: AbortSignal,
   ): Promise<T> {
     return this.workerLifecycle?.runPhase(phase, operation, signal) ?? operation();
-  }
-
-  private safely<T>(operation: () => T, fallback?: T): T | undefined {
-    try {
-      return operation();
-    } catch {
-      return fallback;
-    }
-  }
-
-  private captureTelemetryClock() {
-    return this.safely(
-      () => this.options.journey_telemetry?.captureClock(),
-    );
-  }
-
-  private beginStage(
-    journey: MeetingApprovalJourneyRefV1 | null,
-    stage: "meeting_extraction" | "meeting_candidate_persist",
-  ): MeetingApprovalJourneyStageAttemptV1 | null {
-    if (journey === null) return null;
-    return this.safely(
-      () => this.options.journey_telemetry?.beginStage(journey, stage) ?? null,
-      null,
-    ) ?? null;
-  }
-
-  private closeExtractionSuccess(
-    attempt: MeetingApprovalJourneyStageAttemptV1 | null,
-    observation: DecisionExtractionGenerationObservation | null,
-    startedAt: number,
-  ): void {
-    this.safely(() => {
-      this.options.journey_telemetry?.succeedExtractionStage(
-        attempt,
-        observation,
-        Math.max(0, Date.now() - startedAt),
-      );
-    });
-  }
-
-  private closeExtractionFailure(
-    attempt: MeetingApprovalJourneyStageAttemptV1 | null,
-    error: unknown,
-    observation: DecisionExtractionGenerationObservation | null,
-    startedAt: number,
-  ): void {
-    this.safely(() => {
-      this.options.journey_telemetry?.failExtractionStage(
-        attempt,
-        error,
-        observation,
-        Math.max(0, Date.now() - startedAt),
-      );
-    });
-  }
-
-  private bindCandidate(
-    journey: MeetingApprovalJourneyRefV1 | null,
-    candidate: MeetingProcessingCandidateV1,
-  ): void {
-    if (journey === null) return;
-    this.safely(() => {
-      this.options.journey_telemetry?.bindCandidate(journey, {
-        candidate_id: candidate.candidate_id,
-        approval_id: candidate.approval_id,
-      });
-    });
-  }
-
-  private reconcileFrozenCandidateStages(
-    journey: MeetingApprovalJourneyRefV1 | null,
-    candidate: MeetingProcessingCandidateV1,
-  ): void {
-    this.skipStageIfMissing(journey, "meeting_extraction");
-    if (journey === null) return;
-    this.safely(() => {
-      const telemetry = this.options.journey_telemetry;
-      if (
-        telemetry === undefined ||
-        telemetry.hasTerminalJourneyStage(journey, "meeting_candidate_persist")
-      ) {
-        return;
-      }
-      const attempt = telemetry.beginStage(journey, "meeting_candidate_persist");
-      telemetry.succeedStage(attempt, { outcome: candidate.disposition });
-    });
-  }
-
-  /**
-   * A staged candidate is the durable proof that both the Control Plane handoff
-   * and Authority acknowledgement completed. Rebuild only the optional journey
-   * observations after a crash, without replaying provider delivery.
-   */
-  private reconcileStagedApproval(
-    journey: MeetingApprovalJourneyRefV1 | null,
-    candidate: ActionableMeetingProcessingCandidateV1,
-  ): void {
-    if (journey === null) return;
-    this.safely(() => {
-      const telemetry = this.options.journey_telemetry;
-      if (telemetry === undefined) return;
-      if (!telemetry.hasTerminalJourneyStage(journey, "meeting_approval_staging")) {
-        const attempt = telemetry.beginStage(journey, "meeting_approval_staging");
-        telemetry.succeedStage(attempt, { outcome: "staged" });
-      }
-      // This marker is independently idempotent and repairs a crash after the
-      // durable staged acknowledgement but before the optional wait clock.
-      const durableStagedAt = canonicalDurableTimestamp(
-        candidate.durable_staged_at,
-      );
-      if (durableStagedAt !== undefined) {
-        telemetry.markCardStaged(candidate.approval_id, durableStagedAt);
-      }
-    });
-  }
-
-  private skipApprovalStages(
-    journey: MeetingApprovalJourneyRefV1 | null,
-  ): void {
-    for (const stage of [
-      "meeting_approval_staging",
-      "meeting_approval_action_verify",
-      "meeting_approval_action_queue",
-      "meeting_terminal_persist",
-      "meeting_record_append",
-      "meeting_search_publication",
-    ] as const) {
-      this.skipStageIfMissing(journey, stage);
-    }
-  }
-
-  private skipStageIfMissing(
-    journey: MeetingApprovalJourneyRefV1 | null,
-    stage: Exclude<MeetingApprovalJourneyStageV1, "meeting_source_intake">,
-  ): void {
-    if (journey === null) return;
-    this.safely(() => {
-      const telemetry = this.options.journey_telemetry;
-      if (
-        telemetry !== undefined &&
-        !telemetry.hasTerminalJourneyStage(journey, stage)
-      ) {
-        telemetry.skipStage(journey, stage);
-      }
-    });
   }
 }

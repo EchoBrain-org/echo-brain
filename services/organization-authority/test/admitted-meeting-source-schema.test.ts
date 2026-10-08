@@ -1,20 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV11,
+  applyAuthorityBaselineV12,
   AUTHORITY_BASELINE_APPLICATION_ID_V1,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
-  authorityBaselineSha256V11,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V12,
+  authorityBaselineSha256V12,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
-const AUTHORITY_BASELINE_SHA256_V11 =
-  "sha256:3c688e2d1504b1ecb7b214c54864c0347dd1df22d09e252b22fc6fd7ec8335b2";
+const AUTHORITY_BASELINE_SHA256_V12 =
+  "sha256:14e5a3cb1351db83f43822cd49baf6ab4c1b562c832ef792b718486f8fbb15ef";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-29T00:00:00.000Z";
+/** A personal source key; the admission table keys every source by its own text key. */
+const SOURCE_KEY = "pms_fixture";
 
 function openedCurrentDatabase() {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV11(database);
+  applyAuthorityBaselineV12(database);
   return database;
 }
 
@@ -60,14 +62,14 @@ function admitSyntheticSource(
         processor_configuration_sha256, processor_credential_reference_sha256,
         semantic_input_sha256, admitted_at
       ) VALUES (
-        1, 'org_1', 'prn_1', 'mem_1', 'owner',
+        ?, 'org_1', 'prn_1', 'mem_1', 'owner',
         'synthetic-meeting-fixture-v1', '1.0.0', 'synthetic-fixture',
         '1.0.0', ?, 'fixture_owner_declared', ?, ?,
         'fixture://cursor/zero', ?,
         'decision-processor', '1.0.0', 'processor', ?, ?, ?, ?
       )`,
     )
-    .run(DIGEST, NOW, DIGEST, NOW, DIGEST, DIGEST, DIGEST, NOW);
+    .run(SOURCE_KEY, DIGEST, NOW, DIGEST, NOW, DIGEST, DIGEST, DIGEST, NOW);
 }
 
 describe("Authority admitted meeting-source schema", () => {
@@ -84,22 +86,28 @@ describe("Authority admitted meeting-source schema", () => {
     const database = openedCurrentDatabase();
     try {
       seedOwner(database); admitSyntheticSource(database);
-      database.prepare('INSERT INTO authority_person_meeting_sources_v1 VALUES (?, ?, NULL, NULL, 0)').run('1', DIGEST);
-      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v1 SET settings_revision=2 WHERE source_key=?').run('1')).toThrow('ordered');
-      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v1 SET folder_id=?,settings_revision=1 WHERE source_key=?').run('folder', '1')).toThrow();
-      expect(database.prepare('SELECT settings_revision FROM authority_person_meeting_sources_v1').pluck().get()).toBe(0);
-      expect((database.pragma('table_info(authority_person_meeting_approval_actions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['sequence', 'approval_id', 'command_id', 'body_json', 'receipt_json']);
+      database.prepare('INSERT INTO authority_person_meeting_sources_v2 VALUES (?, ?, NULL, NULL, 0)').run(SOURCE_KEY, DIGEST);
+      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v2 SET settings_revision=2 WHERE source_key=?').run(SOURCE_KEY)).toThrow('ordered');
+      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v2 SET folder_id=?,settings_revision=1 WHERE source_key=?').run('folder', SOURCE_KEY)).toThrow('CHECK');
+      expect(database.prepare('SELECT settings_revision FROM authority_person_meeting_sources_v2').pluck().get()).toBe(0);
+      expect((database.pragma('table_info(authority_person_meeting_sources_v2)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'person_key', 'folder_id', 'folder_project_id', 'settings_revision']);
+      expect((database.pragma('table_info(authority_person_meeting_suggestions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'external_id', 'project_id', 'created_at']);
+      expect((database.pragma('table_info(authority_person_meeting_pending_suggestions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'external_id', 'project_id', 'created_at']);
+      expect((database.pragma('table_info(authority_approval_decisions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['sequence', 'approval_id', 'command_id', 'surface', 'action', 'body_json', 'receipt_json']);
+      const tables = database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").pluck().all();
+      expect(tables).not.toContain('authority_person_meeting_approval_actions_v1');
+      expect(tables).not.toContain('authority_live_approval_delivery_quarantines_v1');
     } finally { database.close(); }
   });
   it("is a pinned fresh-only provider-neutral schema with stable role headers", () => {
     const database = openedCurrentDatabase();
     try {
-      expect(authorityBaselineSha256V11()).toBe(AUTHORITY_BASELINE_SHA256_V11);
+      expect(authorityBaselineSha256V12()).toBe(AUTHORITY_BASELINE_SHA256_V12);
       expect(database.pragma("application_id", { simple: true })).toBe(
         AUTHORITY_BASELINE_APPLICATION_ID_V1,
       );
       expect(database.pragma("user_version", { simple: true })).toBe(
-        AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
+        AUTHORITY_BASELINE_SCHEMA_VERSION_V12,
       );
       const tables = database
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -112,11 +120,11 @@ describe("Authority admitted meeting-source schema", () => {
           "authority_live_source_candidates_v2",
           "authority_live_source_review_lineage_heads_v2",
           "authority_live_approval_outbox_v2",
-          "authority_private_approval_assignments_v3",
-          "authority_private_approval_terminal_receipts_v3",
         ]),
       );
       expect(tables).not.toContain("authority_clean_granola_source_admission_v1");
+      expect(tables).not.toContain("authority_private_approval_assignments_v3");
+      expect(tables).not.toContain("authority_private_approval_terminal_receipts_v3");
       expect(
         database
           .prepare("SELECT count(*) FROM sqlite_master WHERE lower(sql) LIKE '%granola%'")
@@ -138,24 +146,24 @@ describe("Authority admitted meeting-source schema", () => {
         .prepare(
           `INSERT INTO authority_live_source_progress_v2 (
             source_key, admission_semantic_input_sha256, cursor, cursor_version, updated_at
-          ) VALUES (1, ?, 'not-a-granola-prefix', 0, ?)`,
+          ) VALUES (?, ?, 'not-a-granola-prefix', 0, ?)`,
         )
-        .run(DIGEST, NOW);
+        .run(SOURCE_KEY, DIGEST, NOW);
       database
         .prepare(
           `UPDATE authority_live_source_progress_v2
            SET cursor = 'arbitrary-provider-cursor', cursor_version = 1, updated_at = ?
-           WHERE source_key = 1`,
+           WHERE source_key = ?`,
         )
-        .run(NOW);
+        .run(NOW, SOURCE_KEY);
       expect(() =>
         database
           .prepare(
             `UPDATE authority_live_source_progress_v2
              SET cursor = 'same-version', cursor_version = 1, updated_at = ?
-             WHERE source_key = 1`,
+             WHERE source_key = ?`,
           )
-          .run(NOW),
+          .run(NOW, SOURCE_KEY),
       ).toThrow(/ordered cursor advances/);
       expect(() =>
         database
@@ -167,96 +175,10 @@ describe("Authority admitted meeting-source schema", () => {
     }
   });
 
-  it("keeps the existing Slack DM assignment contract while relinking it to generic candidates", () => {
-    const database = openedCurrentDatabase();
-    try {
-      const sql = database
-        .prepare(
-          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'authority_private_approval_assignments_v3'",
-        )
-        .pluck()
-        .get() as string;
-      expect(sql).toContain("candidate_id TEXT NOT NULL UNIQUE REFERENCES authority_live_source_candidates_v2(candidate_id)");
-      expect(sql).toContain("slack_workspace_id TEXT NOT NULL");
-      expect(sql).toContain("slack_enterprise_id TEXT CHECK");
-      expect(sql).toContain("slack_subject_id TEXT NOT NULL");
-      expect(sql).toContain("slack_dm_channel_id TEXT NOT NULL CHECK");
-      expect(sql).toContain("substr(slack_dm_channel_id, 1, 1) = 'D'");
-      expect(sql).not.toContain("delivery_workspace_id");
-    } finally {
-      database.close();
-    }
-  });
-
-  it("keeps the private-approval terminal receipt fence dependent on generic candidates", () => {
-    const database = openedCurrentDatabase();
-    try {
-      seedOwner(database);
-      admitSyntheticSource(database);
-      database
-        .prepare(
-          `INSERT INTO authority_live_source_candidates_v2 (
-            candidate_id, candidate_semantic_sha256, admission_semantic_input_sha256,
-            review_lineage_id, review_input_sha256, review_semantic_sha256,
-            review_policy_id, review_policy_contract_sha256,
-            review_policy_consequence_text, review_policy_consequence_sha256,
-            disposition, source_cursor, meeting_sha256, meeting_json,
-            decisions_sha256, decisions_json, created_at
-          ) VALUES (
-            'cnd_1', ?, ?, 'rli_1', ?, ?, 'restricted', ?, 'Only me', ?,
-            'actionable', 'fixture://cursor/one', ?, '{"meeting":true}', ?, '{"decisions":true}', ?
-          )`,
-        )
-        .run(DIGEST, DIGEST, DIGEST, DIGEST, DIGEST, DIGEST, DIGEST, DIGEST, NOW);
-      database
-        .prepare(
-          `INSERT INTO authority_private_approval_assignments_v3 (
-            approval_id, candidate_id, candidate_sha256, frozen_card_sha256,
-            approved_snapshot_sha256, connection_id, connection_contract_sha256,
-            connection_state_sha256, external_identity_link_id,
-            external_identity_link_contract_sha256, assignee_principal_id,
-            assignee_membership_id, slack_workspace_id, slack_enterprise_id,
-            slack_subject_id, slack_dm_channel_id, created_at
-          ) VALUES (
-            'apr_1', 'cnd_1', ?, ?, ?, 'con_1', ?, ?, 'clm_1', ?, 'prn_1',
-            'mem_1', 'workspace', NULL, 'person', 'Dprivate-channel', ?
-          )`,
-        )
-        .run(DIGEST, DIGEST, DIGEST, DIGEST, DIGEST, DIGEST, NOW);
-      expect(() =>
-        database
-          .prepare(
-            `INSERT INTO authority_private_approval_terminal_receipts_v3 (
-              approval_id, candidate_id, outcome, resolution_json, resolution_sha256,
-              v4_receipt_json, v4_receipt_sha256, card_render_state,
-              card_rendered_at, recorded_at
-            ) VALUES ('apr_missing', 'cnd_1', 'rejected', '{"outcome":"rejected"}', ?, NULL, NULL, 'unrendered', NULL, ?)`,
-          )
-          .run(DIGEST, NOW),
-      ).toThrow(/FOREIGN KEY/);
-      database
-        .prepare(
-          `INSERT INTO authority_private_approval_terminal_receipts_v3 (
-            approval_id, candidate_id, outcome, resolution_json, resolution_sha256,
-            v4_receipt_json, v4_receipt_sha256, card_render_state,
-            card_rendered_at, recorded_at
-          ) VALUES ('apr_1', 'cnd_1', 'rejected', '{"outcome":"rejected"}', ?, NULL, NULL, 'unrendered', NULL, ?)`,
-        )
-        .run(DIGEST, NOW);
-      expect(() =>
-        database
-          .prepare("DELETE FROM authority_private_approval_terminal_receipts_v3")
-          .run(),
-      ).toThrow(/cannot be deleted/);
-    } finally {
-      database.close();
-    }
-  });
-
   it("refuses to reinitialize an occupied database", () => {
     const database = openedCurrentDatabase();
     try {
-      expect(() => applyAuthorityBaselineV11(database)).toThrow(
+      expect(() => applyAuthorityBaselineV12(database)).toThrow(
         /completely empty database/,
       );
     } finally {

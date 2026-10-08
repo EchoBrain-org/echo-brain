@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  organizationControlBaselineSha256V3,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
+  organizationControlBaselineSha256V4,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
   organizationRecordLogBaselineSha256V4,
@@ -16,8 +16,8 @@ import {
   READABLE_SEARCH_LEXICAL_BASELINE_V2,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import {
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
-  authorityBaselineSha256V11,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V12,
+  authorityBaselineSha256V12,
 } from "../adapters/persistence/sqlite/baseline.js";
 import { StateLineagePreopenRefusal, verifyStateLineageBeforeOpen } from "../state-lineage/state-lineage-preopen-guard.js";
 import { validateStateLineageRootManifestV2 } from "../state-lineage/state-lineage-manifest-v1.js";
@@ -50,13 +50,13 @@ export function verifyAuthorityStateLineage(stateDirectory: string) {
     },
     expected_schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V11,
-        schema_sha256: authorityBaselineSha256V11(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V12,
+        schema_sha256: authorityBaselineSha256V12(),
       },
       "control-plane": {
         database_schema_version:
-          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
-        schema_sha256: organizationControlBaselineSha256V3(),
+          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4,
+        schema_sha256: organizationControlBaselineSha256V4(),
       },
       "record-log": {
         database_schema_version:

@@ -6,8 +6,9 @@ admitted meeting processing, approval finalization, immutable V4 records, and
 permission-aware Person reads and answer composition. It also owns durable
 Person document and upload custody, projects with their association and
 audience, audited read/search, and optional search enrichment. Uploads do not
-require Slack approval. The current artifact is Authority V10, with project
-settings and project-scoped meeting approvals. Runtime opening never migrates
+require Slack approval. The current artifact is Authority V12 with control-plane
+V4, with project settings and one approval core for meetings (one proposal per
+meeting, multi-project audiences, confirmed owners). Runtime opening never migrates
 state. This release requires fresh databases; existing disposable rehearsal
 state uses the [authorized reset](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state).
 
@@ -27,15 +28,19 @@ defines the supported operator and employee flow.
 - `organization-authority-http-server.ts` owns HTTP mechanics and dispatch.
 - `organization-authority-setup-cli.ts` coordinates organization setup.
 - `organization-authority-state-bootstrap.ts` bootstraps a new absent-state lineage.
-- `meeting-source-bundle-v1.ts`, `decision-processor-bundle-v1.ts`, and
-  `approval-workflow-bundle-v1.ts` in `packages/organization-processing/src/ports/`
-  define provider-neutral composition seams.
-- `providers/synthetic-demo/src/synthetic-demo-meeting-source-bundle-v1.ts`,
-  `providers/openrouter/src/openrouter-decision-processor-bundle-v1.ts`, and
-  `providers/slack/server/src/private-approval/private-slack-approval-workflow-bundle-v1.ts`
-  own the selected providers. Slack Person identity composition is under
-  `providers/slack/server/src/person-identity/`; the Slack private-DM staging
-  canary is under `providers/slack/server/src/composition/staging/slack-private-approval/`.
+- `meeting-source-bundle-v1.ts` and `decision-processor-bundle-v1.ts` in
+  `packages/organization-processing/src/ports/` define provider-neutral
+  composition seams; `ApprovalWorkflowContextV1` in `approval-workflow-bundle-v1.ts`
+  is the approval seam the approval core (`approval-core-v1.ts`) is built on.
+- `providers/openrouter/src/openrouter-decision-processor-bundle-v1.ts` owns
+  the selected decision processor. `approval-core-v1.ts` is the one approval
+  core and `approval-publisher-v1.ts` the one publisher, composed here. Slack is
+  an optional presenter on the core
+  (`providers/slack/server/src/private-approval/slack-approval-presenter-v1.ts`,
+  with clicks decided through `slack-approval-click-v1.ts`). Slack Person
+  identity composition is under `providers/slack/server/src/person-identity/`;
+  the Slack private-DM staging canary is under
+  `providers/slack/server/src/composition/staging/slack-private-approval/`.
 - Private Slack interactions are separated into protocol, handler, HTTP adapter,
   and presentation-port components.
 - Identity and approval callbacks share the application-owned
@@ -147,7 +152,7 @@ Receipts contain hashes and counts, never source contents, cursors, provider
 account IDs or credentials. The V3 protocol supports status and Jira
 `verify-read` only. All capture requests are rejected before provider I/O, and no
 tool pointers, metadata or bodies enter Layer 1. Organization Granola polling is
-removed. Slack approval tests use the existing synthetic release canary and
+removed. Approval tests use the existing synthetic release canary and
 human approval, with separate evidence. The diagnostic profile alone does not
 enable Ask. See the
 [scope and custody rules](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal).
@@ -197,7 +202,7 @@ Bootstrap and finalization are stopped-state operations. The path is:
    browser OIDC sign-in, set up the organization's Slack connection in the
    app, and connect the signed-in person's own Slack.
 3. Stop the Organization Authority service, install the three provider credentials, then finalize.
-4. Restart the Organization Authority service and complete the post-admission canary.
+4. Restart the Organization Authority service and complete the staging canary.
 
 The OIDC JSON must be readable JSON with exactly `issuer`, `client_id`,
 `redirect_uri`, `tenant`, `id_token_algorithms`, and `client_authentication`.
@@ -262,7 +267,7 @@ the meeting-owner DM lane.
 
 Re-onboarding a staging lineage uses the same in-app setup and connect as a
 first connection; it does not reuse a Slack app's scopes or token by hand. Use
-a wholly fresh Authority V10 staging lineage with the
+a wholly fresh Authority V12 staging lineage with the
 [current storage baselines](#state-and-baselines); use the supported
 rehearsal reset before preparing state from an earlier release.
 
@@ -335,19 +340,22 @@ echo-organization-authority-setup finalize --state-dir /absolute/clean-state
 
 Finalization requires clean genesis, the organization Slack connection, the
 initial owner's OIDC binding and Slack identity link, and the LLM credential.
-Ordinary deployments admit no meeting source and start with intake idle. On the
-exact staging origin, finalization admits synthetic canary infrastructure with
-an empty source; only an explicit release-bound canary request supplies content.
-The existing four-meeting fixture selector instead admits its fixed synthetic
-corpus. Neither staging mode needs a Granola account or credential.
+Ordinary deployments admit no meeting source and start with intake idle;
+meetings enter only through a person's own sources. On the exact staging origin,
+finalization ensures the owner's synthetic personal source with no fixture
+notes; only an explicit release-bound canary request supplies content. The
+existing four-meeting fixture selector instead queues its fixed synthetic corpus
+into that source. Neither staging mode needs a Granola account or credential.
 
 ### 4. Restart the Authority service and run the canary
 
 Restart the same `clean-live serve` compatibility command. Optional
 `--worker-interval-ms <positive-integer>` changes the worker interval. At
-startup, the runtime reconciles the search index once, then each cycle recovers pending
-V4 appends, polls the admitted meeting source, finalizes approvals, appends
-approved records, and reconciles the search index again.
+startup, the runtime reconciles the search index once, then each cycle recovers
+decided approvals whose record was not appended, polls the personal meeting
+sources and freezes one proposal per meeting, publishes the decisions made since
+(one V4 record per approval, then the after-record hooks), and reconciles the
+search index again.
 
 The deployment wrapper's `resume` output is the single source for staging's
 actor-scoped host, Slack, and release-matched Person-client actions. A staging
@@ -381,25 +389,33 @@ query never triggers a build. If the head advances or a generation build fails,
 the existing pointer is not used for the new head. The Person client reports
 that search is catching up; wait for the next worker cycle and retry.
 
-The private owner-approval card chooses approved-content visibility. It defaults
-to **Only me** (`restricted-reviewer-person-v2`), which allows only the exact
-approving owner and that owner's current membership tenure to read the record.
-Before approving, the owner may select **Team**
-(`organization-member-readable-person-v2`), which allows every current active
-owner or employee in the organization to read it, or, when the owner has an
-active project, **Projects** (`project-members-readable-person-v1`) with one to
-twenty of the owner's projects. Projects lets current members of any selected
-project read the record and associates it with those projects for project Ask;
-Only me and Team records carry no project association. The selected policy and
-project IDs freeze with the approved record; project readers are resolved at
-read time.
+The meeting card chooses approved-content visibility. It is the same on the
+desktop and in the Slack DM copy that a reviewer who linked Slack also gets, and
+the first decision wins. **Who can read it** defaults to **Only me**
+(`restricted-reviewer-person-v2`), which allows only the exact approving person
+and that person's current membership tenure to read the record. Instead, the
+reviewer may pick **Projects** (`project-members-readable-person-v1`): one to
+twenty of their own active projects, with the projects chosen at import or watch
+already ticked. Current members of any selected project can read the record, and
+it is associated with those projects for project Ask. Only me records carry no
+project association. There is no organization-wide (Team) choice. Each action
+with an owner proposed by extraction shows an owner field, pre-filled; only the
+owners the approver confirms are recorded. The selected policy and project IDs
+freeze with the approved record; project readers are resolved at read time.
 
 The separate **Share transcript with the selected audience** checkbox defaults
 off. When checked, the same approval releases the exact retained transcript
 revision to the record's audience through `echo-brain person transcript`
 (`POST /v1/person/meeting-transcripts/read`). Ask does not search transcripts.
 
-A later source-folder move does not reinterpret a posted card or approved
+Each approved record also enqueues one impact check (`authority_trigger_runs_v1`),
+written in the same transaction as the approval's receipt. `POST /v1/person/runs`
+(`echo-brain person runs --request <json>`: list, start, retry, view) runs the
+check as the approver. A stored run keeps pointers and ECHO's own judgments
+only, and every view re-releases the items through a fresh desk
+([ADR-0032](../../docs/decisions/ADR-0032-stored-trigger-runs.md)).
+
+A later source-folder move does not reinterpret a frozen proposal or an approved
 record.
 Revoking a membership denies both list and search for that tenure. A newly
 invited employee gets a new membership tenure and may read only content allowed
@@ -414,18 +430,21 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
-Current state uses Authority V10, control-plane V3, record-log V4, retrieval
+Current state uses Authority V12, control-plane V4, record-log V4, retrieval
 facts V3, and retrieval lexical/content V2. The V2 root binds exactly these six
 roles. Per-database manifests remain V1; schema versions and digests identify
 each role's current baseline. Each baseline applies only to a completely empty
 database. Old roots, retired databases, and mismatched schemas refuse before
 writable opening.
 
-The immutable approval-delivery quarantine fences unrepresentable approval
-packages before any provider post and retains them for audit. A temporarily
-missing reviewer identity leaves its durable outbox queued for reconciliation.
+A proposal is frozen once, when it is staged, and one row in
+`authority_approval_decisions_v1` records the first decision. A card that cannot
+fit Slack's limits is marked unrepresentable in
+`authority_approval_presentations_v1` and not retried; the desktop still shows
+the proposal. A temporarily missing reviewer identity leaves the proposal queued
+for reconciliation.
 
-The checkout carries only the current V10 baseline. Earlier Authority
+The checkout carries only the current V12 and control-plane V4 baselines. Earlier Authority
 baselines and their offline converters remain in Git history.
 
 Routine releases use baseline-preserving image replacements through the

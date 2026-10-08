@@ -124,16 +124,17 @@ server adapters remain outside its dependency closure.
   inbox leases instead of inventing provider cursors.
 - A **decision processor** turns one canonical revision into decisions,
   actions, rationales, and source-linked evidence.
-- An **approval surface**, loaded through `ApprovalWorkflowBundleV1`, presents
-  the exact staged brief and records an explicit human outcome.
+- An **approval surface** reads the approval core (`createApprovalCoreV1`),
+  which freezes one proposal per meeting and records one decision from any surface.
 - No **delivery surface** port exists today. A capability that publishes
   approved content elsewhere would need its own typed port.
 
-The shared approval path retains an opaque, generic presentation reference,
-not a provider message timestamp or channel grammar. The approved-record path
-receives a policy projector that translates a canonical terminal approval into
-the record facts appropriate for the selected product policy; it does not
-inspect an approval-surface payload.
+The shared approval path keeps no presentation reference on a proposal. A
+surface keeps its own record of where it showed one (for Slack,
+`authority_approval_presentations_v1`). The approved-record path receives a
+policy projector that translates a canonical approval decision
+(`echo-approval-decision-ref-v1`) into the record facts appropriate for the
+selected product policy; it does not inspect an approval-surface payload.
 
 Approval and any future delivery remain separate capabilities. They may share
 a provider connection, but a generic Slack delivery surface must differ from
@@ -181,28 +182,34 @@ contract. Its Ollama, OpenAI, Anthropic, and OpenRouter drivers own only
 provider authentication, wire translation, capability checks, response
 extraction, and error normalization.
 
-The Slack approval adapter owns its narrow Web API transport and its own
-authorization, idempotency, and receipt semantics. Slack actors are
-tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
+The Slack approval adapter owns its narrow Web API transport, click
+verification and identity-link check. It never writes records: a verified click
+calls the approval core's `decide`, which owns idempotency and the one decision
+per proposal. Slack actors are tenant-namespaced `(team_id, user_id)` subjects,
+never bare user IDs.
 
-Finalized private approvals have two ordered responsibilities. The durable
-worker materializes the terminal and, for an approval, its V4 receipt before
-Authority startup can serve. Card redraw is provider presentation only: approval
-publication requests it immediately after the durable work, independently of
-search. Each writer turn tries one unrendered terminal card and records
-`rendered` only after Slack confirms the replacement update. Confirmed progress
-schedules another turn so a burst drains without waiting for source polling.
-An uncertain result or failure waits for a new approval wake or periodic pass;
-the cursor rotates so one unavailable card cannot starve the rest. This keeps a
-Nango outage out of the startup gate and retains bounded, cancellable attempts.
+Decided approvals have two ordered responsibilities. The durable worker
+publishes each decision before Authority startup can serve: the one publisher
+appends the V4 record, then writes the receipt and runs the after-record hooks
+in one Authority transaction, so a crash between the append and the receipt
+finishes once on recovery. Card redraw is provider presentation only: publication
+requests it immediately after the durable work, independently of search. Each
+presenter turn tries one card that no longer shows the proposal's state and
+records the new state only after Slack confirms the replacement update.
+Confirmed progress schedules another turn so a burst drains without waiting for
+source polling. An uncertain result or failure waits for a new approval wake or
+periodic pass; the cursor rotates so one unavailable card cannot starve the
+rest. This keeps a Nango outage out of the startup gate and retains bounded,
+cancellable attempts.
 
 ## Current composition
 
 The Organization Authority composition root selects OpenRouter with the pinned
-Claude Sonnet processing version as the decision processor, Slack for private
-approval cards, interactions and identity, and Authority SQLite state. Ordinary
-startup requires no organization meeting source. Staging-only synthetic sources
-exercise the retained meeting pipeline without Granola. It separately
+Claude Sonnet processing version as the decision processor, Slack for the
+optional approval DM copy, interactions and identity, and Authority SQLite
+state. Meetings enter only through a person's own sources, so ordinary startup
+requires no meeting source. A staging-only synthetic personal source exercises
+the retained meeting pipeline without Granola. It separately
 composes the bounded Person `ask` path above Layer 3 with a pinned OpenRouter
 DeepSeek planner/answer model. The other LLM transports are compiled
 alternatives, not active runtime dependencies. This is an allowed selecting
@@ -243,15 +250,16 @@ the atoms released by the Layer 3 protocol boundary for one authenticated
 Person request and cannot read lower
 layers directly.
 
-Current live composition delivers private meeting-owner approval DMs. Their
-visibility selector defaults to **Only me**, which binds
-`restricted-reviewer-person-v2` if approved unchanged. The owner may select
-**Team** before approving to bind `organization-member-readable-person-v2`,
-or, when they hold active project memberships, **Projects** to bind
-`project-members-readable-person-v1` for the chosen projects. A separate
-**Share transcript with the selected audience** checkbox, off by default, also
-releases the exact retained transcript to that audience. The selected policy is
-frozen with the approved record; rejection creates no record.
+Current live composition reviews each meeting once, in the approval core. The
+desktop card and, for a reviewer who linked Slack, the Slack DM copy offer the
+same choices, and the first decision wins. **Who can read it** defaults to
+**Only me**, which binds `restricted-reviewer-person-v2` if approved unchanged.
+The reviewer may instead pick one to twenty of their active projects, binding
+`project-members-readable-person-v1`; there is no Team choice. A separate
+**Share the transcript** checkbox, off by default, also releases the exact
+retained transcript to that audience. Owners are recorded only when the approver
+confirms them. The selected policy is frozen with the approved record;
+rejection creates no record.
 
 ## Shared connector capabilities
 
@@ -298,10 +306,9 @@ answer versions retain their strict citation contracts.
 Granola retains transport-free meeting normalization and context capture
 transforms. Its organization acquisition and owner-admission code is retired;
 shared meeting custody and processing contracts remain distinct from personal
-live reads. Slack's organization app,
-private approval cards and human action records likewise retain their own
-lifecycle. A Slack Person read requires a separately authorized binding; an
-organization approval installation alone grants no such access. This refactor
+live reads. Slack's organization app and approval DM copies likewise retain
+their own lifecycle. A Slack Person read requires a separately authorized
+binding; an organization approval installation alone grants no such access. This refactor
 does not migrate Slack approval onboarding onto the Jira/Confluence personal
 Nango lifecycle.
 
@@ -347,9 +354,9 @@ and
   file-key, Node-runtime, or authentication-protocol implementations. The
   source port is pull-oriented; Person push submissions use the durable edge
   inbox. New push providers need an equivalent explicit buffering boundary.
-- The Authority approval outbox physically stores `provider_message_ts`;
-  shared code treats it as opaque `presentation_external_id` until an explicit
-  schema migration.
+- The Authority approval outbox stores no presentation state: a proposal's
+  frozen snapshot and suggestions, and one decision row in
+  `authority_approval_decisions_v1`, are all any surface draws from.
 - Bundles are trusted static composition, and ownership/dependency checks cannot
   detect every hidden semantic coupling. Each selected profile still needs
   capability tests and a bounded staging rehearsal.
@@ -376,7 +383,7 @@ account-scoped minimal receipt can acknowledge an earlier save without
 disclosing content after project access is lost.
 
 Person documents carry `on_request` analysis policy. Admission and extraction
-do not invoke the meeting decision processor, create approval cards or publish
+do not invoke the meeting decision processor, create approval proposals or publish
 approved records. This implementation adds no requested-analysis API;
 [global/project Ask](../features/global-project-ask-v1.md) answers from
 extracted document evidence. Existing meeting sources retain their explicitly

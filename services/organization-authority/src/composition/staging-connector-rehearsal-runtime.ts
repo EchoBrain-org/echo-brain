@@ -195,7 +195,7 @@ function requireSelection(config: OrganizationAuthorityServiceConfig, selection:
       selection.authority_host !== 'authority-staging.echobrain.org' || (config.slack_nango.base_url !== undefined && config.slack_nango.base_url !== 'https://api.nango.dev') ||
       (config.jira_person_live !== undefined && (config.jira_person_live.enabled !== true ||
         config.jira_person_live.cloud_id !== profile.jira.cloud_id || config.jira_person_live.integration_id !== profile.jira.integration_key)) ||
-      config.staging_synthetic_meetings_directory !== undefined || config.staging_synthetic_owner_email !== undefined ||
+      config.staging_synthetic_meetings_directory !== undefined ||
       (dependencies.api?.live_connectors?.length ?? 0) !== 0 ||
       dependencies.api?.person_http_runtime_factory !== undefined) {
     throw new Error('Staging connector rehearsal selection is invalid');
@@ -349,7 +349,6 @@ export async function openStagingConnectorRehearsalService(
     runtime = await openOrganizationAuthorityService(serviceConfig, {
       ...dependencies,
       api: { ...dependencies.api, person_http_runtime_factory: personFactory, ...(jiraAsk === undefined ? {} : { live_connectors: [{ ...JIRA_LIVE_CONNECTOR_V1, open: openJira }] }) },
-      processing_adapter_overrides: dependencies.processing_adapter_overrides,
     });
     let closing: Promise<void> | undefined;
     return Object.freeze({

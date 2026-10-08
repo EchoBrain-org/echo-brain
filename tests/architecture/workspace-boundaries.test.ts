@@ -436,7 +436,6 @@ describe("workspace source boundaries", () => {
         "@echo-brain/organization-control-plane",
         "@echo-brain/organization-processing",
         "@echo-brain/organization-protocol",
-        "@echo-brain/organization-record",
         "@echo-brain/provider-runtime",
         "@echo-brain/provider-slack-client"
       ],
@@ -634,10 +633,10 @@ describe("workspace source boundaries", () => {
   it("ships only the current baselines", () => {
     const expectedByRoot: Record<string, string[]> = {
       "packages/organization-authority-kernel": [
-        "authority-baseline-v11.sql",
+        "authority-baseline-v12.sql",
       ],
       "packages/organization-control-plane": [
-        "organization-control-plane-baseline-v3.sql",
+        "organization-control-plane-baseline-v4.sql",
       ],
       "packages/organization-record": [
         "organization-record-log-baseline-v4.sql",
@@ -1298,7 +1297,7 @@ describe("workspace source boundaries", () => {
     const cases = [
       ["packages/organization-api/src/direction-probe.ts", "../../../services/organization-authority/src/composition/organization-authority-setup-cli.js", "neutral module reaches bootstrap"],
       ["providers/openrouter/src/direction-probe.ts", "../../../services/organization-authority/src/composition/organization-authority-runtime.js", "provider imports the composing service"],
-      ["providers/openrouter/src/direction-probe.ts", "@echo-brain/provider-synthetic-demo/synthetic-demo-setup-evidence-v1", "cross-provider dependency"],
+      ["providers/openrouter/src/direction-probe.ts", "@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1", "cross-provider dependency"],
     ];
     for (const [path, target, failure] of cases) {
       const entry = join(fixture, path!);

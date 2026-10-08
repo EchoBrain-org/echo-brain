@@ -69,9 +69,9 @@ The shared implementation packages are `packages/organization-processing` and
 | `providers/shared` | Reusable Nango personal connection lifecycle, local ownership state, HTTP routes, and bounded JSON transport; product grants and readers remain separate |
 | `providers/confluence` | Person-bound Confluence connection, project-space mapping, live page discovery and section reader; no retained page content |
 | `providers/confluence/client` | Confluence connection and project-space wire contracts and Person tool commands; no server dependencies |
-| `providers/synthetic-demo` | Fixed synthetic source and its evaluation/setup proofs |
+| `providers/synthetic-demo` | Fixed synthetic source, the staging synthetic personal meeting provider and the extraction evaluator |
 | `providers/slack/client` | Client contracts and Person commands |
-| `providers/slack/server` | Server identity, approval delivery, historical codec/projector, connection/setup and assets |
+| `providers/slack/server` | Server identity, the approval presenter and click handling, connection/setup and assets |
 
 ### Reusing personal tool connections
 

@@ -1,10 +1,9 @@
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-  PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
 } from "../../src/organization-control-plane/slack-approval-integration-v1.js";
 import { describe, expect, it } from "vitest";
-import { buildPrivateSlackApprovalBlockKitCardV1 } from "../../src/private-approval/private-slack-approval-block-kit-card-v1.js";
+import { buildPrivateSlackApprovalBlockKitCardV1, PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS } from "../../src/private-approval/private-slack-approval-block-kit-card-v1.js";
 
 const INPUT = Object.freeze({
   schema_version: 1 as const,

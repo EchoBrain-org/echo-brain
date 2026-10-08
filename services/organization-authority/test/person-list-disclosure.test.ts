@@ -40,7 +40,7 @@ import { personMeetingReleaseOptionsV1 } from "../src/composition/person-record-
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import { APPROVER_X, EMP_A, EMP_B, EMP_C, OWNER, PROJECT_NAMES, PROJ_X, SHARED, STANDARD_RECORDS, T, UNJOINED, admittedTranscriptV1, meetingWorld, type MeetingWorldV1 } from "./fixtures/person-meeting-world.js";
 import { addMembership, authorization } from "./fixtures/project-context-sqlite.js";
-import { SIGNED_APPROVAL_APPROVER } from "./fixtures/signed-slack-approval-v2.js";
+import { SIGNED_APPROVAL_APPROVER, SIGNED_APPROVAL_PRIVATE_MARKER } from "./fixtures/signed-approval-decision-v1.js";
 
 /**
  * The person list and open (ADR-0024) on real SQLite stores and signed
@@ -106,6 +106,8 @@ async function disclosureWorld() {
   });
   // An employee's Only me approval, which the owner must never see.
   await w.approve({ name: "emp_a_only", approval_id: "apr_emp_a_only", projects: [], final_approver: EMP_A, issued_at: T(9) });
+  // EMP_B's own Only me approval: its only approved meeting of its own.
+  await w.approve({ name: "b_only", approval_id: "apr_b_only", projects: [], final_approver: EMP_B, issued_at: T(10) });
   w.rebuild();
 
   // Originals, authored through the real applications on the same Authority database.
@@ -379,7 +381,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     expect(f.bodies.length).toBeGreaterThan(50);
     const hiddenValues = [
       UNJOINED, PROJECT_NAMES[UNJOINED], PROJ_X, PROJECT_NAMES[PROJ_X], QUOTE, "mem_", "prn_", "apr_", "audit-apr", "source-apr", "revision-1",
-      "U0APPROVERSUBJECT", ...f.requestIds,
+      SIGNED_APPROVAL_PRIVATE_MARKER, ...f.requestIds,
     ];
     for (const body of f.bodies) {
       for (const value of hiddenValues) expect(body).not.toContain(value);
@@ -438,8 +440,8 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       }
     }
     const mine = async (token: Token) => (await f.refsOf(token, { mine: true })).filter((ref) => ref.startsWith("meeting:"));
-    // r1 is team: EMP_A reads it, but only its approver EMP_B has it as mine.
-    expect(await mine("emp_b")).toEqual([f.meeting("quoted"), f.meeting("r1")]);
+    // r1 and quoted are generic team records with no approver: everyone reads them, nobody has them as mine.
+    expect(await mine("emp_b")).toEqual([f.meeting("b_only")]);
     expect(await f.refsOf("emp_a")).toContain(f.meeting("r1"));
     expect(await mine("emp_a")).toEqual([f.meeting("emp_a_only"), f.meeting("r4")]);
     // r3 is SHARED and UNJOINED: EMP_A reads it, the owner approved it.
@@ -512,7 +514,9 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     const f = await disclosureWorld();
     await f.admitNotes();
     const approvers = new Map<string, { readonly principal_id: string; readonly membership_id: string }>([
-      ...STANDARD_RECORDS.map((input) => [f.meeting(input.name), input.final_approver] as const), [f.meeting("quoted"), EMP_B], [f.meeting("emp_a_only"), EMP_A],
+      // Generic team records (r1, r7a, r7b, quoted) name no approver, so they are nobody's mine and never cited here.
+      ...STANDARD_RECORDS.filter((input) => input.projects !== "team").map((input) => [f.meeting(input.name), input.final_approver] as const),
+      [f.meeting("emp_a_only"), EMP_A], [f.meeting("b_only"), EMP_B],
     ]);
     const added = (ref: string) => (ref.startsWith("note:")
       ? f.w.authority.prepare("SELECT principal_id, membership_id FROM authority_person_updates_v2 WHERE context_id = ?").get(ref.slice("note:".length))

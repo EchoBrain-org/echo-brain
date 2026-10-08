@@ -32,8 +32,8 @@ The allowed selecting modules are exactly the
 `adapter_architecture.bootstrap_entrypoints` declared in
 `product/source-boundary.v1.json`. They may select Granola, OpenRouter, Slack,
 Jira, or a future external-capability provider. The shared runtime must receive
-only their ports, identity/configuration commitments, generic presentation
-references, and approved-record policy projectors.
+only their ports, identity/configuration commitments, presenter factories for
+the approval core, and approved-record policy projectors.
 
 The Jira live runtime (`jira-person-live-runtime-v1.ts`) and the opt-in
 [context capture integration](../product/2026-10-01-connector-context-integration-v1.md)
@@ -109,23 +109,23 @@ reference that does not match its admitted boundary fails closed before it can
 change canonical state. Shared state must not parse provider cursors, message
 timestamps, signed interaction payloads, or provider-specific identity facts.
 
-Changing an approval presentation surface is a controlled restart boundary.
-Before work resumes, the selected surface MUST prove ownership of every
-outstanding external presentation. It may adopt pristine queued work only.
-The approved-record policy-projector registry is additive across such a
-change: it MUST retain projectors for historical record protocols as well as
-the selected surface's new protocol. The optional approver-metadata projector
+A presenter MUST prove, before every call to its provider, that the stored
+target of the presentation (connection, identity link, subject and app) is still
+current. A changed connection or link never posts or redraws a card through the
+new target, and the proposal stays decidable on the desktop.
+
+The approved-record policy-projector registry is additive across a change of
+approval surface: it MUST retain projectors for historical record protocols as
+well as the selected protocol. The optional approver-metadata projector
 uses an explicit retained composite too: unsupported or multiply matched records
 omit metadata. Projection runs after read authorization and cannot grant access.
 
-The approval-state port is synchronous and is called only when both authority
-connection owners are outside transactions. The runtime guards its handle and
-the provider guards its own before every port call. Each operation commits before
-the next owner runs. The provider's stable approval fence uses its own authority
-handle while committing the separate control-plane database; it must not call
-back through the state port inside that fence. Both handles retain DELETE journal
-mode and existing durability settings; this is an ordering contract, not a
-cross-database atomic transaction.
+The approval-state port is synchronous and is called only when the Authority
+connection is outside a transaction. The runtime guards its handle before every
+port call, and each operation commits before the next owner runs. A decision is
+one immediate Authority transaction in the approval core (`decide`); the
+control-plane database takes no part in it, and a surface never calls back
+through the state port inside that transaction.
 
 Provider bundles are trusted, reviewed composition code rather than an
 independently installable plugin surface. The runtime enforces that the
@@ -141,7 +141,8 @@ The reviewed source is covered by:
 - `tests/architecture/workspace-boundaries.test.ts`;
 - `services/organization-authority/test/admitted-meeting-source-schema.test.ts`;
 - `packages/organization-processing/test/admitted-meeting-processing/meeting-processing-cycle-v1.test.ts`;
-- `services/organization-authority/test/organization-authority-private-approval-runtime.test.ts`;
+- `services/organization-authority/test/approval-core-v1.test.ts`;
+- `providers/slack/server/test/private-approval/slack-approval-presenter-v1.test.ts`;
 - `providers/openrouter/test/openrouter-decision-processor-bundle-v1.test.ts`;
 - `providers/openrouter/test/openrouter-answer-composition-generation-bundle-v1.test.ts`;
 - `packages/organization-record/test/record-log-v4-append.test.ts`;
@@ -180,8 +181,9 @@ host-side Slack credential flags and uses `person tools setup --tool slack`.
 Provider verification and wire/state interpretation are delegated to their
 provider folders. Adding a provider can require a new versioned domain capability,
 but cannot silently widen an existing canonical contract. V2 Person compatibility
-and historical Slack V4 codecs remain explicit provider-owned selections, with
-no permissive fallback. Historical signed bytes and SQL baselines remain unchanged.
+remains an explicit selection, with no permissive fallback. A meeting approval on
+any surface is recorded with the one neutral `echo-approval-decision-ref-v1`
+proof. Historical signed bytes and SQL baselines remain unchanged.
 
 CODEOWNERS covers the provider tree, public contracts, bootstrap/source manifests,
 application code, and architecture tests. Changes to provider facts in shared

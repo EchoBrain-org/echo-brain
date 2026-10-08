@@ -139,6 +139,9 @@ Slack reads:
   is switched off for any model call whose prompt can contain Slack text.
 - Answers are returned only to the asker and are not stored. No other person
   ever sees Slack or DM content through Echo.
+- Background trigger runs store pointers only (ADR-0032). A stored run keeps
+  the coordinates of the items it cited and ECHO's own judgments, never Slack
+  text; each view reads the items again under the viewer's current access.
 - The Slack connect screen says, in plain words, that Echo searches the
   person's Slack when they ask a question and keeps nothing.
 

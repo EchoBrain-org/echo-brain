@@ -10,7 +10,6 @@ import { requestStagingSyntheticPrivateDmCanaryV1 } from "@echo-brain/provider-s
 import { createStagingJourneyTelemetryTransportFromEnvironmentV1 } from "./staging/observability/staging-journey-telemetry-transport-v1.js";
 import { createAskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
 import { OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
-import { OPENROUTER_DECISION_PROCESSOR_MODEL_V1, OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-config-v1";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 } from './jira-person-live-runtime-v1.js';
 import { CONFLUENCE_PERSON_LIVE_RELEASE_APPROVED_V1 } from './confluence-person-live-runtime-v1.js';
@@ -135,9 +134,8 @@ function stagingCanaryReleaseId(argv: readonly string[]): string {
 /**
  * Starts from the private, non-secret onboarding manifest. It deliberately does
  * not repeat the Authority URL, OIDC configuration or PKCE key at the command
- * line. Before the setup `finalize` command, the same command serves Person
- * onboarding and the owner's in-app Slack setup with an inert worker; after a
- * restart it opens the admitted source-processing chain.
+ * line. The same command serves Person onboarding, the owner's in-app Slack
+ * setup and personal meeting intake; meetings enter only through personal sources.
  */
 export async function runOrganizationAuthorityServiceCli(
   argv: readonly string[],
@@ -269,21 +267,6 @@ export async function runOrganizationAuthorityServiceCli(
             planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
             answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
           });
-    const meetingApprovalJourneyTelemetry =
-      stagingJourneyTelemetry?.identity === null ||
-      stagingJourneyTelemetry?.identity === undefined
-        ? undefined
-        : {
-            observer: stagingJourneyTelemetry.observer,
-            on_observation_failure: stagingJourneyTelemetry.observation_failure,
-            approved_search_backlog_observer:
-              stagingJourneyTelemetry.approved_search_backlog_observer,
-            release_sha: stagingJourneyTelemetry.identity.release_sha,
-            build_number: stagingJourneyTelemetry.identity.build_number,
-            vocabulary: OPENROUTER_TELEMETRY_VOCABULARY_V1,
-            extraction_provider: OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1,
-            extraction_model: OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
-          } as const;
     const openService: typeof openOrganizationAuthorityService = connectorRehearsal === undefined
       ? openOrganizationAuthorityService
       : (config, dependencies) => openStagingConnectorRehearsalService(config, connectorRehearsal, dependencies);
@@ -331,7 +314,6 @@ export async function runOrganizationAuthorityServiceCli(
         : {
             staging_synthetic_meetings_directory:
               stagingSyntheticMeetingsDirectory,
-            staging_synthetic_owner_email: manifest.owner_email,
           }),
       on_worker_error: () => {
         io.stderr(`${LEGACY_CLEAN_LIVE_WORKER_FAILURE_EVENT_V1}\n`);
@@ -340,25 +322,9 @@ export async function runOrganizationAuthorityServiceCli(
         // The lifecycle reporter constructs this closed, content-free schema.
         io.stderr(`${canonicalJson(event as never)}\n`);
       },
-      on_private_approval_slack_rejection: (event) => {
-        io.stderr(
-          `${canonicalJson({
-            schema_version: 1,
-            kind: "echo-private-approval-slack-interaction-rejection-v1",
-            stage: event.stage,
-          } as never)}\n`,
-        );
-      },
       ...(askJourneyTelemetry === undefined
         ? {}
         : { ask_journey_telemetry: askJourneyTelemetry }),
-      ...(meetingApprovalJourneyTelemetry === undefined
-        ? {}
-        : {
-            staging_meeting_approval_journey_telemetry_enabled: true,
-            meeting_approval_journey_telemetry:
-              meetingApprovalJourneyTelemetry,
-          }),
       ...(parsed["--worker-interval-ms"] === undefined
         ? {}
         : {
@@ -371,12 +337,11 @@ export async function runOrganizationAuthorityServiceCli(
     const stagingCanaryControl =
       manifest.authority_url ===
         STAGING_AUTHORITY_ORIGIN_V1 &&
-      runtime.run_staging_synthetic_private_dm_canary !== undefined
+      runtime.run_staging_synthetic_canary !== undefined
         ? await openStagingSyntheticPrivateDmCanaryControlV1({
             authority_url: manifest.authority_url,
             authority_host: process.env.ECHO_CLEAN_AUTHORITY_HOST ?? "",
             release_id: process.env.ECHO_CLEAN_RELEASE_ID ?? "",
-            owner_email: manifest.owner_email,
             runtime,
           }).catch(async (error: unknown) => {
             await runtime.close();

@@ -5,26 +5,6 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    "./organization-protocol/private-slack-block-approval-record-input-v1": {
-      "types": "./dist/organization-protocol/private-slack-block-approval-record-input-v1.d.ts",
-      "import": "./dist/organization-protocol/private-slack-block-approval-record-input-v1.js"
-    },
-    "./organization-protocol/private-slack-block-approval-record-input-v2": {
-      "types": "./dist/organization-protocol/private-slack-block-approval-record-input-v2.d.ts",
-      "import": "./dist/organization-protocol/private-slack-block-approval-record-input-v2.js"
-    },
-    "./organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1": {
-      "types": "./dist/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.d.ts",
-      "import": "./dist/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.js"
-    },
-    "./organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2": {
-      "types": "./dist/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.d.ts",
-      "import": "./dist/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.js"
-    },
-    "./private-approval/private-slack-approval-workflow-bundle-v1": {
-      "types": "./dist/private-approval/private-slack-approval-workflow-bundle-v1.d.ts",
-      "import": "./dist/private-approval/private-slack-approval-workflow-bundle-v1.js"
-    },
     "./person-identity/slack-person-external-identity-runtime-bundle-v1": {
       "types": "./dist/person-identity/slack-person-external-identity-runtime-bundle-v1.d.ts",
       "import": "./dist/person-identity/slack-person-external-identity-runtime-bundle-v1.js"
@@ -33,9 +13,25 @@
       "types": "./dist/private-approval/private-slack-approval-interaction-protocol-v1.d.ts",
       "import": "./dist/private-approval/private-slack-approval-interaction-protocol-v1.js"
     },
-    "./composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1": {
-      "types": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.d.ts",
-      "import": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.js"
+    "./private-approval/slack-approval-card-v4": {
+      "types": "./dist/private-approval/slack-approval-card-v4.d.ts",
+      "import": "./dist/private-approval/slack-approval-card-v4.js"
+    },
+    "./private-approval/slack-approval-presenter-v1": {
+      "types": "./dist/private-approval/slack-approval-presenter-v1.d.ts",
+      "import": "./dist/private-approval/slack-approval-presenter-v1.js"
+    },
+    "./private-approval/slack-approval-click-v1": {
+      "types": "./dist/private-approval/slack-approval-click-v1.d.ts",
+      "import": "./dist/private-approval/slack-approval-click-v1.js"
+    },
+    "./private-approval/private-slack-approval-interaction-handler-v1": {
+      "types": "./dist/private-approval/private-slack-approval-interaction-handler-v1.d.ts",
+      "import": "./dist/private-approval/private-slack-approval-interaction-handler-v1.js"
+    },
+    "./private-approval/private-slack-approval-http-adapter-v1": {
+      "types": "./dist/private-approval/private-slack-approval-http-adapter-v1.d.ts",
+      "import": "./dist/private-approval/private-slack-approval-http-adapter-v1.js"
     },
     "./processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1": {
       "types": "./dist/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.d.ts",
@@ -48,6 +44,10 @@
     "./organization-control-plane/application/slack-bot-token-source-v1": {
       "types": "./dist/organization-control-plane/application/slack-bot-token-source-v1.d.ts",
       "import": "./dist/organization-control-plane/application/slack-bot-token-source-v1.js"
+    },
+    "./organization-control-plane/application/slack-app-credentials-v1": {
+      "types": "./dist/organization-control-plane/application/slack-app-credentials-v1.d.ts",
+      "import": "./dist/organization-control-plane/application/slack-app-credentials-v1.js"
     },
     "./organization-control-plane/application/slack-connection-health-v1": {
       "types": "./dist/organization-control-plane/application/slack-connection-health-v1.d.ts",
@@ -101,7 +101,6 @@
     "@echo-brain/organization-control-plane": "0.0.0-dev.0",
     "@echo-brain/organization-processing": "0.0.0-dev.0",
     "@echo-brain/organization-protocol": "0.0.0-dev.0",
-    "@echo-brain/organization-record": "0.0.0-dev.0",
     "@echo-brain/provider-runtime": "0.0.0-dev.0",
     "@echo-brain/provider-slack-client": "0.0.0-dev.0",
     "better-sqlite3": "12.10.0",

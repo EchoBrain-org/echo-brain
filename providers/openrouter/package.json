@@ -29,11 +29,7 @@
       "types": "./dist/openrouter-telemetry-vocabulary-v1.d.ts",
       "import": "./dist/openrouter-telemetry-vocabulary-v1.js"
     },
-    "./assets/telemetry-vocabulary.v1.json": "./assets/telemetry-vocabulary.v1.json",
-    "./verify-openrouter-decision-processor-admission-v1": {
-      "types": "./dist/verify-openrouter-decision-processor-admission-v1.d.ts",
-      "import": "./dist/verify-openrouter-decision-processor-admission-v1.js"
-    }
+    "./assets/telemetry-vocabulary.v1.json": "./assets/telemetry-vocabulary.v1.json"
   },
   "files": [
     "dist/**/*.js",

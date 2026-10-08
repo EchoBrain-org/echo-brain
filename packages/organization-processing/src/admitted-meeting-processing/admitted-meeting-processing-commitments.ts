@@ -40,7 +40,7 @@ interface CommitmentRow {
 /** Reads no private file and exposes no private value. */
 export function readAdmittedMeetingProcessingCommitmentsV1(
   database: Database.Database,
-  sourceKey: string = '1',
+  sourceKey: string,
 ): AdmittedMeetingProcessingCommitmentsV1 {
   const row = database
     .prepare(

@@ -1,8 +1,3 @@
-import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
-import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
-import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v2";
-import { createPrivateSlackBlockApprovalPolicyProjectorV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
-import { createPrivateSlackBlockApprovalPolicyProjectorV2 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2";
 /** Single child process running the existing core through canonical IPC ports. */
 import { randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -13,10 +8,10 @@ import { FileOrganizationAuthoritySigner } from "../../../services/organization-
 import { SqliteAuthorityMeetingProcessingStateV1 } from "../../../packages/organization-processing/dist/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import { AdmittedMeetingProcessingCycleV1 } from "../../../packages/organization-processing/dist/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import { DEFAULT_MEETING_PROCESSING_WORKER_INTERVAL_MS } from "../../../packages/organization-processing/dist/admitted-meeting-processing/serialized-meeting-processing-worker.js";
+import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from "../../../services/organization-authority/dist/composition/authority-record-protocols-v1.js";
 import { startOrganizationAuthorityServiceLifecycle } from "../../../services/organization-authority/dist/composition/organization-authority-service-lifecycle.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../../../services/organization-authority/dist/composition/readable-search-generation-composition.js";
-import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
-import { openOrganizationRecordDatabase, OrganizationRecordAppenderV4, createRecordPolicyFactProjectorRegistryV1 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { openOrganizationRecordDatabase, OrganizationRecordAppenderV4 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { createCoreIdentity } from "./core-identity.mjs";
 import { createCoreInput, createCoreSourceIngestion } from "./core-input.mjs";
 import { createCoreApproval } from "./core-approval.mjs";
@@ -33,7 +28,6 @@ let approvals;
 let state;
 let reads;
 let authority;
-let control;
 let record;
 let workerError;
 let closing;
@@ -45,7 +39,6 @@ function close() {
       reads?.close();
       identity?.close();
       record?.close();
-      control?.close();
       authority?.close();
     }
   })();
@@ -68,32 +61,27 @@ async function open(state_directory) {
   const { root } = verifyAuthorityStateLineage(initialized.state_directory);
   const coordinates = { authority_id: root.authority_id, organization_id: root.organization_id, state_lineage_id: root.state_lineage_id };
   authority = openAuthorityDatabase(join(state_directory, "authority.sqlite"), { fileMustExist: true });
-  control = openOrganizationControlDatabase(join(state_directory, "integrations.sqlite"), { fileMustExist: true });
   record = openOrganizationRecordDatabase(join(state_directory, "record-log.sqlite"), { fileMustExist: true });
   input = createCoreInput({ authority, coordinates, owner: identity.owner, sessions: identity.sessions });
-  state = new SqliteAuthorityMeetingProcessingStateV1(authority, input.source_cursor_policy, input.processor.identity.adapter_id);
+  // The personal source's own fence, as the personal runtime passes it to its state.
+  state = new SqliteAuthorityMeetingProcessingStateV1(
+    authority, input.source_cursor_policy, input.processor.identity.adapter_id, undefined, input.source_key, () => input.requireCurrent(),
+  );
   const signer = FileOrganizationAuthoritySigner.openExisting({ directory: join(state_directory, "keys"), ...coordinates });
-  const projectors = createRecordPolicyFactProjectorRegistryV1([
-    createPrivateSlackBlockApprovalPolicyProjectorV1(),
-    createPrivateSlackBlockApprovalPolicyProjectorV2(),
-  ]);
+  const projectors = authorityRecordPolicyProjectorsV1();
   approvals = await createCoreApproval({
     context: {
       // Match the production composition root: approval construction happens
       // before the lifecycle exposes its coalesced wake. Until it is bound,
       // the periodic worker remains the conservative fallback.
       on_terminal_action_queued: () => requestApprovalPublication?.(),
-      state, authority_database: authority, control_plane_database: control,
+      state, authority_database: authority,
       record_append: new OrganizationRecordAppenderV4(record, coordinates, projectors),
       signer, coordinates, next_envelope_id: () => `env_${randomUUID()}`,
     },
-    owner: identity.owner, employee: identity.employee, sessions: identity.sessions,
+    input, owner: identity.owner, employee: identity.employee, sessions: identity.sessions,
   });
-  const record_input_codecs = createRecordInputCodecRegistryV4([
-    HUMAN_ACT_RECORD_INPUT_CODEC_V1,
-    PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1,
-    PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2,
-  ]);
+  const record_input_codecs = AUTHORITY_RECORD_INPUT_CODECS_V1;
   reads = createCoreReadRoutes({ state_directory, sessions: identity.sessions, record_input_codecs });
   const search = createReadableSearchGenerationReconcilerV1({
     state_directory, root, authority, record, signer,
@@ -104,7 +92,7 @@ async function open(state_directory) {
     source: input.source,
     source_ingestion: createCoreSourceIngestion({
       authority,
-      organization_id: coordinates.organization_id,
+      setting: input.setting,
       state,
       source: input.source,
     }),
@@ -134,9 +122,12 @@ async function open(state_directory) {
 }
 
 function status(approval_id) {
+  const action = authority.prepare(
+    "SELECT action AS outcome, receipt_json IS NOT NULL AS receipted FROM authority_approval_decisions_v1 WHERE approval_id = ?",
+  ).get(approval_id);
   return {
-    denied: control.prepare("SELECT COUNT(*) AS n FROM organization_private_approval_denied_action_receipts_v2").get().n,
-    terminal: control.prepare("SELECT outcome FROM organization_private_approval_terminal_evidence_v2 WHERE approval_id = ?").get(approval_id) ?? null,
+    actions: authority.prepare("SELECT COUNT(*) AS n FROM authority_approval_decisions_v1").get().n,
+    terminal: action === undefined ? null : { outcome: action.outcome, receipted: action.receipted === 1 },
     record_count: record.prepare("SELECT COUNT(*) AS n FROM organization_record_log").get().n,
   };
 }
@@ -147,7 +138,7 @@ async function command(message) {
   switch (message.command) {
     case "offer": return input.offer(message.input);
     case "candidate": return await state.readFrozenCandidateForSourceRevision(message.source_revision) ?? null;
-    case "presentation": return approvals.poster.readPresentation(message.approval_id) ?? null;
+    case "presentation": return approvals.readPresentation(message.approval_id) ?? null;
     case "approve": {
       return await approvals.offerApproval(message.input);
     }

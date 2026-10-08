@@ -1,14 +1,19 @@
 import { chmodSync, lstatSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import type { StagingSyntheticMeetingCanaryInputV1, StagingSyntheticMeetingCanaryResultV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
+import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
+
+/** The Authority's staging canary outcome; the receipt carries `kind` as its approval outcome. */
+export interface StagingSyntheticCanaryResultV1 {
+  readonly kind: "staged" | "not_actionable" | "not_staged";
+  readonly approval_id: string | null;
+}
 
 interface StagingCanaryRuntimeV1 {
-  run_staging_synthetic_private_dm_canary?: (
-    canary: StagingSyntheticMeetingCanaryInputV1,
+  run_staging_synthetic_canary?: (
+    release_id: string,
     options?: Readonly<{ signal?: AbortSignal }>,
-  ) => Promise<StagingSyntheticMeetingCanaryResultV1>;
+  ) => Promise<StagingSyntheticCanaryResultV1>;
 }
-import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 
 export const STAGING_SYNTHETIC_PRIVATE_DM_CANARY_SOCKET_V1 =
   "/echo-runtime/authority-staging-private-dm-canary-v1.sock";
@@ -29,14 +34,9 @@ export interface OpenStagingSyntheticPrivateDmCanaryControlV1Input {
   readonly authority_url: string;
   readonly authority_host: string;
   readonly release_id: string;
-  readonly owner_email: string;
-  readonly runtime: Pick<
-    StagingCanaryRuntimeV1,
-    "run_staging_synthetic_private_dm_canary"
-  >;
+  readonly runtime: Pick<StagingCanaryRuntimeV1, "run_staging_synthetic_canary">;
   /** A focused test seam. Production uses the fixed non-mounted runtime path. */
   readonly socket_path?: string;
-  readonly now?: () => string;
   /** Focused timeout seam; production stays below the client deadline. */
   readonly operation_timeout_ms?: number;
 }
@@ -58,10 +58,7 @@ function assertStagingControlInput(
       "staging synthetic private-DM control release id is invalid",
     );
   }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.owner_email)) {
-    throw new Error("staging synthetic private-DM control owner is invalid");
-  }
-  if (input.runtime.run_staging_synthetic_private_dm_canary === undefined) {
+  if (input.runtime.run_staging_synthetic_canary === undefined) {
     throw new Error(
       "staging synthetic private-DM control requires active processing",
     );
@@ -99,13 +96,7 @@ function noContent(response: ServerResponse): void {
 function receipt(
   response: ServerResponse,
   releaseId: string,
-  result: Awaited<
-    ReturnType<
-      NonNullable<
-        StagingCanaryRuntimeV1["run_staging_synthetic_private_dm_canary"]
-      >
-    >
-  >,
+  result: StagingSyntheticCanaryResultV1,
 ): void {
   const body = Buffer.from(
     JSON.stringify({
@@ -113,7 +104,7 @@ function receipt(
       kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
       release_id: releaseId,
       approval_outcome: result.kind,
-      ...(result.kind === "not_actionable"
+      ...(result.kind === "not_actionable" || result.approval_id === null
         ? {}
         : { approval_id: result.approval_id }),
     }),
@@ -192,8 +183,7 @@ export async function openStagingSyntheticPrivateDmCanaryControlV1(
   const socketPath =
     input.socket_path ?? STAGING_SYNTHETIC_PRIVATE_DM_CANARY_SOCKET_V1;
   removeStaleSocket(socketPath);
-  const runCanary = input.runtime.run_staging_synthetic_private_dm_canary!;
-  const now = input.now ?? (() => new Date().toISOString());
+  const runCanary = input.runtime.run_staging_synthetic_canary!;
   const operationTimeoutMs = input.operation_timeout_ms ?? OPERATION_TIMEOUT_MS;
   const active = new Set<AbortController>();
   const server = createServer(async (request, response) => {
@@ -236,14 +226,8 @@ export async function openStagingSyntheticPrivateDmCanaryControlV1(
     response.once("close", abortIfUnfinished);
     try {
       const result = await raceOperationWithAbort(
-        runCanary(
-          {
-            canary_id: input.release_id,
-            owner_email: input.owner_email,
-            observed_at: now(),
-          },
-          { signal: controller.signal },
-        ),
+        // The canary is bound to the release this runtime started with, never to the request.
+        runCanary(input.release_id, { signal: controller.signal }),
         controller.signal,
       );
       controller.signal.throwIfAborted();

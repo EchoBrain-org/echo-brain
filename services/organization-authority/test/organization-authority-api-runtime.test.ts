@@ -1,10 +1,6 @@
 import { HUMAN_ACT_RECORD_INPUT_CODECS_V4 } from '@echo-brain/organization-protocol';
 import { createPersonPolicyFactProjectorV2, createRecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
-import { AdapterError, type DecisionProcessorAdapter } from '@echo-brain/organization-processing/core';
 import type { AnswerCompositionGenerationBindingV1 } from '@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1';
-import { personLoginGrantExpectedEmailSha256 } from '@echo-brain/organization-authority-kernel/domain/person-email-binding';
-import { createSyntheticDemoMeetingSourceBundleV1 } from '@echo-brain/provider-synthetic-demo/synthetic-demo-meeting-source-bundle-v1';
-import { SYNTHETIC_DEMO_INITIAL_CURSOR_V1, loadSyntheticDemoMeetingCorpusV1, syntheticDemoMeetingSourceIdentityV1 } from '@echo-brain/provider-synthetic-demo/source/synthetic-demo-meeting-source-v1';
 import { openOrganizationAuthorityRuntime } from '../src/composition/organization-authority-runtime.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
@@ -140,19 +136,15 @@ describe("Organization Authority API runtime", () => {
       creating_artifact_revision: "pc03-worker-composition",
     });
     const credentials = initializePersonSessionCredentials({ state_directory: initialized.state_directory });
-    const directory = new URL('../../../demo/meetings/', import.meta.url).pathname;
-    const corpus = await loadSyntheticDemoMeetingCorpusV1(directory);
-    const sourceBundle = await createSyntheticDemoMeetingSourceBundleV1({ meetings_directory: directory, owner_email: 'founder@example.com' });
     const database = openAuthorityDatabase(join(initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
     const actor = authorization({ organization_id: initialized.organization_id, principal_id: initialized.owner_principal_id, membership_id: initialized.owner_membership_id, membership_type: 'owner' });
     const application = createProjectContextApplicationV1({ authenticate: () => actor, repository: new SqliteProjectContextRepositoryV1(database) });
     const events: string[] = [];
     const errors: unknown[] = [];
-    const processorIdentity = { kind: 'decision-processor' as const, adapter_id: 'pc03-processor', instance_id: 'pc03-processor', version: '1.0.0' };
-    const processor: DecisionProcessorAdapter = {
-      identity: processorIdentity, validateConfig: () => ({ ok: true, errors: [] }),
-      healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
-      extract: async () => { throw new Error('uploads must not enter extraction'); },
+    // Meetings enter only through a personal meeting runtime, which shares the one serialized worker.
+    const personal_meetings = {
+      async recoverV4Appends() {}, async pollAndStageAdmittedMeetings() { events.push('meeting'); },
+      async observeAndFinalizePendingApprovals() {}, async appendFinalizedApprovalsToV4() {}, async reconcileReadableSearchGeneration() {},
     };
     let releaseModel!: () => void;
     const modelPending = new Promise<void>(resolve => { releaseModel = resolve; });
@@ -168,21 +160,6 @@ describe("Organization Authority API runtime", () => {
         finally { active--; }
       } },
     };
-    const now = new Date().toISOString();
-    database.prepare(`INSERT INTO authority_live_source_admission_v2 (
-      source_key, organization_id, principal_id, membership_id, membership_type,
-      source_adapter_id, source_adapter_version, source_adapter_instance_id, normalizer_version,
-      source_custodian_sha256, source_custodian_assurance, source_custodian_observed_at,
-      source_credential_reference_sha256, initial_cursor, cutoff_at,
-      processor_adapter_id, processor_adapter_version, processor_instance_id,
-      processor_configuration_sha256, processor_credential_reference_sha256, semantic_input_sha256, admitted_at
-    ) VALUES (1, ?, ?, ?, 'owner', ?, ?, ?, ?, ?, 'authority_initial_owner_identity', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(initialized.organization_id, initialized.owner_principal_id, initialized.owner_membership_id,
-        syntheticDemoMeetingSourceIdentityV1.adapter_id, syntheticDemoMeetingSourceIdentityV1.version, syntheticDemoMeetingSourceIdentityV1.instance_id,
-        syntheticDemoMeetingSourceIdentityV1.version, personLoginGrantExpectedEmailSha256('founder@example.com'), now,
-        corpus.corpus_digest, SYNTHETIC_DEMO_INITIAL_CURSOR_V1, now,
-        processorIdentity.adapter_id, processorIdentity.version, processorIdentity.instance_id,
-        canonicalSha256('processor-config'), canonicalSha256('processor-reference'), canonicalSha256('pc03-admission'), now);
     const project = application.createProject('fixture', { schema_version: 1, kind: 'echo-project-create-v1', request_id: '00000000-0000-4000-8000-000000000011', name: 'Worker' });
     const request = { schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: '00000000-0000-4000-8000-000000000012', title: 'Original', text: 'Call the customer.', project_id: project.project_id, audience: { kind: 'project', project_id: project.project_id } };
     const receipt = application.submitUpload('fixture', request);
@@ -191,29 +168,18 @@ describe("Organization Authority API runtime", () => {
       authority_url: 'https://authority.example',
       oidc: { issuer: 'https://issuer.example', client_id: 'founder-client', redirect_uri: 'https://authority.example/v2/session/oidc/callback', tenant: { kind: 'issuer' as const }, id_token_algorithms: ['RS256'] },
       client_authentication: { method: 'none' as const }, pkce_key_file: credentials.pkce_sealing_key_reference.slice('file:'.length),
-      meeting_source_bundle: { ...sourceBundle, create_source(admission: Parameters<typeof sourceBundle.create_source>[0]) {
-        const source = sourceBundle.create_source(admission);
-        vi.spyOn(source, 'pull').mockImplementation(async () => { events.push('meeting'); throw new AdapterError('temporarily_unavailable', 'fixture source unavailable', true); });
-        return source;
-      } },
-      decision_processor_bundle: { processor_adapter_id: processorIdentity.adapter_id, assert_admission_commitments() {}, create_processor: () => processor },
-      approval_workflow_bundle: {
-        async assert_existing_presentations_owned() {}, async load() {
-          return {
-            stager: { async stage(): Promise<never> { throw new Error('upload must not stage approval'); }, async reconcilePendingDeliveries() {}, async reconcileSuperseded() {} },
-            processing: { async recoverV4Appends() {}, async observeAndFinalizePendingApprovals() {}, async appendFinalizedApprovalsToV4() {} },
-          };
-        },
-      },
       answer_composition_generation_bundle: { load: () => generation }, record_input_codecs: HUMAN_ACT_RECORD_INPUT_CODECS_V4,
       record_policy_fact_projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2()]),
       worker_interval_ms: 10, on_worker_error: (error: unknown) => { errors.push(error); },
     };
+    const dependencies = { api: { oidc_provider: new MockOidcProvider(), person_http_runtime_factory: () => ({ applications: [], processing: personal_meetings, close() {} }) } };
     let runtime: Awaited<ReturnType<typeof openOrganizationAuthorityRuntime>> | undefined;
     try {
-      runtime = await openOrganizationAuthorityRuntime(config, { api: { oidc_provider: new MockOidcProvider() } });
+      runtime = await openOrganizationAuthorityRuntime(config, dependencies);
+      expect(runtime.processing).toBe('active');
       await vi.waitFor(() => expect(generationCalls).toBe(1), { timeout: 2000 });
-      expect(events.slice(0, 2)).toEqual(['meeting', 'upload']);
+      // Personal meeting intake waits behind the in-flight enrichment in the same worker.
+      expect(events).toEqual(['upload']);
       expect(application.readUpload('fixture', receipt.context_id).text).toBe(request.text);
       let stopped = false;
       const closing = runtime.close().then(() => { stopped = true; });
@@ -221,12 +187,16 @@ describe("Organization Authority API runtime", () => {
       expect(stopped).toBe(false); expect(generationCalls).toBe(1); expect(maximumActive).toBe(1);
       releaseModel(); await closing; runtime = undefined;
       expect(application.uploadStatus('fixture', request.request_id).metadata).toBe('processing');
-      runtime = await openOrganizationAuthorityRuntime(config, { api: { oidc_provider: new MockOidcProvider() } });
+      expect(events).toEqual(['upload']);
+      runtime = await openOrganizationAuthorityRuntime(config, dependencies);
       await vi.waitFor(() => expect(application.uploadStatus('fixture', request.request_id).metadata).toBe('ready'));
+      await vi.waitFor(() => expect(events).toContain('meeting'));
       await runtime.close(); runtime = undefined;
+      expect(events.slice(0, 3)).toEqual(['upload', 'upload', 'meeting']);
       expect(generationCalls).toBe(2); expect(maximumActive).toBe(1); expect(errors).toEqual([]);
       expect(application.searchUploads('fixture', { query: 'telephone' }).results[0]?.context_id).toBe(receipt.context_id);
       expect(application.readUpload('fixture', receipt.context_id).text).toBe(request.text);
+      expect(database.prepare('SELECT count(*) AS n FROM authority_live_source_admission_v2').get()).toEqual({ n: 0 });
       expect(database.prepare('SELECT count(*) AS n FROM authority_live_source_candidates_v2').get()).toEqual({ n: 0 });
       expect(database.prepare('SELECT count(*) AS n FROM authority_person_update_work_v2').get()).toEqual({ n: 1 });
     } finally { releaseModel(); await runtime?.close(); database.close(); }
@@ -1204,6 +1174,14 @@ describe("Organization Authority API runtime", () => {
       ) as Record<string, unknown>;
       expect(session.membership_id).toBe(initialized.owner_membership_id);
       expect(session.display_name).toBe("Founder");
+
+      const unavailableRuns = await fetch(`${origin}/v1/person/runs`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${session.access_token as string}`, "content-type": "application/json" },
+        body: JSON.stringify({ schema_version: 1, operation: "list" }),
+      });
+      expect(unavailableRuns.status).toBe(503);
+      expect(await json(unavailableRuns)).toMatchObject({ error: { code: "unavailable" } });
 
       const recoveryBegin = await fetch(`${origin}/v2/session/oidc/begin`, {
         method: "POST",

@@ -5,8 +5,9 @@ import type {
   Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, CreatedProject, DocumentSummary,
   Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, Member, MemberPage, Opened,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
-  ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus,
+  ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, ImpactView,
 } from '../shared/protocol.js';
+import type { PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
@@ -406,6 +407,20 @@ function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = fals
     return { kind, tool_id, label: label || fallback, permalink };
   }
   throw new ViewError();
+}
+
+/**
+ * A finished impact check, validated by the client: the card as the Authority
+ * rebuilt it for this viewer, each citation a source the meeting card can name
+ * or open (a source without a label is "Item n").
+ */
+export function impactCardView(result: PersonRunsResultsV1['view']): ImpactView {
+  const { card } = result;
+  return {
+    status: card.status, decided: card.decided, affected: card.affected, unconfirmed: card.unconfirmed, people: card.people,
+    sources: card.citations.map((entry, index) => v4Source(entry, `Item ${index + 1}`, true, true)),
+    checked_at: result.checked_at, hidden: result.hidden,
+  };
 }
 
 function v4Statement(raw: unknown, sourceCount: number): AnswerStatement {

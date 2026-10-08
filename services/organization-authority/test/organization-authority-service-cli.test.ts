@@ -9,18 +9,10 @@ import { MeetingProcessingWorkerLifecycleV1 } from "@echo-brain/organization-pro
 
 type WorkerErrorObserver = (error: Error) => void;
 type WorkerTelemetryObserver = (event: object) => void;
-type ApprovedSearchBacklogObserver = (event: {
-  readonly observed_at: string;
-  readonly pending_count: number;
-  readonly stuck_count: number;
-  readonly oldest_age_ms: number | null;
-}) => void | Promise<void>;
 
 const runtimeState = vi.hoisted(() => ({
   worker_error: undefined as WorkerErrorObserver | undefined,
   worker_telemetry: undefined as WorkerTelemetryObserver | undefined,
-  approved_search_backlog: undefined as
-    ApprovedSearchBacklogObserver | undefined,
   startup_error: undefined as Error | undefined,
   open_gate: undefined as Promise<void> | undefined,
   slack_nango: undefined as object | undefined,
@@ -28,13 +20,10 @@ const runtimeState = vi.hoisted(() => ({
   confluence_person_live: undefined as object | undefined,
   openrouter_credential_file: undefined as string | undefined,
   staging_synthetic_meetings_directory: undefined as string | undefined,
-  staging_synthetic_owner_email: undefined as string | undefined,
   ask_journey_telemetry: undefined as object | undefined,
   core_runtime_observation: undefined as CoreRuntimeObservationScopeV1 | undefined,
-  meeting_approval_journey_telemetry: undefined as object | undefined,
-  staging_meeting_approval_journey_telemetry_enabled: undefined as
-    | true
-    | undefined,
+  /** Every config key the CLI passed, so removed organization-lane options stay absent. */
+  config_keys: [] as string[],
   agentic_ask_v1_enabled: undefined as true | undefined,
   agentic_ask_v1_small_scope_shortcut: undefined as true | undefined,
   staging_research_eval_v1: undefined as true | undefined,
@@ -70,10 +59,6 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
     readonly ask_journey_telemetry?: object;
     readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
-    readonly meeting_approval_journey_telemetry?: {
-      readonly approved_search_backlog_observer?: ApprovedSearchBacklogObserver;
-    };
-    readonly staging_meeting_approval_journey_telemetry_enabled?: true;
     readonly agentic_ask_v1_enabled?: true;
     readonly agentic_ask_v1_small_scope_shortcut?: true;
     readonly staging_research_eval_v1?: true;
@@ -82,21 +67,14 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly confluence_person_live?: object;
     readonly openrouter_credential_file: string;
     readonly staging_synthetic_meetings_directory?: string;
-    readonly staging_synthetic_owner_email?: string;
   }) => {
     if (runtimeState.open_gate !== undefined) await runtimeState.open_gate;
     if (runtimeState.startup_error !== undefined) throw runtimeState.startup_error;
     runtimeState.worker_error = config.on_worker_error;
     runtimeState.worker_telemetry = config.on_worker_telemetry;
-    runtimeState.approved_search_backlog =
-      config.meeting_approval_journey_telemetry
-        ?.approved_search_backlog_observer;
+    runtimeState.config_keys = Object.keys(config);
     runtimeState.ask_journey_telemetry = config.ask_journey_telemetry;
     runtimeState.core_runtime_observation = config.core_runtime_observation;
-    runtimeState.meeting_approval_journey_telemetry =
-      config.meeting_approval_journey_telemetry;
-    runtimeState.staging_meeting_approval_journey_telemetry_enabled =
-      config.staging_meeting_approval_journey_telemetry_enabled;
     runtimeState.agentic_ask_v1_enabled = config.agentic_ask_v1_enabled;
     runtimeState.agentic_ask_v1_small_scope_shortcut =
       config.agentic_ask_v1_small_scope_shortcut;
@@ -107,8 +85,6 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.openrouter_credential_file = config.openrouter_credential_file;
     runtimeState.staging_synthetic_meetings_directory =
       config.staging_synthetic_meetings_directory;
-    runtimeState.staging_synthetic_owner_email =
-      config.staging_synthetic_owner_email;
     return {
       address: { address: "127.0.0.1", port: 43179 },
       processing: runtimeState.processing,
@@ -185,7 +161,6 @@ afterEach(() => {
   delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
   runtimeState.worker_error = undefined;
   runtimeState.worker_telemetry = undefined;
-  runtimeState.approved_search_backlog = undefined;
   runtimeState.startup_error = undefined;
   runtimeState.open_gate = undefined;
   runtimeState.slack_nango = undefined;
@@ -193,10 +168,8 @@ afterEach(() => {
   runtimeState.confluence_person_live = undefined;
   runtimeState.openrouter_credential_file = undefined;
   runtimeState.staging_synthetic_meetings_directory = undefined;
-  runtimeState.staging_synthetic_owner_email = undefined;
   runtimeState.ask_journey_telemetry = undefined;
-  runtimeState.meeting_approval_journey_telemetry = undefined;
-  runtimeState.staging_meeting_approval_journey_telemetry_enabled = undefined;
+  runtimeState.config_keys = [];
   runtimeState.agentic_ask_v1_enabled = undefined;
   runtimeState.agentic_ask_v1_small_scope_shortcut = undefined;
   runtimeState.authority_url = "https://authority.example";
@@ -417,7 +390,6 @@ describe("admitted runtime CLI events", () => {
 
     const running = start({ stderr: () => undefined });
     await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
-    expect(runtimeState.approved_search_backlog).toBeDefined();
     process.emit("SIGTERM");
     await vi.waitFor(() =>
       expect(runtimeState.shutdown_events).toEqual(["runtime-close-started"]),
@@ -445,13 +417,6 @@ describe("admitted runtime CLI events", () => {
       },
     });
     await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
-    expect(runtimeState.approved_search_backlog).toBeDefined();
-    runtimeState.approved_search_backlog?.({
-      observed_at: "2026-09-02T12:35:56.000Z",
-      pending_count: 1,
-      stuck_count: 0,
-      oldest_age_ms: 60_000,
-    });
     process.emit("SIGTERM");
     await expect(staging).resolves.toBe(0);
 
@@ -473,25 +438,9 @@ describe("admitted runtime CLI events", () => {
       liveness?.observed_at,
     );
     expect(runtimeState.ask_journey_telemetry).toBeDefined();
-    expect(runtimeState.meeting_approval_journey_telemetry).toMatchObject({
-      release_sha: releaseSha,
-      build_number: 33_689_731_778,
-    });
-    expect(
-      runtimeState.staging_meeting_approval_journey_telemetry_enabled,
-    ).toBe(true);
-    expect(
-      stagingStderr
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .find(
-          (event) => event.kind === "echo-authority-approved-search-backlog-v1",
-        ),
-    ).toMatchObject({
-      environment: "staging",
-      pending_count: 1,
-      stuck_count: 0,
-      oldest_age_ms: 60_000,
-    });
+    // The meeting-approval journey sidecar observed only the removed organization source lane.
+    expect(runtimeState.config_keys).not.toContain("meeting_approval_journey_telemetry");
+    expect(runtimeState.config_keys).not.toContain("staging_meeting_approval_journey_telemetry_enabled");
 
     runtimeState.worker_error = undefined;
     runtimeState.authority_url = "https://authority.example";
@@ -505,10 +454,6 @@ describe("admitted runtime CLI events", () => {
     process.emit("SIGTERM");
     await expect(nonStaging).resolves.toBe(0);
     expect(runtimeState.ask_journey_telemetry).toBeUndefined();
-    expect(runtimeState.meeting_approval_journey_telemetry).toBeUndefined();
-    expect(
-      runtimeState.staging_meeting_approval_journey_telemetry_enabled,
-    ).toBeUndefined();
     expect(nonStagingStderr.join("")).not.toContain(
       "echo-authority-journey-telemetry-liveness-v1",
     );
@@ -578,10 +523,6 @@ describe("admitted runtime CLI events", () => {
 
     await expect(running).resolves.toBe(0);
     expect(runtimeState.ask_journey_telemetry).toBeUndefined();
-    expect(runtimeState.meeting_approval_journey_telemetry).toBeUndefined();
-    expect(
-      runtimeState.staging_meeting_approval_journey_telemetry_enabled,
-    ).toBeUndefined();
     expect(stderr.join("")).not.toContain(
       "echo-authority-journey-telemetry-liveness-v1",
     );
@@ -685,9 +626,8 @@ describe("admitted runtime CLI events", () => {
         "/echo-clean/meetings",
       ),
     );
-    expect(runtimeState.staging_synthetic_owner_email).toBe(
-      "founder@example.com",
-    );
+    // The fixtures feed the owner's synthetic personal source; no organization source owner is named.
+    expect(runtimeState.config_keys).not.toContain("staging_synthetic_owner_email");
     process.emit("SIGTERM");
     await expect(running).resolves.toBe(0);
   });

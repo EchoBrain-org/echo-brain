@@ -33,7 +33,8 @@
     ],
     "compatibility_entrypoints": [],
     "retired_source_paths": [
-      "packages/organization-protocol/src/private-slack-block-approval-record-input-v1.ts"
+      "packages/organization-protocol/src/private-slack-block-approval-record-input-v1.ts",
+      "packages/organization-protocol/src/person-meeting-approval-record-input-v1.ts"
     ]
   },
   "layer_rules": [

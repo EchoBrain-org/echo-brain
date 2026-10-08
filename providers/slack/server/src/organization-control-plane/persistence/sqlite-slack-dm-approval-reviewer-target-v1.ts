@@ -1,8 +1,15 @@
 import { validateExternalHumanIdentityLinkContractV2, validateOrganizationToolConnectionContractV2, validateOrganizationToolConnectionStateV2, type ExternalHumanIdentityLinkContractV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2, type PersonMembershipType } from "../application/organization-tool-connection-contracts-v2.js";
 import type { ApprovalContractSha256 } from "@echo-brain/organization-control-plane/application/record-visibility-policy-contracts-v1";
-import type { PrivateApprovalSlackIdentityLinkV1 } from "../application/slack/private-approval-policy-resolution-v1.js";
 import { canonicalJson, canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
 import type Database from "better-sqlite3";
+
+/** Exact Slack external-human-link commitment for the assigned human. */
+export interface PrivateApprovalSlackIdentityLinkV1 {
+  readonly provider: "slack";
+  readonly external_identity_link_id: string;
+  readonly external_identity_link_contract_sha256: ApprovalContractSha256;
+  readonly provider_subject_id: string;
+}
 
 /** One validated contract body together with its canonical digest. */
 export interface FrozenApprovalContractV2<T> {

@@ -7,7 +7,7 @@ import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-br
 import { SlackIdentityProviderErrorV1, type SlackIdentityProviderV1 } from "../../src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { readActiveSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyOrganizationControlBaselineV3 } from "../../../../../packages/organization-control-plane/src/persistence/baseline.js";
+import { applyOrganizationControlBaselineV4 } from "../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import { activateNangoSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { serializeSlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
@@ -68,7 +68,7 @@ async function setup(
 ) {
   const database = new Database(":memory:");
   databases.push(database);
-  applyOrganizationControlBaselineV3(database);
+  applyOrganizationControlBaselineV4(database);
   database
     .prepare(
       `INSERT INTO organization_control_plane_metadata
@@ -373,15 +373,6 @@ describe("Person Slack identity-link workflow", () => {
     );
     expect(context.slack.observeIdentityLinkChallenge).toHaveBeenCalledTimes(1);
     expect((await context.application.tools("bearer")).tools).toEqual([{ provider: "slack", availability: "enabled", personal_status: "linked", workspace_id: "T12345678", account_id: "U12345679" }]);
-    // Linking an identity does not create a pending approval or action evidence.
-    for (const table of [
-      "organization_private_approval_pending_contracts_v2",
-      "organization_private_approval_signed_action_receipts_v2",
-      "organization_private_approval_denied_action_receipts_v2",
-      "organization_private_approval_terminal_evidence_v2",
-    ]) {
-      expect(context.database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
-    }
     const contract = context.database.prepare("SELECT contract_json FROM organization_external_human_link_contracts").get() as { contract_json: string };
     expect(JSON.parse(contract.contract_json).membership_type).toBe("employee");
     context.database.prepare("UPDATE organization_external_human_link_current SET current_status = 'revoked'").run();

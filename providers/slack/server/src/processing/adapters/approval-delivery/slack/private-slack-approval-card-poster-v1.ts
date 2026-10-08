@@ -312,7 +312,7 @@ export class PrivateSlackApprovalCardPosterV1 {
     signal?: AbortSignal,
   ): Promise<PrivateSlackApprovalPostOutcomeV1> {
     assertDirectMessageChannel(input.dm_channel_id);
-    if (this.retryBlocked()) return { kind: "retry_allowed" };
+    if (this.retryBlocked()) return { kind: "uncertain" };
     try {
       if (this.auth_identity === undefined) {
         const authIdentity = await this.slackOrNoToken((client) => client.authIdentity(signal));
@@ -383,9 +383,7 @@ export class PrivateSlackApprovalCardPosterV1 {
       if (signal?.aborted === true) throw error;
       if (error instanceof SlackApiError) {
         this.rememberRetryAfter(error);
-        return error.code === "rate_limited"
-          ? { kind: "retry_allowed" }
-          : { kind: "uncertain" };
+        return { kind: "uncertain" };
       }
       throw error;
     }

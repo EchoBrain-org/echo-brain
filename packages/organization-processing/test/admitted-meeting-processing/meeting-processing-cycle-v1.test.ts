@@ -4,13 +4,6 @@ import type {
   ExtractionAttemptStoreV1,
 } from "../../src/admitted-meeting-processing/extraction-attempt-store-v1.js";
 import { LlmDecisionProcessor } from "../../src/llm/llm-decision-processor.js";
-import type {
-  MeetingApprovalJourneyClockV1,
-  MeetingApprovalJourneyRefV1,
-  MeetingApprovalJourneyStageAttemptV1,
-  MeetingApprovalJourneyStageV1,
-  MeetingApprovalJourneyTelemetryPortV1,
-} from "../../src/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
 import {
   AdmittedMeetingProcessingCycleV1,
   type AdmittedMeetingProcessingAdmissionV1,
@@ -42,7 +35,6 @@ import {
 const fixtureCursor = (cutoff: string) => `fixture-source:v1:live:${cutoff}`;
 
 const CUT_OFF = "2026-08-22T02:03:04.005Z";
-const DURABLE_STAGED_AT = "2026-08-22T02:05:04.005Z";
 const SOURCE = {
   kind: "meeting-source" as const,
   adapter_id: "fixture-source",
@@ -325,180 +317,6 @@ function processor(
   };
 }
 
-class FakeJourneyTelemetry implements MeetingApprovalJourneyTelemetryPortV1 {
-  readonly events: string[] = [];
-  readonly bindings: Array<{ candidate_id: string; approval_id: string | null }> = [];
-  readonly usages: Array<{ provider_latency_ms: number; had_observation: boolean }> = [];
-  readonly cardStaged: Array<{
-    readonly approval_id: string;
-    readonly observed_at: string | undefined;
-  }> = [];
-  private readonly terminalStages = new Set<string>();
-  private readonly journeysBySource = new Map<string, string>();
-  private nextAttempt = 0;
-  throwEveryCall = false;
-
-  private call(): void {
-    if (this.throwEveryCall) throw new Error("telemetry must be fail-open");
-  }
-
-  private sourceKey(input: {
-    readonly source_adapter_id: string;
-    readonly source_instance_id: string;
-    readonly external_id: string;
-    readonly canonical_revision: string;
-  }): string {
-    return `${input.source_adapter_id}:${input.source_instance_id}:${input.external_id}:${input.canonical_revision}`;
-  }
-
-  private terminalKey(
-    journey: MeetingApprovalJourneyRefV1,
-    stage: MeetingApprovalJourneyStageV1,
-  ): string {
-    return `${journey.journey_id}:${stage}`;
-  }
-
-  private attempt(
-    journey: MeetingApprovalJourneyRefV1,
-    stage: MeetingApprovalJourneyStageV1,
-  ): MeetingApprovalJourneyStageAttemptV1 {
-    return {
-      journey_id: journey.journey_id,
-      stage,
-      attempt: ++this.nextAttempt,
-      started: this.captureClock(),
-    };
-  }
-
-  captureClock(): MeetingApprovalJourneyClockV1 {
-    this.call();
-    return { observed_at: "2026-08-22T02:03:00.000Z", monotonic_ms: 1 };
-  }
-
-  beginOrResumeSource(input: {
-    readonly source_adapter_id: string;
-    readonly source_instance_id: string;
-    readonly external_id: string;
-    readonly canonical_revision: string;
-  }): MeetingApprovalJourneyStageAttemptV1 {
-    this.call();
-    const key = this.sourceKey(input);
-    const journey_id = this.journeysBySource.get(key) ?? `journey-${this.journeysBySource.size + 1}`;
-    this.journeysBySource.set(key, journey_id);
-    const attempt = this.attempt({ journey_id }, "meeting_source_intake");
-    this.events.push("meeting_source_intake:started");
-    return attempt;
-  }
-
-  bindCandidate(
-    _journey: MeetingApprovalJourneyRefV1,
-    input: { readonly candidate_id: string; readonly approval_id: string | null },
-  ): void {
-    this.call();
-    this.bindings.push(input);
-  }
-
-  readForApproval(): MeetingApprovalJourneyRefV1 | null {
-    this.call();
-    return null;
-  }
-
-  beginStage(
-    journey: MeetingApprovalJourneyRefV1,
-    stage: MeetingApprovalJourneyStageV1,
-  ): MeetingApprovalJourneyStageAttemptV1 {
-    this.call();
-    const attempt = this.attempt(journey, stage);
-    this.events.push(`${stage}:started`);
-    return attempt;
-  }
-
-  beginStageForApproval(): MeetingApprovalJourneyStageAttemptV1 | null {
-    this.call();
-    return null;
-  }
-
-  succeedStage(
-    attempt: MeetingApprovalJourneyStageAttemptV1 | null,
-    input?: { readonly outcome?: string },
-  ): void {
-    this.call();
-    if (attempt === null) return;
-    this.events.push(`${attempt.stage}:succeeded${input?.outcome === undefined ? "" : `:${input.outcome}`}`);
-    this.terminalStages.add(this.terminalKey(attempt, attempt.stage));
-  }
-
-  failStage(attempt: MeetingApprovalJourneyStageAttemptV1 | null): void {
-    this.call();
-    if (attempt === null) return;
-    this.events.push(`${attempt.stage}:failed`);
-  }
-
-  skipStage(
-    journey: MeetingApprovalJourneyRefV1,
-    stage: MeetingApprovalJourneyStageV1,
-  ): void {
-    this.call();
-    this.events.push(`${stage}:skipped`);
-    this.terminalStages.add(this.terminalKey(journey, stage));
-  }
-
-  skipStageForApproval(): void {
-    this.call();
-  }
-
-  hasTerminalStage(): boolean {
-    this.call();
-    return false;
-  }
-
-  hasTerminalJourneyStage(
-    journey: MeetingApprovalJourneyRefV1,
-    stage: MeetingApprovalJourneyStageV1,
-  ): boolean {
-    this.call();
-    return this.terminalStages.has(this.terminalKey(journey, stage));
-  }
-
-  succeedExtractionStage(
-    attempt: MeetingApprovalJourneyStageAttemptV1 | null,
-    observation: { readonly provider_latency_ms: number } | null,
-    fallback_provider_latency_ms: number,
-  ): void {
-    this.call();
-    this.usages.push({
-      provider_latency_ms: fallback_provider_latency_ms,
-      had_observation: observation !== null,
-    });
-    this.succeedStage(attempt);
-  }
-
-  failExtractionStage(
-    attempt: MeetingApprovalJourneyStageAttemptV1 | null,
-    _error: unknown,
-    observation: { readonly provider_latency_ms: number } | null,
-    fallback_provider_latency_ms: number,
-  ): void {
-    this.call();
-    this.usages.push({
-      provider_latency_ms: fallback_provider_latency_ms,
-      had_observation: observation !== null,
-    });
-    this.failStage(attempt);
-  }
-
-  markCardStaged(approvalId: string, observedAt?: string): void {
-    this.call();
-    this.cardStaged.push({ approval_id: approvalId, observed_at: observedAt });
-  }
-  queueAgeMs(): number | null { this.call(); return null; }
-  markAwaitingSearch(): void { this.call(); }
-  beginAwaitingSearch(): readonly MeetingApprovalJourneyStageAttemptV1[] { this.call(); return []; }
-  completeAwaitingSearch(): void { this.call(); }
-  failAwaitingSearch(): void { this.call(); }
-  close(): void { this.call(); }
-}
-
 function stager(
   result: Awaited<ReturnType<ApprovalWorkflowStagerV1["stage"]>>,
 ): ApprovalWorkflowStagerV1 & { readonly calls: number } {
@@ -594,49 +412,6 @@ describe("admitted meeting-processing cycle", () => {
     await expect(cycle.runOnce()).rejects.toThrow("source custody unavailable");
     expect(extracted).toBe(false);
     expect(state.advances).toHaveLength(0);
-  });
-
-  it("correlates the actionable source, extraction, and durable candidate stages", async () => {
-    const telemetry = new FakeJourneyTelemetry();
-    const observed = meeting();
-    const cycle = liveCycle({
-      source: source({ meetings: [observed] }),
-      processor: processor((value, context) => {
-        context?.on_generation?.({
-          outcome: "succeeded",
-          provider: "openrouter",
-          model: "anthropic/claude-sonnet-4.6",
-          provider_latency_ms: 23,
-          input_tokens: 11,
-          output_tokens: 7,
-          total_tokens: 18,
-          cached_input_tokens: null,
-          reasoning_tokens: null,
-          finish_reason: "stop",
-        });
-        return decisions(value);
-      }),
-      state: new FakeState(admission()),
-      stager: stager({ kind: "staged", stage_id: "stage-1" }),
-      journey_telemetry: telemetry,
-    });
-
-    await expect(cycle.runOnce()).resolves.toMatchObject({ kind: "staged" });
-
-    expect(telemetry.events).toEqual([
-      "meeting_source_intake:started",
-      "meeting_source_intake:succeeded",
-      "meeting_extraction:started",
-      "meeting_extraction:succeeded",
-      "meeting_candidate_persist:started",
-      "meeting_candidate_persist:succeeded:actionable",
-    ]);
-    expect(telemetry.bindings).toEqual([
-      { candidate_id: "cnd_test", approval_id: "apr_test" },
-    ]);
-    expect(telemetry.usages).toEqual([
-      expect.objectContaining({ had_observation: true }),
-    ]);
   });
 
   it.each([
@@ -788,8 +563,7 @@ describe("admitted meeting-processing cycle", () => {
     expect(extraction_attempts.completed).toHaveLength(0);
   });
 
-  it("closes a failed extraction without opening another paid attempt in the same journey", async () => {
-    const telemetry = new FakeJourneyTelemetry();
+  it("closes a failed extraction without opening another paid attempt", async () => {
     let calls = 0;
     const cycle = liveCycle({
       source: source({ meetings: [meeting()] }),
@@ -812,72 +586,15 @@ describe("admitted meeting-processing cycle", () => {
       }),
       state: new FakeState(admission()),
       stager: stager({ kind: "staged", stage_id: "stage-1" }),
-      journey_telemetry: telemetry,
       extraction_attempts: new RecordingExtractionAttempts(),
     });
 
     await expect(cycle.runOnce()).rejects.toThrow("provider retry");
     await expect(cycle.runOnce()).rejects.toThrow("extraction_on_hold");
-
-    expect(telemetry.events.filter((event) => event.startsWith("meeting_extraction:"))).toEqual([
-      "meeting_extraction:started",
-      "meeting_extraction:failed",
-    ]);
     expect(calls).toBe(1);
-    expect(telemetry.events.filter((event) => event === "meeting_source_intake:started")).toHaveLength(2);
   });
 
-  it("marks reused extraction and no-signal downstream work skipped", async () => {
-    const telemetry = new FakeJourneyTelemetry();
-    const state = new FakeState(admission());
-    const first = liveCycle({
-      source: source({ meetings: [meeting()] }),
-      processor: processor(),
-      state,
-      stager: stager({ kind: "staged", stage_id: "stage-1" }),
-      journey_telemetry: telemetry,
-    });
-    await expect(first.runOnce()).resolves.toMatchObject({ kind: "staged" });
-
-    const reused: MeetingDocument = {
-      ...meeting(),
-      provenance: { ...meeting().provenance, canonical_revision: "sha256:folder-only" },
-      extensions: { "fixture-source": { folder_membership: [] } },
-    };
-    const second = liveCycle({
-      source: source({ meetings: [reused] }),
-      processor: processor(() => {
-        throw new Error("reused extraction must not invoke the processor");
-      }),
-      state,
-      stager: stager({ kind: "staged", stage_id: "never" }),
-      journey_telemetry: telemetry,
-    });
-    await expect(second.runOnce()).resolves.toMatchObject({ kind: "already_processed" });
-    expect(telemetry.events).toContain("meeting_extraction:skipped");
-    expect(telemetry.events).toContain("meeting_candidate_persist:succeeded:coalesced");
-
-    const noSignalsTelemetry = new FakeJourneyTelemetry();
-    const noSignal = liveCycle({
-      source: source({ meetings: [meeting()] }),
-      processor: processor(noSignals),
-      state: new FakeState(admission()),
-      stager: stager({ kind: "staged", stage_id: "never" }),
-      journey_telemetry: noSignalsTelemetry,
-    });
-    await expect(noSignal.runOnce()).resolves.toMatchObject({ kind: "no_signals" });
-    expect(noSignalsTelemetry.events.filter((event) => event.endsWith(":skipped"))).toEqual([
-      "meeting_approval_staging:skipped",
-      "meeting_approval_action_verify:skipped",
-      "meeting_approval_action_queue:skipped",
-      "meeting_terminal_persist:skipped",
-      "meeting_record_append:skipped",
-      "meeting_search_publication:skipped",
-    ]);
-  });
-
-  it("reconciles frozen candidate persistence from its durable no-signal disposition", async () => {
-    const telemetry = new FakeJourneyTelemetry();
+  it("never re-extracts a frozen no-signal revision", async () => {
     const current = admission();
     const observed = meeting();
     const state = new FakeState(current);
@@ -907,27 +624,10 @@ describe("admitted meeting-processing cycle", () => {
         }),
         state,
         stager: stager({ kind: "staged", stage_id: "never" }),
-        journey_telemetry: telemetry,
       });
       await expect(cycle.runOnce()).resolves.toMatchObject({ kind: "already_processed" });
     }
-    expect(telemetry.events.filter((event) => event === "meeting_extraction:skipped")).toHaveLength(1);
-    expect(telemetry.events.filter((event) => event === "meeting_candidate_persist:succeeded:no_signals")).toHaveLength(1);
-    expect(telemetry.events).not.toContain("meeting_candidate_persist:skipped");
-  });
-
-  it("keeps processing fail-open when journey telemetry throws", async () => {
-    const telemetry = new FakeJourneyTelemetry();
-    telemetry.throwEveryCall = true;
-    const cycle = liveCycle({
-      source: source({ meetings: [meeting()] }),
-      processor: processor(),
-      state: new FakeState(admission()),
-      stager: stager({ kind: "staged", stage_id: "stage-1" }),
-      journey_telemetry: telemetry,
-    });
-
-    await expect(cycle.runOnce()).resolves.toMatchObject({ kind: "staged" });
+    expect(state.candidates).toHaveLength(0);
   });
 
   it("reports source intake, extraction, and approval staging without meeting data", async () => {
@@ -1134,54 +834,40 @@ describe("admitted meeting-processing cycle", () => {
     }
   });
 
-  it("advances after a durable approval delivery remains pending", async () => {
+  it("stages before it advances the cursor", async () => {
     const current = admission();
     const state = new FakeState(current);
+    const order: string[] = [];
+    const downstream: ApprovalWorkflowStagerV1 = {
+      stage: async () => {
+        // The approval core freezes an import's pending choices before the advance records them (R28).
+        order.push(`stage:${state.advances.length}`);
+        return { kind: "staged", stage_id: "stage-1" };
+      },
+      reconcilePendingDeliveries: async () => { order.push(`reconcile:${state.advances.length}`); },
+      reconcileSuperseded: async () => {},
+    };
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state,
-      stager: stager({ kind: "delivery_pending" }),
+      stager: downstream,
     });
-
-    await expect(cycle.runOnce()).resolves.toEqual({
-      kind: "delivery_pending",
-      cursor_advanced: true,
-    });
-    expect(state.candidates).toHaveLength(1);
-    expect(state.advances).toEqual([
-      {
-        expected_cursor: current.source.cursor,
-        next_cursor: "fixture-source:v1:next",
-      },
-    ]);
+    await expect(cycle.runOnce()).resolves.toEqual({ kind: "staged", stage_id: "stage-1", cursor_advanced: true });
+    expect(order).toEqual(["stage:0", "reconcile:1"]);
   });
 
-  it("advances after a deterministic approval package is durably quarantined", async () => {
-    const current = admission();
-    const state = new FakeState(current);
+  it("state_drift gives not_staged without advancing", async () => {
+    const state = new FakeState(admission());
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state,
-      stager: stager({
-        kind: "quarantined",
-        reason_code: "approval_package_unrepresentable",
-      }),
+      stager: stager({ kind: "state_drift" }),
     });
-
-    await expect(cycle.runOnce()).resolves.toEqual({
-      kind: "quarantined",
-      reason_code: "approval_package_unrepresentable",
-      cursor_advanced: true,
-    });
+    await expect(cycle.runOnce()).resolves.toEqual({ kind: "not_staged", reason: "state_drift", cursor_advanced: false });
+    expect(state.advances).toEqual([]);
     expect(state.candidates).toHaveLength(1);
-    expect(state.advances).toEqual([
-      {
-        expected_cursor: current.source.cursor,
-        next_cursor: "fixture-source:v1:next",
-      },
-    ]);
   });
 
   it("admits and advances the next meeting before surfacing an older delivery failure", async () => {
@@ -1233,21 +919,21 @@ describe("admitted meeting-processing cycle", () => {
     expect(state.advances).toHaveLength(1);
   });
 
-  it("keeps a pending delivery durable when its source cursor fence drifts", async () => {
-    const state = new FakeState(admission(), "state_drift");
+  it("reports the freeze failure when the advance after it also fails", async () => {
+    const state = new FailingCursorAdvanceState(admission());
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state,
-      stager: stager({ kind: "delivery_pending" }),
+      stager: {
+        stage: async () => { throw new Error("proposal freeze refused"); },
+        reconcilePendingDeliveries: async () => {},
+        reconcileSuperseded: async () => {},
+      },
     });
 
-    await expect(cycle.runOnce()).resolves.toEqual({
-      kind: "delivery_pending_cursor_not_advanced",
-      reason: "state_drift",
-      cursor_advanced: false,
-    });
-    expect(state.advances).toHaveLength(1);
+    await expect(cycle.runOnce()).rejects.toThrow("proposal freeze refused");
+    expect(state.candidates).toHaveLength(1);
   });
 
   it("keeps a durable staged item visible when the Authority cursor fence drifts", async () => {
@@ -1471,8 +1157,8 @@ describe("admitted meeting-processing cycle", () => {
     expect(extracts).toBe(2);
   });
 
-  it("retries queued, posting, and posted revisions with only their frozen snapshots", async () => {
-    for (const stateName of ["queued", "posting", "posted"] as const) {
+  it("retries a queued revision with only its frozen snapshot", async () => {
+    for (const stateName of ["queued"] as const) {
       const current = admission();
       const state = new FakeState(current);
       const originalMeeting = meeting();
@@ -1550,7 +1236,7 @@ describe("admitted meeting-processing cycle", () => {
     }
   });
 
-  it("reconciles a durably staged candidate and wait clock after a restart", async () => {
+  it("reconciles a durably staged candidate after a restart", async () => {
     const current = admission();
     const state = new FakeState(current);
     const originalMeeting = meeting();
@@ -1569,14 +1255,12 @@ describe("admitted meeting-processing cycle", () => {
       approval_id: "apr_staged",
       stage_command_id: "pas_staged",
       state: "staged",
-      durable_staged_at: DURABLE_STAGED_AT,
       admission: current,
       meeting: originalMeeting,
       decisions: decisions(originalMeeting),
     });
     let extracts = 0;
     let stages = 0;
-    const telemetry = new FakeJourneyTelemetry();
     const countingProcessor = processor((value) => {
       extracts += 1;
       return decisions(value);
@@ -1606,19 +1290,13 @@ describe("admitted meeting-processing cycle", () => {
       processor: countingProcessor,
       state,
       stager: downstream,
-      journey_telemetry: telemetry,
     });
     await expect(repeated.runOnce()).resolves.toEqual({
       kind: "already_processed",
       cursor_advanced: false,
     });
-    expect(telemetry.events).toEqual(expect.arrayContaining([
-      "meeting_candidate_persist:succeeded:actionable",
-      "meeting_approval_staging:succeeded:staged",
-    ]));
-    expect(telemetry.cardStaged).toEqual([
-      { approval_id: "apr_staged", observed_at: DURABLE_STAGED_AT },
-    ]);
+    expect(extracts).toBe(0);
+    expect(stages).toBe(0);
 
     const revisedMeeting: MeetingDocument = {
       ...originalMeeting,
@@ -1645,51 +1323,6 @@ describe("admitted meeting-processing cycle", () => {
     expect(stages).toBe(1);
     expect(state.candidates).toHaveLength(1);
     expect(state.advances).toEqual([]);
-  });
-
-  it("does not invent a restart-time wait anchor without a durable staged timestamp", async () => {
-    const current = admission();
-    const state = new FakeState(current);
-    const originalMeeting = meeting();
-    state.seedFrozenCandidate({
-      candidate_id: "cnd_staged-without-anchor",
-      candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
-      review_lineage_id: "rli_test",
-      review_input_sha256: `sha256:${"c".repeat(64)}`,
-      review_semantic_sha256: `sha256:${"d".repeat(64)}`,
-      review_policy_id: REVIEW_POLICY.policy_id,
-      review_policy_contract_sha256: REVIEW_POLICY.policy_contract_sha256,
-      review_policy_consequence_text: REVIEW_POLICY.policy_consequence_text,
-      review_policy_consequence_sha256:
-        REVIEW_POLICY.policy_consequence_sha256,
-      disposition: "actionable",
-      approval_id: "apr_staged-without-anchor",
-      stage_command_id: "pas_staged-without-anchor",
-      state: "staged",
-      durable_staged_at: null,
-      admission: current,
-      meeting: originalMeeting,
-      decisions: decisions(originalMeeting),
-    });
-    const telemetry = new FakeJourneyTelemetry();
-    const downstream = stager({ kind: "staged", stage_id: "unused" });
-    const repeated = liveCycle({
-      source: source({
-        meetings: [originalMeeting],
-        next_cursor: current.source.cursor,
-      }),
-      processor: processor(),
-      state,
-      stager: downstream,
-      journey_telemetry: telemetry,
-    });
-
-    await expect(repeated.runOnce()).resolves.toEqual({
-      kind: "already_processed",
-      cursor_advanced: false,
-    });
-    expect(downstream.calls).toBe(0);
-    expect(telemetry.cardStaged).toEqual([]);
   });
 
   it("does not advance no-signal meetings when the Authority cursor fence drifts or is revoked", async () => {

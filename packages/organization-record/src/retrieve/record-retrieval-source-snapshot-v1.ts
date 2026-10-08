@@ -261,9 +261,10 @@ function expectedSignals(
 }
 
 /**
- * Owners the approver confirmed in the signed human act (ADR-0021), by signal
- * ID. The approved brief never carries them; a resolution without the field
- * confirmed none. Read by field, so this workspace names no provider shape.
+ * Owners the approver confirmed (ADR-0021), carried by the approval decision
+ * reference by signal ID; the approved brief never carries them, and a
+ * resolution without the field confirmed none. Read by field, so this
+ * workspace names no provider shape.
  */
 function confirmedOwners(reference: unknown): ReadonlyMap<string, string> {
   const owners = (reference as { readonly action_owners?: unknown }).action_owners;

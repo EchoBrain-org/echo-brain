@@ -10,8 +10,7 @@
     "packages/organization-authority-kernel/src/shared/core-runtime-observation-v1.ts",
     "packages/organization-authority-kernel/src/shared/person-email-rules.ts",
     "packages/organization-authority-kernel/src/shared/journey-telemetry-v1.ts",
-    "packages/organization-authority-kernel/src/shared/telemetry-vocabulary-v1.ts",
-    "packages/organization-authority-kernel/src/shared/staging-synthetic-meeting-canary-envelope-v1.ts"
+    "packages/organization-authority-kernel/src/shared/telemetry-vocabulary-v1.ts"
   ],
   "owned_source_paths": [
     "packages/organization-authority-kernel/src/**"
@@ -39,7 +38,7 @@
     "util"
   ],
   "runtime_assets": [
-    "packages/organization-authority-kernel/baselines/authority-baseline-v11.sql"
+    "packages/organization-authority-kernel/baselines/authority-baseline-v12.sql"
   ],
   "layer_rules": [
     {

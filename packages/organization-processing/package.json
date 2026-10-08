@@ -33,6 +33,10 @@
       "types": "./dist/core/processing/brief.d.ts",
       "import": "./dist/core/processing/brief.js"
     },
+    "./core/processing/owner-proposals-v1": {
+      "types": "./dist/core/processing/owner-proposals-v1.d.ts",
+      "import": "./dist/core/processing/owner-proposals-v1.js"
+    },
     "./llm/llm-decision-processor": {
       "types": "./dist/llm/llm-decision-processor.d.ts",
       "import": "./dist/llm/llm-decision-processor.js"
@@ -48,10 +52,6 @@
     "./llm/llm-provider": {
       "types": "./dist/llm/llm-provider.d.ts",
       "import": "./dist/llm/llm-provider.js"
-    },
-    "./admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1": {
-      "types": "./dist/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.d.ts",
-      "import": "./dist/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js"
     },
     "./admitted-meeting-processing/serialized-meeting-processing-worker": {
       "types": "./dist/admitted-meeting-processing/serialized-meeting-processing-worker.d.ts",
@@ -88,10 +88,6 @@
     "./ports/meeting-source-bundle-v1": {
       "types": "./dist/ports/meeting-source-bundle-v1.d.ts",
       "import": "./dist/ports/meeting-source-bundle-v1.js"
-    },
-    "./admitted-meeting-processing/staging-synthetic-meeting-canary-v1": {
-      "types": "./dist/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.d.ts",
-      "import": "./dist/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js"
     },
     "./admitted-meeting-processing/decision-processor-admission-commitment": {
       "types": "./dist/admitted-meeting-processing/decision-processor-admission-commitment.d.ts",

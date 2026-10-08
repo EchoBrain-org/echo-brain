@@ -1,6 +1,7 @@
 /** Core-stage deterministic meeting input. Provider admission is fixture setup only. */
 import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
 import { assertCanonicalDecisionSet, assertCanonicalMeetingDocument } from "../../../packages/organization-processing/dist/core/index.js";
+import { SqlitePersonMeetingIntakeV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/person-meeting-intake-v1.js";
 import { SqliteSourceAdmissionStoreV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/source-admission-v1.js";
 
 const SOURCE = Object.freeze({ kind: "meeting-source", adapter_id: "core-input", instance_id: "core-input-v1", version: "1.0.0" });
@@ -25,6 +26,26 @@ const source_cursor_policy = Object.freeze({
   assert_live_cursor(value) { offset(value); },
 });
 
+/**
+ * The personal intake writes a checkpoint when it admits the source. This
+ * benchmark never watches a folder or queues a manual import: meetings arrive
+ * only through `offer`, and the processing cycle owns the cursor from then on.
+ * So the codec accepts exactly the empty initial checkpoint and maps it to the
+ * first offered position.
+ */
+const checkpoint_codec = Object.freeze({
+  read(value) {
+    offset(value);
+    return Object.freeze({ folder: null, baseline: false, revisions: Object.freeze({}), manual: Object.freeze([]) });
+  },
+  write(value) {
+    if (value?.folder !== null || value.baseline !== false || value.manual?.length !== 0 || Object.keys(value.revisions ?? {}).length !== 0) {
+      throw new Error("core input admits only the empty initial checkpoint");
+    }
+    return cursor(0);
+  },
+});
+
 function health() {
   return Object.freeze({ status: "healthy", checked_at: new Date().toISOString() });
 }
@@ -42,8 +63,10 @@ function immutableSnapshot(value) {
 
 /**
  * Fixture-only stopped-time admission plus canonical source/processor ports.
- * During a run the ports are read-only except for `offer`, which appends an
- * immutable tuple and never changes a previously-addressable cursor.
+ * The fictional owner admits a personal meeting source through the same intake
+ * the product uses; the cursor stays unadvanced until the cycle pulls. During a
+ * run the ports are read-only except for `offer`, which appends an immutable
+ * tuple and never changes a previously-addressable cursor.
  */
 export function createCoreInput({ authority, coordinates: { organization_id }, owner, sessions }) {
   const authorization = sessions.authenticateAccess({ access_token: owner.access_token });
@@ -52,42 +75,26 @@ export function createCoreInput({ authority, coordinates: { organization_id }, o
     authorization.membership_id !== owner.membership_id || authorization.membership_type !== "owner"
   ) throw new Error("core input setup requires the authenticated active owner");
 
-  const admitted_at = new Date().toISOString();
-  const admission_semantic_input_sha256 = canonicalSha256({
-    schema_version: 1,
-    kind: "echo-capacity-core-input-static-admission-v1",
-    organization_id,
-    principal_id: authorization.principal_id,
-    membership_id: authorization.membership_id,
-    source: SOURCE,
-    processor: PROCESSOR,
+  const person = Object.freeze({ organization_id, principal_id: authorization.principal_id, membership_id: authorization.membership_id });
+  const intake = new SqlitePersonMeetingIntakeV1(authority, checkpoint_codec);
+  if (authority.prepare("SELECT count(*) FROM authority_live_source_admission_v2").pluck().get() !== 0) {
+    throw new Error("core input setup requires an unadmitted Authority state");
+  }
+  const setting = intake.ensure({
+    person,
+    identity: SOURCE,
+    normalizer_version: SOURCE.version,
+    custodian: { kind: "echo-capacity-core-input-owner-v1", principal_id: person.principal_id, membership_id: person.membership_id },
+    processor: {
+      adapter_id: PROCESSOR.adapter_id,
+      instance_id: PROCESSOR.instance_id,
+      version: PROCESSOR.version,
+      configuration_sha256: canonicalSha256({ kind: "echo-capacity-core-input-deterministic-processor-v1" }),
+      credential_reference_sha256: canonicalSha256({ kind: "echo-capacity-core-input-no-provider-credential-v1" }),
+    },
+    current: () => { intake.currentPerson(person); },
+    custodian_assurance: "fixture_owner_declared",
   });
-  const source_custodian_sha256 = canonicalSha256({ kind: "echo-capacity-core-input-owner-v1", principal_id: authorization.principal_id, membership_id: authorization.membership_id });
-  const source_credential_reference_sha256 = canonicalSha256({ kind: "echo-capacity-core-input-no-provider-credential-v1" });
-  const processor_configuration_sha256 = canonicalSha256({ kind: "echo-capacity-core-input-deterministic-processor-v1" });
-  const processor_credential_reference_sha256 = canonicalSha256({ kind: "echo-capacity-core-input-no-provider-credential-v1" });
-  authority.transaction(() => {
-    const existing = authority.prepare("SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = '1'").get();
-    if (existing !== undefined) throw new Error("core input setup requires an unadmitted Authority state");
-    authority.prepare(
-      `INSERT INTO authority_live_source_admission_v2 (
-        source_key, organization_id, principal_id, membership_id, membership_type,
-        source_adapter_id, source_adapter_version, source_adapter_instance_id,
-        normalizer_version, source_custodian_sha256, source_custodian_assurance,
-        source_custodian_observed_at, source_credential_reference_sha256,
-        initial_cursor, cutoff_at, processor_adapter_id, processor_instance_id,
-        processor_adapter_version, processor_configuration_sha256,
-        processor_credential_reference_sha256, semantic_input_sha256, admitted_at
-      ) VALUES ('1', ?, ?, ?, 'owner', ?, ?, ?, ?, ?, 'fixture_owner_declared', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      organization_id, authorization.principal_id, authorization.membership_id,
-      SOURCE.adapter_id, SOURCE.version, SOURCE.instance_id, SOURCE.version,
-      source_custodian_sha256, admitted_at, source_credential_reference_sha256,
-      cursor(0), admitted_at, PROCESSOR.adapter_id, PROCESSOR.instance_id,
-      PROCESSOR.version, processor_configuration_sha256,
-      processor_credential_reference_sha256, admission_semantic_input_sha256, admitted_at,
-    );
-  }).immediate();
 
   const offered = [];
   const source = Object.freeze({
@@ -120,6 +127,13 @@ export function createCoreInput({ authority, coordinates: { organization_id }, o
     source,
     processor,
     source_cursor_policy,
+    /** The admitted personal source; the processing state and review are bound to this key. */
+    source_key: setting.source_key,
+    setting,
+    /** The personal intake that admitted the source; the review uses it for the current-person fence. */
+    intake,
+    /** The personal intake's own fence: the owner is active and the source settings are unchanged. */
+    requireCurrent() { intake.requireCurrent(setting); },
     offer({ meeting, decisions } = {}) {
       assertCanonicalMeetingDocument(meeting, SOURCE);
       assertCanonicalDecisionSet(decisions, meeting, PROCESSOR);
@@ -135,21 +149,24 @@ export function createCoreInput({ authority, coordinates: { organization_id }, o
 
 /**
  * Bind the fixture source to the same current-admission fence used by the
- * Authority runtime. Keeping this beside the source avoids a core evaluator
+ * Authority runtime, with the personal custody scope a person's own source
+ * retains under. Keeping this beside the source avoids a core evaluator
  * silently processing a meeting that was never retained in source custody.
  */
-export function createCoreSourceIngestion({ authority, organization_id, state, source }) {
+export function createCoreSourceIngestion({ authority, setting, state, source }) {
   if (authority === null || typeof authority?.prepare !== "function") throw new TypeError("authority is required");
-  if (typeof organization_id !== "string" || organization_id.length === 0) throw new TypeError("organization_id is required");
+  if (typeof setting?.source_key !== "string" || typeof setting.organization_id !== "string" || typeof setting.membership_id !== "string") {
+    throw new TypeError("setting must be the admitted personal source");
+  }
   if (state === null || typeof state?.assertCurrentSourceAdmission !== "function") throw new TypeError("state must provide the current source-admission fence");
   if (source === null || typeof source?.identity !== "object") throw new TypeError("source identity is required");
   const identity = source.identity;
   return Object.freeze({
     store: new SqliteSourceAdmissionStoreV1(authority, () => state.assertCurrentSourceAdmission(identity)),
     scope: Object.freeze({
-      organization_id,
-      custody_ref: `organization:${organization_id}`,
-      access_policy_ref: `meeting-admission:${identity.adapter_id}:${identity.instance_id}`,
+      organization_id: setting.organization_id,
+      custody_ref: `person:${setting.membership_id}`,
+      access_policy_ref: `personal-meeting:${setting.source_key}`,
       analysis_policy: "automatic",
     }),
   });

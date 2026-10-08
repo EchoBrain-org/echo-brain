@@ -1,13 +1,13 @@
-import { createPersonToolConnectionVerbsV1, PersonToolConnectionClientV1, personMeetingCommandV1, validatePersonMeetingRequestV1, type PersonToolProviderV1 } from '@echo-brain/organization-api';
+import { createPersonToolConnectionVerbsV1, PersonToolConnectionClientV1, personMeetingCommandV2, validatePersonMeetingRequestV2, type PersonToolProviderV1 } from '@echo-brain/organization-api';
 function granolaTool(): PersonToolProviderV1 {
   const routes = Object.fromEntries(['connect','status','cancel','disconnect'].map(verb => [verb, `/v1/person/tools/granola/${verb}`])) as { connect: string; status: string; cancel: string; disconnect: string };
   const connection = createPersonToolConnectionVerbsV1('Granola', host => new PersonToolConnectionClientV1(host, 'Granola', routes));
   return { tool_id: 'granola', verbs: { ...connection, setup: connection.connect,
     meetings: { description: 'Browse, import, watch and review meetings with a versioned JSON request.', options: { request: { type: 'string' } }, requires: ['request'],
       async run(context) {
-        const request = validatePersonMeetingRequestV1(JSON.parse(String(context.values.request)));
+        const request = validatePersonMeetingRequestV2(JSON.parse(String(context.values.request)));
         if (request.tool_id !== 'granola') throw new Error('Meeting request must select Granola');
-        context.print({ ok: true, result: await personMeetingCommandV1(context.host, request) });
+        context.print({ ok: true, result: await personMeetingCommandV2(context.host, request) });
       },
     },
   } };

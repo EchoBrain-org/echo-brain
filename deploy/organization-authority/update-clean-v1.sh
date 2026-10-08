@@ -163,7 +163,7 @@ verify_candidate_state_lineage() {
     --security-opt no-new-privileges --user "$runtime_identity" --workdir /app \
     --entrypoint node \
     --mount "type=bind,src=$STATE_DIR,dst=/echo-clean/state,readonly" \
-    "$image" --input-type=module -e 'import { verifyAuthorityStateLineage } from "./packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js"; import { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } from "./providers/openrouter/dist/verify-openrouter-decision-processor-admission-v1.js"; verifyAuthorityStateLineage("/echo-clean/state"); verifyPersistedOpenRouterDecisionProcessorAdmissionV1("/echo-clean/state");' || \
+    "$image" --input-type=module -e 'import { verifyAuthorityStateLineage } from "./packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js"; verifyAuthorityStateLineage("/echo-clean/state");' || \
     fail 'candidate Authority image rejected persisted state lineage; state is never migrated, so with no live users use onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users for fresh state'
 }
 
@@ -951,7 +951,7 @@ PY
       ;;
     quarantined|not_actionable|not_staged)
       printf '%s\n' "$normalized"
-      fail "staging canary did not stage a private approval card: $outcome"
+      fail "staging canary did not stage an approval proposal: $outcome"
       ;;
   esac
 }
@@ -1052,7 +1052,7 @@ case "$command" in
       fail 'could not persist the staged candidate setup class'
     fi
     if activate_release_tuple "$CANDIDATE_RECORD" && start_and_check "$CANDIDATE_RECORD" "$expected_setup_class" false; then
-      next_action='Run one bounded post-update canary, stop for founder Slack approval and the exact candidate-client record and answer checks, then promote with --canary-passed or run rollback.'
+      next_action='Run one bounded post-update canary, stop for founder approval of the canary meeting and the exact candidate-client record and answer checks, then promote with --canary-passed or run rollback.'
       if [[ "$expected_setup_class" == initial_onboarding ]]; then
         next_action='Install the exact candidate Person kit, complete Slack setup and the owner Slack link, then have the human host operator run onboard-clean-v1.sh continue-staged-initial-onboarding before the candidate canary and approval checks.'
       fi

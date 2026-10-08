@@ -80,32 +80,47 @@ Stage 1 runs a single synthetic meeting through the real core in a child process
 npm run capacity:checkpoint
 ```
 
-The command runs two fresh, separate organizations, one for each visibility
-policy. Each receives one meeting with five canonical facts. It checks a complete
-durable candidate and delivered presentation, absence of unapproved search
-results, durable denial of an unassigned employee's approval, the owner's real
-approval, one signed canonical record, actual generation publication, grounded
-answers, shared/private reader isolation and same-process duplicate approval
-idempotence.
+The command runs two fresh, separate organizations, one for each audience the
+approving person can choose: the members of a project, or only the approving
+person. Each receives one meeting with five canonical facts, offered to the
+owner's own personal source. It checks a complete durable candidate and the
+in-app review shown for it, absence of unapproved search results, refusal of an
+unassigned employee's approval attempt (no durable action, no record), the
+owner's real approval, one signed canonical record, actual generation
+publication, grounded answers, shared/private reader isolation and
+same-process duplicate approval idempotence.
 After the child stops, the driver opens the real databases read-only and checks
 the frozen input, record, policy facts, active head and each reader's matching
 answer release audit. Identical answer text from two readers requires two
 separately bound audit entries.
 
 `core-candidate.mjs` composes the existing worker lifecycle, processing cycle,
-approval finalizer, record appender and search reconciler. `core-input.mjs`,
+in-app review, record appender and search reconciler. `core-input.mjs`,
 `core-approval.mjs`, `core-identity.mjs` and `core-read-routes.mjs` provide the
 canonical ports and application setup. Person sessions are real; only the
-external verified identity is deterministic. The existing approval storage
-format contains Slack-specific fields. The fixture supplies verified-action
-inputs at the boundary after transport verification, and deterministic delivery
-results; no Slack client, HTTP payload simulator or signature handler runs.
-The canonical approval port requests the lifecycle's late-bound, coalesced
-publication wake after its durable queue succeeds; the IPC driver does not
-request publication itself. Until that binding exists, periodic processing is
-the fallback, matching production composition.
-Current membership, assignment, connection/link, candidate and policy checks
-remain in the production finalizer. No authorization witness is injected.
+external verified identity is deterministic.
+`core-input.mjs` admits the fictional owner's own personal meeting source
+through the production personal intake, so the source key, custody scope and
+processing fence are the ones a person's source has; meetings reach it only
+through the harness's `offer`. `core-approval.mjs` drives the approval
+core (`createApprovalCoreV1`): a Person session authenticates the reviewer, and
+the core's proposal freeze, frozen-snapshot check, durable decision, signed V4
+append and policy-fact projection are the production code. The approving person's audience choice names the policy: a project they
+share with the employee, or themselves alone. The harness creates that project
+through the real project application. No provider client, HTTP route or
+transport signature runs.
+The review requests the lifecycle's late-bound, coalesced publication wake
+after its durable action commits; the IPC driver does not request publication
+itself. Until that binding exists, periodic processing is the fallback,
+matching production composition.
+Current membership, project grant, candidate and snapshot checks remain in the
+production review and its authorization callback. The authorization witness is
+the review's own (the authenticated Person action and its Authority audit
+entry); the harness injects none.
+The frozen V4 workload keeps its `organization-member` policy class, which only
+the history generator and ranking tests use. The checkpoint's shared audience is
+the project members, because the in-app review offers the approving person only
+that or themselves alone. The metric profile is unchanged.
 This directly composes the shared production components; it does not start the
 deployed API/provider composition. A change to that composition must also be
 checked against this harness before making performance claims.

@@ -117,19 +117,29 @@ function parseCard(value: unknown): Draft {
   return { decided, affected };
 }
 
+/**
+ * What the card reads off an item: its title, its text when research read it,
+ * and its details. A released desk item has this shape, and so does an item
+ * opened again when a stored card is viewed.
+ */
+export interface ImpactItemFactsV1 {
+  readonly label: string;
+  readonly text?: string;
+  readonly attributes?: { readonly owner?: string; readonly due_at?: string; readonly status?: string };
+}
 /** An owner from the item's details (a ticket's assignee, an action's owner), never from model text. */
-function ownerOf(entry: Entry): string | undefined {
-  const owner = entry.item.attributes?.owner;
+export function ownerOfImpactItemV1(item: ImpactItemFactsV1): string | undefined {
+  const owner = item.attributes?.owner;
   return owner !== undefined && owner.length > 0 && cleanLine(owner, LIMITS.name_chars) === owner ? owner : undefined;
 }
 /** A date the item itself states: its due date, or the date written in its title or text (spec section 2: details and text prove themselves). */
-function statesDate(entry: Entry, date: string): boolean {
-  return [entry.item.attributes?.due_at, entry.item.label, entry.item.text].some(value => value?.includes(date) === true);
+export function statesImpactDateV1(item: ImpactItemFactsV1, date: string): boolean {
+  return [item.attributes?.due_at, item.label, item.text].some(value => value?.includes(date) === true);
 }
 /** What a not-yet-assessed item says: its title and details. */
-function detailsOf(entry: Entry): string {
-  const { status, due_at: due } = entry.item.attributes ?? {};
-  return cleanLine([entry.item.label, ...(status === undefined ? [] : [`status ${status}`]), ...(due === undefined ? [] : [`due ${due}`])].join("; "), LIMITS.line_chars);
+export function detailsOfImpactItemV1(item: ImpactItemFactsV1): string {
+  const { status, due_at: due } = item.attributes ?? {};
+  return cleanLine([item.label, ...(status === undefined ? [] : [`status ${status}`]), ...(due === undefined ? [] : [`due ${due}`])].join("; "), LIMITS.line_chars);
 }
 /** Couldn't confirm: an early stop, needs research did not find, cut-short lists, items and sources it could not read, source notices. */
 function unconfirmedOf(bundle: AgenticEvidenceBundleV1): string[] {
@@ -198,14 +208,14 @@ export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1
       // A date the item does not state is dropped; the item stays.
       rows = [...kept.values()].sort((left, right) => RELATIONS.indexOf(left.relation) - RELATIONS.indexOf(right.relation)).map(({ id, date_at_risk: risk, ...value }) => {
         const entry = shown.get(id)!;
-        return { entry, ...value, ...(risk !== undefined && statesDate(entry, risk.date) ? { date_at_risk: risk } : {}) };
+        return { entry, ...value, ...(risk !== undefined && statesImpactDateV1(entry.item, risk.date) ? { date_at_risk: risk } : {}) };
       });
     } else {
       // Possibly affected, not yet assessed: what research cited, with its details.
-      rows = others.filter(entry => entry.cited_by_plan).slice(0, LIMITS.affected).map(entry => ({ entry, says_now: detailsOf(entry) }));
+      rows = others.filter(entry => entry.cited_by_plan).slice(0, LIMITS.affected).map(entry => ({ entry, says_now: detailsOfImpactItemV1(entry.item) }));
     }
     const affected = rows.map(({ entry, ...row }) => {
-      const owner = ownerOf(entry);
+      const owner = ownerOfImpactItemV1(entry.item);
       return { citation_index: cite(entry), ...row, ...(owner === undefined ? {} : { owner }) };
     });
     const people = new Map<string, number[]>();
