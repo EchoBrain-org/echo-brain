@@ -1,4 +1,5 @@
 import { openGranolaPersonLiveRuntimeV1 } from './granola-person-live-runtime-v1.js';
+import { enqueueApprovedRecordRunV1, SqliteTriggerRunsV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import { AUTHORITY_RECORD_APPROVER_PROJECTORS_V1, AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from './authority-record-protocols-v1.js';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 import { composePersonExternalIdentityRuntimeBundlesV1 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
@@ -140,6 +141,7 @@ export async function openOrganizationAuthorityService(
         if (existing?.processing !== undefined) throw new Error('Personal meeting processing is already selected');
         const granola = openGranolaPersonLiveRuntimeV1({ state_directory: sharedConfig.state_directory, sessions, resources,
           processor: dependencies.person_meeting_processor ?? decisionProcessor, projectors: policyProjectors, nango_authorization: () => slack_nango.secret_key,
+          approval_core: { after_record: [enqueueApprovedRecordRunV1(new SqliteTriggerRunsV1(resources.database))] },
           ...(stagingSynthetic === undefined ? {} : { providers: [stagingSynthetic] }) });
         if (stagingSynthetic !== undefined) stagingCanary = (release_id, signal) => runStagingSyntheticPersonalCanaryV1({ database: resources.database, runtime: granola, release_id, signal });
         return { applications: [...(existing?.applications ?? []), ...granola.applications], processing: granola.processing,
