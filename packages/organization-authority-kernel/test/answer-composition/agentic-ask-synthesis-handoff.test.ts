@@ -74,6 +74,7 @@ describe('synthesis receives observed research coverage', () => {
     ] });
     // A supported requested fact remains answerable despite bounded research.
     expect(answer.outcome).toBe('answered');
+    expect(answer.notice).toBe('Research stopped before it finished, so relevant context may be missing.');
   });
 
   it('keeps an unread inventory visible even when the requested fact was found', async () => {

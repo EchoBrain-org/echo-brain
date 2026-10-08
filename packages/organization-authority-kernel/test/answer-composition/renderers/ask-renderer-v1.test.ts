@@ -109,18 +109,17 @@ describe("Ask renderer", () => {
     expect(rendered).toMatchObject({ outcome: "answered", result: { response: { notice: "Some source coverage was incomplete, so relevant context may be missing." } } });
   });
 
-  it("adds a search-completion caveat when research stopped before the writer answer", async () => {
+  it("keeps a fully supported stopped-research answer answered with a neutral notice", async () => {
     const item = record("gate", "Approved: the pilot may proceed after the gate.");
     const stopped = bundle([{ item, full: true, touched: 1 }], ["E1"], false);
     const rendered = await alone({
       bundle: stopped,
       replies: [{ sentences: [{ text: "The pilot may proceed after the gate.", evidence: ["E1"] }], not_found: [] }], version: 6,
     }).render("Can the pilot proceed?");
-    expect(rendered.outcome).toBe("partial");
-    expect(rendered.result.response.parts[0]).toMatchObject({
-      status: "partial",
-      gap: "I couldn't complete the search. Please try again.",
-    });
+    expect(rendered.outcome).toBe("answered");
+    expect(rendered.result.response.parts[0]).toMatchObject({ status: "answered" });
+    expect(rendered.result.response.parts[0]).not.toHaveProperty("gap");
+    expect(rendered.result.response.notice).toBe("Research stopped before it finished, so relevant context may be missing.");
   });
 
   it("keeps a completed answer answered when an unrelated source was truncated", async () => {
