@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
+import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonAnswerCitationV6, validatePersonImpactCardV1 } from '@echo-brain/organization-api';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
@@ -32,7 +32,7 @@ export interface CreatePersonTriggerRunsV1Options {
 const LEASE_MS = 600_000;
 const actorOf = (value: PersonAccessAuthorization): ApprovalActorV1 => ({ organization_id: value.organization_id, principal_id: value.principal_id, membership_id: value.membership_id });
 const sameActor = (left: ApprovalActorV1, right: ApprovalActorV1) => left.organization_id === right.organization_id && left.principal_id === right.principal_id && left.membership_id === right.membership_id;
-const scopeFor = (records: PersonRecordProjectsV1, token: string, record_sha256: TriggerRunRowV1['record_sha256']) => {
+const scopeFor = (records: PersonRecordProjectsV1, token: string, record_sha256: Sha256Digest) => {
   const projects = records.recordProjects({ access_token: token, record_sha256 });
   return projects.length === 1 ? Object.freeze({ kind: 'project' as const, project_id: projects[0]! }) : Object.freeze({ kind: 'global' as const });
 };
@@ -80,6 +80,11 @@ function stored(json: string): StoredImpactCardV1 {
     throw new AuthorityOperationError('unavailable', 'stored impact card is invalid');
   }
 }
+/** Until sweeps get their own path (open items plan, Task 11), this service serves approved-record runs only. */
+function impactRecord(row: TriggerRunRowV1): Sha256Digest {
+  if (row.trigger !== 'approved_record' || row.record_sha256 === null) throw new AuthorityOperationError('not_found', 'run is not available');
+  return row.record_sha256;
+}
 function unavailable(error: unknown): boolean {
   return error instanceof AuthorityOperationError && error.code === 'unavailable';
 }
@@ -97,8 +102,10 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     const controller = new AbortController(); controllers.add(controller);
     void (async () => {
       try {
-        const anchor = options.records.recordAnchor({ access_token: token, record_sha256: row.record_sha256 });
-        const scope = scopeFor(options.records, token, row.record_sha256);
+        const record_sha256 = row.record_sha256;
+        if (row.trigger !== 'approved_record' || record_sha256 === null) throw new Error('sweep runs are not served yet');
+        const anchor = options.records.recordAnchor({ access_token: token, record_sha256 });
+        const scope = scopeFor(options.records, token, record_sha256);
         const requestContext = context(authorization);
         const desk = await options.bindDesk(options.bind_options, compatible, { access_token: token, scope, signal: controller.signal }, requestContext);
         const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
@@ -123,7 +130,8 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
   return Object.freeze({
     async list(input: Parameters<PersonTriggerRunsHttpApplicationV1['list']>[0]) {
       input.signal?.throwIfAborted(); const actor = actorOf(options.sessions.authenticateAccess({ access_token: input.access_token }));
-      return Object.freeze({ runs: Object.freeze(options.runs.list(actor, 100).map(row => Object.freeze({ run_id: row.run_id, trigger: row.trigger, event_ref: row.event_ref, state: row.state, error_code: row.error_code, created_at: row.created_at, updated_at: row.updated_at }))) });
+      // The runs API lists approved-record runs only until it learns sweeps (open items plan, Task 11).
+      return Object.freeze({ runs: Object.freeze(options.runs.list(actor, 100).flatMap(row => row.trigger !== 'approved_record' ? [] : [Object.freeze({ run_id: row.run_id, trigger: row.trigger, event_ref: row.event_ref, state: row.state, error_code: row.error_code, created_at: row.created_at, updated_at: row.updated_at })])) });
     },
     async start(input: Parameters<PersonTriggerRunsHttpApplicationV1['start']>[0]) {
       input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token }); const actor = actorOf(authorization);
@@ -141,7 +149,8 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
       input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token }); const actor = actorOf(authorization);
       const row = options.runs.read(actor, input.request.run_id); if (row === undefined) throw new AuthorityOperationError('not_found', 'run is not available');
       if (!sameActor(row.actor, actor) || row.state !== 'done' || row.result_json === null) throw new AuthorityOperationError('not_found', 'run is not available');
-      const card = stored(row.result_json); const scope = scopeFor(options.records, input.access_token, row.record_sha256); const requestContext = context(authorization);
+      const record_sha256 = impactRecord(row);
+      const card = stored(row.result_json); const scope = scopeFor(options.records, input.access_token, record_sha256); const requestContext = context(authorization);
       const desk = await options.bindDesk(options.bind_options, compatible, { access_token: input.access_token, scope, ...(input.signal === undefined ? {} : { signal: input.signal }) }, requestContext);
       const fresh = await Promise.all(card.citations.map(async citation => {
         try { const opened = await desk.openCitation!({ citation, ...(input.signal === undefined ? {} : { signal: input.signal }) }); const item = opened.items[0]; return item === undefined ? null : { citation: { citation: item.citation, kind: item.kind, label: item.label, visibility: item.visibility }, text: item.text, label: item.label, ...(item.attributes === undefined ? {} : { attributes: item.attributes }) } as FreshImpactItemV1; } catch { return null; }

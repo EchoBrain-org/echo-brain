@@ -8,7 +8,7 @@ import {
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
 const AUTHORITY_BASELINE_SHA256_V13 =
-  "sha256:df78329584428c18fc1cee98f8e6fc1da8cc6326e4a64d4c18b0aa74c36d3012";
+  "sha256:7bf4d67a3506a669a5ba54ccd85363f0bf47a7b956fcf3fb3d3715f08a014ef8";
 
 function digest(character: string): string {
   return `sha256:${character.repeat(64)}`;

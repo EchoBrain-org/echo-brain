@@ -1,29 +1,14 @@
+import { randomUUID } from 'node:crypto';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { enqueueApprovedRecordRunV1, SqliteTriggerRunsV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
+import { approvedRunFixture } from './fixtures/trigger-runs.js';
 
 const signal = () => new AbortController().signal;
-
-async function approvedRunFixture(options: { readonly runs?: number; readonly now?: string } = {}) {
-  let now = new Date(options.now ?? '2026-10-07T10:00:00.000Z');
-  const f = await approvalCoreFixture();
-  const runs = new SqliteTriggerRunsV1(f.db, () => now);
-  const hook = enqueueApprovedRecordRunV1(runs);
-  const approvals = [f.approvalId];
-  for (let index = 1; index < (options.runs ?? 1); index++) approvals.push((await f.otherProposal()).approvalId);
-  for (const approvalId of approvals) {
-    f.core.decide('desktop', f.approve({ approval_id: approvalId, command_id: `approve-${approvalId}` }), () => f.session);
-  }
-  const publisher = f.publisher([hook]);
-  await publisher.appendFinalizedApprovalsToV4(signal());
-  return {
-    ...f, runs, approvals,
-    owner: f.person,
-    stranger: { ...f.person, principal_id: 'prn_00000000-0000-4000-8000-0000000000f1', membership_id: 'mem_00000000-0000-4000-8000-0000000000f2' },
-    advance(ms: number) { now = new Date(now.getTime() + ms); },
-  };
-}
+const NOW = '2026-10-07T10:00:00.000Z';
+/** A stored result; the store never reads inside it. */
+const card = () => ({ json: '{"schema_version":1}', sha256: canonicalSha256({ schema_version: 1 }) });
 
 describe('SQLite trigger runs v1', () => {
   it('enqueues exactly one pending run per approved record through the publisher hook', async () => {
@@ -122,5 +107,93 @@ describe('SQLite trigger runs v1', () => {
     if (second.kind !== 'claimed') throw new Error('expected replacement lease');
     expect(f.runs.finish(run.run_id, first.lease_token, { json: '{}', sha256: canonicalSha256({}) })).toBe(false);
     expect(f.runs.read(f.owner, run.run_id)).toMatchObject({ state: 'running', lease_token: second.lease_token });
+  });
+
+  it('queues one live sweep per person and scope, and a new one once it is done', async () => {
+    const f = await approvedRunFixture();
+    const first = f.runs.enqueueSweep(f.owner, { kind: 'mine' });
+    expect(first.created).toBe(true);
+    expect(f.runs.enqueueSweep(f.owner, { kind: 'mine' })).toEqual({ run_id: first.run_id, created: false });
+    expect(f.runs.enqueueSweep(f.owner, { kind: 'record', record_sha256: f.recordSha256 }).created).toBe(true);
+    expect(f.runs.read(f.owner, first.run_id)).toMatchObject({ trigger: 'sweep', record_sha256: null, scope: { kind: 'mine' }, state: 'pending' });
+    const claimed = f.runs.claim(f.owner, first.run_id, 600_000);
+    if (claimed.kind !== 'claimed') throw new Error('expected lease');
+    expect(f.runs.finish(first.run_id, claimed.lease_token, { json: '{"schema_version":1}', sha256: canonicalSha256({ schema_version: 1 }) })).toBe(true);
+    expect(f.runs.enqueueSweep(f.owner, { kind: 'mine' }).created).toBe(true);
+  });
+
+  it('refuses a sweep row with a record and an approved-record row without one', async () => {
+    const f = await approvedRunFixture();
+    expect(() => f.db.prepare(`INSERT INTO authority_trigger_runs_v1 (run_id, trigger, event_ref, organization_id, principal_id, membership_id, record_sha256, scope_kind, state, attempts, created_at, updated_at)
+      VALUES ('run_badsweep', 'sweep', 'sweep_x', ?, ?, ?, ?, 'mine', 'pending', 0, ?, ?)`).run(f.person.organization_id, f.person.principal_id, f.person.membership_id, f.recordSha256, NOW, NOW)).toThrow();
+    expect(() => f.db.prepare(`INSERT INTO authority_trigger_runs_v1 (run_id, trigger, event_ref, organization_id, principal_id, membership_id, state, attempts, created_at, updated_at)
+      VALUES ('run_badimpact', 'approved_record', 'apr_without_record', ?, ?, ?, 'pending', 0, ?, ?)`).run(f.person.organization_id, f.person.principal_id, f.person.membership_id, NOW, NOW)).toThrow();
+    const sweep = (scopeKind: string | null, scopeId: string | null) => () => f.db.prepare(`INSERT INTO authority_trigger_runs_v1
+      (run_id, trigger, event_ref, organization_id, principal_id, membership_id, scope_kind, scope_id, state, attempts, created_at, updated_at)
+      VALUES (?, 'sweep', ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`).run(`run_${randomUUID()}`, `sweep_${randomUUID()}`, f.person.organization_id, f.person.principal_id, f.person.membership_id, scopeKind, scopeId, NOW, NOW);
+    expect(sweep(null, null)).toThrow();
+    expect(sweep('mine', f.projectA)).toThrow();
+    expect(sweep('project', null)).toThrow();
+    sweep('project', f.projectA)();
+    expect(sweep('project', f.projectA)).toThrow('UNIQUE');
+  });
+
+  it('runs the finishing callback in the same transaction and never after a lost lease', async () => {
+    const f = await approvedRunFixture();
+    const run = f.runs.list(f.owner, 1)[0]!;
+    const lease = f.runs.claim(f.owner, run.run_id, 600_000);
+    if (lease.kind !== 'claimed') throw new Error('expected lease');
+    f.advance(600_001);
+    const then = vi.fn();
+    expect(f.runs.finish(run.run_id, lease.lease_token, card(), then)).toBe(false);
+    expect(then).not.toHaveBeenCalled();
+  });
+
+  it('commits a finishing callback with the run, and undoes the finish when the callback throws', async () => {
+    const f = await approvedRunFixture();
+    const run = f.runs.list(f.owner, 1)[0]!;
+    const lease = f.runs.claim(f.owner, run.run_id, 600_000);
+    if (lease.kind !== 'claimed') throw new Error('expected lease');
+    expect(() => f.runs.finish(run.run_id, lease.lease_token, card(), () => { throw new Error('items refused'); })).toThrow('items refused');
+    expect(f.runs.read(f.owner, run.run_id)).toMatchObject({ state: 'running', result_json: null, lease_token: lease.lease_token });
+    const seen: unknown[] = [];
+    expect(f.runs.finish(run.run_id, lease.lease_token, card(), transaction => {
+      seen.push([transaction === f.db, transaction.inTransaction, transaction.prepare('SELECT state FROM authority_trigger_runs_v1 WHERE run_id=?').pluck().get(run.run_id)]);
+    })).toBe(true);
+    expect(seen).toEqual([[true, true, 'done']]);
+  });
+
+  it('retries a failed impact run only; a failed sweep stays failed and the next sweep replaces it', async () => {
+    const f = await approvedRunFixture();
+    const scope = { kind: 'project', project_id: f.projectA } as const;
+    const sweep = f.runs.enqueueSweep(f.owner, scope);
+    const lease = f.runs.claim(f.owner, sweep.run_id, 600_000);
+    if (lease.kind !== 'claimed') throw new Error('expected lease');
+    expect(f.runs.fail(sweep.run_id, lease.lease_token, 'research_failed')).toBe(true);
+    expect(f.runs.retry(f.owner, sweep.run_id)).toBe(false);
+    expect(f.runs.read(f.owner, sweep.run_id)).toMatchObject({ state: 'failed', error_code: 'research_failed', scope });
+    expect(f.runs.enqueueSweep(f.owner, scope)).toMatchObject({ created: true });
+  });
+
+  it('finds the live sweep of any scope, the impact runs of records, and any run by id', async () => {
+    const f = await approvedRunFixture({ runs: 2 });
+    const impact = f.runs.list(f.owner, 10);
+    expect(f.runs.liveSweep(f.owner)).toBeUndefined();
+    f.advance(1_000);
+    const sweep = f.runs.enqueueSweep(f.owner, { kind: 'record', record_sha256: f.recordSha256 });
+    expect(f.runs.liveSweep(f.owner)).toMatchObject({ run_id: sweep.run_id, trigger: 'sweep', record_sha256: null, scope: { kind: 'record', record_sha256: f.recordSha256 } });
+    expect(f.runs.liveSweep(f.stranger)).toBeUndefined();
+    expect(f.runs.list(f.owner, 10).map(row => row.trigger)).toEqual(['sweep', 'approved_record', 'approved_record']);
+    expect(f.runs.read(f.stranger, sweep.run_id)).toBeUndefined();
+    expect(f.runs.readUnfenced(sweep.run_id)).toMatchObject({ run_id: sweep.run_id, actor: f.owner, scope: { kind: 'record' } });
+    expect(f.runs.readUnfenced('run_missing')).toBeUndefined();
+    expect(f.runs.impactRunsFor([f.recordSha256]).map(row => row.event_ref)).toEqual([f.approvalId]);
+    expect(f.runs.impactRunsFor(impact.map(row => row.record_sha256!)).map(row => row.run_id).sort()).toEqual(impact.map(row => row.run_id).sort());
+    expect(f.runs.impactRunsFor([])).toEqual([]);
+    const lease = f.runs.claim(f.owner, sweep.run_id, 600_000);
+    if (lease.kind !== 'claimed') throw new Error('expected lease');
+    expect(f.runs.liveSweep(f.owner)).toMatchObject({ run_id: sweep.run_id, state: 'running' });
+    expect(f.runs.finish(sweep.run_id, lease.lease_token, card())).toBe(true);
+    expect(f.runs.liveSweep(f.owner)).toBeUndefined();
   });
 });

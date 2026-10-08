@@ -109,6 +109,16 @@
         "name": "Trigger run persistence",
         "path": "services/organization-authority/src/adapters/persistence/sqlite/trigger-runs-v1.ts",
         "export": "SqliteTriggerRunsV1"
+      },
+      {
+        "name": "Open item persistence",
+        "path": "services/organization-authority/src/adapters/persistence/sqlite/impact-items-v1.ts",
+        "export": "SqliteImpactItemsV1"
+      },
+      {
+        "name": "Open item people directory",
+        "path": "services/organization-authority/src/adapters/persistence/sqlite/open-item-people-v1.ts",
+        "export": "SqliteOpenItemPeopleV1"
       }
     ],
     "compatibility_entrypoints": [
