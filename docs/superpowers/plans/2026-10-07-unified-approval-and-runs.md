@@ -871,6 +871,8 @@ Protocol tests: the V4 parser accepts only V4 action ids for the approval, refus
 
 ### Task 13: Runs store, the approval hook and the storable impact card
 
+> **Already built in Task 13a (side track, commits 7cf65e9 and 057be83):** `impact-card-storage-v1.ts` (`storableImpactCardV1`, `refreshImpactCardV1`, `StoredImpactCardV1`, `FreshImpactItemV1` — whose `local` is derived from the citation kind), the renderer exports `ownerOfImpactItemV1` / `statesImpactDateV1` / `detailsOfImpactItemV1`, and their tests. Refresh hides a fresh item that names another item than its stored pointer or duplicates a kept one; every stored model-written line is screened against outside labels. Task 13 builds only the table, DAO, hook registration and their tests.
+
 **Files:**
 - Modify V12 SQL:
 
@@ -975,7 +977,6 @@ export interface FreshImpactItemV1 {
   readonly citation: PersonAnswerCitationV6;      // as released to this viewer now
   readonly text?: string; readonly label: string;
   readonly attributes?: { readonly owner?: string; readonly due_at?: string; readonly status?: string };
-  readonly local: boolean;                        // approved_record or source_revision
 }
 /** Rebuilds the viewer's card from the stored form and fresh reads (null = could not open). */
 export function refreshImpactCardV1(stored: StoredImpactCardV1, fresh: readonly (FreshImpactItemV1 | null)[]): { readonly card: PersonImpactCardV1; readonly hidden: number };
@@ -1034,6 +1035,8 @@ it('rebuilds outside text and owners from the fresh item and drops a date it no 
 ---
 
 ### Task 14: Runs service and API
+
+> **Already built in Task 13a:** `packages/organization-api/src/person-runs-v1.ts` (contract and validators, response cap 1 MiB) and `recordAnchor` in `person-record-search-route.ts` (requires the generation at the exact record-log head). Task 14 builds the service, route, client and CLI on top of them. Pass the labels of ALL non-ECHO bundle items as `outsideLabels`; map an empty open to `null`; supply `text` for local fresh items; validate the stored JSON (`schema_version`) when reading it back; add word boundaries to the outside-label screen (ledger R24).
 
 **Files:**
 - Create: `packages/organization-api/src/person-runs-v1.ts` (+ export)
