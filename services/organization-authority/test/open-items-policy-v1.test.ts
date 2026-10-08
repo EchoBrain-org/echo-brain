@@ -13,7 +13,7 @@ it.each([
   ['reader who cannot open the item', { reads_decision: true, opens_item: false }, { see_row: true, see_outside: false }],
   ['reader who opened the item', { reads_decision: true, opens_item: true }, { see_outside: true }],
   // Edges the rows above leave open: rights come only with the row, and outside words only with a live open.
-  ['approver who can no longer read the decision', { viewer: 'mem_ari' }, { see_row: false, see_outside: false, set_state: false, assign: false, waits_on_viewer: false }],
+  ['approver who can no longer read the decision, after the owner left', { viewer: 'mem_ari', owner_active: false }, { see_row: false, see_outside: false, set_state: false, assign: false, waits_on: 'approver', waits_on_viewer: false }],
   ['reader when no open was tried', { reads_decision: true }, { see_outside: false }],
   ['stranger who opened the item', { opens_item: true }, { see_row: false, see_outside: false }],
   ['reader who leads no project after both left', { reads_decision: true, owner_active: false, approver_active: false }, { waits_on: 'leads', waits_on_viewer: false }],
