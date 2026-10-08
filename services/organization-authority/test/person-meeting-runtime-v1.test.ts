@@ -26,7 +26,7 @@ const folder = '00000000-0000-4000-8000-000000000002';
 const project = 'prj_00000000-0000-4000-8000-000000000003';
 const projectB = 'prj_00000000-0000-4000-8000-000000000013';
 const foreignProject = 'prj_00000000-0000-4000-8000-000000000023';
-async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean } = {}) {
+async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly started?: string } = {}) {
   const f = await approvalContextFixture();
   f.db.prepare('INSERT INTO authority_project_authorization_state_v1 VALUES (?,0,?)').run(f.actor.organization_id, new Date().toISOString());
   const person = { organization_id: f.actor.organization_id, principal_id: f.actor.principal_id, membership_id: f.actor.membership_id };
@@ -65,7 +65,8 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
           guard(); current(); const cursor = readGranolaCheckpointV1(input.cursor!);
           const transcript = { id: 'private-transcript', kind: 'transcript' as const, text: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' };
           // A real provider names the meeting by its source instance, so two tool accounts never share a meeting id.
-          const build = (external: string): MeetingDocument => ({ ...original, id: `${identity.instance_id}:${external}`, content: options.transcriptOnly ? [transcript] : [...original.content, transcript], title: 'Test meeting', provenance: { ...original.provenance, source: identity, external_id: external, canonical_revision: canonicalSha256('meeting version') } });
+          const build = (external: string): MeetingDocument => ({ ...original, id: `${identity.instance_id}:${external}`, content: options.transcriptOnly ? [transcript] : [...original.content, transcript], title: 'Test meeting', provenance: { ...original.provenance, source: identity, external_id: external, canonical_revision: canonicalSha256('meeting version') },
+            ...(options.started === undefined ? {} : { time: { actual_start_at: options.started } }) });
           if (!cursor.manual[0]) {
             if (cursor.folder !== null && cursor.baseline && folderDeliveries[0] !== undefined) {
               const delivered = folderDeliveries.shift()!;
@@ -659,6 +660,18 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect((await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id })).review.decided_on).toBe('slack');
     await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, command_id: 'c2', snapshot_sha256: opened.snapshot_sha256,
       action: 'reject', project_ids: [], share_transcript: false, owners: [] })).resolves.toEqual({ status: 'publishing', decided_on: 'slack' });
+  });
+  it('names the first decision, the action count and the meeting time on review rows', async () => {
+    const f = await fixture({ ownedAction: true, started: '2026-10-06T16:00:00.000Z' }), runtime = f.create();
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await f.processUntilIdle(runtime);
+    const [row] = (await f.call(runtime, { operation: 'reviews' })).reviews;
+    expect(row).toMatchObject({ first_line: 'Ship the cohort onboarding.', action_count: 1, meeting_at: '2026-10-06T16:00:00.000Z' });
+    expect((await f.call(runtime, { operation: 'review_open', approval_id: row!.approval_id })).review).toEqual(row);
+    const g = await fixture(), plain = g.create();
+    await g.call(plain, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await g.processUntilIdle(plain);
+    expect((await g.call(plain, { operation: 'reviews' })).reviews).toEqual([expect.objectContaining({ first_line: 'Ship the cohort onboarding.', action_count: 0, meeting_at: null })]);
   });
   it('approvals() returns one core per runtime', async () => {
     const f = await fixture(), runtime = f.create();

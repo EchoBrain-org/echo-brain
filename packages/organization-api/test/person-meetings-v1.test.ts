@@ -5,7 +5,8 @@ const approval = `apr_${'a'.repeat(64)}`;
 const projectA = 'prj_00000000-0000-4000-8000-000000000001';
 const projectB = 'prj_00000000-0000-4000-8000-000000000002';
 const digest = `sha256:${'b'.repeat(64)}`;
-const review = { approval_id: approval, title: 'Pilot planning', project_ids: [projectA], status: 'pending', decided_on: null } as const;
+const review = { approval_id: approval, title: 'Pilot planning', project_ids: [projectA], status: 'pending', decided_on: null,
+  first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' } as const;
 const request = (value: Record<string, unknown>) => ({ schema_version: 2, tool_id: 'granola', operation: 'review', approval_id: approval, command_id: 'review-1', snapshot_sha256: digest,
   action: 'approve', project_ids: [projectA], share_transcript: false, owners: [], ...value });
 
@@ -44,5 +45,33 @@ describe('person meetings v2', () => {
   it('allows independently bounded owner proposal lines', () => {
     expect(validatePersonMeetingResultV2('review_open', { review, snapshot_sha256: digest, content: 'Review', suggested_projects: [],
       owners: [{ signal_id: 'act-1', action: 'A'.repeat(300), proposed: 'R'.repeat(300) }] })).toMatchObject({ owners: [{ signal_id: 'act-1' }] });
+  });
+
+  it('requires the three new review fields', () => {
+    expect(() => validatePersonMeetingResultV2('reviews', { reviews: [{ approval_id: approval, title: 'Pilot planning', project_ids: [], status: 'pending', decided_on: null }] })).toThrow();
+    expect(validatePersonMeetingResultV2('reviews', { reviews: [{ approval_id: approval, title: 'Pilot planning', project_ids: [], status: 'pending', decided_on: null,
+      first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' }] }).reviews[0]!.action_count).toBe(2);
+  });
+
+  it.each([
+    ['an empty first line', { first_line: '' }],
+    ['a first line over 300 characters', { first_line: 'L'.repeat(301) }],
+    ['a first line of two lines', { first_line: 'Launch the pilot.\nNext week.' }],
+    ['a negative action count', { action_count: -1 }],
+    ['more than forty actions', { action_count: 41 }],
+    ['a fractional action count', { action_count: 1.5 }],
+    ['an action count as text', { action_count: '2' }],
+    ['a meeting time that is not a timestamp', { meeting_at: 'Oct 6' }],
+    ['a meeting time without milliseconds', { meeting_at: '2026-10-06T16:00:00Z' }],
+  ])('rejects a review row with %s, in reviews and review_open', (_name, value) => {
+    expect(() => validatePersonMeetingResultV2('reviews', { reviews: [{ ...review, ...value }] })).toThrow();
+    expect(() => validatePersonMeetingResultV2('review_open', { review: { ...review, ...value }, snapshot_sha256: digest, content: 'Review', owners: [], suggested_projects: [] })).toThrow();
+  });
+
+  it('accepts a review row without a decision line or meeting time, and the bounds themselves', () => {
+    expect(validatePersonMeetingResultV2('reviews', { reviews: [{ ...review, first_line: null, action_count: 0, meeting_at: null },
+      { ...review, first_line: 'L'.repeat(300), action_count: 40 }] }).reviews).toHaveLength(2);
+    expect(() => validatePersonMeetingResultV2('review_open', { review: { ...review, first_line: null, action_count: 0, meeting_at: null }, snapshot_sha256: digest,
+      content: 'Review', owners: [], suggested_projects: [] })).not.toThrow();
   });
 });

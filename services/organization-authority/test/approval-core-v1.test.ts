@@ -6,7 +6,7 @@ import { retainedMeetingSourceCoordinateV1 } from '@echo-brain/organization-proc
 import type { DecisionBrief } from '@echo-brain/organization-processing/core';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
 import {
-  APPROVAL_PROJECTS_MAX_V1, APPROVAL_SNAPSHOT_SURFACE_V1, approvalProposalTextV1,
+  APPROVAL_PROJECTS_MAX_V1, APPROVAL_SNAPSHOT_SURFACE_V1, approvalProposalSummaryV1, approvalProposalTextV1,
   createApprovalCoreV1, validateApprovalDecisionRequestV1, type ApprovalAuthorizationV1,
 } from '../src/composition/approval-core-v1.js';
 
@@ -430,6 +430,41 @@ describe('approval core: views', () => {
     expect(text).toContain('  Due: Not specified');
     expect(text).toContain('  Due: 2026-10-20T00:00:00.000Z');
     expect(text).not.toMatch(/Owner|Rafael|Ana Lima|Unassigned/);
+  });
+});
+
+/** A snapshot's JSON with just what approvalProposalSummaryV1 reads: the decisions, the actions and the meeting's start. */
+function snapshot(input: { readonly decisions: readonly string[]; readonly actions: readonly string[]; readonly started?: string; readonly scheduled?: string }): string {
+  const time = { ...(input.started === undefined ? {} : { actual_start_at: input.started }), ...(input.scheduled === undefined ? {} : { scheduled_start_at: input.scheduled }) };
+  return JSON.stringify({ approved_payload: { brief: {
+    meeting: { id: 'meeting-1', participants: [], ...(Object.keys(time).length === 0 ? {} : { time }) },
+    decisions: input.decisions.map((text, i) => ({ id: `dec-${i + 1}`, kind: 'decision', text })),
+    actions: input.actions.map((text, i) => ({ id: `act-${i + 1}`, kind: 'action', text })), rationales: [],
+  } } });
+}
+
+describe('approval core: the Home row summary', () => {
+  it('summarizes a proposal for its Home row', () => {
+    expect(approvalProposalSummaryV1(snapshot({ decisions: ['Launch the pilot next week.'], actions: ['Send the revised quote', 'Confirm the trace'], started: '2026-10-06T16:00:00Z' })))
+      .toEqual({ first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' });
+    expect(approvalProposalSummaryV1(snapshot({ decisions: [], actions: ['Book the lab'] })).first_line).toBe('Book the lab');
+  });
+  it('keeps the line to one line of at most 300 characters and the count to 40', () => {
+    expect(approvalProposalSummaryV1(snapshot({ decisions: ['  Launch the\n\tpilot\u0007 next week.  '], actions: [] })).first_line).toBe('Launch the pilot next week.');
+    expect(approvalProposalSummaryV1(snapshot({ decisions: ['L'.repeat(400)], actions: Array.from({ length: 41 }, (_, i) => `Action ${i + 1}`) })))
+      .toMatchObject({ first_line: 'L'.repeat(300), action_count: 40 });
+    // The cut never leaves half of a character.
+    expect(approvalProposalSummaryV1(snapshot({ decisions: ['x'.repeat(299) + '🚀'], actions: [] })).first_line).toBe('x'.repeat(299));
+  });
+  it('falls back to the scheduled start, and has no line or time when the proposal has none', () => {
+    expect(approvalProposalSummaryV1(snapshot({ decisions: [], actions: [], scheduled: '2026-10-06T15:30:00.000Z' })))
+      .toEqual({ first_line: null, action_count: 0, meeting_at: '2026-10-06T15:30:00.000Z' });
+    expect(approvalProposalSummaryV1(snapshot({ decisions: ['Ship it.'], actions: [] })).meeting_at).toBeNull();
+    expect(approvalProposalSummaryV1(snapshot({ decisions: ['Ship it.'], actions: [], started: 'not a time' })).meeting_at).toBeNull();
+  });
+  it('summarizes a frozen proposal', async () => {
+    const f = await approvalCoreFixture();
+    expect(approvalProposalSummaryV1(f.core.proposal(f.approvalId)!.snapshot_json)).toEqual({ first_line: 'Ship the cohort onboarding.', action_count: 2, meeting_at: null });
   });
 });
 
