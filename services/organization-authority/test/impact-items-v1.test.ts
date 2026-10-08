@@ -138,6 +138,12 @@ describe('SQLite open items v1', () => {
     expect(f.db.transaction(() => f.items.recordCheck(f.db, { item_id: f.itemId, verdict: 'changed', by: f.mina, at: '2026-10-08T11:00:00.000Z', run_id: f.sweepRunId }))()).toBe(true);
     expect(f.items.read(f.itemId)!.check).toEqual({ verdict: 'changed', by: f.mina, at: '2026-10-08T11:00:00.000Z', run_id: f.sweepRunId });
     expect(() => f.db.prepare('UPDATE authority_impact_items_v1 SET checked_at=? WHERE item_id=?').run('2026-10-08T10:30:00.000Z', f.itemId)).toThrow('newer');
+    // Rewriting the last check without a newer time is refused, whichever check column it names.
+    expect(() => f.db.prepare("UPDATE authority_impact_items_v1 SET checked_verdict='landed' WHERE item_id=?").run(f.itemId)).toThrow('newer');
+    expect(() => f.db.prepare("UPDATE authority_impact_items_v1 SET checked_verdict='landed', checked_by=? WHERE item_id=?").run(ARI, f.itemId)).toThrow('newer');
+    expect(() => f.db.prepare('UPDATE authority_impact_items_v1 SET checked_run_id=? WHERE item_id=?').run(f.run.run_id, f.itemId)).toThrow('newer');
+    expect(() => f.db.prepare('UPDATE authority_impact_items_v1 SET checked_verdict=NULL, checked_by=NULL, checked_at=NULL, checked_run_id=NULL WHERE item_id=?').run(f.itemId)).toThrow('newer');
+    expect(f.items.read(f.itemId)!.check).toEqual({ verdict: 'changed', by: f.mina, at: '2026-10-08T11:00:00.000Z', run_id: f.sweepRunId });
     expect(() => f.items.recordCheck(f.db, { item_id: f.itemId, verdict: 'landed', by: f.mina, at: '2026-10-08T12:00:00.000Z', run_id: f.sweepRunId })).toThrow('transaction');
     expect(() => f.db.transaction(() => f.items.recordCheck(f.db, { item_id: f.itemId, verdict: 'landed', by: f.mina, at: '2026-10-08T12:00Z', run_id: f.sweepRunId }))()).toThrow();
   });

@@ -125,17 +125,35 @@ describe('SQLite trigger runs v1', () => {
   it('refuses a sweep row with a record and an approved-record row without one', async () => {
     const f = await approvedRunFixture();
     expect(() => f.db.prepare(`INSERT INTO authority_trigger_runs_v1 (run_id, trigger, event_ref, organization_id, principal_id, membership_id, record_sha256, scope_kind, state, attempts, created_at, updated_at)
-      VALUES ('run_badsweep', 'sweep', 'sweep_x', ?, ?, ?, ?, 'mine', 'pending', 0, ?, ?)`).run(f.person.organization_id, f.person.principal_id, f.person.membership_id, f.recordSha256, NOW, NOW)).toThrow();
+      VALUES ('run_badsweep', 'sweep', 'sweep_x', ?, ?, ?, ?, 'mine', 'pending', 0, ?, ?)`).run(f.person.organization_id, f.person.principal_id, f.person.membership_id, f.recordSha256, NOW, NOW))
+      .toThrow("CHECK constraint failed: (trigger = 'approved_record') = (record_sha256 IS NOT NULL)");
+    // The approved-record insert trigger refuses a record-less row before the CHECK is reached.
     expect(() => f.db.prepare(`INSERT INTO authority_trigger_runs_v1 (run_id, trigger, event_ref, organization_id, principal_id, membership_id, state, attempts, created_at, updated_at)
-      VALUES ('run_badimpact', 'approved_record', 'apr_without_record', ?, ?, ?, 'pending', 0, ?, ?)`).run(f.person.organization_id, f.person.principal_id, f.person.membership_id, NOW, NOW)).toThrow();
+      VALUES ('run_badimpact', 'approved_record', 'apr_without_record', ?, ?, ?, 'pending', 0, ?, ?)`).run(f.person.organization_id, f.person.principal_id, f.person.membership_id, NOW, NOW))
+      .toThrow('approved-record run needs its published approval');
     const sweep = (scopeKind: string | null, scopeId: string | null) => () => f.db.prepare(`INSERT INTO authority_trigger_runs_v1
       (run_id, trigger, event_ref, organization_id, principal_id, membership_id, scope_kind, scope_id, state, attempts, created_at, updated_at)
       VALUES (?, 'sweep', ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`).run(`run_${randomUUID()}`, `sweep_${randomUUID()}`, f.person.organization_id, f.person.principal_id, f.person.membership_id, scopeKind, scopeId, NOW, NOW);
-    expect(sweep(null, null)).toThrow();
-    expect(sweep('mine', f.projectA)).toThrow();
-    expect(sweep('project', null)).toThrow();
+    const scopeCheck = "CHECK constraint failed: (scope_kind IS NOT NULL AND scope_kind IN ('record', 'project')) = (scope_id IS NOT NULL)";
+    expect(sweep(null, null)).toThrow("CHECK constraint failed: (trigger = 'sweep') = (scope_kind IS NOT NULL)");
+    expect(sweep('mine', f.projectA)).toThrow(scopeCheck);
+    expect(sweep('project', null)).toThrow(scopeCheck);
+    expect(sweep('record', null)).toThrow(scopeCheck);
     sweep('project', f.projectA)();
-    expect(sweep('project', f.projectA)).toThrow('UNIQUE');
+    expect(sweep('project', f.projectA)).toThrow("UNIQUE constraint failed: index 'authority_trigger_runs_one_live_sweep_v1'");
+  });
+
+  it('refuses a published approval\'s run that carries a sweep scope, by the CHECK alone', async () => {
+    const f = await approvalCoreFixture();
+    f.core.decide('desktop', f.approve(), () => f.session);
+    await f.publisher([]).appendFinalizedApprovalsToV4(signal());
+    const record = (JSON.parse(f.receipt()!) as { readonly record_sha256: Sha256Digest }).record_sha256;
+    const impact = (scopeKind: string | null) => () => f.db.prepare(`INSERT INTO authority_trigger_runs_v1
+      (run_id, trigger, event_ref, organization_id, principal_id, membership_id, record_sha256, scope_kind, state, attempts, created_at, updated_at)
+      VALUES (?, 'approved_record', ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`).run(`run_${randomUUID()}`, f.approvalId, f.person.organization_id, f.person.principal_id, f.person.membership_id, record, scopeKind, NOW, NOW);
+    expect(impact('mine')).toThrow("CHECK constraint failed: (trigger = 'sweep') = (scope_kind IS NOT NULL)");
+    impact(null)();
+    expect(f.db.prepare('SELECT trigger, scope_kind FROM authority_trigger_runs_v1').all()).toEqual([{ trigger: 'approved_record', scope_kind: null }]);
   });
 
   it('runs the finishing callback in the same transaction and never after a lost lease', async () => {

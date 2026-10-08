@@ -13,7 +13,7 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 it("pins the current baseline bytes", () => {
-  expect(authorityBaselineSha256V13()).toBe("sha256:7bf4d67a3506a669a5ba54ccd85363f0bf47a7b956fcf3fb3d3715f08a014ef8");
+  expect(authorityBaselineSha256V13()).toBe("sha256:1a5b5bb18fc629c6e84eb0170a4f2e93aa0087fa4ceb09d9bcfb790caaeb59aa");
   expect(organizationControlBaselineSha256V4()).toBe("sha256:ba84d1a7e605db91f0aca1319fca9db17fb3f62b004b22a943f89897a2a64825");
   expect(organizationRecordLogBaselineSha256V4()).toBe("sha256:b98091c9073ca1d1146d9f2b6d6b0cb7c950e829dbf26c7c431485370c76e52a");
 });

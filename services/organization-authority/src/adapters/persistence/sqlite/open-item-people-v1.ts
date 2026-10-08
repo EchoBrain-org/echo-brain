@@ -47,13 +47,15 @@ export class SqliteOpenItemPeopleV1 {
       .get(organizationId, membershipId) !== undefined;
   }
 
-  /** The member is an active lead of at least one of these projects (active grant, active membership). */
+  /** The member is an active lead of at least one of these projects (active project, active grant, active membership). */
   leadsAny(membershipId: string, projectIds: readonly string[]): boolean {
     if (projectIds.length === 0) return false;
     return this.database.prepare(`SELECT 1 FROM authority_project_memberships_v1 AS grant_row
       JOIN authority_memberships AS membership ON membership.membership_id = grant_row.membership_id
        AND membership.organization_id = grant_row.organization_id AND membership.principal_id = grant_row.principal_id
        AND membership.membership_type = grant_row.membership_type AND membership.status = 'active'
+      JOIN authority_projects_v1 AS project ON project.project_id = grant_row.project_id
+       AND project.organization_id = grant_row.organization_id AND project.status = 'active'
       WHERE grant_row.membership_id = ? AND grant_row.status = 'active' AND grant_row.role = 'lead'
         AND grant_row.project_id IN (SELECT value FROM json_each(?))
       LIMIT 1`).get(membershipId, JSON.stringify([...new Set(projectIds)])) !== undefined;

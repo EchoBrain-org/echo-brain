@@ -29,6 +29,7 @@ function peopleFixture(rows: readonly PersonRow[]) {
       return id;
     },
     revokeGrant(id: string) { db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked', revoked_at=? WHERE project_membership_id=?").run(PROJECT_CONTEXT_NOW, id); },
+    archive(projectId: string) { db.prepare("UPDATE authority_projects_v1 SET status='archived' WHERE project_id=?").run(projectId); },
     revoke(membershipId: string) { revokeMembership(db, binding(membershipId)); },
   };
 }
@@ -79,5 +80,14 @@ describe('SQLite open item people v1', () => {
     expect(f.people.leadsAny('mem_c', [PROJECT_B])).toBe(true);
     f.revoke('mem_c');
     expect(f.people.leadsAny('mem_c', [PROJECT_B])).toBe(false);
+  });
+
+  it('does not count an active lead of an archived project', () => {
+    const f = peopleFixture([['mem_a', 'Rafael Moreno', 'active']]);
+    f.grant('mem_a', PROJECT_A, 'lead');
+    f.grant('mem_a', PROJECT_B, 'lead');
+    f.archive(PROJECT_A);
+    expect(f.people.leadsAny('mem_a', [PROJECT_A])).toBe(false);
+    expect(f.people.leadsAny('mem_a', [PROJECT_A, PROJECT_B])).toBe(true);
   });
 });

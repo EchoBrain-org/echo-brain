@@ -890,9 +890,12 @@ BEFORE UPDATE OF state, sent_at, send_command_id ON authority_impact_items_v1
 WHEN (OLD.state = 'unsent' AND NEW.state NOT IN ('unsent', 'open', 'not_relevant'))
   OR (OLD.state != 'unsent' AND (NEW.state = 'unsent' OR NEW.sent_at IS NOT OLD.sent_at OR NEW.send_command_id IS NOT OLD.send_command_id))
 BEGIN SELECT RAISE(ABORT, 'open item state move is not allowed'); END;
+-- Any change to the last check needs a strictly newer checked_at; the first check comes from NULL.
 CREATE TRIGGER authority_impact_item_check_newer_v1
-BEFORE UPDATE OF checked_at ON authority_impact_items_v1
-WHEN OLD.checked_at IS NOT NULL AND (NEW.checked_at IS NULL OR NEW.checked_at <= OLD.checked_at)
+BEFORE UPDATE OF checked_verdict, checked_by, checked_at, checked_run_id ON authority_impact_items_v1
+WHEN (NEW.checked_verdict IS NOT OLD.checked_verdict OR NEW.checked_by IS NOT OLD.checked_by
+    OR NEW.checked_at IS NOT OLD.checked_at OR NEW.checked_run_id IS NOT OLD.checked_run_id)
+  AND (NEW.checked_at IS NULL OR (OLD.checked_at IS NOT NULL AND NEW.checked_at <= OLD.checked_at))
 BEGIN SELECT RAISE(ABORT, 'a last check is replaced only by a newer one'); END;
 CREATE TRIGGER authority_impact_item_delete_denied_v1
 BEFORE DELETE ON authority_impact_items_v1
