@@ -8,7 +8,7 @@ import {
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
 const AUTHORITY_BASELINE_SHA256_V12 =
-  "sha256:57500844161293e18c4019517a2590882177168d0fac41f87a921467fc56a60b";
+  "sha256:a9d0dd0109e224cf31b0823ca0282ee3433c05bce8bb086cc73aa089964ede96";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-29T00:00:00.000Z";
 /** A personal source key; the admission table keys every source by its own text key. */
@@ -86,10 +86,12 @@ describe("Authority admitted meeting-source schema", () => {
     const database = openedCurrentDatabase();
     try {
       seedOwner(database); admitSyntheticSource(database);
-      database.prepare('INSERT INTO authority_person_meeting_sources_v1 VALUES (?, ?, NULL, NULL, 0)').run(SOURCE_KEY, DIGEST);
-      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v1 SET settings_revision=2 WHERE source_key=?').run(SOURCE_KEY)).toThrow('ordered');
-      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v1 SET folder_id=?,settings_revision=1 WHERE source_key=?').run('folder', SOURCE_KEY)).toThrow();
-      expect(database.prepare('SELECT settings_revision FROM authority_person_meeting_sources_v1').pluck().get()).toBe(0);
+      database.prepare('INSERT INTO authority_person_meeting_sources_v2 VALUES (?, ?, NULL, NULL, 0)').run(SOURCE_KEY, DIGEST);
+      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v2 SET settings_revision=2 WHERE source_key=?').run(SOURCE_KEY)).toThrow('ordered');
+      expect(() => database.prepare('UPDATE authority_person_meeting_sources_v2 SET folder_id=?,settings_revision=1 WHERE source_key=?').run('folder', SOURCE_KEY)).toThrow('CHECK');
+      expect(database.prepare('SELECT settings_revision FROM authority_person_meeting_sources_v2').pluck().get()).toBe(0);
+      expect((database.pragma('table_info(authority_person_meeting_sources_v2)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'person_key', 'folder_id', 'folder_project_id', 'settings_revision']);
+      expect((database.pragma('table_info(authority_person_meeting_suggestions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'external_id', 'project_id', 'created_at']);
       expect((database.pragma('table_info(authority_person_meeting_approval_actions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['sequence', 'approval_id', 'command_id', 'body_json', 'receipt_json']);
     } finally { database.close(); }
   });

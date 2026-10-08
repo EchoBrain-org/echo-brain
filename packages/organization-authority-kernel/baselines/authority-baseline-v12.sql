@@ -551,21 +551,33 @@ CREATE TABLE authority_live_source_progress_v2 (
     REFERENCES authority_live_source_admission_v2(source_key, semantic_input_sha256)
 ) STRICT;
 
--- Personal intake configuration. Meeting text stays in the existing source store.
-CREATE TABLE authority_person_meeting_sources_v1 (
+-- Personal intake configuration, one source per person and tool account, and import
+-- project suggestions. Meeting text stays in the existing source store.
+CREATE TABLE authority_person_meeting_sources_v2 (
   source_key TEXT PRIMARY KEY REFERENCES authority_live_source_admission_v2(source_key),
   person_key TEXT NOT NULL CHECK (person_key LIKE 'sha256:%'),
-  project_id TEXT REFERENCES authority_projects_v1(project_id),
   folder_id TEXT CHECK (folder_id IS NULL OR length(folder_id) BETWEEN 1 AND 256),
+  folder_project_id TEXT REFERENCES authority_projects_v1(project_id),
   settings_revision INTEGER NOT NULL CHECK (settings_revision >= 0),
-  CHECK (folder_id IS NULL OR project_id IS NOT NULL)
+  CHECK ((folder_id IS NULL) = (folder_project_id IS NULL))
 ) STRICT;
-CREATE UNIQUE INDEX authority_person_meeting_one_watch_v1 ON authority_person_meeting_sources_v1(person_key) WHERE folder_id IS NOT NULL;
-CREATE TRIGGER authority_person_meeting_settings_ordered_v1
-BEFORE UPDATE ON authority_person_meeting_sources_v1
-WHEN NEW.source_key != OLD.source_key OR NEW.person_key != OLD.person_key OR NEW.project_id IS NOT OLD.project_id
+CREATE UNIQUE INDEX authority_person_meeting_one_watch_v2 ON authority_person_meeting_sources_v2(person_key) WHERE folder_id IS NOT NULL;
+CREATE TRIGGER authority_person_meeting_settings_ordered_v2
+BEFORE UPDATE ON authority_person_meeting_sources_v2
+WHEN NEW.source_key != OLD.source_key OR NEW.person_key != OLD.person_key
   OR NEW.settings_revision != OLD.settings_revision + 1
 BEGIN SELECT RAISE(ABORT, 'personal meeting settings require ordered changes'); END;
+CREATE TABLE authority_person_meeting_suggestions_v1 (
+  source_key TEXT NOT NULL REFERENCES authority_person_meeting_sources_v2(source_key),
+  external_id TEXT NOT NULL CHECK (length(external_id) BETWEEN 1 AND 256),
+  project_id TEXT NOT NULL REFERENCES authority_projects_v1(project_id),
+  created_at TEXT NOT NULL CHECK (unixepoch(created_at) IS NOT NULL),
+  PRIMARY KEY (source_key, external_id, project_id)
+) STRICT;
+CREATE TRIGGER authority_person_meeting_suggestion_immutable_v1 BEFORE UPDATE ON authority_person_meeting_suggestions_v1
+BEGIN SELECT RAISE(ABORT, 'meeting suggestion is immutable'); END;
+CREATE TRIGGER authority_person_meeting_suggestion_delete_denied_v1 BEFORE DELETE ON authority_person_meeting_suggestions_v1
+BEGIN SELECT RAISE(ABORT, 'meeting suggestion deletion is denied'); END;
 
 CREATE TABLE authority_live_source_candidates_v2 (
   candidate_id TEXT PRIMARY KEY CHECK (candidate_id GLOB 'cnd_*'),

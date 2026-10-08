@@ -82,7 +82,6 @@ export function createCoreInput({ authority, coordinates: { organization_id }, o
   }
   const setting = intake.ensure({
     person,
-    project_id: null,
     identity: SOURCE,
     normalizer_version: SOURCE.version,
     custodian: { kind: "echo-capacity-core-input-owner-v1", principal_id: person.principal_id, membership_id: person.membership_id },

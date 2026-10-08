@@ -426,7 +426,7 @@ function insertStagingSyntheticSource(
     .prepare("INSERT INTO authority_live_source_progress_v2 VALUES (?, ?, ?, 1, ?)")
     .run(sourceKey, semantic, cursor, SYNTHETIC_ISSUED_AT);
   authority
-    .prepare("INSERT INTO authority_person_meeting_sources_v1 VALUES (?, ?, NULL, NULL, 0)")
+    .prepare("INSERT INTO authority_person_meeting_sources_v2 VALUES (?, ?, NULL, NULL, 0)")
     .run(sourceKey, sha256Digest("synthetic-person"));
   return semantic;
 }

@@ -36,7 +36,8 @@ const cursor = (manual: readonly string[]) => writeStagingSyntheticCheckpointV1(
 async function source(options: { readonly fixtures_directory?: string } = {}) {
   const provider = createStagingSyntheticPersonalMeetingProviderV1(options);
   const session = await provider.open(person, () => undefined);
-  const identity = { ...session.identity, instance_id: `${session.identity.instance_id}-project` };
+  // A personal source stores the session's tool-account identity exactly.
+  const identity = session.identity;
   return { provider, session, identity, adapter: provider.source({ source_adapter_id: identity.adapter_id, source_adapter_version: identity.version, source_adapter_instance_id: identity.instance_id }, () => undefined) };
 }
 

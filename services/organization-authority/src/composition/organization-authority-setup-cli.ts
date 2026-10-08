@@ -1164,7 +1164,7 @@ function readStagingSyntheticSource(
     .prepare(
       `SELECT admission.semantic_input_sha256, progress.cursor
          FROM authority_live_source_admission_v2 AS admission
-         JOIN authority_person_meeting_sources_v1 AS person_source
+         JOIN authority_person_meeting_sources_v2 AS person_source
            ON person_source.source_key = admission.source_key
          JOIN authority_live_source_progress_v2 AS progress
            ON progress.source_key = admission.source_key

@@ -41,17 +41,19 @@ export function meetingIntakePersonV1(value: MeetingIntakePersonV1): MeetingInta
   return { organization_id: value.organization_id, principal_id: value.principal_id, membership_id: value.membership_id };
 }
 type ProcessorCommitmentsV1 = (instance_id: string) => AdmittedMeetingProcessingCommitmentsV1['processor'] | undefined;
-/** The one source rule: a source per person, tool account and project, with a processor instance per person and project. */
+/**
+ * The one source rule: a source per person and tool account, with a processor instance per person.
+ * Projects never enter the source, so one meeting is extracted and reviewed once whatever projects it suggests.
+ */
 export function ensurePersonMeetingSourceV1(intake: SqlitePersonMeetingIntakeV1, input: {
-  readonly provider: Pick<PersonMeetingProviderV1, 'normalizer_version' | 'custodian_assurance'>; readonly person: MeetingIntakePersonV1; readonly project_id: string | null;
+  readonly provider: Pick<PersonMeetingProviderV1, 'normalizer_version' | 'custodian_assurance'>; readonly person: MeetingIntakePersonV1;
   readonly session: { readonly identity: MeetingSourceAdapter['identity']; readonly custodian: unknown };
   readonly commitments: ProcessorCommitmentsV1; readonly current: () => void;
 }): MeetingIntakeSettingV1 {
-  const person = meetingIntakePersonV1(input.person), project = input.project_id;
-  const identity = { ...input.session.identity, instance_id: `${input.session.identity.instance_id}-${canonicalSha256(project).slice(7, 31)}` };
-  const processor = input.commitments(`personal-${canonicalSha256({ person, project }).slice(7, 39)}`);
+  const person = meetingIntakePersonV1(input.person);
+  const processor = input.commitments(`personal-${canonicalSha256(person).slice(7, 39)}`);
   if (!processor) throw new AuthorityOperationError('unavailable', 'Meeting processing unavailable');
-  return intake.ensure({ person, project_id: project, identity, normalizer_version: input.provider.normalizer_version, custodian: input.session.custodian, processor, current: input.current,
+  return intake.ensure({ person, identity: input.session.identity, normalizer_version: input.provider.normalizer_version, custodian: input.session.custodian, processor, current: input.current,
     ...(input.provider.custodian_assurance === undefined ? {} : { custodian_assurance: input.provider.custodian_assurance }) });
 }
 /** Queues meetings into a person's own source without an HTTP session (the staging canary and setup). */
@@ -65,8 +67,8 @@ export async function queuePersonMeetingsV1(input: {
   for (const meeting of input.meeting_ids) await session.preview(meeting);
   return input.database.transaction(() => {
     session.current();
-    const setting = ensurePersonMeetingSourceV1(intake, { provider: input.provider, person, project_id: null, session, commitments: input.commitments, current });
-    for (const meeting of input.meeting_ids) intake.enqueue(setting, meeting, current);
+    const setting = ensurePersonMeetingSourceV1(intake, { provider: input.provider, person, session, commitments: input.commitments, current });
+    for (const meeting of input.meeting_ids) intake.enqueue(setting, meeting, null, current);
     return setting;
   }).immediate();
 }
@@ -92,16 +94,16 @@ export function createPersonMeetingRuntimeV1(options: {
   const intake = ownerOf(providers[0]!.cursor.policy.source_adapter_id).intake;
   const authenticate = personToolAuthenticationV1(options.sessions);
   const observed = new Map<string, { checked_at: string; error: string | null; next: number }>();
-  function settings(person: MeetingIntakePersonV1) { return canonicalSha256(intake.list(person).map(({ source_key, folder_id, project_id, settings_revision }) => ({ source_key, folder_id, project_id, settings_revision }))); }
+  function settings(person: MeetingIntakePersonV1) { return canonicalSha256(intake.list(person).map(({ source_key, folder_id, folder_project_id, settings_revision }) => ({ source_key, folder_id, folder_project_id, settings_revision }))); }
   async function lane(setting: MeetingIntakeSettingV1) {
     const { provider } = ownerOf(setting.source_adapter_id);
-    // Pin the project grant's exact version as well as the person's active membership.
-    // Approval recovery itself can proceed without an active provider/project grant.
+    // Pin the person's exact active membership; a source belongs to the person, not to a project.
+    // Approval recovery itself can proceed without an active provider grant.
     let grant: string | undefined;
     const source = provider.source(setting, () => {
       intake.requireCurrent(setting);
-      const now = intake.currentPerson(meetingIntakePersonV1(setting), setting.project_id).grant_sha256;
-      if (grant !== undefined && now !== grant) throw new AuthorityOperationError('stale_access_state', 'Meeting project access changed');
+      const now = intake.currentPerson(meetingIntakePersonV1(setting)).grant_sha256;
+      if (grant !== undefined && now !== grant) throw new AuthorityOperationError('stale_access_state', 'Meeting access changed');
       grant = now;
     });
     const state = new SqliteAuthorityMeetingProcessingStateV1(db, provider.cursor.policy, processor.processor_adapter_id, undefined, setting.source_key, () => source.requireCurrent());
@@ -112,7 +114,7 @@ export function createPersonMeetingRuntimeV1(options: {
   }
   async function publish(signal: AbortSignal) {
     // Finalized human actions survive disconnect/restart; they do not need provider access.
-    const keys = db.prepare(`SELECT DISTINCT s.source_key FROM authority_person_meeting_sources_v1 s
+    const keys = db.prepare(`SELECT DISTINCT s.source_key FROM authority_person_meeting_sources_v2 s
       JOIN authority_live_source_admission_v2 a ON a.source_key=s.source_key
       JOIN authority_live_source_candidates_v2 c ON c.admission_semantic_input_sha256=a.semantic_input_sha256
       JOIN authority_live_approval_outbox_v2 o ON o.candidate_id=c.candidate_id
@@ -161,20 +163,26 @@ export function createPersonMeetingRuntimeV1(options: {
     },
   };
   function reviewRows(person: MeetingIntakePersonV1, approvalId?: string) {
-    return db.prepare(`SELECT o.approval_id,o.state,o.approved_snapshot_sha256,o.approved_snapshot_json,s.source_key,s.project_id,
-      coalesce(json_extract(c.meeting_json,'$.title'),'Untitled meeting') AS title,h.body_json,h.receipt_json FROM authority_person_meeting_sources_v1 s
+    return db.prepare(`SELECT o.approval_id,o.state,o.approved_snapshot_sha256,o.approved_snapshot_json,s.source_key,s.folder_project_id,
+      json_extract(c.meeting_json,'$.provenance.external_id') AS external_id,
+      coalesce(json_extract(c.meeting_json,'$.title'),'Untitled meeting') AS title,h.body_json,h.receipt_json FROM authority_person_meeting_sources_v2 s
       JOIN authority_live_source_admission_v2 a ON a.source_key=s.source_key
       JOIN authority_live_source_candidates_v2 c ON c.admission_semantic_input_sha256=a.semantic_input_sha256
       JOIN authority_live_approval_outbox_v2 o ON o.candidate_id=c.candidate_id
       LEFT JOIN authority_person_meeting_approval_actions_v1 h ON h.approval_id=o.approval_id
       WHERE a.organization_id=? AND a.principal_id=? AND a.membership_id=? AND o.approved_snapshot_sha256 IS NOT NULL AND (? IS NULL OR o.approval_id=?)
       ORDER BY CASE WHEN h.body_json IS NULL AND o.state='staged' THEN 0 ELSE 1 END,c.created_at DESC,o.approval_id LIMIT 100`).all(person.organization_id, person.principal_id, person.membership_id, approvalId ?? null, approvalId ?? null) as {
-        approval_id: string; state: string; approved_snapshot_sha256: string; approved_snapshot_json: string; source_key: string; project_id: string | null; title: string; body_json: string | null; receipt_json: string | null;
+        approval_id: string; state: string; approved_snapshot_sha256: string; approved_snapshot_json: string; source_key: string; folder_project_id: string | null; external_id: string; title: string; body_json: string | null; receipt_json: string | null;
       }[];
   }
-  function reviewView(row: ReturnType<typeof reviewRows>[number]): PersonMeetingReviewV1 {
+  // Until the meetings API carries several projects, a review names the first suggested project the person can still read.
+  function suggestedProject(person: MeetingIntakePersonV1, row: ReturnType<typeof reviewRows>[number]): string | null {
+    const suggested = [...new Set([...intake.suggestions(row.source_key, row.external_id), ...(row.folder_project_id === null ? [] : [row.folder_project_id])])].sort();
+    return suggested.find(project => { try { intake.currentPerson(person, project); return true; } catch { return false; } }) ?? null;
+  }
+  function reviewView(person: MeetingIntakePersonV1, row: ReturnType<typeof reviewRows>[number]): PersonMeetingReviewV1 {
     const action = row.body_json === null ? null : (JSON.parse(row.body_json) as { request: { action: string } }).request.action;
-    return { approval_id: row.approval_id, title: row.title.slice(0, 256), project_id: row.project_id,
+    return { approval_id: row.approval_id, title: row.title.slice(0, 256), project_id: suggestedProject(person, row),
       status: action === 'reject' ? 'rejected' : action === 'approve' ? row.receipt_json === null ? 'publishing' : 'approved' : row.state === 'superseded' ? 'superseded' : 'pending' };
   }
   const application: ProviderHttpApplicationV1 = {
@@ -192,18 +200,21 @@ export function createPersonMeetingRuntimeV1(options: {
       if (!provider) throw new AuthorityOperationError('not_found', 'Meeting tool unavailable');
       const result = async (): Promise<unknown> => {
         if (input.operation === 'reviews' || input.operation === 'review_open' || input.operation === 'review') {
-          const rows = reviewRows(person, input.operation === 'reviews' ? undefined : input.approval_id).filter(row => { try { intake.currentPerson(person, row.project_id); return true; } catch { return false; } });
-          if (input.operation === 'reviews') return { reviews: rows.map(reviewView) };
+          // Reviews belong to the person who brought the meeting in, whatever projects it suggests.
+          let member = true;
+          try { intake.currentPerson(person); } catch { member = false; }
+          const rows = member ? reviewRows(person, input.operation === 'reviews' ? undefined : input.approval_id) : [];
+          if (input.operation === 'reviews') return { reviews: rows.map(row => reviewView(person, row)) };
           const row = rows.find(row => row.approval_id === input.approval_id);
           if (!row) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
-          if (input.operation === 'review_open') return { review: reviewView(row), snapshot_sha256: row.approved_snapshot_sha256,
+          if (input.operation === 'review_open') return { review: reviewView(person, row), snapshot_sha256: row.approved_snapshot_sha256,
             content: personMeetingReviewTextV1(row.approved_snapshot_json) };
           const action = input;
           const setting = intake.list(person).find(s => s.source_key === row.source_key)!;
           const { review } = await lane(setting);
           return review.resolve({ approval_id: action.approval_id, command_id: action.command_id, snapshot_sha256: action.snapshot_sha256 as `sha256:${string}`,
             action: action.action, project_id: action.project_id, share_transcript: action.share_transcript }, () => {
-            current(); intake.currentPerson(person, row.project_id); intake.currentPerson(person, action.project_id); return authenticate(token);
+            current(); intake.currentPerson(person, action.project_id); return authenticate(token);
           });
         }
         if (input.operation === 'cancel_import') {
@@ -214,7 +225,7 @@ export function createPersonMeetingRuntimeV1(options: {
         if (input.operation === 'watch' && input.folder_id === null) {
           current(); db.transaction(() => {
             if (settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
-            const old = intake.list(person).find(s => s.folder_id !== null); if (old) ownerOf(old.source_adapter_id).intake.watch(old, null, current);
+            const old = intake.list(person).find(s => s.folder_id !== null); if (old) ownerOf(old.source_adapter_id).intake.watch(old, null, null, current);
           }).immediate(); return { status: 'saved' };
         }
         const linked = provider.tool(token).personal_status === 'linked';
@@ -226,7 +237,8 @@ export function createPersonMeetingRuntimeV1(options: {
         if (input.operation === 'home') {
           const folders = session === null ? [] : await session.folders();
           return { connected: session !== null, email: session?.email ?? null, workspace: session?.workspace ?? null, folders, settings_sha256: settings(person),
-            sources: intake.list(person).filter(s => s.source_adapter_id === provider.cursor.policy.source_adapter_id).map(s => ({ source_key: s.source_key, folder_id: s.folder_id, project_id: s.project_id,
+            // Meetings API v1 still names the watched folder's project `project_id`.
+            sources: intake.list(person).filter(s => s.source_adapter_id === provider.cursor.policy.source_adapter_id).map(s => ({ source_key: s.source_key, folder_id: s.folder_id, project_id: s.folder_project_id,
               baseline: ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).baseline, pending_imports: ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual,
               checked_at: observed.get(s.source_key)?.checked_at ?? null, error: observed.get(s.source_key)?.error ?? null })) };
         }
@@ -247,9 +259,10 @@ export function createPersonMeetingRuntimeV1(options: {
           currentProject();
           if (input.operation === 'watch' && settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
           const providerIntake = ownerOf(provider.cursor.policy.source_adapter_id).intake;
-          const setting = ensurePersonMeetingSourceV1(providerIntake, { provider, person, project_id: project, session, commitments: id => processor.current_commitments?.(id), current: currentProject });
-          if (input.operation === 'watch') providerIntake.watch(setting, input.folder_id, currentProject);
-          else providerIntake.enqueue(setting, input.meeting_id, currentProject);
+          const setting = ensurePersonMeetingSourceV1(providerIntake, { provider, person, session, commitments: id => processor.current_commitments?.(id), current: currentProject });
+          // "Save to" records the watched folder's project or the import's suggestion; neither changes the source.
+          if (input.operation === 'watch') providerIntake.watch(setting, input.folder_id, project, currentProject);
+          else providerIntake.enqueue(setting, input.meeting_id, project, currentProject);
           observed.delete(setting.source_key);
           return { status: input.operation === 'watch' ? 'saved' : 'queued' };
         }).immediate();
