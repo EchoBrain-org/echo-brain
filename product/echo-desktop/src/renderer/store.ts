@@ -3205,8 +3205,9 @@ export function resume(): void {
     // People & invites is read again for whoever is signed in now.
     if (state.route.page === 'organization' && !state.concealed) void loadEmployees();
     // Resume healthy or interrupted Home reads, including an open decision.
-    // A failed Home retains its explicit retry instead of retrying offline calls on every focus.
-    if (state.home && !state.home.failure && !state.concealed) void loadHome();
+    // A failed initial Home retains its explicit retry; an ongoing check or open
+    // decision resumes its interrupted retry when the window returns.
+    if (state.home && (!state.home.failure || homeNeedsPolling()) && !state.concealed) void loadHome();
   });
 }
 
@@ -3316,6 +3317,10 @@ function homeShown(mine?: number): HomeState | null {
   return home && !state.concealed && state.status?.signed_in && (state.route.page === 'home' || state.route.page === 'decision') && (mine === undefined || home.seq === mine) ? home : null;
 }
 
+function homeNeedsPolling(): boolean {
+  return state.route.page === 'decision' || (state.home?.rows.some(row => row.kind === 'checking') ?? false);
+}
+
 /**
  * Home: the decisions waiting for you and the impact of ones you approved.
  * Read when Home opens, when the window comes forward, and after a decision.
@@ -3335,7 +3340,7 @@ export async function loadHome(): Promise<void> {
   try {
     const [reviews, runs] = await Promise.all([
       meetingCommand({ operation: 'reviews' }),
-      runsCommand({ schema_version: 1, operation: 'list' }).catch(() => ({ runs: [] as readonly PersonRunV1[] })),
+      runsCommand({ schema_version: 1, operation: 'list' }),
     ]);
     if (!homeShown(mine)) return;
     set({ home: { ...state.home!, loading: false, meetings: true, rows: needsRows(reviews.reviews, runs.runs) } });
@@ -3345,6 +3350,9 @@ export async function loadHome(): Promise<void> {
     if (!homeShown(mine)) return;
     void error;
     set({ home: { ...state.home!, loading: false, meetings: true, failure: { code: 'unavailable', retryable: true } } });
+    // Keep known rows and the open card intact. Active work must recover even
+    // when the decision page has no Home retry button.
+    if (homeNeedsPolling()) pollRuns(runSeq);
   }
 }
 
@@ -3405,7 +3413,7 @@ async function refreshRuns(mine: number): Promise<void> {
   try {
     const [reviews, runs] = await Promise.all([meetingCommand({ operation: 'reviews' }), runsCommand({ schema_version: 1, operation: 'list' })]);
     if (!homeShown(home.seq) || mine !== runSeq) return;
-    set({ home: { ...state.home!, rows: needsRows(reviews.reviews, runs.runs) } });
+    set({ home: { ...state.home!, failure: undefined, rows: needsRows(reviews.reviews, runs.runs) } });
     updateDecisionRun(runs.runs);
     void driveRuns(runs.runs, reviews.reviews.some(review => review.status === 'publishing'));
   } catch {

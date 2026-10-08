@@ -124,4 +124,45 @@ describe('Home decisions and impact checks', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(store.getState().home?.rows).toMatchObject([{ kind: 'impact', run: { state: 'done' } }]);
   });
+
+  it('reports an initial runs-list failure and recovers when Home is retried', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('running');
+    failNextList = true;
+    const store = await start();
+    expect(store.getState().home).toMatchObject({ loading: false, failure: { code: 'unavailable', retryable: true } });
+    const requests = rpc.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(rpc.mock.calls).toHaveLength(requests);
+    await store.loadHome();
+    expect(store.getState().home?.failure).toBeUndefined();
+    expect(store.getState().home?.rows).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
+  });
+
+  it.each([false, true])('preserves and retries a failed resume with an open decision: %s', async (openCard) => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('running');
+    const store = await start();
+    if (openCard) await store.openDecision(store.getState().home!.rows[0]!);
+    store.conceal();
+    failNextList = true;
+    store.resume();
+    await flush();
+    expect(store.getState().home?.rows).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
+    expect(store.getState().home?.failure).toMatchObject({ code: 'unavailable' });
+    if (openCard) expect(store.getState().decision?.run?.state).toBe('running');
+    // A second focus change must not strand the retry after stopping its timer.
+    store.conceal();
+    failNextList = true;
+    store.resume();
+    await flush();
+    run = impactRun('done');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(store.getState().home?.failure).toBeUndefined();
+    expect(store.getState().home?.rows).toMatchObject([{ kind: 'impact', run: { state: 'done' } }]);
+    if (openCard) {
+      expect(store.getState().decision?.run?.state).toBe('done');
+      expect(store.getState().decision?.impact).toMatchObject({ status: 'assessed' });
+    }
+  });
 });
