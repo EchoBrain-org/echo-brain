@@ -21,6 +21,8 @@ import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 
 const NOT_FOUND_GAP = "I couldn't find this in the sources you can access.";
 const RECORDS_GAP = "I found these records, but could not write a verified summary.";
 const INCOMPLETE_SEARCH_GAP = "I couldn't complete the search. Please try again.";
+const INCOMPLETE_SEARCH_NOTICE = "Research stopped before it finished, so relevant context may be missing.";
+const LIMITED_COVERAGE_GAP = "Some source coverage was incomplete, so relevant context may be missing.";
 /** The writer runs in Ask's answer span; the audit records it as an `answer` call. */
 const WRITER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_answer" });
 
@@ -54,6 +56,29 @@ export interface CreateAskRendererV1Options {
 function bytes(value: string | undefined): number { return value === undefined ? 0 : Buffer.byteLength(value, "utf8"); }
 function privateItem(item: Entry["item"]): boolean {
   return item.visibility === "only_me" || item.visibility === "approver_only";
+}
+
+/**
+ * A completed answer can report source coverage separately from a requested
+ * fact gap. A limited open matters when it requested or returned a cited body;
+ * a later clean open of that same returned body resolves the limitation.
+ */
+function coverageIsLimitedFor(bundle: AgenticEvidenceBundleV1, used: readonly Entry[]): boolean {
+  const usedIds = new Set(used.map(entry => entry.short));
+  const limited = new Set<string>();
+  const resolved = new Set<string>();
+  for (const round of bundle.rounds) for (const action of round.actions) {
+    if (action.tool !== "open") continue;
+    const requested = typeof action.args.id === "string" ? action.args.id : undefined;
+    const citedBodies = action.result.opened.filter(id => usedIds.has(id));
+    const relevant = [...(requested !== undefined && usedIds.has(requested) ? [requested] : []), ...citedBodies];
+    if (relevant.length === 0) continue;
+    const limitedOpen = action.result.truncated === true || action.result.notice === true || action.result.error !== undefined;
+    if (limitedOpen) for (const id of relevant) limited.add(id);
+    // Only a body returned by a clean open resolves a limited returned body.
+    if (!limitedOpen) for (const id of citedBodies) resolved.add(id);
+  }
+  return [...limited].some(id => !resolved.has(id));
 }
 
 export function createAskRendererV1(options: CreateAskRendererV1Options): AgenticRendererV1<AskRendererInputV1, AskRenderedV1> {
@@ -130,8 +155,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         .filter(value => value.shorts.length > 0)
         .map(value => ({ text: value.sentence.text, citation_indexes: use(value.shorts), private: isPrivate(value.shorts) }));
       const notFound = answer?.not_found ?? [];
-      const incomplete = researchIncomplete || (answer === null && evidence.length > 0);
-      const gapText = incomplete && (statements.length === 0 || notFound.length > 0)
+      const coverageLimited = coverageIsLimitedFor(bundle, used);
+      const incomplete = (answer === null && evidence.length > 0) || (researchIncomplete && (statements.length === 0 || notFound.length > 0));
+      const gapText = incomplete
         ? cleanLine(`${INCOMPLETE_SEARCH_GAP}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`, 600)
         : notFound.length === 0 ? undefined : cleanLine(`Not found: ${notFound.join("; ")}.`, 600);
       type Draft = { status: PersonAnswerPartV4["status"]; statements: typeof statements; gap?: string; records?: { text: string; citation_indexes: number[]; private: boolean }[] };
@@ -149,6 +175,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           : { status: "not_found", statements: [], gap: gapText ?? (incomplete ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP) };
       }
       const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
+      // A completed answer can retain source coverage as a notice. A stop
+      // becomes a notice only when the rendered answer has no existing gap.
+      const responseNotices = [
+        ...bundle.coverage.notices,
+        ...(coverageLimited ? [LIMITED_COVERAGE_GAP] : []),
+        ...(researchIncomplete && anyEvidence && draft.gap === undefined ? [INCOMPLETE_SEARCH_NOTICE] : []),
+      ];
       const outcome = !anyEvidence ? (incomplete ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
       const result = Object.freeze({
         schema_version: responseVersion, kind: responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
@@ -159,7 +192,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...(draft.records === undefined ? {} : { records: Object.freeze(draft.records.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))) }),
         })]),
         citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV1(entry.item)) : []),
-        ...(bundle.coverage.notices.length === 0 ? {} : { notice: bundle.coverage.notices.join(" ") }),
+        ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
       });
       const validated: AskResponse = responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
       return Object.freeze({

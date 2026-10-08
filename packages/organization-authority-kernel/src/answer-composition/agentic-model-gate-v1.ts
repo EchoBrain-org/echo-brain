@@ -54,6 +54,18 @@ export class AgenticAskGenerationFailureV1 extends AgenticAskOutputErrorV1 {
   constructor(message: string, readonly recovery: "retry" | "repair" | "fallback") { super(message); }
 }
 
+/**
+ * The access fence completed, but left too little time for the model role.
+ * This is deliberately separate from a provider or output failure: callers
+ * can retain already released evidence and report a truthful budget stop.
+ */
+export class AgenticAskPostRevalidationNoTimeErrorV1 extends AgenticAskGenerationFailureV1 {
+  constructor() {
+    super("no time left for generation after revalidation", "fallback");
+    this.name = "AgenticAskPostRevalidationNoTimeErrorV1";
+  }
+}
+
 export function object(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
@@ -176,7 +188,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     // preserving the answer/finalization reserves even for a slow check before a retry.
     const timeoutMs = timeout();
     const minimum = role === "step" ? AGENTIC_ASK_MIN_STEP_MS_V1 : AGENTIC_ASK_MIN_ANSWER_MS_V1;
-    if (timeoutMs < minimum) throw new AgenticAskGenerationFailureV1("no time left for generation", "fallback");
+    if (timeoutMs < minimum) throw new AgenticAskPostRevalidationNoTimeErrorV1();
     calls += 1;
     if (recovery) repairs += 1;
     const modelInput: StructuredGenerationInput = Object.freeze({ model: options.generation.answer_model, system_prompt, user_prompt: JSON.stringify(user), schema, max_output_tokens: AGENTIC_MODEL_OUTPUT_TOKENS_V1[role], timeout_ms: Math.max(1, Math.floor(Math.min(options.generation.timeout_ms, timeoutMs, remaining()))), signal: activeSignal });

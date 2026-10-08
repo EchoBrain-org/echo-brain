@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonPageCitationV1, type PersonPageCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { createAtlassianVerificationBatchV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { ConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
 import { normalizeConfluencePageDocumentV1 } from './confluence-page-text-v1.js';
@@ -88,11 +89,18 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     signal?.throwIfAborted();
     if (canonicalSha256(options.transport.binding) !== bindingHash) confluenceFailure('stale_access_state');
   }
-  async function verify(signal?: AbortSignal): Promise<void> {
+  const verifyQueued = createAtlassianVerificationBatchV1(async (signal?: AbortSignal): Promise<void> => {
     current(signal);
     const result = await verifyConfluenceConnectionV1(transport, { signal, expected_origin: origin,
       require_account(account) { if (account !== binding.external_subject_id) confluenceFailure('unauthorized'); } });
     origin = result.origin;
+    current(signal);
+  });
+  async function verify(signal?: AbortSignal): Promise<void> {
+    // Every caller retains its own binding/abort fences. Only checks queued
+    // before remote verification starts can share that verification.
+    current(signal);
+    await verifyQueued(signal);
     current(signal);
   }
   function inScope(page: Page): void { if (selected !== undefined && !selected.includes(page.space_id)) confluenceFailure('unauthorized'); }

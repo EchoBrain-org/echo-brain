@@ -141,6 +141,8 @@ describe("journey telemetry v1", () => {
           released_atom_count: 3,
           context_atom_count: 2,
           citation_count: 1,
+          research_stop_reason: "budget",
+          research_admission: "post_revalidation_no_time",
           private_atoms: ["private-sentinel"],
         } as never,
       },
@@ -152,9 +154,22 @@ describe("journey telemetry v1", () => {
       released_atom_count: 3,
       context_atom_count: 2,
       citation_count: 1,
+      research_stop_reason: "budget",
+      research_admission: "post_revalidation_no_time",
     });
     expect(Object.isFrozen(event.retrieval)).toBe(true);
     expect(JSON.stringify(event)).not.toContain("private-sentinel");
+
+    expect(() => createJourneyTelemetryEventV1({
+      journey_id: JOURNEY_ID,
+      sequence: 4,
+      observed_at: OBSERVED_AT,
+      context: askContext,
+      event: {
+        stage: "ask_retrieval", event: "succeeded", elapsed_ms: 1,
+        retrieval: { research_stop_reason: "query: private text" as never },
+      },
+    }, TELEMETRY_FIXTURE_VOCABULARY_V1)).toThrow("research_stop_reason is invalid");
 
     expect(
       createJourneyTelemetryEventV1({

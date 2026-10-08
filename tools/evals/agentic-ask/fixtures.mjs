@@ -111,6 +111,12 @@ const decisionWithoutDateOrOwner = meeting({
   occurredAt: undefined,
 });
 
+const proposedPrerequisiteDecision = meeting({
+  id: "proposed-prerequisite-decision",
+  label: "Synthetic pilot prerequisite review",
+  text: "The approved review recorded a proposal to begin the synthetic pilot after fixture verification and Manufacturing approval. The proposal is not yet an approved launch decision, and neither prerequisite is recorded as complete.",
+});
+
 const laterTickets = Array.from({ length: 52 }, (_, index) => {
   const number = index + 1;
   const isTarget = number === 52;
@@ -196,6 +202,25 @@ export const CASES = Object.freeze([
     expected: Object.freeze({
       sources: Object.freeze(["meeting"]), complete: true, discovery: true, open: true,
       reader_visible: Object.freeze({ required_any: Object.freeze([Object.freeze(["may proceed", "approved", "proceed"])]), no_gap: true }),
+    }),
+  }),
+  Object.freeze({
+    id: "held-out-proposed-prerequisites",
+    question: "What is required before the synthetic pilot can begin?",
+    mode: "v1",
+    items: Object.freeze([proposedPrerequisiteDecision]),
+    expected: Object.freeze({
+      sources: Object.freeze(["meeting"]), complete: true, discovery: true, open: true,
+      reader_visible: Object.freeze({
+        // Ground truth: this record describes an unapproved proposal, with two
+        // explicit prerequisites. Both distinctions must remain reader-visible.
+        required_any: Object.freeze([
+          Object.freeze(["fixture verification"]),
+          Object.freeze(["manufacturing approval", "manufacturing"]),
+          Object.freeze(["proposal", "proposed", "not yet approved"]),
+        ]),
+        no_gap: true,
+      }),
     }),
   }),
   Object.freeze({

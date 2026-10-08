@@ -36,6 +36,8 @@ export type AgenticResearchGoalV1 =
   | { readonly kind: "task"; readonly task: string };
 
 export type AgenticResearchStopReasonV1 = "finished" | "empty_catalog" | "no_progress" | "step_limit" | "budget" | "unusable_step";
+/** A content-free reason a planner call was not admitted after its access fence. */
+export type AgenticResearchAdmissionV1 = "post_revalidation_no_time";
 
 export interface AgenticResearchNeedV1 { readonly need: string; readonly status: "open" | "found" | "not_found"; readonly evidence: readonly string[] }
 export interface AgenticResearchPartV1 { readonly part: number; readonly question: string; readonly notes: string; readonly needs: readonly AgenticResearchNeedV1[] }
@@ -105,7 +107,11 @@ export interface AgenticResearchResultV1 {
     readonly inventories: readonly Readonly<Record<string, unknown>>[];
     readonly notices: readonly string[];
   };
-  readonly stop: { readonly reason: AgenticResearchStopReasonV1; readonly completed: boolean };
+  readonly stop: {
+    readonly reason: AgenticResearchStopReasonV1;
+    readonly completed: boolean;
+    readonly admission?: AgenticResearchAdmissionV1;
+  };
   readonly cost: {
     readonly rounds: number;
     readonly model_calls: number;

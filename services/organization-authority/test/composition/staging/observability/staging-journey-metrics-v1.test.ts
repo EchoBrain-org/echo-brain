@@ -241,6 +241,8 @@ describe("staging journey EMF metrics v1", () => {
         released_atom_count: 0,
         context_atom_count: 0,
         citation_count: 0,
+        research_stop_reason: "budget",
+        research_admission: "post_revalidation_no_time",
       },
     }), TELEMETRY_FIXTURE_VOCABULARY_V1);
     const retrieval = records.find((record) => metric(record, "RetrievalPlannedQueries") === 0)!;
@@ -253,6 +255,8 @@ describe("staging journey EMF metrics v1", () => {
       RetrievalContextAtoms: 0,
       RetrievalCitations: 0,
     });
+    expect(JSON.stringify(retrieval)).not.toContain("research_stop_reason");
+    expect(JSON.stringify(retrieval)).not.toContain("research_admission");
   });
 
   it("keeps human wait out of machine latency and attaches it only to approval verification", () => {

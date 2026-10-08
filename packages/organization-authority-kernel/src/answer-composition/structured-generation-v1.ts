@@ -100,6 +100,10 @@ export interface AnswerCompositionRetrievalObservationV1 {
   readonly released_atom_count?: number;
   readonly context_atom_count?: number;
   readonly citation_count?: number;
+  /** Research's terminal condition, never a query, source item or model content. */
+  readonly research_stop_reason?: "finished" | "empty_catalog" | "no_progress" | "step_limit" | "budget" | "unusable_step";
+  /** Why a planner call was refused after a required access fence. */
+  readonly research_admission?: "post_revalidation_no_time";
 }
 
 /**

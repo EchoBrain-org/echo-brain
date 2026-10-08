@@ -563,6 +563,14 @@ Ask journey, so it is listed, counted and alarmed like any Ask:
 | `ask_revalidation`, `ask_audit` | The final fence and the terminal audit. |
 | `ask_response` | `answered`, `partial`, `not_found` or `off_scope`. |
 
+The retrieval summary also records `research_stop_reason`: `finished`,
+`empty_catalog`, `no_progress`, `step_limit`, `budget`, or `unusable_step`.
+When a required access revalidation leaves too little time to admit the next
+planner call, the stop is `budget` and `research_admission` is
+`post_revalidation_no_time`. This does not count as an unusable model reply;
+the writer can still use evidence already released within its reserved time.
+These fields contain only fixed diagnostic values, never queries or evidence.
+
 A request that fails marks the first research-to-audit stage still open as
 failed with the request's failure class, then fails `ask_response`. The deadline
 is `timeout`; a closed client connection is `cancelled`. A failed `ask_response`

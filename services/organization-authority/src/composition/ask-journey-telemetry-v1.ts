@@ -256,9 +256,10 @@ export function createAskJourneyTelemetryFactoryV1(input: {
       });
       const closed = new Set<AskJourneyStageV1>();
       let lastFailure: AskJourneyFailureV1 | null = null;
-      const counters: Partial<
-        Record<keyof JourneyRetrievalCountersInputV1, number>
-      > = {};
+      type MutableRetrievalCounters = {
+        -readonly [Key in keyof JourneyRetrievalCountersInputV1]: JourneyRetrievalCountersInputV1[Key];
+      };
+      const counters: Partial<MutableRetrievalCounters> = {};
 
       function safeNow(): number {
         try {
@@ -286,6 +287,12 @@ export function createAskJourneyTelemetryFactoryV1(input: {
         ] as const) {
           const count = value[key];
           if (typeof count === "number") counters[key] = count;
+        }
+        if (value.research_stop_reason !== undefined) {
+          counters.research_stop_reason = value.research_stop_reason;
+        }
+        if (value.research_admission !== undefined) {
+          counters.research_admission = value.research_admission;
         }
       }
 

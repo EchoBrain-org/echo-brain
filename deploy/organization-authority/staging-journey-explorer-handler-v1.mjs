@@ -32,6 +32,8 @@ const CORE_RESULTS = new Set(["current", "published", "superseded", "done", "unc
 const CORE_UPSTREAM_SERVICES = new Set(["nango", "jira", "confluence", "granola", "other"]);
 const CORE_UPSTREAM_OPERATIONS = new Set(["connection_read", "connection_list", "connect_session", "connection_delete", "provider_read"]);
 const CORE_UPSTREAM_RATE_LIMIT_REASONS = new Set(["burst", "global_quota", "tenant_quota", "per_issue_write", "other"]);
+const RESEARCH_STOP_REASONS = new Set(["finished", "empty_catalog", "no_progress", "step_limit", "budget", "unusable_step"]);
+const RESEARCH_ADMISSIONS = new Set(["post_revalidation_no_time"]);
 const WORKFLOWS = new Set(["ask", "meeting_approval", "core_runtime"]);
 const STAGES = new Set([
   "core_operation",
@@ -200,9 +202,9 @@ function detailQuery(id) {
     id +
     '" | fields ' +
     BASE +
-    ', retrieval.planned_query_count as retrieval_planned_query_count, retrieval.query_hit_count as retrieval_query_hit_count, retrieval.released_atom_count as retrieval_released_atom_count, retrieval.context_atom_count as retrieval_context_atom_count, retrieval.citation_count as retrieval_citation_count, llm_usage.provider as llm_provider, llm_usage.model as llm_model, llm_usage.usage_status as llm_usage_status, llm_usage.provider_latency_ms as llm_provider_latency_ms, llm_usage.input_tokens as llm_input_tokens, llm_usage.output_tokens as llm_output_tokens, llm_usage.total_tokens as llm_total_tokens, llm_usage.cached_input_tokens as llm_cached_input_tokens, llm_usage.reasoning_tokens as llm_reasoning_tokens, llm_usage.finish_reason as llm_finish_reason | display ' +
+    ', retrieval.planned_query_count as retrieval_planned_query_count, retrieval.query_hit_count as retrieval_query_hit_count, retrieval.released_atom_count as retrieval_released_atom_count, retrieval.context_atom_count as retrieval_context_atom_count, retrieval.citation_count as retrieval_citation_count, retrieval.research_stop_reason as retrieval_research_stop_reason, retrieval.research_admission as retrieval_research_admission, llm_usage.provider as llm_provider, llm_usage.model as llm_model, llm_usage.usage_status as llm_usage_status, llm_usage.provider_latency_ms as llm_provider_latency_ms, llm_usage.input_tokens as llm_input_tokens, llm_usage.output_tokens as llm_output_tokens, llm_usage.total_tokens as llm_total_tokens, llm_usage.cached_input_tokens as llm_cached_input_tokens, llm_usage.reasoning_tokens as llm_reasoning_tokens, llm_usage.finish_reason as llm_finish_reason | display ' +
     BASE_DISPLAY +
-    ', retrieval_planned_query_count, retrieval_query_hit_count, retrieval_released_atom_count, retrieval_context_atom_count, retrieval_citation_count, llm_provider, llm_model, llm_usage_status, llm_provider_latency_ms, llm_input_tokens, llm_output_tokens, llm_total_tokens, llm_cached_input_tokens, llm_reasoning_tokens, llm_finish_reason | sort observed_at asc, sequence asc | limit ' +
+    ', retrieval_planned_query_count, retrieval_query_hit_count, retrieval_released_atom_count, retrieval_context_atom_count, retrieval_citation_count, retrieval_research_stop_reason, retrieval_research_admission, llm_provider, llm_model, llm_usage_status, llm_provider_latency_ms, llm_input_tokens, llm_output_tokens, llm_total_tokens, llm_cached_input_tokens, llm_reasoning_tokens, llm_finish_reason | sort observed_at asc, sequence asc | limit ' +
     DETAIL_LIMIT
   );
 }
@@ -449,15 +451,19 @@ function nested(raw, item) {
       "retrieval_context_atom_count",
       "retrieval_citation_count",
     ],
-    hasRetrieval = retrievalKeys.some((key) => raw[key] !== undefined),
+    hasRetrieval = [...retrievalKeys, "retrieval_research_stop_reason", "retrieval_research_admission"].some((key) => raw[key] !== undefined),
     retrievalValues = retrievalKeys.map((key) =>
       raw[key] === undefined ? null : uint(raw[key]),
-    );
+    ),
+    researchStopReason = enumValue(raw.retrieval_research_stop_reason, RESEARCH_STOP_REASONS),
+    researchAdmission = enumValue(raw.retrieval_research_admission, RESEARCH_ADMISSIONS);
   if (
     retrievalValues.some(
       (value, index) =>
         raw[retrievalKeys[index]] !== undefined && value === null,
     ) ||
+    (raw.retrieval_research_stop_reason !== undefined && researchStopReason === null) ||
+    (raw.retrieval_research_admission !== undefined && researchAdmission === null) ||
     (hasRetrieval &&
       (item.workflow !== "ask" ||
         item.event !== "succeeded" ||
@@ -541,6 +547,8 @@ function nested(raw, item) {
       released_atom_count: retrievalValues[2],
       context_atom_count: retrievalValues[3],
       citation_count: retrievalValues[4],
+      research_stop_reason: researchStopReason,
+      research_admission: researchAdmission,
     },
     llm,
   };
@@ -1004,7 +1012,7 @@ function renderDetail(data, parsed, endpointArn) {
       const retrieval = item.retrieval;
       const rowClass =
         item.event === "failed" ? ' class="failure-boundary"' : "";
-      return `<tr${rowClass}><td>${escapeHtml(item.sequence)}</td><td>${escapeHtml(item.diagnostic?.phase || item.stage)}</td><td>${escapeHtml(item.accounting?.execution_attempt ?? item.attempt)}</td><td>${escapeHtml(item.event)}</td><td>${escapeHtml(item.observed_at)}</td><td>${machineWaterfall(item, origin, span)}</td><td>${escapeHtml(item.accounting && !["legacy", "shared_reference"].includes(item.accounting.kind) ? item.accounting.retry_count : "unknown (legacy ordinal)")}</td><td>${escapeHtml(item.outcome || "not reported")}</td><td>${escapeHtml(item.failure_class || "not reported")}${item.diagnostic ? `<details><summary>Operation evidence</summary><pre>${escapeHtml(JSON.stringify(item.diagnostic, null, 2))}</pre></details>` : ""}</td><td>provider: ${reported(llm.provider)}<br>model: ${reported(llm.model)}<br>usage: ${reported(llm.usage_status)}<br>finish: ${reported(llm.finish_reason)}<br>provider latency: ${milliseconds(llm.provider_latency_ms)}<br>input tokens: ${reported(llm.input_tokens)}<br>output tokens: ${reported(llm.output_tokens)}<br>total tokens: ${reported(llm.total_tokens)}<br>cached input tokens: ${reported(llm.cached_input_tokens)}<br>reasoning tokens: ${reported(llm.reasoning_tokens)}</td><td>planned queries: ${reported(retrieval.planned_query_count)}<br>query hits: ${reported(retrieval.query_hit_count)}<br>released atoms: ${reported(retrieval.released_atom_count)}<br>context atoms: ${reported(retrieval.context_atom_count)}<br>citations: ${reported(retrieval.citation_count)}</td></tr>`;
+      return `<tr${rowClass}><td>${escapeHtml(item.sequence)}</td><td>${escapeHtml(item.diagnostic?.phase || item.stage)}</td><td>${escapeHtml(item.accounting?.execution_attempt ?? item.attempt)}</td><td>${escapeHtml(item.event)}</td><td>${escapeHtml(item.observed_at)}</td><td>${machineWaterfall(item, origin, span)}</td><td>${escapeHtml(item.accounting && !["legacy", "shared_reference"].includes(item.accounting.kind) ? item.accounting.retry_count : "unknown (legacy ordinal)")}</td><td>${escapeHtml(item.outcome || "not reported")}</td><td>${escapeHtml(item.failure_class || "not reported")}${item.diagnostic ? `<details><summary>Operation evidence</summary><pre>${escapeHtml(JSON.stringify(item.diagnostic, null, 2))}</pre></details>` : ""}</td><td>provider: ${reported(llm.provider)}<br>model: ${reported(llm.model)}<br>usage: ${reported(llm.usage_status)}<br>finish: ${reported(llm.finish_reason)}<br>provider latency: ${milliseconds(llm.provider_latency_ms)}<br>input tokens: ${reported(llm.input_tokens)}<br>output tokens: ${reported(llm.output_tokens)}<br>total tokens: ${reported(llm.total_tokens)}<br>cached input tokens: ${reported(llm.cached_input_tokens)}<br>reasoning tokens: ${reported(llm.reasoning_tokens)}</td><td>planned queries: ${reported(retrieval.planned_query_count)}<br>query hits: ${reported(retrieval.query_hit_count)}<br>released atoms: ${reported(retrieval.released_atom_count)}<br>context atoms: ${reported(retrieval.context_atom_count)}<br>citations: ${reported(retrieval.citation_count)}<br>research stop: ${reported(retrieval.research_stop_reason)}<br>planner admission: ${reported(retrieval.research_admission)}</td></tr>`;
     })
     .join("");
   const workflows = [...new Set(data.stages.map((item) => item.workflow))];

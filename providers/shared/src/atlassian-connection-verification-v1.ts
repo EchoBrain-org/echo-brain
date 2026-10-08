@@ -20,6 +20,33 @@ const REQUIRED_SCOPES = Object.freeze({
   ],
 });
 
+/**
+ * Combine only checks queued before their remote I/O begins. Every later
+ * fence starts fresh, even while the preceding verification remains in flight.
+ * A reader owns this helper; callers retain their own local grant fences.
+ */
+export function createAtlassianVerificationBatchV1<T>(verify: (signal?: AbortSignal) => Promise<T>): (signal?: AbortSignal) => Promise<T> {
+  const queued = new Map<AbortSignal | undefined, Promise<T>>();
+  return async (signal?: AbortSignal): Promise<T> => {
+    signal?.throwIfAborted();
+    const existing = queued.get(signal);
+    if (existing !== undefined) return existing;
+    const batch = new Promise<T>((resolve, reject) => {
+      queueMicrotask(() => {
+        // Clear before invoking the operation: a post-read caller must never
+        // join a remote check that started before its resource read finished.
+        queued.delete(signal);
+        try {
+          signal?.throwIfAborted();
+          void verify(signal).then(resolve, reject);
+        } catch (error) { reject(error); }
+      });
+    });
+    queued.set(signal, batch);
+    return batch;
+  };
+}
+
 export function atlassianSiteOriginV1(provider: AtlassianPersonProviderV1, value: unknown): string {
   const raw = provider.string(value, provider.id === 'jira' ? 256 : 2048);
   let url: URL;

@@ -58,6 +58,12 @@ accessible-resources does not prove user permissions; Jira scope selection
 and exact authenticated issue reads remain necessary.
 Source: [site access and API routing](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/#4--check-site-access-for-the-app).
 
+Within a request, simultaneous connection checks with the same abort signal
+share a verification only while it is queued, before its remote requests begin.
+A check arriving after verification starts performs a new verification. There
+is no retained verification result: each caller still checks its local binding
+and cancellation, and post-read checks cannot reuse a pre-read result.
+
 Jira checks Browse Projects, issue security and app access policy under the
 current user. Search results may lag, so every selected ticket is fetched by
 its immutable numeric issue id before release. Search and list release only
@@ -143,6 +149,15 @@ SHA-256 of the empty string. Numeric issue ids are stable citation identities;
 the verified current key determines the tenant's `/browse/<key>` display link.
 Returned `self` links are validated against the tenant/API cloudid and issue
 or project coordinates, and are never followed.
+
+Opening a ticket also discovers up to four directly linked ticket summaries,
+within the requested result limit. Jira's `issuelinks` contributes only numeric
+issue IDs; each selected target is exact-read under the same person and project
+boundary before its metadata is released. Inaccessible or out-of-project targets
+are omitted with a coverage limitation. The planner must use a normal `open`
+on the returned handle to read a linked body. Missing optional link data does
+not block the anchor, and refreshing a stored citation reads only that anchor.
+Source: [Jira issue links](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-links/).
 
 Text is the issue key, summary and supported ADF description. Formatting marks
 are not rendered; supported blocks include paragraphs, headings, lists,

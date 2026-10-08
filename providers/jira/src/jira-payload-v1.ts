@@ -36,11 +36,47 @@ export interface ParsedJiraIssueV1 {
   readonly key: string;
   readonly project_id: string;
   readonly created_at: string;
+  /** Direct provider references only; each is exact-read before its metadata is released. */
+  readonly related_issue_ids: readonly string[];
+  /** True when optional link discovery inspected only its bounded prefix. */
+  readonly related_truncated: boolean;
   readonly value: Omit<PersonLiveEvidenceValueV1<PersonTicketCitationV1>, 'handle'>;
   readonly truncated: boolean;
 }
 
-export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: string; readonly origin: string; readonly inventory: boolean }): ParsedJiraIssueV1 {
+/**
+ * Jira includes summary/key/self data in link stubs. Those values are never
+ * trusted or released: a link contributes only an opaque issue ID, and the
+ * reader exact-reads that ID under the current connection before release.
+ */
+const RELATED_LINK_SCAN_MAX = 64;
+
+function relatedIssueIds(value: unknown, anchorId: string): { readonly ids: readonly string[]; readonly truncated: boolean } {
+  // The provider transport bounds JSON response bytes. Inspecting a fixed
+  // prefix avoids turning a large but valid link list into a failed anchor
+  // read, while still rejecting a malformed present array or inspected link.
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length !== 0) jiraFailure('invalid_output');
+  const ids = new Set<string>();
+  const count = Math.min(value.length, RELATED_LINK_SCAN_MAX);
+  for (let index = 0; index < count; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable) jiraFailure('invalid_output');
+    const raw = descriptor.value;
+    const link = jiraRecord(raw);
+    const inward = link.inwardIssue;
+    const outward = link.outwardIssue;
+    if ((inward === undefined) === (outward === undefined)) jiraFailure('invalid_output');
+    const issue = jiraRecord(inward ?? outward);
+    const id = jiraString(issue.id, 20, JIRA_ID);
+    if (id !== anchorId) ids.add(id);
+  }
+  // Jira does not promise a useful link order. Numeric IDs are canonical,
+  // non-zero decimal strings, so length then byte order is a stable order.
+  return Object.freeze({ ids: Object.freeze([...ids].sort((left, right) => left.length - right.length || (left < right ? -1 : left > right ? 1 : 0))),
+    truncated: value.length > count });
+}
+
+export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: string; readonly origin: string; readonly inventory: boolean; readonly related?: boolean }): ParsedJiraIssueV1 {
   const issue = jiraRecord(value);
   const id = jiraString(issue.id, 20, JIRA_ID); const key = jiraString(issue.key, 85, JIRA_TICKET_KEY);
   const apiPrefix = `https://api.atlassian.com/ex/jira/${input.cloudid}`;
@@ -58,10 +94,14 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
   const status = jiraString(jiraRecord(fields.status).name, 128);
   const owner = fields.assignee === null ? undefined : jiraString(jiraRecord(fields.assignee).displayName, 128);
   const due_at = fields.duedate === null ? undefined : jiraDay(fields.duedate);
+  // Jira can omit this optional field when linking is disabled or unavailable.
+  // That means no related context was discoverable, not that no link exists.
+  // A field that is present must still have the expected safe array shape.
+  const relatedLinks = input.related && fields.issuelinks !== undefined ? relatedIssueIds(fields.issuelinks, id) : Object.freeze({ ids: Object.freeze([]), truncated: false });
   const content = input.inventory ? undefined : jiraBoundText(`${key}: ${fields.summary}\n\n${(fields.description === null ? '' : normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1).text.trim())}`.trim(), 3072);
   const citation: PersonTicketCitationV1 = Object.freeze({ kind: 'ticket', tool_id: 'jira', external_scope_id: input.cloudid,
     ticket_id: id, permalink: `${input.origin}/browse/${key}`, text_sha256: sha256Digest(content?.text ?? '') });
-  return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(),
+  return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(), related_issue_ids: relatedLinks.ids, related_truncated: relatedLinks.truncated,
     truncated: label.truncated || (content?.truncated ?? false),
     value: Object.freeze({ citation, label: label.text, visibility: 'only_me', occurred_at, date_kind: 'created',
       attributes: Object.freeze({ status, ...(owner === undefined ? {} : { owner }), ...(due_at === undefined ? {} : { due_at }) }),
