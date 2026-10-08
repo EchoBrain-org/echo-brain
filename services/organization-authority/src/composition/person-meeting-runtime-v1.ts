@@ -11,12 +11,12 @@ import type { AdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organiz
 import type { ApprovalWorkflowContextV1 } from '@echo-brain/organization-processing/ports/approval-workflow-bundle-v1';
 import type { ExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/extraction-attempt-store-v1';
 import { AdmittedMeetingProcessingCycleV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1';
-import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
+import { SqliteApprovalWorkflowStateV1, SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { readAdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments';
 import { bindApprovalWorkflowStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1';
 import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointCodecV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
-import { createPersonMeetingReviewV1, personMeetingReviewTextV1 } from './person-meeting-review-v1.js';
+import { approvalProposalTextV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalViewV1 } from './approval-core-v1.js';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { OrganizationAuthorityProcessingCycleV1 } from './organization-authority-service-lifecycle.js';
@@ -72,12 +72,14 @@ export async function queuePersonMeetingsV1(input: {
     return setting;
   }).immediate();
 }
-/** One processing lane, shared custody/candidates/append, and a first-party review presentation. */
+/** One processing lane, shared custody/candidates/append, and one approval core for every proposal. */
 export function createPersonMeetingRuntimeV1(options: {
   readonly database: Database.Database; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
   /** One provider per tool; a stored source belongs to the provider whose cursor policy names its source adapter. */
   readonly providers: readonly PersonMeetingProviderV1[]; readonly processor: DecisionProcessorBundleV1;
   readonly approval: Omit<ApprovalWorkflowContextV1, 'state'>; readonly extraction_attempts: ExtractionAttemptStoreV1;
+  /** Static, core-independent approval core options (Task 8 adds after_record). */
+  readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'now'>;
 }) {
   const { database: db, providers, processor } = options;
   if (providers.length === 0 || new Set(providers.map(p => p.id)).size !== providers.length || new Set(providers.map(p => p.cursor.policy.source_adapter_id)).size !== providers.length) {
@@ -94,6 +96,16 @@ export function createPersonMeetingRuntimeV1(options: {
   const intake = ownerOf(providers[0]!.cursor.policy.source_adapter_id).intake;
   const authenticate = personToolAuthenticationV1(options.sessions);
   const observed = new Map<string, { checked_at: string; error: string | null; next: number }>();
+  // One approval core per runtime: routes, cycles and the publisher all read and decide through it.
+  const approvalState = bindApprovalWorkflowStateV1(new SqliteApprovalWorkflowStateV1(db, {
+    source_cursor_policies: providers.map(p => p.cursor.policy), processor_adapter_id: processor.processor_adapter_id,
+  }), () => { if (db.inTransaction) throw new Error('Approval state transaction must be idle'); });
+  let core: Promise<ApprovalCoreV1> | undefined;
+  const approvals = (): Promise<ApprovalCoreV1> => core ??= createApprovalCoreV1(db, { ...options.approval, state: approvalState }, {
+    ...options.approval_core,
+    suggestions: (sourceKey, externalId) => intake.proposalSuggestions(sourceKey, externalId),
+    projects: (actor, ids) => { for (const id of ids) intake.currentPerson(actor, id); },
+  }).catch((error: unknown) => { core = undefined; throw error; });
   function settings(person: MeetingIntakePersonV1) { return canonicalSha256(intake.list(person).map(({ source_key, folder_id, folder_project_id, settings_revision }) => ({ source_key, folder_id, folder_project_id, settings_revision }))); }
   async function lane(setting: MeetingIntakeSettingV1) {
     const { provider } = ownerOf(setting.source_adapter_id);
@@ -110,26 +122,11 @@ export function createPersonMeetingRuntimeV1(options: {
     // The advance that drops a processed import from the queue records its project choices in the same transaction.
     const state = new SqliteAuthorityMeetingProcessingStateV1(db, provider.cursor.policy, processor.processor_adapter_id, undefined, setting.source_key, () => source.requireCurrent(),
       ({ expected_cursor, next_cursor }) => providerIntake.promoteConsumedImports(setting, expected_cursor, next_cursor));
-    const review = await createPersonMeetingReviewV1(db, { ...options.approval,
-      state: bindApprovalWorkflowStateV1(state, () => { if (db.inTransaction) throw new Error('Meeting review state transaction must be idle'); }),
-    }, setting.source_key);
-    return { source, state, review };
+    return { source, state };
   }
-  async function publish(signal: AbortSignal) {
-    // Finalized human actions survive disconnect/restart; they do not need provider access.
-    const keys = db.prepare(`SELECT DISTINCT s.source_key FROM authority_person_meeting_sources_v2 s
-      JOIN authority_live_source_admission_v2 a ON a.source_key=s.source_key
-      JOIN authority_live_source_candidates_v2 c ON c.admission_semantic_input_sha256=a.semantic_input_sha256
-      JOIN authority_live_approval_outbox_v2 o ON o.candidate_id=c.candidate_id
-      JOIN authority_person_meeting_approval_actions_v1 h ON h.approval_id=o.approval_id
-      WHERE h.receipt_json IS NULL AND json_extract(h.body_json,'$.request.action')='approve' ORDER BY s.source_key LIMIT 100`).all() as { source_key: string }[];
-    // A source whose provider is not selected in this runtime keeps its finalized actions until it is.
-    const all = intake.list().filter(s => owners.has(s.source_adapter_id));
-    for (const { source_key } of keys) {
-      signal.throwIfAborted(); const setting = all.find(s => s.source_key === source_key);
-      if (setting) await (await lane(setting)).review.processing.appendFinalizedApprovalsToV4(signal);
-    }
-  }
+  // Decisions survive disconnect/restart and need no provider access. A source whose provider is not selected in
+  // this runtime keeps its decisions until it is (the core's state does not route to it).
+  async function publish(signal: AbortSignal) { await (await approvals()).processing.appendFinalizedApprovalsToV4(signal); }
   let after = '';
   const processing: OrganizationAuthorityProcessingCycleV1 = {
     recoverV4Appends: publish, appendFinalizedApprovalsToV4: publish,
@@ -142,11 +139,12 @@ export function createPersonMeetingRuntimeV1(options: {
       try {
         intake.requireCurrent(setting);
         processor.assert_admission_commitments(readAdmittedMeetingProcessingCommitmentsV1(db, setting.source_key));
-        const { source, state, review } = await lane(setting);
+        const { source, state } = await lane(setting);
+        const stager = (await approvals()).stagerForSource(setting.source_key);
         const admission = await state.readAdmission();
         const { provider, intake: sourceIntake } = ownerOf(setting.source_adapter_id);
         const outcome = await new AdmittedMeetingProcessingCycleV1({ source, state, processor: processor.create_processor(admission), extraction_attempts: options.extraction_attempts,
-          source_cursor_policy: provider.cursor.policy, stager: review.stager,
+          source_cursor_policy: provider.cursor.policy, stager,
           source_ingestion: { store: new SqliteSourceAdmissionStoreV1(db, delivered => {
             source.requireCurrent(); state.assertCurrentSourceAdmission(source.identity);
             if (provider.cursor.write(sourceIntake.checkpoint(setting.source_key)) !== admission.source.cursor) throw new AuthorityOperationError('stale_access_state', 'Meeting intake changed during acquisition');
@@ -172,28 +170,9 @@ export function createPersonMeetingRuntimeV1(options: {
     try { check(); return true; }
     catch (error) { if (error instanceof AuthorityOperationError) return false; throw error; }
   }
-  function reviewRows(person: MeetingIntakePersonV1, approvalId?: string) {
-    return db.prepare(`SELECT o.approval_id,o.state,o.approved_snapshot_sha256,o.approved_snapshot_json,s.source_key,
-      json_extract(c.meeting_json,'$.provenance.external_id') AS external_id,
-      coalesce(json_extract(c.meeting_json,'$.title'),'Untitled meeting') AS title,h.body_json,h.receipt_json FROM authority_person_meeting_sources_v2 s
-      JOIN authority_live_source_admission_v2 a ON a.source_key=s.source_key
-      JOIN authority_live_source_candidates_v2 c ON c.admission_semantic_input_sha256=a.semantic_input_sha256
-      JOIN authority_live_approval_outbox_v2 o ON o.candidate_id=c.candidate_id
-      LEFT JOIN authority_person_meeting_approval_actions_v1 h ON h.approval_id=o.approval_id
-      WHERE a.organization_id=? AND a.principal_id=? AND a.membership_id=? AND o.approved_snapshot_sha256 IS NOT NULL AND (? IS NULL OR o.approval_id=?)
-      ORDER BY CASE WHEN h.body_json IS NULL AND o.state='staged' THEN 0 ELSE 1 END,c.created_at DESC,o.approval_id LIMIT 100`).all(person.organization_id, person.principal_id, person.membership_id, approvalId ?? null, approvalId ?? null) as {
-        approval_id: string; state: string; approved_snapshot_sha256: string; approved_snapshot_json: string; source_key: string; external_id: string; title: string; body_json: string | null; receipt_json: string | null;
-      }[];
-  }
-  // Until the meetings API carries several projects, a review names the first suggested project the person can still read.
-  // Imports and folder deliveries both record per-meeting suggestions.
-  function suggestedProject(person: MeetingIntakePersonV1, row: ReturnType<typeof reviewRows>[number]): string | null {
-    return intake.suggestions(row.source_key, row.external_id).find(project => allowed(() => intake.currentPerson(person, project))) ?? null;
-  }
-  function reviewView(person: MeetingIntakePersonV1, row: ReturnType<typeof reviewRows>[number]): PersonMeetingReviewV1 {
-    const action = row.body_json === null ? null : (JSON.parse(row.body_json) as { request: { action: string } }).request.action;
-    return { approval_id: row.approval_id, title: row.title.slice(0, 256), project_id: suggestedProject(person, row),
-      status: action === 'reject' ? 'rejected' : action === 'approve' ? row.receipt_json === null ? 'publishing' : 'approved' : row.state === 'superseded' ? 'superseded' : 'pending' };
+  // Meetings API v1 names one project: the first of the proposal's projects (its decision's, or its readable suggestions).
+  function reviewView(view: ApprovalProposalViewV1): PersonMeetingReviewV1 {
+    return { approval_id: view.approval_id, title: view.title, project_id: view.project_ids[0] ?? null, status: view.status };
   }
   const application: ProviderHttpApplicationV1 = {
     routes: [{ route_id: 'personal-meetings', method: 'POST', path: PERSON_MEETINGS_PATH_V1 }],
@@ -211,19 +190,24 @@ export function createPersonMeetingRuntimeV1(options: {
       const result = async (): Promise<unknown> => {
         if (input.operation === 'reviews' || input.operation === 'review_open' || input.operation === 'review') {
           // Reviews belong to the person who brought the meeting in, whatever projects it suggests.
-          const rows = allowed(() => intake.currentPerson(person)) ? reviewRows(person, input.operation === 'reviews' ? undefined : input.approval_id) : [];
-          if (input.operation === 'reviews') return { reviews: rows.map(row => reviewView(person, row)) };
-          const row = rows.find(row => row.approval_id === input.approval_id);
-          if (!row) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
-          if (input.operation === 'review_open') return { review: reviewView(person, row), snapshot_sha256: row.approved_snapshot_sha256,
-            content: personMeetingReviewTextV1(row.approved_snapshot_json) };
+          const reviewer = allowed(() => intake.currentPerson(person));
+          if (input.operation === 'reviews') return { reviews: reviewer ? (await approvals()).proposals(person).map(reviewView) : [] };
+          if (!reviewer) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
+          const approvalCore = await approvals();
+          const view = approvalCore.proposal(input.approval_id);
+          if (!view || view.reviewer.organization_id !== person.organization_id || view.reviewer.principal_id !== person.principal_id
+            || view.reviewer.membership_id !== person.membership_id) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
+          if (input.operation === 'review_open') return { review: reviewView(view), snapshot_sha256: view.snapshot_sha256, content: approvalProposalTextV1(view.snapshot_json) };
           const action = input;
-          const setting = intake.list(person).find(s => s.source_key === row.source_key)!;
-          const { review } = await lane(setting);
-          return review.resolve({ approval_id: action.approval_id, command_id: action.command_id, snapshot_sha256: action.snapshot_sha256 as `sha256:${string}`,
-            action: action.action, project_id: action.project_id, share_transcript: action.share_transcript }, () => {
-            current(); intake.currentPerson(person, action.project_id); return authenticate(token);
+          // Until the v2 contract (Task 9): one project or Only me, no owners.
+          const decided = approvalCore.decide('desktop', { approval_id: action.approval_id, command_id: action.command_id, snapshot_sha256: action.snapshot_sha256 as `sha256:${string}`,
+            action: action.action, project_ids: action.project_id === null ? [] : [action.project_id], share_transcript: action.share_transcript, owners: [] }, () => {
+            current(); const a = authenticate(token);
+            return { actor: { organization_id: a.organization_id, principal_id: a.principal_id, membership_id: a.membership_id }, evidence: { kind: 'person-session', sha256: a.authorization_sha256 } };
           });
+          if (decided.kind === 'already_decided') throw new AuthorityOperationError('stale_access_state', 'Meeting review has already been resolved');
+          if (decided.kind === 'stale') throw new AuthorityOperationError('stale_access_state', 'Meeting review has changed');
+          return { status: decided.status };
         }
         if (input.operation === 'cancel_import') {
           const setting = intake.list(person).find(s => s.source_key === input.source_key);
@@ -289,5 +273,5 @@ export function createPersonMeetingRuntimeV1(options: {
     return setting;
   }
   return { applications: [...providers.map(p => p.connection_http), application], processing, queue,
-    tools: async (token: string) => providers.map(p => p.tool(token)), close() {} };
+    tools: async (token: string) => providers.map(p => p.tool(token)), approvals, close() {} };
 }

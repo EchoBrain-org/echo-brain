@@ -1,4 +1,4 @@
--- Authority baseline V12: independent personal meeting-source progress,
+-- Authority baseline V12: independent personal meeting-source progress, one approval proposal per meeting with one shared decision table,
 -- plus project context, raw Person uploads, and optional search enrichment.
 -- Fresh initialization only; no V11-to-V12 transition or backfill exists, and
 -- this file is never an in-place upgrade.
@@ -621,57 +621,118 @@ CREATE TABLE authority_live_approval_outbox_v2 (
   candidate_id TEXT PRIMARY KEY REFERENCES authority_live_source_candidates_v2(candidate_id),
   approval_id TEXT NOT NULL UNIQUE CHECK (approval_id GLOB 'apr_*'),
   stage_command_id TEXT NOT NULL UNIQUE CHECK (stage_command_id GLOB 'pas_*'),
-  state TEXT NOT NULL CHECK (state IN ('queued', 'posting', 'posted', 'staged', 'superseded')),
-  provider_message_ts TEXT UNIQUE,
-  frozen_card_sha256 TEXT CHECK (frozen_card_sha256 LIKE 'sha256:%'),
-  private_approval_card_v2_json TEXT CHECK (private_approval_card_v2_json IS NULL OR (json_valid(private_approval_card_v2_json) AND json_type(private_approval_card_v2_json) = 'object')),
-  approved_snapshot_json TEXT CHECK (approved_snapshot_json IS NULL OR (json_valid(approved_snapshot_json) AND json_type(approved_snapshot_json) = 'object')),
-  approved_snapshot_sha256 TEXT CHECK (approved_snapshot_sha256 LIKE 'sha256:%'),
-  post_started_at TEXT CHECK (post_started_at IS NULL OR unixepoch(post_started_at) IS NOT NULL),
-  control_approval_sha256 TEXT UNIQUE CHECK (control_approval_sha256 LIKE 'sha256:%'),
+  state TEXT NOT NULL CHECK (state IN ('queued', 'staged', 'superseded')),
+  approved_snapshot_json TEXT CHECK (approved_snapshot_json IS NULL OR (
+    json_valid(approved_snapshot_json) AND json_type(approved_snapshot_json) = 'object'
+    AND json_extract(approved_snapshot_json, '$.approval_id') IS approval_id)),
+  approved_snapshot_sha256 TEXT CHECK (approved_snapshot_sha256 IS NULL OR (
+    length(approved_snapshot_sha256) = 71 AND substr(approved_snapshot_sha256, 1, 7) = 'sha256:'
+    AND substr(approved_snapshot_sha256, 8) NOT GLOB '*[^0-9a-f]*')),
+  suggested_projects_json TEXT CHECK (suggested_projects_json IS NULL OR (
+    json_valid(suggested_projects_json) AND json_type(suggested_projects_json) = 'array'
+    AND json_array_length(suggested_projects_json) <= 20)),
   superseded_by_candidate_id TEXT REFERENCES authority_live_source_candidates_v2(candidate_id),
   superseded_at TEXT CHECK (superseded_at IS NULL OR unixepoch(superseded_at) IS NOT NULL),
-  tombstoned_at TEXT CHECK (tombstoned_at IS NULL OR unixepoch(tombstoned_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
+  CHECK ((approved_snapshot_json IS NULL) = (approved_snapshot_sha256 IS NULL)
+     AND (approved_snapshot_json IS NULL) = (suggested_projects_json IS NULL)),
   CHECK (
-    (state = 'queued' AND provider_message_ts IS NULL AND frozen_card_sha256 IS NULL AND approved_snapshot_json IS NULL AND approved_snapshot_sha256 IS NULL AND post_started_at IS NULL AND control_approval_sha256 IS NULL AND superseded_by_candidate_id IS NULL AND superseded_at IS NULL AND tombstoned_at IS NULL) OR
-    (state = 'posting' AND provider_message_ts IS NULL AND frozen_card_sha256 IS NOT NULL AND approved_snapshot_json IS NOT NULL AND approved_snapshot_sha256 IS NOT NULL AND post_started_at IS NOT NULL AND control_approval_sha256 IS NULL AND superseded_by_candidate_id IS NULL AND superseded_at IS NULL AND tombstoned_at IS NULL) OR
-    (state = 'posted' AND provider_message_ts IS NOT NULL AND frozen_card_sha256 IS NOT NULL AND approved_snapshot_json IS NOT NULL AND approved_snapshot_sha256 IS NOT NULL AND post_started_at IS NOT NULL AND control_approval_sha256 IS NULL AND superseded_by_candidate_id IS NULL AND superseded_at IS NULL AND tombstoned_at IS NULL) OR
-    (state = 'staged' AND provider_message_ts IS NOT NULL AND frozen_card_sha256 IS NOT NULL AND approved_snapshot_json IS NOT NULL AND approved_snapshot_sha256 IS NOT NULL AND post_started_at IS NOT NULL AND control_approval_sha256 IS NOT NULL AND superseded_by_candidate_id IS NULL AND superseded_at IS NULL AND tombstoned_at IS NULL) OR
-    (state = 'superseded' AND ((provider_message_ts IS NULL AND frozen_card_sha256 IS NULL AND approved_snapshot_json IS NULL AND approved_snapshot_sha256 IS NULL AND post_started_at IS NULL AND control_approval_sha256 IS NULL) OR (frozen_card_sha256 IS NOT NULL AND approved_snapshot_json IS NOT NULL AND approved_snapshot_sha256 IS NOT NULL AND post_started_at IS NOT NULL)) AND superseded_by_candidate_id IS NOT NULL AND superseded_at IS NOT NULL AND (tombstoned_at IS NULL OR provider_message_ts IS NOT NULL))
+    (state = 'queued' AND approved_snapshot_json IS NULL AND superseded_by_candidate_id IS NULL AND superseded_at IS NULL) OR
+    (state = 'staged' AND approved_snapshot_json IS NOT NULL AND superseded_by_candidate_id IS NULL AND superseded_at IS NULL) OR
+    (state = 'superseded' AND superseded_by_candidate_id IS NOT NULL AND superseded_at IS NOT NULL
+      AND superseded_by_candidate_id != candidate_id)
   )
 ) STRICT;
 
--- Authenticated in-app human actions and append recovery, without a second candidate store.
-CREATE TABLE authority_person_meeting_approval_actions_v1 (
+-- One decision per proposal, from any surface; the first decision wins. Written only by the
+-- approval core's decide(); the publisher fills receipt_json once with {record_sha256, receipt},
+-- where receipt is the signed record receipt and record_sha256 equals receipt.body.record_sha256.
+CREATE TABLE authority_approval_decisions_v1 (
   sequence INTEGER PRIMARY KEY,
   approval_id TEXT NOT NULL UNIQUE REFERENCES authority_live_approval_outbox_v2(approval_id),
-  command_id TEXT NOT NULL UNIQUE CHECK (length(command_id) BETWEEN 1 AND 128),
+  command_id TEXT NOT NULL UNIQUE CHECK (length(command_id) BETWEEN 1 AND 128
+    AND command_id GLOB '[A-Za-z0-9]*' AND command_id NOT GLOB '*[^A-Za-z0-9._:-]*'),
+  surface TEXT NOT NULL CHECK (surface IN ('desktop', 'slack')),
+  action TEXT NOT NULL CHECK (action IN ('approve', 'reject')),
   body_json TEXT NOT NULL CHECK (json_valid(body_json) AND json_type(body_json) = 'object'
-    AND json_extract(body_json, '$.request.action') IN ('approve', 'reject')),
-  receipt_json TEXT CHECK (receipt_json IS NULL OR (json_valid(receipt_json) AND json_type(receipt_json) = 'object')),
-  CHECK (receipt_json IS NULL OR json_extract(body_json, '$.request.action') = 'approve')
+    AND json_extract(body_json, '$.request.action') IS action
+    AND json_extract(body_json, '$.request.approval_id') IS approval_id
+    AND json_extract(body_json, '$.request.command_id') IS command_id
+    AND json_extract(body_json, '$.surface') IS surface
+    AND json_type(body_json, '$.request.snapshot_sha256') IS 'text'
+    AND json_type(body_json, '$.request.project_ids') IS 'array'
+    AND json_array_length(body_json, '$.request.project_ids') <= 20
+    AND coalesce(json_type(body_json, '$.request.share_transcript'), '') IN ('true', 'false')
+    AND json_type(body_json, '$.request.owners') IS 'array'
+    AND json_array_length(body_json, '$.request.owners') <= 40
+    AND json_type(body_json, '$.actor.organization_id') IS 'text'
+    AND json_type(body_json, '$.actor.principal_id') IS 'text'
+    AND json_type(body_json, '$.actor.membership_id') IS 'text'
+    AND json_extract(body_json, '$.evidence.kind') IS CASE surface WHEN 'desktop' THEN 'person-session' ELSE 'slack-click' END
+    AND json_type(body_json, '$.evidence.sha256') IS 'text'
+    AND unixepoch(json_extract(body_json, '$.decided_at')) IS NOT NULL),
+  receipt_json TEXT CHECK (receipt_json IS NULL OR (json_valid(receipt_json) AND json_type(receipt_json) = 'object'
+    AND json_type(receipt_json, '$.record_sha256') IS 'text'
+    AND json_type(receipt_json, '$.receipt') IS 'object'
+    AND json_extract(receipt_json, '$.receipt.body.record_sha256') IS json_extract(receipt_json, '$.record_sha256'))),
+  CHECK ((surface = 'slack') = (command_id GLOB 'slack:*')),
+  CHECK (action = 'approve' OR (json_array_length(body_json, '$.request.project_ids') = 0
+    AND json_type(body_json, '$.request.share_transcript') IS 'false'
+    AND json_array_length(body_json, '$.request.owners') = 0)),
+  CHECK (receipt_json IS NULL OR action = 'approve')
 ) STRICT;
-CREATE TRIGGER authority_person_meeting_action_immutable_v1
-BEFORE UPDATE ON authority_person_meeting_approval_actions_v1
+CREATE INDEX authority_approval_decisions_v1_unpublished
+  ON authority_approval_decisions_v1(sequence) WHERE receipt_json IS NULL AND action = 'approve';
+CREATE TRIGGER authority_approval_decision_immutable_v1
+BEFORE UPDATE ON authority_approval_decisions_v1
 WHEN NEW.sequence != OLD.sequence OR NEW.approval_id != OLD.approval_id OR NEW.command_id != OLD.command_id
-  OR NEW.body_json != OLD.body_json OR OLD.receipt_json IS NOT NULL OR NEW.receipt_json IS NULL
-BEGIN SELECT RAISE(ABORT, 'personal meeting action is immutable'); END;
-CREATE TRIGGER authority_person_meeting_action_delete_denied_v1
-BEFORE DELETE ON authority_person_meeting_approval_actions_v1
-BEGIN SELECT RAISE(ABORT, 'personal meeting action deletion is denied'); END;
-
-CREATE TABLE authority_live_approval_delivery_quarantines_v1 (
-  candidate_id TEXT PRIMARY KEY
-    REFERENCES authority_live_approval_outbox_v2(candidate_id),
-  reason_code TEXT NOT NULL CHECK (
-    reason_code = 'approval_package_unrepresentable'
-  ),
-  quarantined_at TEXT NOT NULL CHECK (
-    strftime('%Y-%m-%dT%H:%M:%fZ', quarantined_at) IS NOT NULL AND
-    quarantined_at = strftime('%Y-%m-%dT%H:%M:%fZ', quarantined_at)
-  )
-) STRICT;
+  OR NEW.surface != OLD.surface OR NEW.action != OLD.action OR NEW.body_json != OLD.body_json
+  OR OLD.receipt_json IS NOT NULL OR NEW.receipt_json IS NULL
+BEGIN SELECT RAISE(ABORT, 'approval decision is immutable'); END;
+CREATE TRIGGER authority_approval_decision_delete_denied_v1
+BEFORE DELETE ON authority_approval_decisions_v1
+BEGIN SELECT RAISE(ABORT, 'approval decision deletion is denied'); END;
+-- A decision names the staged proposal and the exact snapshot its reviewer saw.
+CREATE TRIGGER authority_approval_decision_staged_v1
+BEFORE INSERT ON authority_approval_decisions_v1
+WHEN NOT EXISTS (
+  SELECT 1 FROM authority_live_approval_outbox_v2 AS outbox
+   WHERE outbox.approval_id = NEW.approval_id AND outbox.state = 'staged'
+     AND outbox.approved_snapshot_sha256 = json_extract(NEW.body_json, '$.request.snapshot_sha256'))
+BEGIN SELECT RAISE(ABORT, 'approval decision needs its staged proposal'); END;
+-- Only the person whose source brought the meeting in decides, while their membership is active.
+CREATE TRIGGER authority_approval_decision_reviewer_v1
+BEFORE INSERT ON authority_approval_decisions_v1
+WHEN NOT EXISTS (
+  SELECT 1 FROM authority_live_approval_outbox_v2 AS outbox
+    JOIN authority_live_source_candidates_v2 AS candidate ON candidate.candidate_id = outbox.candidate_id
+    JOIN authority_live_source_admission_v2 AS admission ON admission.semantic_input_sha256 = candidate.admission_semantic_input_sha256
+    JOIN authority_memberships AS membership ON membership.membership_id = admission.membership_id
+     AND membership.organization_id = admission.organization_id AND membership.principal_id = admission.principal_id
+     AND membership.membership_type = admission.membership_type AND membership.status = 'active'
+   WHERE outbox.approval_id = NEW.approval_id
+     AND admission.organization_id = json_extract(NEW.body_json, '$.actor.organization_id')
+     AND admission.principal_id = json_extract(NEW.body_json, '$.actor.principal_id')
+     AND admission.membership_id = json_extract(NEW.body_json, '$.actor.membership_id'))
+BEGIN SELECT RAISE(ABORT, 'approval decision needs the active reviewer'); END;
+-- An approval's audience is sorted and unique; each project is active and the reviewer an active member of it.
+CREATE TRIGGER authority_approval_decision_audience_v1
+BEFORE INSERT ON authority_approval_decisions_v1
+WHEN EXISTS (
+  SELECT 1 FROM json_each(NEW.body_json, '$.request.project_ids') AS earlier
+    JOIN json_each(NEW.body_json, '$.request.project_ids') AS later ON later.key = earlier.key + 1
+   WHERE later.value <= earlier.value)
+  OR EXISTS (
+  SELECT 1 FROM json_each(NEW.body_json, '$.request.project_ids') AS chosen
+   WHERE chosen.type != 'text' OR NOT EXISTS (
+     SELECT 1 FROM authority_project_memberships_v1 AS grant_row
+       JOIN authority_projects_v1 AS project ON project.project_id = grant_row.project_id
+        AND project.organization_id = grant_row.organization_id AND project.status = 'active'
+      WHERE grant_row.project_id = chosen.value AND grant_row.status = 'active'
+        AND grant_row.organization_id = json_extract(NEW.body_json, '$.actor.organization_id')
+        AND grant_row.principal_id = json_extract(NEW.body_json, '$.actor.principal_id')
+        AND grant_row.membership_id = json_extract(NEW.body_json, '$.actor.membership_id')))
+BEGIN SELECT RAISE(ABORT, 'approval decision audience needs active project membership'); END;
 
 CREATE INDEX authority_memberships_current
   ON authority_memberships (principal_id, status, membership_id);
@@ -1279,124 +1340,38 @@ BEFORE UPDATE ON authority_live_approval_outbox_v2
 WHEN NEW.candidate_id != OLD.candidate_id
   OR NEW.approval_id != OLD.approval_id
   OR NEW.stage_command_id != OLD.stage_command_id
-  OR (OLD.state = 'queued' AND NOT (
-    NEW.state IN ('posting', 'superseded') OR
-    (NEW.state = 'queued' AND OLD.private_approval_card_v2_json IS NULL
-      AND NEW.private_approval_card_v2_json IS NOT NULL)
-  ))
-  OR (OLD.state = 'posting' AND NEW.state NOT IN ('queued', 'posted', 'superseded'))
-  OR (OLD.state = 'posted' AND NEW.state NOT IN ('staged', 'superseded'))
-  OR (OLD.state = 'staged' AND NEW.state NOT IN ('superseded'))
-  -- A provider or approval result can land after another runner supersedes
-  -- the outbox. Permit each missing external witness to be filled once while
-  -- preserving every already-known field.
-  OR (OLD.state = 'superseded' AND NOT (
-      NEW.state = 'superseded'
-      AND NEW.superseded_by_candidate_id IS OLD.superseded_by_candidate_id
-      AND NEW.superseded_at IS OLD.superseded_at
-      AND (NEW.post_started_at IS OLD.post_started_at OR
-           (OLD.provider_message_ts IS NULL AND
-            OLD.post_started_at IS NOT NULL AND NEW.post_started_at IS NULL))
-      AND (
-        (NEW.provider_message_ts IS OLD.provider_message_ts
-         AND NEW.frozen_card_sha256 IS OLD.frozen_card_sha256
-         AND NEW.approved_snapshot_json IS OLD.approved_snapshot_json
-         AND NEW.approved_snapshot_sha256 IS OLD.approved_snapshot_sha256
-         AND NEW.control_approval_sha256 IS OLD.control_approval_sha256
-         AND NEW.tombstoned_at IS OLD.tombstoned_at)
-        OR
-        (OLD.provider_message_ts IS NULL
-         AND NEW.provider_message_ts IS NOT NULL
-         AND NEW.frozen_card_sha256 IS OLD.frozen_card_sha256
-         AND NEW.approved_snapshot_json IS OLD.approved_snapshot_json
-         AND NEW.approved_snapshot_sha256 IS OLD.approved_snapshot_sha256
-         AND NEW.control_approval_sha256 IS OLD.control_approval_sha256
-         AND NEW.tombstoned_at IS OLD.tombstoned_at)
-        OR
-        (OLD.control_approval_sha256 IS NULL
-         AND NEW.control_approval_sha256 IS NOT NULL
-         AND NEW.provider_message_ts IS OLD.provider_message_ts
-         AND NEW.frozen_card_sha256 IS OLD.frozen_card_sha256
-         AND NEW.approved_snapshot_json IS OLD.approved_snapshot_json
-         AND NEW.approved_snapshot_sha256 IS OLD.approved_snapshot_sha256
-         AND NEW.tombstoned_at IS OLD.tombstoned_at)
-        OR
-        (OLD.tombstoned_at IS NULL
-         AND NEW.tombstoned_at IS NOT NULL
-         AND OLD.provider_message_ts IS NOT NULL
-         AND OLD.frozen_card_sha256 IS NOT NULL
-         AND OLD.approved_snapshot_json IS NOT NULL
-         AND OLD.approved_snapshot_sha256 IS NOT NULL
-         AND NEW.provider_message_ts IS OLD.provider_message_ts
-         AND NEW.frozen_card_sha256 IS OLD.frozen_card_sha256
-         AND NEW.approved_snapshot_json IS OLD.approved_snapshot_json
-         AND NEW.approved_snapshot_sha256 IS OLD.approved_snapshot_sha256
-         AND NEW.control_approval_sha256 IS OLD.control_approval_sha256
-         AND NEW.updated_at = NEW.tombstoned_at)
-        OR
-        (OLD.provider_message_ts IS NULL
-         AND OLD.frozen_card_sha256 IS NOT NULL
-         AND OLD.approved_snapshot_json IS NOT NULL
-         AND OLD.approved_snapshot_sha256 IS NOT NULL
-         AND OLD.post_started_at IS NOT NULL
-         AND OLD.control_approval_sha256 IS NULL
-         AND NEW.provider_message_ts IS NULL
-         AND NEW.frozen_card_sha256 IS NULL
-         AND NEW.approved_snapshot_json IS NULL
-         AND NEW.approved_snapshot_sha256 IS NULL
-         AND NEW.post_started_at IS NULL
-         AND NEW.control_approval_sha256 IS NULL
-         AND NEW.tombstoned_at IS NULL)
-      )
-    ))
-  OR (OLD.provider_message_ts IS NOT NULL AND NEW.provider_message_ts IS NOT OLD.provider_message_ts)
-  OR (OLD.frozen_card_sha256 IS NOT NULL AND NEW.frozen_card_sha256 IS NOT OLD.frozen_card_sha256
-      AND NOT (OLD.state = 'posting' AND NEW.state = 'queued')
-      AND NOT (OLD.state = 'superseded' AND NEW.state = 'superseded'
-               AND OLD.provider_message_ts IS NULL AND NEW.post_started_at IS NULL))
-  OR (OLD.approved_snapshot_json IS NOT NULL AND NEW.approved_snapshot_json IS NOT OLD.approved_snapshot_json
-      AND NOT (OLD.state = 'posting' AND NEW.state = 'queued')
-      AND NOT (OLD.state = 'superseded' AND NEW.state = 'superseded'
-               AND OLD.provider_message_ts IS NULL AND NEW.post_started_at IS NULL))
-  OR (OLD.approved_snapshot_sha256 IS NOT NULL AND NEW.approved_snapshot_sha256 IS NOT OLD.approved_snapshot_sha256
-      AND NOT (OLD.state = 'posting' AND NEW.state = 'queued')
-      AND NOT (OLD.state = 'superseded' AND NEW.state = 'superseded'
-               AND OLD.provider_message_ts IS NULL AND NEW.post_started_at IS NULL))
-  OR (OLD.post_started_at IS NOT NULL AND NEW.post_started_at IS NOT OLD.post_started_at
-      AND NOT (OLD.state = 'posting' AND NEW.state = 'queued')
-      AND NOT (OLD.state = 'superseded' AND NEW.state = 'superseded'
-               AND OLD.provider_message_ts IS NULL AND NEW.post_started_at IS NULL))
-  OR (OLD.control_approval_sha256 IS NOT NULL AND NEW.control_approval_sha256 IS NOT OLD.control_approval_sha256)
-  OR (OLD.state = 'queued' AND NEW.state = 'superseded' AND (NEW.provider_message_ts IS NOT NULL OR NEW.frozen_card_sha256 IS NOT NULL OR NEW.approved_snapshot_json IS NOT NULL OR NEW.approved_snapshot_sha256 IS NOT NULL OR NEW.post_started_at IS NOT NULL OR NEW.control_approval_sha256 IS NOT NULL))
-  OR (OLD.state = 'posting' AND NEW.state = 'superseded' AND (NEW.provider_message_ts IS NOT OLD.provider_message_ts OR NEW.frozen_card_sha256 IS NOT OLD.frozen_card_sha256 OR NEW.approved_snapshot_json IS NOT OLD.approved_snapshot_json OR NEW.approved_snapshot_sha256 IS NOT OLD.approved_snapshot_sha256 OR NEW.post_started_at IS NOT OLD.post_started_at OR NEW.control_approval_sha256 IS NOT NULL))
-  OR (OLD.state = 'posted' AND NEW.state = 'superseded' AND NEW.control_approval_sha256 IS NOT NULL)
-  OR (OLD.state != 'superseded' AND NEW.tombstoned_at IS NOT NULL)
-  OR (OLD.tombstoned_at IS NOT NULL AND NEW.tombstoned_at IS NOT OLD.tombstoned_at)
-  OR (NEW.state = 'superseded' AND (NEW.superseded_by_candidate_id IS NULL OR NEW.superseded_at IS NULL))
-  OR (NEW.state != 'superseded' AND (NEW.superseded_by_candidate_id IS NOT NULL OR NEW.superseded_at IS NOT NULL))
-BEGIN SELECT RAISE(ABORT, 'live approval outbox only permits queued-posting-posted-staged-superseded'); END;
+  OR NOT ((OLD.state = 'queued' AND NEW.state IN ('staged', 'superseded'))
+       OR (OLD.state = 'staged' AND NEW.state = 'superseded'))
+  OR (OLD.state = 'queued' AND NEW.state = 'superseded' AND NEW.approved_snapshot_json IS NOT NULL)
+  OR (OLD.approved_snapshot_json IS NOT NULL AND (
+       NEW.approved_snapshot_json IS NOT OLD.approved_snapshot_json
+    OR NEW.approved_snapshot_sha256 IS NOT OLD.approved_snapshot_sha256
+    OR NEW.suggested_projects_json IS NOT OLD.suggested_projects_json))
+BEGIN SELECT RAISE(ABORT, 'live approval outbox only permits queued-staged-superseded'); END;
+
+-- Frozen suggestions are sorted, unique, existing projects.
+CREATE TRIGGER authority_live_approval_outbox_v2_suggestions_v1
+BEFORE UPDATE OF suggested_projects_json ON authority_live_approval_outbox_v2
+WHEN NEW.suggested_projects_json IS NOT NULL AND (
+  EXISTS (
+    SELECT 1 FROM json_each(NEW.suggested_projects_json) AS earlier
+      JOIN json_each(NEW.suggested_projects_json) AS later ON later.key = earlier.key + 1
+     WHERE later.value <= earlier.value)
+  OR EXISTS (
+    SELECT 1 FROM json_each(NEW.suggested_projects_json) AS suggested
+     WHERE suggested.type != 'text' OR NOT EXISTS (
+       SELECT 1 FROM authority_projects_v1 AS project WHERE project.project_id = suggested.value)))
+BEGIN SELECT RAISE(ABORT, 'suggested projects must be sorted, unique, existing projects'); END;
+
+-- A decided proposal is final: it is never superseded and its frozen fields never change.
+CREATE TRIGGER authority_live_approval_outbox_v2_decided_final_v1
+BEFORE UPDATE ON authority_live_approval_outbox_v2
+WHEN EXISTS (SELECT 1 FROM authority_approval_decisions_v1 WHERE approval_id = OLD.approval_id)
+BEGIN SELECT RAISE(ABORT, 'a decided approval proposal is final'); END;
 
 CREATE TRIGGER authority_live_approval_outbox_v2_delete_denied
 BEFORE DELETE ON authority_live_approval_outbox_v2
 BEGIN SELECT RAISE(ABORT, 'live approval outbox deletion is denied'); END;
-
-CREATE TRIGGER authority_live_approval_delivery_quarantines_v1_immutable_update
-BEFORE UPDATE ON authority_live_approval_delivery_quarantines_v1
-BEGIN SELECT RAISE(ABORT, 'approval delivery quarantine is immutable'); END;
-
-CREATE TRIGGER authority_live_approval_delivery_quarantines_v1_delete_denied
-BEFORE DELETE ON authority_live_approval_delivery_quarantines_v1
-BEGIN SELECT RAISE(ABORT, 'approval delivery quarantine deletion is denied'); END;
-
-CREATE TRIGGER authority_live_approval_outbox_v2_quarantine_transition_fence
-BEFORE UPDATE ON authority_live_approval_outbox_v2
-WHEN EXISTS (
-  SELECT 1
-  FROM authority_live_approval_delivery_quarantines_v1
-  WHERE candidate_id = OLD.candidate_id
-)
-  AND NOT (OLD.state <> 'superseded' AND NEW.state = 'superseded')
-BEGIN SELECT RAISE(ABORT, 'quarantined approval outbox only permits supersession'); END;
 
 -- The upload carrier records original text and explicit access, with no context taxonomy.
 CREATE TABLE authority_person_updates_v1 (
@@ -1742,11 +1717,6 @@ BEGIN
    WHERE organization_id = NEW.organization_id;
 END;
 
-CREATE TRIGGER authority_live_approval_outbox_v2_private_card_v2_immutable
-BEFORE UPDATE OF private_approval_card_v2_json ON authority_live_approval_outbox_v2
-WHEN OLD.private_approval_card_v2_json IS NOT NULL
-  AND NEW.private_approval_card_v2_json IS NOT OLD.private_approval_card_v2_json
-BEGIN SELECT RAISE(ABORT, 'authority outbox V2 private approval card is immutable'); END;
 CREATE TRIGGER authority_project_auth_revision_project_membership_insert
 AFTER INSERT ON authority_project_memberships_v1
 BEGIN

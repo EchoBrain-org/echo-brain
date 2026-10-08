@@ -1,11 +1,11 @@
 /**
- * Core-stage approval wiring on the first-party in-app review.
+ * Core-stage approval wiring on the approval core.
  *
  * The benchmark stops at the authenticated-action boundary. A real Person
- * session authenticates the reviewer, then the production in-app review
- * (`createPersonMeetingReviewV1`) does everything after it: the stable
- * reviewer and frozen-snapshot checks, the durable action, the signed V4
- * record append and the policy-fact projection. No HTTP route, OIDC client or
+ * session authenticates the reviewer, then the production approval core
+ * (`createApprovalCoreV1`) does everything after it: the proposal freeze, the
+ * stable reviewer and frozen-snapshot checks, the durable decision, the signed
+ * V4 record append and the policy-fact projection. No HTTP route, OIDC client or
  * provider runs, and nothing here simulates a card, a transport signature or a
  * delivery.
  */
@@ -13,7 +13,8 @@ import { randomUUID } from "node:crypto";
 import { bindApprovalWorkflowStateV1 } from "../../../packages/organization-processing/dist/admitted-meeting-processing/approval-workflow-state-v1.js";
 import { SqliteProjectContextRepositoryV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/project-context-v1.js";
 import { createProjectContextApplicationV1 } from "../../../services/organization-authority/dist/application/project-context-application-v1.js";
-import { createPersonMeetingReviewV1, personMeetingReviewTextV1 } from "../../../services/organization-authority/dist/composition/person-meeting-review-v1.js";
+import { approvalProposalTextV1, createApprovalCoreV1 } from "../../../services/organization-authority/dist/composition/approval-core-v1.js";
+import { AuthorityOperationError } from "../../../packages/organization-authority-kernel/dist/domain/errors.js";
 import { personToolAuthenticationV1 } from "../../../services/organization-authority/dist/composition/person-tool-authentication-v1.js";
 
 /** The two audiences an approving person can choose: only themselves, or the members of one project. */
@@ -23,7 +24,7 @@ export const CORE_APPROVAL_POLICIES = Object.freeze({
 });
 
 function identifier(value, label) {
-  // The review's command id is 1-128 characters.
+  // The decision's command id is 1-128 characters.
   if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) {
     throw new TypeError(`${label} must be a canonical identifier`);
   }
@@ -94,31 +95,35 @@ export async function createCoreApproval({ context, input, owner, employee, sess
     throw new TypeError("policy_id is unsupported");
   };
 
-  const review = await createPersonMeetingReviewV1(database, {
+  const core = await createApprovalCoreV1(database, {
     state: bindApprovalWorkflowStateV1(context.state, () => {
-      if (database.inTransaction) throw new Error("Meeting review state transaction must be idle");
+      if (database.inTransaction) throw new Error("Approval state transaction must be idle");
     }),
     record_append: context.record_append,
     signer: context.signer,
     coordinates: context.coordinates,
     next_envelope_id: context.next_envelope_id,
     ...(context.on_terminal_action_queued === undefined ? {} : { on_terminal_action_queued: context.on_terminal_action_queued }),
-  }, input.source_key);
+  }, {
+    // The core candidate queues no project imports, so no proposal carries a suggestion.
+    suggestions: () => [],
+    projects: (actor, ids) => { for (const id of ids) input.intake.currentPerson(actor, id); },
+  });
 
   return Object.freeze({
-    stager: review.stager,
-    processing: review.processing,
+    stager: core.stager,
+    processing: core.processing,
     audience_project_id,
-    /** What the person is shown for a staged proposal, or undefined until it is staged. */
+    /** What the person is shown for a pending proposal, or undefined until it is frozen. */
     readPresentation(approval_id) {
-      const outbox = context.state.readCandidateByApprovalId(identifier(approval_id, "approval_id"));
-      if (outbox === undefined || outbox.state !== "staged" || outbox.approved_snapshot_json === null) return undefined;
-      return personMeetingReviewTextV1(outbox.approved_snapshot_json);
+      const view = core.proposal(identifier(approval_id, "approval_id"));
+      if (view?.status !== "pending") return undefined;
+      return approvalProposalTextV1(view.snapshot_json);
     },
     /**
      * One reviewer's approve action, with the audience their policy names.
      * `offer_id` is the idempotency key: replaying it returns the original
-     * outcome, and reusing it for another action is refused by the review.
+     * outcome, and reusing it for another action is refused by the core.
      */
     async offerApproval({ approval_id, actor: role = "owner", policy_id, offer_id } = {}) {
       identifier(approval_id, "approval_id");
@@ -126,27 +131,25 @@ export async function createCoreApproval({ context, input, owner, employee, sess
       const project_id = projectOf(policy_id);
       const reviewer = role === "owner" ? ownerActor : role === "employee" ? employeeActor : undefined;
       if (reviewer === undefined) throw new TypeError("actor must name a configured owner or employee");
-      const frozen = context.state.readFrozenCandidateForApproval(approval_id);
-      if (frozen?.approved_snapshot_sha256 == null) throw new Error("approval must be durably staged before an action is offered");
-      // The same re-check the HTTP route runs at each fence: a current session,
-      // an active membership and a current grant on the chosen project.
+      const snapshot_sha256 = core.proposal(approval_id)?.snapshot_sha256;
+      if (snapshot_sha256 === undefined) throw new Error("approval must be durably staged before an action is offered");
+      // The session only: the core checks the reviewer, the membership and each chosen project itself.
       const authorize = () => {
         const authorization = authenticate(reviewer.access_token);
-        input.intake.currentPerson({
-          organization_id: authorization.organization_id, principal_id: authorization.principal_id, membership_id: authorization.membership_id,
-        }, project_id);
-        return authorization;
+        if (authorization.principal_id !== reviewer.principal_id || authorization.membership_id !== reviewer.membership_id) {
+          throw new Error("authenticated Person actor does not match the offered action");
+        }
+        return {
+          actor: { organization_id: authorization.organization_id, principal_id: authorization.principal_id, membership_id: authorization.membership_id },
+          evidence: { kind: "person-session", sha256: authorization.authorization_sha256 },
+        };
       };
-      const authorization = authorize();
-      if (authorization.principal_id !== reviewer.principal_id || authorization.membership_id !== reviewer.membership_id) {
-        throw new Error("authenticated Person actor does not match the offered action");
-      }
-      const replayed = database.prepare("SELECT count(*) FROM authority_person_meeting_approval_actions_v1 WHERE approval_id = ? OR command_id = ?")
-        .pluck().get(approval_id, command_id) > 0;
-      const result = review.resolve({
-        command_id, approval_id, snapshot_sha256: frozen.approved_snapshot_sha256, action: "approve", project_id, share_transcript: false,
+      const result = core.decide("desktop", {
+        approval_id, command_id, snapshot_sha256, action: "approve", project_ids: project_id === null ? [] : [project_id], share_transcript: false, owners: [],
       }, authorize);
-      return Object.freeze({ ...result, idempotent: replayed });
+      if (result.kind === "already_decided") throw new AuthorityOperationError("stale_access_state", "Meeting review has already been resolved");
+      if (result.kind === "stale") throw new AuthorityOperationError("stale_access_state", "Meeting review has changed");
+      return Object.freeze({ status: result.status, idempotent: result.kind === "replayed" });
     },
   });
 }

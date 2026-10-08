@@ -27,9 +27,10 @@ defines the supported operator and employee flow.
 - `organization-authority-http-server.ts` owns HTTP mechanics and dispatch.
 - `organization-authority-setup-cli.ts` coordinates organization setup.
 - `organization-authority-state-bootstrap.ts` bootstraps a new absent-state lineage.
-- `meeting-source-bundle-v1.ts`, `decision-processor-bundle-v1.ts`, and
-  `approval-workflow-bundle-v1.ts` in `packages/organization-processing/src/ports/`
-  define provider-neutral composition seams.
+- `meeting-source-bundle-v1.ts` and `decision-processor-bundle-v1.ts` in
+  `packages/organization-processing/src/ports/` define provider-neutral
+  composition seams; `ApprovalWorkflowContextV1` in `approval-workflow-bundle-v1.ts`
+  is the approval seam the approval core (`approval-core-v1.ts`) is built on.
 - `providers/openrouter/src/openrouter-decision-processor-bundle-v1.ts` owns
   the selected decision processor. Slack approvals are paused; no approval
   workflow bundle is composed. Slack Person identity composition is under

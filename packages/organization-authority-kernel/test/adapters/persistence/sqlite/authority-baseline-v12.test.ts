@@ -74,7 +74,7 @@ function seededWithSources(): Database.Database {
 
 describe("Authority baseline V12", () => {
   it("is fresh-only and stamps the Authority application id", () => {
-    expect(authorityBaselineSha256V12()).toBe("sha256:127286d4a0fcf1266f82523b8e223fa205dd007fbc07c83d020ab622f73b93a1");
+    expect(authorityBaselineSha256V12()).toBe("sha256:246367cc63916bc55c1ce9fcfbbc6fa71c9ad2fbfe62c3e2a3bbc5bd63c59e77");
     const database = seeded();
     expect(() => applyAuthorityBaselineV12(database)).toThrow("completely empty");
     expect(database.pragma("application_id", { simple: true })).toBe(AUTHORITY_BASELINE_APPLICATION_ID_V1);
@@ -144,15 +144,23 @@ describe("Authority baseline V12", () => {
     insert.run(ORG, PRINCIPAL, MEMBERSHIP, "request-1", SHA, JSON.stringify(receipt), SHA, NOW);
   });
 
-  it("freezes a nullable V2 private approval card after its first queued write", () => {
+  it("freezes the approved snapshot and suggestions once and keeps them through supersession", () => {
     const database = opened();
     database.pragma("foreign_keys = OFF");
     applyAuthorityBaselineV12(database);
     expect(database.pragma("user_version", { simple: true })).toBe(AUTHORITY_BASELINE_SCHEMA_VERSION_V12);
-    expect(database.prepare("PRAGMA table_info(authority_live_approval_outbox_v2)").all()).toEqual(expect.arrayContaining([expect.objectContaining({ name: "private_approval_card_v2_json", notnull: 0 })]));
-    database.prepare("INSERT INTO authority_live_approval_outbox_v2(candidate_id,approval_id,stage_command_id,state,updated_at) VALUES ('can_test','apr_test','pas_test','queued','2026-09-26T00:00:00.000Z')").run();
-    database.prepare("UPDATE authority_live_approval_outbox_v2 SET private_approval_card_v2_json = '{\"kind\":\"card\"}' WHERE candidate_id = 'can_test'").run();
-    expect(() => database.prepare("UPDATE authority_live_approval_outbox_v2 SET private_approval_card_v2_json = '{\"kind\":\"replacement\"}' WHERE candidate_id = 'can_test'").run()).toThrow("immutable");
-    expect(() => database.prepare("UPDATE authority_live_approval_outbox_v2 SET private_approval_card_v2_json = NULL WHERE candidate_id = 'can_test'").run()).toThrow("immutable");
+    const columns = (database.prepare("PRAGMA table_info(authority_live_approval_outbox_v2)").all() as { name: string }[]).map(row => row.name);
+    expect(columns).toContain("suggested_projects_json");
+    expect(columns).not.toContain("private_approval_card_v2_json");
+    for (const id of ["test", "next"]) {
+      database.prepare("INSERT INTO authority_live_approval_outbox_v2(candidate_id,approval_id,stage_command_id,state,updated_at) VALUES (?,?,?,'queued',?)").run(`cnd_${id}`, `apr_${id}`, `pas_${id}`, NOW);
+    }
+    const freeze = "UPDATE authority_live_approval_outbox_v2 SET state = 'staged', approved_snapshot_json = '{\"approval_id\":\"apr_test\"}', approved_snapshot_sha256 = ?, suggested_projects_json = '[]', updated_at = ? WHERE candidate_id = 'cnd_test'";
+    database.prepare(freeze).run(SHA, NOW);
+    expect(() => database.prepare("UPDATE authority_live_approval_outbox_v2 SET approved_snapshot_sha256 = ? WHERE candidate_id = 'cnd_test'").run(`sha256:${"b".repeat(64)}`)).toThrow("queued-staged-superseded");
+    expect(() => database.prepare("UPDATE authority_live_approval_outbox_v2 SET suggested_projects_json = NULL, approved_snapshot_json = NULL, approved_snapshot_sha256 = NULL WHERE candidate_id = 'cnd_test'").run()).toThrow("queued-staged-superseded");
+    database.prepare("UPDATE authority_live_approval_outbox_v2 SET state = 'superseded', superseded_by_candidate_id = 'cnd_next', superseded_at = ?, updated_at = ? WHERE candidate_id = 'cnd_test'").run(NOW, NOW);
+    expect(database.prepare("SELECT state, approved_snapshot_sha256, suggested_projects_json FROM authority_live_approval_outbox_v2 WHERE candidate_id = 'cnd_test'").get())
+      .toEqual({ state: "superseded", approved_snapshot_sha256: SHA, suggested_projects_json: "[]" });
   });
 });

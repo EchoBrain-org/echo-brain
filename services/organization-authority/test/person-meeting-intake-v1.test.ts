@@ -162,4 +162,29 @@ describe('personal meeting intake: one source per person and tool account', () =
     revokeMembership(w.db, OWNER);
     expect(() => w.intake.requireCurrent(watched)).toThrow(expect.objectContaining({ code: 'unauthorized' }));
   });
+
+  it('proposalSuggestions returns recorded and still-pending member projects, sorted and unique', () => {
+    const w = world(), setting = w.ensure();
+    w.intake.enqueue(setting, NOTE_1, PROJECT_BETA, () => undefined);
+    w.intake.enqueue(setting, NOTE_1, PROJECT_ALPHA, () => undefined);
+    expect(w.intake.proposalSuggestions(setting.source_key, NOTE_1)).toEqual([PROJECT_ALPHA, PROJECT_BETA].sort());
+    expect(w.intake.suggestions(setting.source_key, NOTE_1)).toEqual([]);
+    w.consume(setting, [NOTE_1]);
+    expect(w.intake.proposalSuggestions(setting.source_key, NOTE_1)).toEqual([PROJECT_ALPHA, PROJECT_BETA].sort());
+    expect(w.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
+    w.intake.enqueue(setting, NOTE_2, PROJECT_ALPHA, () => undefined);
+    w.intake.enqueue(setting, NOTE_2, PROJECT_BETA, () => undefined);
+    w.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_BETA);
+    expect(w.intake.proposalSuggestions(setting.source_key, NOTE_2)).toEqual([PROJECT_ALPHA]);
+    // A recorded suggestion stays whoever left: the freeze offers it and views filter what the reviewer can read.
+    expect(w.intake.proposalSuggestions(setting.source_key, NOTE_1)).toEqual([PROJECT_ALPHA, PROJECT_BETA].sort());
+    expect(w.intake.proposalSuggestions(setting.source_key, NOTE_3)).toEqual([]);
+  });
+
+  it('proposalSuggestions forgets a cancelled import\'s project', () => {
+    const w = world(), setting = w.ensure();
+    w.intake.enqueue(setting, NOTE_1, PROJECT_ALPHA, () => undefined);
+    w.intake.cancelImport(setting, NOTE_1, () => undefined);
+    expect(w.intake.proposalSuggestions(setting.source_key, NOTE_1)).toEqual([]);
+  });
 });

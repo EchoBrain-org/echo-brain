@@ -102,11 +102,10 @@ external verified identity is deterministic.
 `core-input.mjs` admits the fictional owner's own personal meeting source
 through the production personal intake, so the source key, custody scope and
 processing fence are the ones a person's source has; meetings reach it only
-through the harness's `offer`. `core-approval.mjs` drives the first-party
-in-app review (`createPersonMeetingReviewV1`) that exists today: a Person
-session authenticates the reviewer, and the review's frozen-snapshot check,
-durable action, signed V4 append and policy-fact projection are the production
-code. The approving person's audience choice names the policy: a project they
+through the harness's `offer`. `core-approval.mjs` drives the approval
+core (`createApprovalCoreV1`): a Person session authenticates the reviewer, and
+the core's proposal freeze, frozen-snapshot check, durable decision, signed V4
+append and policy-fact projection are the production code. The approving person's audience choice names the policy: a project they
 share with the employee, or themselves alone. The harness creates that project
 through the real project application. No provider client, HTTP route or
 transport signature runs.

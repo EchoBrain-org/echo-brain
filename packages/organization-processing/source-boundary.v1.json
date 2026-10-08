@@ -134,9 +134,9 @@
         "export": "DecisionProcessorBundleV1"
       },
       {
-        "name": "Approval workflow bundle",
+        "name": "Approval workflow context",
         "path": "packages/organization-processing/src/ports/approval-workflow-bundle-v1.ts",
-        "export": "ApprovalWorkflowBundleV1"
+        "export": "ApprovalWorkflowContextV1"
       }
     ],
     "compatibility_entrypoints": [],

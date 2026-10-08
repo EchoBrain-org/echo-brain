@@ -8,7 +8,7 @@ import {
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
 const AUTHORITY_BASELINE_SHA256_V12 =
-  "sha256:127286d4a0fcf1266f82523b8e223fa205dd007fbc07c83d020ab622f73b93a1";
+  "sha256:246367cc63916bc55c1ce9fcfbbc6fa71c9ad2fbfe62c3e2a3bbc5bd63c59e77";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-29T00:00:00.000Z";
 /** A personal source key; the admission table keys every source by its own text key. */
@@ -93,7 +93,10 @@ describe("Authority admitted meeting-source schema", () => {
       expect((database.pragma('table_info(authority_person_meeting_sources_v2)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'person_key', 'folder_id', 'folder_project_id', 'settings_revision']);
       expect((database.pragma('table_info(authority_person_meeting_suggestions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'external_id', 'project_id', 'created_at']);
       expect((database.pragma('table_info(authority_person_meeting_pending_suggestions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'external_id', 'project_id', 'created_at']);
-      expect((database.pragma('table_info(authority_person_meeting_approval_actions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['sequence', 'approval_id', 'command_id', 'body_json', 'receipt_json']);
+      expect((database.pragma('table_info(authority_approval_decisions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['sequence', 'approval_id', 'command_id', 'surface', 'action', 'body_json', 'receipt_json']);
+      const tables = database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").pluck().all();
+      expect(tables).not.toContain('authority_person_meeting_approval_actions_v1');
+      expect(tables).not.toContain('authority_live_approval_delivery_quarantines_v1');
     } finally { database.close(); }
   });
   it("is a pinned fresh-only provider-neutral schema with stable role headers", () => {

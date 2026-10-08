@@ -5,7 +5,7 @@ import { projectApprovedMeetingPolicyFactsV1, type RecordPolicyFactProjectorV1, 
 function parse(reference: unknown, event: unknown) {
   return validatePersonMeetingApprovalRecordInputV1({ person_meeting_approval_resolution_ref_v1: reference, event });
 }
-/** The native session action and Authority audit are committed before this append witness is used. */
+/** The approval core's decision and Authority audit are committed before this append witness is used. */
 export function createPersonMeetingApprovalPolicyProjectorV1(): RecordPolicyFactProjectorV1 {
   return {
     id: PERSON_MEETING_APPROVAL_REF_KIND_V1,
@@ -22,7 +22,7 @@ export function createPersonMeetingApprovalPolicyProjectorV1(): RecordPolicyFact
           canonicalSha256(witness.action) !== ref.provider_action_sha256 || canonicalSha256(witness.authorization) !== ref.authorization_proof_sha256 || canonicalSha256(witness.audit) !== ref.audit_entry_sha256 ||
           witness.action?.approval_id !== ref.approval_id || witness.action?.command_id !== ref.command_id || witness.action?.action !== 'approve' || witness.action?.snapshot_sha256 !== ref.approved_snapshot_sha256 ||
           witness.authorization?.organization_id !== ref.organization_id || witness.authorization?.principal_id !== ref.final_approver.principal_id || witness.authorization?.membership_id !== ref.final_approver.membership_id ||
-          witness.action?.share_transcript !== ref.share_transcript || canonicalSha256(witness.action?.project_id === null ? [] : [witness.action?.project_id]) !== canonicalSha256(ref.audience_project_ids)) throw new Error('Person approval witness differs from the authenticated action');
+          witness.action?.share_transcript !== ref.share_transcript || canonicalSha256(witness.action?.project_ids) !== canonicalSha256(ref.audience_project_ids)) throw new Error('Person approval witness differs from the authenticated action');
       const audit = witness.audit as Record<string, unknown> | null;
       if (!audit || audit.approval_id !== ref.approval_id || audit.sequence !== ref.audit_sequence || audit.event_id !== ref.audit_event_id || audit.action_sha256 !== ref.provider_action_sha256 || audit.authorization_sha256 !== ref.authorization_proof_sha256 || audit.approved_at !== ref.approved_at) throw new Error('Person approval audit differs from the record');
       return projectApprovedMeetingPolicyFactsV1({ ...input, event: parsed.event, reference: ref });

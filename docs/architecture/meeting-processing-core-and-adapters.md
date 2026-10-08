@@ -124,8 +124,8 @@ server adapters remain outside its dependency closure.
   inbox leases instead of inventing provider cursors.
 - A **decision processor** turns one canonical revision into decisions,
   actions, rationales, and source-linked evidence.
-- An **approval surface**, loaded through `ApprovalWorkflowBundleV1`, presents
-  the exact staged brief and records an explicit human outcome.
+- An **approval surface** reads the approval core (`createApprovalCoreV1`),
+  which freezes one proposal per meeting and records one decision from any surface.
 - No **delivery surface** port exists today. A capability that publishes
   approved content elsewhere would need its own typed port.
 
@@ -347,9 +347,9 @@ and
   file-key, Node-runtime, or authentication-protocol implementations. The
   source port is pull-oriented; Person push submissions use the durable edge
   inbox. New push providers need an equivalent explicit buffering boundary.
-- The Authority approval outbox physically stores `provider_message_ts`;
-  shared code treats it as opaque `presentation_external_id` until an explicit
-  schema migration.
+- The Authority approval outbox stores no presentation state: a proposal's
+  frozen snapshot and suggestions, and one decision row in
+  `authority_approval_decisions_v1`, are all any surface draws from.
 - Bundles are trusted static composition, and ownership/dependency checks cannot
   detect every hidden semantic coupling. Each selected profile still needs
   capability tests and a bounded staging rehearsal.

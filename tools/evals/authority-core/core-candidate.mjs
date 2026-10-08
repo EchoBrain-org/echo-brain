@@ -127,10 +127,10 @@ async function open(state_directory) {
 
 function status(approval_id) {
   const action = authority.prepare(
-    "SELECT json_extract(body_json, '$.request.action') AS outcome, receipt_json IS NOT NULL AS receipted FROM authority_person_meeting_approval_actions_v1 WHERE approval_id = ?",
+    "SELECT action AS outcome, receipt_json IS NOT NULL AS receipted FROM authority_approval_decisions_v1 WHERE approval_id = ?",
   ).get(approval_id);
   return {
-    actions: authority.prepare("SELECT COUNT(*) AS n FROM authority_person_meeting_approval_actions_v1").get().n,
+    actions: authority.prepare("SELECT COUNT(*) AS n FROM authority_approval_decisions_v1").get().n,
     terminal: action === undefined ? null : { outcome: action.outcome, receipted: action.receipted === 1 },
     record_count: record.prepare("SELECT COUNT(*) AS n FROM organization_record_log").get().n,
   };

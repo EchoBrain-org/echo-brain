@@ -35,7 +35,6 @@ import {
 const fixtureCursor = (cutoff: string) => `fixture-source:v1:live:${cutoff}`;
 
 const CUT_OFF = "2026-08-22T02:03:04.005Z";
-const DURABLE_STAGED_AT = "2026-08-22T02:05:04.005Z";
 const SOURCE = {
   kind: "meeting-source" as const,
   adapter_id: "fixture-source",
@@ -835,54 +834,40 @@ describe("admitted meeting-processing cycle", () => {
     }
   });
 
-  it("advances after a durable approval delivery remains pending", async () => {
+  it("stages before it advances the cursor", async () => {
     const current = admission();
     const state = new FakeState(current);
+    const order: string[] = [];
+    const downstream: ApprovalWorkflowStagerV1 = {
+      stage: async () => {
+        // The approval core freezes an import's pending choices before the advance records them (R28).
+        order.push(`stage:${state.advances.length}`);
+        return { kind: "staged", stage_id: "stage-1" };
+      },
+      reconcilePendingDeliveries: async () => { order.push(`reconcile:${state.advances.length}`); },
+      reconcileSuperseded: async () => {},
+    };
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state,
-      stager: stager({ kind: "delivery_pending" }),
+      stager: downstream,
     });
-
-    await expect(cycle.runOnce()).resolves.toEqual({
-      kind: "delivery_pending",
-      cursor_advanced: true,
-    });
-    expect(state.candidates).toHaveLength(1);
-    expect(state.advances).toEqual([
-      {
-        expected_cursor: current.source.cursor,
-        next_cursor: "fixture-source:v1:next",
-      },
-    ]);
+    await expect(cycle.runOnce()).resolves.toEqual({ kind: "staged", stage_id: "stage-1", cursor_advanced: true });
+    expect(order).toEqual(["stage:0", "reconcile:1"]);
   });
 
-  it("advances after a deterministic approval package is durably quarantined", async () => {
-    const current = admission();
-    const state = new FakeState(current);
+  it("state_drift gives not_staged without advancing", async () => {
+    const state = new FakeState(admission());
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state,
-      stager: stager({
-        kind: "quarantined",
-        reason_code: "approval_package_unrepresentable",
-      }),
+      stager: stager({ kind: "state_drift" }),
     });
-
-    await expect(cycle.runOnce()).resolves.toEqual({
-      kind: "quarantined",
-      reason_code: "approval_package_unrepresentable",
-      cursor_advanced: true,
-    });
+    await expect(cycle.runOnce()).resolves.toEqual({ kind: "not_staged", reason: "state_drift", cursor_advanced: false });
+    expect(state.advances).toEqual([]);
     expect(state.candidates).toHaveLength(1);
-    expect(state.advances).toEqual([
-      {
-        expected_cursor: current.source.cursor,
-        next_cursor: "fixture-source:v1:next",
-      },
-    ]);
   });
 
   it("admits and advances the next meeting before surfacing an older delivery failure", async () => {
@@ -931,23 +916,6 @@ describe("admitted meeting-processing cycle", () => {
 
     await expect(cycle.runOnce()).rejects.toThrow("Slack transport threw");
     expect(state.candidates).toHaveLength(1);
-    expect(state.advances).toHaveLength(1);
-  });
-
-  it("keeps a pending delivery durable when its source cursor fence drifts", async () => {
-    const state = new FakeState(admission(), "state_drift");
-    const cycle = liveCycle({
-      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
-      processor: processor(),
-      state,
-      stager: stager({ kind: "delivery_pending" }),
-    });
-
-    await expect(cycle.runOnce()).resolves.toEqual({
-      kind: "delivery_pending_cursor_not_advanced",
-      reason: "state_drift",
-      cursor_advanced: false,
-    });
     expect(state.advances).toHaveLength(1);
   });
 
@@ -1172,8 +1140,8 @@ describe("admitted meeting-processing cycle", () => {
     expect(extracts).toBe(2);
   });
 
-  it("retries queued, posting, and posted revisions with only their frozen snapshots", async () => {
-    for (const stateName of ["queued", "posting", "posted"] as const) {
+  it("retries a queued revision with only its frozen snapshot", async () => {
+    for (const stateName of ["queued"] as const) {
       const current = admission();
       const state = new FakeState(current);
       const originalMeeting = meeting();
@@ -1270,7 +1238,6 @@ describe("admitted meeting-processing cycle", () => {
       approval_id: "apr_staged",
       stage_command_id: "pas_staged",
       state: "staged",
-      durable_staged_at: DURABLE_STAGED_AT,
       admission: current,
       meeting: originalMeeting,
       decisions: decisions(originalMeeting),

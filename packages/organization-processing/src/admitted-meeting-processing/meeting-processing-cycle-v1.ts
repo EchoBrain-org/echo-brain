@@ -30,12 +30,6 @@ import {
 
 const MAXIMUM_PULL_LIMIT = 1;
 
-export const APPROVAL_DELIVERY_QUARANTINE_REASON_V1 =
-  "approval_package_unrepresentable" as const;
-
-export type ApprovalDeliveryQuarantineReasonV1 =
-  typeof APPROVAL_DELIVERY_QUARANTINE_REASON_V1;
-
 export interface AdmittedMeetingProcessingAdmissionV1 {
   readonly source: {
     readonly adapter_id: string;
@@ -105,9 +99,7 @@ export interface ActionableMeetingProcessingCandidateV1
   readonly disposition: "actionable";
   readonly approval_id: string;
   readonly stage_command_id: string;
-  readonly state: "queued" | "posting" | "posted" | "staged" | "superseded";
-  /** Present only on a frozen staged outbox snapshot. */
-  readonly durable_staged_at?: string | null;
+  readonly state: "queued" | "staged" | "superseded";
 }
 
 /** An immutable source revision that intentionally creates no approval card. */
@@ -138,38 +130,27 @@ export interface ApprovalWorkflowStageInputV1 {
 }
 
 export type ApprovalWorkflowStageResultV1 =
+  /** The proposal is frozen; `stage_id` is its approval_id. */
   | { readonly kind: "staged"; readonly stage_id: string }
-  | { readonly kind: "delivery_pending" }
-  | {
-      readonly kind: "quarantined";
-      readonly reason_code: ApprovalDeliveryQuarantineReasonV1;
-    }
   | { readonly kind: "revoked" }
   | { readonly kind: "state_drift" };
 
-type DurableApprovalDeliveryOutcomeV1 = Extract<
-  ApprovalWorkflowStageResultV1,
-  { readonly kind: "delivery_pending" | "quarantined" }
->;
-
 /**
- * This is deliberately a narrow handoff. The eventual control-plane adapter
- * owns the durable approval card and returns `staged` only once it is
- * committed. A known revoked or drifted control-plane state is a safe no-op.
+ * This is deliberately a narrow handoff. `staged` means the approval proposal
+ * is frozen and committed. A known revoked or drifted state is a safe no-op.
+ * `stage` runs after the candidate commits and before the cursor advance, so a
+ * stager must not rely on rows that advance writes.
  */
 export interface ApprovalWorkflowStagerV1 {
   stage(
     input: ApprovalWorkflowStageInputV1,
     context?: { readonly signal: AbortSignal },
   ): Promise<ApprovalWorkflowStageResultV1>;
-  /**
-   * Reconciles durable approval delivery work independently of source intake.
-   * A provider-ambiguous post remains frozen and is never blindly repeated.
-   */
+  /** Freezes queued proposals independently of source intake. */
   reconcilePendingDeliveries(
     context?: { readonly signal: AbortSignal },
   ): Promise<void>;
-  /** Reconciles every durable obsolete provider presentation. */
+  /** Reconciles obsolete presentations; may be a no-op when presenters redraw from the proposal. */
   reconcileSuperseded(
     context?: { readonly signal: AbortSignal },
   ): Promise<void>;
@@ -206,26 +187,6 @@ export type AdmittedMeetingProcessingCycleResultV1 =
       readonly kind: "staged";
       readonly stage_id: string;
       readonly cursor_advanced: boolean;
-    }
-  | {
-      readonly kind: "delivery_pending";
-      readonly cursor_advanced: boolean;
-    }
-  | {
-      readonly kind: "delivery_pending_cursor_not_advanced";
-      readonly reason: "revoked" | "state_drift";
-      readonly cursor_advanced: false;
-    }
-  | {
-      readonly kind: "quarantined";
-      readonly reason_code: ApprovalDeliveryQuarantineReasonV1;
-      readonly cursor_advanced: boolean;
-    }
-  | {
-      readonly kind: "quarantined_cursor_not_advanced";
-      readonly reason_code: ApprovalDeliveryQuarantineReasonV1;
-      readonly reason: "revoked" | "state_drift";
-      readonly cursor_advanced: false;
     }
   | {
       readonly kind: "not_staged";
@@ -523,9 +484,7 @@ export class AdmittedMeetingProcessingCycleV1 {
         async () => {
           if (
             frozen.disposition === "actionable" &&
-            (frozen.state === "queued" ||
-              frozen.state === "posting" ||
-              frozen.state === "posted")
+            frozen.state === "queued"
           ) {
             return this.stageAndAdvance(
               frozen,
@@ -700,18 +659,13 @@ export class AdmittedMeetingProcessingCycleV1 {
         signal === undefined ? undefined : { signal },
       );
     } catch (error) {
-      // The candidate/outbox is already durable. Preserve a visible delivery
-      // failure, but release source intake so one presentation defect cannot
-      // cork every later meeting.
+      // The candidate/outbox is already durable and stays queued. Preserve a
+      // visible failure, but release source intake so one proposal defect
+      // cannot cork every later meeting; reconcile retries the freeze.
       if (signal?.aborted !== true) {
-        await this.advanceAfterDurableDelivery(admission, nextCursor, {
-          kind: "delivery_pending",
-        });
+        await this.advanceAfterStageFailure(admission, nextCursor);
       }
       throw error;
-    }
-    if (staged.kind === "delivery_pending" || staged.kind === "quarantined") {
-      return this.advanceAfterDurableDelivery(admission, nextCursor, staged);
     }
     if (staged.kind !== "staged") {
       return {
@@ -745,33 +699,15 @@ export class AdmittedMeetingProcessingCycleV1 {
     return { kind: "staged", stage_id: staged.stage_id, cursor_advanced: true };
   }
 
-  private async advanceAfterDurableDelivery(
+  private async advanceAfterStageFailure(
     admission: AdmittedMeetingProcessingAdmissionV1,
     nextCursor: string | undefined,
-    outcome: DurableApprovalDeliveryOutcomeV1,
-  ): Promise<AdmittedMeetingProcessingCycleResultV1> {
-    if (nextCursor === undefined || nextCursor === admission.source.cursor) {
-      return { ...outcome, cursor_advanced: false };
-    }
-    const advanced = await this.advanceCursor({
+  ): Promise<void> {
+    if (nextCursor === undefined || nextCursor === admission.source.cursor) return;
+    await this.advanceCursor({
       expected_cursor: admission.source.cursor,
       next_cursor: nextCursor,
     });
-    if (advanced === "advanced") {
-      return { ...outcome, cursor_advanced: true };
-    }
-    return outcome.kind === "delivery_pending"
-      ? {
-          kind: "delivery_pending_cursor_not_advanced",
-          reason: advanced,
-          cursor_advanced: false,
-        }
-      : {
-          kind: "quarantined_cursor_not_advanced",
-          reason_code: outcome.reason_code,
-          reason: advanced,
-          cursor_advanced: false,
-        };
   }
 
   private async finishWithoutStage(

@@ -34,7 +34,9 @@ function isExactDisplayText(value: unknown): value is string {
 /**
  * An owner as offered: one line, NFC, single spaces, trimmed, at most 120
  * characters, with no control or format characters. Empty or invalid is no
- * owner.
+ * owner. Every offered owner satisfies the shared confirmed-owner rule
+ * (isApprovalOwnerTextV1 in organization-protocol, which this package cannot
+ * import); a services test pins that.
  */
 function canonicalProposedOwner(value: string): string | null {
   const owner = value.normalize("NFC").replace(/\s+/gu, " ").trim();

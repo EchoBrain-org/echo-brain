@@ -84,3 +84,4 @@ export { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, HUMA
 export * from './meeting-approval-event-v2.js';
 export * from './person-meeting-approval-record-input-v1.js';
 export * from './record-append-factories-v4.js';
+export * from './approval-owner-choice-v1.js';

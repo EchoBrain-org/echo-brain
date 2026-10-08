@@ -1,4 +1,4 @@
-import type { OutstandingApprovalPresentationV1, PostedPrivateApprovalCardV1, PreparedPrivateApprovalPostV1, ApprovalWorkflowOutboxV1, ApprovalDeliveryQuarantineV1, SupersededPrivateApprovalCardV1, FrozenMeetingProcessingCandidateForApprovalV1, ApprovalWorkflowStateV1 } from "./approval-workflow-state-v1.js";
+import { pendingApprovalDeliveryLimitV1, type ApprovalWorkflowOutboxV1, type FreezeApprovalProposalInputV1, type FrozenMeetingProcessingCandidateForApprovalV1, type ApprovalWorkflowStateV1, type ListPendingApprovalDeliveriesOptionsV1 } from "./approval-workflow-state-v1.js";
 import type Database from "better-sqlite3";
 import {
   canonicalJson,
@@ -32,7 +32,6 @@ import {
 } from "./review-lineage-semantics.js";
 import type {
   AdmittedMeetingProcessingAdmissionV1,
-  ApprovalDeliveryQuarantineReasonV1,
   FrozenMeetingProcessingCandidateSnapshotV1,
   MeetingProcessingCandidateSnapshotInputV1,
   MeetingProcessingCandidateV1,
@@ -71,8 +70,7 @@ interface CandidateRow {
   readonly disposition: "actionable" | "coalesced" | "no_signals";
   readonly approval_id: string | null;
   readonly stage_command_id: string | null;
-  readonly state: "queued" | "posting" | "posted" | "staged" | "superseded" | "coalesced" | "no_signals";
-  readonly durable_staged_at: string | null;
+  readonly state: "queued" | "staged" | "superseded" | "coalesced" | "no_signals";
 }
 
 interface LineageHeadRow {
@@ -417,7 +415,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           );
       }
       return this.candidate(candidateSemanticSha256) as MeetingProcessingCandidateV1;
-    })();
+    }).immediate();
   }
 
   async readFrozenCandidateForSourceRevision(input: {
@@ -490,127 +488,69 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           WHERE outbox.approval_id = ?
             AND candidate.admission_semantic_input_sha256 = (SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = ?)
             AND outbox.state != 'superseded'
-            AND NOT EXISTS (
-              SELECT 1
-                FROM authority_live_approval_delivery_quarantines_v1 AS quarantine
-               WHERE quarantine.candidate_id = candidate.candidate_id
-            )
             AND head.candidate_id = candidate.candidate_id`,
       )
       .get(approvalId, this.sourceKey) as { readonly 1: number } | undefined;
     return row !== undefined;
   }
 
+  listPendingApprovalDeliveries(
+    options: ListPendingApprovalDeliveriesOptionsV1 = {},
+  ): readonly FrozenMeetingProcessingCandidateForApprovalV1[] {
+    if (options.source_key !== undefined && options.source_key !== this.sourceKey) return [];
+    return pendingApprovalIdsV1(this.database, { source_key: this.sourceKey, limit: options.limit })
+      .map((approvalId) => {
+        const candidate = this.readFrozenCandidateForApproval(approvalId);
+        if (candidate === undefined) {
+          throw new Error("pending approval delivery is absent");
+        }
+        return candidate;
+      });
+  }
+
   /**
-   * Revalidates every current, actionable approval that still needs presentation
-   * delivery. The query deliberately selects the lineage head first; the
-   * frozen reader then verifies the immutable meeting, decisions, and any
-   * frozen card snapshot before exposing it to a delivery worker.
+   * Freezes one proposal: queued -> staged in one guarded UPDATE that writes the
+   * snapshot, its digest and the suggested projects together. A staged proposal
+   * returns as is when the snapshot bytes match (its suggestions stay as first
+   * frozen) and throws otherwise; a superseded proposal returns as is.
    */
-  listOutstandingApprovalPresentations(): readonly OutstandingApprovalPresentationV1[] {
-    return this.database.prepare(`SELECT outbox.approval_id, outbox.candidate_id, outbox.state
-      FROM authority_live_approval_outbox_v2 AS outbox
-      JOIN authority_live_source_candidates_v2 AS candidate ON candidate.candidate_id = outbox.candidate_id
-      JOIN authority_live_source_admission_v2 AS admission ON admission.semantic_input_sha256 = candidate.admission_semantic_input_sha256
-      WHERE admission.source_key = ? AND (state IN ('posting', 'posted', 'staged')
-        OR (state = 'superseded' AND post_started_at IS NOT NULL AND tombstoned_at IS NULL))
-      ORDER BY approval_id`).all(this.sourceKey) as OutstandingApprovalPresentationV1[];
-  }
-
-  listPendingApprovalDeliveries(): readonly FrozenMeetingProcessingCandidateForApprovalV1[] {
-    const approvals = this.database
-      .prepare(
-        `SELECT outbox.approval_id
-           FROM authority_live_approval_outbox_v2 AS outbox
-           JOIN authority_live_source_candidates_v2 AS candidate
-             ON candidate.candidate_id = outbox.candidate_id
-           JOIN authority_live_source_review_lineage_heads_v2 AS head
-             ON head.review_lineage_id = candidate.review_lineage_id
-          WHERE candidate.admission_semantic_input_sha256 = (SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = ?)
-            AND candidate.disposition = 'actionable'
-            AND head.candidate_id = candidate.candidate_id
-            AND outbox.state IN ('queued', 'posting', 'posted')
-            AND NOT EXISTS (
-              SELECT 1
-                FROM authority_live_approval_delivery_quarantines_v1 AS quarantine
-               WHERE quarantine.candidate_id = candidate.candidate_id
-            )
-          ORDER BY candidate.created_at ASC, candidate.candidate_id ASC`,
-      )
-      .all(this.sourceKey) as readonly { readonly approval_id: string }[];
-    return approvals.map(({ approval_id }) => {
-      const candidate = this.readFrozenCandidateForApproval(approval_id);
-      if (candidate === undefined) {
-        throw new Error("pending approval delivery is absent");
-      }
-      return candidate;
-    });
-  }
-
-  listPendingSupersededApprovalCards(): readonly SupersededPrivateApprovalCardV1[] {
-    return this.database
-      .prepare(
-        `SELECT outbox.approval_id, candidate.review_lineage_id,
-                outbox.superseded_by_candidate_id,
-                outbox.provider_message_ts AS presentation_external_id,
-                outbox.post_started_at
-           FROM authority_live_approval_outbox_v2 AS outbox
-           JOIN authority_live_source_candidates_v2 AS candidate
-             ON candidate.candidate_id = outbox.candidate_id
-          WHERE candidate.admission_semantic_input_sha256 = (SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = ?)
-            AND outbox.state = 'superseded'
-            AND outbox.post_started_at IS NOT NULL
-            AND outbox.tombstoned_at IS NULL
-          ORDER BY outbox.approval_id`,
-      )
-      .all(this.sourceKey) as SupersededPrivateApprovalCardV1[];
-  }
-
-  recordSupersededApprovalCardTombstoned(input: {
-    readonly approval_id: string;
-    readonly presentation_external_id: string;
-  }): void {
-    this.database.transaction(() => {
-      if (this.readCandidateByApprovalId(input.approval_id) === undefined) throw new Error('Approval belongs to another source');
-      const current = this.database
-        .prepare(
-          `SELECT state,
-                  provider_message_ts AS presentation_external_id,
-                  tombstoned_at
-             FROM authority_live_approval_outbox_v2
-            WHERE approval_id = ?`,
-        )
-        .get(input.approval_id) as
-        | {
-            readonly state: string;
-            readonly presentation_external_id: string | null;
-            readonly tombstoned_at: string | null;
-          }
-        | undefined;
+  freezeProposal(input: FreezeApprovalProposalInputV1): ApprovalWorkflowOutboxV1 {
+    return this.database.transaction(() => {
+      const current = this.outbox(input.candidate_id);
+      const projects = input.suggested_project_ids as unknown;
       if (
-        current === undefined ||
-        current.state !== "superseded" ||
-        current.presentation_external_id !== input.presentation_external_id
+        input.approved_snapshot === null || typeof input.approved_snapshot !== "object" ||
+        input.approved_snapshot.approval_id !== current.approval_id ||
+        !Array.isArray(projects) || projects.length > 20 ||
+        !projects.every((project, index) => typeof project === "string" &&
+          (index === 0 || (projects[index - 1] as string) < project))
       ) {
-        throw new Error(
-          "superseded presentation retirement lacks its durable identity",
-        );
+        throw new Error("approval proposal freeze input is invalid");
       }
-      if (current.tombstoned_at !== null) return;
-      const now = this.now();
-      assertCanonicalUtcMillis(now);
-      const update = this.database
-        .prepare(
-          `UPDATE authority_live_approval_outbox_v2
-              SET tombstoned_at = ?, updated_at = ?
-            WHERE approval_id = ? AND state = 'superseded'
-              AND provider_message_ts = ? AND tombstoned_at IS NULL`,
-        )
-        .run(now, now, input.approval_id, input.presentation_external_id);
-      if (update.changes !== 1) {
-        throw new Error("superseded presentation retirement state drifted");
+      const snapshotJson = canonicalJson(input.approved_snapshot);
+      const snapshotSha256 = canonicalSha256(input.approved_snapshot);
+      if (current.state === "queued") {
+        const now = this.now();
+        assertCanonicalUtcMillis(now);
+        const update = this.database
+          .prepare(
+            `UPDATE authority_live_approval_outbox_v2
+                SET state = 'staged', approved_snapshot_json = ?, approved_snapshot_sha256 = ?,
+                    suggested_projects_json = ?, updated_at = ?
+              WHERE candidate_id = ? AND state = 'queued'`,
+          )
+          .run(snapshotJson, snapshotSha256, canonicalJson(projects as string[]), now, input.candidate_id);
+        if (update.changes !== 1) throw new Error("approval proposal freeze state drifted");
+        return this.outbox(input.candidate_id);
       }
-    })();
+      if (current.state === "staged") {
+        if (current.approved_snapshot_json !== snapshotJson || current.approved_snapshot_sha256 !== snapshotSha256) {
+          throw new Error("approval proposal conflicts with its frozen snapshot");
+        }
+        return current;
+      }
+      return current;
+    }).immediate();
   }
 
   async advanceCursor(input: {
@@ -673,78 +613,6 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     approvalId: string,
   ): ApprovalWorkflowOutboxV1 | undefined {
     return this.findOutbox("approval_id", approvalId);
-  }
-
-  /**
-   * Returns only the durable Authority acknowledgement time used to restore
-   * an optional staging-side human-wait observation. This deliberately avoids
-   * loading the frozen approval snapshot or any presentation content.
-   */
-  readDurableCardStagedAt(approvalId: string): string | null {
-    if (this.readCandidateByApprovalId(approvalId) === undefined) return null;
-    const row = this.database
-      .prepare(
-        `SELECT updated_at
-           FROM authority_live_approval_outbox_v2
-          WHERE approval_id = ?
-            AND state = 'staged'`,
-      )
-      .get(approvalId) as { readonly updated_at: string } | undefined;
-    if (row === undefined) return null;
-    assertCanonicalUtcMillis(row.updated_at);
-    return row.updated_at;
-  }
-
-  readApprovalDeliveryQuarantine(
-    candidateId: string,
-  ): ApprovalDeliveryQuarantineV1 | undefined {
-    if (this.findOutbox('candidate_id', candidateId) === undefined) return undefined;
-    return this.database
-      .prepare(
-        `SELECT candidate_id, reason_code, quarantined_at
-           FROM authority_live_approval_delivery_quarantines_v1
-          WHERE candidate_id = ?`,
-      )
-      .get(candidateId) as ApprovalDeliveryQuarantineV1 | undefined;
-  }
-
-  quarantineApprovalDelivery(input: {
-    readonly candidate_id: string;
-    readonly reason_code: ApprovalDeliveryQuarantineReasonV1;
-  }): ApprovalDeliveryQuarantineV1 {
-    return this.database.transaction(() => {
-      const existing = this.readApprovalDeliveryQuarantine(input.candidate_id);
-      if (existing !== undefined) {
-        if (existing.reason_code !== input.reason_code) {
-          throw new Error(
-            "approval delivery quarantine conflicts with its durable reason",
-          );
-        }
-        return existing;
-      }
-      const outbox = this.outbox(input.candidate_id);
-      if (outbox.state !== "queued") {
-        throw new Error(
-          "approval delivery can only be quarantined before presentation starts",
-        );
-      }
-      const quarantinedAt = this.now();
-      assertCanonicalUtcMillis(quarantinedAt);
-      this.database
-        .prepare(
-          `INSERT INTO authority_live_approval_delivery_quarantines_v1 (
-             candidate_id, reason_code, quarantined_at
-           ) VALUES (?, ?, ?)`,
-        )
-        .run(input.candidate_id, input.reason_code, quarantinedAt);
-      const quarantined = this.readApprovalDeliveryQuarantine(
-        input.candidate_id,
-      );
-      if (quarantined === undefined) {
-        throw new Error("approval delivery quarantine was not persisted");
-      }
-      return quarantined;
-    })();
   }
 
   private readFrozenCandidateById(
@@ -843,11 +711,6 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     return this.database.transaction(() => {
       const outbox = this.readCandidateByApprovalId(approvalId);
       if (outbox === undefined) return undefined;
-      if (
-        this.readApprovalDeliveryQuarantine(outbox.candidate_id) !== undefined
-      ) {
-        return undefined;
-      }
       const frozen = this.readFrozenCandidateById(outbox.candidate_id);
       if (frozen === undefined || frozen.disposition !== "actionable") {
         throw new Error("D2 approval has no frozen actionable candidate");
@@ -875,270 +738,6 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       };
     })();
   }
-
-  /**
-   * Persist the exact presentation payload before any external side effect. Recovery must
-   * prove the same frozen payload; it can never silently construct a new one.
-   */
-  prepareApprovalPost(input: {
-    readonly candidate_id: string;
-    readonly frozen_card_sha256: string;
-    readonly approved_snapshot: Readonly<Record<string, unknown>>;
-  }): PreparedPrivateApprovalPostV1 {
-    return this.database.transaction(() => {
-      if (
-        this.readApprovalDeliveryQuarantine(input.candidate_id) !== undefined
-      ) {
-        throw new Error("approval delivery is quarantined");
-      }
-      const current = this.outbox(input.candidate_id);
-      const snapshotJson = canonicalJson(input.approved_snapshot);
-      const snapshotSha256 = canonicalSha256(input.approved_snapshot);
-      if (current.state === "queued") {
-        const now = this.now();
-        assertCanonicalUtcMillis(now);
-        const updated = this.database
-          .prepare(
-            `UPDATE authority_live_approval_outbox_v2
-                SET state = 'posting', frozen_card_sha256 = ?,
-                    approved_snapshot_json = ?, approved_snapshot_sha256 = ?,
-                    post_started_at = ?, updated_at = ?
-              WHERE candidate_id = ? AND state = 'queued'`,
-          )
-          .run(
-            input.frozen_card_sha256,
-            snapshotJson,
-            snapshotSha256,
-            now,
-            now,
-            input.candidate_id,
-          );
-        if (updated.changes !== 1) {
-          throw new Error("approval workflow post intent state drifted");
-        }
-        return { outbox: this.outbox(input.candidate_id), created: true };
-      }
-      if (
-        current.frozen_card_sha256 !== input.frozen_card_sha256 ||
-        current.approved_snapshot_json !== snapshotJson ||
-        current.approved_snapshot_sha256 !== snapshotSha256
-      ) {
-        throw new Error("approval workflow post intent conflicts with its durable outbox");
-      }
-      return { outbox: current, created: false };
-    })();
-  }
-
-  /**
-   * Release a durable delivery attempt only after its adapter explicitly
-   * permits a retry. The frozen attempt timestamp is the compare-and-swap
-   * token, so an old runner cannot release a newer attempt for the same
-   * candidate.
-   */
-  releaseApprovalPostAttempt(input: {
-    readonly candidate_id: string;
-    readonly post_started_at: string;
-  }): ApprovalWorkflowOutboxV1 {
-    return this.database.transaction(() => {
-      assertCanonicalUtcMillis(input.post_started_at);
-      const current = this.outbox(input.candidate_id);
-      if (current.state === "queued") return current;
-      if (
-        current.state === "superseded" &&
-        current.presentation_external_id === null &&
-        current.post_started_at === null
-      ) {
-        return current;
-      }
-      if (current.presentation_external_id !== null) {
-        throw new Error(
-          "approval workflow post attempt is externally visible",
-        );
-      }
-      if (current.post_started_at !== input.post_started_at) {
-        throw new Error("approval workflow post attempt is stale");
-      }
-      if (
-        current.state === "superseded" &&
-        current.control_approval_sha256 === null
-      ) {
-        const now = this.now();
-        assertCanonicalUtcMillis(now);
-        const updated = this.database
-          .prepare(
-            `UPDATE authority_live_approval_outbox_v2
-                SET frozen_card_sha256 = NULL,
-                    approved_snapshot_json = NULL,
-                    approved_snapshot_sha256 = NULL,
-                    post_started_at = NULL, updated_at = ?
-              WHERE candidate_id = ? AND state = 'superseded'
-                AND provider_message_ts IS NULL
-                AND post_started_at = ?
-                AND control_approval_sha256 IS NULL`,
-          )
-          .run(now, input.candidate_id, input.post_started_at);
-        if (updated.changes !== 1) {
-          throw new Error(
-            "superseded approval post attempt state drifted",
-          );
-        }
-        return this.outbox(input.candidate_id);
-      }
-      if (current.state !== "posting") {
-        throw new Error(
-          "approval workflow post attempt lacks a releasable unresolved delivery",
-        );
-      }
-      const now = this.now();
-      assertCanonicalUtcMillis(now);
-      const updated = this.database
-        .prepare(
-          `UPDATE authority_live_approval_outbox_v2
-              SET state = 'queued', frozen_card_sha256 = NULL,
-                  approved_snapshot_json = NULL,
-                  approved_snapshot_sha256 = NULL,
-                  post_started_at = NULL, updated_at = ?
-            WHERE candidate_id = ? AND state = 'posting'
-              AND provider_message_ts IS NULL
-              AND post_started_at = ?`,
-        )
-        .run(now, input.candidate_id, input.post_started_at);
-      if (updated.changes !== 1) {
-        throw new Error("approval workflow post attempt state drifted");
-      }
-      return this.outbox(input.candidate_id);
-    })();
-  }
-
-  recordPostedApprovalCard(
-    input: PostedPrivateApprovalCardV1,
-  ): ApprovalWorkflowOutboxV1 {
-    return this.database.transaction(() => {
-      assertCanonicalUtcMillis(input.post_started_at);
-      const current = this.outbox(input.candidate_id);
-      const snapshotJson = canonicalJson(input.approved_snapshot);
-      const snapshotSha256 = canonicalSha256(input.approved_snapshot);
-      if (current.state !== "posting") {
-        if (
-          current.presentation_external_id === input.presentation_external_id &&
-          current.post_started_at === input.post_started_at &&
-          current.frozen_card_sha256 === input.frozen_card_sha256 &&
-          current.approved_snapshot_json === snapshotJson &&
-          current.approved_snapshot_sha256 === snapshotSha256
-        ) {
-          return current;
-        }
-        if (
-          current.state === "superseded" &&
-          current.presentation_external_id === null &&
-          current.frozen_card_sha256 === input.frozen_card_sha256 &&
-          current.approved_snapshot_json === snapshotJson &&
-          current.approved_snapshot_sha256 === snapshotSha256 &&
-          current.post_started_at === input.post_started_at
-        ) {
-          const now = this.now();
-          assertCanonicalUtcMillis(now);
-          this.database
-            .prepare(
-              `UPDATE authority_live_approval_outbox_v2
-                  SET provider_message_ts = ?,
-                      updated_at = ?
-                WHERE candidate_id = ? AND state = 'superseded'
-                  AND provider_message_ts IS NULL
-                  AND post_started_at = ?`,
-            )
-            .run(
-              input.presentation_external_id,
-              now,
-              input.candidate_id,
-              input.post_started_at,
-            );
-          return this.outbox(input.candidate_id);
-        }
-        throw new Error(
-          "approval workflow card conflicts with its durable outbox",
-        );
-      }
-      const now = this.now();
-      assertCanonicalUtcMillis(now);
-      const updated = this.database
-        .prepare(
-          `UPDATE authority_live_approval_outbox_v2
-              SET state = 'posted', provider_message_ts = ?,
-                  updated_at = ?
-            WHERE candidate_id = ? AND state = 'posting'
-              AND post_started_at = ?`,
-        )
-        .run(
-          input.presentation_external_id,
-          now,
-          input.candidate_id,
-          input.post_started_at,
-        );
-      if (updated.changes !== 1) {
-        throw new Error("approval workflow post result is stale");
-      }
-      return this.outbox(input.candidate_id);
-    })();
-  }
-
-  markControlPlaneStaged(input: {
-    readonly candidate_id: string;
-    readonly control_approval_sha256: string;
-  }): ApprovalWorkflowOutboxV1 {
-    return this.database.transaction(() => {
-      const current = this.outbox(input.candidate_id);
-      if (
-        (current.state === "staged" || current.state === "superseded") &&
-        current.control_approval_sha256 !== null
-      ) {
-        if (current.control_approval_sha256 === input.control_approval_sha256) {
-          return current;
-        }
-        throw new Error(
-          "approval-workflow control approval conflicts with its durable outbox",
-        );
-      }
-      if (current.state === "superseded") {
-        if (
-          current.presentation_external_id === null ||
-          current.frozen_card_sha256 === null ||
-          current.approved_snapshot_sha256 === null
-        ) {
-          throw new Error(
-            "superseded D2 approval has no frozen posted card",
-          );
-        }
-        const now = this.now();
-        assertCanonicalUtcMillis(now);
-        this.database
-          .prepare(
-            `UPDATE authority_live_approval_outbox_v2
-                SET control_approval_sha256 = ?, updated_at = ?
-              WHERE candidate_id = ? AND state = 'superseded'
-                AND control_approval_sha256 IS NULL`,
-          )
-          .run(input.control_approval_sha256, now, input.candidate_id);
-        return this.outbox(input.candidate_id);
-      }
-      if (current.state !== "posted") {
-        throw new Error(
-          "approval workflow card must be posted before control staging",
-        );
-      }
-      const now = this.now();
-      assertCanonicalUtcMillis(now);
-      this.database
-        .prepare(
-          `UPDATE authority_live_approval_outbox_v2
-              SET state = 'staged', control_approval_sha256 = ?, updated_at = ?
-            WHERE candidate_id = ? AND state = 'posted'`,
-        )
-        .run(input.control_approval_sha256, now, input.candidate_id);
-      return this.outbox(input.candidate_id);
-    })();
-  }
-
   private admission(): AdmissionRow {
     const admission = this.database
       .prepare(
@@ -1193,9 +792,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
                 candidate.review_policy_consequence_sha256,
                 candidate.disposition, outbox.approval_id,
                 outbox.stage_command_id,
-                COALESCE(outbox.state, candidate.disposition) AS state,
-                CASE WHEN outbox.state = 'staged' THEN outbox.updated_at
-                     ELSE NULL END AS durable_staged_at
+                COALESCE(outbox.state, candidate.disposition) AS state
            FROM authority_live_source_candidates_v2 AS candidate
            LEFT JOIN authority_live_approval_outbox_v2 AS outbox
              ON outbox.candidate_id = candidate.candidate_id
@@ -1234,8 +831,8 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           )
             AND state != 'superseded'
             AND NOT EXISTS (
-              SELECT 1 FROM authority_person_meeting_approval_actions_v1 AS terminal
-               WHERE terminal.approval_id = authority_live_approval_outbox_v2.approval_id
+              SELECT 1 FROM authority_approval_decisions_v1 AS decision
+               WHERE decision.approval_id = authority_live_approval_outbox_v2.approval_id
             )`,
       )
       .run(successorCandidateId, supersededAt, supersededAt, reviewLineageId);
@@ -1253,7 +850,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     value: string,
   ): ApprovalWorkflowOutboxV1 | undefined {
     const column = key === "approval_id" ? "outbox.approval_id" : "candidate.candidate_id";
-    return this.database
+    const row = this.database
       .prepare(
           `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
                 candidate.review_lineage_id, candidate.review_input_sha256,
@@ -1264,21 +861,137 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
                 candidate.review_policy_consequence_sha256,
                 candidate.disposition,
                 outbox.approval_id, outbox.stage_command_id, outbox.state,
-                outbox.provider_message_ts AS presentation_external_id,
-                outbox.frozen_card_sha256,
                 outbox.approved_snapshot_json, outbox.approved_snapshot_sha256,
-                outbox.post_started_at,
-                CASE WHEN outbox.state = 'staged' THEN outbox.updated_at
-                     ELSE NULL END AS durable_staged_at,
-                outbox.control_approval_sha256,
-                outbox.superseded_by_candidate_id, outbox.superseded_at,
-                outbox.tombstoned_at
+                outbox.suggested_projects_json,
+                outbox.superseded_by_candidate_id, outbox.superseded_at
            FROM authority_live_source_candidates_v2 AS candidate
            JOIN authority_live_approval_outbox_v2 AS outbox
              ON outbox.candidate_id = candidate.candidate_id
           WHERE ${column} = ? AND candidate.admission_semantic_input_sha256 = (SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = ?)`,
       )
-      .get(value, this.sourceKey) as ApprovalWorkflowOutboxV1 | undefined;
+      .get(value, this.sourceKey) as (Omit<ApprovalWorkflowOutboxV1, "suggested_project_ids"> & { readonly suggested_projects_json: string | null }) | undefined;
+    if (row === undefined) return undefined;
+    const { suggested_projects_json: suggested, ...outbox } = row;
+    return { ...outbox, suggested_project_ids: suggestedProjectIdsFrom(suggested) };
+  }
+}
+
+function suggestedProjectIdsFrom(json: string | null): readonly string[] | null {
+  if (json === null) return null;
+  const value = JSON.parse(json) as unknown;
+  if (!Array.isArray(value) || !value.every((project) => typeof project === "string")) {
+    throw new Error("approval proposal suggested projects are invalid");
+  }
+  return Object.freeze(value as string[]);
+}
+
+/**
+ * Queued, actionable lineage heads whose reviewer membership is active, oldest
+ * first. `source_key` scopes to one source; `source_adapter_ids` (when given)
+ * keeps only sources of the configured adapters.
+ */
+function pendingApprovalIdsV1(database: Database.Database, options: {
+  readonly source_key?: string | undefined;
+  readonly source_adapter_ids?: readonly string[] | undefined;
+  readonly limit?: number | undefined;
+}): readonly string[] {
+  const adapters = options.source_adapter_ids === undefined ? null : JSON.stringify(options.source_adapter_ids);
+  const sourceKey = options.source_key ?? null;
+  return database
+    .prepare(
+      `SELECT outbox.approval_id
+         FROM authority_live_approval_outbox_v2 AS outbox
+         JOIN authority_live_source_candidates_v2 AS candidate ON candidate.candidate_id = outbox.candidate_id
+         JOIN authority_live_source_review_lineage_heads_v2 AS head ON head.candidate_id = candidate.candidate_id
+         JOIN authority_live_source_admission_v2 AS admission ON admission.semantic_input_sha256 = candidate.admission_semantic_input_sha256
+         JOIN authority_memberships AS membership ON membership.membership_id = admission.membership_id
+          AND membership.organization_id = admission.organization_id AND membership.principal_id = admission.principal_id
+          AND membership.membership_type = admission.membership_type AND membership.status = 'active'
+        WHERE outbox.state = 'queued' AND candidate.disposition = 'actionable'
+          AND (? IS NULL OR admission.source_adapter_id IN (SELECT value FROM json_each(?)))
+          AND (? IS NULL OR admission.source_key = ?)
+        ORDER BY candidate.created_at ASC, candidate.candidate_id ASC
+        LIMIT ?`,
+    )
+    .pluck()
+    .all(adapters, adapters, sourceKey, sourceKey, pendingApprovalDeliveryLimitV1(options.limit)) as string[];
+}
+
+/**
+ * Runtime-wide approval reads and freeze. Each call resolves the approval's (or
+ * candidate's) admission source_key and source adapter, picks the configured
+ * cursor policy for that adapter, and delegates to a per-source
+ * SqliteAuthorityMeetingProcessingStateV1, so every frozen-row check stays in
+ * force. Delegates never advance a cursor, so they carry no source-current or
+ * after-advance hook. A source whose adapter has no configured policy is
+ * invisible: reads return undefined, lists skip it, and a freeze throws.
+ */
+export class SqliteApprovalWorkflowStateV1 implements ApprovalWorkflowStateV1 {
+  private readonly policies: ReadonlyMap<string, AdmittedMeetingSourceCursorPolicyV1>;
+  private readonly processorAdapterId: string;
+  private readonly now: (() => string) | undefined;
+
+  constructor(
+    private readonly database: Database.Database,
+    options: {
+      readonly source_cursor_policies: readonly AdmittedMeetingSourceCursorPolicyV1[];
+      readonly processor_adapter_id: string;
+      readonly now?: () => string;
+    },
+  ) {
+    const policies = new Map(options.source_cursor_policies.map((policy) => [policy.source_adapter_id, policy] as const));
+    if (policies.size !== options.source_cursor_policies.length) {
+      throw new Error("approval workflow state needs distinct source adapters");
+    }
+    if (options.processor_adapter_id.trim().length === 0) {
+      throw new Error("admitted meeting-processing expected processor adapter identity is invalid");
+    }
+    this.policies = policies;
+    this.processorAdapterId = options.processor_adapter_id;
+    this.now = options.now;
+  }
+
+  listPendingApprovalDeliveries(
+    options: ListPendingApprovalDeliveriesOptionsV1 = {},
+  ): readonly FrozenMeetingProcessingCandidateForApprovalV1[] {
+    return pendingApprovalIdsV1(this.database, {
+      source_key: options.source_key,
+      source_adapter_ids: [...this.policies.keys()],
+      limit: options.limit,
+    }).map((approvalId) => {
+      const candidate = this.route("approval_id", approvalId)?.readFrozenCandidateForApproval(approvalId);
+      if (candidate === undefined) throw new Error("pending approval delivery is absent");
+      return candidate;
+    });
+  }
+
+  readCandidateByApprovalId(approvalId: string): ApprovalWorkflowOutboxV1 | undefined {
+    return this.route("approval_id", approvalId)?.readCandidateByApprovalId(approvalId);
+  }
+
+  readFrozenCandidateForApproval(approvalId: string): FrozenMeetingProcessingCandidateForApprovalV1 | undefined {
+    return this.route("approval_id", approvalId)?.readFrozenCandidateForApproval(approvalId);
+  }
+
+  freezeProposal(input: FreezeApprovalProposalInputV1): ApprovalWorkflowOutboxV1 {
+    const state = this.route("candidate_id", input.candidate_id);
+    if (state === undefined) throw new Error("approval proposal source is not configured in this runtime");
+    return state.freezeProposal(input);
+  }
+
+  private route(column: "approval_id" | "candidate_id", value: string): SqliteAuthorityMeetingProcessingStateV1 | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT admission.source_key, admission.source_adapter_id
+           FROM authority_live_approval_outbox_v2 AS outbox
+           JOIN authority_live_source_candidates_v2 AS candidate ON candidate.candidate_id = outbox.candidate_id
+           JOIN authority_live_source_admission_v2 AS admission ON admission.semantic_input_sha256 = candidate.admission_semantic_input_sha256
+          WHERE outbox.${column} = ?`,
+      )
+      .get(value) as { readonly source_key: string; readonly source_adapter_id: string } | undefined;
+    const policy = row === undefined ? undefined : this.policies.get(row.source_adapter_id);
+    if (row === undefined || policy === undefined) return undefined;
+    return new SqliteAuthorityMeetingProcessingStateV1(this.database, policy, this.processorAdapterId, this.now, row.source_key);
   }
 }
 

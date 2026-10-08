@@ -78,6 +78,26 @@ export class SqlitePersonMeetingIntakeV1 {
     return this.db.prepare('SELECT project_id FROM authority_person_meeting_suggestions_v1 WHERE source_key=? AND external_id=? ORDER BY project_id')
       .pluck().all(sourceKey, externalId) as string[];
   }
+  /**
+   * The project ids a meeting's proposal freezes as suggestions: its recorded suggestions plus its still-pending import
+   * choices for projects the importer is still an active member of (the rule promoteConsumedImports applies), sorted and
+   * unique. Called by the approval core's freeze, which runs after stageCandidate and before the cursor advance that
+   * records those pending choices (R28), so the frozen set equals what that advance records. Grants nothing: read access
+   * still comes only from authority_person_meeting_suggestions_v1. Decodes no cursor, so any provider's intake serves it.
+   */
+  proposalSuggestions(sourceKey: string, externalId: string): readonly string[] {
+    return this.db.prepare(`SELECT project_id FROM authority_person_meeting_suggestions_v1 WHERE source_key=? AND external_id=?
+      UNION
+      SELECT pending.project_id FROM authority_person_meeting_pending_suggestions_v1 AS pending
+        JOIN authority_live_source_admission_v2 AS admission ON admission.source_key=pending.source_key
+        JOIN authority_project_memberships_v1 AS grant_row ON grant_row.project_id=pending.project_id
+         AND grant_row.organization_id=admission.organization_id AND grant_row.principal_id=admission.principal_id
+         AND grant_row.membership_id=admission.membership_id AND grant_row.status='active'
+        JOIN authority_projects_v1 AS project ON project.project_id=grant_row.project_id
+         AND project.organization_id=grant_row.organization_id AND project.status='active'
+       WHERE pending.source_key=? AND pending.external_id=?
+      ORDER BY project_id`).pluck().all(sourceKey, externalId, sourceKey, externalId) as string[];
+  }
   /** A watch names the project it suggests; stopping (`folder` null) needs no project access. */
   watch(setting: MeetingIntakeSettingV1, folder: string | null, folderProjectId: string | null, current: () => void): void {
     if ((folder === null) !== (folderProjectId === null)) throw new AuthorityOperationError('invalid_request', 'A watched folder needs a project');

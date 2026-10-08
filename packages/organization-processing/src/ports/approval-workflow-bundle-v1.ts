@@ -1,8 +1,6 @@
 import type { OrganizationAuthoritySigner } from "@echo-brain/organization-authority-kernel/application/ports/organization-authority-signer";
 import type { AppendV4RecordInput, AppendedV4Record } from "@echo-brain/organization-record/organization-record-api-v1";
-import type { ApprovalWorkflowStagerV1 } from "../admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import type { ApprovalWorkflowStateV1 } from "../admitted-meeting-processing/approval-workflow-state-v1.js";
-import type { ProviderHttpApplicationV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
 
 /**
  * The outcome of one bounded provider terminal-card reconciliation turn.
@@ -50,39 +48,4 @@ export interface ApprovalWorkflowContextV1 {
    * acknowledgement or durable receipt.
    */
   readonly on_terminal_action_queued?: () => void;
-}
-
-export interface ApprovalWorkflowComponentsV1 {
-  /** Release adapter-owned resources after ingress and the worker have stopped. */
-  close?(): void;
-  readonly stager: ApprovalWorkflowStagerV1;
-  readonly processing: ApprovalWorkflowProcessingV1;
-  /** Omitted only for an approval surface with no inbound interaction route. */
-  readonly interaction_ingress?: ProviderHttpApplicationV1;
-}
-
-/**
- * The active approval surface is selected in composition. Source intake and
- * the shared worker only consume the provider-neutral values returned here.
- */
-export interface ApprovalWorkflowBundleV1 {
-  /**
-   * Fail closed before the worker starts if this surface cannot recover every
-   * outstanding external presentation it may need to reconcile, update, or
-   * retire. An adapter may take over pristine queued work, but it must not
-   * take over a posting, posted, staged, or untombstoned superseded card
-   * merely because it was selected in a new configuration.
-   *
-   * A replacement must supply its own durable ownership proof. Historical
-   * approved-record policy projectors are similarly additive: composition
-   * must retain every projector needed to read record protocols already
-   * appended before a surface is replaced.
-   */
-  assert_existing_presentations_owned(
-    context: ApprovalWorkflowContextV1,
-  ): Promise<void>;
-
-  load(
-    context: ApprovalWorkflowContextV1,
-  ): Promise<ApprovalWorkflowComponentsV1>;
 }

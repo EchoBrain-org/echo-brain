@@ -24,7 +24,7 @@ import { createCoreInput, createCoreSourceIngestion } from "../core-input.mjs";
 const POLICY = CORE_APPROVAL_POLICIES.restricted;
 
 function queuedActionCount(authority) {
-  return authority.prepare("SELECT count(*) FROM authority_person_meeting_approval_actions_v1").pluck().get();
+  return authority.prepare("SELECT count(*) FROM authority_approval_decisions_v1").pluck().get();
 }
 
 function fixtureInput(identities) {
@@ -140,11 +140,6 @@ async function createFixture(on_terminal_action_queued) {
       approval,
       authority,
       snapshot_sha256: () => state.readFrozenCandidateForApproval(frozen.approval_id).approved_snapshot_sha256,
-      closeAuthority() {
-        if (!authorityOpen) return;
-        authority.close();
-        authorityOpen = false;
-      },
       close() {
         record.close();
         if (authorityOpen) authority.close();
@@ -175,7 +170,7 @@ test("approval-port wake follows the persisted action", async () => {
     assert.equal(observedActionCount, 1);
     assert.equal(observedInTransaction, false, "the wake runs only after the action transaction commits");
     assert.equal(queuedActionCount(fixture.authority), 1);
-    const action = fixture.authority.prepare("SELECT command_id, body_json FROM authority_person_meeting_approval_actions_v1").get();
+    const action = fixture.authority.prepare("SELECT command_id, body_json FROM authority_approval_decisions_v1").get();
     assert.equal(action.command_id, "wake-after-durable");
     const { request } = JSON.parse(action.body_json);
     assert.equal(request.snapshot_sha256, fixture.snapshot_sha256(), "the durable action binds the frozen snapshot the reviewer saw");
@@ -203,9 +198,11 @@ test("a rejected persistence step does not wake publication", async () => {
   let fixture;
   try {
     fixture = await createFixture(() => { wakes += 1; });
-    fixture.closeAuthority();
-    await assert.rejects(fixture.approval("closed-authority-database"), /not open/);
+    // The decision insert itself fails, after both authorizations ran.
+    fixture.authority.exec("CREATE TEMP TRIGGER refuse BEFORE INSERT ON authority_approval_decisions_v1 BEGIN SELECT RAISE(ABORT, 'refused'); END");
+    await assert.rejects(fixture.approval("refused-decision"), /refused/);
     assert.equal(wakes, 0);
+    assert.equal(queuedActionCount(fixture.authority), 0, "a refused insert leaves no durable decision");
   } finally {
     fixture?.close();
   }

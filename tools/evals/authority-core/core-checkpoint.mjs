@@ -143,10 +143,10 @@ function verifyStoppedState(stateDirectory, input, response, answers, policy) {
     assert.deepEqual(JSON.parse(candidates[0].meeting_json), input.meeting);
     assert.deepEqual(JSON.parse(candidates[0].decisions_json), input.decisions);
     // Only the owner's action exists: the refused wrong-reviewer attempt left nothing behind.
-    const actions = authority.prepare("SELECT json_extract(body_json, '$.request.action') AS action, json_extract(body_json, '$.request.project_id') AS project_id, receipt_json FROM authority_person_meeting_approval_actions_v1").all();
+    const actions = authority.prepare("SELECT action, json_array_length(body_json, '$.request.project_ids') AS projects, receipt_json FROM authority_approval_decisions_v1").all();
     assert.equal(actions.length, 1);
     assert.equal(actions[0].action, "approve");
-    assert.equal(actions[0].project_id === null, policy === POLICIES[1], "the action names the audience its policy requires");
+    assert.equal(actions[0].projects === 0, policy === POLICIES[1], "the decision names the audience its policy requires");
     assert.notEqual(actions[0].receipt_json, null, "the approved action carries its signed record receipt");
     assert.equal(record.prepare("SELECT COUNT(*) AS n FROM organization_record_log").get().n, 1);
     assert.equal(record.prepare("SELECT COUNT(*) AS n FROM organization_record_signed_receipt").get().n, 1);

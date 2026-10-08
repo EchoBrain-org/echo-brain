@@ -473,21 +473,16 @@ function insertSyntheticProposal(
     .prepare(
       `INSERT INTO authority_live_approval_outbox_v2
          (candidate_id, approval_id, stage_command_id, state,
-          provider_message_ts, frozen_card_sha256, approved_snapshot_json,
-          approved_snapshot_sha256, post_started_at,
-          control_approval_sha256, updated_at)
-       VALUES (?, ?, ?, 'staged', ?, ?, ?, ?, ?, ?, ?)`,
+          approved_snapshot_json, approved_snapshot_sha256,
+          suggested_projects_json, updated_at)
+       VALUES (?, ?, ?, 'staged', ?, ?, '[]', ?)`,
     )
     .run(
       candidateId,
       input.approval_id,
       `pas_synthetic_${suffix}`,
-      `echo:${input.approval_id}`,
-      sha256Digest(`synthetic-card-${suffix}`),
-      canonicalJson({ schema_version: 1, kind: "synthetic-card", proposal: input.index }),
-      sha256Digest(`synthetic-snapshot-${suffix}`),
-      SYNTHETIC_ISSUED_AT,
-      sha256Digest(`synthetic-control-${suffix}`),
+      canonicalJson({ approval_id: input.approval_id, schema_version: 1, kind: "synthetic-snapshot", proposal: input.index }),
+      canonicalSha256({ approval_id: input.approval_id, schema_version: 1, kind: "synthetic-snapshot", proposal: input.index } as never),
       SYNTHETIC_ISSUED_AT,
     );
 }
