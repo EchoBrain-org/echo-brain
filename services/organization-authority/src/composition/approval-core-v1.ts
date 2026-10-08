@@ -84,7 +84,7 @@ export interface ApprovalDecisionBodyV1 {
 }
 
 /**
- * Static, core-independent options. Task 11 adds `presenters?: readonly ApprovalPresenterFactoryV1[]`, where
+ * Static, core-independent options. `presenters` are factories, where
  * `ApprovalPresenterFactoryV1 = (core: Pick<ApprovalCoreV1, 'proposal' | 'ownerProposals'>) => ApprovalPresenterV1`;
  * createApprovalCoreV1 calls each factory once with its own frozen core object. A presenter is never passed as an instance.
  */
@@ -116,7 +116,7 @@ export interface ApprovalCoreV1 {
    *  another person's intake cycle. The runtime's lanes use this. */
   stagerForSource(sourceKey: string): ApprovalWorkflowStagerV1;
   /** The publisher (approval-publisher-v1.ts) with this core's after_record hooks. observeAndFinalizePendingApprovals is a no-op;
-   *  reconcileApprovalPresentations is left undefined until Task 11. */
+   *  reconcileApprovalPresentations runs each presenter in turn, and is undefined when there are none. */
   readonly processing: ApprovalWorkflowProcessingV1;
   decide(surface: ApprovalSurfaceV1, request: ApprovalDecisionRequestV1, authorize: () => ApprovalAuthorizationV1): ApprovalDecideResultV1;
   proposal(approvalId: string): ApprovalProposalViewV1 | undefined;

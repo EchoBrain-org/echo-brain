@@ -57,7 +57,7 @@ async function publisherAppendOptionsV1(context: ApprovalWorkflowContextV1): Pro
 /**
  * The one publisher: appends every approved, unpublished decision as an echo-approval-decision-ref-v1 record, writes its receipt and
  * runs the after-record hooks in that receipt's transaction. Each row is isolated: the first failure is rethrown after the pass, unless
- * the signal aborted. reconcileApprovalPresentations stays undefined until Task 11; the lifecycle requests search and presentation
+ * the signal aborted. The core adds reconcileApprovalPresentations when it has presenters; the lifecycle requests search and presentation
  * after each successful pass.
  */
 export function createApprovalPublisherV1(database: Database.Database, context: ApprovalWorkflowContextV1,
