@@ -6,7 +6,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 /** Only selecting server composition supplies this port. Never pass its key to a Person or model. */
 export interface NangoPersonConnectionV1 {
   connect(tags: Readonly<Record<string, string>>, signal?: AbortSignal): Promise<{ readonly link: string }>;
-  connection(reference: string, signal?: AbortSignal): Promise<{ readonly tags: Readonly<Record<string, string>>; readonly access_token: string }>;
+  connection(reference: string, signal?: AbortSignal): Promise<{ readonly tags: Readonly<Record<string, string>>; readonly access_token: string; readonly expires_at?: string }>;
   find(tags: Readonly<Record<string, string>>, signal?: AbortSignal): Promise<string | undefined>;
   disconnect(reference: string, signal?: AbortSignal): Promise<void>;
 }
@@ -64,7 +64,11 @@ export function createNangoPersonConnectionV1(options: { readonly provider: Pick
       const credentials = record(data.credentials); if (credentials.type !== 'OAUTH2') failure('unauthorized');
       const tags = record(data.tags); const copied: Record<string, string> = {};
       for (const key of ['echo_attempt', 'organization_id', 'end_user_id', 'echo_membership']) copied[key] = string(tags[key], 255);
-      return Object.freeze({ tags: Object.freeze(copied), access_token: string(credentials.access_token, 16 * 1024) });
+      const raw_expires_at = credentials.expires_at;
+      const expires_at = raw_expires_at === undefined || raw_expires_at === null ? undefined : string(raw_expires_at, 64);
+      if (expires_at !== undefined && (!Number.isFinite(Date.parse(expires_at)) || new Date(expires_at).toISOString() !== expires_at)) failure('invalid_output');
+      return Object.freeze({ tags: Object.freeze(copied), access_token: string(credentials.access_token, 16 * 1024),
+        ...(expires_at === undefined || expires_at === null ? {} : { expires_at }) });
     },
     async find(tags, signal) {
       // Nango connection-list pages are zero-based, so page 0 is the first page.

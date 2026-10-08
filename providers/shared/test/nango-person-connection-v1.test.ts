@@ -56,6 +56,20 @@ function fixture() {
     expect(f.fetch.mock.calls[3]![1]!.method).toBe('DELETE');
     for (const [, init] of f.fetch.mock.calls) expect(init).toMatchObject({ redirect: 'error', headers: expect.objectContaining({ Authorization: 'Bearer synthetic-nango-key' }) });
   });
+  it('propagates a canonical OAuth2 expiry while preserving connections whose expiry is unknown', async () => {
+    const f = fixture();
+    f.fetch.mockResolvedValueOnce(json({ ...connection, credentials: { ...connection.credentials, expires_at: '2026-10-02T03:04:05.000Z' } }));
+    await expect(f.nango.connection('reference-fixture')).resolves.toEqual({ tags, access_token: 'synthetic-jira-access', expires_at: '2026-10-02T03:04:05.000Z' });
+    f.fetch.mockResolvedValueOnce(json({ ...connection, credentials: { ...connection.credentials, expires_at: null } }));
+    const unknownExpiry = await f.nango.connection('reference-fixture');
+    expect(unknownExpiry).toEqual({ tags, access_token: 'synthetic-jira-access' });
+    expect(unknownExpiry).not.toHaveProperty('expires_at');
+  });
+  it.each([['not-a-date', 'not-a-date'], ['invalid calendar date', '2026-02-30T03:04:05.000Z'], ['noncanonical timestamp', '2026-10-02T03:04:05Z'], ['oversized value', 'x'.repeat(65)]])('rejects malformed or noncanonical OAuth2 expiry metadata (%s)', async (_case, expires_at) => {
+    const f = fixture();
+    f.fetch.mockResolvedValueOnce(json({ ...connection, credentials: { ...connection.credentials, expires_at } }));
+    await expect(f.nango.connection('reference-fixture')).rejects.toMatchObject({ code: 'invalid_output', message: failureMessage });
+  });
   it('finds a single server-tagged connection without collecting credentials or trusting a client locator', async () => {
     const f = fixture(); const taggedConnections = [connection]; const requests: URL[] = []; const served: (typeof connection)[][] = [];
     f.fetch.mockImplementation(async url => {

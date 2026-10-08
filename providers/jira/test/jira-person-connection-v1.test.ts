@@ -141,6 +141,7 @@ describe('Nango-backed personal Jira connection', () => {
   it('binds consent to the authenticated tenure, verifies Jira, persists only compact custody and keeps refresh outside grant identity', async () => {
     const f = fixture(); try {
       await f.connected(); const before = f.store.current(person)!;
+      const connectionCalls = vi.mocked(f.nango.connection).mock.calls.length;
       const source = await f.service.source({ access_token: f.token, audit: f.audit });
       const result = await source!.search({ query: 'launch' });
       expect(result.items[0]).not.toHaveProperty('text');
@@ -155,6 +156,7 @@ describe('Nango-backed personal Jira connection', () => {
         body_json: expect.stringContaining('\"status\":\"complete\"'),
       })]);
       expect(f.audit.record).toHaveBeenCalledTimes(2);
+      expect(f.nango.connection).toHaveBeenCalledTimes(connectionCalls + 1);
     } finally { f.database.close(); }
   });
 
@@ -429,11 +431,24 @@ describe('Nango-backed personal Jira connection', () => {
 
   it('passes cancellation through credential retrieval and performs no subsequent Jira fetch or audit', async () => {
     const f = fixture(); try {
-      await f.connected(); const source = await f.service.source({ access_token: f.token, audit: f.audit });
+      await f.connected();
       const abort = new AbortController(); const calls = f.transport.mock.calls.length;
       vi.mocked(f.nango.connection).mockImplementationOnce(async (_ref, signal) => { expect(signal).toBeDefined(); abort.abort(); return { tags: {}, access_token: 'synthetic-unused' }; });
-      await expect(source!.search({ query: 'launch', signal: abort.signal })).rejects.toThrow();
+      await expect(f.service.source({ access_token: f.token, audit: f.audit, signal: abort.signal })).rejects.toThrow();
       expect(f.transport).toHaveBeenCalledTimes(calls); expect(f.audit.record).not.toHaveBeenCalled();
+    } finally { f.database.close(); }
+  });
+
+  it('refuses a cancelled read before using the request-cached credential or fetching Jira', async () => {
+    const f = fixture(); try {
+      await f.connected(); const source = await f.service.source({ access_token: f.token, audit: f.audit });
+      const abort = new AbortController(); abort.abort();
+      const providerCalls = f.transport.mock.calls.length;
+      const connectionCalls = vi.mocked(f.nango.connection).mock.calls.length;
+      await expect(source!.search({ query: 'launch', signal: abort.signal })).rejects.toThrow();
+      expect(f.transport).toHaveBeenCalledTimes(providerCalls);
+      expect(f.nango.connection).toHaveBeenCalledTimes(connectionCalls);
+      expect(f.audit.record).not.toHaveBeenCalled();
     } finally { f.database.close(); }
   });
 });
