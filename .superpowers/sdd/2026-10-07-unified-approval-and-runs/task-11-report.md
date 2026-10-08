@@ -59,3 +59,16 @@ npx vitest run --config vitest.config.ts providers/slack/server/test/private-app
 # 36 passed
 npx tsc -b packages/organization-authority-kernel providers/slack/server services/organization-authority
 ```
+
+## Fix round 2, Stage A: tests-only RED evidence
+
+No production or schema files changed in this stage. The presenter tests now begin with an actually eligible staged outbox proposal and no presentation row. They cover normal delivery, unlinked and late-linked reviewers, persisted-channel crash recovery, `retry_allowed` versus `uncertain`, each provider-operation exception, stale target validation, oversized cards, a terminal decision redraw behind 25 completed rows, and the service lifecycle's `additional_processing` presenter dispatch.
+
+RED command on unmodified production commit `a91fc7d`:
+
+```text
+npx vitest run --config vitest.config.ts providers/slack/server/test/private-approval/slack-approval-presenter-v1.test.ts services/organization-authority/test/organization-authority-service-lifecycle.test.ts
+# 2 files; lifecycle 32 passed; presenter 11 tests with 7 failures
+```
+
+The failures are meaningful behavior gaps: normal and late-linked first delivery calls `reconcileMarker` after opening the DM rather than `postMarker`; `retry_allowed` therefore never reaches the safe first-marker retry; an `openDirectMessage` exception escapes instead of recording retry state; post cannot begin after the durable channel reservation; and thrown reconciliation/publish exceptions escape without durable backoff. The uncertain-marker, stale-target, oversized-card, terminal-redraw/starvation, and additional-lane lifecycle cases are already green. This is an intentional RED stopping point pending the controller's explicit Stage B authorization.
