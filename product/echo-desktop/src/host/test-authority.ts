@@ -705,8 +705,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // list after that finds it done (in granola-run-failed, failed until Try
     // again). A done check has found two open items. No sweep is due, and a
     // sweep finds nothing to check. Every answer passes the contract's own
-    // result check, as the Authority's does.
-    if (method === 'POST' && path === '/v1/person/runs' && mode.startsWith('granola')) {
+    // result check, as the Authority's does. Runs and shared Home reads exist
+    // even when the meeting provider is unavailable.
+    if (method === 'POST' && path === '/v1/person/runs') {
       const api = await contract();
       let request: RunsRequest;
       try {
