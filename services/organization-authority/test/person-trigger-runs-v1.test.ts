@@ -45,7 +45,7 @@ async function fixture(options: { readonly anchor?: () => typeof record; readonl
     record_sha256s.map(sha => [sha, { approval_id: f.approvalId, record_sha256: sha, title: 'Approved display', approved_at: now.toISOString(), project_ids: [] }] as const));
   const diagnostics = createPersonDiagnosticsV1({ sessions: { authenticateAccess: ({ access_token }) => auth(access_token) } });
   captures.push(diagnostics);
-  const create = (serviceRuns: SqliteTriggerRunsV1 = runs) => createPersonTriggerRunsV1({ runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordProjects: () => [], readableDecisions: readableDecisions as never, projectRecords: () => [] }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000,
+  const create = (serviceRuns: SqliteTriggerRunsV1 = runs, max_running?: number) => createPersonTriggerRunsV1({ ...(max_running === undefined ? {} : { max_running }), runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordProjects: () => [], readableDecisions: readableDecisions as never, projectRecords: () => [] }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000,
     items: new SqliteImpactItemsV1(f.db, () => now), people: new SqliteOpenItemPeopleV1(f.db) });
   const app = create();
   const settled = async () => await vi.waitFor(() => expect(runs.read(f.person, row.run_id)!.state).not.toBe('running'));
@@ -148,10 +148,24 @@ describe('durable approved-record trigger runs', () => {
     expect(result.trace!.events.some(event => event.stage === 'application' && event.event === 'succeeded')).toBe(false);
   });
 
-  it('releases index lag without an attempt and maps access loss and repeated timeouts', async () => {
+  it('answers busy past the process cap, and running to a duplicate start of a running run', async () => {
+    const f = await fixture({ render: ({ signal }) => new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('closed')), { once: true })) });
+    const app = f.create(f.runs, 1);
+    const sweep = f.runs.enqueueSweep({ ...f.person, principal_id: 'prn_00000000-0000-4000-8000-0000000000f1', membership_id: 'mem_00000000-0000-4000-8000-0000000000f2' }, { kind: 'mine' });
+    const start = (access_token: string, run_id: string) => app.start({ access_token, request: { schema_version: 1, operation: 'start', run_id } });
+    await expect(start('approver', f.row.run_id)).resolves.toEqual({ state: 'running' });
+    await expect(start('other', sweep.run_id)).resolves.toEqual({ state: 'busy' });
+    await expect(start('approver', f.row.run_id)).resolves.toEqual({ state: 'running' });
+    app.close();
+  });
+
+  it('releases index lag and a rotated access token without an attempt, and maps access loss and repeated timeouts', async () => {
     const lag = await fixture({ anchor: () => { throw new PersonRecordSearchIndexLagV1(); } });
     await lag.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: lag.row.run_id } }); await lag.settled();
     expect(lag.runs.read(lag.person, lag.row.run_id)).toMatchObject({ state: 'pending', attempts: 0 });
+    const rotated = await fixture({ anchor: () => { throw new AuthorityOperationError('unauthorized', 'access token was rotated'); } });
+    await rotated.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: rotated.row.run_id } }); await rotated.settled();
+    expect(rotated.runs.read(rotated.person, rotated.row.run_id)).toMatchObject({ state: 'pending', attempts: 0, error_code: null });
     const timeout = await fixture({ render: async () => { throw new AgenticAskDeadlineErrorV1(); } });
     for (let at = 0; at < 3; at++) { await timeout.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: timeout.row.run_id } }); await timeout.settled(); }
     expect(timeout.runs.read(timeout.person, timeout.row.run_id)).toMatchObject({ state: 'failed', error_code: 'timed_out', attempts: 3 });

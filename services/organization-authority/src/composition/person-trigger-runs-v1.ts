@@ -50,11 +50,14 @@ export interface CreatePersonTriggerRunsV1Options {
   readonly live_sources?: BoundOptions['live_sources'];
   readonly research: (input: { readonly desk: Desk; readonly context: PersonLiveRequestContextV1 }) => RunResearch;
   readonly lease_ms?: number;
+  /** How many runs this process researches at once; a start past it answers `busy`. */
+  readonly max_running?: number;
   /** The clock a sweep's checks are stamped with, and a lapsed lease is told by. */
   readonly now?: () => Date;
 }
 
 const LEASE_MS = 600_000;
+const MAX_RUNNING = 4;
 /** `list` shows at most this many sweeps, so frequent sweeps never push an impact run (and its Try again) off the list (R55). */
 const SWEEPS_LISTED = 20;
 /** Newest first, as the store lists runs. */
@@ -101,6 +104,7 @@ export type PersonTriggerRunsApplicationV1 = Pick<PersonTriggerRunsHttpApplicati
 
 export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Options): PersonTriggerRunsApplicationV1 {
   const lease = options.lease_ms ?? LEASE_MS;
+  const maxRunning = options.max_running ?? MAX_RUNNING;
   const now = options.now ?? (() => new Date());
   const controllers = new Set<AbortController>();
   let closing = false;
@@ -165,8 +169,9 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
         if (!persisted) throw new AuthorityOperationError('conflict', 'The research attempt no longer owns its run');
       } catch (error) {
         if (closing && controller.signal.aborted) throw error;
-        if (error instanceof PersonRecordSearchIndexLagV1) options.runs.release(row.run_id, lease_token, { counted: false });
-        else if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'stale_access_state' || error.code === 'not_found')) options.runs.fail(row.run_id, lease_token, 'no_access');
+        // The desktop's access token rotates every 12 h, revoking the old one, and `start` checks access again: no attempt is spent.
+        if (error instanceof PersonRecordSearchIndexLagV1 || (error instanceof AuthorityOperationError && error.code === 'unauthorized')) options.runs.release(row.run_id, lease_token, { counted: false });
+        else if (error instanceof AuthorityOperationError && (error.code === 'stale_access_state' || error.code === 'not_found')) options.runs.fail(row.run_id, lease_token, 'no_access');
         else if (controller.signal.aborted || error instanceof AgenticAskDeadlineErrorV1) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'timed_out' });
         else if (unavailable(error)) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'unavailable' });
         else options.runs.fail(row.run_id, lease_token, 'research_failed');
@@ -186,7 +191,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     },
     async start(input: Parameters<PersonTriggerRunsHttpApplicationV1['start']>[0]) {
       input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token }); const actor = actorOf(authorization);
-      const claim = options.runs.claim(actor, input.request.run_id, lease);
+      const claim = options.runs.claim(actor, input.request.run_id, lease, () => controllers.size < maxRunning);
       if (claim.kind !== 'claimed') { if (claim.kind === 'not_found') throw new AuthorityOperationError('not_found', 'run is not available'); return Object.freeze({ state: claim.kind }); }
       const row = options.runs.read(actor, input.request.run_id); if (row === undefined) throw new AuthorityOperationError('not_found', 'run is not available');
       let capture: PersonDiagnosticCaptureHandleV1 | undefined;

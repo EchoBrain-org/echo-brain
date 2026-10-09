@@ -152,9 +152,10 @@ export class SqliteTriggerRunsV1 {
 
   /**
    * One live run per person. Impact checks start before sweeps: a sweep is
-   * `busy` while one of the actor's impact checks is pending or running.
+   * `busy` while one of the actor's impact checks is pending or running, and
+   * while `admit` says the process already runs as many as it allows.
    */
-  claim(actor: ApprovalActorV1, runId: string, leaseMs: number): { readonly kind: 'claimed'; readonly lease_token: string } | { readonly kind: 'running' | 'busy' | 'done' | 'failed' | 'not_found' } {
+  claim(actor: ApprovalActorV1, runId: string, leaseMs: number, admit?: () => boolean): { readonly kind: 'claimed'; readonly lease_token: string } | { readonly kind: 'running' | 'busy' | 'done' | 'failed' | 'not_found' } {
     if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0) throw new TypeError('Trigger run lease must be a positive integer');
     return this.immediate(() => {
       const current = this.read(actor, runId);
@@ -170,7 +171,7 @@ export class SqliteTriggerRunsV1 {
       const anotherLiveRun = this.database.prepare(`SELECT 1 FROM authority_trigger_runs_v1
         WHERE organization_id=? AND principal_id=? AND membership_id=? AND run_id!=? AND state='running' AND lease_expires_at>? LIMIT 1`).get(
         actor.organization_id, actor.principal_id, actor.membership_id, runId, timestamp);
-      if (anotherLiveRun !== undefined) return { kind: 'busy' } as const;
+      if (anotherLiveRun !== undefined || admit?.() === false) return { kind: 'busy' } as const;
       const lease_token = randomUUID();
       const lease_expires_at = new Date(currentTime.getTime() + leaseMs).toISOString();
       const changed = this.database.prepare(`UPDATE authority_trigger_runs_v1 SET state='running', lease_token=?, lease_expires_at=?, updated_at=?
