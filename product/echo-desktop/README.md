@@ -7,17 +7,51 @@ Windows packaging is not implemented.
 Global Ask includes live Jira reads through the person's connected account and
 shows ticket citations that open directly in Jira. Project Ask includes Jira only through a saved project mapping. Mine excludes Jira.
 
-Home shows only what waits on you. Open a meeting's decision to choose its
-audience, owners and transcript sharing. After approval, Home keeps the meeting
-visible while its record publishes and its impact check runs. When the check
-finds items the decision changes, **Tell the owners?** sends each to its owner
-(or **Pick a person**), and each owner closes theirs with **Done** on their own
-Home. An approved meeting shows its Impact line, and a project the items still
-open. Projects and archived projects live in the sidebar.
+Home shows only what waits on you, under **Needs you**. Each row is one of:
+
+- **Approve**: a meeting waiting for your decision. It opens the decision,
+  where you choose its audience, owners and transcript sharing.
+- **Checking**: a meeting you approved, while its record publishes and its
+  impact check runs. It has no action and is not counted.
+- **Check failed** (verb **Retry**): "Approved · the check did not finish". It
+  opens the decision with the reason and **Try again**.
+- **Send**: your impact check found items the decision changes.
+  **Tell the owners?** sends each to its owner (or **Pick a person**).
+- **Update**: an item that waits on you: sent to you, or left to you because
+  the people ahead of you have left. **Open in Jira** (or the item's tool)
+  when you can open it, and **Done** when you may close it, act on the row
+  itself.
+- **Check**: an open item ECHO's last check saw change, but not as decided.
+  The row opens the item first: what the decision expected, its live details,
+  the verdict and who checked it when, then **Done** and **Not relevant** when
+  you may close it. Nothing on the row itself closes the item.
+
+Under the rows, and on an empty Home, a footer says how many of your items
+landed, how many items you sent wait on others, and when ECHO last checked
+("2 landed since yesterday · 1 with others · checked 2 h ago"). When anything
+landed, **Mark done** opens **Did it land?** for your items: those that
+landed (ticked), those still open and those ECHO couldn't read, each with its
+owner and, when you can open it, its live details. **Mark N done** closes the
+ticked ones.
+
+An approved decision shows its Impact line ("Impact · 1 open · 1 handled ·
+1 couldn't read · checked just now"), and a project the items still open
+across its decisions ("4 open items · from 2 decisions · checked today"). An
+item that landed, or that ECHO couldn't read, is not counted as open. Both
+lines offer **Check now** when they have items: it re-checks that decision's
+or project's open items, shows "Checking…" until the check ends, then opens
+Did it land? for them ("Nothing open to check" when none is left; "Check
+failed · Try again" when it fails). Home also re-checks your own open items
+by itself: when the Authority says they are due, Home asks for a sweep and
+starts it after any waiting impact check. A sweep makes no Home row and
+changes no item's state; it only records each item's latest verdict. Items on
+a Slack message are not re-checked: ECHO cannot read a Slack message yet, so
+they stay "not checked yet". Projects and archived projects live in the
+sidebar.
 
 Tools → Granola manages folder watching and individual meeting imports. Home and
 decision content is covered while another app is in front, and unfinished checks
-refresh when ECHO returns. Sweeps (re-checking open items) are not included yet.
+refresh when ECHO returns.
 
 ## Build
 

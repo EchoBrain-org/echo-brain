@@ -29,11 +29,16 @@ Provider-neutral runtime components must not import a provider implementation.
   approval into one record through `approval-decision-projection-v1.ts`, writes
   the receipt and runs the after-record hooks in one Authority transaction.
   `authority-record-protocols-v1.ts` is the one list of record codecs and
-  projectors. `person-trigger-runs-v1.ts` serves `POST /v1/person/runs`, the
-  approver-owned impact checks that the hook enqueues, and writes each finished
-  check's open items; `person-open-items-v1.ts` serves the open-items
-  operations on the same route, asking `open-items-policy-v1.ts` every access
-  question.
+  projectors. `person-trigger-runs-v1.ts` serves `POST /v1/person/runs`: the
+  approver-owned impact checks that the hook enqueues and the sweeps a person
+  asks for, through one launch path for both; it writes each finished check's
+  open items. `person-sweep-runs-v1.ts` does a sweep's own work: which open
+  items it re-checks, the findings it hands research, and the counts and
+  verdicts it keeps. `person-open-items-v1.ts` serves the open-items
+  operations on the same route, `sweep` (which queues a sweep) and `home`'s
+  `sweep_due` included, asking `open-items-policy-v1.ts` every access
+  question. Both services read a run's stored impact card through
+  `person-stored-impact-card-v1.ts`.
 - `organization-authority-state-bootstrap.ts`, `organization-authority-setup-cli.ts`
   and `organization-authority-reset-cli.ts` own stopped-state setup and reset.
 - The `person-*` modules wire Person routes and upload processing, the

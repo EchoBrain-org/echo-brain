@@ -8,6 +8,12 @@ Companion spec: [runs store and impact card](2026-10-07-runs-store-and-impact-ca
 Implementation plan: `docs/superpowers/plans/2026-10-07-unified-approval-and-runs.md`.
 Implementation plan executed; see the plan's As built section.
 
+Implementation note, 2026-10-08: the current Authority baseline is V13, which
+adds the shared open items and sweep runs of
+[open items and Home v1](2026-10-08-open-items-and-home-v1.md) (section 2) and
+replaces V12; it is fresh state only, like V12. Text below that names V12
+describes this design as written.
+
 ## Goal
 
 A meeting is approved once, in one place in the code, whichever screen the
