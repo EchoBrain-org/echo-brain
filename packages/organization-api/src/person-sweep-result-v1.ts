@@ -19,8 +19,10 @@ export interface PersonSweepFindingResultV1 {
   /** The finding's position in the sweep's input. */
   readonly finding_index: number;
   /**
-   * null: not assessed: the model gave no usable reply, or the finding was not
-   * shown because its own items did not fit. The item's last check stays as it is.
+   * null: not assessed. The model gave no usable reply; no model call was
+   * possible (none or too little time left); or the finding's own items were
+   * not shown (they did not fit, or research holds one of them in no form).
+   * The item's last check stays as it is.
    */
   readonly verdict: PersonSweepVerdictV1 | null;
   /** ECHO's one line: what the current item shows against what was expected. For evaluation and the staging endpoint; never stored. */

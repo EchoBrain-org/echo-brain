@@ -212,6 +212,38 @@ describe("sweep renderer", () => {
     expect(unreadable.result).toEqual({ findings: [{ ...UNREADABLE, finding_index: 0 }], status: "assessed", citations: [] });
   });
 
+  it("takes an ECHO record cited first as the finding's own item, and a page cited later as its own item too", async () => {
+    // The first citation is always the finding's own item, whatever its kind; a further page is an outside item, never context.
+    const recordFirst = { ...FINDINGS[0]!, citations: [DECISION, TICKET_46] };
+    const pageLater = { ...FINDINGS[1]!, citations: [TICKET_46, PRD_DISPLAY_SECTION] };
+    const run = alone({ findings: [recordFirst, pageLater], bundle: bundle({ unreadable: [] }), replies: [{ findings: [
+      { index: 0, verdict: "landed", line: "The decision and THERM-46 both say two decimals.", cites: ["E2", "E1"] },
+      { index: 1, verdict: "still_open", line: "THERM-46 changed, but the PRD still specifies one decimal.", cites: ["E1", "E3"] },
+    ] }] });
+    const rendered = await run.render();
+    expect((run.prompt(0).findings as { about: string[] }[]).map(value => value.about)).toEqual([["E2", "E1"], ["E1", "E3"]]);
+    expect(rendered.result.findings.map(value => value.verdict)).toEqual(["landed", "still_open"]);
+  });
+
+  it("never sends a finding with no own item, even one that cites nothing at all", async () => {
+    // Its citations match nothing in the bundle: two tickets research holds in no form, or no citation at all.
+    const nowhere = finding(ticketCitation("THERM-98", "THERM-98: a ticket research never read."));
+    const findings = [FINDINGS[0]!, { ...nowhere, citations: [ticketCitation("THERM-98", "THERM-98."), ticketCitation("THERM-99", "THERM-99.")] }, { ...nowhere, citations: [] }];
+    const run = alone({ findings, bundle: bundle({ unreadable: [] }), replies: [{ findings: [REPLY.findings[0]] }] });
+    const rendered = await run.render();
+    expect((run.prompt(0).findings as { index: number }[]).map(value => value.index)).toEqual([0]);
+    expect(rendered.result.findings).toEqual([
+      { finding_index: 0, verdict: "landed", line: "THERM-46 now formats two decimals.", citation_indexes: [0] }, notAssessed(1), notAssessed(2),
+    ]);
+  });
+
+  it("asks for a landed verdict only when the current items show the whole expected change", () => {
+    // A finding may be about several items: one of three moving is not the change landing.
+    expect(SWEEP_PROMPT).toContain("about: the ids of the items it is about, as they read now.");
+    expect(SWEEP_PROMPT).toContain("\"landed\" only when the current items show the whole expected change;");
+    expect(SWEEP_PROMPT).not.toContain("the ids of the item it is about");
+  });
+
   it("lays the result out in code: one finding per input finding, in input order, citing what each verdict cites", async () => {
     const rendered = await alone({ replies: [REPLY] }).render();
     expect(rendered.result).toEqual({
