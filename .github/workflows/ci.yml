@@ -20,7 +20,42 @@ env:
   PRODUCT_NODE_VERSION: "22.22.1"
 
 jobs:
+  plan:
+    name: Select CI jobs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Main pushes read the merged pull request and its required check.
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    outputs:
+      check: ${{ steps.select.outputs.check }}
+      docs: ${{ steps.select.outputs.docs }}
+      person_client_package: ${{ steps.select.outputs.person_client_package }}
+      desktop_app: ${{ steps.select.outputs.desktop_app }}
+      authority_recovery_infrastructure: ${{ steps.select.outputs.authority_recovery_infrastructure }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # A pull request compares its tested merge commit with main, its
+          # first parent.
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.PRODUCT_NODE_VERSION }}
+          package-manager-cache: false
+      - name: Select the jobs this run needs
+        id: select
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/ci-select-jobs.mjs
+
   check:
+    needs: plan
+    # Pull requests always run check. Only a verified main push skips it.
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.plan.outputs.check == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -59,8 +94,29 @@ jobs:
           path: ${{ env.ECHO_CI_REPORT_DIR }}
           retention-days: 7
 
+  docs:
+    name: Documentation history
+    needs: plan
+    # Replaces check on a verified main push: check:docs is the one proof
+    # that depends on history, which a squash merge can change.
+    if: ${{ needs.plan.outputs.docs == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.PRODUCT_NODE_VERSION }}
+          package-manager-cache: false
+      - name: Verify documentation against the merged history
+        run: node tools/check-docs.mjs
+
   person-client-package:
     name: macOS arm64 Person-client package
+    needs: plan
+    if: ${{ needs.plan.outputs.person_client_package == 'true' }}
     runs-on: macos-15
     timeout-minutes: 20
     steps:
@@ -184,10 +240,13 @@ jobs:
 
   desktop-app:
     name: ${{ matrix.name }} desktop app
+    needs: plan
+    if: ${{ needs.plan.outputs.desktop_app == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
-      # Report both platforms even when one fails. Both remain required.
+      # Report both platforms even when one fails. Both are required whenever
+      # the plan selects the desktop app.
       fail-fast: false
       matrix:
         include:
@@ -494,6 +553,8 @@ jobs:
 
   authority-recovery-infrastructure:
     name: Authority recovery infrastructure
+    needs: plan
+    if: ${{ needs.plan.outputs.authority_recovery_infrastructure == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -513,22 +574,39 @@ jobs:
   required-checks:
     name: CI required checks
     if: ${{ always() }}
-    needs: [check, person-client-package, desktop-app, authority-container, authority-recovery-infrastructure]
+    needs: [plan, check, docs, person-client-package, desktop-app, authority-container, authority-recovery-infrastructure]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Require every CI proof to succeed
+      - name: Require every selected CI proof to succeed
         shell: bash
         env:
+          PLAN_RESULT: ${{ needs.plan.result }}
           CHECK_RESULT: ${{ needs.check.result }}
+          CHECK_SELECTED: ${{ needs.plan.outputs.check }}
+          DOCS_RESULT: ${{ needs.docs.result }}
+          DOCS_SELECTED: ${{ needs.plan.outputs.docs }}
           PERSON_CLIENT_PACKAGE_RESULT: ${{ needs.person-client-package.result }}
+          PERSON_CLIENT_PACKAGE_SELECTED: ${{ needs.plan.outputs.person_client_package }}
           DESKTOP_APP_RESULT: ${{ needs.desktop-app.result }}
+          DESKTOP_APP_SELECTED: ${{ needs.plan.outputs.desktop_app }}
           AUTHORITY_CONTAINER_RESULT: ${{ needs.authority-container.result }}
           AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT: ${{ needs.authority-recovery-infrastructure.result }}
+          AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED: ${{ needs.plan.outputs.authority_recovery_infrastructure }}
         run: |
           set -euo pipefail
-          test "$CHECK_RESULT" = success
-          test "$PERSON_CLIENT_PACKAGE_RESULT" = success
-          test "$DESKTOP_APP_RESULT" = success
+          # A job may be skipped only when the plan deselected it.
+          selected() {
+            case "$2" in
+              true) test "$1" = success ;;
+              false) test "$1" = skipped ;;
+              *) return 1 ;;
+            esac
+          }
+          test "$PLAN_RESULT" = success
+          selected "$CHECK_RESULT" "$CHECK_SELECTED"
+          selected "$DOCS_RESULT" "$DOCS_SELECTED"
+          selected "$PERSON_CLIENT_PACKAGE_RESULT" "$PERSON_CLIENT_PACKAGE_SELECTED"
+          selected "$DESKTOP_APP_RESULT" "$DESKTOP_APP_SELECTED"
           test "$AUTHORITY_CONTAINER_RESULT" = success
-          test "$AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT" = success
+          selected "$AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT" "$AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED"

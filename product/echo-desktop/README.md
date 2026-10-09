@@ -134,18 +134,23 @@ now explicitly releases that response after cancellation. This fixture is
 compiled out of release builds; application behavior is unchanged.
 
 The `desktop-app` CI matrix runs on macOS 15 arm64 and Ubuntu 24.04 x64 in
-parallel. Both runs are required; a failure on one does not cancel the other.
+parallel. Whenever CI selects it, both runs are required; a failure on one does
+not cancel the other.
 Each typechecks the desktop, runs unit and full Electron end-to-end tests,
 builds the platform's packages, and verifies release fuses and packaged startup.
 Linux uses Xvfb and additionally installs the deb, validates its desktop entry,
 and smokes the installed executable. macOS verifies the app's code signature.
+A pull request into `main` selects the matrix when its tested merge changes the
+desktop inputs listed in
+[`tools/ci-select-jobs.mjs`](../../tools/ci-select-jobs.mjs); a manual dispatch
+or an unverified push to `main` always does.
 
 CI caches npm downloads and Electron/packaging-tool downloads separately by
 OS, architecture and lockfile. It rebuilds the application from the current
-commit on every run. Packaging already compiles and checks the release bundles,
-so CI does not repeat that build before packaging. All repository, CLI and
-Authority checks keep their independent jobs; `CI required checks` gates them
-and both desktop targets.
+commit on every run that selects it. Packaging already compiles and checks the
+release bundles, so CI does not repeat that build before packaging. All
+repository, CLI and Authority checks keep their independent jobs;
+`CI required checks` gates them and both desktop targets.
 
 Xvfb exercises X11, not a complete GNOME/KDE desktop. Before claiming support
 for a particular Wayland desktop, check portal consent, global capture shortcuts,

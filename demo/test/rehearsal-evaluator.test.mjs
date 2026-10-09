@@ -513,12 +513,18 @@ test("the captured-result CLI returns failure without printing answer content", 
 
 test("the existing required CI check job runs this Node suite without masking failures", () => {
   const workflow = readFileSync(resolve(demo, "../.github/workflows/ci.yml"), "utf8");
-  const job = workflow.slice(workflow.indexOf("  check:"), workflow.indexOf("  person-client-package:"));
+  const start = workflow.indexOf("\n  check:\n") + 1;
+  const job = workflow.slice(start, start + workflow.slice(start).search(/\n  [a-z-]+:\n/) + 1);
   assert.match(job, /^        run: node --test demo\/test\/rehearsal-evaluator\.test\.mjs$/m);
-  const proofSteps = job.split(/(?=^      - )/m).filter(step => !step.includes('uses: actions/upload-artifact@'));
+  const [header, ...steps] = job.split(/(?=^      - )/m);
+  // Pull requests always run check; only a verified main push replaces it.
+  assert.match(header, /^    if: \$\{\{ !cancelled\(\) && \(github\.event_name == 'pull_request' \|\| needs\.plan\.outputs\.check == 'true'\) \}\}$/m);
+  assert.doesNotMatch(header, /continue-on-error:/);
+  const proofSteps = steps.filter(step => !step.includes('uses: actions/upload-artifact@'));
   for (const step of proofSteps) assert.doesNotMatch(step, /continue-on-error:|if:/);
-  assert.match(workflow, /needs: \[check,/);
-  assert.ok(workflow.includes('test "$CHECK_RESULT" = success'));
+  assert.match(workflow, /needs: \[plan, check,/);
+  assert.ok(workflow.includes('selected "$CHECK_RESULT" "$CHECK_SELECTED"'));
+  assert.ok(workflow.includes('true) test "$1" = success ;;'));
 });
 
 test("reports context absence only from captured content-free counts, independently of missing groups", () => {

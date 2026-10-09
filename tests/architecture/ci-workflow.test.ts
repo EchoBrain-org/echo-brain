@@ -1,6 +1,8 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { JOB_OUTPUTS } from "../../tools/ci-select-jobs.mjs";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const DOCKERFILE = resolve(REPO, "deploy/organization-authority/Dockerfile");
@@ -13,6 +15,25 @@ const source = readFileSync(resolve(REPO, ".github/workflows/ci.yml"), "utf8");
 
 function between(from: string, to: string) {
   return source.slice(source.indexOf(from), source.indexOf(to));
+}
+
+const JOBS = source.indexOf("\njobs:\n");
+const jobIds = [...source.slice(JOBS).matchAll(/^  ([a-z-]+):$/gm)].map((match) => match[1]);
+
+function job(id: string) {
+  const start = source.indexOf(`\n  ${id}:\n`, JOBS) + 1;
+  expect(start, id).toBeGreaterThan(JOBS);
+  const end = source.slice(start).search(/\n  [a-z-]+:\n/);
+  return end === -1 ? source.slice(start) : source.slice(start, start + end + 1);
+}
+
+function gate(id: string) {
+  return job(id).match(/^    (?:needs|if): .*$/gm) ?? [];
+}
+
+function aggregate(env: Record<string, string>) {
+  const script = job("required-checks").split("        run: |\n")[1]!.replace(/^ {10}/gm, "");
+  return spawnSync("bash", ["-c", script], { env: { PATH: process.env.PATH!, ...env }, encoding: "utf8" }).status;
 }
 
 function dependencyInputs(dockerfile: string) {
@@ -29,18 +50,20 @@ function dependencyInputs(dockerfile: string) {
 
 describe("CI workflow", () => {
   it("runs the research-loop evaluator as an unconditional required proof", () => {
-    const check = between("  check:", "  person-client-package:");
+    const check = job("check");
     const steps = check.split(/(?=^      - )/m);
     const research = steps.find((step) => step.includes("run: npm run test:research-loop-eval"));
     expect(research).toBeDefined();
     expect(research).not.toMatch(/if:|continue-on-error:/);
   });
 
-  it("pins Ubuntu and prevents the dependency-free recovery job from owning npm caches", () => {
+  it("pins Ubuntu and prevents the dependency-free jobs from owning npm caches", () => {
     expect(source).not.toContain("ubuntu-latest");
-    const recovery = between("  authority-recovery-infrastructure:", "  required-checks:");
-    expect(recovery).toContain("package-manager-cache: false");
-    expect(recovery).not.toMatch(/cache: npm|npm ci/);
+    for (const id of ["plan", "docs", "authority-recovery-infrastructure"]) {
+      const dependencyFree = job(id);
+      expect(dependencyFree, id).toContain("package-manager-cache: false");
+      expect(dependencyFree, id).not.toMatch(/cache: npm|npm ci/);
+    }
   });
 
   it("retains bounded test diagnostics after failures without uploading builds or homes", () => {
@@ -92,30 +115,146 @@ describe("CI workflow", () => {
     expect(build).not.toContain("scope=authority-container-arm64\n");
   });
 
-  it("exposes one stable aggregate required-check name", () => {
+  it("exposes one stable aggregate required-check name over every job", () => {
+    const required = job("required-checks");
     expect(source).toMatch(/required-checks:\s*\n\s+name: CI required checks/);
-    expect(source).toMatch(
-      /needs: \[check, person-client-package, desktop-app, authority-container, authority-recovery-infrastructure\]/,
+    expect(required).toContain("    if: ${{ always() }}\n");
+    expect(required).toContain(
+      "    needs: [plan, check, docs, person-client-package, desktop-app, authority-container, authority-recovery-infrastructure]\n",
     );
-    expect(source).toContain('test "$CHECK_RESULT" = success');
-    expect(source).toContain('test "$PERSON_CLIENT_PACKAGE_RESULT" = success');
-    expect(source).toContain('test "$DESKTOP_APP_RESULT" = success');
-    expect(source).toContain('test "$AUTHORITY_CONTAINER_RESULT" = success');
-    expect(source).toContain(
-      'test "$AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT" = success',
+    expect(jobIds).toEqual([
+      "plan", "check", "docs", "person-client-package", "desktop-app",
+      "authority-container", "authority-recovery-infrastructure", "required-checks",
+    ]);
+    expect(required).toContain('test "$PLAN_RESULT" = success');
+    expect(required).toContain('selected "$CHECK_RESULT" "$CHECK_SELECTED"');
+    expect(required).toContain('selected "$DOCS_RESULT" "$DOCS_SELECTED"');
+    expect(required).toContain(
+      'selected "$PERSON_CLIENT_PACKAGE_RESULT" "$PERSON_CLIENT_PACKAGE_SELECTED"',
     );
+    expect(required).toContain('selected "$DESKTOP_APP_RESULT" "$DESKTOP_APP_SELECTED"');
+    expect(required).toContain('test "$AUTHORITY_CONTAINER_RESULT" = success');
+    expect(required).toContain(
+      'selected "$AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT" "$AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED"',
+    );
+    expect(required).toContain(
+      '            case "$2" in\n              true) test "$1" = success ;;\n              false) test "$1" = skipped ;;\n              *) return 1 ;;\n            esac\n',
+    );
+    for (const output of JOB_OUTPUTS) {
+      const variable = output.toUpperCase();
+      expect(required).toContain(`${variable}_SELECTED: \${{ needs.plan.outputs.${output} }}`);
+      expect(required).toContain(`selected "$${variable}_RESULT" "$${variable}_SELECTED"`);
+    }
+  });
+
+  it("accepts a skipped job only when the plan deselected it", () => {
+    const pullRequest = {
+      PLAN_RESULT: "success",
+      CHECK_RESULT: "success", CHECK_SELECTED: "true",
+      DOCS_RESULT: "skipped", DOCS_SELECTED: "false",
+      PERSON_CLIENT_PACKAGE_RESULT: "skipped", PERSON_CLIENT_PACKAGE_SELECTED: "false",
+      DESKTOP_APP_RESULT: "success", DESKTOP_APP_SELECTED: "true",
+      AUTHORITY_CONTAINER_RESULT: "success",
+      AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT: "success", AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED: "true",
+    };
+    const verifiedMain = {
+      ...pullRequest,
+      CHECK_RESULT: "skipped", CHECK_SELECTED: "false",
+      DOCS_RESULT: "success", DOCS_SELECTED: "true",
+      DESKTOP_APP_RESULT: "skipped", DESKTOP_APP_SELECTED: "false",
+      AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT: "skipped", AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED: "false",
+    };
+    expect(aggregate(pullRequest)).toBe(0);
+    expect(aggregate(verifiedMain)).toBe(0);
+    for (const failing of [
+      { PLAN_RESULT: "failure" },
+      { PLAN_RESULT: "cancelled" },
+      { DESKTOP_APP_RESULT: "skipped" },
+      { DESKTOP_APP_RESULT: "failure" },
+      { DESKTOP_APP_RESULT: "cancelled" },
+      { DESKTOP_APP_SELECTED: "" },
+      { PERSON_CLIENT_PACKAGE_RESULT: "success" },
+      { PERSON_CLIENT_PACKAGE_RESULT: "failure" },
+      { PERSON_CLIENT_PACKAGE_SELECTED: "" },
+      { CHECK_RESULT: "skipped" },
+      { DOCS_RESULT: "success" },
+      { AUTHORITY_CONTAINER_RESULT: "skipped" },
+      { AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT: "skipped" },
+    ]) {
+      expect(aggregate({ ...pullRequest, ...failing }), JSON.stringify(failing)).not.toBe(0);
+    }
+    for (const failing of [
+      { DOCS_RESULT: "skipped" },
+      { DOCS_RESULT: "failure" },
+      { CHECK_SELECTED: "" },
+      { CHECK_RESULT: "failure" },
+      { AUTHORITY_CONTAINER_RESULT: "failure" },
+    ]) {
+      expect(aggregate({ ...verifiedMain, ...failing }), JSON.stringify(failing)).not.toBe(0);
+    }
+  });
+
+  it("plans job selection in one dependency-free job with read-only access", () => {
+    const plan = job("plan");
+    expect(plan).toContain("    name: Select CI jobs\n");
+    expect(gate("plan")).toEqual([]);
+    expect(plan).toContain(
+      "    permissions:\n      contents: read\n      pull-requests: read\n      checks: read\n    outputs:\n",
+    );
+    for (const output of JOB_OUTPUTS) {
+      expect(plan).toContain(`      ${output}: \${{ steps.select.outputs.${output} }}\n`);
+    }
+    expect(plan.match(/^      [a-z_]+: \$\{\{ steps\.select\.outputs\.[a-z_]+ \}\}$/gm)).toHaveLength(JOB_OUTPUTS.length);
+    expect(plan).toContain("          fetch-depth: 2\n          persist-credentials: false\n");
+    expect(plan).toContain(
+      "        id: select\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: node tools/ci-select-jobs.mjs\n",
+    );
+    expect(plan).not.toMatch(/secrets\.|continue-on-error/);
+    expect(source.match(/permissions:/g)).toHaveLength(2);
+    expect(source).toContain("\npermissions:\n  contents: read\n\nenv:\n");
+  });
+
+  it("gates proofs on the plan while check and the Authority container always run on pull requests", () => {
+    expect(gate("check")).toEqual([
+      "    needs: plan",
+      "    if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.plan.outputs.check == 'true') }}",
+    ]);
+    expect(gate("authority-container")).toEqual([]);
+    for (const [id, output] of [
+      ["docs", "docs"],
+      ["person-client-package", "person_client_package"],
+      ["desktop-app", "desktop_app"],
+      ["authority-recovery-infrastructure", "authority_recovery_infrastructure"],
+    ]) {
+      expect(gate(id), id).toEqual([
+        "    needs: plan",
+        `    if: \${{ needs.plan.outputs.${output} == 'true' }}`,
+      ]);
+    }
+  });
+
+  it("replaces check on a verified main push with only the history-dependent docs proof", () => {
+    const docs = job("docs");
+    expect(docs).toContain("    name: Documentation history\n");
+    expect(docs).toContain("          fetch-depth: 0\n");
+    expect(docs).toContain("        run: node tools/check-docs.mjs\n");
+    expect(docs.split(/(?=^      - )/m)).toHaveLength(4);
+    const scripts = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")).scripts;
+    expect(scripts["check:docs"]).toBe("node tools/check-docs.mjs");
+    expect(scripts.check).toContain("npm run check:docs");
+    expect(job("check")).toContain("      - run: npm run check\n");
   });
 
   it("executes exact recovery-template validation as an independent proof", () => {
     const validator = readFileSync(RECOVERY_VALIDATOR, "utf8");
-    const job = between("  authority-recovery-infrastructure:", "  required-checks:");
+    const recovery = job("authority-recovery-infrastructure");
 
-    expect(job).toContain("name: Authority recovery infrastructure");
-    expect(job).toContain(
+    expect(recovery).toContain("name: Authority recovery infrastructure");
+    expect(recovery).toContain(
       "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
     );
-    expect(job).toContain('python-version: "3.10"');
-    expect(job).toContain("npm run check:authority-recovery-infrastructure");
+    expect(recovery).toContain('python-version: "3.10"');
+    expect(recovery).toContain("npm run check:authority-recovery-infrastructure");
     for (const required of [
       "authority-current-host-recovery-v1.template.json",
       "authority-current-host-recovery-v1.guard",
@@ -157,7 +296,7 @@ describe("CI workflow", () => {
   });
 
   it("reuses the local harness after retaining the exact Authority-image proof", () => {
-    const authorityJob = between("  authority-container:", "  required-checks:");
+    const authorityJob = job("authority-container");
 
     expect(authorityJob).toContain("cache: npm");
     expect(authorityJob).toContain("- run: npm ci");
@@ -189,7 +328,7 @@ describe("CI workflow", () => {
   });
 
   it("runs the macOS-only CLI-kit and update-dispatch proofs in the macOS Person-client job", () => {
-    const personClientJob = between("  person-client-package:", "  desktop-app:");
+    const personClientJob = job("person-client-package");
 
     expect(personClientJob).toContain(
       "tests/architecture/mac-person-cli-kit.test.ts",
@@ -202,7 +341,7 @@ describe("CI workflow", () => {
   });
 
   it("builds, verifies, and installs only the macOS command-line kit in the macOS Person-client job", () => {
-    const personClientJob = between("  person-client-package:", "  authority-container:");
+    const personClientJob = job("person-client-package");
     const build = personClientJob.indexOf("npm run kit:person-onboarding --");
     const verify = personClientJob.indexOf(
       '"$kit_root/node" "$kit_root/verify-person-onboarding-kit.mjs" "$kit_root"',
@@ -217,13 +356,13 @@ describe("CI workflow", () => {
     expect(build).toBeGreaterThan(0);
     expect(verify).toBeGreaterThan(build);
     expect(smoke).toBeGreaterThan(verify);
-    expect(personClientJob).not.toMatch(
+    expect(personClientJob + job("desktop-app")).not.toMatch(
       /--app\b|build:echo-overlay|person-onboarding-ui|ECHO Setup|Start ECHO\.command/,
     );
   });
 
   it("requires native macOS and Linux desktop tests and package proofs", () => {
-    const desktopJob = between("  desktop-app:", "  authority-container:");
+    const desktopJob = job("desktop-app");
     const steps = [
       "- name: Install repository dependencies",
       "run: node tools/build.mjs --person-client",
@@ -275,7 +414,11 @@ describe("CI workflow", () => {
         expect.stringContaining(`- name: ${name}\n        if: runner.os == '${os}'`),
       );
     }
-    expect(desktopJob).not.toMatch(/^    if:/m);
+    // The plan alone gates the whole matrix; no leg is excluded or optional.
+    expect(desktopJob.match(/^    if:.*$/gm)).toEqual([
+      "    if: ${{ needs.plan.outputs.desktop_app == 'true' }}",
+    ]);
+    expect(desktopJob).not.toMatch(/exclude:|matrix\.[a-z-]+ ==/);
     expect(desktopJob).not.toMatch(
       /secrets\.|--allow-dirty|continue-on-error|--publish always/,
     );

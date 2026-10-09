@@ -78,7 +78,9 @@ GitHub App is `github-actions` with application ID `15368`. In the committed
 [CI workflow](../../.github/workflows/ci.yml), the `required-checks` job needs:
 
 ```text
+Select CI jobs
 check
+Documentation history
 macOS arm64 Person-client package
 macOS arm64 desktop app
 Linux x64 desktop app
@@ -86,12 +88,34 @@ Organization authority container
 Authority recovery infrastructure
 ```
 
-The aggregate uses `if: always()` and succeeds only when every dependency
-result equals `success`. The executable architecture test
+`Select CI jobs` runs [`tools/ci-select-jobs.mjs`](../../tools/ci-select-jobs.mjs)
+and publishes which jobs the run needs:
+
+- A pull request into `main` always runs `check`, the Authority container, and
+  the recovery infrastructure. It runs the desktop matrix and the macOS
+  Person-client package only when its tested merge commit changes their traced
+  inputs relative to `main`.
+- A push to `main` is a verified light run when its tree is byte-identical to
+  the head of the merged pull request, that head contained the previous
+  `main`, and the head's latest `CI required checks` from app `15368`
+  succeeded. It runs only `Documentation history` (the history-dependent
+  `check:docs`) and the Authority container, which binds this exact SHA and
+  run ID into the image.
+- Every other run selects every job: a stacked pull request, a manual
+  dispatch, a push without a single verified pull request (including a bypass),
+  or any lookup failure.
+
+The aggregate uses `if: always()` and succeeds only when the plan succeeded,
+every selected job's result equals `success`, and every deselected job's
+result equals `skipped`. A failed or cancelled plan, or a missing plan output,
+fails closed. The executable architecture tests
 [`tests/architecture/ci-workflow.test.ts`](../../tests/architecture/ci-workflow.test.ts)
-asserts the dependency topology and each success test. The two desktop runs
-come from one `desktop-app` matrix with `fail-fast: false`; both must succeed
-before its aggregate dependency succeeds. Requiring the individual
+and
+[`tests/architecture/ci-select-jobs.test.ts`](../../tests/architecture/ci-select-jobs.test.ts)
+assert the dependency topology, each selection rule, the aggregate's
+success-or-deselected test, and each job's traced inputs. The two desktop runs
+come from one `desktop-app` matrix with `fail-fast: false`; when selected, both
+must succeed before its aggregate dependency succeeds. Requiring the individual
 implementation checks separately would duplicate the committed topology in
 GitHub settings and make safe CI evolution brittle.
 
@@ -216,7 +240,14 @@ from the owner account, then repeat the full readback.
 After issue #25 is closed and before the first beta is published:
 
 1. Select the protected `main` commit whose `CI required checks` result is
-   green. Record its full SHA. Never use a moving tag.
+   green. Record its full SHA. Never use a moving tag. A verified light run
+   also produces that green result. It certifies that the commit's tree is
+   byte-identical to a pull-request head whose selected proofs passed on that
+   tree, that `check:docs` passed against the merged history, and that the
+   Authority image was built and exercised from this exact SHA. The run's
+   `Select CI jobs` summary names the pull request. To re-prove every job on
+   that SHA with current runner images, dispatch the CI workflow on it; a
+   manual dispatch runs every job.
 2. Build and validate the release record, Person-client artifact and onboarding
    kit, Authority image digest, and runtime profile from that exact commit.
 3. Create a draft release with a new semantic-version tag pointing
