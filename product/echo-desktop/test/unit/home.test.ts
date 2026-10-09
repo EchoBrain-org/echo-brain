@@ -16,6 +16,8 @@ let failNextReviews = false;
 let failLists = false;
 let failNextHome = false;
 let failSetState = false;
+/** Items reads fail (unavailable) while set. */
+let failItems = false;
 /** Home reads to hold until the test answers them, each with what `home` holds then. */
 let holdHome = 0;
 let held: (() => void)[] = [];
@@ -73,6 +75,7 @@ beforeEach(() => {
   failLists = false;
   failNextHome = false;
   failSetState = false;
+  failItems = false;
   holdHome = 0;
   held = [];
   holdSend = false;
@@ -129,6 +132,7 @@ beforeEach(() => {
         }
         if (params.request?.operation === 'set_state') return failSetState ? unavailable : ok({ state: params.request.state });
         if (params.request?.operation === 'items') {
+          if (failItems) return unavailable;
           if (page) return ok(page);
           return ok({ items: [{ ...item('5'), state: 'unsent', sent_at: null, state_set_at: null, waits_on: 'approver' }], next_cursor: null, stages: [],
             summary: { unsent: 1, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 1, last_checked_at: null, by_decision: [] } });
@@ -217,6 +221,21 @@ describe('Home rows', () => {
     granola = null;
     const store = await start();
     expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['review', 'update']);
+  });
+
+  it('names an Approve row\'s meeting without writing "meeting" twice (R76)', async () => {
+    const { ReviewLine } = await import('../../src/renderer/screens/home.js');
+    /** The text a line renders, its parts joined. */
+    const text = (node: unknown): string => {
+      if (typeof node === 'string' || typeof node === 'number') return String(node);
+      if (Array.isArray(node)) return node.map(text).join('');
+      if (node && typeof node === 'object' && 'props' in node) return text((node as { props: { children?: unknown } }).props.children);
+      return '';
+    };
+    const line = (title: string) => text(ReviewLine({ row: { kind: 'approve', review: { ...meeting('a', 'pending'), title, meeting_at: '2026-10-06T12:00:00.000Z' } } }));
+    expect(line('Pilot planning')).toBe('Decision · Pilot planning meeting, Oct 6');
+    expect(line('Approved meeting')).toBe('Decision · Approved meeting, Oct 6');
+    expect(line('Weekly Meeting')).toBe('Decision · Weekly Meeting, Oct 6');
   });
 
   it('names who Send tells: a pick, else the owner, never you, each once', async () => {
@@ -710,6 +729,44 @@ describe('Sweeps from Home', () => {
     expect(requests('sweep')).toHaveLength(1);
   });
 
+  it('asks for its due sweep, and starts it, even when the runs read of that load failed (D6)', async () => {
+    granola = null;
+    home = { ...emptyHome(), sweep_due: true };
+    sweepAnswer = { run_id: sweepRun('pending').run_id };
+    failNextList = true;
+    await start();
+    // The list read failed once; the load still asks for its one sweep and starts it.
+    expect(requests('sweep')).toEqual([{ schema_version: 1, operation: 'sweep', scope: 'mine' }]);
+    expect(requests('start')).toEqual([{ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id }]);
+  });
+
+  it('starts a queued run even when the read of what a check found failed (D6)', async () => {
+    granola = null;
+    run = impactRun('running');
+    await start();
+    expect(requests('start')).toEqual([]);
+    // The check ends while a sweep (from Check now) waits in the queue, and the read of what the check found fails.
+    run = impactRun('done');
+    sweep = sweepRun('pending');
+    failNextHome = true;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(requests('start')).toEqual([{ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id }]);
+  });
+
+  it('spends the Home load\'s one sweep request only when it asks for one (D6)', async () => {
+    granola = null;
+    run = impactRun('pending');
+    home = { ...emptyHome(), sweep_due: true };
+    sweepAnswer = { run_id: sweepRun('pending').run_id };
+    await start();
+    // A queued impact check starts first: no sweep is asked for yet, so the load has not spent its request.
+    expect(requests('sweep')).toEqual([]);
+    run = impactRun('done');
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(requests('sweep')).toHaveLength(1);
+  });
+
   it('stops owing a sweep once a runs list no longer holds it', async () => {
     granola = null;
     home = { ...emptyHome(), sweep_due: true };
@@ -820,6 +877,23 @@ describe('The item card and Your open items', () => {
     ]);
     expect(store.itemStatusShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000001', 'itm_00000002', 'itm_00000003']);
     expect(store.itemStatusShown()).toMatchObject({ open: 3, next: null });
+  });
+
+  it('says how many are open only once a read of them succeeded (D7)', async () => {
+    granola = null;
+    failItems = true;
+    const store = await start();
+    await store.openItemStatus('mine', undefined, null);
+    // The first read failed: no count, so nothing reads "0 open" above the error.
+    expect(store.itemStatusShown()).toMatchObject({ loading: false, open: null, failure: { code: 'unavailable' } });
+    failItems = false;
+    page = { items: [landedItem('1'), item('2', 'still_open')], next_cursor: 'cGFnZTI', stages: [], summary: { ...summary, open: 3, landed: 1 } };
+    await store.openItemStatus('mine', undefined, null);
+    expect(store.itemStatusShown()).toMatchObject({ open: 3 });
+    // A failed More keeps the count the first page read.
+    failItems = true;
+    await store.moreItemStatus();
+    expect(store.itemStatusShown()).toMatchObject({ open: 3, failure: { code: 'unavailable' } });
   });
 
   it('keeps an item that could not be closed, with why', async () => {

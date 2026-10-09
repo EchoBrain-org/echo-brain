@@ -42,13 +42,14 @@ export function ItemStatus({ page }: { page: ItemStatusState }) {
   const labels = itemLabels(page.items);
   const matching = closable(page.items);
   const heading = page.scope === 'mine' ? 'Your open items' : page.scope === 'project' && page.title !== null ? `Open items · ${page.title}` : 'Open items';
+  // No count until a read of the items succeeded: a failed first read shows its error, not "0 open" (D7).
+  const subline = statusSubline(page.open, page.checked_at);
   const decided = page.scope === 'record' ? page.items.find(item => item.decision)?.decision?.first_line : null;
-  const read = !page.loading || page.items.length > 0;
   return (
     <div class="column decision" ref={box}>
       <article class="decision-card" data-testid="item-status" aria-labelledby="item-status-head" aria-busy={page.loading || page.busy}>
         <h1 id="item-status-head" class="decision-ask" tabIndex={-1}>{heading}</h1>
-        {read && <div class="decision-from">{statusSubline(page.open, page.checked_at)}</div>}
+        {subline !== null && <div class="decision-from">{subline}</div>}
         {decided && <div class="decision-line">{decided}</div>}
         {page.loading && page.items.length === 0 && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
         {groups.map(group => group.items.length > 0 && (

@@ -2,7 +2,7 @@ import type { ComponentChildren } from 'preact';
 import type { OpenItemView } from '../../shared/protocol.js';
 import { colorFor, initial, when } from '../format.js';
 import { message } from '../messages.js';
-import { actionCount, homeFooter, itemHeadline, itemLabels, itemNames, itemNeeds, itemTitle, itemWhy, monthDay, needUpdating, shortNames, titleLine } from '../needs.js';
+import { actionCount, homeFooter, itemHeadline, itemLabels, itemNames, itemNeeds, itemTitle, itemWhy, meetingSuffix, monthDay, needUpdating, shortNames, titleLine } from '../needs.js';
 import { closeItem, loadHome, openDecision, openItemCard, openItemStatus, openNewProject, openSend, type NeedRow, type State } from '../store.js';
 import { Plus, Saved } from './icons.js';
 import { OpenInTool } from './open-items.js';
@@ -37,14 +37,14 @@ function Side({ state, at, projects, children }: { state: State; at?: string | n
   );
 }
 
-/** A meeting's line: "Decision · 2 actions · Pilot planning meeting, Oct 6". */
-function ReviewLine({ row }: { row: Extract<NeedRow, { review: unknown }> }) {
+/** A meeting's line: "Decision · 2 actions · Pilot planning meeting, Oct 6" ("meeting" only once, R76). */
+export function ReviewLine({ row }: { row: Extract<NeedRow, { review: unknown }> }) {
   const review = row.review;
   if (row.kind === 'checking') return <>{review.status === 'publishing' && !row.run ? 'Approved · publishing to ECHO' : 'Approved · checking what it changes'}</>;
   if (row.kind === 'failed') return <>Approved · the check did not finish</>;
   const day = review.meeting_at === null ? null : monthDay(review.meeting_at);
   const actions = actionCount(review.action_count);
-  return <>Decision{actions ? ` · ${actions}` : ''} · <b>{review.title}</b> meeting{day ? `, ${day}` : ''}</>;
+  return <>Decision{actions ? ` · ${actions}` : ''} · <b>{review.title}</b>{meetingSuffix(review.title)}{day ? `, ${day}` : ''}</>;
 }
 
 /** Approve, Send, Retry and Checking: the whole row is one button. */

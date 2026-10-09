@@ -198,7 +198,12 @@ export function itemKind(item: OpenItemView, tools?: readonly ConnectedTool[] | 
  */
 export function approvedMeeting(decision: Pick<PersonOpenItemDecisionV1, 'title' | 'approved_at'>, separator: ', ' | ' · ' = ', '): string {
   const day = monthDay(decision.approved_at);
-  return `${decision.title} meeting${day === null ? '' : `${separator}approved ${day}`}`;
+  return `${decision.title}${meetingSuffix(decision.title)}${day === null ? '' : `${separator}approved ${day}`}`;
+}
+
+/** " meeting" after a meeting's title, unless the title already ends with it ("Approved meeting"; R76). */
+export function meetingSuffix(title: string): string {
+  return /meeting$/iu.test(title.trimEnd()) ? '' : ' meeting';
 }
 
 /** Where an item came from: its decision when you can read it, else who sent it ("sent by Mina"). */
@@ -406,7 +411,7 @@ export function closable(items: readonly OpenItemView[]): OpenItemView[] {
   return items.filter(item => item.state === 'open' && item.check?.verdict === 'landed' && item.can.set_state);
 }
 
-/** Under Your open items' heading: "3 open · ECHO checked 2 h ago". */
-export function statusSubline(open: number, checkedAt: string | null, now = Date.now()): string {
-  return joined([`${open} open`, checkedAt === null ? null : `ECHO checked ${checkedAgo(checkedAt, now)}`]);
+/** Under Your open items' heading: "3 open · ECHO checked 2 h ago"; nothing before a read of them succeeded (D7). */
+export function statusSubline(open: number | null, checkedAt: string | null, now = Date.now()): string | null {
+  return open === null ? null : joined([`${open} open`, checkedAt === null ? null : `ECHO checked ${checkedAgo(checkedAt, now)}`]);
 }

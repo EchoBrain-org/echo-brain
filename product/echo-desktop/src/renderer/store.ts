@@ -3565,14 +3565,18 @@ async function driveRuns(listed: readonly PersonRunV1[], publishing = false, fai
   const mine = runSeq;
   const load = homeLoads;
   const current = () => mine === runSeq && homeShown() !== null;
+  // A failed read never skips the start or the sweep request (D6): each is tried, and its failure joins the read's.
   let failed = failure;
   const next = runToStart(listed);
   if (next) {
-    failed ??= await startRun(next.run_id);
+    const refused = await startRun(next.run_id);
+    failed ??= refused;
     if (!current()) return;
   } else if (sweepDue && askedIn !== load && !listed.some(going)) {
+    // This load's one sweep request is spent here, as it is made.
     askedIn = load;
-    failed ??= await startDueSweep();
+    const refused = await startDueSweep();
+    failed ??= refused;
     if (!current()) return;
   }
   runFailures = failed ? runFailures + 1 : 0;
@@ -4210,8 +4214,8 @@ export interface ItemStatusState {
   /** The scope's open items read so far, oldest first. */
   items: readonly OpenItemView[];
   next: string | null;
-  /** How many open items the scope has, and when ECHO last checked one of its items. */
-  open: number;
+  /** How many open items the scope has (null until a read of them succeeded), and when ECHO last checked one of its items. */
+  open: number | null;
   checked_at: string | null;
   /** Close or Close all is on its way. */
   busy: boolean;
@@ -4229,7 +4233,7 @@ export function itemStatusShown(current: State = state): ItemStatusState | null 
 /** Your open items: from Home's footer for your own, or after Check now for that decision or project (named `title`). */
 export function openItemStatus(scope: ItemStatusState['scope'], id: string | undefined, title: string | null): Promise<void> {
   if (!expect() || state.concealed) return Promise.resolve();
-  set({ itemStatus: { route: state.route, scope, ...(id === undefined ? {} : { id }), title, seq: ++seq, loading: true, items: [], next: null, open: 0, checked_at: null,
+  set({ itemStatus: { route: state.route, scope, ...(id === undefined ? {} : { id }), title, seq: ++seq, loading: true, items: [], next: null, open: null, checked_at: null,
     busy: false }, itemCard: null, openItems: null, ask: null, sources: null, toast: null });
   return loadItemStatus(false);
 }
@@ -4270,7 +4274,8 @@ async function closeMatches(items: readonly OpenItemView[]): Promise<void> {
   }
   const current = itemStatusShown();
   if (current?.seq !== page.seq) return;
-  set({ itemStatus: { ...current, busy: false, items: current.items.filter(item => !closed.has(item.item_id)), open: Math.max(0, current.open - closed.size),
+  set({ itemStatus: { ...current, busy: false, items: current.items.filter(item => !closed.has(item.item_id)),
+    open: current.open === null ? null : Math.max(0, current.open - closed.size),
     closeFailure: failure, ...(closed.size > 0 || current.closed ? { closed: true as const } : {}) } });
 }
 

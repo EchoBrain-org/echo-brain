@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
-  actionCount, byStatus, checkedAgo, checkLine, closable, homeFooter, impactWords, itemChange, itemHeadline, itemKind, itemLabels, itemNames, itemNeeds, itemNow, itemParts,
-  itemTitle, itemWhose, itemWhy, monthDay, nameList, needUpdating, openCount, projectWords, shortNames, STATUS, statusGroups, statusOf, statusSubline, titleLine, whereFrom,
+  actionCount, approvedMeeting, byStatus, checkedAgo, checkLine, closable, homeFooter, impactWords, itemChange, itemHeadline, itemKind, itemLabels, itemNames, itemNeeds, itemNow, itemParts,
+  itemTitle, itemWhose, itemWhy, meetingSuffix, monthDay, nameList, needUpdating, openCount, projectWords, shortNames, STATUS, statusGroups, statusOf, statusSubline, titleLine, whereFrom,
 } from '../../src/renderer/needs.js';
 
 const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name: 'Mina Patel', active: true };
@@ -203,6 +203,8 @@ describe('what ECHO saw when it checked again', () => {
   it('heads Your open items with how many are open and when ECHO checked', () => {
     expect(statusSubline(3, ago(120), now)).toBe('3 open · ECHO checked 2 h ago');
     expect(statusSubline(1, null, now)).toBe('1 open');
+    // Before any read succeeded there is no count to give (D7).
+    expect(statusSubline(null, null, now)).toBeNull();
   });
 
   it('groups your own items by decision only when they come from more than one', () => {
@@ -304,6 +306,19 @@ describe('Home item rows and the item card (R63–R67)', () => {
     // A project lead the item fell back to did not send it.
     expect(itemWhy(theirs, 'mem_00000000-0000-4000-8000-000000000009', null))
       .toBe('Jira ticket · Pilot planning meeting, approved Oct 6 · Mina\'s to update · changed since it was sent');
+  });
+
+  it('never writes "meeting" after a title that already ends with it (R76)', () => {
+    const at = '2026-10-06T12:00:00.000Z';
+    expect(approvedMeeting({ title: 'Pilot planning', approved_at: at })).toBe('Pilot planning meeting, approved Oct 6');
+    expect(approvedMeeting({ title: 'Approved meeting', approved_at: at })).toBe('Approved meeting, approved Oct 6');
+    expect(approvedMeeting({ title: 'Weekly sync MEETING', approved_at: at }, ' · ')).toBe('Weekly sync MEETING · approved Oct 6');
+    expect([meetingSuffix('Pilot planning'), meetingSuffix('Approved meeting'), meetingSuffix('Team Meeting')]).toEqual([' meeting', '', '']);
+    // Home rows and Your open items' headers take the same words.
+    const untitled = { ...pilot, title: 'Approved meeting' };
+    expect(itemWhy({ ...own, decision: untitled }, ari.membership_id, null)).toContain('Confluence page · Approved meeting, approved Oct 6');
+    expect(statusGroups([{ ...own, decision: untitled }, item({ item_id: 'itm_00000009' })], 'mine').map(group => group.header))
+      .toEqual(['Approved meeting, approved Oct 6', 'Sent by Mina Patel']);
   });
 
   it('labels alike items by position only where nothing else on the row tells them apart', () => {
