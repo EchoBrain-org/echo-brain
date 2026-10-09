@@ -36,9 +36,12 @@ export async function launch(mode = ''): Promise<Launched> {
       ECHO_DESKTOP_HIDDEN: '1',
     },
   });
+  const context = app.context();
+  let contextClosed = false;
+  context.once('close', () => { contextClosed = true; });
   // Electron contexts need explicit tracing; the test runner's trace alone
   // contains assertion steps but no browser snapshots.
-  if (process.env.CI) await app.context().tracing.start({ screenshots: true, snapshots: true });
+  if (process.env.CI) await context.tracing.start({ screenshots: true, snapshots: true });
   const page = await app.firstWindow();
   let closed = false;
   return {
@@ -52,11 +55,19 @@ export async function launch(mode = ''): Promise<Launched> {
       if (closed) return;
       closed = true;
       try {
-        if (process.env.CI && !page.isClosed()) {
+        if (process.env.CI) {
           const info = test.info();
           const failed = info.status !== info.expectedStatus;
           const path = failed ? info.outputPath(`electron-${basename(home)}.zip`) : undefined;
-          await app.context().tracing.stop({ path });
+          try {
+            // A closed renderer can leave this context alive in the tray.
+            await context.tracing.stop({ path });
+          } catch (error) {
+            // An exited app has already lost its context. Still run cleanup,
+            // and preserve the original test result rather than a trace error.
+            if (!contextClosed) throw error;
+            return;
+          }
           if (path) await info.attach('electron-trace', { path, contentType: 'application/zip' });
         }
       } finally {
