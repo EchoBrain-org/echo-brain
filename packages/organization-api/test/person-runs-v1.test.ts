@@ -63,7 +63,7 @@ const openItem = (overrides: Record<string, unknown>) => ({
 });
 const without = (value: Record<string, unknown>, key: string) => Object.fromEntries(Object.entries(value).filter(([name]) => name !== key));
 const sendRow = (overrides: Record<string, unknown> = {}) => ({ run_id: RUN, decision: DECISION, items: 2, kinds: ['ticket', 'page'], owners: ['Mina Patel'], finished_at: LATER, ...overrides });
-const decisionCount = { record_sha256: RECORD, unsent: 1, open: 1 };
+const decisionCount = { record_sha256: RECORD, unsent: 1, open: 1, landed: 0, unreadable: 0 };
 const summary = (overrides: Record<string, unknown> = {}) => ({
   unsent: 1, open: 1, done: 0, not_relevant: 0, landed: 0, changed: 1, unreadable: 0, decisions: 1, last_checked_at: LATER, by_decision: [decisionCount], ...overrides,
 });
@@ -269,6 +269,21 @@ describe('runs API open items', () => {
     }
     for (const reach of ['denied', '', null, true]) refused(() => validatePersonRunsResultV1('item', { item: openItem({ reach }) }), `reach ${JSON.stringify(reach)}`);
   });
+  it('accepts open_only only as true, never with summary_only, and with a cursor', () => {
+    // Open items only: Did it land? pages past closed items without opening them.
+    const open = { schema_version: 1, operation: 'items', scope: 'record', id: RECORD, open_only: true };
+    expect(validatePersonRunsRequestV1(open)).toEqual(open);
+    expect(Object.isFrozen(validatePersonRunsRequestV1(open))).toBe(true);
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', open_only: true })).toEqual({ schema_version: 1, operation: 'items', scope: 'mine', open_only: true });
+    // A cursor pages the same filtered list: the caller sends open_only with it again.
+    expect(validatePersonRunsRequestV1({ ...open, cursor: 'next-page_2' })).toEqual({ ...open, cursor: 'next-page_2' });
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'project', id: PROJECT })).not.toHaveProperty('open_only');
+    for (const open_only of [false, 'true', 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...open, open_only }), `open_only ${JSON.stringify(open_only)}`);
+    // A counts-only answer lists no items to keep the open ones of.
+    refused(() => validatePersonRunsRequestV1({ ...open, summary_only: true }), 'open_only with summary_only');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', open_only: true }), 'open_only on home');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, open_only: true }), 'open_only on one item');
+  });
 });
 
 describe('runs API open-item requests', () => {
@@ -386,6 +401,22 @@ describe('runs API open-item results', () => {
     refused(() => validatePersonRunsResultV1('items', page({ stages: Array.from({ length: 101 }, () => stage()) })), 'one stage too many');
   });
 
+  it('counts, of a decision\'s open items, those that landed and those ECHO could not read', () => {
+    // Canvas 9.6: three sent items, one still open, one landed, one unreadable.
+    const counted = { record_sha256: RECORD, unsent: 0, open: 3, landed: 1, unreadable: 1 };
+    const read = validatePersonRunsResultV1('items', page({ summary: summary({ open: 3, landed: 1, unreadable: 1, by_decision: [counted] }) }));
+    expect(read.summary.by_decision).toEqual([counted]);
+    expect(Object.isFrozen(read.summary.by_decision[0])).toBe(true);
+    // Every open item may have landed or gone unread, and no more than those.
+    for (const counts of [{ open: 3, landed: 3, unreadable: 0 }, { open: 3, landed: 0, unreadable: 3 }, { open: 2, landed: 1, unreadable: 1 }, { open: 0, landed: 0, unreadable: 0 }]) {
+      expect(validatePersonRunsResultV1('items', page({ summary: summary({ by_decision: [{ ...counted, ...counts }] }) })).summary.by_decision[0]).toEqual({ ...counted, ...counts });
+    }
+    for (const [label, counts] of [
+      ['more landed and unreadable than open', { open: 3, landed: 2, unreadable: 2 }], ['a landed item with nothing open', { open: 0, landed: 1, unreadable: 0 }],
+      ['an unreadable item with nothing open', { open: 0, landed: 0, unreadable: 1 }],
+    ] as const) refused(() => validatePersonRunsResultV1('items', page({ summary: summary({ by_decision: [{ ...counted, ...counts }] }) })), label);
+  });
+
   it('accepts the send, set_state and assign results', () => {
     expect(validatePersonRunsResultV1('send', { sent: 2, not_relevant: 1 })).toEqual({ sent: 2, not_relevant: 1 });
     for (const state of ['open', 'done', 'not_relevant'] as const) expect(validatePersonRunsResultV1('set_state', { state })).toEqual({ state });
@@ -462,6 +493,12 @@ describe('runs API open-item results', () => {
     ['a bad summary check time', 'items', page({ summary: summary({ last_checked_at: '' }) })],
     ['a decision count with an extra key', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, done: 0 }] }) })],
     ['a decision count with a bad record id', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, record_sha256: RUN }] }) })],
+    ['a decision count without its landed count', 'items', page({ summary: summary({ by_decision: [without(decisionCount, 'landed')] }) })],
+    ['a decision count without its unreadable count', 'items', page({ summary: summary({ by_decision: [without(decisionCount, 'unreadable')] }) })],
+    ['a negative decision landed count', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, landed: -1 }] }) })],
+    ['a fractional decision unreadable count', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, unreadable: 0.5 }] }) })],
+    ['a decision landed count that is a string', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, landed: '0' }] }) })],
+    ['a decision count with a changed count', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, changed: 0 }] }) })],
     ['a stage with an extra key', 'items', page({ stages: [stage({ checked_at: LATER })] })],
     ['a stage in an unknown state', 'items', page({ stages: [stage({ state: 'queued' })] })],
     ['a failed stage without its reason', 'items', page({ stages: [stage({ state: 'failed' })] })],
@@ -503,6 +540,7 @@ describe('runs API sweep', () => {
     ['a project scope with a project id that is not canonical', sweep({ scope: 'project', id: 'prj_pilot' })],
     ['a cursor', sweep({ scope: 'mine', cursor: 'next-page_2' })],
     ['summary_only', sweep({ scope: 'record', id: RECORD, summary_only: true })],
+    ['open_only', sweep({ scope: 'mine', open_only: true })],
     ['an extra key', sweep({ scope: 'mine', force: true })],
   ])('refuses a sweep with %s', (_label, request) => {
     refused(() => validatePersonRunsRequestV1(request), _label);

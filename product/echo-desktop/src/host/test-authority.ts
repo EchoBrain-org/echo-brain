@@ -56,7 +56,7 @@ interface Contract {
 
 /** A runs request, as the contract's validator returns it. */
 interface RunsRequest {
-  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; summary_only?: true;
+  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; summary_only?: true; open_only?: true;
   item_id?: string; command_id?: string; state?: 'open' | 'done' | 'not_relevant'; owner_membership_id?: string;
   items?: { item_id: string; include: boolean; owner_membership_id?: string }[];
 }
@@ -571,6 +571,22 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       relation: 'conflicts', expected: 'freeze after the pilot', owner: { ...ARI, match: 'name' }, created_at: '2026-10-03T15:05:00.000Z', sent_at: '2026-10-03T16:00:00.000Z',
     }));
   }
+  // granola-checked: Mina approved Kickoff review into Thermostat redesign and sent its three items to herself, Rafael and S.
+  // Okafor; none is checked yet. Ari reads the decision, and none of its items involves Ari (canvas 9.7: "3 open" on its row).
+  if (mode === 'granola-checked') {
+    const kickoff = { approval_id: 'apr_' + 'e'.repeat(64), record_sha256: sha('record:Kickoff review'), title: 'Kickoff review',
+      first_line: 'Freeze the firmware after the pilot.', approved_at: '2026-09-29T15:00:00.000Z', project_ids: [THERMOSTAT] };
+    const sent = { run_id: 'run_00000000-0000-4000-8000-000000000045', kind: 'ticket' as const, decision: kickoff, readable: true, opens: true,
+      relation: 'conflicts' as const, expected: 'freeze after the pilot', created_at: '2026-09-29T15:05:00.000Z', sent_at: '2026-09-29T16:00:00.000Z' };
+    openItems.push(
+      minaSent({ ...sent, item_id: 'itm_00000000-0000-4000-8000-000000000045', owner: { ...MINA, match: 'jira_account' },
+        live: { citation: ticket('ECHO-7', 'Firmware freeze', '10007'), says_now: 'The firmware freezes before the pilot.', assignee: 'Mina Patel', status: 'To Do', due_at: '2026-11-04' } }),
+      minaSent({ ...sent, item_id: 'itm_00000000-0000-4000-8000-000000000046', owner: { ...RAFAEL, match: 'name' },
+        live: { citation: ticket('ECHO-8', 'Pilot firmware build', '10008'), says_now: 'The pilot build uses the frozen firmware.', assignee: 'Rafael Moreno', status: 'To Do' } }),
+      minaSent({ ...sent, item_id: 'itm_00000000-0000-4000-8000-000000000047', owner: { ...OKAFOR, match: 'picked' },
+        live: { citation: ticket('ECHO-9', 'Firmware sign-off', '10009'), says_now: 'Sign-off follows the freeze.', assignee: 'S. Okafor', status: 'Blocked' } }),
+    );
+  }
   // The meetings Mina approved that Ari can read, each once: in their project's feed, where their Impact line shows.
   for (const item of openItems.filter(entry => entry.readable)) {
     if (meetings.some(meeting => meeting.record_sha256 === item.decision.record_sha256)) continue;
@@ -894,7 +910,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const records = [...new Set(items.filter(item => item.readable).map(item => item.decision.record_sha256))];
           const count = (state: OpenItem['state'], of = items) => of.filter(item => item.state === state).length;
           // Last checks count on open items only: a check reads open items.
-          const verdicts = (verdict: Check['verdict']) => items.filter(item => item.state === 'open' && item.check?.verdict === verdict).length;
+          const verdicts = (verdict: Check['verdict'], of = items) => of.filter(item => item.state === 'open' && item.check?.verdict === verdict).length;
           // Each decision's check: Ari's own (whatever its stage), and Mina's, done. Only Ari's is Ari's own.
           const pilotProjects = Array.isArray(granolaReview?.project_ids) ? granolaReview.project_ids as string[] : [];
           const pilot = run !== null && granolaApproved && (scope === 'mine' || (scope === 'run' && id === runId) || (scope === 'record' && id === PILOT_RECORD) ||
@@ -906,13 +922,16 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
               return { record_sha256: record, run_id: found.run_id, state: 'done', error_code: null, mine: found.approver.membership_id === ARI.membership_id };
             }),
           ];
-          // Counts only (a project's or a decision's line): the summary and stages, no item.
-          return result('items', { items: request.summary_only === true ? [] : items.map(itemView), next_cursor: null, stages, summary: {
+          // Counts only (a project's or a decision's line): the summary and stages, no item. Open only (Did it land?): the open
+          // items alone, with the same summary.
+          const listed = request.open_only === true ? items.filter(item => item.state === 'open') : items;
+          return result('items', { items: request.summary_only === true ? [] : listed.map(itemView), next_cursor: null, stages, summary: {
             unsent: count('unsent'), open: count('open'), done: count('done'), not_relevant: count('not_relevant'),
             landed: verdicts('landed'), changed: verdicts('changed'), unreadable: verdicts('unreadable'), decisions: records.length,
             last_checked_at: items.flatMap(item => (item.check ? [item.check.checked_at] : [])).sort().at(-1) ?? null, by_decision: records.map(record => {
               const of = items.filter(item => item.decision.record_sha256 === record);
-              return { record_sha256: record, unsent: count('unsent', of), open: count('open', of) };
+              // Of its open items, those whose last check landed, and those ECHO could not read.
+              return { record_sha256: record, unsent: count('unsent', of), open: count('open', of), landed: verdicts('landed', of), unreadable: verdicts('unreadable', of) };
             }),
           } });
         }

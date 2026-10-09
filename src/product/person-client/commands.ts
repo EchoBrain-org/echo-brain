@@ -246,7 +246,7 @@ Runs a versioned request against approved-record impact runs, the open items the
   list                 your own impact runs and sweeps
   start, retry, view   with run_id; view shows a finished run's impact card to anyone who can read its decision
   home                 what waits on you: Send rows and open items
-  items                with scope mine, run, record or project, an id for run, record and project, and an optional cursor; summary_only true answers the counts alone
+  items                with scope mine, run, record or project, an id for run, record and project, and an optional cursor; summary_only true answers the counts alone; open_only true lists open items only
   item                 with item_id
   send                 with run_id, command_id and items [{item_id, include, owner_membership_id?}]; the approver only
   set_state            with item_id and state open, done or not_relevant; the approver or the owner

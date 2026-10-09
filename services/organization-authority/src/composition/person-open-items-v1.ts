@@ -527,19 +527,26 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       }
       const context = assess(viewer, rows, scopeRecords);
       const visible = context.assessed.filter(entry => entry.access.see_row).sort((left, right) => oldestFirst(left.row, right.row));
-      const following = after === undefined ? visible : visible.filter(entry => oldestFirst(entry.row, after) > 0);
+      const open = visible.filter(entry => entry.row.state === 'open');
+      // Open items only (Did it land?): pages over them alone, so a closed item is never opened only to be left out (R51).
+      const pageable = request.open_only === true ? open : visible;
+      const following = after === undefined ? pageable : pageable.filter(entry => oldestFirst(entry.row, after) > 0);
       const page = following.slice(0, PERSON_OPEN_ITEMS_PAGE_V1);
 
       // The whole visible scope, counted with no live read. Last checks count on open items only: a check reads open items.
-      const open = visible.filter(entry => entry.row.state === 'open');
       const verdicts = (verdict: string) => open.filter(entry => entry.row.check?.verdict === verdict).length;
-      // A decision is named, with its counts, only to those the policy shows its decision part.
-      const byDecision = new Map<Sha256Digest, { unsent: number; open: number; latest: string }>();
+      // A decision is named, with its counts, only to those the policy shows its decision part. Of its open items, those whose
+      // last check landed or could not read them, so a decision's open count reads as its Impact line does (R35).
+      const byDecision = new Map<Sha256Digest, { unsent: number; open: number; landed: number; unreadable: number; latest: string }>();
       for (const { row, access } of visible) {
         if (!access.see_decision) continue;
-        const counts = byDecision.get(row.record_sha256) ?? { unsent: 0, open: 0, latest: row.created_at };
+        const counts = byDecision.get(row.record_sha256) ?? { unsent: 0, open: 0, landed: 0, unreadable: 0, latest: row.created_at };
         if (row.state === 'unsent') counts.unsent += 1;
-        if (row.state === 'open') counts.open += 1;
+        if (row.state === 'open') {
+          counts.open += 1;
+          if (row.check?.verdict === 'landed') counts.landed += 1;
+          if (row.check?.verdict === 'unreadable') counts.unreadable += 1;
+        }
         if (row.created_at > counts.latest) counts.latest = row.created_at;
         byDecision.set(row.record_sha256, counts);
       }
@@ -551,7 +558,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         decisions: new Set(visible.map(entry => entry.row.record_sha256)).size, last_checked_at: checkTimes.at(-1) ?? null,
         // Most recent decisions first, when a scope holds more than the API carries.
         by_decision: [...byDecision].sort(([leftRecord, left], [rightRecord, right]) => ascending(right.latest, left.latest) || ascending(leftRecord, rightRecord))
-          .slice(0, SCOPE_DECISIONS_MAX).map(([record_sha256, counts]) => ({ record_sha256, unsent: counts.unsent, open: counts.open })),
+          .slice(0, SCOPE_DECISIONS_MAX).map(([record_sha256, { latest: _latest, ...counts }]) => ({ record_sha256, ...counts })),
       };
 
       // Each decision's impact check stage, for the decisions in scope the policy shows the viewer: a project lists the records they read now.

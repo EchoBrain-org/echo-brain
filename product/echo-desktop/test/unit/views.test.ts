@@ -82,11 +82,11 @@ describe('view models copy only what the renderer may see', () => {
     expect(JSON.stringify(home)).not.toContain('private-tenant');
     const stage = { record_sha256: sha('2'), run_id: 'run_00000001', state: 'done', error_code: null, mine: true } as const;
     const page = openItemsView({ items: [opened], next_cursor: null, stages: [stage], summary: { unsent: 0, open: 1, done: 0, not_relevant: 0, landed: 0, changed: 0,
-      unreadable: 0, decisions: 1, last_checked_at: null, by_decision: [{ record_sha256: sha('2'), unsent: 0, open: 1 }] } } as unknown as Parameters<typeof openItemsView>[0]);
+      unreadable: 0, decisions: 1, last_checked_at: null, by_decision: [{ record_sha256: sha('2'), unsent: 0, open: 1, landed: 0, unreadable: 0 }] } } as unknown as Parameters<typeof openItemsView>[0]);
     // Whether a decision's check is your own crosses with its stage.
     expect(page.stages).toEqual([stage]);
     expect(page.items[0]?.current?.source).toEqual({ kind: 'ticket', tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink });
-    expect(page.summary.by_decision).toEqual([{ record_sha256: sha('2'), unsent: 0, open: 1 }]);
+    expect(page.summary.by_decision).toEqual([{ record_sha256: sha('2'), unsent: 0, open: 1, landed: 0, unreadable: 0 }]);
     expect(openItemView(opened as unknown as Parameters<typeof openItemView>[0]).current?.source).toMatchObject({ kind: 'ticket' });
   });
 

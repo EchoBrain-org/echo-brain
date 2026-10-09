@@ -4124,17 +4124,18 @@ interface ItemsPage {
 /**
  * The first page of a scope's items, or the next one (More), each opened live
  * for you, joined to what `shown` shows: the items `keep` keeps, then what
- * `withRead` takes from the read. A read for a view since left is dropped.
+ * `withRead` takes from the read. `openOnly` asks for open items alone, on
+ * More too. A read for a view since left is dropped.
  */
 async function loadItemsPage<View extends ItemsPage>(shown: () => View | null, show: (view: View) => void, more: boolean,
-  keep: (item: OpenItemView) => boolean = () => true, withRead: (view: View, read: OpenItemsView) => View = view => view): Promise<void> {
+  keep: (item: OpenItemView) => boolean = () => true, withRead: (view: View, read: OpenItemsView) => View = view => view, openOnly = false): Promise<void> {
   const account = expect();
   const page = shown();
   if (!account || !page || (more && (!page.next || page.loading))) return;
   const mine = page.seq;
   show({ ...page, loading: true, failure: undefined });
   const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope: page.scope, ...(page.id === undefined ? {} : { id: page.id }),
-    ...(more && page.next ? { cursor: page.next } : {}) } });
+    ...(openOnly ? { open_only: true as const } : {}), ...(more && page.next ? { cursor: page.next } : {}) } });
   const current = shown();
   if (current?.seq !== mine) return;
   if (!result.ok) { show({ ...current, loading: false, failure: result.failure }); accountLost(result.failure); return; }
@@ -4221,10 +4222,14 @@ export function openDidItLand(scope: DidItLandState['scope'], id: string | undef
 /** More: the next page. */
 export function moreDidItLand(): Promise<void> { return loadDidItLand(true); }
 
-/** A page of the scope's items, each opened live: the open ones are kept, with the scope's open count and latest check. */
+/**
+ * A page of the scope's open items only, each opened live (R51): closed ones
+ * are never read, so they never hide open ones behind More. The open check
+ * stays as a guard. With the scope's open count and latest check.
+ */
 function loadDidItLand(more: boolean): Promise<void> {
   return loadItemsPage(didItLandShown, page => set({ didItLand: page }), more, item => item.state === 'open',
-    (page, read) => ({ ...page, open: read.summary.open, checked_at: read.summary.last_checked_at }));
+    (page, read) => ({ ...page, open: read.summary.open, checked_at: read.summary.last_checked_at }), true);
 }
 
 export function tickLanded(item_id: string): void {

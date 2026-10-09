@@ -751,8 +751,8 @@ describe('Check rows and Did it land?', () => {
       summary: { ...summary, open: 4, landed: 3, changed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' } };
     const store = await start();
     await store.openDidItLand('mine', undefined, null);
-    // Your own items: the scope names no id.
-    expect(requests('items')).toEqual([{ schema_version: 1, operation: 'items', scope: 'mine' }]);
+    // Your own items, open ones only (R51): the scope names no id.
+    expect(requests('items')).toEqual([{ schema_version: 1, operation: 'items', scope: 'mine', open_only: true }]);
     expect(store.didItLandShown()).toMatchObject({ scope: 'mine', title: null, open: 4, checked_at: '2026-10-08T12:05:00.000Z' });
     expect(store.didItLandShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000001', 'itm_00000002', 'itm_00000003', 'itm_00000004']);
     store.tickLanded('itm_00000002');
@@ -764,6 +764,22 @@ describe('Check rows and Did it land?', () => {
     await flush();
     expect(requests('home')).toHaveLength(homeReads + 1);
     expect(store.getState().home?.open?.landed).toBe(0);
+  });
+
+  it('pages open items only, with the same filter on More, and still keeps open ones only', async () => {
+    granola = null;
+    page = { items: [landedItem('1'), item('2', 'still_open')], next_cursor: 'cGFnZTI', stages: [], summary: { ...summary, open: 3, landed: 1, done: 60 } };
+    const store = await start();
+    await store.openDidItLand('project', project.project_id, project.name);
+    // A closed item answered anyway is left out: the filter is the Authority's, the check stays ours.
+    page = { items: [item('3'), { ...landedItem('4'), state: 'done' }], next_cursor: null, stages: [], summary: { ...summary, open: 3, landed: 1, done: 60 } };
+    await store.moreDidItLand();
+    expect(requests('items')).toEqual([
+      { schema_version: 1, operation: 'items', scope: 'project', id: project.project_id, open_only: true },
+      { schema_version: 1, operation: 'items', scope: 'project', id: project.project_id, open_only: true, cursor: 'cGFnZTI' },
+    ]);
+    expect(store.didItLandShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000001', 'itm_00000002', 'itm_00000003']);
+    expect(store.didItLandShown()).toMatchObject({ open: 3, next: null });
   });
 
   it('keeps an item that could not be marked done, with why', async () => {
@@ -780,7 +796,7 @@ describe('Check rows and Did it land?', () => {
 
 describe('Check now', () => {
   const linePage = (): OpenItemsView => ({ items: [], next_cursor: null, stages: [],
-    summary: { ...summary, open: 3, landed: 1, unreadable: 1, decisions: 1, by_decision: [{ record_sha256: record, unsent: 0, open: 3 }] } });
+    summary: { ...summary, open: 3, landed: 1, unreadable: 1, decisions: 1, by_decision: [{ record_sha256: record, unsent: 0, open: 3, landed: 1, unreadable: 1 }] } });
 
   it('says when nothing is open to check, and when the sweep could not be asked for', async () => {
     granola = null;
@@ -920,7 +936,7 @@ describe('Check now', () => {
   it('learns from the decision\'s check whether Send and Try again are yours, reading no runs list', async () => {
     granola = null;
     page = { ...linePage(), stages: [{ record_sha256: record, run_id: impactRun('done').run_id, state: 'done', error_code: null, mine: true }],
-      summary: { ...summary, unsent: 2, decisions: 1, by_decision: [{ record_sha256: record, unsent: 2, open: 0 }] } };
+      summary: { ...summary, unsent: 2, decisions: 1, by_decision: [{ record_sha256: record, unsent: 2, open: 0, landed: 0, unreadable: 0 }] } };
     const store = await start();
     await store.openProject(project);
     const lists = requests('list').length;

@@ -1,4 +1,4 @@
-import type { PersonImpactStageV1, PersonOpenItemKindV1, PersonOpenItemStateV1, PersonOpenItemsSummaryV1 } from '@echo-brain/organization-api';
+import type { PersonImpactStageV1, PersonOpenItemKindV1, PersonOpenItemsDecisionCountV1, PersonOpenItemStateV1, PersonOpenItemsSummaryV1 } from '@echo-brain/organization-api';
 import type { ConnectedTool, HomeView, OpenItemView } from '../shared/protocol.js';
 import { externalSourceProvider } from './answer.js';
 
@@ -166,9 +166,13 @@ export function stageSince(item: OpenItemView): string {
   return item.state === 'unsent' ? item.created_at : item.state === 'open' ? item.sent_at ?? item.created_at : item.state_set_at ?? item.created_at;
 }
 
-/** Items not closed: the ones still found, and the ones sent and open. */
-export function openCount(summary: Pick<PersonOpenItemsSummaryV1, 'unsent' | 'open'>): number {
-  return summary.unsent + summary.open;
+/**
+ * A decision's open items as its Impact line calls them open (R35): the ones
+ * not sent yet, and the sent ones whose last check neither landed nor could
+ * not read them.
+ */
+export function openCount(decision: PersonOpenItemsDecisionCountV1): number {
+  return decision.unsent + Math.max(0, decision.open - decision.landed - decision.unreadable);
 }
 
 /** Parts of a line that are not empty, joined: "1 open · 1 handled". */
@@ -225,13 +229,17 @@ export function impactWords(summary: PersonOpenItemsSummaryV1, stage: PersonImpa
   return 'Nothing to change';
 }
 
-/** A project's line (canvas 9.7): "4 open items · from 2 decisions · checked today", or nothing when none is open. */
+/**
+ * A project's line (canvas 9.7): "4 open items · from 2 decisions · checked
+ * today", the sum of its decisions' rows and how many of them have any open;
+ * nothing when none is open.
+ */
 export function projectWords(summary: PersonOpenItemsSummaryV1, now = Date.now()): { count: string; from: string; checked: string | null } | null {
-  const open = openCount(summary);
+  const rows = summary.by_decision.map(openCount).filter(count => count > 0);
+  const open = rows.reduce((total, count) => total + count, 0);
   if (open === 0) return null;
-  const decisions = summary.by_decision.filter(decision => openCount(decision) > 0).length;
   return {
-    count: open === 1 ? '1 open item' : `${open} open items`, from: decisions === 0 ? '' : decisions === 1 ? 'from 1 decision' : `from ${decisions} decisions`,
+    count: open === 1 ? '1 open item' : `${open} open items`, from: rows.length === 1 ? 'from 1 decision' : `from ${rows.length} decisions`,
     checked: checkedPart(summary.last_checked_at, now),
   };
 }

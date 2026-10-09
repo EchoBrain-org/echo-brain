@@ -24,8 +24,10 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * now only to a viewer who opened it in its tool in this request. Each row
  * says how that live read went (`reach`), so an outage is never shown as lost
  * access. `items` with `summary_only` answers the counts and stages alone and
- * opens nothing; each decision's stage says whether its impact run is the
- * caller's own (`mine`).
+ * opens nothing; with `open_only` it pages over the open items only, so
+ * closed ones are never opened to be thrown away. Each decision's counts say
+ * how many of its open items last landed or could not be read, and its stage
+ * says whether its impact run is the caller's own (`mine`).
  *
  * Sweep (open items and Home v1, sections 6 and 7) rechecks open items
  * against what was decided and keeps only a verdict per item. `sweep` asks for
@@ -53,7 +55,9 @@ export type PersonRunsRequestV1 =
   | { readonly schema_version: 1; readonly operation: 'view'; readonly run_id: string }
   | { readonly schema_version: 1; readonly operation: 'items'; readonly scope: 'mine' | 'run' | 'record' | 'project'; readonly id?: string; readonly cursor?: string;
       /** Counts and stages only: no items, no live reads. */
-      readonly summary_only?: true }
+      readonly summary_only?: true;
+      /** Items in state `open` only; the summary and stages still cover the whole scope. A cursor pages the same list. */
+      readonly open_only?: true }
   | { readonly schema_version: 1; readonly operation: 'item'; readonly item_id: string }
   | { readonly schema_version: 1; readonly operation: 'send'; readonly run_id: string; readonly command_id: string;
       readonly items: readonly { readonly item_id: string; readonly include: boolean; readonly owner_membership_id?: string }[] }
@@ -121,7 +125,13 @@ export interface PersonOpenItemsSummaryV1 {
   readonly unsent: number; readonly open: number; readonly done: number; readonly not_relevant: number;
   readonly landed: number; readonly changed: number; readonly unreadable: number;
   readonly decisions: number; readonly last_checked_at: string | null;
-  readonly by_decision: readonly { readonly record_sha256: string; readonly unsent: number; readonly open: number }[];
+  readonly by_decision: readonly PersonOpenItemsDecisionCountV1[];
+}
+/** One decision's items in a summary. */
+export interface PersonOpenItemsDecisionCountV1 {
+  readonly record_sha256: string; readonly unsent: number; readonly open: number;
+  /** Of `open`: items whose last check is `landed`, and `unreadable` (so `landed + unreadable <= open`). */
+  readonly landed: number; readonly unreadable: number;
 }
 export interface PersonImpactStageV1 {
   readonly record_sha256: string; readonly run_id: string;
@@ -282,8 +292,8 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
   const operation = request.operation;
   if (typeof operation !== 'string' || !Object.hasOwn(REQUEST_KEYS, operation)) fail('Runs request operation is invalid');
   const kind = operation as PersonRunsRequestV1['operation'];
-  // `items` may leave out its scope id and its cursor, and may ask for its counts only; a sweep of `mine` names no id.
-  const optional = (kind === 'items' ? ['id', 'cursor', 'summary_only'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : [])
+  // `items` may leave out its scope id and its cursor, and may ask for its counts only or its open items only; a sweep of `mine` names no id.
+  const optional = (kind === 'items' ? ['id', 'cursor', 'summary_only', 'open_only'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : [])
     .filter(key => Object.hasOwn(request, key));
   assertExactKeys(request, ['schema_version', 'operation', ...REQUEST_KEYS[kind], ...optional], 'Runs request');
   if (request.schema_version !== 1) fail('Runs request version is invalid');
@@ -305,11 +315,16 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       if (counts && request.summary_only !== true) fail('Runs request summary_only is invalid');
       // Counts cover the whole scope at once: there is no next page to ask for.
       if (counts && Object.hasOwn(request, 'cursor')) fail('Runs request summary_only takes no cursor');
+      const openOnly = Object.hasOwn(request, 'open_only');
+      if (openOnly && request.open_only !== true) fail('Runs request open_only is invalid');
+      // A counts-only answer lists no items to keep the open ones of.
+      if (openOnly && counts) fail('Runs request open_only takes no summary_only');
       return Object.freeze({
         schema_version: 1 as const, operation: kind, scope,
         ...(scope === 'mine' ? {} : { id: scopeId(scope, request.id) }),
         ...(Object.hasOwn(request, 'cursor') ? { cursor: matching(request.cursor, CURSOR, 'Runs request cursor') } : {}),
         ...(counts ? { summary_only: true as const } : {}),
+        ...(openOnly ? { open_only: true as const } : {}),
       });
     }
     case 'item':
@@ -463,11 +478,15 @@ function summary(value: unknown): PersonOpenItemsSummaryV1 {
     decisions: total('decisions'), last_checked_at: timestampOrNull(entry.last_checked_at, 'Open items summary last_checked_at'),
     by_decision: Object.freeze(list(entry.by_decision, 'Open items summary decision list', SCOPE_DECISIONS_MAX).map(raw => {
       const row = asEnumerableRecord(raw, 'Open items decision count');
-      assertExactKeys(row, ['record_sha256', 'unsent', 'open'], 'Open items decision count');
-      return Object.freeze({
+      assertExactKeys(row, ['record_sha256', 'unsent', 'open', 'landed', 'unreadable'], 'Open items decision count');
+      const decided: PersonOpenItemsDecisionCountV1 = {
         record_sha256: recordId(row.record_sha256, 'Open items decision count record'),
         unsent: count(row.unsent, 'Open items decision unsent count'), open: count(row.open, 'Open items decision open count'),
-      });
+        landed: count(row.landed, 'Open items decision landed count'), unreadable: count(row.unreadable, 'Open items decision unreadable count'),
+      };
+      // Both are last checks of open items: together never more than the open ones.
+      if (decided.landed + decided.unreadable > decided.open) fail('Open items decision count is inconsistent');
+      return Object.freeze(decided);
     })),
   });
 }

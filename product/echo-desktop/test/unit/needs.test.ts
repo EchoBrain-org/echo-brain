@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
   actionCount, checkedAgo, footerWords, impactWords, itemChange, itemCount, itemFrom, itemKind, itemNames, itemParts, itemTitle, landedGroups, landedNote, markable,
-  monthDay, nameList, needUpdating, projectWords, shortNames, titleLine,
+  monthDay, nameList, needUpdating, openCount, projectWords, shortNames, titleLine,
 } from '../../src/renderer/needs.js';
 
 const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name: 'Mina Patel', active: true };
@@ -92,10 +92,29 @@ describe('the words Home and Tell the owners? use', () => {
     expect(impactWords(summary, { ...run, state: 'failed', error_code: 'research_failed' })).toBe('Check failed');
     expect(impactWords(summary, { ...run, state: 'done', error_code: null })).toBe('Nothing to change');
     expect(projectWords(summary)).toBeNull();
-    expect(projectWords({ ...summary, unsent: 2, open: 2, by_decision: [{ record_sha256: 'sha256:1', unsent: 2, open: 0 }, { record_sha256: 'sha256:2', unsent: 0, open: 2 },
-      { record_sha256: 'sha256:3', unsent: 0, open: 0 }] })).toEqual({ count: '4 open items', from: 'from 2 decisions', checked: null });
-    expect(projectWords({ ...summary, open: 1, by_decision: [{ record_sha256: 'sha256:1', unsent: 0, open: 1 }] }))
+    const counted = { landed: 0, unreadable: 0 };
+    expect(projectWords({ ...summary, unsent: 2, open: 2, by_decision: [{ record_sha256: 'sha256:1', unsent: 2, open: 0, ...counted },
+      { record_sha256: 'sha256:2', unsent: 0, open: 2, ...counted }, { record_sha256: 'sha256:3', unsent: 0, open: 0, ...counted }] }))
+      .toEqual({ count: '4 open items', from: 'from 2 decisions', checked: null });
+    expect(projectWords({ ...summary, open: 1, by_decision: [{ record_sha256: 'sha256:1', unsent: 0, open: 1, ...counted }] }))
       .toEqual({ count: '1 open item', from: 'from 1 decision', checked: null });
+  });
+
+  it('counts a decision\'s open items on its row as its Impact line does, and the project line as the sum of its rows', () => {
+    // Canvas 9.7: Pilot planning's three sent items are one still open, one landed and one ECHO could not read; Kickoff review's three are open.
+    const pilot = { record_sha256: 'sha256:1', unsent: 0, open: 3, landed: 1, unreadable: 1 };
+    const kickoff = { record_sha256: 'sha256:2', unsent: 0, open: 3, landed: 0, unreadable: 0 };
+    expect([openCount(pilot), openCount(kickoff)]).toEqual([1, 3]);
+    expect(projectWords({ ...summary, open: 6, landed: 1, unreadable: 1, by_decision: [pilot, kickoff] }))
+      .toEqual({ count: '4 open items', from: 'from 2 decisions', checked: null });
+    // Items not sent yet are open too.
+    expect(openCount({ ...pilot, unsent: 2 })).toBe(3);
+    // A decision whose open items all landed or went unread has none open: its row and the line leave it out.
+    const handled = { ...pilot, open: 2 };
+    expect(openCount(handled)).toBe(0);
+    expect(projectWords({ ...summary, open: 5, landed: 1, unreadable: 1, by_decision: [handled, kickoff] }))
+      .toEqual({ count: '3 open items', from: 'from 1 decision', checked: null });
+    expect(projectWords({ ...summary, open: 2, landed: 1, unreadable: 1, by_decision: [handled] })).toBeNull();
   });
 });
 
@@ -136,7 +155,7 @@ describe('what ECHO saw when it checked again', () => {
   });
 
   it('says when a project\'s items were last checked', () => {
-    expect(projectWords({ ...summary, open: 4, last_checked_at: ago(120), by_decision: [{ record_sha256: 'sha256:1', unsent: 0, open: 4 }] }, now))
+    expect(projectWords({ ...summary, open: 4, last_checked_at: ago(120), by_decision: [{ record_sha256: 'sha256:1', unsent: 0, open: 4, landed: 0, unreadable: 0 }] }, now))
       .toEqual({ count: '4 open items', from: 'from 1 decision', checked: 'checked 2 h ago' });
   });
 

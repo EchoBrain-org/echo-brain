@@ -27,6 +27,9 @@ const runOperations = () => app.calls().filter(call => call.path === '/v1/person
 /** The sweeps the app asked for, by scope. */
 const sweeps = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'sweep')
   .map(call => ({ scope: call.body?.scope, id: call.body?.id }));
+/** The item pages the app read (not counts only), by scope and whether they asked for open items only. */
+const itemPages = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items' && call.body?.summary_only !== true)
+  .map(call => ({ scope: call.body?.scope, open_only: call.body?.open_only === true }));
 /** The fixture's Pilot planning record, and the project it was approved into. */
 const PILOT_RECORD = `sha256:${createHash('sha256').update('record:Pilot planning').digest('hex')}`;
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
@@ -209,6 +212,8 @@ test('Home sweeps by itself and shows what landed and what drifted', async () =>
   const landed = app.page.getByTestId('did-it-land');
   await expect(landed.getByRole('heading', { name: 'Did it land?' })).toBeVisible();
   await expect(landed).toContainText('Your items · checked just now · 3 items');
+  // It asked for your open items only (R51): closed ones are never opened to be left out.
+  expect(itemPages()).toEqual([{ scope: 'mine', open_only: true }]);
   await landed.getByRole('button', { name: 'Mark 1 done' }).click();
   await expect(app.page.getByText(/landed since yesterday/)).toHaveCount(0);
   const closed = app.calls().filter(call => call.body?.operation === 'set_state').map(call => ({ item: call.body?.item_id, state: call.body?.state }));
@@ -259,6 +264,8 @@ test('Check now on a decision checks only that decision', async () => {
   await expect(landed.getByRole('heading', { name: 'Did it land?' })).toBeVisible({ timeout: 20_000 });
   expect(sweeps()).toEqual([{ scope: 'record', id: PILOT_RECORD }]);
   await expect(landed).toContainText('Pilot planning · checked just now · 3 items');
+  // The decision's open items only (R51); the Impact line read its counts alone.
+  expect(itemPages()).toEqual([{ scope: 'record', open_only: true }]);
   await expect(landed).toContainText('Launch the pilot next week.');
   await expect(landed.getByRole('region', { name: 'Landed · 1' })).toContainText('ECHO-12 · Pilot launch · due Oct 30');
   await expect(landed.getByRole('region', { name: 'Still open · 1' })).toContainText('Thermostat PRD · Pilot scope · says "starts after freeze" — not what was decided');
@@ -276,18 +283,33 @@ test('Check now on a project shows what landed of its items', async () => {
   app = await launch('granola-checked');
   await app.page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
   const line = app.page.getByTestId('project-line');
-  await expect(line).toContainText('3 open items · from 1 decision · checked 2 h ago');
+  await expect(line).toContainText('4 open items · from 2 decisions · checked 2 h ago');
   await line.getByRole('button', { name: 'Check now' }).click();
   await expect(line).toContainText('Checking…');
   const landed = app.page.getByTestId('did-it-land');
-  await expect(landed).toContainText('Thermostat redesign · checked just now · 3 items', { timeout: 20_000 });
+  // Pilot planning's three open items and Kickoff review's three.
+  await expect(landed).toContainText('Thermostat redesign · checked just now · 6 items', { timeout: 20_000 });
   expect(sweeps()).toEqual([{ scope: 'project', id: THERMOSTAT }]);
+  expect(itemPages()).toEqual([{ scope: 'project', open_only: true }]);
   // A project is not one decision: no decided line.
   await expect(landed).not.toContainText('Launch the pilot next week.');
   // Back returns to the project, whose line was read again.
   await app.page.getByTestId('back').click();
-  await expect(line).toContainText('3 open items · from 1 decision · checked just now');
+  await expect(line).toContainText('4 open items · from 2 decisions · checked just now');
   await expect(line.getByRole('button', { name: 'Check now' })).toBeVisible();
+});
+
+test('a decision\'s row counts what its Impact line calls open, and the project line sums its rows (canvas 9.7)', async () => {
+  app = await launch('granola-checked');
+  await app.page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
+  // Pilot planning's three sent items: one still open, one landed, one ECHO could not read. Kickoff review's three are open.
+  const pilot = app.page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' });
+  await expect(pilot.getByTestId('item-open')).toHaveText('1 open');
+  await expect(app.page.getByTestId('feed-row').filter({ hasText: 'Kickoff review' }).getByTestId('item-open')).toHaveText('3 open');
+  await expect(app.page.getByTestId('project-line')).toContainText('4 open items · from 2 decisions · checked 2 h ago');
+  // The same count as the decision's own Impact line.
+  await pilot.click();
+  await expect(app.page.getByTestId('impact-line')).toContainText('Impact · 1 open · 1 handled · 1 couldn\'t read · checked 2 h ago');
 });
 
 test('Tell the owners? names apart items whose titles nothing tells apart', async () => {
