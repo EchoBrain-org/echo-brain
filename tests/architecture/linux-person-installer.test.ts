@@ -241,14 +241,19 @@ describe("Linux x64 Person onboarding installer", () => {
     expect(rejected.stderr).toContain("symbolic link");
   });
 
-  it("fails before executing Node for the wrong ELF header and rejects verifier tampering", () => {
+  it.each<{ name: string; release: number; env: Record<string, string>; message: string }>([
+    { name: "the wrong ELF header before executing Node", release: 1, env: { WRONG_ELF: "yes", REJECT_KIT: "1" }, message: "x86_64 ELF executable" },
+    { name: "verifier tampering", release: 2, env: { REJECT_KIT: "1" }, message: "onboarding kit verification failed" },
+    { name: "glibc 2.27", release: 1, env: { GLIBC: "2.27" }, message: "glibc 2.28 or later is required" },
+    { name: "kernel 4.17.9", release: 1, env: { KERNEL: "4.17.9" }, message: "kernel 4.18 or later is required" },
+    { name: "a non-Linux host before checking the kit", release: 1, env: { WRONG_OS: "yes" }, message: "Linux x86_64 only" },
+    { name: "a musl host before checking the kit", release: 1, env: { MUSL: "yes" }, message: "glibc Linux only" },
+  ])("refuses $name before installation", ({ release, env, message }) => {
     const subject = fixture();
-    const wrongHeader = subject.run(1, "--install-only", { WRONG_ELF: "yes", REJECT_KIT: "1" });
-    expect(wrongHeader.status).toBe(1);
-    expect(wrongHeader.stderr).toContain("x86_64 ELF executable");
-    const tampered = subject.run(2, "--install-only", { REJECT_KIT: "1" });
-    expect(tampered.status).toBe(1);
-    expect(tampered.stderr).toContain("onboarding kit verification failed");
+    const result = subject.run(release, "--install-only", env);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(message);
+    expect(existsSync(join(subject.home, ".local"))).toBe(false);
   });
 
   it("refuses missing or relative invitations, a held lock, and symlinked data paths", () => {
@@ -302,14 +307,8 @@ describe("Linux x64 Person onboarding installer", () => {
     expect(existsSync(join(data, "echo/person/bin/echo-brain"))).toBe(true);
   });
 
-  it("rejects old libc and kernels before installation, but accepts the supported floor", () => {
+  it("accepts the supported glibc and kernel floor", () => {
     const subject = fixture();
-    for (const env of [{ GLIBC: "2.27" }, { KERNEL: "4.17.9" }] as Array<Record<string, string>>) {
-      const result = subject.run(1, "--install-only", env);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toMatch(/glibc 2.28|kernel 4.18/);
-      expect(existsSync(join(subject.home, ".local"))).toBe(false);
-    }
     const accepted = subject.run(1, "--install-only", { GLIBC: "2.28", KERNEL: "4.18.0" });
     expect(accepted.status, accepted.stderr).toBe(0);
     expect(accepted.stdout).toContain("Bundled Node: v22.22.1");
@@ -340,15 +339,5 @@ describe("Linux x64 Person onboarding installer", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("free disk space");
     expect(readFileSync(wrapper, "utf8")).toBe(before);
-  });
-
-  it("refuses non-Linux and musl hosts before checking the kit", () => {
-    const subject = fixture();
-    const wrongOs = subject.run(1, "--install-only", { WRONG_OS: "yes" });
-    expect(wrongOs.status).toBe(1);
-    expect(wrongOs.stderr).toContain("Linux x86_64 only");
-    const musl = subject.run(1, "--install-only", { MUSL: "yes" });
-    expect(musl.status).toBe(1);
-    expect(musl.stderr).toContain("glibc Linux only");
   });
 });

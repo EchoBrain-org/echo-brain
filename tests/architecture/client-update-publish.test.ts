@@ -220,23 +220,18 @@ describe('bounded first S3 client update publication', () => {
     expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
   });
 
-  it('keeps a replaced object version unconfirmed when status audits after expiry', async () => {
+  const replaceArtifactVersion = (f: ReturnType<typeof fixture>) => { f.objects.get(f.artifactKey)!.metadata.VersionId = 'replacement-version'; };
+  it.each([
+    { name: 'a changed published version even when public bytes remain the same', expired: false, mutate: replaceArtifactVersion },
+    { name: 'a replaced object version after expiry', expired: true, mutate: replaceArtifactVersion },
+    { name: 'a corrupted remote feed after expiry', expired: true, mutate: (f: ReturnType<typeof fixture>) => { f.state.tamperFetch = 'feed.json'; } },
+  ])('keeps $name unconfirmed when status audits', async ({ expired, mutate }) => {
     const f = fixture();
     await f.plan();
     await f.execute();
-    f.state.now = Date.parse(f.manifest.expires_at) + 1;
-    f.objects.get(f.artifactKey)!.metadata.VersionId = 'replacement-version';
-    expect(await f.status()).toMatchObject({ state: 'unconfirmed', metadata_fresh: false });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
-  });
-
-  it('keeps a corrupted remote feed unconfirmed when status audits after expiry', async () => {
-    const f = fixture();
-    await f.plan();
-    await f.execute();
-    f.state.now = Date.parse(f.manifest.expires_at) + 1;
-    f.state.tamperFetch = 'feed.json';
-    expect(await f.status()).toMatchObject({ state: 'unconfirmed', metadata_fresh: false });
+    if (expired) f.state.now = Date.parse(f.manifest.expires_at) + 1;
+    mutate(f);
+    expect(await f.status()).toMatchObject({ state: 'unconfirmed', ...(expired ? { metadata_fresh: false } : {}) });
     expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
   });
 
@@ -338,13 +333,6 @@ describe('bounded first S3 client update publication', () => {
     expect(await f.execute()).toMatchObject({ state: 'unconfirmed' });
     expect(f.objects.has('feed.json')).toBe(false);
     expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(1);
-  });
-
-  it('detects a changed published version even when public bytes remain the same', async () => {
-    const f = fixture(); await f.plan(); await f.execute();
-    f.objects.get(f.artifactKey)!.metadata.VersionId = 'replacement-version';
-    expect(await f.status()).toMatchObject({ state: 'unconfirmed' });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
   });
 
   it('refuses an unexpected public feed signature even when matching planned raw bytes were supplied by a faulty validator', async () => {

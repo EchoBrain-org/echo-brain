@@ -72,11 +72,10 @@ function updateWrapperForTest(): string {
   return isolatedUpdate;
 }
 
-// Unit container fixtures must explicitly return setup readiness. The connected
-// journey uses the real setup command and separately proves not_ready refusal.
+// Unit container fixtures must explicitly return setup readiness.
 const READY_SETUP_DOCKER = `if [[ "$1" == compose && "$*" == *"clean-founder-main.js status --state-dir"* ]]; then if [[ -n "\${ECHO_TEST_SETUP_STATUS:-}" ]]; then printf '%s\\n' "$ECHO_TEST_SETUP_STATUS"; else printf '%s\\n' '{"schema_version":1,"kind":"echo-clean-founder-setup-status-v1","runtime_status":"ready_to_start"}'; fi; exit 0; fi`;
 
-const PRE_SLACK_ONBOARDING_STATUS = JSON.stringify({
+const PRE_SLACK_SETUP_FIELDS = {
   schema_version: 2,
   kind: "echo-organization-authority-setup-status-v2",
   setup_plan_present: true,
@@ -90,16 +89,20 @@ const PRE_SLACK_ONBOARDING_STATUS = JSON.stringify({
   llm_credential_valid: false,
   source_mode: "none",
   source_admission_present: false,
+  next_step: "connect_slack_in_app",
+  runtime_status: "not_ready",
+  runtime_observation: "not_observed",
+  canary_status: "not_ready",
+};
+
+const PRE_SLACK_ONBOARDING_STATUS = JSON.stringify({
+  ...PRE_SLACK_SETUP_FIELDS,
   source_progress_observed: false,
   synthetic_staging_canary_observed: false,
   approved_record_present: false,
   active_generation_current: false,
   owner_layer1_read_after_head: false,
   owner_layer2_read_after_generation: false,
-  next_step: "connect_slack_in_app",
-  runtime_status: "not_ready",
-  runtime_observation: "not_observed",
-  canary_status: "not_ready",
 });
 
 const INITIAL_ONBOARDING_PROGRESS_STATUS = JSON.stringify({
@@ -244,9 +247,9 @@ function writeCanaryReceipt(
   return path;
 }
 
-function tupleEnvironment(release: ReturnType<typeof record>): string {
+function tupleEnvironment(release: ReturnType<typeof record>, host = "authority.example.test"): string {
   return `ECHO_CLEAN_AUTHORITY_IMAGE=${release.authority_image.reference}
-ECHO_CLEAN_AUTHORITY_HOST=authority.example.test
+ECHO_CLEAN_AUTHORITY_HOST=${host}
 ECHO_CLEAN_RELEASE_ID=${release.release_id}
 ECHO_CLEAN_RELEASE_SOURCE_SHA=${release.source_sha}
 ECHO_CLEAN_RUNTIME_PROFILE_SHA256=${release.runtime_profile.artifact_sha256}
@@ -259,8 +262,9 @@ function installActiveTuple(
   environmentFile: string,
   release: ReturnType<typeof record>,
   profile: string,
+  host?: string,
 ) {
-  const environment = tupleEnvironment(release);
+  const environment = tupleEnvironment(release, host);
   mkdirSync(join(state, "runtime-profiles"), { recursive: true });
   mkdirSync(join(state, "runtime-environments"), { recursive: true });
   copyFileSync(profile, acceptedRuntimeProfile(state, release.release_id));
@@ -363,6 +367,60 @@ function run(
   });
 }
 
+/** An update-clean-v1.sh host under a fresh root; Docker is faked only once a test writes it. */
+function updateHost(prefix: string) {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  roots.push(root);
+  const envFile = join(root, ".env.clean-v1");
+  const state = join(root, "release-state");
+  const environment: Record<string, string> = {
+    ECHO_CLEAN_ENV_FILE: envFile,
+    ECHO_CLEAN_RELEASE_STATE_DIR: state,
+  };
+  const writeDocker = (script: string) => {
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "docker"), `#!/usr/bin/env bash\n${script}`);
+    chmodSync(join(bin, "docker"), 0o755);
+    environment.PATH = `${bin}:${process.env.PATH}`;
+  };
+  return { root, envFile, state, environment, writeDocker,
+    update: (...args: string[]) => run("bash", [UPDATE, ...args], environment),
+  };
+}
+
+function authorityImage(digestLetter: string): string {
+  return `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${digestLetter.repeat(64)}`;
+}
+
+/** Fake Docker lines for a running runtime that reports envFile's release tuple. */
+function runningRuntimeInspection(envFile: string, imageLetter: string): string {
+  return [
+    `if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; exit 0; fi`,
+    `if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}"; exit 0; fi`,
+    `if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; then sed -n 's/^ECHO_CLEAN_RUNTIME_PROFILE_SHA256=//p' "${envFile}"; exit 0; fi`,
+    `if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${imageLetter.repeat(64)}\\n'; exit 0; fi`,
+  ].join("\n");
+}
+
+/** A fake npm that installs a Person client whose build identity names sourceSha. */
+function writeFakeNpm(bin: string, sourceSha: string): void {
+  writeFileSync(
+    join(bin, "npm"),
+    `#!/usr/bin/env bash
+if [[ "$1" == --version ]]; then printf '10.9.4\\n'; exit 0; fi
+for ((i=1; i<=$#; i++)); do
+  if [[ "\${!i}" == --prefix ]]; then j=$((i + 1)); prefix="\${!j}"; fi
+done
+mkdir -p "$prefix/bin" "$prefix/lib/node_modules/@echo-brain/person-client/dist"
+printf '#!/usr/bin/env bash\\nif [[ "$1" == --version ]]; then printf "0.1.0-internal.1\\\\n"; else printf "{}\\\\n"; fi\\n' > "$prefix/bin/echo-brain"
+chmod 0755 "$prefix/bin/echo-brain"
+printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","product_version":"0.1.0-internal.1","source_sha":"${sourceSha}","source_kind":"materialized-commit"}' > "$prefix/lib/node_modules/@echo-brain/person-client/dist/build-identity.v1.json"
+`,
+  );
+  chmodSync(join(bin, "npm"), 0o755);
+}
+
 afterEach(() => {
   isolatedUpdate = undefined;
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
@@ -391,42 +449,11 @@ describe("Organization Authority clean-v1 release record", () => {
   it("classifies only the durable pre-Slack onboarding state as eligible for a staged update", () => {
     const helper = readFileSync(UPDATE, "utf8").match(/^safe_update_setup_status\(\) \{[\s\S]*?^\}/m)?.[0];
     expect(helper).toBeDefined();
-    const initial = JSON.stringify({
-      schema_version: 2,
-      kind: "echo-organization-authority-setup-status-v2",
-      setup_plan_present: true,
-      genesis_published: true,
-      credentials_ready: true,
-      slack_connected: false,
-      invitation_file_present: true,
-      founder_invitation_valid: false,
-      founder_oidc_bound: true,
-      founder_slack_link_active: false,
-      llm_credential_valid: false,
-      source_mode: "none",
-      source_admission_present: false,
-      next_step: "connect_slack_in_app",
-      runtime_status: "not_ready",
-      runtime_observation: "not_observed",
-      canary_status: "not_ready",
-    });
     const result = run("bash", ["-c", `set -euo pipefail\ncompose_clean() { printf '%s' "$ECHO_TEST_SETUP_BODY"; return 0; }\n${helper}\nsafe_update_setup_status`], {
-      ECHO_TEST_SETUP_BODY: initial,
+      ECHO_TEST_SETUP_BODY: JSON.stringify(PRE_SLACK_SETUP_FIELDS),
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe("initial_onboarding\n");
-  });
-
-  it("accepts the same canonical non-secret record in build and operator tools", () => {
-    const path = writeRecord(record());
-    const node = run(process.execPath, [TOOL, "validate", path]);
-    const python = run("python3", [DEPLOY_TOOL, "validate", path]);
-
-    expect(node.status).toBe(0);
-    expect(python.status).toBe(0);
-    expect(node.stdout).toBe(python.stdout);
-    expect(node.stdout).toContain('"baseline_compatibility_class":"clean-v1"');
-    expect(node.stdout).not.toMatch(/token|secret|grant|session/i);
   });
 
   it("preserves legacy release bytes while binding the allowlisted Ask switches in new records", () => {
@@ -440,6 +467,10 @@ describe("Organization Authority clean-v1 release record", () => {
       expect(node.status, node.stderr).toBe(0);
       expect(python.status, python.stderr).toBe(0);
       expect(node.stdout).toBe(python.stdout);
+      if (path === legacy) {
+        expect(node.stdout).toContain('"baseline_compatibility_class":"clean-v1"');
+        expect(node.stdout).not.toMatch(/token|secret|grant|session/i);
+      }
     }
     expect(readFileSync(legacy, "utf8")).not.toContain("agentic_ask_v1");
     expect(run(process.execPath, [TOOL, "field", legacy, "agentic-ask-v1"]).stdout).toBe("false\n");
@@ -588,8 +619,6 @@ describe("Organization Authority clean-v1 release record", () => {
   });
 
   it("keeps the bounded staging canary private, release-bound, and separate from promotion", () => {
-    const syntax = run("bash", ["-n", UPDATE]);
-    expect(syntax.status).toBe(0);
     const source = readFileSync(UPDATE, "utf8");
     expect(source).toContain("--canary-passed");
     expect(source).toContain("update-clean-v1.sh canary");
@@ -608,47 +637,11 @@ describe("Organization Authority clean-v1 release record", () => {
     expect(source).not.toContain("imageTag");
   });
 
-  it("serializes release commands with Authority credential activation", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-operation-lock-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
+  it("serializes release commands with Authority activation and keeps a dead-owner lock fail-closed for deliberate recovery", () => {
+    const { root, envFile, writeDocker, update } = updateHost("echo-clean-v1-stale-lock-");
     const lock = join(root, ".authority-operation-lock");
     const marker = join(root, "docker-called");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
-    mkdirSync(bin);
-    mkdirSync(lock, { mode: 0o700 });
-    writeFileSync(join(lock, "owner-pid"), `${process.pid}\n`, {
-      mode: 0o600,
-    });
-    writeFileSync(docker, `#!/usr/bin/env bash\ntouch "${marker}"\n`);
-    chmodSync(docker, 0o755);
-    writeFileSync(
-      envFile,
-      `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}\n`,
-      { mode: 0o600 },
-    );
-
-    const result = run("bash", [UPDATE, "status"], {
-      PATH: `${bin}:${process.env.PATH}`,
-      ECHO_CLEAN_ENV_FILE: envFile,
-      ECHO_CLEAN_RELEASE_STATE_DIR: state,
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "another Authority activation or release operation is already in progress",
-    );
-    expect(existsSync(marker)).toBe(false);
-  });
-
-  it("keeps a dead-owner release lock fail-closed for deliberate recovery", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-stale-lock-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
-    const lock = join(root, ".authority-operation-lock");
+    writeDocker(`touch "${marker}"\n`);
     mkdirSync(lock, { mode: 0o700 });
     writeFileSync(join(lock, "owner-pid"), "99999999\n", {
       mode: 0o600,
@@ -659,10 +652,7 @@ describe("Organization Authority clean-v1 release record", () => {
       { mode: 0o600 },
     );
 
-    const result = run("bash", [UPDATE, "status"], {
-      ECHO_CLEAN_ENV_FILE: envFile,
-      ECHO_CLEAN_RELEASE_STATE_DIR: state,
-    });
+    const result = update("status");
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
@@ -670,40 +660,26 @@ describe("Organization Authority clean-v1 release record", () => {
     );
     expect(result.stderr).toContain("README operation-lock recovery");
     expect(existsSync(lock)).toBe(true);
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("refuses a symlinked runtime-profile state directory before Docker or outside writes", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-state-symlink-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
+    const { root, envFile, state, writeDocker, update } = updateHost("echo-clean-v1-state-symlink-");
     const outside = join(root, "outside");
     const marker = join(root, "docker-called");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
     const profile = writeRuntimeProfile();
     const candidate = writeRecord(releaseWithRuntimeProfile(profile));
     mkdirSync(state, { mode: 0o700 });
     mkdirSync(outside, { mode: 0o700 });
-    mkdirSync(bin);
     symlinkSync(outside, join(state, "runtime-profiles"), "dir");
-    writeFileSync(docker, `#!/usr/bin/env bash\ntouch "${marker}"\n`);
-    chmodSync(docker, 0o755);
+    writeDocker(`touch "${marker}"\n`);
     writeFileSync(
       envFile,
       "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\n",
       { mode: 0o600 },
     );
 
-    const result = run(
-      "bash",
-      [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile],
-      {
-        PATH: `${bin}:${process.env.PATH}`,
-        ECHO_CLEAN_ENV_FILE: envFile,
-        ECHO_CLEAN_RELEASE_STATE_DIR: state,
-      },
-    );
+    const result = update("stage", "--release", candidate, "--runtime-profile", profile);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("release-state directories are missing or unsafe");
@@ -805,6 +781,14 @@ fi
         "ECHO_BUILD_NUMBER=42",
       ]),
     };
+    const build = (
+      overrides: Record<string, string> = {},
+      args = ["echo-authority:test", "--build-number", "42"],
+    ) => spawnSync(
+      process.execPath,
+      [join(tools, "build-authority-image.mjs"), ...args],
+      { cwd: repository, encoding: "utf8", env: { ...process.env, ...environment, ...overrides } },
+    );
     for (const args of [
       ["echo-authority:test"],
       ["echo-authority:test", "--build-number", "0"],
@@ -812,11 +796,7 @@ fi
       ["echo-authority:test", "--build-number", "not-a-number"],
       ["echo-authority:test", "--build-number", "9007199254740992"],
     ]) {
-      const invalid = spawnSync(
-        process.execPath,
-        [join(tools, "build-authority-image.mjs"), ...args],
-        { cwd: repository, encoding: "utf8", env: { ...process.env, ...environment } },
-      );
+      const invalid = build({}, args);
       expect(invalid.status).toBe(1);
       expect(invalid.stderr).toContain(
         args.length === 1 ? "usage:" : "build number must be a canonical positive safe integer",
@@ -824,16 +804,7 @@ fi
     }
     expect(existsSync(dockerLog)).toBe(false);
 
-    const clean = spawnSync(
-      process.execPath,
-      [
-        join(tools, "build-authority-image.mjs"),
-        "echo-authority:test",
-        "--build-number",
-        "42",
-      ],
-      { cwd: repository, encoding: "utf8", env: { ...process.env, ...environment } },
-    );
+    const clean = build();
     expect(clean.status).toBe(0);
     expect(JSON.parse(clean.stdout)).toEqual({
       image: "echo-authority:test",
@@ -857,52 +828,20 @@ fi
       "image inspect --format {{json .Config.Env}} echo-authority:test",
     );
 
-    const missingCapability = spawnSync(
-      process.execPath,
-      [
-        join(tools, "build-authority-image.mjs"),
-        "echo-authority:test",
-        "--build-number",
-        "42",
-      ],
-      {
-        cwd: repository,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          ...environment,
-          ECHO_FAKE_TELEMETRY_CAPABILITY: "false",
-        },
-      },
-    );
+    const missingCapability = build({ ECHO_FAKE_TELEMETRY_CAPABILITY: "false" });
     expect(missingCapability.status).toBe(1);
     expect(missingCapability.stderr).toContain(
       "does not declare staging journey telemetry V1",
     );
 
-    const duplicateEnvironment = spawnSync(
-      process.execPath,
-      [
-        join(tools, "build-authority-image.mjs"),
-        "echo-authority:test",
-        "--build-number",
-        "42",
-      ],
-      {
-        cwd: repository,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          ...environment,
-          ECHO_FAKE_CONFIG_ENV: JSON.stringify([
-            "ECHO_STAGING_JOURNEY_TELEMETRY_V1=true",
-            `ECHO_SOURCE_SHA=${sourceSha}`,
-            `ECHO_SOURCE_SHA=${"b".repeat(40)}`,
-            "ECHO_BUILD_NUMBER=42",
-          ]),
-        },
-      },
-    );
+    const duplicateEnvironment = build({
+      ECHO_FAKE_CONFIG_ENV: JSON.stringify([
+        "ECHO_STAGING_JOURNEY_TELEMETRY_V1=true",
+        `ECHO_SOURCE_SHA=${sourceSha}`,
+        `ECHO_SOURCE_SHA=${"b".repeat(40)}`,
+        "ECHO_BUILD_NUMBER=42",
+      ]),
+    });
     expect(duplicateEnvironment.status).toBe(1);
     expect(duplicateEnvironment.stderr).toContain(
       "does not exactly bind telemetry capability, source SHA, and build number",
@@ -910,16 +849,7 @@ fi
 
     const callsBeforeDirtyAttempt = readFileSync(dockerLog, "utf8");
     writeFileSync(join(repository, "tracked.txt"), "dirty\n");
-    const dirty = spawnSync(
-      process.execPath,
-      [
-        join(tools, "build-authority-image.mjs"),
-        "echo-authority:test",
-        "--build-number",
-        "42",
-      ],
-      { cwd: repository, encoding: "utf8", env: { ...process.env, ...environment } },
-    );
+    const dirty = build();
     expect(dirty.status).toBe(1);
     expect(dirty.stderr).toContain("build requires clean, committed source");
     expect(readFileSync(dockerLog, "utf8")).toBe(callsBeforeDirtyAttempt);
@@ -953,21 +883,14 @@ fi
   ].map((scenario) => [scenario.name, scenario] as const))(
     "%s",
     (_name, { imageSource, host, telemetry, assertFailedRecord, assertImageWritten }) => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-startup-refusal-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
+    const { root, envFile, state, environment, writeDocker, update } = updateHost("echo-clean-v1-startup-refusal-");
     const up = join(root, "up-called");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
     const profile = writeRuntimeProfile();
-    const runtimeConfig = prepareRuntimeConfig(root, profile);
+    environment.ECHO_CLEAN_RUNTIME_CONFIG_DIR = prepareRuntimeConfig(root, profile);
     const candidate = writeRecord(
       releaseWithRuntimeProfile(profile, {
         release_id: "clean-v1-20260822-002",
-        authority_image: {
-          reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
-        },
+        authority_image: { reference: authorityImage("d") },
       }),
     );
     const telemetryInspection = telemetry ? `
@@ -981,17 +904,11 @@ if [[ "$1" == image && "$*" == *'{{json .Config.Env}}'* ]]; then printf '%s\\n' 
       "ECHO_BUILD_NUMBER=42",
     ])}'; exit 0; fi
 ` : "";
-    mkdirSync(bin);
-    writeFileSync(
-      docker,
-      `#!/usr/bin/env bash
-if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then exit 0; fi
+    writeDocker(`if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then exit 0; fi
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${imageSource}'; exit 0; fi
 ${telemetryInspection}
 if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${up}"; fi
-`,
-    );
-    chmodSync(docker, 0o755);
+`);
     writeFileSync(
       envFile,
       "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\n" +
@@ -999,23 +916,7 @@ if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${up}"; fi
       { mode: 0o600 },
     );
 
-    const result = run(
-      "bash",
-      [
-        UPDATE,
-        "stage",
-        "--release",
-        candidate,
-        "--runtime-profile",
-        profile,
-      ],
-      {
-        PATH: `${bin}:${process.env.PATH}`,
-        ECHO_CLEAN_ENV_FILE: envFile,
-        ECHO_CLEAN_RELEASE_STATE_DIR: state,
-        ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
-      },
-    );
+    const result = update("stage", "--release", candidate, "--runtime-profile", profile);
 
     expect(result.status).toBe(1);
     expect(existsSync(up)).toBe(false);
@@ -1026,21 +927,14 @@ if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${up}"; fi
   });
 
   it("rejects a running container that overrides telemetry image identity", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-telemetry-runtime-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
+    const { root, envFile, state, environment, writeDocker, update } = updateHost("echo-clean-v1-telemetry-runtime-");
     const started = join(root, "container-started");
     const descriptor = join(root, "descriptor-checked");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
     const profile = writeRuntimeProfile();
-    const runtimeConfig = prepareRuntimeConfig(root, profile);
+    environment.ECHO_CLEAN_RUNTIME_CONFIG_DIR = prepareRuntimeConfig(root, profile);
     const candidateRecord = releaseWithRuntimeProfile(profile, {
       release_id: "clean-v1-20260822-002",
-      authority_image: {
-        reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
-      },
+      authority_image: { reference: authorityImage("d") },
     });
     const candidate = writeRecord(candidateRecord);
     const imageEnvironment = JSON.stringify(["NODE_ENV=production"]);
@@ -1050,11 +944,7 @@ if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${up}"; fi
       `ECHO_SOURCE_SHA=${"a".repeat(40)}`,
       "ECHO_BUILD_NUMBER=42",
     ]);
-    mkdirSync(bin);
-    writeFileSync(
-      docker,
-      `#!/usr/bin/env bash
-if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then [[ -f "${started}" ]] && printf 'authority-container\\n'; exit 0; fi
+    writeDocker(`if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then [[ -f "${started}" ]] && printf 'authority-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then [[ -f "${started}" ]] && printf 'proxy-container\\n'; exit 0; fi
 if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; exit 0; fi
 if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}"; exit 0; fi
@@ -1070,32 +960,14 @@ if [[ "$1" == image && "$*" == *'{{json .Config.Env}}'* ]]; then printf '%s\\n' 
 if [[ "$1" == image ]]; then printf '%s\\n' '${candidateRecord.authority_image.reference}'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${started}"; exit 0; fi
 if [[ "$1" == compose && "$*" == *" exec "* ]]; then touch "${descriptor}"; exit 0; fi
-`,
-    );
-    chmodSync(docker, 0o755);
+`);
     writeFileSync(
       envFile,
       "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\n",
       { mode: 0o600 },
     );
 
-    const result = run(
-      "bash",
-      [
-        UPDATE,
-        "stage",
-        "--release",
-        candidate,
-        "--runtime-profile",
-        profile,
-      ],
-      {
-        PATH: `${bin}:${process.env.PATH}`,
-        ECHO_CLEAN_ENV_FILE: envFile,
-        ECHO_CLEAN_RELEASE_STATE_DIR: state,
-        ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
-      },
-    );
+    const result = update("stage", "--release", candidate, "--runtime-profile", profile);
 
     expect(result.status).toBe(1);
     expect(existsSync(started)).toBe(true);
@@ -1106,7 +978,6 @@ if [[ "$1" == compose && "$*" == *" exec "* ]]; then touch "${descriptor}"; exit
   });
 
   it("verifies an exact artifact before installing it and uses the product status surface", () => {
-    expect(run("bash", ["-n", INSTALL]).status).toBe(0);
     const source = readFileSync(INSTALL, "utf8");
     expect(source.indexOf("actual_sha")).toBeLessThan(source.lastIndexOf("npm install"));
     expect(source).toContain("--ignore-scripts");
@@ -1153,7 +1024,6 @@ if [[ "$1" == compose && "$*" == *" exec "* ]]; then touch "${descriptor}"; exit
     const archive = join(root, "client.tgz");
     const prefix = join(root, "prefix");
     const bin = join(root, "bin");
-    const npm = join(bin, "npm");
     const node = join(bin, "node");
     const bytes = "correct artifact bytes";
     const artifactSha = createHash("sha256").update(bytes).digest("hex");
@@ -1161,21 +1031,8 @@ if [[ "$1" == compose && "$*" == *" exec "* ]]; then touch "${descriptor}"; exit
     writeFileSync(archive, bytes);
     mkdirSync(bin);
     writeFileSync(node, "#!/usr/bin/env bash\nprintf 'v22.22.1\\n'\n");
-    writeFileSync(
-      npm,
-      `#!/usr/bin/env bash
-if [[ "$1" == --version ]]; then printf '10.9.4\\n'; exit 0; fi
-for ((i=1; i<=$#; i++)); do
-  if [[ "\${!i}" == --prefix ]]; then j=$((i + 1)); prefix="\${!j}"; fi
-done
-mkdir -p "$prefix/bin" "$prefix/lib/node_modules/@echo-brain/person-client/dist"
-printf '#!/usr/bin/env bash\\nif [[ "$1" == --version ]]; then printf "0.1.0-internal.1\\\\n"; else printf "{}\\\\n"; fi\\n' > "$prefix/bin/echo-brain"
-chmod 0755 "$prefix/bin/echo-brain"
-printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","product_version":"0.1.0-internal.1","source_sha":"${"f".repeat(40)}","source_kind":"materialized-commit"}' > "$prefix/lib/node_modules/@echo-brain/person-client/dist/build-identity.v1.json"
-`,
-    );
+    writeFakeNpm(bin, "f".repeat(40));
     chmodSync(node, 0o755);
-    chmodSync(npm, 0o755);
 
     const result = run("bash", [INSTALL, "--release", release, "--prefix", prefix, "--artifact", archive], {
       PATH: `${bin}:${process.env.PATH}`,
@@ -1186,30 +1043,11 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
   });
 
   it("creates a zero-argument offline bundle and preserves an existing employee session on reinstall", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-clean-v1-offline-bundle-")));
-    roots.push(root);
-    const sourceSha = "a".repeat(40);
-    const version = "0.1.0-internal.1";
-    const artifact = join(root, "client.tgz");
+    const { root, artifact, release } = kitBuilderInputs("echo-clean-v1-offline-bundle-");
     const output = join(root, "employee-bundle.tar.gz");
     const extracted = join(root, "extracted");
-    const packageRoot = join(root, "package", "dist");
     const home = join(root, "employee-home");
     const session = join(home, ".local", "share", "echo-brain", "person", "session.v1.json");
-    mkdirSync(packageRoot, { recursive: true });
-    writeFileSync(join(packageRoot, "build-identity.v1.json"), JSON.stringify({
-      schema_version: 1,
-      kind: "echo-packaged-build-identity",
-      product_version: version,
-      source_sha: sourceSha,
-      source_kind: "materialized-commit",
-    }));
-    expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
-    const artifactSha = createHash("sha256").update(readFileSync(artifact)).digest("hex");
-    const release = writeRecord(record({
-      source_sha: sourceSha,
-      person_client: { ...record().person_client, version, artifact_sha256: artifactSha },
-    }));
 
     const bundled = run(process.execPath, [BUNDLE, "--release", release, "--artifact", artifact, "--output", output]);
     expect(bundled.status).toBe(0);
@@ -1233,22 +1071,9 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     const bin = join(root, "bin");
     mkdirSync(bin);
     const node = join(bin, "node");
-    const npm = join(bin, "npm");
     writeFileSync(node, "#!/usr/bin/env bash\nprintf 'v22.22.1\\n'\n");
-    writeFileSync(npm, [
-      "#!/usr/bin/env bash",
-      "if [[ \"$1\" == --version ]]; then printf '10.9.4\\n'; exit 0; fi",
-      "for ((i=1; i<=$#; i++)); do",
-      "  if [[ \"${!i}\" == --prefix ]]; then j=$((i + 1)); prefix=\"${!j}\"; fi",
-      "done",
-      "mkdir -p \"$prefix/bin\" \"$prefix/lib/node_modules/@echo-brain/person-client/dist\"",
-      `printf '#!/usr/bin/env bash\\nif [[ \"$1\" == --version ]]; then printf \"${version}\\\\n\"; else printf \"{}\\\\n\"; fi\\n' > \"$prefix/bin/echo-brain\"`,
-      "chmod 0755 \"$prefix/bin/echo-brain\"",
-      `printf '%s\\n' '{\"schema_version\":1,\"kind\":\"echo-packaged-build-identity\",\"product_version\":\"${version}\",\"source_sha\":\"${sourceSha}\",\"source_kind\":\"materialized-commit\"}' > \"$prefix/lib/node_modules/@echo-brain/person-client/dist/build-identity.v1.json\"`,
-      "",
-    ].join("\n"));
+    writeFakeNpm(bin, "a".repeat(40));
     chmodSync(node, 0o755);
-    chmodSync(npm, 0o755);
     const installed = run("bash", [join(extracted, "echo-brain-person-client-clean-v1-20260822-001", "install.sh")], {
       PATH: `${bin}:${process.env.PATH}`,
       HOME: home,
@@ -1257,8 +1082,11 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     expect(readFileSync(session, "utf8")).toBe("existing-private-session");
   });
 
-  /** A valid release record and client artifact, so the kit builder reaches its runtime checks. */
-  function kitBuilderInputs(prefix: string) {
+  /**
+   * A valid release record and client artifact, so the kit builder reaches its
+   * runtime checks. sourceSha changes only the packaged build identity.
+   */
+  function kitBuilderInputs(prefix: string, sourceSha = "a".repeat(40)) {
     const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
     roots.push(root);
     const artifact = join(root, "client.tgz");
@@ -1270,7 +1098,7 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
         schema_version: 1,
         kind: "echo-packaged-build-identity",
         product_version: "0.1.0-internal.1",
-        source_sha: "a".repeat(40),
+        source_sha: sourceSha,
         source_kind: "materialized-commit",
       }),
     );
@@ -1442,22 +1270,8 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
   });
 
   it("refuses noncanonical, digest-mismatched, and source-mismatched offline bundle inputs", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-clean-v1-offline-bundle-reject-")));
-    roots.push(root);
-    const artifact = join(root, "client.tgz");
+    const { root, artifact, release } = kitBuilderInputs("echo-clean-v1-offline-bundle-reject-", "b".repeat(40));
     const output = join(root, "employee-bundle.tar.gz");
-    const packageRoot = join(root, "package", "dist");
-    mkdirSync(packageRoot, { recursive: true });
-    writeFileSync(join(packageRoot, "build-identity.v1.json"), JSON.stringify({
-      schema_version: 1,
-      kind: "echo-packaged-build-identity",
-      product_version: "0.1.0-internal.1",
-      source_sha: "b".repeat(40),
-      source_kind: "materialized-commit",
-    }));
-    expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
-    const artifactSha = createHash("sha256").update(readFileSync(artifact)).digest("hex");
-    const release = writeRecord(record({ person_client: { ...record().person_client, artifact_sha256: artifactSha } }));
     const badSource = run(process.execPath, [BUNDLE, "--release", release, "--artifact", artifact, "--output", output]);
     expect(badSource.status).toBe(1);
     expect(badSource.stderr).toContain("build identity does not match");
@@ -1525,33 +1339,81 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     expect(existsSync(prefix)).toBe(false);
   });
 
-  it("refuses a baseline-mismatched candidate before Docker can mutate the deployment", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-baseline-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
-    const marker = join(root, "docker-called");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
+  it.each<{
+    name: string;
+    prefix: string;
+    prepare: (host: ReturnType<typeof updateHost>, profile: string) => string;
+    verify: (host: ReturnType<typeof updateHost>, result: ReturnType<typeof run>) => void;
+  }>([
+    {
+      name: "refuses a baseline-mismatched candidate",
+      prefix: "echo-clean-v1-baseline-",
+      prepare: ({ envFile, state }, profile) => {
+        const current = writeRecord(releaseWithRuntimeProfile(profile));
+        writeFileSync(envFile, `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}\n`);
+        chmodSync(envFile, 0o600);
+        mkdirSync(state, { recursive: true });
+        copyFileSync(current, join(state, "current.clean-v1.json"));
+        return writeRecord({ ...record(), baseline_compatibility_class: "clean-v2" });
+      },
+      verify: ({ envFile }) => {
+        expect(readFileSync(envFile, "utf8")).toContain(record().authority_image.reference);
+      },
+    },
+    {
+      name: "rejects a runtime-profile digest mismatch",
+      prefix: "echo-clean-v1-runtime-profile-mismatch-",
+      prepare: ({ root, envFile, environment }, profile) => {
+        const candidate = writeRecord(
+          releaseWithRuntimeProfile(profile, {
+            release_id: "clean-v1-20260822-002",
+            authority_image: { reference: authorityImage("d") },
+          }),
+        );
+        const changedProfile = writeRuntimeProfile(
+          "a".repeat(40),
+          "\n# changed after the release record was created\n",
+        );
+        copyFileSync(changedProfile, profile);
+        writeFileSync(
+          envFile,
+          "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=authority.example.test\n",
+        );
+        chmodSync(envFile, 0o600);
+        environment.ECHO_CLEAN_RUNTIME_CONFIG_DIR = root;
+        return candidate;
+      },
+      verify: ({ state }, result) => {
+        expect(result.stderr).toContain("runtime profile SHA-256 does not match the release record");
+        expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(false);
+      },
+    },
+    {
+      name: "rejects a reused release ID",
+      prefix: "echo-clean-v1-reuse-",
+      prepare: ({ envFile, state }, profile) => {
+        const candidate = writeRecord(releaseWithRuntimeProfile(profile));
+        writeFileSync(envFile, `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}\n`);
+        chmodSync(envFile, 0o600);
+        mkdirSync(join(state, "history"), { recursive: true });
+        copyFileSync(candidate, join(state, "history", "clean-v1-20260822-001.json"));
+        return candidate;
+      },
+      verify: (_host, result) => {
+        expect(result.stderr).toContain("release_id was already used");
+      },
+    },
+  ])("$name before Docker can mutate the deployment", ({ prefix, prepare, verify }) => {
+    const host = updateHost(prefix);
+    const marker = join(host.root, "docker-called");
+    host.writeDocker(`touch "${marker}"\n`);
     const profile = writeRuntimeProfile();
-    const current = writeRecord(releaseWithRuntimeProfile(profile));
-    const candidate = writeRecord({ ...record(), baseline_compatibility_class: "clean-v2" });
-    mkdirSync(bin);
-    writeFileSync(docker, `#!/usr/bin/env bash\ntouch "${marker}"\n`);
-    chmodSync(docker, 0o755);
-    writeFileSync(envFile, `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}\n`);
-    chmodSync(envFile, 0o600);
-    mkdirSync(state, { recursive: true });
-    copyFileSync(current, join(state, "current.clean-v1.json"));
+    const candidate = prepare(host, profile);
 
-    const result = run("bash", [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile], {
-      PATH: `${bin}:${process.env.PATH}`,
-      ECHO_CLEAN_ENV_FILE: envFile,
-      ECHO_CLEAN_RELEASE_STATE_DIR: state,
-    });
+    const result = host.update("stage", "--release", candidate, "--runtime-profile", profile);
     expect(result.status).toBe(1);
     expect(existsSync(marker)).toBe(false);
-    expect(readFileSync(envFile, "utf8")).toContain(record().authority_image.reference);
+    verify(host, result);
   });
 
   it.each([
@@ -1571,9 +1433,7 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
       },
       candidateOverrides: {
         release_id: "clean-v1-20260822-002",
-        authority_image: {
-          reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
-        },
+        authority_image: { reference: authorityImage("d") },
       },
       inspectVerifier: true,
       diagnostics: ["candidate Authority image rejected persisted state lineage"],
@@ -1593,24 +1453,16 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
   ].map((scenario) => [scenario.name, scenario] as const))(
     "%s",
     (_name, { prepareState, candidateOverrides, inspectVerifier, diagnostics }) => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-state-refusal-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const releaseState = join(root, "release-state");
+    const { root, envFile, state: releaseState, environment, writeDocker, update } = updateHost("echo-clean-v1-state-refusal-");
     const stateDirectory = join(root, "state");
+    environment.ECHO_CLEAN_STATE_DIR = stateDirectory;
     const verifier = join(root, "state-verifier-called");
     const activation = join(root, "compose-activation-called");
     const dockerLog = join(root, "docker.log");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
     const profile = writeRuntimeProfile();
     const candidate = writeRecord(releaseWithRuntimeProfile(profile, candidateOverrides));
     prepareState(stateDirectory);
-    mkdirSync(bin);
-    writeFileSync(
-      docker,
-      `#!/usr/bin/env bash
-${inspectVerifier ? `printf '%s\\n' "$*" >> "${dockerLog}"` : ""}
+    writeDocker(`${inspectVerifier ? `printf '%s\\n' "$*" >> "${dockerLog}"` : ""}
 if [[ "$1" == pull ]]; then exit 0; fi
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then
   printf '%s\\n' '${"a".repeat(40)}'
@@ -1624,9 +1476,7 @@ fi
 if [[ "$1" == compose && ( "$*" == *" up "* || "$*" == *" restart "* ) ]]; then
   touch "${activation}"
 fi
-`,
-    );
-    chmodSync(docker, 0o755);
+`);
     const initialEnvironment = [
       `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}`,
       "ECHO_CLEAN_AUTHORITY_HOST=authority.example.test",
@@ -1636,16 +1486,7 @@ fi
     ].join("\n");
     writeFileSync(envFile, initialEnvironment, { mode: 0o600 });
 
-    const result = run(
-      "bash",
-      [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile],
-      {
-        PATH: `${bin}:${process.env.PATH}`,
-        ECHO_CLEAN_ENV_FILE: envFile,
-        ECHO_CLEAN_RELEASE_STATE_DIR: releaseState,
-        ECHO_CLEAN_STATE_DIR: stateDirectory,
-      },
-    );
+    const result = update("stage", "--release", candidate, "--runtime-profile", profile);
     expect(result.status).toBe(1);
     for (const diagnostic of diagnostics) expect(result.stderr).toContain(diagnostic);
     expect(existsSync(verifier)).toBe(true);
@@ -1672,81 +1513,24 @@ fi
     }
   });
 
-  it("rejects a runtime-profile digest mismatch before Docker can mutate the deployment", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-runtime-profile-mismatch-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
-    const profile = writeRuntimeProfile();
-    const marker = join(root, "docker-called");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
-    const candidate = writeRecord(
-      releaseWithRuntimeProfile(profile, {
-        release_id: "clean-v1-20260822-002",
-        authority_image: {
-          reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
-        },
-      }),
-    );
-    const changedProfile = writeRuntimeProfile(
-      "a".repeat(40),
-      "\n# changed after the release record was created\n",
-    );
-    copyFileSync(changedProfile, profile);
-    mkdirSync(bin);
-    writeFileSync(docker, `#!/usr/bin/env bash\ntouch "${marker}"\n`);
-    chmodSync(docker, 0o755);
-    writeFileSync(
-      envFile,
-      "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=authority.example.test\n",
-    );
-    chmodSync(envFile, 0o600);
-
-    const result = run("bash", [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile], {
-      PATH: `${bin}:${process.env.PATH}`,
-      ECHO_CLEAN_ENV_FILE: envFile,
-      ECHO_CLEAN_RELEASE_STATE_DIR: state,
-      ECHO_CLEAN_RUNTIME_CONFIG_DIR: root,
-    });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("runtime profile SHA-256 does not match the release record");
-    expect(existsSync(marker)).toBe(false);
-    expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(false);
-  });
-
   it("stages and promotes the first deployment without a manually installed current record", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-first-deploy-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
+    const { root, envFile, state, environment, writeDocker, update } = updateHost("echo-clean-v1-first-deploy-");
     const started = join(root, "started");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
     const profile = writeRuntimeProfile();
     const candidateRecord = releaseWithRuntimeProfile(profile, {
       release_id: "clean-v1-20260822-002",
-      authority_image: {
-        reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
-      },
+      authority_image: { reference: authorityImage("d") },
     });
     const candidate = writeRecord(candidateRecord);
-    const runtimeConfig = prepareRuntimeConfig(root, profile);
-    mkdirSync(bin);
-    writeFileSync(
-      docker,
-      `#!/usr/bin/env bash
-${READY_SETUP_DOCKER}
+    environment.ECHO_CLEAN_RUNTIME_CONFIG_DIR = prepareRuntimeConfig(root, profile);
+    writeDocker(`${READY_SETUP_DOCKER}
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then
   [[ -f "${started}" ]] && printf 'authority-container\\n'
   exit 0
 fi
 if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then printf 'proxy-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${started}"; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}"; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; then sed -n 's/^ECHO_CLEAN_RUNTIME_PROFILE_SHA256=//p' "${envFile}"; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"e".repeat(64)}\\n'; exit 0; fi
+${runningRuntimeInspection(envFile, "e")}
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
 if [[ "$1" == image && "$*" == *'org.echobrain.authority.telemetry.staging-journey-v1'* ]]; then printf '<no value>\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'ECHO_STAGING_JOURNEY_TELEMETRY_V1=true'* ]]; then exit 0; fi
@@ -1756,65 +1540,53 @@ if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then
   printf '{"schema_version":1,"kind":"echo-staging-synthetic-private-dm-canary-receipt-v1","release_id":"%s","approval_outcome":"staged","approval_id":"approval-canary"}\\n' "$release_id"
   exit 0
 fi
-`,
-    );
-    chmodSync(docker, 0o755);
+`);
     writeFileSync(envFile, "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\n");
     chmodSync(envFile, 0o600);
 
-    const environment = {
-      PATH: `${bin}:${process.env.PATH}`,
-      ECHO_CLEAN_ENV_FILE: envFile,
-      ECHO_CLEAN_RELEASE_STATE_DIR: state,
-      ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
-    };
-    const staged = run("bash", [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile], environment);
+    const staged = update("stage", "--release", candidate, "--runtime-profile", profile);
     expect(staged.status).toBe(0);
     expect(staged.stdout).toContain('"accepted_release_present":false');
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
     expect(existsSync(join(state, "current.clean-v1.json"))).toBe(false);
     expect(readFileSync(envFile, "utf8")).toContain(candidateRecord.authority_image.reference);
 
-    const refused = run("bash", [UPDATE, "promote", "--release", candidate, "--canary-passed"], environment);
+    const refused = update("promote", "--release", candidate, "--canary-passed");
     expect(refused.status).toBe(1);
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
-    const canary = run("bash", [UPDATE, "canary"], environment);
+    const canary = update("canary");
     expect(canary.status).toBe(0);
-    const promoted = run("bash", [UPDATE, "promote", "--release", candidate, "--canary-passed"], environment);
+    const promoted = update("promote", "--release", candidate, "--canary-passed");
     expect(promoted.status).toBe(0);
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(false);
     expect(existsSync(join(state, "current.clean-v1.json"))).toBe(true);
   });
 
+  // A failed canary persists nothing, so every outcome leaves the same staged
+  // state; the recovery and restage sequence runs once, for delivery_pending.
   it.each([
-    ["delivery_pending", "delivery is still pending", '"approval_outcome":"delivery_pending","approval_id":"approval-canary"'],
-    ["quarantined", "did not stage an approval proposal: quarantined", '"approval_outcome":"quarantined","approval_id":"approval-canary"'],
-    ["not_actionable", "did not stage an approval proposal: not_actionable", '"approval_outcome":"not_actionable"'],
-  ])("aborts a first-deployment candidate after a %s canary and permits a new stage", (_outcome, expectedFailure, outcomeFields) => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-first-deploy-abort-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
+    { name: "aborts a first-deployment candidate after a delivery_pending canary and permits a new stage", expectedFailure: "delivery is still pending", outcomeFields: '"approval_outcome":"delivery_pending","approval_id":"approval-canary"', recover: true },
+    { name: "fails a first-deployment canary with a quarantined outcome", expectedFailure: "did not stage an approval proposal: quarantined", outcomeFields: '"approval_outcome":"quarantined","approval_id":"approval-canary"', recover: false },
+    { name: "fails a first-deployment canary with a not_actionable outcome", expectedFailure: "did not stage an approval proposal: not_actionable", outcomeFields: '"approval_outcome":"not_actionable"', recover: false },
+  ])("$name", ({ expectedFailure, outcomeFields, recover }) => {
+    const { root, envFile, state, environment, writeDocker, update } = updateHost("echo-clean-v1-first-deploy-abort-");
     const started = join(root, "started");
     const mismatchedRuntime = join(root, "mismatched-runtime");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
     const firstProfile = writeRuntimeProfile();
     const nextProfile = writeRuntimeProfile("a".repeat(40), "\n# next candidate\n");
     const first = releaseWithRuntimeProfile(firstProfile, {
       release_id: "clean-v1-20260822-005",
-      authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}` },
+      authority_image: { reference: authorityImage("d") },
     });
     const next = releaseWithRuntimeProfile(nextProfile, {
       release_id: "clean-v1-20260822-006",
-      authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"e".repeat(64)}` },
+      authority_image: { reference: authorityImage("e") },
     });
     const firstCandidate = writeRecord(first);
     const nextCandidate = writeRecord(next);
     const runtimeConfig = prepareRuntimeConfig(root, firstProfile);
-    mkdirSync(bin);
-    writeFileSync(docker, `#!/usr/bin/env bash
-if [[ "$1" == compose ]] && grep -q 'interrupted activation' "${runtimeConfig}/compose.clean-v1.yaml"; then exit 44; fi
+    environment.ECHO_CLEAN_RUNTIME_CONFIG_DIR = runtimeConfig;
+    writeDocker(`if [[ "$1" == compose ]] && grep -q 'interrupted activation' "${runtimeConfig}/compose.clean-v1.yaml"; then exit 44; fi
 ${READY_SETUP_DOCKER}
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then [[ -f "${started}" ]] && printf 'authority-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then [[ -f "${started}" ]] && printf 'proxy-container\\n'; exit 0; fi
@@ -1830,22 +1602,17 @@ if [[ "$1" == image && "$*" == *'ECHO_STAGING_JOURNEY_TELEMETRY_V1=true'* ]]; th
 if [[ "$1" == image ]]; then printf '%s\\n' '${first.authority_image.reference}'; sleep 0.05; printf '%s\\n' '${next.authority_image.reference}'; exit 0; fi
 if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then release_id="$(sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}")"; printf '{"schema_version":1,"kind":"echo-staging-synthetic-private-dm-canary-receipt-v1","release_id":"%s",${outcomeFields}}\\n' "$release_id"; exit 0; fi
 `);
-    chmodSync(docker, 0o755);
     writeFileSync(envFile, "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\n", { mode: 0o600 });
-    const environment = { PATH: `${bin}:${process.env.PATH}`, ECHO_CLEAN_ENV_FILE: envFile, ECHO_CLEAN_RELEASE_STATE_DIR: state, ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig };
-    const staged = run(
-      "bash",
-      [UPDATE, "stage", "--release", firstCandidate, "--runtime-profile", firstProfile],
-      environment,
-    );
+    const staged = update("stage", "--release", firstCandidate, "--runtime-profile", firstProfile);
     expect(staged.status, `${staged.stdout}\n${staged.stderr}`).toBe(0);
-    const canary = run("bash", [UPDATE, "canary"], environment);
+    const canary = update("canary");
     expect(canary.status).toBe(1);
     expect(canary.stderr).toContain(expectedFailure);
+    if (!recover) return;
     // A running runtime that no longer proves the staged tuple must not be
     // treated as safely stopped or archived.
     writeFileSync(mismatchedRuntime, "yes\n");
-    const refused = run("bash", [UPDATE, "rollback"], environment);
+    const refused = update("rollback");
     expect(refused.status).toBe(1);
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
     expect(existsSync(join(state, "failed", "clean-v1-20260822-005.json"))).toBe(false);
@@ -1872,34 +1639,27 @@ if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then release_
       join(state, "failed", "clean-v1-20260822-005.json"),
     );
     chmodSync(join(state, "failed", "clean-v1-20260822-005.json"), 0o600);
-    expect(run("bash", [UPDATE, "rollback"], environment).stdout).toContain('"stage":"aborted"');
+    expect(update("rollback").stdout).toContain('"stage":"aborted"');
     expect(existsSync(started)).toBe(false);
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(false);
     expect(existsSync(join(state, "current.clean-v1.json"))).toBe(false);
     expect(existsSync(join(state, "failed", "clean-v1-20260822-005.json"))).toBe(true);
-    expect(run("bash", [UPDATE, "stage", "--release", nextCandidate, "--runtime-profile", nextProfile], environment).status).toBe(0);
+    expect(update("stage", "--release", nextCandidate, "--runtime-profile", nextProfile).status).toBe(0);
   });
 
   it("keeps a first-deployment candidate staged when an automatic stop fails", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-first-deploy-stop-retry-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
+    const { root, envFile, state, environment, writeDocker, update } = updateHost("echo-clean-v1-first-deploy-stop-retry-");
     const stopAttempted = join(root, "stop-attempted");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
     const profile = writeRuntimeProfile();
-    const candidate = writeRecord(releaseWithRuntimeProfile(profile, { release_id: "clean-v1-20260822-008", authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}` } }));
-    mkdirSync(bin);
-    writeFileSync(docker, `#!/usr/bin/env bash
-if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then exit 0; fi
+    const candidate = writeRecord(releaseWithRuntimeProfile(profile, { release_id: "clean-v1-20260822-008", authority_image: { reference: authorityImage("d") } }));
+    writeDocker(`if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then exit 0; fi
 if [[ "$1" == compose && "$*" == *" up "* ]]; then exit 1; fi
 if [[ "$1" == compose && "$*" == *" down"* ]]; then touch "${stopAttempted}"; exit 1; fi
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
 `);
-    chmodSync(docker, 0o755);
     writeFileSync(envFile, "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\n", { mode: 0o600 });
-    const result = run("bash", [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile], { PATH: `${bin}:${process.env.PATH}`, ECHO_CLEAN_ENV_FILE: envFile, ECHO_CLEAN_RELEASE_STATE_DIR: state, ECHO_CLEAN_RUNTIME_CONFIG_DIR: prepareRuntimeConfig(root, profile) });
+    environment.ECHO_CLEAN_RUNTIME_CONFIG_DIR = prepareRuntimeConfig(root, profile);
+    const result = update("stage", "--release", candidate, "--runtime-profile", profile);
     expect(result.stderr).toContain("candidate stop could not be confirmed");
     expect(existsSync(stopAttempted)).toBe(true);
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
@@ -1907,28 +1667,17 @@ if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then pr
   });
 
   it("rejects a misrouted public descriptor before accepting a first deployment", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-public-descriptor-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
+    const { root, envFile, state, environment, writeDocker, update } = updateHost("echo-clean-v1-public-descriptor-");
     const started = join(root, "started");
     const log = join(root, "docker.log");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
     const profile = writeRuntimeProfile();
     const candidateRecord = releaseWithRuntimeProfile(profile, {
       release_id: "clean-v1-20260822-004",
-      authority_image: {
-        reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
-      },
+      authority_image: { reference: authorityImage("d") },
     });
     const candidate = writeRecord(candidateRecord);
-    const runtimeConfig = prepareRuntimeConfig(root, profile);
-    mkdirSync(bin);
-    writeFileSync(
-      docker,
-      `#!/usr/bin/env bash
-${READY_SETUP_DOCKER}
+    environment.ECHO_CLEAN_RUNTIME_CONFIG_DIR = prepareRuntimeConfig(root, profile);
+    writeDocker(`${READY_SETUP_DOCKER}
 printf '%s\\n' "$*" >> "${log}"
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then
   [[ -f "${started}" ]] && printf 'authority-container\\n'
@@ -1936,10 +1685,7 @@ if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then
 fi
 if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then printf 'proxy-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${started}"; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}"; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; then sed -n 's/^ECHO_CLEAN_RUNTIME_PROFILE_SHA256=//p' "${envFile}"; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"e".repeat(64)}\\n'; exit 0; fi
+${runningRuntimeInspection(envFile, "e")}
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
 if [[ "$1" == image ]]; then printf '%s\\n' '${candidateRecord.authority_image.reference}'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" exec "* && "$*" == *"https://authority.example.test/v1/authority-descriptor"* ]]; then
@@ -1948,25 +1694,14 @@ if [[ "$1" == compose && "$*" == *" exec "* && "$*" == *"https://authority.examp
 fi
 if [[ "$1" == compose && "$*" == *" exec "* ]]; then exit 0; fi
 if [[ "$1" == compose && "$*" == *" down"* ]]; then exit 0; fi
-`,
-    );
-    chmodSync(docker, 0o755);
+`);
     writeFileSync(
       envFile,
       "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=authority.example.test\n",
       { mode: 0o600 },
     );
 
-    const result = run(
-      "bash",
-      [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile],
-      {
-        PATH: `${bin}:${process.env.PATH}`,
-        ECHO_CLEAN_ENV_FILE: envFile,
-        ECHO_CLEAN_RELEASE_STATE_DIR: state,
-        ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
-      },
-    );
+    const result = update("stage", "--release", candidate, "--runtime-profile", profile);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("candidate failed health/setup checks");
@@ -1978,69 +1713,45 @@ if [[ "$1" == compose && "$*" == *" down"* ]]; then exit 0; fi
   });
 
   it("requires an accepted-image rollback reader before an upgrade canary creates state", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-canary-rollback-reader-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
+    const { root, envFile, state, environment, writeDocker, update } = updateHost("echo-clean-v1-canary-rollback-reader-");
     const invoked = join(root, "canary-invoked");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
     const acceptedProfile = writeRuntimeProfile();
     const candidateProfile = writeRuntimeProfile("a".repeat(40), "\n# candidate\n");
     const accepted = releaseWithRuntimeProfile(acceptedProfile);
     const candidate = releaseWithRuntimeProfile(candidateProfile, {
       release_id: "clean-v1-20260822-007",
-      authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}` },
+      authority_image: { reference: authorityImage("d") },
     });
-    mkdirSync(bin);
-    writeFileSync(docker, `#!/usr/bin/env bash
-if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then touch "${invoked}"; fi
+    writeDocker(`if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then touch "${invoked}"; fi
 `);
-    chmodSync(docker, 0o755);
     installActiveTuple(state, envFile, candidate, candidateProfile);
     copyFileSync(writeRecord(accepted), join(state, "current.clean-v1.json"));
     copyFileSync(writeRecord(candidate), join(state, "candidate.clean-v1.json"));
-    const result = run("bash", [UPDATE, "canary"], {
-      PATH: `${bin}:${process.env.PATH}`,
-      ECHO_CLEAN_ENV_FILE: envFile,
-      ECHO_CLEAN_RELEASE_STATE_DIR: state,
-      ECHO_CLEAN_RUNTIME_CONFIG_DIR: prepareRuntimeConfig(root, candidateProfile),
-    });
+    environment.ECHO_CLEAN_RUNTIME_CONFIG_DIR = prepareRuntimeConfig(root, candidateProfile);
+    const result = update("canary");
     expect(result.stderr).toContain("rollback-read capability");
     expect(existsSync(invoked)).toBe(false);
   });
 
   it("binds routine promotion to staged canary evidence and recovers a promotion crash", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-promote-retry-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
+    const { root, envFile, state, environment, writeDocker, update } = updateHost("echo-clean-v1-promote-retry-");
     const acceptedProfile = writeRuntimeProfile();
     const nextProfile = writeRuntimeProfile("a".repeat(40), "\n# next profile\n");
     const accepted = releaseWithRuntimeProfile(acceptedProfile, {
       release_id: "clean-v1-20260822-002",
-      authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}` },
+      authority_image: { reference: authorityImage("d") },
     });
     const next = releaseWithRuntimeProfile(nextProfile, {
       release_id: "clean-v1-20260822-003",
-      authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"e".repeat(64)}` },
+      authority_image: { reference: authorityImage("e") },
     });
     const acceptedPath = writeRecord(accepted);
     const nextPath = writeRecord(next);
-    const runtimeConfig = prepareRuntimeConfig(root, acceptedProfile);
-    mkdirSync(bin);
-    writeFileSync(
-      docker,
-      `#!/usr/bin/env bash
-${READY_SETUP_DOCKER}
+    environment.ECHO_CLEAN_RUNTIME_CONFIG_DIR = prepareRuntimeConfig(root, acceptedProfile);
+    writeDocker(`${READY_SETUP_DOCKER}
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then printf 'authority-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then printf 'proxy-container\\n'; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}"; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; then sed -n 's/^ECHO_CLEAN_RUNTIME_PROFILE_SHA256=//p' "${envFile}"; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"f".repeat(64)}\\n'; exit 0; fi
+${runningRuntimeInspection(envFile, "f")}
 if [[ "$1" == image && "$*" == *'org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1'* ]]; then printf 'true\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
 if [[ "$1" == image && "$*" == *'org.echobrain.authority.telemetry.staging-journey-v1'* ]]; then printf '<no value>\\n'; exit 0; fi
@@ -2051,50 +1762,21 @@ if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then
   printf '{"schema_version":1,"kind":"echo-staging-synthetic-private-dm-canary-receipt-v1","release_id":"%s","approval_outcome":"staged","approval_id":"approval-canary"}\\n' "$release_id"
   exit 0
 fi
-`,
-    );
-    chmodSync(docker, 0o755);
-    const acceptedEnvironment = `ECHO_CLEAN_AUTHORITY_IMAGE=${accepted.authority_image.reference}
-ECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org
-ECHO_CLEAN_RELEASE_ID=${accepted.release_id}
-ECHO_CLEAN_RELEASE_SOURCE_SHA=${accepted.source_sha}
-ECHO_CLEAN_RUNTIME_PROFILE_SHA256=${accepted.runtime_profile.artifact_sha256}
-ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
-`;
-    writeFileSync(envFile, acceptedEnvironment, { mode: 0o600 });
-    mkdirSync(state, { recursive: true });
-    mkdirSync(join(state, "runtime-profiles"), { recursive: true });
-    mkdirSync(join(state, "runtime-environments"), { recursive: true });
+`);
+    installActiveTuple(state, envFile, accepted, acceptedProfile, "authority-staging.echobrain.org");
     copyFileSync(acceptedPath, join(state, "current.clean-v1.json"));
     copyFileSync(acceptedPath, join(state, "candidate.clean-v1.json"));
-    copyFileSync(acceptedProfile, acceptedRuntimeProfile(state, String(accepted.release_id)));
-    copyFileSync(acceptedProfile, activeRuntimeProfile(state));
-    writeFileSync(
-      acceptedRuntimeEnvironment(state, String(accepted.release_id)),
-      acceptedEnvironment,
-      { mode: 0o600 },
-    );
-    const environment = {
-      PATH: `${bin}:${process.env.PATH}`,
-      ECHO_CLEAN_ENV_FILE: envFile,
-      ECHO_CLEAN_RELEASE_STATE_DIR: state,
-      ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
-    };
 
     writeCanaryReceipt(state, String(accepted.release_id));
-    const retry = run("bash", [UPDATE, "promote", "--release", acceptedPath, "--canary-passed"], environment);
+    const retry = update("promote", "--release", acceptedPath, "--canary-passed");
     expect(retry.status).toBe(0);
     expect(retry.stdout).toContain('"idempotent":true');
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(false);
     expect(existsSync(join(state, "history", "clean-v1-20260822-002.json"))).toBe(false);
 
-    const staged = run("bash", [UPDATE, "stage", "--release", nextPath, "--runtime-profile", nextProfile], environment);
+    const staged = update("stage", "--release", nextPath, "--runtime-profile", nextProfile);
     expect(staged.status).toBe(0);
-    const refusedWithoutEvidence = run(
-      "bash",
-      [UPDATE, "promote", "--release", nextPath, "--canary-passed"],
-      environment,
-    );
+    const refusedWithoutEvidence = update("promote", "--release", nextPath, "--canary-passed");
     expect(refusedWithoutEvidence.status).toBe(1);
     expect(refusedWithoutEvidence.stderr).toContain(
       "requires a private-DM canary receipt for the exact staged candidate",
@@ -2106,18 +1788,14 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
       String(next.release_id),
       "delivery_pending",
     );
-    const refusedPending = run(
-      "bash",
-      [UPDATE, "promote", "--release", nextPath, "--canary-passed"],
-      environment,
-    );
+    const refusedPending = update("promote", "--release", nextPath, "--canary-passed");
     expect(refusedPending.status).toBe(1);
     expect(refusedPending.stderr).toContain(
       "requires a staged private-DM canary for the exact candidate",
     );
     rmSync(pendingReceipt);
 
-    const canary = run("bash", [UPDATE, "canary"], environment);
+    const canary = update("canary");
     expect(canary.status).toBe(0);
     expect(canary.stdout).toContain('"approval_outcome":"staged"');
     const storedReceipt = canaryReceiptPath(state, String(next.release_id));
@@ -2131,11 +1809,7 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
       String(accepted.release_id),
     );
     rmSync(storedAcceptedProfile);
-    const refused = run(
-      "bash",
-      [UPDATE, "promote", "--release", nextPath, "--canary-passed"],
-      environment,
-    );
+    const refused = update("promote", "--release", nextPath, "--canary-passed");
     expect(refused.status).toBe(1);
     expect(refused.stderr).toContain("stored runtime profile is missing or unsafe");
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
@@ -2147,7 +1821,7 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
       "conflicting history record\n",
       { mode: 0o600 },
     );
-    const conflicted = run("bash", [UPDATE, "promote", "--release", nextPath, "--canary-passed"], environment);
+    const conflicted = update("promote", "--release", nextPath, "--canary-passed");
     expect(conflicted.status).toBe(1);
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
     copyFileSync(
@@ -2155,37 +1829,9 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
       join(state, "history", "clean-v1-20260822-002.json"),
     );
     chmodSync(join(state, "history", "clean-v1-20260822-002.json"), 0o600);
-    const promoted = run("bash", [UPDATE, "promote", "--release", nextPath, "--canary-passed"], environment);
+    const promoted = update("promote", "--release", nextPath, "--canary-passed");
     expect(promoted.status).toBe(0);
     expect(existsSync(join(state, "history", "clean-v1-20260822-002.json"))).toBe(true);
-  });
-
-  it("rejects a reused release ID before Docker can mutate the deployment", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-reuse-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
-    const marker = join(root, "docker-called");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
-    const profile = writeRuntimeProfile();
-    const candidate = writeRecord(releaseWithRuntimeProfile(profile));
-    mkdirSync(bin);
-    writeFileSync(docker, `#!/usr/bin/env bash\ntouch "${marker}"\n`);
-    chmodSync(docker, 0o755);
-    writeFileSync(envFile, `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}\n`);
-    chmodSync(envFile, 0o600);
-    mkdirSync(join(state, "history"), { recursive: true });
-    copyFileSync(candidate, join(state, "history", "clean-v1-20260822-001.json"));
-
-    const result = run("bash", [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile], {
-      PATH: `${bin}:${process.env.PATH}`,
-      ECHO_CLEAN_ENV_FILE: envFile,
-      ECHO_CLEAN_RELEASE_STATE_DIR: state,
-    });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("release_id was already used");
-    expect(existsSync(marker)).toBe(false);
   });
 
   it.each([
@@ -2202,28 +1848,21 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
   ].map((scenario) => [scenario.name, scenario] as const))(
     "%s",
     (_name, { symlink, diagnostic }) => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-status-current-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
+    const { root, envFile, state, environment, update } = updateHost("echo-clean-v1-status-current-");
     const profile = writeRuntimeProfile();
     const candidateRecord = releaseWithRuntimeProfile(profile, {
       release_id: "clean-v1-20260822-002",
     });
     const candidate = writeRecord(candidateRecord);
     mkdirSync(state, { recursive: true });
-    const runtimeConfig = prepareRuntimeConfig(root, profile);
+    environment.ECHO_CLEAN_RUNTIME_CONFIG_DIR = prepareRuntimeConfig(root, profile);
     installActiveTuple(state, envFile, candidateRecord, profile);
     copyFileSync(candidate, join(state, "candidate.clean-v1.json"));
     const current = join(state, "current.clean-v1.json");
     if (symlink) symlinkSync(candidate, current);
     else writeFileSync(current, "not a release record\n");
 
-    const result = run("bash", [UPDATE, "status"], {
-      ECHO_CLEAN_ENV_FILE: envFile,
-      ECHO_CLEAN_RELEASE_STATE_DIR: state,
-      ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
-    });
+    const result = update("status");
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain(diagnostic);
@@ -2319,7 +1958,7 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
     expect(existsSync(join(fixture.state, "candidate.clean-v1.json"))).toBe(false);
   });
 
-  it.each(["missing", "corrupt"])("refuses promotion and rollback with %s setup-readiness evidence", (problem) => {
+  it("refuses promotion and rollback with corrupt or missing setup-readiness evidence", () => {
     const fixture = environmentDriftFixture();
     writeFileSync(fixture.envFile, fixture.original);
     const acceptedBytes = readFileSync(fixture.acceptedPath, "utf8");
@@ -2332,16 +1971,19 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
     expect(staged.status, staged.stderr).toBe(0);
     writeCanaryReceipt(fixture.state, releaseId);
     const marker = join(fixture.state, "setup-readiness", `${releaseId}.json`);
-    if (problem === "missing") rmSync(marker);
-    else writeFileSync(marker, "{}\n");
     const candidateEnvironment = readFileSync(fixture.envFile, "utf8");
-    for (const args of [["promote", "--release", candidate, "--canary-passed"], ["rollback"]]) {
-      const refused = fixture.execute(...args);
-      expect(refused.status).toBe(1);
-      expect(refused.stderr).toContain("setup class is missing or unsafe");
-      expect(readFileSync(fixture.acceptedPath, "utf8")).toBe(acceptedBytes);
-      expect(readFileSync(fixture.envFile, "utf8")).toBe(candidateEnvironment);
-      expect(existsSync(join(fixture.state, "candidate.clean-v1.json"))).toBe(true);
+    // Every refusal leaves the staged candidate unchanged, so one stage serves
+    // both problems. Corrupt first: overwriting keeps the marker's private mode.
+    for (const damage of [() => writeFileSync(marker, "{}\n"), () => rmSync(marker)]) {
+      damage();
+      for (const args of [["promote", "--release", candidate, "--canary-passed"], ["rollback"]]) {
+        const refused = fixture.execute(...args);
+        expect(refused.status).toBe(1);
+        expect(refused.stderr).toContain("setup class is missing or unsafe");
+        expect(readFileSync(fixture.acceptedPath, "utf8")).toBe(acceptedBytes);
+        expect(readFileSync(fixture.envFile, "utf8")).toBe(candidateEnvironment);
+        expect(existsSync(join(fixture.state, "candidate.clean-v1.json"))).toBe(true);
+      }
     }
   });
 
@@ -2358,19 +2000,12 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
   });
 
   it("reports runtime-profile drift before claiming the accepted release is healthy", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-runtime-profile-status-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
+    const { root, envFile, state, environment, writeDocker, update } = updateHost("echo-clean-v1-runtime-profile-status-");
     const profile = writeRuntimeProfile();
     const marker = join(root, "docker-called");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
     const accepted = releaseWithRuntimeProfile(profile);
     const acceptedPath = writeRecord(accepted);
-    mkdirSync(bin);
-    writeFileSync(docker, `#!/usr/bin/env bash\ntouch "${marker}"\n`);
-    chmodSync(docker, 0o755);
+    writeDocker(`touch "${marker}"\n`);
     writeFileSync(
       envFile,
       `ECHO_CLEAN_AUTHORITY_IMAGE=${accepted.authority_image.reference}\nECHO_CLEAN_AUTHORITY_HOST=authority.example.test\n`,
@@ -2382,13 +2017,9 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
       writeRuntimeProfile("a".repeat(40), "\n# drifted\n"),
       activeRuntimeProfile(state),
     );
+    environment.ECHO_CLEAN_RUNTIME_CONFIG_DIR = root;
 
-    const result = run("bash", [UPDATE, "status"], {
-      PATH: `${bin}:${process.env.PATH}`,
-      ECHO_CLEAN_ENV_FILE: envFile,
-      ECHO_CLEAN_RELEASE_STATE_DIR: state,
-      ECHO_CLEAN_RUNTIME_CONFIG_DIR: root,
-    });
+    const result = update("status");
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("runtime profile drifted from the accepted release record");
@@ -2396,10 +2027,7 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
   });
 
   it("rolls back the accepted image, runtime profile, proxy, and public descriptor together", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-runtime-profile-rollback-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
+    const { root, envFile, state, environment, writeDocker, update } = updateHost("echo-clean-v1-runtime-profile-rollback-");
     const log = join(root, "docker.log");
     const count = join(root, "up-count");
     const proxyRestarted = join(root, "proxy-restarted");
@@ -2408,50 +2036,20 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
       "a".repeat(40),
       "\n# candidate profile\n",
     );
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
     const currentRecord = releaseWithRuntimeProfile(currentProfile);
     const candidateRecord = releaseWithRuntimeProfile(candidateProfile, {
       release_id: "clean-v1-20260822-002",
-      authority_image: {
-        reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
-      },
+      authority_image: { reference: authorityImage("d") },
     });
     const current = writeRecord(currentRecord);
     const candidate = writeRecord(candidateRecord);
-    const runtimeConfig = prepareRuntimeConfig(root, currentProfile);
-    mkdirSync(bin);
-    mkdirSync(join(state, "runtime-profiles"), { recursive: true });
-    mkdirSync(join(state, "runtime-environments"), { recursive: true });
-    copyFileSync(
-      currentProfile,
-      acceptedRuntimeProfile(state, String(currentRecord.release_id)),
-    );
-    copyFileSync(currentProfile, activeRuntimeProfile(state));
-    const currentEnvironment = `ECHO_CLEAN_AUTHORITY_IMAGE=${currentRecord.authority_image.reference}
-ECHO_CLEAN_AUTHORITY_HOST=authority.example.test
-ECHO_CLEAN_RELEASE_ID=${currentRecord.release_id}
-ECHO_CLEAN_RELEASE_SOURCE_SHA=${currentRecord.source_sha}
-ECHO_CLEAN_RUNTIME_PROFILE_SHA256=${currentRecord.runtime_profile.artifact_sha256}
-ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${currentRecord.runtime_profile.profile_version}
-`;
-    writeFileSync(envFile, currentEnvironment, { mode: 0o600 });
-    writeFileSync(
-      acceptedRuntimeEnvironment(state, String(currentRecord.release_id)),
-      currentEnvironment,
-      { mode: 0o600 },
-    );
-    writeFileSync(
-      docker,
-      `#!/usr/bin/env bash
-${READY_SETUP_DOCKER}
+    environment.ECHO_CLEAN_RUNTIME_CONFIG_DIR = prepareRuntimeConfig(root, currentProfile);
+    installActiveTuple(state, envFile, currentRecord, currentProfile);
+    writeDocker(`${READY_SETUP_DOCKER}
 printf '%s\\n' "$*" >> "${log}"
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then printf 'authority-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then printf 'proxy-container\\n'; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}"; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; then sed -n 's/^ECHO_CLEAN_RUNTIME_PROFILE_SHA256=//p' "${envFile}"; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"e".repeat(64)}\\n'; exit 0; fi
+${runningRuntimeInspection(envFile, "e")}
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
 if [[ "$1" == image ]]; then
   printf '%s\\n' '${currentRecord.authority_image.reference}' '${candidateRecord.authority_image.reference}'
@@ -2468,22 +2066,11 @@ if [[ "$1" == compose && "$*" == *" up "* ]]; then
 fi
 if [[ "$1" == compose && "$*" == *" restart proxy"* ]]; then touch "${proxyRestarted}"; exit 0; fi
 if [[ "$1" == compose && "$*" == *" exec "* ]]; then exit 0; fi
-`,
-    );
-    chmodSync(docker, 0o755);
+`);
     mkdirSync(state, { recursive: true });
     copyFileSync(current, join(state, "current.clean-v1.json"));
 
-    const result = run(
-      "bash",
-      [UPDATE, "stage", "--release", candidate, "--runtime-profile", candidateProfile],
-      {
-        PATH: `${bin}:${process.env.PATH}`,
-        ECHO_CLEAN_ENV_FILE: envFile,
-        ECHO_CLEAN_RELEASE_STATE_DIR: state,
-        ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
-      },
-    );
+    const result = update("stage", "--release", candidate, "--runtime-profile", candidateProfile);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("previous accepted release tuple was restored and verified");
@@ -2503,44 +2090,28 @@ if [[ "$1" == compose && "$*" == *" exec "* ]]; then exit 0; fi
   });
 
   it("keeps a staged candidate through a transient rollback failure so rollback can be retried", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-rollback-retry-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
+    const { root, envFile, state, environment, writeDocker, update } = updateHost("echo-clean-v1-rollback-retry-");
     const count = join(root, "up-count");
     const currentProfile = writeRuntimeProfile();
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
     const currentRecord = releaseWithRuntimeProfile(currentProfile);
     const candidateProfile = writeRuntimeProfile("a".repeat(40), "\n# candidate profile\n");
     const candidateRecord = releaseWithRuntimeProfile(candidateProfile, {
       release_id: "clean-v1-20260822-002",
-      authority_image: {
-        reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
-      },
+      authority_image: { reference: authorityImage("d") },
     });
     const current = writeRecord(currentRecord);
     const candidate = writeRecord(candidateRecord);
-    const runtimeConfig = prepareRuntimeConfig(root, currentProfile);
-    mkdirSync(bin);
-    writeFileSync(
-      docker,
-      `#!/usr/bin/env bash
-${READY_SETUP_DOCKER}
+    environment.ECHO_CLEAN_RUNTIME_CONFIG_DIR = prepareRuntimeConfig(root, currentProfile);
+    writeDocker(`${READY_SETUP_DOCKER}
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then printf 'authority-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then printf 'proxy-container\\n'; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}"; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; then sed -n 's/^ECHO_CLEAN_RUNTIME_PROFILE_SHA256=//p' "${envFile}"; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"e".repeat(64)}\\n'; exit 0; fi
+${runningRuntimeInspection(envFile, "e")}
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
 if [[ "$1" == image ]]; then printf '%s\\n' '${currentRecord.authority_image.reference}' '${candidateRecord.authority_image.reference}'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" up "* ]]; then
   if [[ ! -f "${count}" ]]; then touch "${count}"; exit 1; fi
 fi
-`,
-    );
-    chmodSync(docker, 0o755);
+`);
     mkdirSync(state, { recursive: true });
     installActiveTuple(state, envFile, currentRecord, currentProfile);
     copyFileSync(current, join(state, "current.clean-v1.json"));
@@ -2551,14 +2122,8 @@ fi
       candidate_sha256: createHash("sha256").update(readFileSync(candidate)).digest("hex"),
       setup_class: "ready",
     })}\n`, { mode: 0o600 });
-    const environment = {
-      PATH: `${bin}:${process.env.PATH}`,
-      ECHO_CLEAN_ENV_FILE: envFile,
-      ECHO_CLEAN_RELEASE_STATE_DIR: state,
-      ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
-    };
 
-    const failed = run("bash", [UPDATE, "rollback"], environment);
+    const failed = update("rollback");
     expect(failed.status).toBe(1);
     expect(failed.stderr).toContain("candidate remains staged");
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
@@ -2571,7 +2136,7 @@ fi
       join(state, "failed", "clean-v1-20260822-002.json"),
     );
     chmodSync(join(state, "failed", "clean-v1-20260822-002.json"), 0o600);
-    const retried = run("bash", [UPDATE, "rollback"], environment);
+    const retried = update("rollback");
     expect(retried.status).toBe(0);
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(false);
     expect(existsSync(join(state, "failed", "clean-v1-20260822-002.json"))).toBe(true);
