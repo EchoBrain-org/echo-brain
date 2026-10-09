@@ -10,7 +10,8 @@ import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from '../src/comp
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from '../../../tests/support/telemetry-fixture-vocabulary-v1.js';
 
 import { SqliteTriggerRunsV1, enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
-import { createPersonTriggerRunsV1, readStoredImpactCardV1 } from '../src/composition/person-trigger-runs-v1.js';
+import { readStoredImpactCardV1 } from '../src/composition/person-stored-impact-card-v1.js';
+import { createPersonTriggerRunsV1 } from '../src/composition/person-trigger-runs-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
 import { openItemsFixture } from './fixtures/open-items.js';
@@ -44,7 +45,7 @@ async function fixture(options: { readonly anchor?: () => typeof record; readonl
     record_sha256s.map(sha => [sha, { approval_id: f.approvalId, record_sha256: sha, title: 'Approved display', approved_at: now.toISOString(), project_ids: [] }] as const));
   const diagnostics = createPersonDiagnosticsV1({ sessions: { authenticateAccess: ({ access_token }) => auth(access_token) } });
   captures.push(diagnostics);
-  const create = (serviceRuns: SqliteTriggerRunsV1 = runs) => createPersonTriggerRunsV1({ runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordProjects: () => [], readableDecisions: readableDecisions as never }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000,
+  const create = (serviceRuns: SqliteTriggerRunsV1 = runs) => createPersonTriggerRunsV1({ runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordProjects: () => [], readableDecisions: readableDecisions as never, projectRecords: () => [] }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000,
     items: new SqliteImpactItemsV1(f.db, () => now), people: new SqliteOpenItemPeopleV1(f.db) });
   const app = create();
   const settled = async () => await vi.waitFor(() => expect(runs.read(f.person, row.run_id)!.state).not.toBe('running'));
@@ -67,6 +68,32 @@ describe('durable approved-record trigger runs', () => {
     await expect(f.app.view({ access_token: 'other', request: { schema_version: 1, operation: 'view', run_id: f.row.run_id } })).rejects.toMatchObject({ code: 'not_found' });
     await expect(f.app.retry({ access_token: 'other', request: { schema_version: 1, operation: 'retry', run_id: f.row.run_id } })).rejects.toMatchObject({ code: 'not_found' });
     await expect(f.app.list({ access_token: 'other' })).resolves.toEqual({ runs: [] });
+  });
+
+  it('lists at most the 20 newest sweeps, so they never push an impact run off the list', async () => {
+    const f = await fixture();
+    // An older impact check that failed: its Try again row must stay listed.
+    const impact = f.runs.claim(f.person, f.row.run_id, 60_000);
+    if (impact.kind !== 'claimed') throw new Error('expected lease');
+    expect(f.runs.fail(f.row.run_id, impact.lease_token, 'research_failed')).toBe(true);
+    const sweeps: string[] = [];
+    for (let index = 0; index < 30; index++) {
+      f.advance(1_000);
+      const sweep = f.runs.enqueueSweep(f.person, { kind: 'mine' });
+      const lease = f.runs.claim(f.person, sweep.run_id, 60_000);
+      if (lease.kind !== 'claimed' || !f.runs.fail(sweep.run_id, lease.lease_token, 'unavailable')) throw new Error('expected a failed sweep');
+      sweeps.push(sweep.run_id);
+    }
+    // A newer approval's impact check, queued after them all.
+    f.advance(1_000);
+    const other = await f.otherProposal();
+    f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: 'approve-other' }), () => f.session);
+    await f.publisher([enqueueApprovedRecordRunV1(f.runs)]).appendFinalizedApprovalsToV4(new AbortController().signal);
+    const newer = f.runs.list(f.person, 1, 'approved_record')[0]!.run_id;
+    const { runs } = await f.app.list({ access_token: 'approver' });
+    // Newest first overall, as before: the 20 newest sweeps among the impact runs.
+    expect(runs.map(run => run.run_id)).toEqual([newer, ...sweeps.slice(-20).reverse(), f.row.run_id]);
+    expect(runs.at(-1)).toMatchObject({ trigger: 'approved_record', state: 'failed', error_code: 'research_failed' });
   });
 
   it('captures one approved run with a linked background root and preserves its research outcome after committing output', async () => {
@@ -208,6 +235,26 @@ describe('open items written when an impact check finishes', () => {
     // One bulk assignee read, with the approver's own session.
     expect(f.jira_owners.assignees).toHaveBeenCalledTimes(1);
     expect(f.jira_owners.assignees).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'ari', ticket_ids: ['10012'] }));
+  });
+
+  it('reports a run whose attempt stopped without finishing as pending, without changing it, and starts it again (R60)', async () => {
+    const f = await openItemsFixture();
+    const mina = { organization_id: f.person.organization_id, principal_id: f.people.mina.principal_id, membership_id: f.membership('mina') };
+    // The Authority stops while Ari's impact check and Mina's sweep run.
+    if (f.runs.claim(f.person, f.runId, 60_000).kind !== 'claimed') throw new Error('expected lease');
+    const sweep = f.runs.enqueueSweep(mina, { kind: 'mine' });
+    if (f.runs.claim(mina, sweep.run_id, 60_000).kind !== 'claimed') throw new Error('expected lease');
+    const stage = async () => (await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record, summary_only: true } })).stages;
+    expect((await f.app.list({ access_token: 'ari' })).runs.map(run => run.state)).toEqual(['running']);
+    expect(await stage()).toMatchObject([{ run_id: f.runId, state: 'running' }]);
+    f.advance(60_001);
+    expect((await f.app.list({ access_token: 'ari' })).runs).toMatchObject([{ run_id: f.runId, trigger: 'approved_record', state: 'pending', error_code: null }]);
+    expect((await f.app.list({ access_token: 'mina' })).runs).toMatchObject([{ run_id: sweep.run_id, trigger: 'sweep', state: 'pending', error_code: null }]);
+    expect(await stage()).toMatchObject([{ run_id: f.runId, state: 'pending', error_code: null }]);
+    expect([f.runs.readUnfenced(f.runId)!.state, f.runs.readUnfenced(sweep.run_id)!.state]).toEqual(['running', 'running']);
+    // The desktop starts it again: claim takes over the lapsed attempt.
+    await expect(f.app.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id: f.runId } })).resolves.toEqual({ state: 'running' });
+    await vi.waitFor(() => expect(f.runs.read(f.person, f.runId)!.state).toBe('done'));
   });
 
   it('matches an ECHO action owner by a name exactly one active member holds', async () => {

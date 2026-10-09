@@ -24,12 +24,12 @@ import type { PersonAccessAuthorization } from '@echo-brain/organization-authori
 import { AuthorityOperationError, type AuthorityErrorCode } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { ImpactItemRowV1, ImpactItemStateV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
-import type { SqliteTriggerRunsV1, TriggerRunRowV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
+import { triggerRunStateAtV1, type SqliteTriggerRunsV1, type TriggerRunRowV1, type TriggerRunScopeV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
-import { openItemAccessV1, openItemSendAccessV1, type OpenItemAccessV1, type OpenItemFactsV1 } from './open-items-policy-v1.js';
+import { openItemAccessV1, openItemDecisionAccessV1, openItemSendAccessV1, type OpenItemAccessV1, type OpenItemFactsV1 } from './open-items-policy-v1.js';
 import type { bindPersonLiveEvidenceDeskV1, CreatePersonLiveAnswerRouteOptionsV1, PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
 import type { PersonReadableDecisionV1, PersonReadableDecisionsV1 } from './person-record-search-route.js';
-import { readStoredImpactCardV1 } from './person-trigger-runs-v1.js';
+import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
 
 /**
  * The shared open items on the runs API (open items and Home v1, sections 4,
@@ -44,18 +44,30 @@ import { readStoredImpactCardV1 } from './person-trigger-runs-v1.js';
  * access is `no_access`; anything else that stops a read (an outage, a rate
  * limit, a timeout) is `unavailable` and is reported without content, so an
  * outage is never shown as lost access.
+ *
+ * `sweep` asks for a sweep run of the open items the caller can see in a
+ * scope, and `home` says when one is due (section 6); the sweep run itself
+ * reads the same items through `sweepScopeOpenItemsV1`.
  */
-export interface CreatePersonOpenItemsV1Options {
+export interface CreatePersonOpenItemsV1Options extends OpenItemSourcesV1 {
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
   readonly runs: SqliteTriggerRunsV1;
   readonly items: SqliteImpactItemsV1;
   readonly people: SqliteOpenItemPeopleV1;
-  readonly records: PersonReadableDecisionsV1;
   /** Kept injectable for focused service tests, as the runs service keeps it. */
   readonly bindDesk: typeof bindPersonLiveEvidenceDeskV1;
   readonly bind_options: CreatePersonLiveAnswerRouteOptionsV1;
   readonly live_sources?: CreatePersonLiveAnswerRouteOptionsV1['live_sources'];
-  /** Where a failed live read is reported; one line of JSON on standard error by default. */
+  /** The clock Home tells a stale check and a recent sweep by, and a stage a lapsed lease. */
+  readonly now?: () => Date;
+}
+/** Where open items, the facts the policy weighs for them, and each decision's first line are read. */
+export interface OpenItemSourcesV1 {
+  readonly runs: Pick<SqliteTriggerRunsV1, 'readUnfenced'>;
+  readonly items: Pick<SqliteImpactItemsV1, 'involving' | 'forRecords'>;
+  readonly people: Pick<SqliteOpenItemPeopleV1, 'people' | 'leadsAny'>;
+  readonly records: PersonReadableDecisionsV1;
+  /** Where a failed live read, or a stored card whose first line cannot be read, is reported; one line of JSON on standard error by default. */
   readonly on_live_failure?: (event: OpenItemsLiveFailureV1) => void;
 }
 /**
@@ -71,14 +83,20 @@ export interface OpenItemsLiveFailureV1 {
 }
 export type PersonOpenItemsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'home' | 'items' | 'item' | 'send' | 'set_state' | 'assign' | 'sweep'>;
 
+/** The signed-in person an open-items read is for. */
+export interface OpenItemViewerV1 { readonly token: string; readonly authorization: PersonAccessAuthorization; readonly organization: string; readonly principal: string; readonly membership: string }
+/** One row with the facts the policy was given and its answer. */
+export interface AssessedOpenItemV1 { readonly row: ImpactItemRowV1; readonly facts: OpenItemFactsV1; readonly access: OpenItemAccessV1 }
+/** Rows assessed for one viewer, with the decisions the viewer reads now and the people the rows name. */
+export interface OpenItemsContextV1 { readonly decisions: ReadonlyMap<Sha256Digest, PersonReadableDecisionV1>; readonly people: People; readonly assessed: readonly AssessedOpenItemV1[] }
+
 type Desk = Awaited<ReturnType<typeof bindPersonLiveEvidenceDeskV1>>;
 type DeskItem = Awaited<ReturnType<NonNullable<Desk['openCitation']>>>['items'][number];
 type Pointer = ImpactItemRowV1['pointer'];
 type People = ReturnType<SqliteOpenItemPeopleV1['people']>;
-interface Viewer { readonly token: string; readonly authorization: PersonAccessAuthorization; readonly organization: string; readonly principal: string; readonly membership: string }
-/** One row with the facts the policy was given and its answer. */
-interface Assessed { readonly row: ImpactItemRowV1; readonly facts: OpenItemFactsV1; readonly access: OpenItemAccessV1 }
-interface Context { readonly decisions: ReadonlyMap<Sha256Digest, PersonReadableDecisionV1>; readonly people: People; readonly assessed: readonly Assessed[] }
+type Viewer = OpenItemViewerV1;
+type Assessed = AssessedOpenItemV1;
+type Context = OpenItemsContextV1;
 /** How one item's live read went: the item read, or why there is none. An item no read was tried for has no entry. */
 type LiveRead = { readonly reach: 'opened'; readonly item: DeskItem } | { readonly reach: 'no_access' | 'unavailable' };
 
@@ -106,6 +124,9 @@ const UNKNOWN_MEMBER = 'Unknown member';
 const ERROR_CODES: readonly AuthorityErrorCode[] = ['conflict', 'invalid_request', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable'];
 /** A desk that refuses an item with one of these refused the viewer's access to it; any other failure says nothing about access. */
 const ACCESS_REFUSED: readonly AuthorityErrorCode[] = ['unauthorized', 'not_found', 'stale_access_state'];
+/** A last check older than a day makes a sweep due; a person's sweep is asked for at most hourly (R32). */
+const DAY_MS = 24 * 3_600_000;
+const HOUR_MS = 3_600_000;
 
 const notFound = () => new AuthorityOperationError('not_found', 'item is not available');
 /** An error's Authority code, or `error`. */
@@ -120,22 +141,13 @@ function invalidOutput(): never {
 }
 
 /** The tool an item lives in, from its stored pointer. */
-function kindOf(pointer: Pointer): PersonOpenItemKindV1 {
+export function openItemKindV1(pointer: Pointer): PersonOpenItemKindV1 {
   switch (pointer.kind) {
     case 'ticket': case 'page': case 'slack_message': return pointer.kind;
     case 'approved_record': return 'record';
     case 'source_revision': return 'document';
     default: return invalidOutput();
   }
-}
-
-/**
- * The item has gone to its owner (R13). Send stamps an item it leaves
- * unticked `not_relevant` at the same instant as its `sent_at`; an item sent
- * and closed later has a later `state_set_at`.
- */
-function sentToOwner(row: ImpactItemRowV1): boolean {
-  return row.state === 'open' || row.state === 'done' || (row.state === 'not_relevant' && row.state_set_at !== row.sent_at);
 }
 
 /** Code point order, as SQLite's binary collation and canonical ISO times order. */
@@ -204,76 +216,126 @@ function checkedItem(item: PersonOpenItemV1, unshowable: () => void): PersonOpen
   return invalidOutput();
 }
 
-export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options): PersonOpenItemsApplicationV1 {
-  const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= 6);
-  const viewerOf = (access_token: string, signal?: AbortSignal): Viewer => {
-    signal?.throwIfAborted();
-    const authorization = options.sessions.authenticateAccess({ access_token });
-    return { token: access_token, authorization, organization: authorization.organization_id, principal: authorization.principal_id, membership: authorization.membership_id };
-  };
-  const observe = options.on_live_failure ?? ((event: OpenItemsLiveFailureV1) => { console.error(JSON.stringify(event)); });
-  /** Where a read failed and the error's code, nothing else. An observer that fails never fails the read. */
-  const report = (reason: OpenItemsLiveFailureV1['reason'], code: string): void => {
-    try { observe(Object.freeze({ kind: 'open_items_live_read' as const, reason, code })); } catch { /* observation only */ }
-  };
-  const approvedBy = (row: ImpactItemRowV1, viewer: Viewer) => row.approver.membership_id === viewer.membership && row.approver.principal_id === viewer.principal;
-  /** The run was made for the viewer: they approved its decision. */
-  const runFor = (run: TriggerRunRowV1, viewer: Viewer) => run.actor.membership_id === viewer.membership && run.actor.principal_id === viewer.principal;
-  const requestContext = (viewer: Viewer): PersonLiveRequestContextV1 => ({
-    authority_id: options.bind_options.authority_id, organization_id: viewer.organization, state_lineage_id: options.bind_options.state_lineage_id,
-    principal_id: viewer.principal, membership_id: viewer.membership, session_family_id: viewer.authorization.session_family_id, request_id: `open_items_${randomUUID()}`,
-  });
+/** Where a read failed and the error's code, nothing else. An observer that fails never fails the read. */
+function reportLiveFailure(sources: Pick<OpenItemSourcesV1, 'on_live_failure'>, reason: OpenItemsLiveFailureV1['reason'], code: string): void {
+  const event = Object.freeze({ kind: 'open_items_live_read' as const, reason, code });
+  try { (sources.on_live_failure ?? (value => { console.error(JSON.stringify(value)); }))(event); } catch { /* observation only */ }
+}
 
-  /**
-   * The policy's facts and answer for each row, with no live read: which
-   * decisions the viewer reads now, who is still an active member, and
-   * whether the viewer leads one of a decision's projects.
-   */
-  const assess = (viewer: Viewer, found: readonly ImpactItemRowV1[], scopeRecords: readonly Sha256Digest[] = []): Context => {
-    const rows = found.filter(row => row.organization_id === viewer.organization);
-    const records = [...new Set([...rows.map(row => row.record_sha256), ...scopeRecords])];
-    const decisions = records.length === 0 ? new Map<Sha256Digest, PersonReadableDecisionV1>() : options.records.readableDecisions({ access_token: viewer.token, record_sha256s: records });
-    const people = options.people.people(viewer.organization, [...new Set(rows.flatMap(row => [row.approver.membership_id, row.owner_membership_id, ...(row.check === null ? [] : [row.check.by])]))]);
-    const leads = new Map<Sha256Digest, boolean>();
-    const leadsDecision = (record: Sha256Digest): boolean => {
-      if (!leads.has(record)) {
-        const decision = decisions.get(record);
-        leads.set(record, decision !== undefined && options.people.leadsAny(viewer.membership, decision.project_ids));
-      }
-      return leads.get(record)!;
-    };
-    const assessed = rows.map(row => {
-      const facts: OpenItemFactsV1 = Object.freeze({
-        viewer: viewer.membership, approver: row.approver.membership_id, owner: row.owner_membership_id,
-        approver_active: people.get(row.approver.membership_id)?.active === true, owner_active: people.get(row.owner_membership_id)?.active === true,
-        sent_to_owner: sentToOwner(row), state: row.state,
-        reads_decision: decisions.has(row.record_sha256), leads_decision_project: leadsDecision(row.record_sha256),
-      });
-      return Object.freeze({ row, facts, access: openItemAccessV1(facts) });
+/** The person an open-items read is for, as their session authorized them. */
+export function openItemViewerV1(token: string, authorization: PersonAccessAuthorization): OpenItemViewerV1 {
+  return Object.freeze({ token, authorization, organization: authorization.organization_id, principal: authorization.principal_id, membership: authorization.membership_id });
+}
+/** The viewer approved the item's decision: they sent it, once it is open. */
+function approvedBy(row: ImpactItemRowV1, viewer: Viewer): boolean {
+  return row.approver.membership_id === viewer.membership && row.approver.principal_id === viewer.principal;
+}
+
+/**
+ * The policy's facts and answer for each row, with no live read: which
+ * decisions the viewer reads now, who is still an active member, whether the
+ * viewer leads one of a decision's projects, and whether the item reached its owner.
+ */
+export function assessOpenItemsV1(sources: Pick<OpenItemSourcesV1, 'records' | 'people'>, viewer: Viewer, found: readonly ImpactItemRowV1[], scopeRecords: readonly Sha256Digest[] = []): Context {
+  const rows = found.filter(row => row.organization_id === viewer.organization);
+  const records = [...new Set([...rows.map(row => row.record_sha256), ...scopeRecords])];
+  const decisions = records.length === 0 ? new Map<Sha256Digest, PersonReadableDecisionV1>() : sources.records.readableDecisions({ access_token: viewer.token, record_sha256s: records });
+  const people = sources.people.people(viewer.organization, [...new Set(rows.flatMap(row => [row.approver.membership_id, row.owner_membership_id, ...(row.check === null ? [] : [row.check.by])]))]);
+  const leads = new Map<Sha256Digest, boolean>();
+  const leadsDecision = (record: Sha256Digest): boolean => {
+    if (!leads.has(record)) {
+      const decision = decisions.get(record);
+      leads.set(record, decision !== undefined && sources.people.leadsAny(viewer.membership, decision.project_ids));
+    }
+    return leads.get(record)!;
+  };
+  const assessed = rows.map(row => {
+    const facts: OpenItemFactsV1 = Object.freeze({
+      viewer: viewer.membership, approver: row.approver.membership_id, owner: row.owner_membership_id,
+      approver_active: people.get(row.approver.membership_id)?.active === true, owner_active: people.get(row.owner_membership_id)?.active === true,
+      // Sent, and Send included it, or it was reopened since: an open item waits on an owner who must be able to see it (R54).
+      sent_to_owner: row.sent_at !== null && (row.send_included === true || row.state === 'open' || row.state === 'done'), state: row.state,
+      reads_decision: decisions.has(row.record_sha256), leads_decision_project: leadsDecision(row.record_sha256),
     });
-    return { decisions, people, assessed };
-  };
+    return Object.freeze({ row, facts, access: openItemAccessV1(facts) });
+  });
+  return { decisions, people, assessed };
+}
 
-  /** The impact card's first decided line, read once per run; only ever shown to a decision reader. */
-  const firstLines = () => {
-    const lines = new Map<string, string | null>();
-    return (run: TriggerRunRowV1 | string): string | null => {
-      const runId = typeof run === 'string' ? run : run.run_id;
-      if (!lines.has(runId)) {
-        const row = typeof run === 'string' ? options.runs.readUnfenced(run) : run;
-        let line: string | null = null;
-        try { if (row?.result_json !== null && row?.result_json !== undefined) line = readStoredImpactCardV1(row.result_json).decided[0]?.text ?? null; }
-        catch (error) { report('first_line', codeOf(error)); line = null; }
-        lines.set(runId, line);
-      }
-      return lines.get(runId)!;
-    };
+/** The impact card's first decided line, read once per run; only ever shown to a decision reader. A card that cannot be read gives none and is reported. */
+function firstDecidedLines(sources: Pick<OpenItemSourcesV1, 'runs' | 'on_live_failure'>) {
+  const lines = new Map<string, string | null>();
+  return (run: TriggerRunRowV1 | string): string | null => {
+    const runId = typeof run === 'string' ? run : run.run_id;
+    if (!lines.has(runId)) {
+      const row = typeof run === 'string' ? sources.runs.readUnfenced(run) : run;
+      let line: string | null = null;
+      try { if (row?.result_json !== null && row?.result_json !== undefined) line = readStoredImpactCardV1(row.result_json).decided[0]?.text ?? null; }
+      catch (error) { reportLiveFailure(sources, 'first_line', codeOf(error)); line = null; }
+      lines.set(runId, line);
+    }
+    return lines.get(runId)!;
   };
-  const decisionOf = (decision: PersonReadableDecisionV1, first_line: string | null): PersonOpenItemDecisionV1 => Object.freeze({
+}
+function decisionOf(decision: PersonReadableDecisionV1, first_line: string | null): PersonOpenItemDecisionV1 {
+  return Object.freeze({
     approval_id: decision.approval_id, record_sha256: decision.record_sha256,
     title: impactCardLineV1(decision.title, LIMITS.name_chars) || 'Approved meeting', first_line, approved_at: decision.approved_at,
     project_ids: Object.freeze(decision.project_ids.slice(0, PERSON_UPLOAD_PROJECT_SET_MAX)),
   });
+}
+/**
+ * Each row's decision part (its title, first decided line, approval time and
+ * projects), exactly when the policy shows the viewer the decision. Each
+ * run's stored card is read once.
+ */
+export function openItemDecisionPartsV1(sources: Pick<OpenItemSourcesV1, 'runs' | 'on_live_failure'>, context: Pick<Context, 'decisions'>): (entry: Assessed) => PersonOpenItemDecisionV1 | undefined {
+  const firstLine = firstDecidedLines(sources);
+  return ({ row, access }) => {
+    const decision = access.see_decision ? context.decisions.get(row.record_sha256) : undefined;
+    return decision === undefined ? undefined : decisionOf(decision, firstLine(row.run_id));
+  };
+}
+
+/**
+ * The open items a sweep of `scope` rechecks for this viewer (section 6):
+ * open, and shown to the viewer by the policy. `mine` is what they sent or
+ * own; a decision's or a project's are its items the viewer sees, as `items`
+ * shows them. `assessed` holds those items only.
+ */
+export function sweepScopeOpenItemsV1(sources: OpenItemSourcesV1, viewer: Viewer, scope: TriggerRunScopeV1): Context {
+  let rows: readonly ImpactItemRowV1[];
+  switch (scope.kind) {
+    case 'mine':
+      rows = sources.items.involving(viewer.organization, viewer.membership, { states: ['open'], limit: INVOLVING_MAX })
+        .filter(row => approvedBy(row, viewer) || row.owner_membership_id === viewer.membership);
+      break;
+    case 'record':
+      rows = sources.items.forRecords([scope.record_sha256], { states: ['open'], limit: SCOPE_ROWS_MAX });
+      break;
+    default:
+      rows = sources.items.forRecords(sources.records.projectRecords({ access_token: viewer.token, project_id: scope.project_id, limit: PROJECT_RECORDS_MAX }), { states: ['open'], limit: SCOPE_ROWS_MAX });
+  }
+  const context = assessOpenItemsV1(sources, viewer, rows);
+  return { ...context, assessed: context.assessed.filter(entry => entry.access.see_row) };
+}
+
+export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options): PersonOpenItemsApplicationV1 {
+  const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= 6);
+  const now = options.now ?? (() => new Date());
+  const viewerOf = (access_token: string, signal?: AbortSignal): Viewer => {
+    signal?.throwIfAborted();
+    return openItemViewerV1(access_token, options.sessions.authenticateAccess({ access_token }));
+  };
+  const report = (reason: OpenItemsLiveFailureV1['reason'], code: string): void => reportLiveFailure(options, reason, code);
+  /** The run was made for the viewer: they approved its decision. */
+  const runFor = (run: TriggerRunRowV1, viewer: Viewer) => run.actor.membership_id === viewer.membership && run.actor.principal_id === viewer.principal;
+  const actorOf = (viewer: Viewer) => ({ organization_id: viewer.organization, principal_id: viewer.principal, membership_id: viewer.membership });
+  const requestContext = (viewer: Viewer): PersonLiveRequestContextV1 => ({
+    authority_id: options.bind_options.authority_id, organization_id: viewer.organization, state_lineage_id: options.bind_options.state_lineage_id,
+    principal_id: viewer.principal, membership_id: viewer.membership, session_family_id: viewer.authorization.session_family_id, request_id: `open_items_${randomUUID()}`,
+  });
+  const assess = (viewer: Viewer, found: readonly ImpactItemRowV1[], scopeRecords: readonly Sha256Digest[] = []): Context => assessOpenItemsV1(options, viewer, found, scopeRecords);
 
   /**
    * One desk for the request, bound to the viewer in the global scope; each
@@ -326,9 +388,10 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
   /** Rows the policy lets the viewer see, as the API carries them, with live parts from one open each. */
   const present = async (viewer: Viewer, context: Context, shown: readonly Assessed[], signal?: AbortSignal): Promise<readonly PersonOpenItemV1[]> => {
     const reads = await openLive(viewer, shown.map(entry => entry.row), signal);
-    const firstLine = firstLines();
+    const decisionPart = openItemDecisionPartsV1(options, context);
     const unshowable = () => report('open', 'invalid_output');
-    return Object.freeze(shown.map(({ row, facts }) => {
+    return Object.freeze(shown.map(entry => {
+      const { row, facts } = entry;
       const read = reads.get(row.item_key);
       // The policy hears whether the viewer opened the item in this request; nothing, when no open was tried.
       const access = openItemAccessV1(read === undefined ? facts : { ...facts, opens_item: read.reach === 'opened' });
@@ -337,10 +400,10 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       if (read?.reach === 'opened' && access.see_outside && current === undefined) unshowable();
       const reach: PersonOpenItemReachV1 = read === undefined ? 'not_read' : read.reach !== 'opened' ? read.reach
         : !access.see_outside ? 'no_access' : current === undefined ? 'unavailable' : 'opened';
-      const decision = access.see_decision ? context.decisions.get(row.record_sha256) : undefined;
+      const decision = decisionPart(entry);
       return checkedItem({
-        item_id: row.item_id, run_id: row.run_id, kind: kindOf(row.pointer),
-        ...(decision === undefined ? {} : { decision: decisionOf(decision, firstLine(row.run_id)) }),
+        item_id: row.item_id, run_id: row.run_id, kind: openItemKindV1(row.pointer),
+        ...(decision === undefined ? {} : { decision }),
         ...(current === undefined ? {} : { current }),
         relation: row.relation, expected: row.expected,
         approver: personOf(context.people, row.approver.membership_id),
@@ -375,7 +438,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
   return Object.freeze({
     async home(input: Parameters<PersonOpenItemsApplicationV1['home']>[0]) {
       const viewer = viewerOf(input.access_token, input.signal);
-      const actor = { organization_id: viewer.organization, principal_id: viewer.principal, membership_id: viewer.membership };
+      const actor = actorOf(viewer);
       const unsent = options.items.involving(viewer.organization, viewer.membership, { states: ['unsent'], limit: INVOLVING_MAX }).filter(row => approvedBy(row, viewer));
       const open = new Map<string, ImpactItemRowV1>();
       // Leads take an item when its approver and owner have both left.
@@ -383,7 +446,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         if (row.state === 'open') open.set(row.item_id, row);
       }
       const context = assess(viewer, [...unsent, ...open.values()]);
-      const firstLine = firstLines();
+      const firstLine = firstDecidedLines(options);
 
       // Send: the caller's own finished impact runs with an unsent item, which the send policy lets them send.
       const byRun = new Map<string, ImpactItemRowV1[]>();
@@ -392,13 +455,15 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       for (const [runId, rows] of byRun) {
         const run = options.runs.read(actor, runId);
         if (run === undefined || run.trigger !== 'approved_record' || run.state !== 'done' || run.record_sha256 === null) continue;
-        const decision = context.decisions.get(run.record_sha256);
-        const { send: sends } = openItemSendAccessV1({ viewer: viewer.membership, approver: run.actor.membership_id, reads_decision: decision !== undefined });
-        if (!sends || decision === undefined) continue;
+        const reads_decision = context.decisions.has(run.record_sha256);
+        const { send: sends } = openItemSendAccessV1({ viewer: viewer.membership, approver: run.actor.membership_id, reads_decision });
+        // A Send row names its decision, which only its sender, a reader, is shown.
+        const decision = sends && openItemDecisionAccessV1({ reads_decision }).see_decision ? context.decisions.get(run.record_sha256) : undefined;
+        if (decision === undefined) continue;
         const owners = [...new Set(rows.filter(row => row.owner_membership_id !== viewer.membership).map(row => nameOf(context.people, row.owner_membership_id)))];
         send.push(Object.freeze({
           run_id: runId, decision: decisionOf(decision, firstLine(run)), items: rows.length,
-          kinds: Object.freeze(KIND_ORDER.filter(kind => rows.some(row => kindOf(row.pointer) === kind))),
+          kinds: Object.freeze(KIND_ORDER.filter(kind => rows.some(row => openItemKindV1(row.pointer) === kind))),
           owners: Object.freeze(owners.sort((left, right) => left.localeCompare(right)).slice(0, LIMITS.affected)), finished_at: run.updated_at,
         }));
       }
@@ -414,12 +479,22 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // The footer counts open items the caller approved or owns, with no live read.
       const theirs = visible.filter(entry => approvedBy(entry.row, viewer) || entry.row.owner_membership_id === viewer.membership);
       const checks = theirs.flatMap(entry => (entry.row.check === null ? [] : [entry.row.check.at])).sort();
+
+      // A sweep is due (section 6) for one of those items that nobody checked in the last day, unless the caller asked for a sweep in
+      // the last hour (R32: one that keeps failing, or leaves items unassessed, is not asked for on every load) or one of theirs is
+      // running. A sweep still waiting after the hour lets the desktop ask again, which hands back that run to start (R58). Check now
+      // is the caller's own request, and never limited.
+      const time = now().getTime();
+      const dayAgo = new Date(time - DAY_MS).toISOString();
+      const stale = theirs.some(entry => entry.row.check === null || entry.row.check.at < dayAgo);
+      const newest = stale ? options.runs.newestSweep(actor) : undefined;
+      const sweep_due = stale && (newest === undefined || newest.created_at <= new Date(time - HOUR_MS).toISOString()) && options.runs.runningSweep(actor) === undefined;
       return checked('home', {
         send: send.slice(0, PERSON_HOME_ROWS_V1), items: await present(viewer, context, shown, input.signal),
         landed: theirs.filter(entry => entry.row.check?.verdict === 'landed').length,
         waiting: theirs.filter(entry => approvedBy(entry.row, viewer) && !entry.access.waits_on_viewer).length,
         last_checked_at: checks.at(-1) ?? null,
-        sweep_due: false, // Temporary until open items plan Task 11 serves sweeps and works out when one is due.
+        sweep_due,
       });
     },
 
@@ -479,14 +554,18 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
           .slice(0, SCOPE_DECISIONS_MAX).map(([record_sha256, counts]) => ({ record_sha256, unsent: counts.unsent, open: counts.open })),
       };
 
-      // Each decision's impact check stage, for the decisions in scope the viewer reads now.
-      const stageRecords = projectRecords ?? [...new Set([...scopeRecords, ...visible.map(entry => entry.row.record_sha256)])].filter(record => context.decisions.has(record));
+      // Each decision's impact check stage, for the decisions in scope the policy shows the viewer: a project lists the records they read now.
+      const listed = new Set(projectRecords ?? []);
+      const stageRecords = (projectRecords ?? [...new Set([...scopeRecords, ...visible.map(entry => entry.row.record_sha256)])])
+        .filter(record => openItemDecisionAccessV1({ reads_decision: listed.has(record) || context.decisions.has(record) }).see_decision);
       const latestRun = new Map<Sha256Digest, TriggerRunRowV1>();
       for (const run of options.runs.impactRunsFor(stageRecords)) if (run.record_sha256 !== null) latestRun.set(run.record_sha256, run);
+      // A check whose attempt stopped without finishing reads as pending, as its run is listed (R60).
+      const at = now().toISOString();
       const stages: PersonImpactStageV1[] = stageRecords.flatMap(record => {
         const run = latestRun.get(record);
         return run === undefined ? [] : [{
-          record_sha256: record, run_id: run.run_id, state: run.state, error_code: run.state === 'failed' ? run.error_code ?? 'research_failed' : null, mine: runFor(run, viewer),
+          record_sha256: record, run_id: run.run_id, state: triggerRunStateAtV1(run, at), error_code: run.state === 'failed' ? run.error_code ?? 'research_failed' : null, mine: runFor(run, viewer),
         }];
       }).slice(0, SCOPE_DECISIONS_MAX);
 
@@ -554,8 +633,14 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     },
 
     async sweep(input: Parameters<PersonOpenItemsApplicationV1['sweep']>[0]): Promise<PersonRunsResultsV1['sweep']> {
-      viewerOf(input.access_token, input.signal);
-      throw new AuthorityOperationError('unavailable', 'Sweep runs are not served yet'); // Temporary until open items plan Task 11 serves sweeps.
+      const viewer = viewerOf(input.access_token, input.signal);
+      const { request } = input;
+      const scope: TriggerRunScopeV1 = request.scope === 'mine' ? { kind: 'mine' }
+        : request.scope === 'record' ? { kind: 'record', record_sha256: request.id as Sha256Digest } : { kind: 'project', project_id: request.id! };
+      // A scope with nothing the caller can see to check queues nothing, and says nothing of whether its record or project exists.
+      if (sweepScopeOpenItemsV1(options, viewer, scope).assessed.length === 0) return checked('sweep', { state: 'nothing_to_check' });
+      // The caller's waiting or running sweep of the same scope, else a new one; the desktop starts it after any pending impact check.
+      return checked('sweep', { run_id: options.runs.enqueueSweep(actorOf(viewer), scope).run_id });
     },
   });
 }

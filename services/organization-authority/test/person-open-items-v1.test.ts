@@ -100,6 +100,9 @@ describe('open items: who sees what', () => {
     const f = await openItemsFixture();
     expect(await scope(f, 'mina', 'record')).toMatchObject({ items: [], stages: [{ record_sha256: f.record, run_id: f.runId, state: 'pending', error_code: null }] });
     expect((await scope(f, 'okafor', 'record')).stages).toEqual([]);
+    // A project's page shows the stage of every decision the reader reads there, items or none.
+    expect(await scope(f, 'mina', 'project')).toMatchObject({ items: [], stages: [{ record_sha256: f.record, run_id: f.runId, state: 'pending', error_code: null }] });
+    expect((await scope(f, 'okafor', 'project')).stages).toEqual([]);
   });
 
   it("says whose impact check a stage is: the approver's own, and no other reader's", async () => {
@@ -209,6 +212,23 @@ describe('open items: counts and live reads', () => {
     const rafael = (await f.app.items({ access_token: 'rafael', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record } })).items;
     expect(rafael.find(item => item.kind === 'ticket')).toMatchObject({ reach: 'no_access' });
     expect(failures).toHaveLength(1);                                       // a refusal is not an outage
+  });
+
+  // A refusal by the viewer's own access is no_access; anything else says nothing about access, and is reported without content.
+  it.each([
+    { name: 'unauthorized', error: new AuthorityOperationError('unauthorized', 'refused'), reach: 'no_access', code: null },
+    { name: 'not_found', error: new AuthorityOperationError('not_found', 'refused'), reach: 'no_access', code: null },
+    { name: 'stale_access_state', error: new AuthorityOperationError('stale_access_state', 'refused'), reach: 'no_access', code: null },
+    { name: 'rate_limited', error: new AuthorityOperationError('rate_limited', 'slow down'), reach: 'unavailable', code: 'rate_limited' },
+    { name: 'unavailable', error: new AuthorityOperationError('unavailable', 'down'), reach: 'unavailable', code: 'unavailable' },
+    { name: 'a timeout', error: new DOMException('The operation was aborted due to timeout', 'TimeoutError'), reach: 'unavailable', code: 'error' },
+    { name: 'a plain Error', error: new Error('ECHO-12 Kestrel cooling fan drift 0xC0FFEE failed'), reach: 'unavailable', code: 'error' },
+  ] as const)('reads $name from the desk as $reach', async ({ error, reach, code }) => {
+    const f = await openItemsFixture({ openFails: { ticket: error } }); await f.finishImpactRun();
+    const ticket = (await scope(f, 'mina', 'run')).items.find(entry => entry.kind === 'ticket')!;
+    expect(ticket.reach).toBe(reach);
+    expect(ticket).not.toHaveProperty('current');
+    expect(f.liveFailures).toEqual(code === null ? [] : [{ kind: 'open_items_live_read', reason: 'open', code }]);
   });
 
   it('logs a failed live read by default as one line of JSON, without an id, a title or the tool\'s words', async () => {
@@ -347,7 +367,7 @@ describe('open items: send, update, reassign', () => {
     expect(f.items.read(ticket!.item_id)).toMatchObject({ state: 'unsent', owner_match: 'jira_account' });
   });
 
-  it('hides an unticked item from an owner who cannot read the decision, and keeps one sent then closed (R13)', async () => {
+  it('hides an unticked item from an owner who cannot read the decision until it is reopened, and keeps one sent then closed (R13, R54)', async () => {
     const unticked = await openItemsFixture({ ticketOwner: 'okafor' }); await unticked.finishImpactRun();
     const unsent = (await scope(unticked, 'ari', 'run')).items;
     await expect(sendAll(unticked, unsent, 'c1', entry => ({ include: entry.kind !== 'ticket' }))).resolves.toEqual({ sent: 1, not_relevant: 1 });
@@ -359,6 +379,11 @@ describe('open items: send, update, reassign', () => {
     unticked.advance(5_000);
     await expect(setState(unticked, 'ari', hidden, 'not_relevant')).resolves.toEqual({ state: 'not_relevant' });
     expect((await scope(unticked, 'okafor', 'mine')).items).toEqual([]);
+    // The approver reopens it: it now waits on its owner, who sees it, though Send left it out (R54).
+    await expect(setState(unticked, 'ari', hidden, 'open')).resolves.toEqual({ state: 'open' });
+    expect((await unticked.app.home({ access_token: 'okafor' })).items).toMatchObject([{ item_id: hidden, state: 'open', waits_on: 'owner' }]);
+    expect((await scope(unticked, 'okafor', 'mine')).items.map(entry => entry.item_id)).toEqual([hidden]);
+    expect((await item(unticked, 'okafor', hidden)).item).not.toHaveProperty('decision');
 
     const closed = await sentFixture({ ticketOwner: 'okafor' });
     expect((await scope(closed, 'okafor', 'mine')).items.map(entry => entry.item_id)).toEqual([closed.ticket.item_id]);
@@ -415,16 +440,10 @@ describe('open items: Home', () => {
   });
 });
 
-describe('open items: sweep, until sweep runs are served (open items plan, Task 11)', () => {
-  it('refuses a sweep as unavailable once it knows the caller, and Home calls no sweep due', async () => {
+describe('open items: sweep requests', () => {
+  it('asks the caller who they are before anything else', async () => {
     const f = await sentFixture({ owner: 'mina' });
-    // Ari's sent items have never been checked: once sweeps are served, they are due one.
-    for (const request of [{ scope: 'mine' as const }, { scope: 'record' as const, id: f.record }, { scope: 'project' as const, id: f.projectA }]) {
-      await expect(f.openItemsApp.sweep({ access_token: 'ari', request: { schema_version: 1, operation: 'sweep', ...request } }))
-        .rejects.toMatchObject({ name: 'AuthorityOperationError', code: 'unavailable', message: 'Sweep runs are not served yet' });
-    }
     await expect(f.openItemsApp.sweep({ access_token: 'stranger', request: { schema_version: 1, operation: 'sweep', scope: 'mine' } })).rejects.toMatchObject({ code: 'unauthorized' });
-    expect((await f.app.home({ access_token: 'ari' })).sweep_due).toBe(false);
     expect(f.runs.list(f.person, 10).map(run => run.trigger)).toEqual(['approved_record']);
   });
 });
