@@ -1,6 +1,6 @@
--- Authority baseline V13: independent personal meeting-source progress, one approval proposal per meeting with one shared decision table,
+-- Authority baseline V14: independent personal meeting-source progress, one approval proposal per meeting with one shared decision table,
 -- plus project context, raw Person uploads, and optional search enrichment.
--- Fresh initialization only; no V12-to-V13 transition or backfill exists, and
+-- Fresh initialization only; no V13-to-V14 transition or backfill exists, and
 -- this file is never an in-place upgrade.
 
 CREATE TABLE authority_metadata (
@@ -2255,7 +2255,7 @@ BEGIN
    WHERE organization_id = OLD.organization_id;
 END;
 
-PRAGMA user_version = 13;
+PRAGMA user_version = 14;
 
 -- A malformed legacy retained note must not pin the source-admission worker.
 -- The disposition carries no title, body, request ID or exception text.

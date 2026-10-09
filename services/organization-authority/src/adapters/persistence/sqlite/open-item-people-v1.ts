@@ -12,8 +12,8 @@ function comparableName(value: string): string {
  */
 export class SqliteOpenItemPeopleV1 {
   constructor(private readonly database: Database.Database) {
-    if (database.pragma('user_version', { simple: true }) !== 13 || database.pragma('foreign_keys', { simple: true }) !== 1) {
-      throw new Error('Open item people require Authority V13 state with foreign keys enabled');
+    if (database.pragma('user_version', { simple: true }) !== 14 || database.pragma('foreign_keys', { simple: true }) !== 1) {
+      throw new Error('Open item people require Authority V14 state with foreign keys enabled');
     }
   }
 

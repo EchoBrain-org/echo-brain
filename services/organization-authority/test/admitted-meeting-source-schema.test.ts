@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV13,
+  applyAuthorityBaselineV14,
   AUTHORITY_BASELINE_APPLICATION_ID_V1,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V13,
-  authorityBaselineSha256V13,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V14,
+  authorityBaselineSha256V14,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
-const AUTHORITY_BASELINE_SHA256_V13 =
-  "sha256:9e3726b7b559664979e08ee32380fad94537e1633ae8a537fce758d526927049";
+const AUTHORITY_BASELINE_SHA256_V14 =
+  "sha256:8d305f9a5e843dc14e68ffd1ad8d2499949b7bcfbdf190f0eded90ecf78ee1be";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-29T00:00:00.000Z";
 /** A personal source key; the admission table keys every source by its own text key. */
@@ -20,7 +20,7 @@ afterEach(() => { for (const database of databases.splice(0)) database.close(); 
 function openedCurrentDatabase() {
   const database = openAuthorityDatabase(":memory:");
   databases.push(database);
-  applyAuthorityBaselineV13(database);
+  applyAuthorityBaselineV14(database);
   return database;
 }
 
@@ -101,12 +101,12 @@ describe("Authority admitted meeting-source schema", () => {
   });
   it("is a pinned fresh-only provider-neutral schema with stable role headers", () => {
     const database = openedCurrentDatabase();
-    expect(authorityBaselineSha256V13()).toBe(AUTHORITY_BASELINE_SHA256_V13);
+    expect(authorityBaselineSha256V14()).toBe(AUTHORITY_BASELINE_SHA256_V14);
     expect(database.pragma("application_id", { simple: true })).toBe(
       AUTHORITY_BASELINE_APPLICATION_ID_V1,
     );
     expect(database.pragma("user_version", { simple: true })).toBe(
-      AUTHORITY_BASELINE_SCHEMA_VERSION_V13,
+      AUTHORITY_BASELINE_SCHEMA_VERSION_V14,
     );
     const tables = database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -168,7 +168,7 @@ describe("Authority admitted meeting-source schema", () => {
 
   it("refuses to reinitialize an occupied database", () => {
     const database = openedCurrentDatabase();
-    expect(() => applyAuthorityBaselineV13(database)).toThrow(
+    expect(() => applyAuthorityBaselineV14(database)).toThrow(
       /completely empty database/,
     );
   });

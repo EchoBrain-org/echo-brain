@@ -3,7 +3,7 @@ import {
   OrganizationRecordAppenderV4,
   PersonRecordReaderV1,
 } from "@echo-brain/organization-record/organization-record-api-v1";
-import { applyAuthorityBaselineV13 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV14 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -63,7 +63,7 @@ describe("Person Layer 1 record list disclosure", () => {
   let response: PersonRecordReadResponseV1;
 
   beforeAll(async () => {
-    applyAuthorityBaselineV13(authorityDatabase);
+    applyAuthorityBaselineV14(authorityDatabase);
     const authority = protocolAuthority();
     const app = new OrganizationRecordAppenderV4(record, COORDINATES, SIGNED_APPROVAL_PROJECTORS);
     // Positions 1 and 3 are released to the member; position 2 is the owner's Only me record.

@@ -351,7 +351,7 @@ update the app. The compatibility DM-code challenge
 available as the fallback for a machine without a browser.
 
 After that setup, the ordinary release updater only replaces artifacts within
-the current lineage: Authority V13, control-plane V4,
+the current lineage: Authority V14, control-plane V4,
 record-log V4, retrieval facts V3, retrieval content/lexical V2, and a six-role
 V2 root. It refuses older or mixed persisted state before runtime,
 configuration, or state mutation. Use `replace-rehearsal --confirm-no-live-users`
@@ -415,7 +415,7 @@ organization.
 
 ### Replace unreleased rehearsal state
 
-The current release requires fresh Authority V13 state. It cannot start over
+The current release requires fresh Authority V14 state. It cannot start over
 an earlier rehearsal lineage. For disposable rehearsal state with no live users,
 retire it through the explicit initial-owner attestation:
 
@@ -461,7 +461,7 @@ re-stage it under a new operation ID, and delete any leftover captured
 On an onboarded staging Authority, the owner can submit a custom meeting through
 the installed Person CLI. Deploy a reviewed server and matching CLI that support
 this operation through the existing current-host release lane. It is additive to
-V13; no reset, Granola connection, host file copy, or source-profile change is
+V14; no reset, Granola connection, host file copy, or source-profile change is
 needed. Production does not mount the synthetic provider.
 
 Create a UTF-8 JSON file with exactly these four fields (48 KiB maximum):
@@ -740,7 +740,7 @@ one reservation and preserves the previous history.
 The private `state/extraction-attempts.sqlite` file is durable spend history.
 Keep it with the retained Authority state and backups; never delete it to clear
 a hold. Its schema and Authority lineage are checked on open. It is a separate
-versioned sidecar and does not migrate the V13 databases or require onboarding
+versioned sidecar and does not migrate the V14 databases or require onboarding
 to be repeated. Releases predating this guard do not enforce it; rolling back
 to those releases can resume repeated extraction calls.
 

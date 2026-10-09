@@ -63,7 +63,7 @@ function metadataV2(row: Row, association_project_ids: readonly ProjectIdV1[], p
 export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositoryV1 {
   readonly sourceAdmission: SqliteSourceAdmissionStoreV1;
   constructor(private readonly database: Database.Database, private readonly now: () => string = () => new Date().toISOString()) {
-    if (database.pragma('user_version', { simple: true }) !== 13 || database.pragma('foreign_keys', { simple: true }) !== 1) throw new Error('Documents require Authority V13 and foreign keys');
+    if (database.pragma('user_version', { simple: true }) !== 14 || database.pragma('foreign_keys', { simple: true }) !== 1) throw new Error('Documents require Authority V14 and foreign keys');
     // SQLite lower() only folds ASCII. Keep title filtering inside the paged,
     // authorized query while applying the same Unicode rules as request input.
     database.function('echo_document_title_contains_v1', { deterministic: true }, (title, query) =>

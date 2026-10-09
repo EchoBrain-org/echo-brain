@@ -57,8 +57,8 @@ export class SqlitePersonUpdateEnrichmentWorkV2 implements PersonUpdateEnrichmen
     private readonly authorization: ProjectUploadEnrichmentAuthorizationV1,
     private readonly now: () => string = () => new Date().toISOString(),
   ) {
-    if (database.pragma('user_version', { simple: true }) !== 13 || database.pragma('foreign_keys', { simple: true }) !== 1) {
-      throw new Error('V2 Person upload enrichment requires Authority V13 state with foreign keys enabled');
+    if (database.pragma('user_version', { simple: true }) !== 14 || database.pragma('foreign_keys', { simple: true }) !== 1) {
+      throw new Error('V2 Person upload enrichment requires Authority V14 state with foreign keys enabled');
     }
   }
 
