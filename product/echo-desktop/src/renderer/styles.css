@@ -525,8 +525,9 @@ button.toast:hover { background: #211f1f; }
 .need-side .asking { gap: 4px; }
 .home-clear { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 14px; color: var(--faint); }
 .home-clear svg { opacity: 0.6; }
-/* Under the rows, and under "Nothing needs you": what you sent that waits on others. */
-.needs-foot { flex-shrink: 0; margin-top: auto; padding: 10px 12px 4px; font-size: 12.5px; color: rgba(240, 236, 230, 0.45); }
+/* Under the rows, and under "Nothing needs you": what landed, what waits on others, when ECHO last checked; Mark done. */
+.needs-foot { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 10px 12px 4px; font-size: 12.5px; color: rgba(240, 236, 230, 0.45); }
+.needs-foot-words { flex-grow: 1; min-width: 0; }
 .side-row .badge { min-width: 18px; height: 18px; padding: 0 6px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--on-accent); background: var(--accent); }
 .sidebar-list .archived-projects { margin-top: 8px; }
 .sidebar-list .archived-heading { padding: 8px 10px 4px; }
@@ -581,7 +582,31 @@ button.toast:hover { background: #211f1f; }
 button.items-line-open:hover, button.items-line:hover { color: var(--text); }
 button.items-line:hover { background: rgba(240, 236, 230, 0.08); }
 .items-line .link-button { flex-shrink: 0; padding: 2px 6px; }
+.items-line .need-open { flex-shrink: 0; }
+.items-line-check { flex-shrink: 0; display: flex; align-items: center; padding: 2px 6px; white-space: nowrap; }
+.items-line-check .link-button { padding: 2px 4px; }
 .project-line { margin-bottom: 6px; }
+
+/* A Check row's item: what it says now beside what the decision requires, and its last check. */
+.check-change { font-size: 17px; }
+.check-verdict { font-size: 13px; }
+.check-verdict-word { font-weight: 600; }
+.check-verdict-word.changed { color: var(--danger); }
+.check-verdict-word.landed { color: #9ed3a2; }
+.check-verdict-word.still_open { color: var(--accent-text); }
+.check-verdict-word.unreadable { color: var(--faint); }
+
+/* Did it land?: a scope's open items by their last check; landed ones ticked, each with its owner. */
+.landed-head { font-size: 12px; font-weight: 600; }
+.landed-head.landed { color: #9ed3a2; }
+.landed-head.open { color: var(--accent-text); }
+.landed-head.unreadable { color: rgba(240, 236, 230, 0.45); }
+.landed-line { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.landed-line.check input { margin: 0; }
+.landed-line.unreadable { opacity: 0.6; }
+.landed-gap { width: 15px; flex-shrink: 0; }
+.landed-text { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+.landed-text b { font-weight: 500; }
 .item-row .open-count { flex-shrink: 0; font-size: 12px; color: var(--faint); white-space: nowrap; }
 
 /* A decision's or a project's open items: grouped by owner, oldest first, each with its stage and age. */

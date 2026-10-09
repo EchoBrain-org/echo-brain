@@ -58,7 +58,9 @@ describe('person runs client', () => {
     expect(JSON.parse(String(fetch.mock.calls[0]![1]!.body))).toEqual({ schema_version: 1, operation: 'home' });
     stdout = '';
     expect(await runPersonClientCli(['runs', '--help'], { ...io, fetch: vi.fn() })).toBe(0);
-    for (const operation of ['list', 'start', 'retry', 'view', 'home', 'items', 'item', 'send', 'set_state', 'assign']) expect(stdout).toContain(operation);
+    for (const operation of ['list', 'start', 'retry', 'view', 'home', 'items', 'item', 'send', 'set_state', 'assign', 'sweep']) expect(stdout).toContain(operation);
+    expect(stdout).toContain('your own impact runs and sweeps');
+    expect(stdout).toContain('re-checks the open items you can see');
     expect(stderr).toBe('');
   });
 });

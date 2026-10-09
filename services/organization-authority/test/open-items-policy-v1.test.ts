@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { openItemAccessV1, openItemSendAccessV1 } from '../src/composition/open-items-policy-v1.js';
+import { openItemAccessV1, openItemDecisionAccessV1, openItemSendAccessV1 } from '../src/composition/open-items-policy-v1.js';
 
 const base = { viewer: 'mem_x', approver: 'mem_ari', owner: 'mem_mina', approver_active: true, owner_active: true, sent_to_owner: false, state: 'open', reads_decision: false, leads_decision_project: false } as const;
 const table = [
@@ -40,6 +40,16 @@ it('shows the decision part exactly to those who read the decision', () => {
   for (const [name, facts] of table) {
     const all = { ...base, ...facts };
     expect(openItemAccessV1(all).see_decision, name).toBe(all.reads_decision);
+  }
+});
+
+// A decision's stage and counts, and every row's decision part, are one decision made in one place.
+it('decides who sees a decision once, for a record and for each of its rows', () => {
+  expect(openItemDecisionAccessV1({ reads_decision: true })).toEqual({ see_decision: true });
+  expect(openItemDecisionAccessV1({ reads_decision: false })).toEqual({ see_decision: false });
+  for (const [name, facts] of table) {
+    const all = { ...base, ...facts };
+    expect(openItemAccessV1(all).see_decision, name).toBe(openItemDecisionAccessV1({ reads_decision: all.reads_decision }).see_decision);
   }
 });
 

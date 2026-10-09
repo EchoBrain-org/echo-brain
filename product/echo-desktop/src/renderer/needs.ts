@@ -1,9 +1,10 @@
 import type { PersonImpactStageV1, PersonOpenItemKindV1, PersonOpenItemStateV1, PersonOpenItemsSummaryV1 } from '@echo-brain/organization-api';
-import type { ConnectedTool, OpenItemView } from '../shared/protocol.js';
+import type { ConnectedTool, HomeView, OpenItemView } from '../shared/protocol.js';
 import { externalSourceProvider } from './answer.js';
 
-// The words Home, Tell the owners? and a decision's open items use for what a
-// decision changes (open items and Home v1, section 8; canvas row 9).
+// The words Home, Tell the owners?, Did it land? and a decision's open items
+// use for what a decision changes (open items and Home v1, section 8; canvas
+// row 9).
 
 /** A decided line as a row's title reads, without its closing full stop. */
 export function titleLine(line: string): string {
@@ -71,17 +72,42 @@ export function itemTitle(item: OpenItemView): string {
 }
 
 /**
- * Each item's name for its buttons ("Done: …", "Open in …", "Pick a
- * person: …"): its title, and where two items would share one (two items you
- * can't open), what the decision requires of it, as its row shows it.
+ * Each item's name for its rows, ticks and buttons ("Done: …", "Open in …",
+ * "Pick a person: …"): its title. Where two items would share one (two items
+ * you can't open), each adds what the decision requires of it; where they
+ * still would, its decision when you can read it and that tells them apart
+ * ("· from Pilot planning"); and then where it is among those alike ("(2)").
  */
 export function itemNames(items: readonly OpenItemView[]): ReadonlyMap<string, string> {
-  const titles = new Map(items.map(item => [item.item_id, itemTitle(item)]));
-  const counts = new Map<string, number>();
-  for (const title of titles.values()) counts.set(title, (counts.get(title) ?? 0) + 1);
+  let names = new Map(items.map(item => [item.item_id, itemTitle(item)]));
+  /** The items that share each name. */
+  const alike = () => {
+    const groups = new Map<string, OpenItemView[]>();
+    for (const item of items) groups.set(names.get(item.item_id)!, [...(groups.get(names.get(item.item_id)!) ?? []), item]);
+    return (item: OpenItemView) => groups.get(names.get(item.item_id)!)!;
+  };
+  const decided = (item: OpenItemView) => item.decision?.title ?? null;
+  const tellApart = [
+    (item: OpenItemView) => (item.expected ? ` → ${item.expected}` : ''),
+    // Only where the decisions differ: one decision's items (one Tell the owners? card) gain nothing by it.
+    (item: OpenItemView, others: readonly OpenItemView[]) => (item.decision && others.some(other => decided(other) !== item.decision!.title) ? ` · from ${item.decision.title}` : ''),
+  ];
+  for (const words of tellApart) {
+    const sharing = alike();
+    names = new Map(items.map(item => {
+      const name = names.get(item.item_id)!;
+      const others = sharing(item);
+      return [item.item_id, others.length > 1 ? `${name}${words(item, others)}` : name];
+    }));
+  }
+  const sharing = alike();
+  const seen = new Map<string, number>();
   return new Map(items.map(item => {
-    const title = titles.get(item.item_id)!;
-    return [item.item_id, counts.get(title)! > 1 && item.expected ? `${title} → ${item.expected}` : title];
+    const name = names.get(item.item_id)!;
+    if (sharing(item).length < 2) return [item.item_id, name];
+    const position = (seen.get(name) ?? 0) + 1;
+    seen.set(name, position);
+    return [item.item_id, `${name} (${position})`];
   }));
 }
 
@@ -104,12 +130,14 @@ export function itemChange(item: OpenItemView): string {
 }
 
 /**
- * An item and what the decision requires of it, on one line: its title, then
- * "· due Oct 30 → launch next week" (live details → `expected`).
+ * An item and what the decision requires of it, on one line: its title, or
+ * the name `itemNames` gave it, then "· due Oct 30 → launch next week" (live
+ * details → `expected`), leaving `expected` out when the name already says it.
  */
-export function itemParts(item: OpenItemView): { title: string; change: string } {
-  const change = itemChange(item);
-  return { title: itemTitle(item), change: change !== '' && liveDetails(item) !== null ? `· ${change}` : change };
+export function itemParts(item: OpenItemView, name = itemTitle(item)): { title: string; change: string } {
+  const details = liveDetails(item);
+  const expected = item.expected !== null && !name.includes(`→ ${item.expected}`) ? `→ ${item.expected}` : null;
+  return { title: name, change: [details === null ? null : `· ${details}`, expected].filter((part): part is string => part !== null).join(' ') };
 }
 
 /** What kind of thing an item is, named by its tool once you can open it: "Jira ticket", "Confluence page". */
@@ -143,26 +171,114 @@ export function openCount(summary: Pick<PersonOpenItemsSummaryV1, 'unsent' | 'op
   return summary.unsent + summary.open;
 }
 
+/** Parts of a line that are not empty, joined: "1 open · 1 handled". */
+function joined(parts: readonly (string | null)[]): string {
+  return parts.filter((part): part is string => part !== null).join(' · ');
+}
+
 /**
- * The words after "Impact" on an approved decision: "2 open · 1 not sent",
- * "Not checked yet", "Checking…", "Check failed", or "Nothing to change".
+ * When ECHO last checked, as the canvas words it: "just now", "5 min ago",
+ * "2 h ago", then for six hours or more the day: "today", "yesterday", "Oct 6".
  */
-export function impactWords(summary: PersonOpenItemsSummaryV1, stage: PersonImpactStageV1 | null): string {
-  const handled = summary.done + summary.not_relevant;
-  const parts = [
-    summary.open > 0 ? `${summary.open} open` : null, summary.unsent > 0 ? `${summary.unsent} not sent` : null, handled > 0 ? `${handled} handled` : null,
-  ].filter((part): part is string => part !== null);
-  if (parts.length > 0) return parts.join(' · ');
+export function checkedAgo(iso: string, now = Date.now()): string {
+  const time = Date.parse(iso);
+  if (Number.isNaN(time)) return '';
+  const minutes = Math.max(0, Math.floor((now - time) / 60_000));
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 6 * 60) return `${Math.floor(minutes / 60)} h ago`;
+  const today = new Date(now);
+  if (time >= new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) return 'today';
+  if (time >= new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1).getTime()) return 'yesterday';
+  return monthDay(iso) ?? '';
+}
+
+/** "checked 2 h ago", when anything was checked. */
+function checkedPart(at: string | null, now: number): string | null {
+  return at === null ? null : `checked ${checkedAgo(at, now)}`;
+}
+
+/** "1 item", "3 items". */
+export function itemCount(count: number): string {
+  return count === 1 ? '1 item' : `${count} items`;
+}
+
+/**
+ * The words after "Impact" on an approved decision (canvas 9.6), its items
+ * counted once each: "1 open · 1 handled · 1 couldn't read · checked just
+ * now". Open items that neither landed nor went unread are open; closed and
+ * landed ones are handled; unsent ones are "not sent". With no item, how its
+ * check stands: "Not checked yet", "Checking…", "Check failed", or "Nothing
+ * to change".
+ */
+export function impactWords(summary: PersonOpenItemsSummaryV1, stage: PersonImpactStageV1 | null, now = Date.now()): string {
+  const open = Math.max(0, summary.open - summary.landed - summary.unreadable);
+  const handled = summary.done + summary.not_relevant + summary.landed;
+  const counts = joined([
+    open > 0 ? `${open} open` : null, summary.unsent > 0 ? `${summary.unsent} not sent` : null, handled > 0 ? `${handled} handled` : null,
+    summary.unreadable > 0 ? `${summary.unreadable} couldn't read` : null,
+  ]);
+  if (counts !== '') return joined([counts, checkedPart(summary.last_checked_at, now)]);
   if (stage === null || stage.state === 'pending') return 'Not checked yet';
   if (stage.state === 'running') return 'Checking…';
   if (stage.state === 'failed') return 'Check failed';
   return 'Nothing to change';
 }
 
-/** A project's line: "4 open items · from 2 decisions", or nothing when none is open. */
-export function projectWords(summary: PersonOpenItemsSummaryV1): { count: string; from: string } | null {
+/** A project's line (canvas 9.7): "4 open items · from 2 decisions · checked today", or nothing when none is open. */
+export function projectWords(summary: PersonOpenItemsSummaryV1, now = Date.now()): { count: string; from: string; checked: string | null } | null {
   const open = openCount(summary);
   if (open === 0) return null;
   const decisions = summary.by_decision.filter(decision => openCount(decision) > 0).length;
-  return { count: open === 1 ? '1 open item' : `${open} open items`, from: decisions === 0 ? '' : decisions === 1 ? 'from 1 decision' : `from ${decisions} decisions` };
+  return {
+    count: open === 1 ? '1 open item' : `${open} open items`, from: decisions === 0 ? '' : decisions === 1 ? 'from 1 decision' : `from ${decisions} decisions`,
+    checked: checkedPart(summary.last_checked_at, now),
+  };
+}
+
+/**
+ * Home's footer (canvas 9.1, 9.5): "2 landed since yesterday · 1 with others
+ * · checked 2 h ago". Landed: your open items (sent or owned) whose last
+ * check saw them land ("since yesterday" is the canvas's words); with others:
+ * open items you sent that wait on someone else. Zero counts are left out;
+ * null when nothing is left.
+ */
+export function footerWords(open: Pick<HomeView, 'landed' | 'waiting' | 'last_checked_at'>, now = Date.now()): string | null {
+  const words = joined([
+    open.landed > 0 ? `${open.landed} landed since yesterday` : null, open.waiting > 0 ? `${open.waiting} with others` : null, checkedPart(open.last_checked_at, now),
+  ]);
+  return words === '' ? null : words;
+}
+
+/**
+ * Did it land? (canvas 9.4): a scope's open items by their last check.
+ * Landed; still open (still open, changed, or not checked yet); and couldn't
+ * read.
+ */
+export function landedGroups(items: readonly OpenItemView[]): { landed: OpenItemView[]; open: OpenItemView[]; unreadable: OpenItemView[] } {
+  const open = items.filter(item => item.state === 'open');
+  return {
+    landed: open.filter(item => item.check?.verdict === 'landed'),
+    open: open.filter(item => item.check === null || item.check.verdict === 'still_open' || item.check.verdict === 'changed'),
+    unreadable: open.filter(item => item.check?.verdict === 'unreadable'),
+  };
+}
+
+/**
+ * What a line of Did it land? says after its item: what it says now when you
+ * opened it, then why it is where it is: "— not what was decided", "· not
+ * checked yet", "· you don't have access" (your own access refused it now), or
+ * "· ECHO could not read it".
+ */
+export function landedNote(item: OpenItemView): string {
+  const details = liveDetails(item);
+  const verdict = item.check?.verdict;
+  const why = item.check === null ? '· not checked yet' : verdict === 'changed' ? '— not what was decided'
+    : verdict === 'unreadable' ? (item.reach === 'no_access' ? '· you don\'t have access' : '· ECHO could not read it') : null;
+  return [details === null ? null : `· ${details}`, why].filter((part): part is string => part !== null).join(' ');
+}
+
+/** Mark N done: the landed items still ticked (`unticked` names the others) that you may close. */
+export function markable(items: readonly OpenItemView[], unticked: Readonly<Record<string, true>>): OpenItemView[] {
+  return landedGroups(items).landed.filter(item => item.can.set_state && !unticked[item.item_id]);
 }

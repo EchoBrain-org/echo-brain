@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { emit, launch, type Launched } from './launch.js';
 
 let app: Launched;
@@ -23,6 +24,12 @@ async function approveFromHome(run: Launched) {
 }
 
 const runOperations = () => app.calls().filter(call => call.path === '/v1/person/runs').map(call => call.body?.operation);
+/** The sweeps the app asked for, by scope. */
+const sweeps = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'sweep')
+  .map(call => ({ scope: call.body?.scope, id: call.body?.id }));
+/** The fixture's Pilot planning record, and the project it was approved into. */
+const PILOT_RECORD = `sha256:${createHash('sha256').update('record:Pilot planning').digest('hex')}`;
+const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 
 test('the approver sends the impact to its owners from Home', async () => {
   app = await launch('granola');
@@ -42,6 +49,8 @@ test('the approver sends the impact to its owners from Home', async () => {
   await app.page.getByRole('button', { name: 'Pick a person: Thermostat PRD · Pilot scope' }).click();
   await app.page.getByRole('searchbox', { name: 'Find a person' }).fill('Raf');
   await app.page.getByRole('option', { name: 'Rafael Moreno' }).click();
+  // Removing the pick names its item too.
+  await expect(app.page.getByRole('button', { name: 'Remove Rafael from Thermostat PRD · Pilot scope', exact: true })).toBeVisible();
   await app.page.getByRole('button', { name: 'Send to Mina and Rafael' }).click();
   await expect(app.page.getByTestId('need-row').filter({ hasText: 'need updating' })).toHaveCount(0);
   const sent = app.calls().find(call => call.path === '/v1/person/runs' && call.body?.operation === 'send')!;
@@ -129,6 +138,10 @@ test('an approved decision shows its Impact line and the project shows its open 
   const impact = app.page.getByTestId('impact-line');
   await expect(impact).toContainText('Impact · 2 not sent');
   await expect(impact.getByRole('button', { name: 'Send' })).toBeVisible();
+  // Nothing is open to check until the items are sent.
+  await impact.getByRole('button', { name: 'Check now' }).click();
+  await expect(impact).toContainText('Nothing open to check');
+  expect(sweeps()).toEqual([{ scope: 'record', id: PILOT_RECORD }]);
   // The line read the decision's counts only; opening it lists the items.
   const recordReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items' && call.body.scope === 'record')
     .map(call => call.body?.summary_only === true);
@@ -180,4 +193,124 @@ test('the project line reads counts without listing items', async () => {
   await line.click();
   await expect(app.page.getByTestId('open-items').getByTestId('open-item')).toHaveCount(2);
   expect(itemReads().filter(read => !read.counts)).toEqual([{ scope: 'project', counts: false }]);
+});
+
+test('Home sweeps by itself and shows what landed and what drifted', async () => {
+  app = await launch('granola-sweep');
+  const rows = app.page.getByTestId('need-row');
+  // Before the sweep the PRD page waits on Ari unchecked; after it, ECHO saw it change.
+  await expect(rows.filter({ hasText: 'not what was decided' })).toBeVisible({ timeout: 20_000 });
+  await expect(app.page.getByText(/1 landed since yesterday/)).toBeVisible();
+  // Home asked for one sweep of Ari's own items and started it; a sweep makes no Home row of its own.
+  expect(sweeps()).toEqual([{ scope: 'mine', id: undefined }]);
+  expect(runOperations().indexOf('start')).toBeGreaterThan(runOperations().indexOf('sweep'));
+  await expect(rows).toHaveCount(1);
+  await app.page.getByRole('button', { name: 'Mark done' }).click();
+  const landed = app.page.getByTestId('did-it-land');
+  await expect(landed.getByRole('heading', { name: 'Did it land?' })).toBeVisible();
+  await expect(landed).toContainText('Your items · checked just now · 3 items');
+  await landed.getByRole('button', { name: 'Mark 1 done' }).click();
+  await expect(app.page.getByText(/landed since yesterday/)).toHaveCount(0);
+  const closed = app.calls().filter(call => call.body?.operation === 'set_state').map(call => ({ item: call.body?.item_id, state: call.body?.state }));
+  expect(closed).toEqual([{ item: 'itm_00000000-0000-4000-8000-000000000031', state: 'done' }]);
+  // Back on Home, no second sweep was asked for.
+  await expect(rows).toHaveCount(1);
+  expect(sweeps()).toHaveLength(1);
+});
+
+test('a Check row opens the item before anything is closed', async () => {
+  app = await launch('granola-checked');
+  const row = app.page.getByTestId('need-row').filter({ hasText: 'not what was decided' });
+  await expect(row).toContainText('Thermostat PRD · Pilot scope · says "starts after freeze" — not what was decided');
+  await expect(row).toContainText('Confluence page · from Pilot planning');
+  // The row is one button: nothing on Home closes the item.
+  await expect(row.getByRole('button')).toHaveCount(0);
+  await expect(app.page.getByTestId('needs-foot')).toContainText('1 landed since yesterday · 2 with others · checked 2 h ago');
+  await row.click();
+  const card = app.page.getByTestId('check-card');
+  await expect(card.getByRole('heading', { name: 'Thermostat PRD · Pilot scope' })).toBeVisible();
+  // Its main control has the focus, as on Tell the owners? and Did it land?.
+  await expect(card.getByRole('button', { name: 'Done', exact: true })).toBeFocused();
+  await expect(card).toContainText('says "starts after freeze" → pilot starts next week');
+  await expect(card).toContainText('Not what was decided · Checked 2 h ago by Mina Patel');
+  await expect(card.getByRole('button', { name: 'Open in Confluence: Thermostat PRD · Pilot scope' })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Done', exact: true })).toBeVisible();
+  expect(app.calls().some(call => call.body?.operation === 'set_state')).toBe(false);
+  await card.getByRole('button', { name: 'Not relevant', exact: true }).click();
+  // Closed for everyone: its row leaves Home at once, and the empty Home keeps its footer (canvas 9.5).
+  await expect(app.page.getByTestId('need-row')).toHaveCount(0);
+  await expect(app.page.getByText('Nothing needs you')).toBeVisible();
+  await expect(app.page.getByTestId('needs-foot')).toContainText('1 landed since yesterday · 2 with others · checked 2 h ago');
+  await expect.poll(() => app.calls().filter(call => call.body?.operation === 'set_state').map(call => call.body?.state)).toEqual(['not_relevant']);
+});
+
+test('Check now on a decision checks only that decision', async () => {
+  app = await launch('granola-checked');
+  await app.page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
+  await app.page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' }).click();
+  const impact = app.page.getByTestId('impact-line');
+  // One open, one landed (handled), one ECHO could not read (canvas 9.6).
+  await expect(impact).toContainText('Impact · 1 open · 1 handled · 1 couldn\'t read · checked 2 h ago');
+  // The faint link the canvas draws (H6), as Home's Mark done is.
+  await expect(impact.getByRole('button', { name: 'Check now' })).toHaveCSS('color', 'rgba(240, 236, 230, 0.5)');
+  await impact.getByRole('button', { name: 'Check now' }).click();
+  await expect(impact).toContainText('Checking…');
+  const landed = app.page.getByTestId('did-it-land');
+  await expect(landed.getByRole('heading', { name: 'Did it land?' })).toBeVisible({ timeout: 20_000 });
+  expect(sweeps()).toEqual([{ scope: 'record', id: PILOT_RECORD }]);
+  await expect(landed).toContainText('Pilot planning · checked just now · 3 items');
+  await expect(landed).toContainText('Launch the pilot next week.');
+  await expect(landed.getByRole('region', { name: 'Landed · 1' })).toContainText('ECHO-12 · Pilot launch · due Oct 30');
+  await expect(landed.getByRole('region', { name: 'Still open · 1' })).toContainText('Thermostat PRD · Pilot scope · says "starts after freeze" — not what was decided');
+  await expect(landed.getByRole('region', { name: 'Couldn\'t read · 1' })).toContainText('A page you can\'t open · you don\'t have access');
+  await expect(landed.getByRole('checkbox', { name: /ECHO-12 · Pilot launch/ })).toBeChecked();
+  await expect(landed.getByRole('button', { name: 'Mark 1 done' })).toBeEnabled();
+  // The page Ari cannot open is never named.
+  expect(await app.page.content()).not.toContain('Supplier brief');
+  // Unticked, nothing is marked.
+  await landed.getByRole('checkbox', { name: /ECHO-12 · Pilot launch/ }).uncheck();
+  await expect(landed.getByRole('button', { name: 'Mark 0 done' })).toBeDisabled();
+});
+
+test('Check now on a project shows what landed of its items', async () => {
+  app = await launch('granola-checked');
+  await app.page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
+  const line = app.page.getByTestId('project-line');
+  await expect(line).toContainText('3 open items · from 1 decision · checked 2 h ago');
+  await line.getByRole('button', { name: 'Check now' }).click();
+  await expect(line).toContainText('Checking…');
+  const landed = app.page.getByTestId('did-it-land');
+  await expect(landed).toContainText('Thermostat redesign · checked just now · 3 items', { timeout: 20_000 });
+  expect(sweeps()).toEqual([{ scope: 'project', id: THERMOSTAT }]);
+  // A project is not one decision: no decided line.
+  await expect(landed).not.toContainText('Launch the pilot next week.');
+  // Back returns to the project, whose line was read again.
+  await app.page.getByTestId('back').click();
+  await expect(line).toContainText('3 open items · from 1 decision · checked just now');
+  await expect(line.getByRole('button', { name: 'Check now' })).toBeVisible();
+});
+
+test('Tell the owners? names apart items whose titles nothing tells apart', async () => {
+  app = await launch('granola-alike');
+  await app.page.getByTestId('need-row').filter({ hasText: 'need updating' }).click();
+  await expect(app.page.getByRole('heading', { name: 'Tell the owners?' })).toBeVisible();
+  await expect(app.page.getByRole('checkbox')).toHaveCount(6);
+  // Two pages Ari cannot open, with the same expected phrase, and two tickets ECHO couldn't read just now, with none.
+  for (const name of [
+    'A page you can\'t open → parts ordered for next week (1)', 'A page you can\'t open → parts ordered for next week (2)',
+    'A Jira ticket ECHO couldn\'t read just now (1)', 'A Jira ticket ECHO couldn\'t read just now (2)',
+  ]) {
+    await expect(app.page.getByRole('checkbox', { name, exact: true })).toBeChecked();
+    await expect(app.page.getByRole('button', { name: `Pick a person: ${name}`, exact: true })).toBeVisible();
+  }
+  const page = await app.page.content();
+  for (const withheld of ['Supplier brief', 'ECHO-41', 'ECHO-42']) expect(page).not.toContain(withheld);
+});
+
+test('Home starts its sweep again when an attempt goes back to the queue', async () => {
+  app = await launch('granola-sweep-requeued');
+  await expect(app.page.getByTestId('need-row').filter({ hasText: 'not what was decided' })).toBeVisible({ timeout: 30_000 });
+  // One sweep, asked for once and started twice: the attempt that went back to the queue, then the one that finished.
+  expect(sweeps()).toEqual([{ scope: 'mine', id: undefined }]);
+  expect(runOperations().filter(operation => operation === 'start')).toHaveLength(2);
 });

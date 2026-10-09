@@ -6,16 +6,7 @@ import {
   clearPick, closePicker, goHome, pickOwner, searchOwner, sendDecision, sendDetails, sendRecipients, sendToOwners, tickSend, type SendState, type State,
 } from '../store.js';
 import { Close } from './icons.js';
-
-/** A person, as a chip: their initials in their color, and their first name. */
-function Chip({ person, label }: { person: { membership_id: string; name: string }; label: string }) {
-  return (
-    <span class="owner-chip">
-      <span class="face" style={{ background: colorFor(person.membership_id) }} aria-hidden="true">{initials(person.name)}</span>
-      <span class="owner-chip-name">{label}</span>
-    </span>
-  );
-}
+import { Chip } from './open-items.js';
 
 /** Pick a person: a search over the organization's people, under the item it picks for. */
 function Picker({ send, item }: { send: SendState; item: OpenItemView }) {
@@ -50,7 +41,8 @@ function Owner({ send, item, me, name: itemName }: { send: SendState; item: Open
     return (
       <span class="owner-slot">
         <Chip person={{ membership_id: pick.membership_id, name: pick.display_name }} label={name ?? pick.display_name} />
-        <button type="button" class="icon-button" aria-label={`Remove ${pick.display_name}`} disabled={send.busy} onClick={() => clearPick(item.item_id)}><Close /></button>
+        <button type="button" class="icon-button" aria-label={`Remove ${name ?? pick.display_name} from ${itemName}`} disabled={send.busy}
+          onClick={() => clearPick(item.item_id)}><Close /></button>
       </span>
     );
   }
@@ -96,7 +88,9 @@ export function Send({ state, send }: { state: State; send: SendState }) {
           <section class="decision-section" aria-labelledby="must-change">
             <div class="section-label" id="must-change">Must change</div>
             {send.items.map(item => {
-              const { title, change } = itemParts(item);
+              const name = names.get(item.item_id) ?? itemTitle(item);
+              // Its name tells it apart from the card's other items (R37), as its buttons do.
+              const { title, change } = itemParts(item, name);
               return (
                 <div class="send-item" key={item.item_id} data-testid="send-item">
                   <div class="send-line">
@@ -104,7 +98,7 @@ export function Send({ state, send }: { state: State; send: SendState }) {
                       <input type="checkbox" checked={send.ticks[item.item_id] === true} disabled={send.busy} onChange={() => tickSend(item.item_id)} />
                       <span><b>{title}</b>{change && <span class="faint"> {change}</span>}</span>
                     </label>
-                    <Owner send={send} item={item} me={me} name={names.get(item.item_id) ?? itemTitle(item)} />
+                    <Owner send={send} item={item} me={me} name={name} />
                   </div>
                   {send.picker?.item_id === item.item_id && <Picker send={send} item={item} />}
                 </div>
