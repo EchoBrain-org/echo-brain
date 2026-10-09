@@ -388,7 +388,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     this.assertOrganization(actor);
     this.assertScope(actor, input.scope);
     if (input.citation.document_id === undefined) {
-      const row = this.textBySource(actor, input.scope, input.citation.source_id, input.citation.revision_id);
+      const row = this.textByCitation(actor, input.scope, input.citation);
       if (row === undefined) {
         // A transcript passage opens with its neighbouring passages.
         const found = this.transcriptPacketForCitation(actor, input.scope, input.citation);
@@ -469,7 +469,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     this.assertScope(actor, input.scope);
     let atom: ReleasedSourceContextAtomV1 | undefined;
     if (input.citation.document_id === undefined) {
-      const row = this.textBySource(actor, input.scope, input.citation.source_id, input.citation.revision_id);
+      const row = this.textByCitation(actor, input.scope, input.citation);
       atom = row !== undefined
         ? this.textAnchorForCitation(row, input.citation)
         : this.transcriptPacketForCitation(actor, input.scope, input.citation)?.atom;
@@ -847,7 +847,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private currentDeskItem(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, atom: ReleasedSourceContextAtomV1, includeText: boolean): OriginalContextDeskItemV1 {
     if (atom.document_id === undefined) {
-      const row = this.textBySource(actor, scope, atom.source_id, atom.revision_id);
+      const row = this.textByCitation(actor, scope, atom);
       if (row === undefined) {
         const found = this.transcriptPacketForCitation(actor, scope, atom);
         if (found === undefined || found.atom.text !== atom.text) denied();
@@ -989,7 +989,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   private assertReleasedAtomReadable(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, atom: ReleasedSourceContextAtomV1): void {
     if (!SOURCE_ID.test(atom.source_id) || !SHA256.test(atom.source_sha256) || !SHA256.test(atom.representation_sha256) || !SHA256.test(atom.anchor_sha256)) denied();
     if (atom.document_id === undefined) {
-      const row = this.textBySource(actor, scope, atom.source_id, atom.revision_id);
+      const row = this.textByCitation(actor, scope, atom);
       if (row !== undefined ? !this.hasTextAnchor(row, atom) : this.transcriptPacketForCitation(actor, scope, atom)?.atom.text !== atom.text) denied();
       return;
     }
@@ -1036,6 +1036,13 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=u.payload_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
       WHERE u.organization_id=? AND ${acl.sql} ${scoped.sql} AND s.source_id=? AND r.revision_id=?`).get(actor.organization_id, ...acl.args, ...scoped.args, sourceId, revisionId) as SourceRow | undefined ?? this.imported.rows(actor, scope, { source_id: sourceId, revision_id: revisionId })[0];
+  }
+
+  /** Imported notes and an approved transcript can share a source revision.
+   * Select the cited representation before choosing its access and anchor checks. */
+  private textByCitation(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, citation: OriginalContextCitationV1): SourceRow | undefined {
+    const row = this.textBySource(actor, scope, citation.source_id, citation.revision_id);
+    return row?.source_sha256 === citation.source_sha256 && row.representation_sha256 === citation.representation_sha256 ? row : undefined;
   }
 
   private documentAnchorByCitation(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, citation: OriginalContextCitationV1): ReleasedSourceContextAtomV1 | undefined {
