@@ -1,12 +1,11 @@
 import type { ComponentChildren } from 'preact';
-import { useState } from 'preact/hooks';
 import type { OpenItemView } from '../../shared/protocol.js';
-import { externalSourceProvider } from '../answer.js';
 import { colorFor, initial, when } from '../format.js';
 import { message } from '../messages.js';
-import { actionCount, itemFrom, itemKind, itemNames, itemParts, itemTitle, liveDetails, monthDay, needUpdating, shortNames, titleLine } from '../needs.js';
-import { loadHome, markDone, openDecision, openItemInTool, openNewProject, openSend, type NeedRow, type State } from '../store.js';
+import { actionCount, footerWords, itemFrom, itemKind, itemNames, itemParts, itemTitle, liveDetails, monthDay, needUpdating, shortNames, titleLine } from '../needs.js';
+import { closeItem, loadHome, openCheckCard, openDecision, openDidItLand, openNewProject, openSend, type NeedRow, type State } from '../store.js';
 import { Plus, Saved } from './icons.js';
+import { OpenInTool } from './open-items.js';
 
 /** The row's verb: what a click will ask of you. */
 const KIND: Record<NeedRow['kind'], string> = { approve: 'Approve', send: 'Send', update: 'Update', check: 'Check', failed: 'Retry', checking: 'Checking' };
@@ -82,54 +81,26 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
 }
 
 /**
- * Open in Jira, only for an item ECHO opened for you just now: the tool checks
- * your access when it opens. Its name says which item, as Done's does.
- */
-function OpenInTool({ state, item, name }: { state: State; item: OpenItemView; name: string }) {
-  const [failed, setFailed] = useState(false);
-  const source = item.reach === 'opened' ? item.current?.source : undefined;
-  if (!source || !('permalink' in source)) return null;
-  const label = `Open in ${externalSourceProvider(source, state.tools?.items)}`;
-  return <>
-    <button type="button" class="need-open" title={source.permalink} aria-label={`${label}: ${name}`}
-      onClick={async () => { setFailed(false); setFailed(!(await openItemInTool(item))); }}>{label}</button>
-    {failed && <span class="error need-error">The item could not be opened. Try again.</span>}
-  </>;
-}
-
-/**
- * Update and Check: an item that waits on you, closed in place. "Open in
+ * Update: an item that waits on you, closed in place (ruling 20). "Open in
  * Jira" only when you can open it; Done when you may close it. `name` names
  * the item on its buttons.
  */
-function ItemRow({ state, row, name }: { state: State; row: Extract<NeedRow, { item: unknown }>; name: string }) {
-  const item = row.item;
+function UpdateRow({ state, item, name }: { state: State; item: OpenItemView; name: string }) {
   const failure = state.home?.closeFailures[item.item_id];
-  const kind = itemKind(item, state.tools?.items);
-  let title: string;
-  let line: string;
-  if (row.kind === 'check') {
-    const details = liveDetails(item);
-    title = `${itemTitle(item)}${details ? ` · ${details}` : ''} — not what was decided`;
-    line = `${kind}${item.current?.assignee ? ` · now ${item.current.assignee}` : ''} · from `;
-  } else {
-    const { title: name, change } = itemParts(item);
-    title = `${name}${change ? ` ${change}` : ''}`;
-    line = `${kind} you own · from `;
-  }
+  const { title, change } = itemParts(item, name);
   return (
-    <div class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind}>
-      <span class="need-kind">{KIND[row.kind]}</span>
+    <div class="need-row update" data-testid="need-row" data-kind="update">
+      <span class="need-kind">{KIND.update}</span>
       <span class="need-text">
-        <span class="need-title">{title}</span>
-        <span class="need-detail">{line}<b>{itemFrom(item)}</b></span>
+        <span class="need-title">{title}{change ? ` ${change}` : ''}</span>
+        <span class="need-detail">{itemKind(item, state.tools?.items)} you own · from <b>{itemFrom(item)}</b></span>
         {failure && <span class="error need-error" role="status">{failure}</span>}
       </span>
-      <Side state={state} at={row.kind === 'check' ? item.check?.checked_at : null} projects={item.decision?.project_ids ?? []}>
+      <Side state={state} projects={item.decision?.project_ids ?? []}>
         <span class="need-actions">
           <OpenInTool state={state} item={item} name={name} />
           {item.can.set_state && (
-            <button type="button" class="need-act" aria-label={`Done: ${name}`} onClick={() => void markDone(item)}>Done</button>
+            <button type="button" class="need-act" aria-label={`Done: ${name}`} onClick={() => void closeItem(item, 'done')}>Done</button>
           )}
         </span>
       </Side>
@@ -137,11 +108,43 @@ function ItemRow({ state, row, name }: { state: State; row: Extract<NeedRow, { i
   );
 }
 
-/** Under the rows, and on an empty Home: what you sent that waits on someone else. */
+/**
+ * Check: ECHO saw an item change, not as decided. The whole row opens the
+ * item first (ruling 3); nothing on it closes the item. `name` titles the item,
+ * apart from any other on Home.
+ */
+function CheckRow({ state, item, name }: { state: State; item: OpenItemView; name: string }) {
+  const failure = state.home?.closeFailures[item.item_id];
+  const details = liveDetails(item);
+  const assignee = item.current?.assignee;
+  return (
+    <button type="button" class="need-row check" data-testid="need-row" data-kind="check" onClick={() => openCheckCard(item)}>
+      <span class="need-kind">{KIND.check}</span>
+      <span class="need-text">
+        <span class="need-title">{name}{details ? ` · ${details}` : ''} — not what was decided</span>
+        <span class="need-detail">{itemKind(item, state.tools?.items)}{assignee ? ` · now ${assignee}` : ''} · from <b>{itemFrom(item)}</b></span>
+        {failure && <span class="error need-error" role="status">{failure}</span>}
+      </span>
+      <Side state={state} at={item.check?.checked_at} projects={item.decision?.project_ids ?? []} />
+    </button>
+  );
+}
+
+/**
+ * Under the rows, and under "Nothing needs you" (canvas 9.1, 9.5): what
+ * landed, what waits on others, and when ECHO last checked; "Mark done" opens
+ * Did it land? for your own items when anything landed.
+ */
 function Footer({ state }: { state: State }) {
-  const waiting = state.home?.open?.waiting ?? 0;
-  if (waiting === 0) return null;
-  return <div class="needs-foot" data-testid="needs-foot">{waiting} with others</div>;
+  const open = state.home?.open;
+  const words = open ? footerWords(open) : null;
+  if (!open || words === null) return null;
+  return (
+    <div class="needs-foot" data-testid="needs-foot">
+      <span class="needs-foot-words">{words}</span>
+      {open.landed > 0 && <button type="button" class="need-open" onClick={() => void openDidItLand('mine', undefined, null)}>Mark done</button>}
+    </div>
+  );
 }
 
 /**
@@ -185,9 +188,13 @@ export function Home({ state }: { state: State }) {
   return (
     <div class="column needs" data-testid="needs" aria-busy={home?.loading ?? true}>
       <div class="section-label needs-head">Needs you{waiting > 0 ? ` · ${waiting}` : ''}</div>
-      {rows.map(row => 'item' in row
-        ? <ItemRow key={row.item.item_id} state={state} row={row} name={names.get(row.item.item_id) ?? itemTitle(row.item)} />
-        : <Row key={row.kind === 'send' ? row.send.run_id : row.review.approval_id} state={state} row={row} />)}
+      {rows.map(row => {
+        if (!('item' in row)) return <Row key={row.kind === 'send' ? row.send.run_id : row.review.approval_id} state={state} row={row} />;
+        const name = names.get(row.item.item_id) ?? itemTitle(row.item);
+        return row.kind === 'check'
+          ? <CheckRow key={row.item.item_id} state={state} item={row.item} name={name} />
+          : <UpdateRow key={row.item.item_id} state={state} item={row.item} name={name} />;
+      })}
       {home?.failure && <div class="error more">{message(home.failure)} <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button></div>}
       <Footer state={state} />
     </div>
