@@ -1,7 +1,7 @@
 import type { OpenItemView } from '../../shared/protocol.js';
 import { colorFor, initials, when } from '../format.js';
 import { message } from '../messages.js';
-import { itemParts, STAGES, stageSince } from '../needs.js';
+import { itemChange, itemTitle, STAGES, stageSince } from '../needs.js';
 import { moreOpenItems, openOpenItems, type OpenItemsState } from '../store.js';
 
 /** Items by who they wait on, each owner once, in the order of their oldest item. */
@@ -35,11 +35,11 @@ export function OpenItems({ page }: { page: OpenItemsState }) {
             <span class="section-label">{group.name}</span>
           </div>
           {group.items.map(item => {
-            const { title, change } = itemParts(item);
+            const change = itemChange(item);
             return (
               <div class="open-item" data-testid="open-item" data-state={item.state} key={item.item_id}>
                 <span class="open-item-text">
-                  <span class="open-item-title">{title}</span>
+                  <span class="open-item-title">{itemTitle(item)}</span>
                   {change && <span class="open-item-change">{change}</span>}
                 </span>
                 <span class="open-item-side">

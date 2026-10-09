@@ -73,16 +73,18 @@ export function liveDetails(item: OpenItemView): string | null {
   return `says "${says.length > QUOTE_CHARS ? `${says.slice(0, QUOTE_CHARS - 1).join('')}…` : current.says_now}"`;
 }
 
+/** What an item says now, then what the decision requires of it: "due Oct 30 → launch next week". Parts that are missing are left out. */
+export function itemChange(item: OpenItemView): string {
+  return [liveDetails(item), item.expected ? `→ ${item.expected}` : null].filter((part): part is string => part !== null).join(' ');
+}
+
 /**
- * An item and what the decision requires of it: its title, then "· due Oct 30
- * → launch next week" (live details → `expected`). Parts that are missing are
- * left out.
+ * An item and what the decision requires of it, on one line: its title, then
+ * "· due Oct 30 → launch next week" (live details → `expected`).
  */
 export function itemParts(item: OpenItemView): { title: string; change: string } {
-  const details = liveDetails(item);
-  const expected = item.expected;
-  const change = details !== null ? `· ${details}${expected ? ` → ${expected}` : ''}` : expected ? `→ ${expected}` : '';
-  return { title: itemTitle(item), change };
+  const change = itemChange(item);
+  return { title: itemTitle(item), change: change !== '' && liveDetails(item) !== null ? `· ${change}` : change };
 }
 
 /** What kind of thing an item is, named by its tool once you can open it: "Jira ticket", "Confluence page". */

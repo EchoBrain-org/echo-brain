@@ -50,7 +50,7 @@ function Owner({ send, item, me }: { send: SendState; item: OpenItemView; me: st
     return (
       <span class="owner-slot">
         <Chip person={{ membership_id: pick.membership_id, name: pick.display_name }} label={name ?? pick.display_name} />
-        <button type="button" class="icon-button" aria-label={`Not ${pick.display_name}`} disabled={send.busy} onClick={() => clearPick(item.item_id)}><Close /></button>
+        <button type="button" class="icon-button" aria-label={`Remove ${pick.display_name}`} disabled={send.busy} onClick={() => clearPick(item.item_id)}><Close /></button>
       </span>
     );
   }

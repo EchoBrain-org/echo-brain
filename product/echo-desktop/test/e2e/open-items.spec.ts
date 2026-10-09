@@ -33,6 +33,12 @@ test('the approver sends the impact to its owners from Home', async () => {
   await send.click();
   await expect(app.page.getByRole('heading', { name: 'Tell the owners?' })).toBeVisible();
   await expect(app.page.getByText('Untick anything that\'s wrong. Owners get it on their Home.')).toBeVisible();
+  // What an item says now is covered while another app is in front, and the card comes back as it was.
+  await emit(app.app, 'echo-test:conceal');
+  await expect(app.page.getByTestId('concealed')).toBeVisible();
+  await expect(app.page.locator('body')).not.toContainText('ECHO-12');
+  await emit(app.app, 'echo-test:resume');
+  await expect(app.page.getByRole('heading', { name: 'Tell the owners?' })).toBeVisible();
   await app.page.getByRole('button', { name: 'Pick a person' }).click();
   await app.page.getByRole('searchbox', { name: 'Find a person' }).fill('Raf');
   await app.page.getByRole('option', { name: 'Rafael Moreno' }).click();
@@ -65,6 +71,8 @@ test('a Home read that fails once keeps the rows it had', async () => {
   const homeReads = () => runOperations().filter(operation => operation === 'home').length;
   await expect(rows.filter({ hasText: 'ECHO-12' })).toBeVisible();
   await expect(rows).toHaveCount(1);
+  // Home is read again on coming forward once the project list is in.
+  await expect(app.page.getByTestId('sidebar-project')).toHaveCount(2);
   // The window comes forward: Home is read again, and that read fails.
   await emit(app.app, 'echo-test:shown');
   await expect.poll(homeReads).toBe(2);

@@ -527,6 +527,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       relation: 'conflicts', expected: 'freeze after the pilot', owner: { ...ARI, match: 'name' }, created_at: '2026-10-03T15:05:00.000Z', sent_at: '2026-10-03T16:00:00.000Z',
     }));
   }
+  // The meetings Mina approved that Ari can read: in their project's feed, where their Impact line shows.
+  for (const item of openItems.filter(entry => entry.readable)) {
+    meetings.push({
+      record_sha256: item.decision.record_sha256, title: item.decision.title, added_at: item.decision.approved_at, meeting_date: item.decision.approved_at.slice(0, 10),
+      visibility: 'project', project_ids: item.decision.project_ids, approver: MINA.membership_id, started_at: item.decision.approved_at, timezone: 'Europe/London',
+      participants: ['Mina Patel', 'Ari'], approved_by: 'Mina Patel', atoms: [{ kind: 'decision', text: item.decision.first_line ?? item.decision.title }],
+    });
+  }
   /** What Ari's check of Pilot planning found, written once when it is done: unsent, with exact owners or Ari. */
   const writeFound = () => {
     if (granolaRun?.state !== 'done' || openItems.some(item => item.run_id === PILOT_RUN)) return;
@@ -632,18 +640,20 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           ...(granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' ? [review] : []),
           ...(mode === 'granola-all' ? [{ ...SUPPLIER_SYNC, status: supplierSync, decided_on: supplierSync === 'pending' ? null : 'desktop' }] : []),
         ] });
-        case 'review_open': if (body?.approval_id === SUPPLIER_SYNC.approval_id) {
-          return json({ review: { ...SUPPLIER_SYNC, status: supplierSync, decided_on: supplierSync === 'pending' ? null : 'desktop' }, snapshot_sha256: 'sha256:' + 'c'.repeat(64),
-            content: 'Supplier sync\nDecisions\nLead time stays six weeks.', owners: [{ signal_id: 'act-1', action: 'Update the supplier contract', proposed: 'Rafael Moreno' }],
-            suggested_projects: [{ project_id: SUPPLIER, name: 'Supplier review' }] });
-        }
+        case 'review_open':
+          if (body?.approval_id === SUPPLIER_SYNC.approval_id) {
+            return json({ review: { ...SUPPLIER_SYNC, status: supplierSync, decided_on: supplierSync === 'pending' ? null : 'desktop' }, snapshot_sha256: 'sha256:' + 'c'.repeat(64),
+              content: 'Supplier sync\nDecisions\nLead time stays six weeks.', owners: [{ signal_id: 'act-1', action: 'Update the supplier contract', proposed: 'Rafael Moreno' }],
+              suggested_projects: [{ project_id: SUPPLIER, name: 'Supplier review' }] });
+          }
           return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.',
           owners: [{ signal_id: 'act-1', action: 'Send the revised quote', proposed: 'Rafael Moreno' }, { signal_id: 'act-2', action: 'Confirm the trace', proposed: 'Mina Patel' }],
           suggested_projects: [{ project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign' }] });
-        case 'review': if (body?.approval_id === SUPPLIER_SYNC.approval_id) {
-          supplierSync = body?.action === 'approve' ? 'approved' : 'rejected';
-          return json({ status: supplierSync, decided_on: 'desktop' });
-        }
+        case 'review':
+          if (body?.approval_id === SUPPLIER_SYNC.approval_id) {
+            supplierSync = body?.action === 'approve' ? 'approved' : 'rejected';
+            return json({ status: supplierSync, decided_on: 'desktop' });
+          }
           granolaReview = body; granolaApproved = true;
           if (body?.action === 'approve' && granolaRun === null && mode !== 'granola-publishing') granolaRun = { state: 'pending', error_code: null, lists: 0, retried: false };
           // The approved meeting: in the projects it was approved into, where its record opens.

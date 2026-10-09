@@ -107,6 +107,19 @@ describe('Home rows', () => {
     expect(rows.map(row => row.kind)).toEqual(['approve', 'failed']);
   });
 
+  it('names who Send tells: a pick, else the owner, never you, each once', async () => {
+    const { sendRecipients } = await import('../../src/renderer/store.js');
+    const me = 'mem_00000000-0000-4000-8000-000000000003';
+    const mine = (id: string): OpenItemView => ({ ...item(id), owner: { membership_id: me, name: 'Ari', active: true, match: 'approver' } });
+    const send = { run_id: 'run_00000020', seq: 1, loading: false, items: [item('1'), mine('2'), item('3')], ticks: { itm_00000001: true, itm_00000002: true, itm_00000003: true },
+      picks: {}, command: 'c', busy: false, picker: null };
+    expect(sendRecipients(send, me)).toEqual(['Fixture']);
+    expect(sendRecipients({ ...send, picks: { itm_00000002: { membership_id: 'mem_00000000-0000-4000-8000-000000000009', display_name: 'Rafael Moreno' } } }, me))
+      .toEqual(['Fixture', 'Rafael Moreno']);
+    // Unticked items go to no one; with only your own ticked, Send keeps them on your Home.
+    expect(sendRecipients({ ...send, ticks: { itm_00000002: true } }, me)).toEqual([]);
+  });
+
   it('polls only while something is in flight, and backs off after failed reads', async () => {
     const { runPollDelay } = await import('../../src/renderer/store.js');
     const running = [impactRun('running')];
