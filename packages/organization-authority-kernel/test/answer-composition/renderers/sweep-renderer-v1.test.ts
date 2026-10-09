@@ -151,14 +151,33 @@ describe("sweep renderer", () => {
     expect((run.inputs[0]!.schema as { properties: { findings: { items: { properties: { index: unknown } } } } }).properties.findings.items.properties.index).toEqual({ type: "integer" });
   });
 
-  it("takes a finding's own item exactly as it cited it, and the same item at another text, version or section only when that one is not there", async () => {
-    // THERM-46 was cited at an earlier text: its later text stands in. The PRD section is cited as it still reads: that section only.
-    const user = await (async () => { const run = alone({ replies: [REPLY] }); await run.render(); return run.prompt(0); })();
-    expect((user.findings as { about: string[] }[]).map(value => value.about)).toEqual([["E1"], ["E3"]]);
-    // The PRD cited at an earlier version: every section of it research read stands in.
+  // A finding's own item is the item it cited, by identity: edits change a citation's text digest, version and link, and edited items are what a sweep checks (R42).
+  it("takes a ticket edited since it was cited as its finding's own item, and judges it", async () => {
+    // THERM-46 was cited at an earlier text; research re-read it at a new one.
+    expect(canonicalSha256(TICKET_46)).not.toBe(canonicalSha256(ITEMS[0]!.citation));
+    const run = alone({ findings: [FINDINGS[0]!], bundle: bundle({ unreadable: [] }), replies: [{ findings: [REPLY.findings[0]] }] });
+    const rendered = await run.render();
+    expect((run.prompt(0).findings as { about: string[] }[])[0]!.about).toEqual(["E1"]);
+    expect(rendered.result.findings).toEqual([{ finding_index: 0, verdict: "landed", line: "THERM-46 now formats two decimals.", citation_indexes: [0] }]);
+  });
+
+  it("takes only the cited section of a page edited since it was cited, at its new version and text, and judges it without the page's other sections", async () => {
     const edited = { ...FINDINGS[1]!, citations: [pageCitation("s1", "3", "Display: the reading shows one decimal (0.1 °C).")] };
-    const run = alone({ findings: [edited], bundle: bundle({ unreadable: [] }), replies: [{ findings: [{ index: 0, verdict: "still_open", line: "The PRD still specifies one decimal.", cites: ["E3"] }] }] });
-    expect((await run.render()).result.findings).toEqual([{ finding_index: 0, verdict: "still_open", line: "The PRD still specifies one decimal.", citation_indexes: [0] }]);
+    // Room for the finding and the display section it cited, and not for the page's scope section.
+    const asked = { index: 0, finding: edited.finding, expected: edited.expected, about: ["E3"] };
+    const tight = EMPTY_PROMPT + cost(asked) + cost(view(bundle().items[2]!));
+    const run = alone({ findings: [edited], bundle: bundle({ unreadable: [] }), prompt_budget: tight,
+      replies: [{ findings: [{ index: 0, verdict: "still_open", line: "The PRD still specifies one decimal.", cites: ["E3"] }] }] });
+    const rendered = await run.render();
+    expect(run.trace[0]).toBe("context:E3");
+    expect(run.prompt(0).findings).toEqual([asked]);
+    expect(rendered.result).toMatchObject({ status: "assessed", findings: [{ finding_index: 0, verdict: "still_open", line: "The PRD still specifies one decimal.", citation_indexes: [0] }] });
+  });
+
+  it("takes a page's other sections when the section it cited is gone", async () => {
+    const moved = { ...FINDINGS[1]!, citations: [pageCitation("s9", "3", "Display limits: the reading shows one decimal.")] };
+    const run = alone({ findings: [moved], bundle: bundle({ unreadable: [] }), replies: [{ findings: [{ index: 0, verdict: "still_open", line: "The PRD still specifies one decimal.", cites: ["E3"] }] }] });
+    await run.render();
     expect((run.prompt(0).findings as { about: string[] }[])[0]!.about).toEqual(["E3", "E4"]);
   });
 

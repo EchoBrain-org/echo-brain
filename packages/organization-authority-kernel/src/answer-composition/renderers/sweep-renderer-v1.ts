@@ -92,6 +92,11 @@ const SWEEP_SCHEMA: StructuredGenerationJsonSchema = Object.freeze({
 function bytes(value: string): number { return Buffer.byteLength(value, "utf8"); }
 /** What an item or a finding costs in the prompt, with its comma. */
 function cost(value: unknown): number { return bytes(JSON.stringify(value)) + 1; }
+/** The section a page citation names; undefined for anything else. */
+function sectionOf(citation: unknown): string | undefined {
+  const pointer = object(citation);
+  return pointer?.kind === "page" && typeof pointer.section_id === "string" ? pointer.section_id : undefined;
+}
 /** The screens' reason to send a line back, or null. */
 function screenFailure(line: string): string | null {
   if (SUGGESTED_EDIT.some(rule => rule.test(line))) return INSTRUCTION_REASON;
@@ -136,15 +141,19 @@ export const SWEEP_RENDERER_V1: AgenticRendererV1<SweepTriggerInputV1, PersonSwe
     const unreadable = new Set(bundle.unreadable_starting.map(citation => canonicalJson(citation)));
     const readable = findings.flatMap((finding, index) => (finding.citations.some(citation => unreadable.has(canonicalJson(citation))) ? [] : [index]));
 
-    // ---- each finding's own items: the item it is about, exactly as cited, else that item at another text, version or section ----
-    const exactly = new Map(bundle.items.map(entry => [entry, canonicalJson(entry.item.citation)]));
+    // ---- each finding's own items: the item it is about, by identity (R42) ----
+    // An edit changes a citation's text digest, and a page's version and link, and edited items are what a sweep checks:
+    // an item is matched by its item key, and a page also by the section it cited. Only when that section is gone do the
+    // page's other sections stand in.
     const itemKey = new Map(bundle.items.map(entry => [entry, impactItemKeyV1(entry.item.citation)]));
     const pointerOf = (index: number) => findings[index]!.citations[0];
     const ownItems = (index: number): readonly Entry[] => {
-      const pointer = canonicalJson(pointerOf(index));
-      const cited = bundle.items.filter(entry => exactly.get(entry) === pointer);
       const key = impactItemKeyV1(pointerOf(index));
-      return cited.length > 0 ? cited : bundle.items.filter(entry => key !== undefined && itemKey.get(entry) === key);
+      const sameItem = key === undefined ? [] : bundle.items.filter(entry => itemKey.get(entry) === key);
+      const section = sectionOf(pointerOf(index));
+      if (section === undefined) return sameItem;
+      const cited = sameItem.filter(entry => sectionOf(entry.item.citation) === section);
+      return cited.length > 0 ? cited : sameItem;
     };
 
     // ---- what the model is shown: in finding order, each finding with all of its own items or not at all; then what is left ----
