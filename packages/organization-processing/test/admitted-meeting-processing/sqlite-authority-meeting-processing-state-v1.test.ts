@@ -9,6 +9,7 @@ import {
   SqliteAuthorityMeetingProcessingStateV1,
 } from "../../src/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import type Database from "better-sqlite3";
+import { EXTRACTION_FAILURE_STAGES_V1 } from "../../src/admitted-meeting-processing/extraction-failure-stage-v1.js";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "../../src/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import type {
   DecisionSet,
@@ -789,5 +790,11 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
     expect(other.review_lineage_id).not.toBe(first.review_lineage_id);
     expect(state.approvalIsCurrent(first.approval_id)).toBe(true);
     expect(state.approvalIsCurrent(other.approval_id)).toBe(true);
+  });
+
+  it("pins the held-extraction failure_stage CHECK to the TypeScript allowlist", () => {
+    const sql = database().prepare("SELECT sql FROM sqlite_schema WHERE name = 'authority_live_source_held_extractions_v1'").pluck().get() as string;
+    const listed = /failure_stage IN \(([^)]*)\)/.exec(sql)![1]!.split(",").map(value => value.trim().replace(/^'|'$/g, ""));
+    expect(listed).toEqual([...EXTRACTION_FAILURE_STAGES_V1]);
   });
 });

@@ -2290,3 +2290,37 @@ BEGIN SELECT RAISE(ABORT, 'person text source failure disposition is immutable')
 CREATE TRIGGER authority_person_text_source_failures_v1_delete_denied
 BEFORE DELETE ON authority_person_text_source_failures_v1
 BEGIN SELECT RAISE(ABORT, 'person text source failure disposition deletion is denied'); END;
+
+-- A meeting whose extraction failed is held here so later meetings in its source continue.
+-- The key is the exact extraction-attempt ledger key; failure_stage is an allowlisted code,
+-- never model output or meeting text. A newer candidate for the same lineage deletes the row.
+CREATE TABLE authority_live_source_held_extractions_v1 (
+  source_key TEXT NOT NULL REFERENCES authority_live_source_admission_v2(source_key),
+  external_id TEXT NOT NULL CHECK (length(external_id) BETWEEN 1 AND 256),
+  organization_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  revision_id TEXT NOT NULL,
+  extraction_admission_sha256 TEXT NOT NULL CHECK (extraction_admission_sha256 LIKE 'sha256:%'),
+  review_lineage_id TEXT NOT NULL CHECK (review_lineage_id GLOB 'rli_*'),
+  review_input_sha256 TEXT NOT NULL CHECK (review_input_sha256 LIKE 'sha256:%'),
+  attempt INTEGER NOT NULL CHECK (attempt >= 1),
+  failure_stage TEXT NOT NULL CHECK (failure_stage IN (
+    'evidence_id', 'evidence_duplicate', 'evidence_quote', 'due_before_meeting', 'decided_question_only', 'rationale_supports',
+    'schema_top_level', 'schema_signal_fields', 'schema_kind', 'schema_text', 'schema_status', 'schema_due_at',
+    'schema_confidence', 'schema_supports', 'schema_evidence_shape', 'schema_evidence_item', 'schema_irrelevant_fields', 'schema_owner',
+    'output_json', 'output_contract',
+    'invalid_config', 'unauthorized', 'rate_limited', 'temporarily_unavailable', 'permanently_rejected', 'timeout',
+    'unknown_outcome', 'invalid_output', 'cancelled', 'unknown',
+    'interrupted', 'output_not_saved', 'not_recorded'
+  )),
+  held_at TEXT NOT NULL CHECK (unixepoch(held_at) IS NOT NULL),
+  updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
+  PRIMARY KEY (source_key, review_lineage_id),
+  FOREIGN KEY (organization_id, source_id, revision_id)
+    REFERENCES authority_source_revisions_v1(organization_id, source_id, revision_id)
+) STRICT, WITHOUT ROWID;
+CREATE TRIGGER authority_live_source_held_extractions_v1_identity
+BEFORE UPDATE ON authority_live_source_held_extractions_v1
+WHEN NEW.source_key != OLD.source_key OR NEW.review_lineage_id != OLD.review_lineage_id
+  OR NEW.external_id != OLD.external_id OR NEW.organization_id != OLD.organization_id
+BEGIN SELECT RAISE(ABORT, 'held extraction identity is immutable'); END;

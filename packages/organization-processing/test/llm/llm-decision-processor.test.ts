@@ -18,6 +18,9 @@ import {
   type StructuredGenerationRequest,
   type StructuredGenerationResult,
 } from "../../src/llm/llm-provider.js";
+import { classifyExtractionFailureStageV1 } from "../../src/admitted-meeting-processing/extraction-failure-stage-v1.js";
+
+const modelFailure = { aborted: false, received_output: false };
 
 const processorConfig: AdapterConfig = {
   adapter_id: 'llm',
@@ -486,6 +489,7 @@ describe('llm decision processor extraction', () => {
       });
       const failure = await attempt.catch((error: unknown) => error);
       expect(extractionGroundingFailureStage(failure)).toBe('evidence_quote');
+      expect(classifyExtractionFailureStageV1(failure, modelFailure)).toBe('evidence_quote');
       expect(generate).toHaveBeenCalledTimes(1);
 
       const retried = await instance.extract(quoteMeeting, context);
@@ -883,6 +887,7 @@ describe('llm decision processor extraction', () => {
           retryable: true,
         });
         expect(extractionSchemaFailureStage(error)).toBe(stage);
+        expect(classifyExtractionFailureStageV1(error, modelFailure)).toBe(`schema_${stage}`);
         expect((error as Error).message).not.toContain(modelValue);
       }
     }
