@@ -502,6 +502,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const openItems: OpenItem[] = [];
   const minaSent = (item: Omit<OpenItem, 'approver' | 'state' | 'sent_at' | 'state_set_at'> & { sent_at: string | null }): OpenItem =>
     ({ ...item, approver: MINA, state: item.sent_at === null ? 'unsent' : 'open', state_set_at: item.sent_at });
+  // Owner modes receive someone else's items without Granola being available.
   // granola-owner-outage is granola-owner while Jira does not answer for its second item.
   const sentToAri = mode === 'granola-owner' || mode === 'granola-owner-outage';
   if (sentToAri || mode === 'granola-home-fails-once') {
@@ -646,7 +647,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           slackLinked ? tool('slack', 'Slack', 'linked', 'T0123ABCD', 'U0123ABCD') : tool('slack', 'Slack', 'unlinked', 'T0123ABCD', null),
           tool('jira', 'Jira', jiraLinked ? 'linked' : mode === 'tools-revoked' ? 'revoked' : 'unlinked', JIRA_CLOUD, jiraLinked ? 'atlassian-account-1' : null),
           tool('confluence', 'Confluence', confluenceLinked ? 'linked' : 'unlinked', CONFLUENCE_CLOUD, confluenceLinked ? 'atlassian-account-1' : null),
-          mode.startsWith('granola') ? tool('granola', 'Granola', 'linked', 'workspace', 'ari@example.test') : { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
+          mode.startsWith('granola') && !sentToAri ? tool('granola', 'Granola', 'linked', 'workspace', 'ari@example.test') : { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
             external_scope_id: null, external_subject_id: null, organization_setup: null },
         ],
       });

@@ -109,6 +109,7 @@ One row per affected item, written when its impact run finishes.
 | `state` | `unsent`, `open`, `done`, `not_relevant`. |
 | `state_set_by`, `state_set_at` | Who last clicked, and when. |
 | `sent_at`, `send_command_id` | Set by Send. |
+| `send_included` | Empty before Send, then immutable: whether Send included the item. Retries return the original counts even after state or owner changes. |
 | `checked_verdict` | Latest check: `landed`, `still_open`, `changed`, `unreadable`. |
 | `checked_by`, `checked_at`, `checked_run_id` | Who ran the latest check, when, and which sweep. |
 
@@ -129,6 +130,8 @@ Database rules (triggers):
   `created_at`) never change; rows are never deleted.
 - State moves: `unsent → open | not_relevant` only together with `sent_at`;
   after that, any of `open`, `done`, `not_relevant`; never back to `unsent`.
+- Send records whether the item was included, matching its initial state;
+  that choice, the command ID and the sent time never change afterward.
 - A last check is replaced only by a newer one (`checked_at` increases).
 
 The database keeps structure only. Who may click is the access policy's call

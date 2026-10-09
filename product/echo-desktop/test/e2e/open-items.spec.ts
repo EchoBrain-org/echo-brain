@@ -50,10 +50,11 @@ test('the approver sends the impact to its owners from Home', async () => {
   await expect(app.page.getByText('2 with others')).toBeVisible();
 });
 
-test('an owner closes an item from Home', async () => {
+test('an owner without Granola closes an item from Home', async () => {
   app = await launch('granola-owner');
   const row = app.page.getByTestId('need-row').filter({ hasText: 'ECHO-12' });
   await expect(row).toContainText('due Oct 30 → launch next week');
+  expect(app.calls().some(call => call.path === '/v1/person/meetings')).toBe(false);
   await expect(row.getByRole('button', { name: 'Open in Jira: ECHO-12 · Pilot launch' })).toBeVisible();
   // The fixture's second item has no `current`: Ari cannot open it in Jira.
   const hidden = app.page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' });

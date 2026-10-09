@@ -137,21 +137,22 @@ export class SqliteImpactItemsV1 {
   }
 
   /**
-   * What a send of the run under `command_id` already did, reported from its
-   * items as they stand now; undefined when no item of the run carries it.
+   * What a send of the run under `command_id` did, from its immutable choices;
+   * undefined when no item of the run carries it. Later state changes do not
+   * change a committed command's answer.
    */
   sentBy(runId: string, commandId: string): { readonly sent: number; readonly not_relevant: number } | undefined {
-    const states = this.database.prepare('SELECT state FROM authority_impact_items_v1 WHERE run_id=? AND send_command_id=?').pluck().all(runId, commandId) as ImpactItemStateV1[];
-    if (states.length === 0) return undefined;
-    const notRelevant = states.filter(state => state === 'not_relevant').length;
-    return Object.freeze({ sent: states.length - notRelevant, not_relevant: notRelevant });
+    const choices = this.database.prepare('SELECT send_included FROM authority_impact_items_v1 WHERE run_id=? AND send_command_id=?').pluck().all(runId, commandId) as (0 | 1)[];
+    if (choices.length === 0) return undefined;
+    const sent = choices.filter(include => include === 1).length;
+    return Object.freeze({ sent, not_relevant: choices.length - sent });
   }
 
   /**
    * One immediate transaction. Replayed when any item of the run carries `command_id` (`sentBy`).
    * Stale when the run has no unsent item or `choices` is not exactly its unsent items.
    * Included → open (with the picked owner, `owner_match = picked`, when one is given and differs);
-   * excluded → not_relevant. Sets sent_at, send_command_id, state_set_by/at = `by`.
+   * excluded → not_relevant. Freezes send_included, sets sent_at, send_command_id, state_set_by/at = `by`.
    */
   send(input: { readonly run_id: string; readonly by: string; readonly command_id: string; readonly choices: readonly ImpactSendChoiceV1[] }):
     { readonly kind: 'sent' | 'replayed'; readonly sent: number; readonly not_relevant: number } | { readonly kind: 'stale' } {
@@ -166,7 +167,7 @@ export class SqliteImpactItemsV1 {
         return Object.freeze({ kind: 'stale' as const });
       }
       const timestamp = this.timestamp();
-      const move = this.database.prepare(`UPDATE authority_impact_items_v1 SET state=?, sent_at=?, send_command_id=?, state_set_by=?, state_set_at=?, updated_at=?
+      const move = this.database.prepare(`UPDATE authority_impact_items_v1 SET state=?, sent_at=?, send_command_id=?, send_included=?, state_set_by=?, state_set_at=?, updated_at=?
         WHERE item_id=? AND run_id=? AND state='unsent'`);
       const pick = this.database.prepare(`UPDATE authority_impact_items_v1 SET owner_membership_id=?, owner_match='picked', owner_set_by=?, owner_set_at=?, updated_at=?
         WHERE item_id=? AND run_id=? AND state='unsent'`);
@@ -176,7 +177,7 @@ export class SqliteImpactItemsV1 {
         if (choice.include && owner !== undefined && owner !== unsent.get(choice.item_id)!.owner_membership_id) {
           pick.run(owner, input.by, timestamp, timestamp, choice.item_id, input.run_id);
         }
-        const changes = move.run(choice.include ? 'open' : 'not_relevant', timestamp, input.command_id, input.by, timestamp, timestamp, choice.item_id, input.run_id).changes;
+        const changes = move.run(choice.include ? 'open' : 'not_relevant', timestamp, input.command_id, choice.include ? 1 : 0, input.by, timestamp, timestamp, choice.item_id, input.run_id).changes;
         if (changes !== 1) throw new Error('Open item send lost its item');
         if (choice.include) sent++;
       }

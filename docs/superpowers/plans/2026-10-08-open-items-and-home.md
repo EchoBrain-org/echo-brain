@@ -1369,6 +1369,19 @@ Tasks run in order; each depends on the one before it. Task 8 and Task 9 both to
 
 ## Self-review notes
 
+### Part 1 follow-up to PR #300
+
+Part 1 was accepted in the fixture walkthrough and merged separately; Part 2
+remains paused. Two review fixes extend the Part 1 implementation:
+
+- Home reads shared open items and runs even when Granola is absent or
+  unavailable. Only meeting reviews depend on Granola availability.
+- V13 stores an immutable `send_included` flag per item, written atomically
+  with Send and constrained to match its initial state. `sentBy` replays the
+  original choice counts, independent of later state or owner changes. This
+  supersedes the earlier current-state replay ruling and re-pins the fresh
+  V13 baseline; no migration is added.
+
 - Spec coverage: stages (Tasks 2, 7, 9); storage (1, 2); the impact run (5, 6, 7); who sees what (3, 7, 9); Send, Update, reassign (2, 7, 9); Sweep (10, 11, 12, 13); API (4, 7, 10, 11); desktop (8, 9, 12); delivery and the stop (STOP); acceptance — items at finish (7), exact owners (6, 7), visibility (3, 7), no live parts without access (7, 9), policy-only writers (3, 7), idempotent Send (2, 7), fallbacks (3, 7), no outside text (2, 7, 11), sweep rules (2, 11), `sweep_due` (11), desktop path (9, 12), goldens (5, 10).
 - Rulings 18–23 are reflected: verdict-only checks (2, 11), Jira bulk assignee read (6), Update in place (9), no Remind (12), short `expected` (2, 4, 5), review summaries (4, 8).
 - Type names used across tasks: `TriggerRunRowV1`, `TriggerRunScopeV1`, `SqliteTriggerRunsV1`, `ImpactItemDraftV1`, `ImpactItemRowV1`, `SqliteImpactItemsV1`, `SqliteOpenItemPeopleV1`, `OpenItemFactsV1`, `OpenItemAccessV1`, `openItemAccessV1`, `JiraOwnerAccountsV1`, `matchImpactOwnersV1`, `PersonReadableDecisionsV1`, `PersonOpenItemV1`, `PersonHomeSendV1`, `PersonOpenItemsSummaryV1`, `PersonImpactStageV1`, `PersonSweepResultV1`, `SWEEP_RENDERER_V1`, `impactItemKeyV1`, `currentImpactLineV1`, `approvalProposalSummaryV1`.

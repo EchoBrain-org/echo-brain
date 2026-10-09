@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonMeetingReviewV2, PersonRunV1 } from '@echo-brain/organization-api';
-import type { HomeView, OpenItemView } from '../../src/shared/protocol.js';
+import type { HomeView, OpenItemView, ToolStatus } from '../../src/shared/protocol.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -10,6 +10,7 @@ const record = 'sha256:' + '1'.repeat(64);
 let review: PersonMeetingReviewV2;
 let run: PersonRunV1 | null;
 let home: HomeView;
+let granola: ToolStatus | null = 'linked';
 let failNextList = false;
 let failNextReviews = false;
 let failLists = false;
@@ -52,6 +53,7 @@ beforeEach(() => {
   review = { approval_id: approval, title: 'Private meeting', project_ids: [], status: 'pending', decided_on: null, first_line: null, action_count: 0, meeting_at: null };
   run = null;
   home = emptyHome();
+  granola = 'linked';
   failNextList = false;
   failNextReviews = false;
   failLists = false;
@@ -70,7 +72,7 @@ beforeEach(() => {
       case 'app.status': return ok({ signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } });
       case 'projects.list': return ok({ items: [], next_cursor: null });
       case 'app.setUnresolved': return ok(null);
-      case 'account.tools': return ok({ tools: [{ tool_id: 'granola', status: 'linked' }] });
+      case 'account.tools': return ok({ tools: granola === null ? [] : [{ tool_id: 'granola', status: granola }] });
       case 'tools.meetings':
         if (params.request?.operation === 'reviews') {
           if (failNextReviews) { failNextReviews = false; return unavailable; }
@@ -116,6 +118,32 @@ async function start() {
 }
 
 describe('Home rows', () => {
+  it.each([null, 'unavailable'] as const)('shows and closes an owner item when Granola is %s', async status => {
+    granola = status;
+    home = { ...emptyHome(), items: [item('1')], waiting: 2 };
+    const store = await start();
+    expect(store.getState().home).toMatchObject({ meetings: false, loading: false, open: { waiting: 2 }, rows: [{ kind: 'update', item: { item_id: item('1').item_id } }] });
+    expect(store.needsCount()).toBe(1);
+    expect(rpc.mock.calls.some(([method]) => method === 'tools.meetings')).toBe(false);
+    const opened = store.getState().home!.open!.items[0]!;
+    home = { ...emptyHome(), waiting: 2 };
+    await store.markDone(opened);
+    expect(operations()).toContain('set_state');
+    expect(store.getState().home?.rows).toEqual([]);
+  });
+
+  it('keeps open items when Granola becomes unavailable and stops reading meeting reviews', async () => {
+    home = { ...emptyHome(), items: [item('1')] };
+    const store = await start();
+    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['approve', 'update']);
+    granola = 'unavailable';
+    rpc.mockClear();
+    await store.loadHome();
+    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['update']);
+    expect(rpc.mock.calls.some(([method]) => method === 'tools.meetings')).toBe(false);
+    expect(operations()).toContain('home');
+  });
+
   it('orders rows approve, send, check, update, failed, checking', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
     const reviews = [meeting('c', 'approved'), meeting('b', 'approved'), meeting('d', 'publishing'), meeting('e', 'approved'), meeting('a', 'pending')];
