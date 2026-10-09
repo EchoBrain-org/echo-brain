@@ -102,6 +102,16 @@ describe("Sweep definition", () => {
     expect(filled(value, ["E7"])).toContain('1. "Ship {{starting:1}} first" Expected: "{{starting:2}} done". Cited then: E7.');
   });
 
+  it("takes a Slack message a finding cited, as the organization API checks a Slack citation", () => {
+    const slack = { kind: "slack_message", team_id: "T0THERM", channel_id: "C0THERM", message_ts: "1700000000.000100",
+      permalink: "https://therm.slack.com/archives/C0THERM/p1700000000000100", text_sha256: canonicalSha256("slack") };
+    const value = brief("sweep", { findings: [{ finding: "Launch moved in chat", expected: "launch next week", citations: [slack, record] }] });
+    expect(value.starting).toEqual([{ citation: slack, if_unreadable: "report" }, { citation: record, if_unreadable: "report" }]);
+    for (const bad of [{ ...slack, channel_id: "general" }, { ...slack, text: "the message itself" }, { kind: "slack_message" }]) {
+      refused("sweep", { findings: [{ finding: "f", expected: "e", citations: [bad] }] });
+    }
+  });
+
   it("refuses empty, unbounded or malformed findings", () => {
     const one = findings[0]!;
     // As many findings as a sweep result holds, and no more.

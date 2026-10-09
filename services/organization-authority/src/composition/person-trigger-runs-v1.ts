@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonImpactCardV1, type PersonImpactCardV1 } from '@echo-brain/organization-api';
+import { PERSON_RUNS_LIST_LIMIT_V1, validatePersonImpactCardV1, type PersonImpactCardV1 } from '@echo-brain/organization-api';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { impactItemKeyV1, refreshImpactCardV1, storableImpactCardV1, type FreshImpactItemV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
@@ -18,8 +18,9 @@ import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, currentCoreRuntimeDetailV1, withoutCoreRuntimeContentV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonDiagnosticCaptureHandleV1 } from './person-diagnostics-v1.js';
-import { openItemViewerV1, readStoredImpactCardV1 } from './person-open-items-v1.js';
+import { openItemViewerV1 } from './person-open-items-v1.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
+import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
 import { sweepOpenItemsV1 } from './person-sweep-runs-v1.js';
 
 type Desk = Awaited<ReturnType<typeof bindPersonLiveEvidenceDeskV1>>;
@@ -51,6 +52,11 @@ export interface CreatePersonTriggerRunsV1Options {
 }
 
 const LEASE_MS = 600_000;
+/** `list` shows at most this many sweeps, so frequent sweeps never push an impact run (and its Try again) off the list (R55). */
+const SWEEPS_LISTED = 20;
+/** Newest first, as the store lists runs. */
+const newestFirst = (left: TriggerRunRowV1, right: TriggerRunRowV1) =>
+  (left.created_at < right.created_at ? 1 : left.created_at > right.created_at ? -1 : 0) || (left.run_id < right.run_id ? 1 : left.run_id > right.run_id ? -1 : 0);
 const actorOf = (value: PersonAccessAuthorization): ApprovalActorV1 => ({ organization_id: value.organization_id, principal_id: value.principal_id, membership_id: value.membership_id });
 const sameActor = (left: ApprovalActorV1, right: ApprovalActorV1) => left.organization_id === right.organization_id && left.principal_id === right.principal_id && left.membership_id === right.membership_id;
 const scopeFor = (records: PersonRecordProjectsV1, token: string, record_sha256: Sha256Digest) => {
@@ -165,8 +171,10 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
   return Object.freeze({
     async list(input: Parameters<PersonTriggerRunsHttpApplicationV1['list']>[0]) {
       input.signal?.throwIfAborted(); const actor = actorOf(options.sessions.authenticateAccess({ access_token: input.access_token }));
-      // The caller's impact runs and sweeps, newest first.
-      return Object.freeze({ runs: Object.freeze(options.runs.list(actor, 100).map(row => Object.freeze({ run_id: row.run_id, trigger: row.trigger, event_ref: row.event_ref, state: row.state, error_code: row.error_code, created_at: row.created_at, updated_at: row.updated_at }))) });
+      // The caller's 20 newest sweeps, and as many of their newest impact runs as fill the rest, newest first.
+      const sweeps = options.runs.list(actor, SWEEPS_LISTED, 'sweep');
+      const rows = [...sweeps, ...options.runs.list(actor, PERSON_RUNS_LIST_LIMIT_V1 - sweeps.length, 'approved_record')].sort(newestFirst);
+      return Object.freeze({ runs: Object.freeze(rows.map(row => Object.freeze({ run_id: row.run_id, trigger: row.trigger, event_ref: row.event_ref, state: row.state, error_code: row.error_code, created_at: row.created_at, updated_at: row.updated_at }))) });
     },
     async start(input: Parameters<PersonTriggerRunsHttpApplicationV1['start']>[0]) {
       input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token }); const actor = actorOf(authorization);

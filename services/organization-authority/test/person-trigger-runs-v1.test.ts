@@ -10,7 +10,7 @@ import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from '../src/comp
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from '../../../tests/support/telemetry-fixture-vocabulary-v1.js';
 
 import { SqliteTriggerRunsV1, enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
-import { readStoredImpactCardV1 } from '../src/composition/person-open-items-v1.js';
+import { readStoredImpactCardV1 } from '../src/composition/person-stored-impact-card-v1.js';
 import { createPersonTriggerRunsV1 } from '../src/composition/person-trigger-runs-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
@@ -68,6 +68,32 @@ describe('durable approved-record trigger runs', () => {
     await expect(f.app.view({ access_token: 'other', request: { schema_version: 1, operation: 'view', run_id: f.row.run_id } })).rejects.toMatchObject({ code: 'not_found' });
     await expect(f.app.retry({ access_token: 'other', request: { schema_version: 1, operation: 'retry', run_id: f.row.run_id } })).rejects.toMatchObject({ code: 'not_found' });
     await expect(f.app.list({ access_token: 'other' })).resolves.toEqual({ runs: [] });
+  });
+
+  it('lists at most the 20 newest sweeps, so they never push an impact run off the list', async () => {
+    const f = await fixture();
+    // An older impact check that failed: its Try again row must stay listed.
+    const impact = f.runs.claim(f.person, f.row.run_id, 60_000);
+    if (impact.kind !== 'claimed') throw new Error('expected lease');
+    expect(f.runs.fail(f.row.run_id, impact.lease_token, 'research_failed')).toBe(true);
+    const sweeps: string[] = [];
+    for (let index = 0; index < 30; index++) {
+      f.advance(1_000);
+      const sweep = f.runs.enqueueSweep(f.person, { kind: 'mine' });
+      const lease = f.runs.claim(f.person, sweep.run_id, 60_000);
+      if (lease.kind !== 'claimed' || !f.runs.fail(sweep.run_id, lease.lease_token, 'unavailable')) throw new Error('expected a failed sweep');
+      sweeps.push(sweep.run_id);
+    }
+    // A newer approval's impact check, queued after them all.
+    f.advance(1_000);
+    const other = await f.otherProposal();
+    f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: 'approve-other' }), () => f.session);
+    await f.publisher([enqueueApprovedRecordRunV1(f.runs)]).appendFinalizedApprovalsToV4(new AbortController().signal);
+    const newer = f.runs.list(f.person, 1, 'approved_record')[0]!.run_id;
+    const { runs } = await f.app.list({ access_token: 'approver' });
+    // Newest first overall, as before: the 20 newest sweeps among the impact runs.
+    expect(runs.map(run => run.run_id)).toEqual([newer, ...sweeps.slice(-20).reverse(), f.row.run_id]);
+    expect(runs.at(-1)).toMatchObject({ trigger: 'approved_record', state: 'failed', error_code: 'research_failed' });
   });
 
   it('captures one approved run with a linked background root and preserves its research outcome after committing output', async () => {

@@ -1,5 +1,6 @@
 import {
   PERSON_SWEEP_RESULT_LIMITS_V1,
+  validatePersonAnswerCitationV6,
   validatePersonEvidenceOpenRequestV1,
   validatePersonPageCitationV1,
   validatePersonQueryText,
@@ -79,12 +80,14 @@ function line(value: unknown, label: string): string {
       Buffer.byteLength(value, "utf8") > 1_000 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)) invalid(`${label} must be one line of text`);
   return value;
 }
-/** A citation released by an earlier request: a ticket, a page, or an ECHO record or document. */
+/** A citation released by an earlier request: a ticket, a page, a Slack message, or an ECHO record or document. */
 function citation(value: unknown, label: string): unknown {
   try {
     const kind = typeof value === "object" && value !== null ? (value as { readonly kind?: unknown }).kind : undefined;
     if (kind === "ticket") return validatePersonTicketCitationV1(value);
     if (kind === "page") return validatePersonPageCitationV1(value);
+    // The organization API's own Slack citation check, as an Ask citation of a Slack message makes it; the live desk opens these.
+    if (kind === "slack_message") return validatePersonAnswerCitationV6({ citation: value, kind: "slack_message", label, visibility: "only_me" }).citation;
     return validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation: value }).citation;
   } catch { return invalid(`${label} is not a citation`); }
 }

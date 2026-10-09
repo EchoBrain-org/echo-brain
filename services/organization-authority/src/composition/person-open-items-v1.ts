@@ -6,7 +6,6 @@ import {
   PERSON_OPEN_ITEMS_PAGE_V1,
   PERSON_UPLOAD_PROJECT_SET_MAX,
   validatePersonAnswerCitationV6,
-  validatePersonImpactCardV1,
   validatePersonRunsResultV1,
   type PersonAnswerCitationV6,
   type PersonHomeSendV1,
@@ -20,8 +19,7 @@ import {
   type PersonOpenItemV1,
   type PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
-import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
-import { currentImpactLineV1, impactCardLineV1, impactItemKeyV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
+import { currentImpactLineV1, impactCardLineV1, impactItemKeyV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError, type AuthorityErrorCode } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { ImpactItemRowV1, ImpactItemStateV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
@@ -31,6 +29,7 @@ import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-
 import { openItemAccessV1, openItemDecisionAccessV1, openItemSendAccessV1, type OpenItemAccessV1, type OpenItemFactsV1 } from './open-items-policy-v1.js';
 import type { bindPersonLiveEvidenceDeskV1, CreatePersonLiveAnswerRouteOptionsV1, PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
 import type { PersonReadableDecisionV1, PersonReadableDecisionsV1 } from './person-record-search-route.js';
+import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
 
 /**
  * The shared open items on the runs API (open items and Home v1, sections 4,
@@ -128,7 +127,6 @@ const ACCESS_REFUSED: readonly AuthorityErrorCode[] = ['unauthorized', 'not_foun
 /** A last check older than a day makes a sweep due; a person's sweep is asked for at most hourly (R32). */
 const DAY_MS = 24 * 3_600_000;
 const HOUR_MS = 3_600_000;
-const SWEEP_TRIGGER = AGENTIC_TRIGGER_DEFINITIONS_V1.find(definition => definition.name === 'sweep')!;
 
 const notFound = () => new AuthorityOperationError('not_found', 'item is not available');
 /** An error's Authority code, or `error`. */
@@ -140,56 +138,6 @@ function refusedAccess(error: unknown): boolean {
 }
 function invalidOutput(): never {
   throw new AuthorityOperationError('invalid_output', 'open items response is invalid');
-}
-
-/**
- * A run's stored impact card, checked to hold pointers and ECHO's own lines
- * only, or `unavailable`. Open items read its first decided line from here.
- */
-export function readStoredImpactCardV1(json: string): StoredImpactCardV1 {
-  let value: unknown;
-  try { value = JSON.parse(json); } catch { throw new AuthorityOperationError('unavailable', 'stored impact card is invalid'); }
-  try {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('stored card is not an object');
-    const raw = value as Record<string, unknown>;
-    const keys = Object.keys(raw).sort();
-    if (JSON.stringify(keys) !== JSON.stringify(['affected', 'citations', 'decided', 'schema_version', 'status', 'unconfirmed']) || raw.schema_version !== 1 ||
-        !Array.isArray(raw.citations) || !Array.isArray(raw.decided) || !Array.isArray(raw.affected) || !Array.isArray(raw.unconfirmed)) throw new Error('stored card has an invalid shape');
-    const rawCitations = raw.citations as unknown[];
-    const rawDecided = raw.decided as unknown[];
-    const rawAffected = raw.affected as unknown[];
-    const rawUnconfirmed = raw.unconfirmed as unknown[];
-    const citations = rawCitations.map(pointer => {
-      if (typeof pointer !== 'object' || pointer === null || Array.isArray(pointer) || typeof (pointer as { readonly kind?: unknown }).kind !== 'string') throw new Error('stored citation is invalid');
-      const kind = (pointer as { readonly kind: string }).kind;
-      const citationKind = kind === 'ticket' || kind === 'page' || kind === 'slack_message' ? kind : 'decision';
-      return validatePersonAnswerCitationV6({ citation: pointer, kind: citationKind, label: 'Stored pointer', visibility: 'only_me' }).citation;
-    });
-    const affected = rawAffected.map(entry => {
-      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) throw new Error('stored affected row is invalid');
-      const row = entry as Record<string, unknown>;
-      const allowed = ['citation_index', 'date_at_risk', 'expected', 'relation', 'says_now'];
-      if (Object.keys(row).some(key => !allowed.includes(key))) throw new Error('stored affected row has an extra field');
-      return { ...row, says_now: row.says_now ?? 'Stored local value.' };
-    });
-    const validated = validatePersonImpactCardV1({
-      status: raw.status, decided: rawDecided, affected, unconfirmed: rawUnconfirmed, people: [],
-      citations: citations.map(citation => ({ citation, kind: citation.kind === 'ticket' || citation.kind === 'page' || citation.kind === 'slack_message' ? citation.kind : 'decision', label: 'Stored pointer', visibility: 'only_me' })),
-    });
-    const local = (index: number) => citations[index]?.kind === 'approved_record' || citations[index]?.kind === 'source_revision';
-    if (validated.decided.some(row => !local(row.citation_index)) || rawAffected.some((entry, index) => Object.hasOwn(entry as object, 'says_now') && !local(validated.affected[index]!.citation_index))) throw new Error('stored card contains outside text');
-    return Object.freeze({ schema_version: 1 as const, status: validated.status,
-      decided: Object.freeze(validated.decided.map(row => Object.freeze({ text: row.text, citation_index: row.citation_index }))),
-      affected: Object.freeze(validated.affected.map((row, index) => Object.freeze({ citation_index: row.citation_index,
-        ...(row.relation === undefined ? {} : { relation: row.relation }), ...(row.expected === undefined ? {} : { expected: row.expected }),
-        ...(row.date_at_risk === undefined ? {} : { date_at_risk: row.date_at_risk }),
-        ...(Object.hasOwn(rawAffected[index] as object, 'says_now') ? { says_now: row.says_now } : {}),
-      }))),
-      unconfirmed: validated.unconfirmed, citations: Object.freeze(citations),
-    });
-  } catch {
-    throw new AuthorityOperationError('unavailable', 'stored impact card is invalid');
-  }
 }
 
 /** The tool an item lives in, from its stored pointer. */
@@ -286,7 +234,7 @@ function approvedBy(row: ImpactItemRowV1, viewer: Viewer): boolean {
 /**
  * The policy's facts and answer for each row, with no live read: which
  * decisions the viewer reads now, who is still an active member, whether the
- * viewer leads one of a decision's projects, and whether Send sent the item.
+ * viewer leads one of a decision's projects, and whether the item reached its owner.
  */
 export function assessOpenItemsV1(sources: Pick<OpenItemSourcesV1, 'records' | 'people'>, viewer: Viewer, found: readonly ImpactItemRowV1[], scopeRecords: readonly Sha256Digest[] = []): Context {
   const rows = found.filter(row => row.organization_id === viewer.organization);
@@ -305,8 +253,8 @@ export function assessOpenItemsV1(sources: Pick<OpenItemSourcesV1, 'records' | '
     const facts: OpenItemFactsV1 = Object.freeze({
       viewer: viewer.membership, approver: row.approver.membership_id, owner: row.owner_membership_id,
       approver_active: people.get(row.approver.membership_id)?.active === true, owner_active: people.get(row.owner_membership_id)?.active === true,
-      // Only Send tells an owner: an item it left unticked stays unsent to them, however it is opened or closed later.
-      sent_to_owner: row.send_included === true, state: row.state,
+      // Sent, and Send included it, or it was reopened since: an open item waits on an owner who must be able to see it (R54).
+      sent_to_owner: row.sent_at !== null && (row.send_included === true || row.state === 'open' || row.state === 'done'), state: row.state,
       reads_decision: decisions.has(row.record_sha256), leads_decision_project: leadsDecision(row.record_sha256),
     });
     return Object.freeze({ row, facts, access: openItemAccessV1(facts) });
@@ -350,25 +298,10 @@ export function openItemDecisionPartsV1(sources: Pick<OpenItemSourcesV1, 'runs' 
 }
 
 /**
- * A sweep re-reads an item through its pointer, as a finding's citation the
- * sweep trigger takes: a ticket, a page, an ECHO record or document, and no
- * Slack message today. An item on any other pointer is never swept, so it
- * never makes a sweep due either.
- */
-function sweepTakesItem(row: Pick<ImpactItemRowV1, 'pointer'>): boolean {
-  try {
-    SWEEP_TRIGGER.parseEvent({ findings: [{ finding: 'An open item', expected: 'the approved decision', citations: [row.pointer] }] });
-    return true;
-  } catch (error) {
-    if (error instanceof AuthorityOperationError && error.code === 'invalid_request') return false;
-    throw error;
-  }
-}
-/**
  * The open items a sweep of `scope` rechecks for this viewer (section 6):
- * open, shown to the viewer by the policy, and on a pointer a sweep re-reads.
- * `mine` is what they sent or own; a decision's or a project's are its items
- * the viewer sees, as `items` shows them. `assessed` holds those items only.
+ * open, and shown to the viewer by the policy. `mine` is what they sent or
+ * own; a decision's or a project's are its items the viewer sees, as `items`
+ * shows them. `assessed` holds those items only.
  */
 export function sweepScopeOpenItemsV1(sources: OpenItemSourcesV1, viewer: Viewer, scope: TriggerRunScopeV1): Context {
   let rows: readonly ImpactItemRowV1[];
@@ -383,7 +316,7 @@ export function sweepScopeOpenItemsV1(sources: OpenItemSourcesV1, viewer: Viewer
     default:
       rows = sources.items.forRecords(sources.records.projectRecords({ access_token: viewer.token, project_id: scope.project_id, limit: PROJECT_RECORDS_MAX }), { states: ['open'], limit: SCOPE_ROWS_MAX });
   }
-  const context = assessOpenItemsV1(sources, viewer, rows.filter(sweepTakesItem));
+  const context = assessOpenItemsV1(sources, viewer, rows);
   return { ...context, assessed: context.assessed.filter(entry => entry.access.see_row) };
 }
 
@@ -547,12 +480,12 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const theirs = visible.filter(entry => approvedBy(entry.row, viewer) || entry.row.owner_membership_id === viewer.membership);
       const checks = theirs.flatMap(entry => (entry.row.check === null ? [] : [entry.row.check.at])).sort();
 
-      // A sweep is due (section 6) for one of those items that a sweep would check and nobody checked in the last day, unless one of
+      // A sweep is due (section 6) for one of those items that nobody checked in the last day, unless one of
       // the caller's sweeps is waiting or running, or one was asked for in the last hour (R32): a sweep that keeps failing, or that
       // leaves items unassessed, is not asked for again on every load. Check now is the caller's own request, and never limited.
       const time = now().getTime();
       const dayAgo = new Date(time - DAY_MS).toISOString();
-      const stale = theirs.some(entry => (entry.row.check === null || entry.row.check.at < dayAgo) && sweepTakesItem(entry.row));
+      const stale = theirs.some(entry => entry.row.check === null || entry.row.check.at < dayAgo);
       const newest = stale ? options.runs.newestSweep(actor) : undefined;
       const sweep_due = stale && options.runs.liveSweep(actor) === undefined && (newest === undefined || newest.created_at <= new Date(time - HOUR_MS).toISOString());
       return checked('home', {

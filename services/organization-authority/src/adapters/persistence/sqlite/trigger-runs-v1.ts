@@ -112,11 +112,13 @@ export class SqliteTriggerRunsV1 {
     return found === undefined ? undefined : publicRow(found);
   }
 
-  list(actor: ApprovalActorV1, limit: number): readonly TriggerRunRowV1[] {
+  /** The actor's newest runs, of one trigger when `trigger` names it, newest first. */
+  list(actor: ApprovalActorV1, limit: number, trigger?: TriggerRunRowV1['trigger']): readonly TriggerRunRowV1[] {
     if (!Number.isFinite(limit)) throw new TypeError('Trigger run limit must be finite');
     const capped = Math.max(0, Math.min(100, Math.floor(limit)));
-    return (this.database.prepare(`${selectRows} WHERE organization_id=? AND principal_id=? AND membership_id=? ORDER BY created_at DESC, run_id DESC LIMIT ?`)
-      .all(actor.organization_id, actor.principal_id, actor.membership_id, capped) as StoredRowV1[]).map(publicRow);
+    return (this.database.prepare(`${selectRows} WHERE organization_id=? AND principal_id=? AND membership_id=? AND (? IS NULL OR trigger=?)
+      ORDER BY created_at DESC, run_id DESC LIMIT ?`)
+      .all(actor.organization_id, actor.principal_id, actor.membership_id, trigger ?? null, trigger ?? null, capped) as StoredRowV1[]).map(publicRow);
   }
 
   read(actor: ApprovalActorV1, runId: string): TriggerRunRowV1 | undefined {

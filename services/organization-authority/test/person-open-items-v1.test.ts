@@ -367,7 +367,7 @@ describe('open items: send, update, reassign', () => {
     expect(f.items.read(ticket!.item_id)).toMatchObject({ state: 'unsent', owner_match: 'jira_account' });
   });
 
-  it('hides an unticked item from an owner who cannot read the decision, and keeps one sent then closed (R13)', async () => {
+  it('hides an unticked item from an owner who cannot read the decision until it is reopened, and keeps one sent then closed (R13, R54)', async () => {
     const unticked = await openItemsFixture({ ticketOwner: 'okafor' }); await unticked.finishImpactRun();
     const unsent = (await scope(unticked, 'ari', 'run')).items;
     await expect(sendAll(unticked, unsent, 'c1', entry => ({ include: entry.kind !== 'ticket' }))).resolves.toEqual({ sent: 1, not_relevant: 1 });
@@ -379,10 +379,11 @@ describe('open items: send, update, reassign', () => {
     unticked.advance(5_000);
     await expect(setState(unticked, 'ari', hidden, 'not_relevant')).resolves.toEqual({ state: 'not_relevant' });
     expect((await scope(unticked, 'okafor', 'mine')).items).toEqual([]);
-    // Nor does the approver closing it as done later send it: Send left it out, and only Send tells an owner.
-    await expect(setState(unticked, 'ari', hidden, 'done')).resolves.toEqual({ state: 'done' });
-    expect((await scope(unticked, 'okafor', 'mine')).items).toEqual([]);
-    await expect(item(unticked, 'okafor', hidden)).rejects.toMatchObject({ code: 'not_found' });
+    // The approver reopens it: it now waits on its owner, who sees it, though Send left it out (R54).
+    await expect(setState(unticked, 'ari', hidden, 'open')).resolves.toEqual({ state: 'open' });
+    expect((await unticked.app.home({ access_token: 'okafor' })).items).toMatchObject([{ item_id: hidden, state: 'open', waits_on: 'owner' }]);
+    expect((await scope(unticked, 'okafor', 'mine')).items.map(entry => entry.item_id)).toEqual([hidden]);
+    expect((await item(unticked, 'okafor', hidden)).item).not.toHaveProperty('decision');
 
     const closed = await sentFixture({ ticketOwner: 'okafor' });
     expect((await scope(closed, 'okafor', 'mine')).items.map(entry => entry.item_id)).toEqual([closed.ticket.item_id]);
