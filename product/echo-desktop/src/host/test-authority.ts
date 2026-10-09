@@ -704,8 +704,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // Impact checks: approving queues one run; a start runs it, and the second
     // list after that finds it done (in granola-run-failed, failed until Try
     // again). A done check has found two open items. Every answer passes the
-    // contract's own result check, as the Authority's does.
-    if (method === 'POST' && path === '/v1/person/runs' && mode.startsWith('granola')) {
+    // contract's own result check, as the Authority's does. Runs and shared
+    // Home reads exist even when the meeting provider is unavailable.
+    if (method === 'POST' && path === '/v1/person/runs') {
       const api = await contract();
       let request: RunsRequest;
       try {
