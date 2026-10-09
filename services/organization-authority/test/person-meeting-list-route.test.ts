@@ -1,6 +1,5 @@
 import { performance } from "node:perf_hooks";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { clearReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PersonItemPositionV1, PersonStoreMeetingRowV1 } from "../src/application/ports/person-list-v1.js";
@@ -10,6 +9,7 @@ import {
   EMP_A, EMP_B, OWNER, PROJ_X, PROJECT_NAMES, SHARED, T, UNJOINED,
   meetingWorld, type ReaderToken,
 } from "./fixtures/person-meeting-world.js";
+import { failure } from "./authority-failure.js";
 import { SIGNED_APPROVAL_PRIVATE_MARKER } from "./fixtures/signed-approval-decision-v1.js";
 
 const GLOBAL: PersonAskScopeV2 = { kind: "global" };
@@ -24,14 +24,6 @@ async function world(options: Parameters<typeof meetingWorld>[0] = {}) {
   const value = await meetingWorld(options);
   worlds.push(value);
   return value;
-}
-
-function failure(operation: () => unknown): { readonly code: string; readonly message: string } {
-  try { operation(); } catch (error) {
-    if (error instanceof AuthorityOperationError) return { code: error.code, message: error.message };
-    throw error;
-  }
-  throw new Error("expected an Authority failure");
 }
 
 /** collect(limit) → commit(all) until a short page, as the list route drives one source. */

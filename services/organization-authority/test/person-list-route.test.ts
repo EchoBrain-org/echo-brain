@@ -72,7 +72,6 @@ interface Options {
   readonly meetings?: readonly PersonStoreMeetingRowV1[];
   readonly mine?: readonly string[];
   readonly projects?: readonly PersonListJoinedProjectV1[];
-  readonly tools?: readonly OrganizationPersonToolV4[];
 }
 
 function fixture(options: Options = {}) {
@@ -204,7 +203,7 @@ function fixture(options: Options = {}) {
   const tools = async (): Promise<readonly OrganizationPersonToolV4[]> => {
     record("tools", {});
     hooks.tools?.();
-    return options.tools ?? [{ tool_id: "slack", display_name: "Slack", availability: "enabled", personal_status: "linked", external_scope_id: "T0SECRETSCOPE", external_subject_id: "U0SECRETSUBJECT", organization_setup: null }];
+    return [{ tool_id: "slack", display_name: "Slack", availability: "enabled", personal_status: "linked", external_scope_id: "T0SECRETSCOPE", external_subject_id: "U0SECRETSUBJECT", organization_setup: null }];
   };
   const tokens = { owner: OWNER, member: MEMBER } as const;
   const sessions = {
@@ -220,7 +219,7 @@ function fixture(options: Options = {}) {
   const open = (value: PersonOpenRefV1, cursor?: string, access_token = "owner") =>
     route.open({ access_token, request: { schema_version: 1, ref: value, ...(cursor === undefined ? {} : { cursor }) } });
   const called = (method: string) => calls.filter((call) => call.method === method);
-  return { world, calls, called, audits, hooks, route, list, open };
+  return { world, calls, called, audits, hooks, list, open };
 }
 
 const CHUNKS = Array.from({ length: 7 }, (_, index) => ({ ordinal: index + 1, text: `chunk ${index + 1}. ` }));

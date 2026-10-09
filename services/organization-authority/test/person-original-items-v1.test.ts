@@ -16,6 +16,7 @@ import {
   MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, RETURNED_MEMBER,
   addMembership, authorization, insertLegacyTextV1, projectContextDatabase, revokeMembership,
 } from "./fixtures/project-context-sqlite.js";
+import { failure } from "./authority-failure.js";
 
 type Actor = AuthorityPersonMembershipBinding;
 type Row = PersonStoreNoteRowV1 | PersonStoreDocumentRowV1;
@@ -44,14 +45,6 @@ function revokeGrant(database: Database.Database, projectId: string, actor: Acto
 function merge(...lists: readonly (readonly Row[])[]): Row[] {
   return lists.flat().sort((left, right) => left.added_at > right.added_at ? -1 : left.added_at < right.added_at ? 1
     : `${left.kind}:${left.id}` < `${right.kind}:${right.id}` ? -1 : 1);
-}
-
-function failure(operation: () => unknown): { readonly code: string; readonly message: string } {
-  try { operation(); } catch (error) {
-    if (error instanceof AuthorityOperationError) return { code: error.code, message: error.message };
-    throw error;
-  }
-  throw new Error("expected an Authority failure");
 }
 
 function fixture() {
@@ -156,7 +149,19 @@ function fixture() {
   const audits = () => (database.prepare("SELECT body_json FROM authority_person_upload_read_audit_v1").all() as { body_json: string }[])
     .map((row) => row.body_json).filter((body) => body.includes(AUDIT_KIND));
 
-  return { database, projects, documents, repository, items, retrieval, session, time, requestIds, authors, note, legacy, document, walk, ids, audits, sessions };
+  /** Every document the reader finds through the V2 document search, page by page. */
+  const searchAll = (token: string, project_id: string | null) => {
+    const found: string[] = [];
+    for (let cursor: string | null = null, guard = 0; guard < 50; guard += 1) {
+      const page = documents.searchV2(token, { schema_version: 2, kind: "echo-person-document-search-v2", project_id, query: "", limit: 20, cursor });
+      found.push(...page.documents.map((item) => item.document_id));
+      if (page.next_cursor === null) return found;
+      cursor = page.next_cursor;
+    }
+    throw new Error("search did not end");
+  };
+
+  return { database, projects, documents, items, retrieval, session, time, requestIds, authors, note, legacy, document, walk, ids, searchAll, audits, sessions };
 }
 
 describe("person original items store", () => {
@@ -295,20 +300,10 @@ describe("person original items store", () => {
       }
       throw new Error("feed did not end");
     };
-    const search = (token: string, project_id: string | null) => {
-      const found: string[] = [];
-      for (let cursor: string | null = null, guard = 0; guard < 50; guard += 1) {
-        const page = f.documents.searchV2(token, { schema_version: 2, kind: "echo-person-document-search-v2", project_id, query: "", limit: 20, cursor });
-        found.push(...page.documents.map((item) => item.document_id));
-        if (page.next_cursor === null) return found;
-        cursor = page.next_cursor;
-      }
-      throw new Error("search did not end");
-    };
     for (const [token, projectId] of [["owner", PROJECT_ALPHA], ["owner", PROJECT_BETA], ["member", PROJECT_ALPHA]] as const) {
       const rows = f.walk(token, inProject(projectId)).rows;
       expect(rows.filter((row) => row.kind === "note").map((row) => row.id)).toEqual(feed(token, projectId));
-      expect(rows.filter((row) => row.kind === "document").map((row) => row.id)).toEqual(search(token, projectId));
+      expect(rows.filter((row) => row.kind === "document").map((row) => row.id)).toEqual(f.searchAll(token, projectId));
       expect(rows.length).toBeGreaterThan(0);
     }
     const nonexistent = "prj_33333333-3333-4333-8333-333333333333";
@@ -496,13 +491,7 @@ describe("person original items store", () => {
     f.document("member", { kind: "team" });
     for (const token of ["owner", "member"]) {
       const rows = f.walk(token, GLOBAL).rows;
-      const searched: string[] = [];
-      for (let cursor: string | null = null, guard = 0; guard === 0 || cursor !== null; guard += 1) {
-        const page = f.documents.searchV2(token, { schema_version: 2, kind: "echo-person-document-search-v2", project_id: null, query: "", limit: 20, cursor });
-        searched.push(...page.documents.map((item) => item.document_id));
-        cursor = page.next_cursor;
-      }
-      expect(rows.filter((row) => row.kind === "document").map((row) => row.id)).toEqual(searched);
+      expect(rows.filter((row) => row.kind === "document").map((row) => row.id)).toEqual(f.searchAll(token, null));
       const listed = new Set(rows.map((row) => row.id));
       for (const id of notes) {
         const version = (f.database.prepare("SELECT request_version FROM authority_person_updates_v2 WHERE context_id=?").get(id) as { request_version: 2 | 3 }).request_version;

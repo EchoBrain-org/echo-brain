@@ -92,6 +92,7 @@ describe('personal meeting intake: one source per person and tool account', () =
     w.intake.enqueue(setting, NOTE_1, PROJECT_ALPHA, () => undefined);
     w.intake.cancelImport(setting, NOTE_1, () => undefined);
     expect(w.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
+    expect(w.intake.proposalSuggestions(setting.source_key, NOTE_1)).toEqual([]);
     w.intake.enqueue(setting, NOTE_1, null, () => undefined);
     w.consume(setting, [NOTE_1]);
     expect(w.intake.suggestions(setting.source_key, NOTE_1)).toEqual([]);
@@ -179,12 +180,5 @@ describe('personal meeting intake: one source per person and tool account', () =
     // A recorded suggestion stays whoever left: the freeze offers it and views filter what the reviewer can read.
     expect(w.intake.proposalSuggestions(setting.source_key, NOTE_1)).toEqual([PROJECT_ALPHA, PROJECT_BETA].sort());
     expect(w.intake.proposalSuggestions(setting.source_key, NOTE_3)).toEqual([]);
-  });
-
-  it('proposalSuggestions forgets a cancelled import\'s project', () => {
-    const w = world(), setting = w.ensure();
-    w.intake.enqueue(setting, NOTE_1, PROJECT_ALPHA, () => undefined);
-    w.intake.cancelImport(setting, NOTE_1, () => undefined);
-    expect(w.intake.proposalSuggestions(setting.source_key, NOTE_1)).toEqual([]);
   });
 });
