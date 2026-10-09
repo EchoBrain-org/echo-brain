@@ -31,6 +31,17 @@ function gate(id: string) {
   return job(id).match(/^    (?:needs|if): .*$/gm) ?? [];
 }
 
+function steps(id: string) {
+  return job(id).split(/(?=^      - )/m).slice(1);
+}
+
+/** The commands a check leg runs only for itself, in order. */
+function legCommands(leg: string) {
+  return steps("check")
+    .filter((step) => step.includes(`        if: matrix.leg == '${leg}'\n`))
+    .map((step) => step.match(/^        run: (.+)$/m)![1]!);
+}
+
 function aggregate(env: Record<string, string>) {
   const script = job("required-checks").split("        run: |\n")[1]!.replace(/^ {10}/gm, "");
   return spawnSync("bash", ["-c", script], { env: { PATH: process.env.PATH!, ...env }, encoding: "utf8" });
@@ -50,11 +61,46 @@ function dependencyInputs(dockerfile: string) {
 
 describe("CI workflow", () => {
   it("runs the research-loop evaluator as an unconditional required proof", () => {
-    const check = job("check");
-    const steps = check.split(/(?=^      - )/m);
-    const research = steps.find((step) => step.includes("run: npm run test:research-loop-eval"));
+    const research = steps("check").find((step) => step.includes("run: npm run test:research-loop-eval"));
     expect(research).toBeDefined();
-    expect(research).not.toMatch(/if:|continue-on-error:/);
+    // Its only condition is the check leg it always runs in.
+    expect(research!.match(/if:.*$/gm)).toEqual(["if: matrix.leg == 'tail'"]);
+    expect(research).not.toContain("continue-on-error:");
+  });
+
+  it("splits check into parallel legs that run npm run check and every later proof", () => {
+    const check = job("check");
+    expect(check).toContain(
+      "      fail-fast: false\n      matrix:\n        leg: [static, vitest, tail]\n",
+    );
+    expect(check).not.toMatch(/^    (?:name|continue-on-error):|exclude:|include:/m);
+    expect(check).toContain("          fetch-depth: 0\n");
+    // A step is shared, belongs to exactly one declared leg, or uploads diagnostics.
+    for (const step of steps("check")) {
+      const conditions = step.match(/^        if: .*$/gm) ?? [];
+      const expected = step.includes("uses: actions/upload-artifact@")
+        ? ["        if: ${{ !cancelled() }}"]
+        : conditions.filter((line) => /^        if: matrix\.leg == '(?:static|vitest|tail)'$/.test(line));
+      expect(conditions, step).toEqual(expected);
+      expect(step).not.toContain("continue-on-error:");
+    }
+    // The static leg runs npm run check up to vitest in its order; the other
+    // legs first build what their proofs import, as npm run check did. Adding
+    // a step to npm run check fails here until CI runs it too.
+    const scripts = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")).scripts;
+    const commands = (scripts.check as string).split(" && ").map((command) => command.replace(/^(tsc|vitest) /, "npx $1 "));
+    expect(commands.at(-1)).toBe("npx vitest run --config vitest.config.ts");
+    expect(legCommands("static").join(" && ")).toContain(commands.slice(0, -1).join(" && "));
+    expect(legCommands("static")[0]).toMatch(/^sudo -n python3 -B tests\/fixtures\/staging-release-posix-proof\.py /);
+    expect(legCommands("vitest")).toEqual(["npm run build", `${commands.at(-1)} --maxWorkers=3`]);
+    expect(legCommands("tail")).toEqual([
+      "npm run build",
+      "node tests/fixtures/person-onboarding-smoke.mjs",
+      "node --test demo/test/rehearsal-evaluator.test.mjs",
+      "npm run test:research-loop-eval",
+      "npm run test:capacity",
+      "npm run capacity:checkpoint",
+    ]);
   });
 
   it("pins Ubuntu and prevents the dependency-free jobs from owning npm caches", () => {
@@ -78,6 +124,7 @@ describe("CI workflow", () => {
       expect(step).not.toMatch(/include-hidden-files|overwrite:|continue-on-error/);
     }
     expect(uploads[0]).toMatch(/path: \$\{\{ env.ECHO_CI_REPORT_DIR \}\}\n/);
+    expect(uploads[0]).toContain("name: check-diagnostics-${{ matrix.leg }}-${{ github.run_attempt }}\n");
     expect(uploads[1]).toMatch(/path: \|\n            \$\{\{ env.ECHO_CI_REPORT_DIR \}\}\n            product\/echo-desktop\/test-results\n/);
     expect(uploads[1]).toContain("runner.os");
     expect(uploads[1]).toContain("runner.arch");
@@ -255,7 +302,7 @@ describe("CI workflow", () => {
     const scripts = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")).scripts;
     expect(scripts["check:docs"]).toBe("node tools/check-docs.mjs");
     expect(scripts.check).toContain("npm run check:docs");
-    expect(job("check")).toContain("      - run: npm run check\n");
+    expect(legCommands("static")).toContain("npm run check:architecture-boundaries && npm run check:docs");
   });
 
   it("executes exact recovery-template validation as an independent proof", () => {

@@ -515,13 +515,22 @@ test("the existing required CI check job runs this Node suite without masking fa
   const workflow = readFileSync(resolve(demo, "../.github/workflows/ci.yml"), "utf8");
   const start = workflow.indexOf("\n  check:\n") + 1;
   const job = workflow.slice(start, start + workflow.slice(start).search(/\n  [a-z-]+:\n/) + 1);
-  assert.match(job, /^        run: node --test demo\/test\/rehearsal-evaluator\.test\.mjs$/m);
   const [header, ...steps] = job.split(/(?=^      - )/m);
   // Pull requests always run check; only a verified main push replaces it.
   assert.match(header, /^    if: \$\{\{ !cancelled\(\) && \(github\.event_name == 'pull_request' \|\| needs\.plan\.outputs\.check == 'true'\) \}\}$/m);
   assert.doesNotMatch(header, /continue-on-error:/);
+  // check is a matrix: a proof step's only condition is the leg it runs in.
+  const legs = header.match(/^        leg: \[(.+)\]$/m)[1].split(", ");
+  const evaluator = steps.find(step => /^        run: node --test demo\/test\/rehearsal-evaluator\.test\.mjs$/m.test(step));
+  assert.ok(evaluator);
+  assert.ok(legs.includes(evaluator.match(/^        if: matrix\.leg == '([a-z]+)'$/m)?.[1]));
   const proofSteps = steps.filter(step => !step.includes('uses: actions/upload-artifact@'));
-  for (const step of proofSteps) assert.doesNotMatch(step, /continue-on-error:|if:/);
+  for (const step of proofSteps) {
+    assert.doesNotMatch(step, /continue-on-error:/);
+    for (const condition of step.match(/^ *if:.*$/gm) ?? []) {
+      assert.ok(legs.includes(condition.match(/^        if: matrix\.leg == '([a-z]+)'$/)?.[1]), condition);
+    }
+  }
   assert.match(workflow, /needs: \[plan, check,/);
   assert.ok(workflow.includes('selected "$CHECK_RESULT" "$CHECK_SELECTED"'));
   assert.ok(workflow.includes('true) test "$1" = success ;;'));

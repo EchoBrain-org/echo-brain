@@ -79,7 +79,9 @@ GitHub App is `github-actions` with application ID `15368`. In the committed
 
 ```text
 Select CI jobs
-check
+check (static)
+check (vitest)
+check (tail)
 Documentation history
 macOS arm64 Person-client package
 macOS arm64 desktop app
@@ -122,9 +124,12 @@ fails closed. The executable architecture tests
 and
 [`tests/architecture/ci-select-jobs.test.ts`](../../tests/architecture/ci-select-jobs.test.ts)
 assert the dependency topology, each selection rule, the aggregate's
-success-or-deselected test, and each job's traced inputs. The two desktop runs
-come from one `desktop-app` matrix with `fail-fast: false`; when selected, both
-must succeed before its aggregate dependency succeeds. Requiring the individual
+success-or-deselected test, and each job's traced inputs. The three `check`
+legs come from one matrix: `static` runs `npm run check` up to its vitest step,
+`vitest` runs the workspace tests, and `tail` runs the proofs after it. The two
+desktop runs come from one `desktop-app` matrix. Both matrices use
+`fail-fast: false`; when selected, every leg must succeed before its aggregate
+dependency succeeds. Requiring the individual
 implementation checks separately would duplicate the committed topology in
 GitHub settings and make safe CI evolution brittle.
 

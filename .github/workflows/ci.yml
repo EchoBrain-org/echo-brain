@@ -60,11 +60,18 @@ jobs:
     if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.plan.outputs.check == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      # The legs split npm run check and the proofs after it across three
+      # runners; together they run every proof, each in exactly one leg.
+      # Report every leg even when one fails.
+      fail-fast: false
+      matrix:
+        leg: [static, vitest, tail]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Documentation proof links are verified against their exact
-          # historical commits, not the current worktree alone.
+          # Documentation proof links and several tests read exact historical
+          # commits, not the current worktree alone.
           fetch-depth: 0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -76,23 +83,49 @@ jobs:
           node tools/ci-runner-info.mjs "$RUNNER_TEMP/ci-diagnostics/runner.json"
       - run: npm ci
       - name: Prove staging control isolation with real POSIX ownership
+        if: matrix.leg == 'static'
         run: sudo -n python3 -B tests/fixtures/staging-release-posix-proof.py tools/authority-staging-release-host.py deploy/organization-authority/update-clean-v1.sh deploy/organization-authority/onboard-clean-v1.sh
-      - run: npm run check
+      # npm run check, in its order, with vitest in its own leg.
+      - name: Check architecture boundaries and documentation
+        if: matrix.leg == 'static'
+        run: npm run check:architecture-boundaries && npm run check:docs
+      - name: Lint
+        if: matrix.leg == 'static'
+        run: npm run lint
+      - name: Build and typecheck the workspaces
+        if: matrix.leg == 'static'
+        run: npm run build && npx tsc --noEmit -p tsconfig.json
+      - name: Build the workspaces the tests import
+        if: matrix.leg == 'vitest'
+        run: npm run build
+      - name: Run the workspace tests
+        if: matrix.leg == 'vitest'
+        # Each worker keeps about one core busy. Three leave headroom on the
+        # 4-vCPU runner (runner.json); local runs keep the configured 2.
+        run: npx vitest run --config vitest.config.ts --maxWorkers=3
+      - name: Build the workspaces the evaluators import
+        if: matrix.leg == 'tail'
+        run: npm run build
       - name: Build and install the Linux x64 Person kit without system Node
+        if: matrix.leg == 'tail'
         run: node tests/fixtures/person-onboarding-smoke.mjs
       - name: Verify four-meeting answer coverage and privacy
+        if: matrix.leg == 'tail'
         run: node --test demo/test/rehearsal-evaluator.test.mjs
       - name: Verify the research-loop evaluator
+        if: matrix.leg == 'tail'
         run: npm run test:research-loop-eval
       - name: Verify the Authority core evaluation components
+        if: matrix.leg == 'tail'
         run: npm run test:capacity
       - name: Exercise the Authority core evaluation checkpoint
+        if: matrix.leg == 'tail'
         run: npm run capacity:checkpoint
       - name: Preserve check diagnostics
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: check-diagnostics-${{ github.run_attempt }}
+          name: check-diagnostics-${{ matrix.leg }}-${{ github.run_attempt }}
           path: ${{ env.ECHO_CI_REPORT_DIR }}
           retention-days: 7
 
