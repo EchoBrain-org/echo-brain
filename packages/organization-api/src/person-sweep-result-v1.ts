@@ -28,7 +28,7 @@ export interface PersonSweepFindingResultV1 {
 export interface PersonSweepResultV1 {
   /** One per input finding, in input order. */
   readonly findings: readonly PersonSweepFindingResultV1[];
-  /** `not_assessed`: no model judged the findings research could read; their verdicts are null. */
+  /** `not_assessed`: no model judged any finding, and at least one is null (see `personSweepResultStatusV1`). */
   readonly status: 'assessed' | 'not_assessed';
   readonly citations: readonly PersonAnswerCitationV6[];
 }
@@ -41,6 +41,20 @@ export interface PersonSweepResultV1 {
 export const PERSON_SWEEP_RESULT_LIMITS_V1 = Object.freeze({ findings: 20, finding_citations: 12, line_chars: PERSON_IMPACT_CARD_LIMITS_V1.line_chars });
 
 const VERDICTS: readonly string[] = ['landed', 'still_open', 'changed', 'unreadable'];
+
+/** A verdict a model gave. `unreadable` is reported without one, and null was not assessed. */
+function judged(verdict: PersonSweepVerdictV1 | null): boolean {
+  return verdict === 'landed' || verdict === 'still_open' || verdict === 'changed';
+}
+
+/**
+ * The one status a set of verdicts has: `not_assessed` exactly when no
+ * finding was judged and at least one is null (not assessed); otherwise
+ * `assessed`, which includes a result whose findings were all unreadable.
+ */
+export function personSweepResultStatusV1(findings: readonly Pick<PersonSweepFindingResultV1, 'verdict'>[]): PersonSweepResultV1['status'] {
+  return !findings.some(entry => judged(entry.verdict)) && findings.some(entry => entry.verdict === null) ? 'not_assessed' : 'assessed';
+}
 
 /** One trimmed NFC line of 1 to `maximum` characters, as the impact card's lines are. */
 function line(value: unknown, label: string, maximum: number): string {
@@ -65,7 +79,6 @@ export function validatePersonSweepResultV1(value: unknown, findingCount?: numbe
   const input = object(value, 'Sweep result');
   assertExactKeys(input, ['findings', 'status', 'citations'], 'Sweep result');
   if (input.status !== 'assessed' && input.status !== 'not_assessed') fail('Sweep result status is invalid');
-  const assessed = input.status === 'assessed';
   const citations = list(input.citations, 'Sweep result citations', limits.findings * limits.finding_citations).map(validatePersonAnswerCitationV6);
   unique(citations.map(entry => canonicalJson(entry.citation)), 'Sweep result citations');
 
@@ -87,11 +100,11 @@ export function validatePersonSweepResultV1(value: unknown, findingCount?: numbe
   });
   if (findingCount !== undefined && findings.length !== findingCount) fail('Sweep result does not hold one entry per finding');
 
-  // An assessment judges every finding research could read; a not-assessed result judges none. An unreadable one is reported either way.
-  const judged = (entry: PersonSweepFindingResultV1) => entry.verdict !== null && entry.verdict !== 'unreadable';
-  if (findings.some(entry => (assessed ? entry.verdict === null : judged(entry)))) fail('Sweep result status is inconsistent');
-  // Only a model's verdict cites what shows it, and every citation is one a verdict uses.
-  if (findings.some(entry => !judged(entry) && entry.citation_indexes.length > 0)) fail('Sweep result cites an item for a finding no model judged');
+  // One encoding per state: the status follows from the verdicts.
+  if (input.status !== personSweepResultStatusV1(findings)) fail('Sweep result status is inconsistent');
+  // A model's verdict cites what it was judged from; a finding no model judged cites nothing; every citation is one a verdict uses.
+  if (findings.some(entry => judged(entry.verdict) && entry.citation_indexes.length === 0)) fail('Sweep result has a verdict that cites nothing');
+  if (findings.some(entry => !judged(entry.verdict) && entry.citation_indexes.length > 0)) fail('Sweep result cites an item for a finding no model judged');
   if (new Set(findings.flatMap(entry => entry.citation_indexes)).size !== citations.length) fail('Sweep result cites an item it does not use');
 
   return Object.freeze({ findings: Object.freeze(findings), status: input.status, citations: Object.freeze(citations) });

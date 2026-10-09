@@ -1,6 +1,6 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
-import { PERSON_SWEEP_RESULT_LIMITS_V1, validatePersonSweepResultV1 } from '../src/person-sweep-result-v1.js';
+import { PERSON_SWEEP_RESULT_LIMITS_V1, personSweepResultStatusV1, validatePersonSweepResultV1 } from '../src/person-sweep-result-v1.js';
 
 const ticketCitation = {
   citation: { kind: 'ticket', tool_id: 'jira', external_scope_id: 'cloud-1', ticket_id: '10046', permalink: 'https://therm.example.test/browse/THERM-46', text_sha256: canonicalSha256('ticket') },
@@ -84,17 +84,31 @@ describe('sweep result', () => {
     ] as const) refused(value, label);
   });
 
-  it('carries verdicts only as its status allows: null only unassessed, and a judgment only from an assessment', () => {
-    for (const [label, value] of [
-      ['an unknown verdict', findingAt(assessed, 0, { verdict: 'drifted' })],
-      ['an unknown status', { ...assessed, status: 'done' }],
-      ['an assessed result with a finding left unjudged', findingAt(assessed, 0, { verdict: null, citation_indexes: [] })],
-      ['an unassessed result with a judgment', { ...notAssessed, findings: [{ finding_index: 0, verdict: 'landed', line: 'Landed.', citation_indexes: [] }] }],
-      ['an unassessed finding that cites an item', { ...notAssessed, findings: [{ finding_index: 0, verdict: null, line: 'Not assessed.', citation_indexes: [0] }], citations: [ticketCitation] }],
-      ['an unreadable finding that cites an item', { ...assessed, findings: [landed, stillOpen, { ...unreadable, citation_indexes: [0] }] }],
-    ] as const) refused(value, label);
+  it('has one status for each set of verdicts: not assessed exactly when nothing was judged and something was left unassessed', () => {
+    // A finding the model was not shown stays unassessed beside the ones it judged.
+    const notShown = findingAt(assessed, 1, { verdict: null, line: 'Not assessed.', citation_indexes: [] });
+    expect(validatePersonSweepResultV1({ ...notShown, citations: [ticketCitation] }, 3).findings.map(entry => entry.verdict)).toEqual(['landed', null, 'unreadable']);
     // Every finding unreadable: nothing was left for a model to judge, so the result is assessed.
     const allUnreadable = { findings: [{ ...unreadable, finding_index: 0 }], status: 'assessed', citations: [] };
     expect(validatePersonSweepResultV1(allUnreadable, 1)).toEqual(allUnreadable);
+    const verdicts = (...values: (string | null)[]) => values.map(verdict => ({ verdict }));
+    expect([verdicts('landed', null), verdicts('unreadable'), verdicts('still_open'), verdicts(null, 'unreadable'), verdicts(null)].map(entries => personSweepResultStatusV1(entries as never)))
+      .toEqual(['assessed', 'assessed', 'assessed', 'not_assessed', 'not_assessed']);
+    for (const [label, value] of [
+      ['an unknown verdict', findingAt(assessed, 0, { verdict: 'drifted' })],
+      ['an unknown status', { ...assessed, status: 'done' }],
+      ['an assessed result that judged nothing and left a finding unassessed', { ...notAssessed, status: 'assessed' }],
+      ['a not-assessed result with nothing left unassessed', { ...allUnreadable, status: 'not_assessed' }],
+      ['a not-assessed result with a judgment', { ...notAssessed, findings: [{ finding_index: 0, verdict: 'landed', line: 'Landed.', citation_indexes: [0] }, notAssessed.findings[1]], citations: [ticketCitation] }],
+      ['an unassessed finding that cites an item', { ...notAssessed, findings: [{ finding_index: 0, verdict: null, line: 'Not assessed.', citation_indexes: [0] }, notAssessed.findings[1]], citations: [ticketCitation] }],
+      ['an unreadable finding that cites an item', { ...assessed, findings: [landed, stillOpen, { ...unreadable, citation_indexes: [0] }] }],
+    ] as const) refused(value, label);
+  });
+
+  it('cites at least one item for each verdict a model gave', () => {
+    for (const verdict of ['landed', 'still_open', 'changed']) {
+      refused(findingAt(assessed, 0, { verdict, citation_indexes: [] }), `${verdict} citing nothing`);
+      expect(validatePersonSweepResultV1(findingAt(assessed, 0, { verdict })).findings[0]!.verdict).toBe(verdict);
+    }
   });
 });
