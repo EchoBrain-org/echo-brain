@@ -12,14 +12,21 @@ Three triggers run the same loop:
 - **Approved record** (replaces Check): an approved meeting record, background
   budget (5 min), graded on the research result and the impact card.
 - **Sweep**: earlier findings re-read after partial fixes (world state S1),
-  background budget, graded on the research result and each finding's verdict.
+  background budget, graded on the research result and the sweep result (a
+  verdict and one line per finding).
 
 The report keeps the loop and the renderers apart. **Research loop**: every
 trigger, graded on its research result (needs, found, read, handed,
-established, verdicts). **Renderers**: Ask's writer on its answer, and the
+established, verdicts). **Renderers**: Ask's writer on its answer; the
 impact card on affected items listed, relations and owners correct (of the
-listed items), invented items or people, and gaps reported. Approved-record
-keys carry a relation and an owner per affected item (`world/README.md`).
+listed items), invented items or people, and gaps reported; and the sweep
+result on verdicts right out of findings, and findings not assessed.
+Approved-record keys carry a relation and an owner per affected item
+(`world/README.md`). A sweep verdict is compared with the key by its
+`finding_index`: `landed` is landed, `still_open` and `changed` are not landed,
+`unreadable` is no evidence, and a null verdict (not assessed) is wrong. Sweep
+verdicts are counted, not averaged: per case over all its runs, then over all
+Sweep cases; a failed run's findings all count as wrong.
 
 **Baselines across the research trigger contract.** Ask is byte-identical
 across that change, so an Ask baseline taken before or after it measures the
@@ -29,7 +36,12 @@ card, and the summary's Ask-writer `gaps_reported` now averages Ask cases only
 Ask baseline with the current `grade` before comparing it. Approved-record and
 Sweep baselines must be taken after the change: their task text changed, and
 approved-record runs now return the impact card (a saved approved-record run
-without one is graded as failed).
+without one is graded as failed). Sweep runs now also return the sweep result,
+and the judge sees it; a saved Sweep run without one is graded as failed, so
+take Sweep baselines on an endpoint that returns it. A run graded as failed
+for a missing result is still scanned for restricted leaks, so regrading an
+older approved-record run without its card can report a leak that grading
+used to hide (it counts in "runs with restricted leaks").
 
 A case whose start request cannot be built (a meeting not bound, or a finding
 that cites only a transcript, which cannot start research in v1) is saved as a
@@ -204,13 +216,13 @@ outside the repository as private source content; output directories are
 ### Evaluation-run privacy
 
 Runs contain released text from Jira, Confluence and approved meetings. A
-saved run keeps the research result (the trimmed bundle) and Ask's answer or
-the impact card, never server records such as receipts or model-call
-fingerprints. Runs are written only to `--out`, which must be an absolute
-directory outside this repository; directories are `0700` and files `0600`.
-The judge receives the answer key, the items research read and the run's
-answer or card, and nothing else. Delete the output directory when the
-evaluation is finished.
+saved run keeps the research result (the trimmed bundle) and Ask's answer, the
+impact card or the sweep result, never server records such as receipts or
+model-call fingerprints. Runs are written only to `--out`, which must be an
+absolute directory outside this repository; directories are `0700` and files
+`0600`. The judge receives the answer key, the items research read and the
+run's answer, card or sweep result, and nothing else. Delete the output
+directory when the evaluation is finished.
 
 ## Limits to keep in mind
 
