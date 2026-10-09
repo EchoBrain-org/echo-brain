@@ -1,10 +1,14 @@
-import type { PersonImpactStageV1, PersonOpenItemKindV1, PersonOpenItemsDecisionCountV1, PersonOpenItemStateV1, PersonOpenItemsSummaryV1 } from '@echo-brain/organization-api';
+import type {
+  PersonImpactStageV1, PersonOpenItemDecisionV1, PersonOpenItemKindV1, PersonOpenItemsDecisionCountV1, PersonOpenItemStateV1, PersonOpenItemsSummaryV1,
+  PersonOpenItemVerdictV1,
+} from '@echo-brain/organization-api';
 import type { ConnectedTool, HomeView, OpenItemView } from '../shared/protocol.js';
 import { externalSourceProvider } from './answer.js';
 
-// The words Home, Tell the owners?, Did it land? and a decision's open items
-// use for what a decision changes (open items and Home v1, section 8; canvas
-// row 9).
+// The words Home, Tell the owners?, an item's card, Your open items and a
+// decision's open items use for what a decision changes (open items and Home
+// v1, section 8; canvas row 9; the founder's rulings of 2026-10-09, R63–R70).
+// "Check" is ECHO's re-read only: "ECHO checked 2 h ago", "Check now".
 
 /** A decided line as a row's title reads, without its closing full stop. */
 export function titleLine(line: string): string {
@@ -45,6 +49,16 @@ export function shortNames(names: readonly string[]): string[] {
   return names.map(name => (people.get(first(name))?.size ?? 0) > 1 ? name.trim() : first(name));
 }
 
+/** A person's first name ("Mina"), or the whole name when its first word is an initial ("S. Okafor"). */
+function firstName(name: string): string {
+  return shortNames([name])[0] ?? name;
+}
+
+/** A phrase made to start a line: "Says …", "Due Oct 30", "Decision needs: …". */
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /** "Mina", "Mina and Rafael", "Mina, Rafael and S. Okafor". */
 export function nameList(names: readonly string[]): string {
   if (names.length <= 1) return names[0] ?? '';
@@ -72,13 +86,13 @@ export function itemTitle(item: OpenItemView): string {
 }
 
 /**
- * Each item's name for its rows, ticks and buttons ("Done: …", "Open in …",
- * "Pick a person: …"): its title. Where two items would share one (two items
- * you can't open), each adds what the decision requires of it; where they
- * still would, its decision when you can read it and that tells them apart
- * ("· from Pilot planning"); and then where it is among those alike ("(2)").
+ * Each item's name, and where it is among items alike when nothing else
+ * tells them apart: its title; where two items would share one (two items you
+ * can't open), what the decision requires of each; where they still would,
+ * its decision when you can read it and that tells them apart ("· from Pilot
+ * planning"); and then where it is among those alike.
  */
-export function itemNames(items: readonly OpenItemView[]): ReadonlyMap<string, string> {
+function namesApart(items: readonly OpenItemView[]): ReadonlyMap<string, { name: string; position: number | null }> {
   let names = new Map(items.map(item => [item.item_id, itemTitle(item)]));
   /** The items that share each name. */
   const alike = () => {
@@ -102,12 +116,36 @@ export function itemNames(items: readonly OpenItemView[]): ReadonlyMap<string, s
   }
   const sharing = alike();
   const seen = new Map<string, number>();
-  return new Map(items.map(item => {
+  return new Map(items.map((item): [string, { name: string; position: number | null }] => {
     const name = names.get(item.item_id)!;
-    if (sharing(item).length < 2) return [item.item_id, name];
+    if (sharing(item).length < 2) return [item.item_id, { name, position: null }];
     const position = (seen.get(name) ?? 0) + 1;
     seen.set(name, position);
-    return [item.item_id, `${name} (${position})`];
+    return [item.item_id, { name, position }];
+  }));
+}
+
+/**
+ * Each item's name for its ticks and buttons ("Mark updated: …", "Open in …",
+ * "Pick a person: …", "Close: …"), apart from every other item's (R37): its
+ * title, then what tells it apart from items alike ("→ order six weeks
+ * ahead", "· from Pilot planning", "(2)").
+ */
+export function itemNames(items: readonly OpenItemView[]): ReadonlyMap<string, string> {
+  return new Map([...namesApart(items)].map(([id, { name, position }]) => [id, position === null ? name : `${name} (${position})`]));
+}
+
+/**
+ * Each item's title as a line shows it beside what the decision needs and
+ * where it came from (Home's rows, Your open items): its title, and where it
+ * is among items alike ("(2)") only when nothing else on the line tells them
+ * apart.
+ */
+export function itemLabels(items: readonly OpenItemView[]): ReadonlyMap<string, string> {
+  const apart = namesApart(items);
+  return new Map(items.map(item => {
+    const position = apart.get(item.item_id)!.position;
+    return [item.item_id, position === null ? itemTitle(item) : `${itemTitle(item)} (${position})`];
   }));
 }
 
@@ -153,9 +191,72 @@ export function itemKind(item: OpenItemView, tools?: readonly ConnectedTool[] | 
   }
 }
 
-/** Where an item came from: its decision when you can read it, else who sent it. */
-export function itemFrom(item: OpenItemView): string {
-  return item.decision?.title ?? item.approver.name;
+/**
+ * A decision as an open item names it: "Pilot planning meeting, approved Oct
+ * 6" (or "· approved Oct 6" on the item's card). Every decision with open
+ * items is a meeting someone approved, named as its Approve row named it.
+ */
+export function approvedMeeting(decision: Pick<PersonOpenItemDecisionV1, 'title' | 'approved_at'>, separator: ', ' | ' · ' = ', '): string {
+  const day = monthDay(decision.approved_at);
+  return `${decision.title} meeting${day === null ? '' : `${separator}approved ${day}`}`;
+}
+
+/** Where an item came from: its decision when you can read it, else who sent it ("sent by Mina"). */
+export function whereFrom(item: OpenItemView): string {
+  return item.decision ? approvedMeeting(item.decision) : `sent by ${firstName(item.approver.name)}`;
+}
+
+/** A Home row's title: "<item> doesn't match the decision yet", or, for an item the check did not assess, "<item> may need updating". */
+export function itemHeadline(item: OpenItemView, label: string): string {
+  return item.relation === null ? `${label} may need updating` : `${label} doesn't match the decision yet`;
+}
+
+/**
+ * What an item says now, then what the decision needs: 'Says "starts after
+ * freeze" → decision needs: pilot starts next week'. What it says now only
+ * when ECHO opened it for you; parts that are missing are left out.
+ */
+export function itemNeeds(item: OpenItemView): string | null {
+  const parts = [liveDetails(item), item.expected === null ? null : `decision needs: ${item.expected}`].filter((part): part is string => part !== null);
+  return parts.length === 0 ? null : capitalized(parts.join(' → '));
+}
+
+/** An item card's "Now": what the item says now ('Says "starts after freeze"', "Due Oct 30"), else its title, which says why it is not shown. */
+export function itemNow(item: OpenItemView): string {
+  const details = liveDetails(item);
+  return details === null ? itemTitle(item) : capitalized(details);
+}
+
+/** Whose an item is to update: "yours to update", or "Mina's to update" when you are not its owner (you sent it, or it fell back to you). */
+export function itemWhose(item: OpenItemView, me: string | null): string {
+  return me === null || item.owner.membership_id === me ? 'yours to update' : `${firstName(item.owner.name)}'s to update`;
+}
+
+/**
+ * A Home row's muted line: what the item is, where it came from, and why it is
+ * back. "Confluence page · Pilot planning meeting, approved Oct 6 · changed
+ * since you got it, still doesn't match" for its owner; "Mina's to update ·
+ * changed since you sent it" on its approver's Review row. An item that is
+ * not yours (it fell back to you) is named as its owner's, never as yours.
+ */
+export function itemWhy(item: OpenItemView, me: string | null, tools?: readonly ConnectedTool[] | null): string {
+  const changed = item.check?.verdict === 'changed';
+  const owner = me === null || item.owner.membership_id === me;
+  const since = !changed ? null : owner ? 'changed since you got it, still doesn\'t match'
+    : item.approver.membership_id === me ? 'changed since you sent it' : 'changed since it was sent';
+  return joined([itemKind(item, tools), whereFrom(item), owner ? null : itemWhose(item, me), since]);
+}
+
+/** What ECHO saw when it last checked an item, naming no one; nothing when it never checked it. */
+export function checkLine(check: OpenItemView['check'], now = Date.now()): string | null {
+  if (check === null) return null;
+  const at = `ECHO checked ${checkedAgo(check.checked_at, now)}`;
+  switch (check.verdict) {
+    case 'changed': return `${at}: it changed since it was sent, but still doesn't match.`;
+    case 'still_open': return `${at}: not updated yet.`;
+    case 'landed': return `${at}: it matches the decision now.`;
+    case 'unreadable': return `${at} but couldn't read it.`;
+  }
 }
 
 /** An item's stage on a decision's or a project's list. */
@@ -167,12 +268,12 @@ export function stageSince(item: OpenItemView): string {
 }
 
 /**
- * A decision's open items as its Impact line calls them open (R35): the ones
- * not sent yet, and the sent ones whose last check neither landed nor could
- * not read them.
+ * A decision's (or a scope's) open items as its Impact line calls them open
+ * (R35): the ones not sent yet, and the sent ones whose last check neither
+ * matched the decision nor could not read them.
  */
-export function openCount(decision: PersonOpenItemsDecisionCountV1): number {
-  return decision.unsent + Math.max(0, decision.open - decision.landed - decision.unreadable);
+export function openCount(counts: Pick<PersonOpenItemsDecisionCountV1, 'unsent' | 'open' | 'landed' | 'unreadable'>): number {
+  return counts.unsent + Math.max(0, counts.open - counts.landed - counts.unreadable);
 }
 
 /** Parts of a line that are not empty, joined: "1 open · 1 handled". */
@@ -202,11 +303,6 @@ function checkedPart(at: string | null, now: number): string | null {
   return at === null ? null : `checked ${checkedAgo(at, now)}`;
 }
 
-/** "1 item", "3 items". */
-export function itemCount(count: number): string {
-  return count === 1 ? '1 item' : `${count} items`;
-}
-
 /**
  * The words after "Impact" on an approved decision (canvas 9.6), its items
  * counted once each: "1 open · 1 handled · 1 couldn't read · checked just
@@ -231,62 +327,86 @@ export function impactWords(summary: PersonOpenItemsSummaryV1, stage: PersonImpa
 
 /**
  * A project's line (canvas 9.7): "4 open items · from 2 decisions · checked
- * today", the sum of its decisions' rows and how many of them have any open;
- * nothing when none is open.
+ * today". The total is the whole project's, from its summary, as its rows
+ * count (R35): in project scope it is the sum of the rows, and it stays exact
+ * past the 100 decisions a summary lists. "From" counts the listed decisions
+ * with any open. While any item is unsent or open the line stays, so Check
+ * now and the way to the project's items never go (R72): when everything left
+ * matched or could not be read, it counts what is not closed (Part 1's
+ * words). Nothing when nothing is unsent or open.
  */
 export function projectWords(summary: PersonOpenItemsSummaryV1, now = Date.now()): { count: string; from: string; checked: string | null } | null {
-  const rows = summary.by_decision.map(openCount).filter(count => count > 0);
-  const open = rows.reduce((total, count) => total + count, 0);
-  if (open === 0) return null;
+  const left = (counts: Pick<PersonOpenItemsDecisionCountV1, 'unsent' | 'open'>) => counts.unsent + counts.open;
+  if (left(summary) === 0) return null;
+  const count = openCount(summary) > 0 ? openCount : left;
+  const open = count(summary);
+  const decisions = summary.by_decision.filter(decision => count(decision) > 0).length;
   return {
-    count: open === 1 ? '1 open item' : `${open} open items`, from: rows.length === 1 ? 'from 1 decision' : `from ${rows.length} decisions`,
+    count: open === 1 ? '1 open item' : `${open} open items`, from: decisions === 0 ? '' : decisions === 1 ? 'from 1 decision' : `from ${decisions} decisions`,
     checked: checkedPart(summary.last_checked_at, now),
   };
 }
 
 /**
- * Home's footer (canvas 9.1, 9.5): "2 landed since yesterday · 1 with others
- * · checked 2 h ago". Landed: your open items (sent or owned) whose last
- * check saw them land ("since yesterday" is the canvas's words); with others:
- * open items you sent that wait on someone else. Zero counts are left out;
- * null when nothing is left.
+ * Home's footer (canvas 9.1, 9.5; R69): "1 matches its decision now · 2
+ * waiting on others · ECHO checked 2 h ago". Matching: your open items (sent
+ * or owned) whose last check found them as decided; waiting on others: open
+ * items you sent that wait on someone else. Zero counts are left out; null
+ * when nothing is left.
  */
-export function footerWords(open: Pick<HomeView, 'landed' | 'waiting' | 'last_checked_at'>, now = Date.now()): string | null {
+export function homeFooter(open: Pick<HomeView, 'landed' | 'waiting' | 'last_checked_at'>, now = Date.now()): string | null {
   const words = joined([
-    open.landed > 0 ? `${open.landed} landed since yesterday` : null, open.waiting > 0 ? `${open.waiting} with others` : null, checkedPart(open.last_checked_at, now),
+    open.landed === 0 ? null : open.landed === 1 ? '1 matches its decision now' : `${open.landed} match their decision now`,
+    open.waiting > 0 ? `${open.waiting} waiting on others` : null, open.last_checked_at === null ? null : `ECHO checked ${checkedAgo(open.last_checked_at, now)}`,
   ]);
   return words === '' ? null : words;
 }
 
+/** An open item's status on Your open items: its last check's verdict, or not checked yet. */
+export type ItemStatusKey = PersonOpenItemVerdictV1 | 'unchecked';
+
+/** The words for each status (R68). Where your own access refused the item, its title already says so. */
+export const STATUS: Readonly<Record<ItemStatusKey, string>> = {
+  landed: 'Matches now', still_open: 'Not updated yet', changed: 'Changed, still doesn\'t match', unreadable: 'ECHO couldn\'t read it', unchecked: 'Not checked yet',
+};
+
+export function statusOf(item: OpenItemView): ItemStatusKey {
+  return item.check?.verdict ?? 'unchecked';
+}
+
+/** Matches first, then not updated or changed, then couldn't read or not checked. */
+const STATUS_ORDER: Readonly<Record<ItemStatusKey, number>> = { landed: 0, still_open: 1, changed: 1, unreadable: 2, unchecked: 2 };
+
+/** A scope's open items in status order, each part in the order it came. */
+export function byStatus(items: readonly OpenItemView[]): OpenItemView[] {
+  return items.filter(item => item.state === 'open').sort((left, right) => STATUS_ORDER[statusOf(left)] - STATUS_ORDER[statusOf(right)]);
+}
+
 /**
- * Did it land? (canvas 9.4): a scope's open items by their last check.
- * Landed; still open (still open, changed, or not checked yet); and couldn't
- * read.
+ * Your open items as one list, or, for your own items from more than one
+ * decision, under a small header per decision ("Pilot planning meeting,
+ * approved Oct 6"; "Sent by Mina Patel" for a decision you cannot read),
+ * each in status order.
  */
-export function landedGroups(items: readonly OpenItemView[]): { landed: OpenItemView[]; open: OpenItemView[]; unreadable: OpenItemView[] } {
+export function statusGroups(items: readonly OpenItemView[], scope: 'mine' | 'record' | 'project'): { key: string; header: string | null; items: OpenItemView[] }[] {
   const open = items.filter(item => item.state === 'open');
-  return {
-    landed: open.filter(item => item.check?.verdict === 'landed'),
-    open: open.filter(item => item.check === null || item.check.verdict === 'still_open' || item.check.verdict === 'changed'),
-    unreadable: open.filter(item => item.check?.verdict === 'unreadable'),
-  };
+  const groups = new Map<string, { key: string; header: string; items: OpenItemView[] }>();
+  for (const item of open) {
+    const key = item.decision ? item.decision.record_sha256 : `sent:${item.approver.membership_id}`;
+    const group = groups.get(key) ?? { key, header: item.decision ? approvedMeeting(item.decision) : `Sent by ${item.approver.name}`, items: [] };
+    group.items.push(item);
+    groups.set(key, group);
+  }
+  if (scope !== 'mine' || groups.size < 2) return [{ key: 'all', header: null, items: byStatus(open) }];
+  return [...groups.values()].map(group => ({ ...group, items: byStatus(group.items) }));
 }
 
-/**
- * What a line of Did it land? says after its item: what it says now when you
- * opened it, then why it is where it is: "— not what was decided", "· not
- * checked yet", "· you don't have access" (your own access refused it now), or
- * "· ECHO could not read it".
- */
-export function landedNote(item: OpenItemView): string {
-  const details = liveDetails(item);
-  const verdict = item.check?.verdict;
-  const why = item.check === null ? '· not checked yet' : verdict === 'changed' ? '— not what was decided'
-    : verdict === 'unreadable' ? (item.reach === 'no_access' ? '· you don\'t have access' : '· ECHO could not read it') : null;
-  return [details === null ? null : `· ${details}`, why].filter((part): part is string => part !== null).join(' ');
+/** The matching items you may close: "Close" on each line, and "Close all N that match". */
+export function closable(items: readonly OpenItemView[]): OpenItemView[] {
+  return items.filter(item => item.state === 'open' && item.check?.verdict === 'landed' && item.can.set_state);
 }
 
-/** Mark N done: the landed items still ticked (`unticked` names the others) that you may close. */
-export function markable(items: readonly OpenItemView[], unticked: Readonly<Record<string, true>>): OpenItemView[] {
-  return landedGroups(items).landed.filter(item => item.can.set_state && !unticked[item.item_id]);
+/** Under Your open items' heading: "3 open · ECHO checked 2 h ago". */
+export function statusSubline(open: number, checkedAt: string | null, now = Date.now()): string {
+  return joined([`${open} open`, checkedAt === null ? null : `ECHO checked ${checkedAgo(checkedAt, now)}`]);
 }

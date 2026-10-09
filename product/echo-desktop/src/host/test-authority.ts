@@ -101,8 +101,8 @@ interface SweepRun {
 }
 
 /** The granola modes whose projects are the meeting's: Thermostat redesign (Ari leads it) and Supplier review. */
-const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-owner-outage', 'granola-home-fails-once', 'granola-all', 'granola-checked', 'granola-sweep',
-  'granola-sweep-requeued', 'granola-alike']);
+const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-owner-outage', 'granola-home-fails-once', 'granola-all', 'granola-checked', 'granola-review',
+  'granola-sweep', 'granola-sweep-requeued', 'granola-alike']);
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
 /** Who an impact check names, besides Ari: fictional people of the organization. */
@@ -624,14 +624,16 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     'itm_00000000-0000-4000-8000-000000000031': 'landed', 'itm_00000000-0000-4000-8000-000000000032': 'changed',
     'itm_00000000-0000-4000-8000-000000000033': 'unreadable',
   };
-  // granola-checked, granola-sweep and granola-sweep-requeued: Ari approved Pilot planning into
-  // Thermostat redesign and sent what its check found: ECHO-12 to Mina, the PRD page kept by Ari, and
-  // a supplier page Ari cannot open to Rafael. In granola-checked Mina's sweep checked them two hours
-  // ago; in the sweep modes none has been checked, so Home says a sweep is due. granola-alike: the
+  // granola-checked, granola-review, granola-sweep and granola-sweep-requeued: Ari approved Pilot
+  // planning into Thermostat redesign and sent what its check found: ECHO-12 to Mina, the PRD page kept
+  // by Ari, and a supplier page Ari cannot open to Rafael. In granola-checked Mina's sweep checked them
+  // two hours ago; granola-review is the same, except that ECHO-12, Mina's to update, changed and still
+  // does not match (a Review row on Ari's Home). In the sweep modes none has been checked, so Home says a
+  // sweep is due. granola-alike: the
   // check is done and nothing is sent yet; it also found items whose titles nothing tells apart: two
   // supplier pages Ari cannot open, with the same expected phrase, and two tickets Jira did not answer
   // for just now, not assessed (no expected phrase).
-  if (mode === 'granola-checked' || mode.startsWith('granola-sweep') || mode === 'granola-alike') {
+  if (mode === 'granola-checked' || mode === 'granola-review' || mode.startsWith('granola-sweep') || mode === 'granola-alike') {
     granolaApproved = true;
     granolaReview = { action: 'approve', project_ids: [THERMOSTAT] };
     granolaRun = { state: 'done', error_code: null, lists: 0, retried: false };
@@ -658,9 +660,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         opens: false, live: { citation: SUPPLIER_BRIEF, says_now: 'Parts are ordered with six weeks of lead time.' }, owner: { ...RAFAEL, match: 'picked' } });
       const sentAt = '2026-10-07T11:00:00.000Z';
       const checkedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
+      const checked: Readonly<Record<string, Check['verdict']>> = mode === 'granola-review' ? { ...SWEPT, 'itm_00000000-0000-4000-8000-000000000031': 'changed' } : SWEPT;
       for (const item of openItems.filter(entry => entry.run_id === PILOT_RUN)) {
         Object.assign(item, { state: 'open', sent_at: sentAt, state_set_at: sentAt,
-          check: mode === 'granola-checked' ? { verdict: SWEPT[item.item_id]!, checked_at: checkedAt, checked_by: 'Mina Patel' } : null });
+          check: mode === 'granola-checked' || mode === 'granola-review' ? { verdict: checked[item.item_id]!, checked_at: checkedAt, checked_by: 'Mina Patel' } : null });
       }
     }
   }
@@ -922,7 +925,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
               return { record_sha256: record, run_id: found.run_id, state: 'done', error_code: null, mine: found.approver.membership_id === ARI.membership_id };
             }),
           ];
-          // Counts only (a project's or a decision's line): the summary and stages, no item. Open only (Did it land?): the open
+          // Counts only (a project's or a decision's line): the summary and stages, no item. Open only (Your open items): the open
           // items alone, with the same summary.
           const listed = request.open_only === true ? items.filter(item => item.state === 'open') : items;
           return result('items', { items: request.summary_only === true ? [] : listed.map(itemView), next_cursor: null, stages, summary: {
