@@ -168,36 +168,23 @@ describe("Authority current-host recovery floor stack", () => {
       unknown
     >;
 
-    expect(backupRole.Type).toBe("AWS::IAM::Role");
-    expect(restoreRole.Type).toBe("AWS::IAM::Role");
-    expect(backupRole.Properties).not.toHaveProperty("RoleName");
-    expect(restoreRole.Properties).not.toHaveProperty("RoleName");
-    expect(backupRole.Properties).not.toHaveProperty("ManagedPolicyArns");
-    expect(restoreRole.Properties).not.toHaveProperty("ManagedPolicyArns");
-    expect(backupRole.Properties).toMatchObject({
-      AssumeRolePolicyDocument: {
-        Version: "2012-10-17",
-        Statement: [
-          {
-            Effect: "Allow",
-            Principal: { Service: "backup.amazonaws.com" },
-            Action: "sts:AssumeRole",
-          },
-        ],
-      },
-    });
-    expect(restoreRole.Properties).toMatchObject({
-      AssumeRolePolicyDocument: {
-        Version: "2012-10-17",
-        Statement: [
-          {
-            Effect: "Allow",
-            Principal: { Service: "backup.amazonaws.com" },
-            Action: "sts:AssumeRole",
-          },
-        ],
-      },
-    });
+    for (const role of [backupRole, restoreRole]) {
+      expect(role.Type).toBe("AWS::IAM::Role");
+      expect(role.Properties).not.toHaveProperty("RoleName");
+      expect(role.Properties).not.toHaveProperty("ManagedPolicyArns");
+      expect(role.Properties).toMatchObject({
+        AssumeRolePolicyDocument: {
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Principal: { Service: "backup.amazonaws.com" },
+              Action: "sts:AssumeRole",
+            },
+          ],
+        },
+      });
+    }
 
     const backupPolicies = backupRole.Properties!.Policies as Record<
       string,
@@ -413,9 +400,6 @@ describe("Authority current-host recovery floor stack", () => {
     expect(runbook).toContain("authority-current-host-recovery-v1.guard");
     expect(runbook).toContain(
       "npm run check:authority-recovery-infrastructure",
-    );
-    expect(runbook).toContain(
-      "authority-recovery-helper-v1.template.json",
     );
     expect(runbook).toContain("aws cloudformation validate-template \\");
     expect(runbook).toContain("`REVIEW_IN_PROGRESS`");

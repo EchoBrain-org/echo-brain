@@ -7,11 +7,11 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, it, type ExpectStatic } from "vitest";
 import { canonicalJsonForTest as canonical } from "../support/test-canonical-json.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
@@ -49,10 +49,14 @@ const AUTHORITY_README = join(
 );
 const roots: string[] = [];
 
-afterEach(() => {
+afterAll(() => {
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true });
 });
+
+function writePrivate(path: string, text: string) {
+  writeFileSync(path, text, { mode: 0o600 });
+}
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "echo-backup-maintenance-"));
@@ -93,8 +97,8 @@ function fixture() {
       `ECHO_CLEAN_RUNTIME_PROFILE_SHA256=${profileSha}`,
       "ECHO_CLEAN_AUTHORITY_HOST=authority.example.test",
     ].join("\n") + "\n";
-  writeFileSync(join(deploy, ".env.clean-v1"), environment, { mode: 0o600 });
-  writeFileSync(
+  writePrivate(join(deploy, ".env.clean-v1"), environment);
+  writePrivate(
     join(release, "current.clean-v1.json"),
     canonical({
       schema_version: 1,
@@ -116,23 +120,10 @@ function fixture() {
         profile_version: "clean-v1-profile-1",
       },
     }) + "\n",
-    { mode: 0o600 },
   );
-  writeFileSync(join(release, "runtime-profile.active"), profile, {
-    mode: 0o600,
-  });
-  writeFileSync(
-    join(release, "runtime-profiles", `${releaseId}.profile`),
-    profile,
-    {
-      mode: 0o600,
-    },
-  );
-  writeFileSync(
-    join(release, "runtime-environments", `${releaseId}.env`),
-    environment,
-    { mode: 0o600 },
-  );
+  writePrivate(join(release, "runtime-profile.active"), profile);
+  writePrivate(join(release, "runtime-profiles", `${releaseId}.profile`), profile);
+  writePrivate(join(release, "runtime-environments", `${releaseId}.env`), environment);
   const docker = join(bin, "docker");
   writeFileSync(
     docker,
@@ -156,7 +147,6 @@ if [[ "$1" == compose ]]; then
   if [[ "$args" == *" down --remove-orphans"* ]]; then
     touch "$root/down"
     touch "$root/stopped"
-    [[ "\${ECHO_TEST_DOWN_FAIL:-false}" == true ]] && exit 1
     exit 0
   fi
   if [[ "$args" == *" up -d "* ]]; then
@@ -196,6 +186,9 @@ exit 1
     root,
     deploy,
     data,
+    lock: join(data, ".authority-operation-lock"),
+    guard: join(deploy, ".staging-release-guard"),
+    marker: (name: "down" | "restart" | "proxy-restart") => join(root, name),
     environment: {
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
@@ -207,15 +200,50 @@ exit 1
   };
 }
 
-function run(args: string[], environment: Record<string, string | undefined>) {
-  return spawnSync("bash", [MAINTENANCE, ...args], {
-    encoding: "utf8",
-    env: environment,
+type Subject = ReturnType<typeof fixture>;
+type RunResult = { status: number | null; stdout: string; stderr: string };
+
+/** Spawns the maintenance script without blocking, so the suite's tests overlap their idle waits. */
+function run(args: readonly string[], environment: Record<string, string | undefined>) {
+  return new Promise<RunResult>((resolve, reject) => {
+    const child = spawn("bash", [MAINTENANCE, ...args], {
+      env: environment,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.once("error", reject);
+    child.once("close", (status) =>
+      resolve({
+        status,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      }),
+    );
   });
 }
 
-describe("current-host backup maintenance transaction", () => {
-  it("documents the canonical installed deployment path for durable execution", () => {
+function writeStatus(subject: Subject, fields: Record<string, unknown>) {
+  const maintenance = join(subject.data, "backup-maintenance");
+  mkdirSync(maintenance, { mode: 0o700 });
+  writePrivate(join(maintenance, "status.json"), JSON.stringify(fields) + "\n");
+  return maintenance;
+}
+
+function dropRuntimeProfile(subject: Subject) {
+  const current = join(subject.data, "release", "current.clean-v1.json");
+  const legacy = JSON.parse(readFileSync(current, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  delete legacy.runtime_profile;
+  writePrivate(current, `${canonical(legacy)}\n`);
+}
+
+describe.concurrent("current-host backup maintenance transaction", () => {
+  it("documents the canonical installed deployment path for durable execution", ({ expect }) => {
     const source = readFileSync(MAINTENANCE, "utf8");
     const releaseReadme = readFileSync(RELEASE_README, "utf8");
     const authorityReadme = readFileSync(AUTHORITY_README, "utf8");
@@ -234,7 +262,7 @@ describe("current-host backup maintenance transaction", () => {
     expect(authorityReadme).toContain("mode `0755`");
   });
 
-  it("bounds the durable unit beyond the maximum acknowledgement and restart proof", () => {
+  it("bounds the durable unit beyond the maximum acknowledgement and restart proof", ({ expect }) => {
     const script = readFileSync(MAINTENANCE, "utf8");
     const runbook = readFileSync(RECOVERY_RUNBOOK, "utf8");
     for (const source of [script, runbook]) {
@@ -245,7 +273,7 @@ describe("current-host backup maintenance transaction", () => {
     expect(script).toContain("--wait-timeout 90 authority proxy");
   });
 
-  it("serializes every onboarding mutation with the same fail-closed lock", () => {
+  it("serializes every onboarding mutation with the same fail-closed lock", ({ expect }) => {
     const source = readFileSync(ONBOARD, "utf8");
     for (const operation of ["prepare", "replace_rehearsal", "resume"]) {
       const start = source.indexOf(`\n${operation}() {`);
@@ -255,56 +283,119 @@ describe("current-host backup maintenance transaction", () => {
     }
   });
 
-  it("uses the shared lock and refuses to touch Docker when another operation owns it", () => {
+  it.for<[
+    string,
+    {
+      readonly args: readonly string[];
+      readonly arrange: (subject: Subject) => void;
+      readonly message: string;
+      readonly extra?: (subject: Subject, result: RunResult, expect: ExpectStatic) => void;
+    },
+  ]>([
+    ["when another operation owns the shared lock", {
+      args: ["maintain", "--ack-timeout-seconds", "30"],
+      arrange: (subject) => {
+        mkdirSync(subject.lock, { mode: 0o700 });
+        writePrivate(join(subject.lock, "owner-pid"), "99999999\n");
+      },
+      message: "another Authority activation or release operation",
+    }],
+    ["while the bounded release root guard is held", {
+      args: ["maintain", "--ack-timeout-seconds", "1"],
+      arrange: (subject) => {
+        mkdirSync(subject.guard, { mode: 0o700 });
+        writePrivate(join(subject.guard, "owner-pid"), "99999999\n");
+      },
+      message: "root-owned guard",
+      extra: (subject, _result, expect) => {
+        expect(readFileSync(join(subject.guard, "owner-pid"), "utf8")).toBe("99999999\n");
+        expect(existsSync(subject.lock)).toBe(false);
+      },
+    }],
+    ["a pre-runtime-profile release through preflight", {
+      args: ["preflight"],
+      arrange: dropRuntimeProfile,
+      message: "accepted release record is not canonical clean-v1",
+      extra: (subject, _result, expect) => expect(existsSync(subject.lock)).toBe(false),
+    }],
+    ["a pre-runtime-profile release through maintain", {
+      args: ["maintain", "--ack-timeout-seconds", "1"],
+      arrange: dropRuntimeProfile,
+      message: "accepted release record is not canonical clean-v1",
+      extra: (subject, _result, expect) => expect(existsSync(subject.lock)).toBe(false),
+    }],
+    ["to overwrite an explicit recovery_required status with a new transaction", {
+      args: ["maintain", "--ack-timeout-seconds", "1"],
+      arrange: (subject) => {
+        writeStatus(subject, {
+          schema_version: 1,
+          operation_id: "backup-20260825T120000Z-aaaaaaaaaaaaaaaaaaaaaaaa",
+          coordinator_nonce: "b".repeat(48),
+          state: "recovery_required",
+          reason: "restart_proof_failed",
+        });
+      },
+      message: "requires deliberate recovery",
+    }],
+    ["a malformed maintenance status with a sanitized failure", {
+      args: ["maintain", "--ack-timeout-seconds", "1"],
+      arrange: (subject) => {
+        const maintenance = join(subject.data, "backup-maintenance");
+        mkdirSync(maintenance, { mode: 0o700 });
+        writePrivate(join(maintenance, "status.json"), "not-json\n");
+      },
+      message: "backup maintenance status is unavailable or unsafe",
+      extra: (subject, result, expect) => {
+        expect(result.stderr).not.toContain("Traceback");
+        expect(result.stderr).not.toContain(subject.root);
+      },
+    }],
+    ["deployed Compose profile drift", {
+      args: ["maintain", "--ack-timeout-seconds", "1"],
+      arrange: (subject) =>
+        writeFileSync(
+          join(subject.deploy, "compose.clean-v1.yaml"),
+          "services: { drift: {} }\n",
+        ),
+      message: "deployed runtime profile files drifted",
+    }],
+    ["full environment snapshot drift", {
+      args: ["maintain", "--ack-timeout-seconds", "1"],
+      arrange: (subject) =>
+        writePrivate(
+          join(subject.deploy, ".env.clean-v1"),
+          `${readFileSync(join(subject.deploy, ".env.clean-v1"), "utf8")}ECHO_CLEAN_UNTRACKED=drift\n`,
+        ),
+      message: "environment drifted from the accepted release snapshot",
+    }],
+  ])("refuses %s before any outage", async ([, { args, arrange, message, extra }], { expect }) => {
     const subject = fixture();
-    const lock = join(subject.data, ".authority-operation-lock");
-    mkdirSync(lock, { mode: 0o700 });
-    writeFileSync(join(lock, "owner-pid"), "99999999\n", { mode: 0o600 });
+    arrange(subject);
 
-    const result = run(
-      ["maintain", "--ack-timeout-seconds", "30"],
-      subject.environment,
-    );
+    const result = await run(args, subject.environment);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "another Authority activation or release operation",
-    );
-    expect(existsSync(join(subject.root, "down"))).toBe(false);
-    expect(existsSync(join(subject.root, "restart"))).toBe(false);
+    expect(result.stderr).toContain(message);
+    expect(existsSync(subject.marker("down"))).toBe(false);
+    expect(existsSync(subject.marker("restart"))).toBe(false);
+    extra?.(subject, result, expect);
   });
 
-  it("refuses backup maintenance while the bounded release root guard is held", () => {
-    const subject = fixture();
-    const guard = join(subject.deploy, ".staging-release-guard");
-    mkdirSync(guard, { mode: 0o700 });
-    writeFileSync(join(guard, "owner-pid"), "99999999\n", { mode: 0o600 });
-    const result = run(["maintain", "--ack-timeout-seconds", "1"], subject.environment);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("root-owned guard");
-    expect(existsSync(join(subject.root, "down"))).toBe(false);
-    expect(existsSync(join(subject.root, "restart"))).toBe(false);
-    expect(readFileSync(join(guard, "owner-pid"), "utf8")).toBe("99999999\n");
-    expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(false);
-  });
-
-  it("proves the complete accepted tuple without stopping or restarting the Authority", () => {
+  it("proves the complete accepted tuple without stopping or restarting the Authority", async ({ expect }) => {
     const subject = fixture();
 
-    const result = run(["preflight"], subject.environment);
+    const result = await run(["preflight"], subject.environment);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("maintenance_preflight_ready=true\n");
     expect(result.stderr).toBe("");
-    expect(existsSync(join(subject.deploy, ".staging-release-guard"))).toBe(false);
-    expect(existsSync(join(subject.root, "down"))).toBe(false);
-    expect(existsSync(join(subject.root, "restart"))).toBe(false);
-    expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
-      false,
-    );
+    expect(existsSync(subject.guard)).toBe(false);
+    expect(existsSync(subject.marker("down"))).toBe(false);
+    expect(existsSync(subject.marker("restart"))).toBe(false);
+    expect(existsSync(subject.lock)).toBe(false);
   });
 
-  it("does not report readiness when the preflight lock cannot be removed", () => {
+  it("does not report readiness when the preflight lock cannot be removed", async ({ expect }) => {
     const subject = fixture();
     const rmdir = join(subject.root, "bin", "rmdir");
     writeFileSync(
@@ -315,163 +406,20 @@ exit 1
       { mode: 0o755 },
     );
 
-    const result = run(["preflight"], subject.environment);
+    const result = await run(["preflight"], subject.environment);
 
     expect(result.status).toBe(1);
     expect(result.stdout).not.toContain("maintenance_preflight_ready=true");
     expect(result.stderr).toContain(
       "could not release the Authority operation lock",
     );
-    expect(existsSync(join(subject.root, "down"))).toBe(false);
-    expect(existsSync(join(subject.root, "restart"))).toBe(false);
-    expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
-      true,
-    );
+    expect(existsSync(subject.marker("down"))).toBe(false);
+    expect(existsSync(subject.marker("restart"))).toBe(false);
+    expect(existsSync(subject.lock)).toBe(true);
   });
 
-  it("refuses a pre-runtime-profile release before any outage", () => {
-    const subject = fixture();
-    const current = join(
-      subject.data,
-      "release",
-      "current.clean-v1.json",
-    );
-    const legacy = JSON.parse(readFileSync(current, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    delete legacy.runtime_profile;
-    writeFileSync(current, `${canonical(legacy)}\n`, { mode: 0o600 });
-
-    const result = run(["preflight"], subject.environment);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "accepted release record is not canonical clean-v1",
-    );
-    expect(existsSync(join(subject.root, "down"))).toBe(false);
-    expect(existsSync(join(subject.root, "restart"))).toBe(false);
-    expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
-      false,
-    );
-  });
-
-  it("refuses a pre-runtime-profile release through maintain before any outage", () => {
-    const subject = fixture();
-    const current = join(
-      subject.data,
-      "release",
-      "current.clean-v1.json",
-    );
-    const legacy = JSON.parse(readFileSync(current, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    delete legacy.runtime_profile;
-    writeFileSync(current, `${canonical(legacy)}\n`, { mode: 0o600 });
-
-    const result = run(
-      ["maintain", "--ack-timeout-seconds", "1"],
-      subject.environment,
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "accepted release record is not canonical clean-v1",
-    );
-    expect(existsSync(join(subject.root, "down"))).toBe(false);
-    expect(existsSync(join(subject.root, "restart"))).toBe(false);
-    expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
-      false,
-    );
-  });
-
-  it("will not overwrite an explicit recovery_required status with a new transaction", () => {
-    const subject = fixture();
-    const maintenance = join(subject.data, "backup-maintenance");
-    mkdirSync(maintenance, { mode: 0o700 });
-    writeFileSync(
-      join(maintenance, "status.json"),
-      JSON.stringify({
-        schema_version: 1,
-        operation_id: "backup-20260825T120000Z-aaaaaaaaaaaaaaaaaaaaaaaa",
-        coordinator_nonce: "b".repeat(48),
-        state: "recovery_required",
-        reason: "restart_proof_failed",
-      }) + "\n",
-      { mode: 0o600 },
-    );
-
-    const result = run(
-      ["maintain", "--ack-timeout-seconds", "1"],
-      subject.environment,
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("requires deliberate recovery");
-    expect(existsSync(join(subject.root, "down"))).toBe(false);
-  });
-
-  it("sanitizes malformed maintenance status failures before Docker is touched", () => {
-    const subject = fixture();
-    const maintenance = join(subject.data, "backup-maintenance");
-    mkdirSync(maintenance, { mode: 0o700 });
-    writeFileSync(join(maintenance, "status.json"), "not-json\n", {
-      mode: 0o600,
-    });
-
-    const result = run(
-      ["maintain", "--ack-timeout-seconds", "1"],
-      subject.environment,
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "backup maintenance status is unavailable or unsafe",
-    );
-    expect(result.stderr).not.toContain("Traceback");
-    expect(result.stderr).not.toContain(subject.root);
-    expect(existsSync(join(subject.root, "down"))).toBe(false);
-  });
-
-  it("refuses deployed Compose profile drift before it can stop the Authority", () => {
-    const subject = fixture();
-    writeFileSync(
-      join(subject.deploy, "compose.clean-v1.yaml"),
-      "services: { drift: {} }\n",
-    );
-
-    const result = run(
-      ["maintain", "--ack-timeout-seconds", "1"],
-      subject.environment,
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("deployed runtime profile files drifted");
-    expect(existsSync(join(subject.root, "down"))).toBe(false);
-  });
-
-  it("refuses full environment snapshot drift before it can stop the Authority", () => {
-    const subject = fixture();
-    writeFileSync(
-      join(subject.deploy, ".env.clean-v1"),
-      `${readFileSync(join(subject.deploy, ".env.clean-v1"), "utf8")}ECHO_CLEAN_UNTRACKED=drift\n`,
-      { mode: 0o600 },
-    );
-
-    const result = run(
-      ["maintain", "--ack-timeout-seconds", "1"],
-      subject.environment,
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "environment drifted from the accepted release snapshot",
-    );
-    expect(existsSync(join(subject.root, "down"))).toBe(false);
-  });
-
-  it("accepts only the current operation nonce before restarting without a pull", async () => {
+  // Sequential: its 10s acknowledgement guard must not compete with sibling processes.
+  it.sequential("accepts only the current operation nonce before restarting without a pull", async ({ expect }) => {
     const subject = fixture();
     const child = spawn(
       "bash",
@@ -509,8 +457,8 @@ exit 1
     const closed = new Promise<{ code: number | null; stderr: string }>(
       (resolve) => child.once("close", (code) => resolve({ code, stderr })),
     );
-    expect(existsSync(join(subject.deploy, ".staging-release-guard", "owner-pid"))).toBe(true);
-    const acknowledgement = run(
+    expect(existsSync(join(subject.guard, "owner-pid"))).toBe(true);
+    const acknowledgement = await run(
       [
         "acknowledge",
         "--operation-id",
@@ -526,11 +474,9 @@ exit 1
     expect(result.stderr).toBe("");
     expect(result.code).toBe(0);
     expect(stdout).toContain("maintenance_complete=true");
-    expect(existsSync(join(subject.deploy, ".staging-release-guard"))).toBe(false);
-    expect(existsSync(join(subject.root, "restart"))).toBe(true);
-    expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
-      false,
-    );
+    expect(existsSync(subject.guard)).toBe(false);
+    expect(existsSync(subject.marker("restart"))).toBe(true);
+    expect(existsSync(subject.lock)).toBe(false);
     const status = readFileSync(
       join(subject.data, "backup-maintenance", "status.json"),
       "utf8",
@@ -540,20 +486,18 @@ exit 1
     expect(status).toContain('"acknowledgement_deadline_epoch_seconds":');
   });
 
-  it("restarts and proves the accepted tuple after an acknowledgement timeout, releasing the lock only after recovery", () => {
+  it("restarts and proves the accepted tuple after an acknowledgement timeout, releasing the lock only after recovery", async ({ expect }) => {
     const subject = fixture();
-    const result = run(
+    const result = await run(
       ["maintain", "--ack-timeout-seconds", "1"],
       subject.environment,
     );
 
     expect(result.status).toBe(1);
-    expect(existsSync(join(subject.root, "down"))).toBe(true);
-    expect(existsSync(join(subject.root, "restart"))).toBe(true);
-    expect(existsSync(join(subject.root, "proxy-restart"))).toBe(true);
-    expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
-      false,
-    );
+    expect(existsSync(subject.marker("down"))).toBe(true);
+    expect(existsSync(subject.marker("restart"))).toBe(true);
+    expect(existsSync(subject.marker("proxy-restart"))).toBe(true);
+    expect(existsSync(subject.lock)).toBe(false);
     const status = readFileSync(
       join(subject.data, "backup-maintenance", "status.json"),
       "utf8",
@@ -565,20 +509,18 @@ exit 1
     );
   });
 
-  it("keeps the shared lock and records recovery_required when no-pull restart proof fails", () => {
+  it("keeps the shared lock and records recovery_required when no-pull restart proof fails", async ({ expect }) => {
     const subject = fixture();
-    const result = run(["maintain", "--ack-timeout-seconds", "1"], {
+    const result = await run(["maintain", "--ack-timeout-seconds", "1"], {
       ...subject.environment,
       ECHO_TEST_RESTART_FAIL: "true",
     });
 
     expect(result.status).toBe(1);
-    expect(existsSync(join(subject.root, "down"))).toBe(true);
-    expect(existsSync(join(subject.root, "restart"))).toBe(true);
-    expect(existsSync(join(subject.deploy, ".staging-release-guard", "owner-pid"))).toBe(true);
-    expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
-      true,
-    );
+    expect(existsSync(subject.marker("down"))).toBe(true);
+    expect(existsSync(subject.marker("restart"))).toBe(true);
+    expect(existsSync(join(subject.guard, "owner-pid"))).toBe(true);
+    expect(existsSync(subject.lock)).toBe(true);
     const status = readFileSync(
       join(subject.data, "backup-maintenance", "status.json"),
       "utf8",
@@ -586,23 +528,17 @@ exit 1
     expect(status).toContain('"state":"recovery_required"');
   });
 
-  it("rejects an acknowledgement whose nonce belongs to no current waiting operation", () => {
+  it("rejects an acknowledgement whose nonce belongs to no current waiting operation", async ({ expect }) => {
     const subject = fixture();
-    const maintenance = join(subject.data, "backup-maintenance");
-    mkdirSync(maintenance, { mode: 0o700 });
-    writeFileSync(
-      join(maintenance, "status.json"),
-      JSON.stringify({
-        schema_version: 1,
-        operation_id: "backup-20260825T120000Z-aaaaaaaaaaaaaaaaaaaaaaaa",
-        coordinator_nonce: "b".repeat(48),
-        state: "awaiting_external_ack",
-        reason: null,
-      }) + "\n",
-      { mode: 0o600 },
-    );
+    const maintenance = writeStatus(subject, {
+      schema_version: 1,
+      operation_id: "backup-20260825T120000Z-aaaaaaaaaaaaaaaaaaaaaaaa",
+      coordinator_nonce: "b".repeat(48),
+      state: "awaiting_external_ack",
+      reason: null,
+    });
 
-    const result = run(
+    const result = await run(
       [
         "acknowledge",
         "--operation-id",
@@ -627,28 +563,22 @@ exit 1
     ).toBe(false);
   });
 
-  it("rejects a late acknowledgement even before the maintainer flips status", () => {
+  it("rejects a late acknowledgement even before the maintainer flips status", async ({ expect }) => {
     const subject = fixture();
-    const maintenance = join(subject.data, "backup-maintenance");
     const operationId = "backup-20260825T120000Z-aaaaaaaaaaaaaaaaaaaaaaaa";
     const nonce = "b".repeat(48);
-    mkdirSync(maintenance, { mode: 0o700 });
-    writeFileSync(
-      join(maintenance, "status.json"),
-      JSON.stringify({
-        schema_version: 1,
-        operation_id: operationId,
-        coordinator_nonce: nonce,
-        maintainer_pid: process.pid,
-        maintainer_started_at_epoch_seconds: 1,
-        acknowledgement_deadline_epoch_seconds: 0,
-        state: "awaiting_external_ack",
-        reason: null,
-      }) + "\n",
-      { mode: 0o600 },
-    );
+    const maintenance = writeStatus(subject, {
+      schema_version: 1,
+      operation_id: operationId,
+      coordinator_nonce: nonce,
+      maintainer_pid: process.pid,
+      maintainer_started_at_epoch_seconds: 1,
+      acknowledgement_deadline_epoch_seconds: 0,
+      state: "awaiting_external_ack",
+      reason: null,
+    });
 
-    const result = run(
+    const result = await run(
       ["acknowledge", "--operation-id", operationId, "--nonce", nonce],
       subject.environment,
     );
