@@ -19,6 +19,7 @@ const OPEN_ITEMS = {
   send: [{ schema_version: 1, operation: 'send', run_id: RUN, command_id: 'cmd-1', items: [{ item_id: ITEM, include: true, owner_membership_id: MEMBER }] }, { sent: 1, not_relevant: 0 }],
   set_state: [{ schema_version: 1, operation: 'set_state', item_id: ITEM, state: 'done' }, { state: 'done' }],
   assign: [{ schema_version: 1, operation: 'assign', item_id: ITEM, owner_membership_id: MEMBER }, { owner: { membership_id: MEMBER, name: 'Mina Patel', active: true } }],
+  sweep: [{ schema_version: 1, operation: 'sweep', scope: 'mine' }, { run_id: RUN }],
 } as const;
 const unavailable = async () => { throw new AuthorityOperationError('unavailable', 'an answer model is not configured'); };
 
@@ -66,7 +67,7 @@ describe('person runs HTTP transport', () => {
       return {} as never;
     });
     const base = await origin(unavailablePersonTriggerRunsV1({ authenticateAccess }));
-    for (const request of [{ schema_version: 1, operation: 'list' }, { schema_version: 1, operation: 'view', run_id: RUN }, ...Object.values(OPEN_ITEMS).map(([value]) => value), { schema_version: 1, operation: 'sweep', scope: 'mine' }]) {
+    for (const request of [{ schema_version: 1, operation: 'list' }, { schema_version: 1, operation: 'view', run_id: RUN }, ...Object.values(OPEN_ITEMS).map(([value]) => value)]) {
       expect((await post(base, request, 'Bearer stranger')).status).toBe(401);
       const response = await post(base, request);
       expect(response.status).toBe(503);
@@ -75,16 +76,15 @@ describe('person runs HTTP transport', () => {
     expect(authenticateAccess).toHaveBeenCalledTimes(18);
   });
 
-  it('dispatches a valid sweep to its method, which refuses it for now, and refuses an invalid one before any method', async () => {
-    // Sweep runs are served from Task 11 of the open items plan; until then the composed method answers unavailable.
-    const sweep = vi.fn(async () => { throw new AuthorityOperationError('unavailable', 'Sweep runs are not served yet'); });
+  it('dispatches a valid sweep of each scope to its method, answers a run or nothing to check, and refuses an invalid one before any method', async () => {
+    const sweep = vi.fn(async ({ request }: Parameters<PersonTriggerRunsHttpApplicationV1['sweep']>[0]) => (request.scope === 'mine' ? { run_id: RUN } : { state: 'nothing_to_check' as const }));
     const app = { list: vi.fn(), start: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), sweep, close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
     const base = await origin(app);
     const valid = [{ scope: 'mine' }, { scope: 'record', id: RECORD }, { scope: 'project', id: PROJECT }].map(fields => ({ schema_version: 1, operation: 'sweep', ...fields }));
     for (const request of valid) {
       const response = await post(base, request);
-      expect(response.status).toBe(503);
-      expect(await response.json()).toMatchObject({ error: { code: 'unavailable' } });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(request.scope === 'mine' ? { run_id: RUN } : { state: 'nothing_to_check' });
       expect(sweep).toHaveBeenLastCalledWith({ access_token: 'fixture', request, signal: expect.any(AbortSignal) });
     }
     for (const fields of [{ scope: 'mine', id: RECORD }, { scope: 'record' }, { scope: 'mine', cursor: 'next-page_2' }]) {

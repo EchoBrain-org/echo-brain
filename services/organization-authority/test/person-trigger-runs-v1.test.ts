@@ -10,7 +10,8 @@ import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from '../src/comp
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from '../../../tests/support/telemetry-fixture-vocabulary-v1.js';
 
 import { SqliteTriggerRunsV1, enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
-import { createPersonTriggerRunsV1, readStoredImpactCardV1 } from '../src/composition/person-trigger-runs-v1.js';
+import { readStoredImpactCardV1 } from '../src/composition/person-open-items-v1.js';
+import { createPersonTriggerRunsV1 } from '../src/composition/person-trigger-runs-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
 import { openItemsFixture } from './fixtures/open-items.js';
@@ -44,7 +45,7 @@ async function fixture(options: { readonly anchor?: () => typeof record; readonl
     record_sha256s.map(sha => [sha, { approval_id: f.approvalId, record_sha256: sha, title: 'Approved display', approved_at: now.toISOString(), project_ids: [] }] as const));
   const diagnostics = createPersonDiagnosticsV1({ sessions: { authenticateAccess: ({ access_token }) => auth(access_token) } });
   captures.push(diagnostics);
-  const create = (serviceRuns: SqliteTriggerRunsV1 = runs) => createPersonTriggerRunsV1({ runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordProjects: () => [], readableDecisions: readableDecisions as never }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000,
+  const create = (serviceRuns: SqliteTriggerRunsV1 = runs) => createPersonTriggerRunsV1({ runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordProjects: () => [], readableDecisions: readableDecisions as never, projectRecords: () => [] }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000,
     items: new SqliteImpactItemsV1(f.db, () => now), people: new SqliteOpenItemPeopleV1(f.db) });
   const app = create();
   const settled = async () => await vi.waitFor(() => expect(runs.read(f.person, row.run_id)!.state).not.toBe('running'));

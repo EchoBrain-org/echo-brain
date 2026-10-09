@@ -418,7 +418,9 @@ A finished check writes one shared open item per affected item in the same
 transaction; the same route's home, items, item, send, set_state and assign
 operations show and change them under one access policy, and read each
 item's outside words live as the viewer
-([ADR-0033](../../docs/decisions/ADR-0033-shared-open-items.md)).
+([ADR-0033](../../docs/decisions/ADR-0033-shared-open-items.md)). Its sweep
+operation queues a run that re-checks the open items the asking person can
+see, as that person, and keeps only a verdict per item as its shared last check.
 
 A later source-folder move does not reinterpret a frozen proposal or an approved
 record.

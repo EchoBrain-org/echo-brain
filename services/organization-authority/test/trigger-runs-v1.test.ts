@@ -9,6 +9,13 @@ const signal = () => new AbortController().signal;
 const NOW = '2026-10-07T10:00:00.000Z';
 /** A stored result; the store never reads inside it. */
 const card = () => ({ json: '{"schema_version":1}', sha256: canonicalSha256({ schema_version: 1 }) });
+/** Runs each of the person's pending impact checks to done: impact checks start before sweeps. */
+function finishImpactRuns(f: Awaited<ReturnType<typeof approvedRunFixture>>): void {
+  for (const run of f.runs.list(f.owner, 100).filter(row => row.trigger === 'approved_record' && row.state === 'pending')) {
+    const lease = f.runs.claim(f.owner, run.run_id, 600_000);
+    if (lease.kind !== 'claimed' || !f.runs.finish(run.run_id, lease.lease_token, card())) throw new Error('expected the impact check to finish');
+  }
+}
 
 describe('SQLite trigger runs v1', () => {
   it('enqueues exactly one pending run per approved record through the publisher hook', async () => {
@@ -111,6 +118,7 @@ describe('SQLite trigger runs v1', () => {
 
   it('queues one live sweep per person and scope, and a new one once it is done', async () => {
     const f = await approvedRunFixture();
+    finishImpactRuns(f);
     const first = f.runs.enqueueSweep(f.owner, { kind: 'mine' });
     expect(first.created).toBe(true);
     expect(f.runs.enqueueSweep(f.owner, { kind: 'mine' })).toEqual({ run_id: first.run_id, created: false });
@@ -183,6 +191,7 @@ describe('SQLite trigger runs v1', () => {
 
   it('retries a failed impact run only; a failed sweep stays failed and the next sweep replaces it', async () => {
     const f = await approvedRunFixture();
+    finishImpactRuns(f);
     const scope = { kind: 'project', project_id: f.projectA } as const;
     const sweep = f.runs.enqueueSweep(f.owner, scope);
     const lease = f.runs.claim(f.owner, sweep.run_id, 600_000);
@@ -208,10 +217,48 @@ describe('SQLite trigger runs v1', () => {
     expect(f.runs.impactRunsFor([f.recordSha256]).map(row => row.event_ref)).toEqual([f.approvalId]);
     expect(f.runs.impactRunsFor(impact.map(row => row.record_sha256!)).map(row => row.run_id).sort()).toEqual(impact.map(row => row.run_id).sort());
     expect(f.runs.impactRunsFor([])).toEqual([]);
+    finishImpactRuns(f);
     const lease = f.runs.claim(f.owner, sweep.run_id, 600_000);
     if (lease.kind !== 'claimed') throw new Error('expected lease');
     expect(f.runs.liveSweep(f.owner)).toMatchObject({ run_id: sweep.run_id, state: 'running' });
     expect(f.runs.finish(sweep.run_id, lease.lease_token, card())).toBe(true);
     expect(f.runs.liveSweep(f.owner)).toBeUndefined();
+  });
+
+  it('starts a sweep only once none of the person\'s impact checks is pending or running', async () => {
+    const f = await approvedRunFixture();
+    const impact = f.runs.list(f.owner, 1)[0]!;
+    const sweep = f.runs.enqueueSweep(f.owner, { kind: 'mine' });
+    expect(f.runs.claim(f.owner, sweep.run_id, 600_000).kind).toBe('busy');          // the impact check is pending
+    const first = f.runs.claim(f.owner, impact.run_id, 600_000);                     // a pending sweep never holds up an impact check
+    if (first.kind !== 'claimed') throw new Error('expected lease');
+    expect(f.runs.claim(f.owner, sweep.run_id, 600_000).kind).toBe('busy');          // running
+    f.advance(600_001);
+    expect(f.runs.claim(f.owner, sweep.run_id, 600_000).kind).toBe('busy');          // still running, its lease lapsed
+    const second = f.runs.claim(f.owner, impact.run_id, 600_000);
+    if (second.kind !== 'claimed') throw new Error('expected lease');
+    expect(f.runs.fail(impact.run_id, second.lease_token, 'research_failed')).toBe(true);
+    // A failed impact check waits for Try again; it does not hold sweeps back.
+    expect(f.runs.claim(f.owner, sweep.run_id, 600_000).kind).toBe('claimed');
+    // Someone else's impact check is theirs alone.
+    const other = await approvedRunFixture();
+    const strangers = other.runs.enqueueSweep(other.stranger, { kind: 'mine' });
+    expect(other.runs.claim(other.stranger, strangers.run_id, 600_000).kind).toBe('claimed');
+  });
+
+  it('reads a person\'s newest sweep, whatever its scope or state', async () => {
+    const f = await approvedRunFixture();
+    finishImpactRuns(f);
+    expect(f.runs.newestSweep(f.owner)).toBeUndefined();
+    const first = f.runs.enqueueSweep(f.owner, { kind: 'mine' });
+    f.advance(1_000);
+    const second = f.runs.enqueueSweep(f.owner, { kind: 'project', project_id: f.projectA });
+    expect(f.runs.newestSweep(f.owner)).toMatchObject({ run_id: second.run_id, trigger: 'sweep', state: 'pending', created_at: f.clock().toISOString() });
+    const lease = f.runs.claim(f.owner, second.run_id, 600_000);
+    if (lease.kind !== 'claimed') throw new Error('expected lease');
+    expect(f.runs.fail(second.run_id, lease.lease_token, 'unavailable')).toBe(true);
+    expect(f.runs.newestSweep(f.owner)).toMatchObject({ run_id: second.run_id, state: 'failed' });
+    expect(f.runs.newestSweep(f.stranger)).toBeUndefined();
+    expect(f.runs.read(f.owner, first.run_id)).toMatchObject({ state: 'pending' });
   });
 });

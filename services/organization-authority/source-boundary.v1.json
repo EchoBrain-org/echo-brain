@@ -129,6 +129,11 @@
         "name": "Open items service",
         "path": "services/organization-authority/src/composition/person-open-items-v1.ts",
         "export": "createPersonOpenItemsV1"
+      },
+      {
+        "name": "Open items sweep run",
+        "path": "services/organization-authority/src/composition/person-sweep-runs-v1.ts",
+        "export": "sweepOpenItemsV1"
       }
     ],
     "compatibility_entrypoints": [

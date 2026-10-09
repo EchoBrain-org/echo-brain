@@ -40,6 +40,8 @@ export interface OpenItemsFixtureOptionsV1 {
   readonly actionOwner?: string;
   /** A not-assessed card lists what research cited, with no relation. */
   readonly assessed?: boolean;
+  /** An assessed card whose rows carry no `expected` phrase, as when storage screens one out. */
+  readonly withoutExpected?: boolean;
   /** A failed bulk assignee read. */
   readonly jiraFails?: boolean;
   /** The card also cites the ticket at a later text hash. */
@@ -54,7 +56,7 @@ export interface OpenItemsFixtureOptionsV1 {
 }
 
 /** One impact card as the renderer returns it, with a copy of the ticket at another text hash when asked. */
-export function fixtureCard(input: { readonly record: unknown; readonly outsideText: string; readonly actionOwner: string; readonly assessed: boolean; readonly duplicateTicket?: boolean }) {
+export function fixtureCard(input: { readonly record: unknown; readonly outsideText: string; readonly actionOwner: string; readonly assessed: boolean; readonly duplicateTicket?: boolean; readonly withoutExpected?: boolean }) {
   const ticket = { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: CLOUD, ticket_id: '10012', permalink: 'https://echo-fixture.atlassian.net/browse/ECHO-12', text_sha256: canonicalSha256('ECHO-12 text') };
   const rollout = { kind: 'approved_record' as const, atom_id: canonicalSha256('rollout atom'), record_sha256: canonicalSha256('rollout record'), policy_id: 'project-members-readable-person-v1' as const };
   const page = { kind: 'page' as const, tool_id: 'confluence', external_scope_id: CLOUD, page_id: '200', section_id: 'section-1', version: '3',
@@ -76,15 +78,16 @@ export function fixtureCard(input: { readonly record: unknown; readonly outsideT
     };
   }
   const duplicate = input.duplicateTicket === true;
+  const expected = (phrase: string) => (input.withoutExpected === true ? {} : { expected: phrase });
   return {
     status: 'assessed' as const,
     decided: [{ text: 'The pilot starts next week.', citation_index: 0 }],
     affected: [
-      { citation_index: 1, says_now: `${input.outsideText} is due Oct 30.`, relation: 'needs_updating', expected: 'launch next week', owner: 'Mina Patel' },
-      { citation_index: 2, says_now: 'The rollout plan starts the pilot after the freeze.', relation: 'conflicts', expected: 'pilot starts next week', owner: input.actionOwner },
+      { citation_index: 1, says_now: `${input.outsideText} is due Oct 30.`, relation: 'needs_updating', ...expected('launch next week'), owner: 'Mina Patel' },
+      { citation_index: 2, says_now: 'The rollout plan starts the pilot after the freeze.', relation: 'conflicts', ...expected('pilot starts next week'), owner: input.actionOwner },
       { citation_index: 3, says_now: `${input.outsideText} says the pilot starts next week.`, relation: 'confirms' },
       // The same ticket at a later text hash: one item.
-      ...(duplicate ? [{ citation_index: 4, says_now: `${input.outsideText} is due Oct 31.`, relation: 'conflicts', expected: 'launch Monday', owner: 'Mina Patel' }] : []),
+      ...(duplicate ? [{ citation_index: 4, says_now: `${input.outsideText} is due Oct 31.`, relation: 'conflicts', ...expected('launch Monday'), owner: 'Mina Patel' }] : []),
     ],
     unconfirmed: [],
     people: [{ name: 'Mina Patel', items: [1, ...(duplicate ? [4] : [])] }, { name: input.actionOwner, items: [2] }],
@@ -153,7 +156,8 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
       return [f.projectA as never];
     },
   };
-  const card = fixtureCard({ record: decisionCitation, outsideText, actionOwner: options.actionOwner ?? 'Nobody Here', assessed: options.assessed !== false, duplicateTicket: options.duplicateTicket === true });
+  const card = fixtureCard({ record: decisionCitation, outsideText, actionOwner: options.actionOwner ?? 'Nobody Here', assessed: options.assessed !== false,
+    duplicateTicket: options.duplicateTicket === true, withoutExpected: options.withoutExpected === true });
   const { pointers } = card;
   const receipt = canonicalSha256('receipt');
   const deskItems = {
@@ -183,10 +187,16 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     openCitation: ({ citation }: { readonly citation: Citation }) => openCitation(token(input.access_token), citation),
     async revalidate() { revalidated.push(input.access_token); return { checked_at: now.toISOString() }; },
   }));
-  const research = vi.fn(() => ({ renderWithResearch: async () => ({
-    rendered: (({ pointers: _pointers, ...rendered }) => rendered)(card),
-    research: { items: card.citations.map(entry => ({ citation: entry.citation, title: entry.label })) },
-  }) }));
+  /** What a sweep's renderer returns; a sweep test sets it with `renderSweepsWith`. */
+  let renderSweep: (input: { readonly trigger_input: unknown; readonly signal?: AbortSignal }) => Promise<unknown> = async () => {
+    throw new Error('This fixture renders no sweep');
+  };
+  const research = vi.fn(() => ({ renderWithResearch: async (input: { readonly trigger: string; readonly trigger_input: unknown; readonly signal?: AbortSignal }) => (input.trigger === 'sweep'
+    ? { rendered: await renderSweep(input), research: { items: [] } }
+    : {
+      rendered: (({ pointers: _pointers, ...rendered }) => rendered)(card),
+      research: { items: card.citations.map(entry => ({ citation: entry.citation, title: entry.label })) },
+    }) }));
   const accounts = { mina: 'acct-mina', okafor: 'acct-okafor', none: undefined };
   const assignee = accounts[options.ticketOwner ?? 'mina'];
   const jira_owners: JiraOwnerAccountsV1 = {
@@ -201,11 +211,12 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     }),
   };
   const bind_options = { authority_id: 'authority', state_lineage_id: 'lineage' } as never;
+  const clock = () => now;
   const runsApp = createPersonTriggerRunsV1({ runs, sessions, records, bindDesk: bindDesk as never, audit: {} as never, bind_options, research: research as never,
-    items, people: directory, jira_owners, lease_ms: 60_000 });
+    items, people: directory, jira_owners, lease_ms: 60_000, now: clock });
   const liveFailures: OpenItemsLiveFailureV1[] = [];
   /** The open-items service's options, so a test can build it again with one of them changed. */
-  const openItemsOptions = { sessions, runs, items, people: directory, records, bindDesk: bindDesk as never, bind_options,
+  const openItemsOptions = { sessions, runs, items, people: directory, records, bindDesk: bindDesk as never, bind_options, now: clock,
     on_live_failure: options.on_live_failure ?? ((event: OpenItemsLiveFailureV1) => { liveFailures.push(event); }) };
   const openItemsApp = createPersonOpenItemsV1(openItemsOptions);
   /** Every response passes the API's own result validator, as the desktop's client would apply it. */
@@ -213,7 +224,9 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     async (input: unknown): Promise<PersonRunsResultsV1[K]> => validatePersonRunsResultV1(operation, await read(input as never));
   type Request<K extends PersonRunsRequestV1['operation']> = { readonly access_token: string; readonly request: Extract<PersonRunsRequestV1, { readonly operation: K }> };
   const app = {
+    list: (input: Parameters<typeof runsApp.list>[0]) => runsApp.list(input).then(value => validatePersonRunsResultV1('list', value)),
     start: (input: Parameters<typeof runsApp.start>[0]) => runsApp.start(input).then(value => validatePersonRunsResultV1('start', value)),
+    retry: (input: Parameters<typeof runsApp.retry>[0]) => runsApp.retry(input).then(value => validatePersonRunsResultV1('retry', value)),
     view: (input: Parameters<typeof runsApp.view>[0]) => runsApp.view(input).then(value => validatePersonRunsResultV1('view', value)),
     home: checked('home', openItemsApp.home) as (input: { readonly access_token: string }) => Promise<PersonRunsResultsV1['home']>,
     items: checked('items', openItemsApp.items) as (input: Request<'items'>) => Promise<PersonRunsResultsV1['items']>,
@@ -221,6 +234,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     send: checked('send', openItemsApp.send) as (input: Request<'send'>) => Promise<PersonRunsResultsV1['send']>,
     set_state: checked('set_state', openItemsApp.set_state) as (input: Request<'set_state'>) => Promise<PersonRunsResultsV1['set_state']>,
     assign: checked('assign', openItemsApp.assign) as (input: Request<'assign'>) => Promise<PersonRunsResultsV1['assign']>,
+    sweep: checked('sweep', openItemsApp.sweep) as (input: Request<'sweep'>) => Promise<PersonRunsResultsV1['sweep']>,
   } satisfies Partial<Record<keyof PersonTriggerRunsHttpApplicationV1, unknown>>;
   const finishImpactRun = async () => {
     await app.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id: run.run_id } });
@@ -234,7 +248,9 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     runId: run.run_id, record: recordSha256, people, outsideText, finishImpactRun, runItems,
     membership: (name: FixturePerson) => people[name].membership_id,
     okaforMembership: people.okafor.membership_id,
-    clock: () => now,
+    decisionCitation,
+    clock,
+    renderSweepsWith(render: typeof renderSweep) { renderSweep = render; },
     advance(ms: number) { now = new Date(now.getTime() + ms); },
     revoke(name: FixturePerson) { revokeMembership(db, { organization_id: organization, ...people[name] }); },
     makeLead(name: FixturePerson) {
