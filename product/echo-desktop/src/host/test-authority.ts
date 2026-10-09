@@ -81,7 +81,8 @@ interface OpenItem {
   opens: boolean;
   /** Its tool did not answer just now (an outage or a rate limit): Ari is told ECHO couldn't read it, not that Ari can't open it. */
   outage?: boolean;
-  relation: 'conflicts' | 'needs_updating'; expected: string;
+  /** Null for a row the check did not assess: it has no expected phrase either (ruling 12). */
+  relation: 'conflicts' | 'needs_updating' | null; expected: string | null;
   approver: { membership_id: string; name: string };
   owner: { membership_id: string; name: string; match: 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned' };
   state: 'unsent' | 'open' | 'done' | 'not_relevant';
@@ -92,14 +93,16 @@ interface OpenItem {
 /**
  * A sweep run (open items and Home v1, section 6): it rechecks the open items
  * in its scope (`scope`: the scope and its id) that were open when it was
- * asked for, and keeps a verdict on each.
+ * asked for, and keeps a verdict on each. `requeued`: an attempt of it went
+ * back to the queue.
  */
 interface SweepRun {
-  run_id: string; event_ref: string; scope: string; created_at: string; state: 'pending' | 'running' | 'done'; lists: number; items: string[];
+  run_id: string; event_ref: string; scope: string; created_at: string; state: 'pending' | 'running' | 'done'; lists: number; items: string[]; requeued?: true;
 }
 
 /** The granola modes whose projects are the meeting's: Thermostat redesign (Ari leads it) and Supplier review. */
-const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-owner-outage', 'granola-home-fails-once', 'granola-all', 'granola-checked', 'granola-sweep']);
+const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-owner-outage', 'granola-home-fails-once', 'granola-all', 'granola-checked', 'granola-sweep',
+  'granola-sweep-requeued', 'granola-alike']);
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
 /** Who an impact check names, besides Ari: fictional people of the organization. */
@@ -605,24 +608,44 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     'itm_00000000-0000-4000-8000-000000000031': 'landed', 'itm_00000000-0000-4000-8000-000000000032': 'changed',
     'itm_00000000-0000-4000-8000-000000000033': 'unreadable',
   };
-  // granola-checked and granola-sweep: Ari approved Pilot planning into Thermostat redesign and sent
-  // what its check found: ECHO-12 to Mina, the PRD page kept by Ari, and a supplier page Ari cannot
-  // open to Rafael. In granola-checked Mina's sweep checked them two hours ago; in granola-sweep none
-  // has been checked, so Home says a sweep is due.
-  if (mode === 'granola-checked' || mode === 'granola-sweep') {
+  // granola-checked, granola-sweep and granola-sweep-requeued: Ari approved Pilot planning into
+  // Thermostat redesign and sent what its check found: ECHO-12 to Mina, the PRD page kept by Ari, and
+  // a supplier page Ari cannot open to Rafael. In granola-checked Mina's sweep checked them two hours
+  // ago; in the sweep modes none has been checked, so Home says a sweep is due. granola-alike: the
+  // check is done and nothing is sent yet; it also found items whose titles nothing tells apart: two
+  // supplier pages Ari cannot open, with the same expected phrase, and two tickets Jira did not answer
+  // for just now, not assessed (no expected phrase).
+  if (mode === 'granola-checked' || mode.startsWith('granola-sweep') || mode === 'granola-alike') {
     granolaApproved = true;
     granolaReview = { action: 'approve', project_ids: [THERMOSTAT] };
     granolaRun = { state: 'done', error_code: null, lists: 0, retried: false };
     meetings.push(pilotMeeting([THERMOSTAT]));
     writeFound();
     const found = openItems.find(item => item.run_id === PILOT_RUN)!;
-    openItems.push({ ...found, item_id: 'itm_00000000-0000-4000-8000-000000000033', kind: 'page', relation: 'conflicts', expected: 'parts ordered for next week',
-      opens: false, live: { citation: SUPPLIER_BRIEF, says_now: 'Parts are ordered with six weeks of lead time.' }, owner: { ...RAFAEL, match: 'picked' } });
-    const sentAt = '2026-10-07T11:00:00.000Z';
-    const checkedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
-    for (const item of openItems.filter(entry => entry.run_id === PILOT_RUN)) {
-      Object.assign(item, { state: 'open', sent_at: sentAt, state_set_at: sentAt,
-        check: mode === 'granola-checked' ? { verdict: SWEPT[item.item_id]!, checked_at: checkedAt, checked_by: 'Mina Patel' } : null });
+    if (mode === 'granola-alike') {
+      const page = (id: string, label: string) => ({ kind: 'page', label: `Supplier brief · ${label}`, visibility: 'only_me', citation: {
+        kind: 'page', tool_id: 'confluence', external_scope_id: CONFLUENCE_CLOUD, page_id: id, section_id: 'parts', version: '3',
+        permalink: `https://example.atlassian.net/wiki/pages/viewpage.action?pageId=${id}`, text_sha256: sha(`Supplier brief: ${label}`) } });
+      const theirs = { ...found, opens: false, owner: { ...ARI, match: 'approver' as const } };
+      openItems.push(
+        { ...theirs, item_id: 'itm_00000000-0000-4000-8000-000000000034', kind: 'page', expected: 'parts ordered for next week',
+          live: { citation: page('23457', 'Tooling'), says_now: 'Tooling is ordered with six weeks of lead time.' } },
+        { ...theirs, item_id: 'itm_00000000-0000-4000-8000-000000000035', kind: 'page', expected: 'parts ordered for next week',
+          live: { citation: page('23458', 'Packaging'), says_now: 'Packaging is ordered with six weeks of lead time.' } },
+        { ...theirs, item_id: 'itm_00000000-0000-4000-8000-000000000036', kind: 'ticket', relation: null, expected: null, outage: true,
+          live: { citation: ticket('ECHO-41', 'Tooling order', '10041'), says_now: 'The tooling order goes out in October.' } },
+        { ...theirs, item_id: 'itm_00000000-0000-4000-8000-000000000037', kind: 'ticket', relation: null, expected: null, outage: true,
+          live: { citation: ticket('ECHO-42', 'Pilot freight', '10042'), says_now: 'Freight is booked for November.' } },
+      );
+    } else {
+      openItems.push({ ...found, item_id: 'itm_00000000-0000-4000-8000-000000000033', kind: 'page', relation: 'conflicts', expected: 'parts ordered for next week',
+        opens: false, live: { citation: SUPPLIER_BRIEF, says_now: 'Parts are ordered with six weeks of lead time.' }, owner: { ...RAFAEL, match: 'picked' } });
+      const sentAt = '2026-10-07T11:00:00.000Z';
+      const checkedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
+      for (const item of openItems.filter(entry => entry.run_id === PILOT_RUN)) {
+        Object.assign(item, { state: 'open', sent_at: sentAt, state_set_at: sentAt,
+          check: mode === 'granola-checked' ? { verdict: SWEPT[item.item_id]!, checked_at: checkedAt, checked_by: 'Mina Patel' } : null });
+      }
     }
   }
   const mineAsOwner = (item: OpenItem) => item.owner.membership_id === ARI.membership_id;
@@ -779,7 +802,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         Object.assign(run, mode === 'granola-run-failed' && !run.retried ? { state: 'failed', error_code: 'research_failed' } : { state: 'done' });
       }
       for (const sweep of sweepRuns) {
-        if (request.operation !== 'list' || sweep.state !== 'running' || ++sweep.lists < 2) continue;
+        if (request.operation !== 'list' || sweep.state !== 'running') continue;
+        // granola-sweep-requeued: the first attempt times out, and the run goes back to the queue (the attempt rules impact checks have).
+        if (mode === 'granola-sweep-requeued' && !sweep.requeued) { Object.assign(sweep, { state: 'pending', requeued: true }); continue; }
+        if (++sweep.lists < 2) continue;
         // Done: each item it checked that is still open keeps this check as its last.
         const at = now();
         for (const item of openItems) {
@@ -858,7 +884,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             landed: theirs.filter(item => item.check?.verdict === 'landed').length,
             waiting: theirs.filter(item => item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
             last_checked_at: theirs.flatMap(item => (item.check ? [item.check.checked_at] : [])).sort().at(-1) ?? null,
-            sweep_due: mode === 'granola-sweep' && sweepRuns.length === 0,
+            sweep_due: mode.startsWith('granola-sweep') && sweepRuns.length === 0,
           });
         }
         case 'items': {

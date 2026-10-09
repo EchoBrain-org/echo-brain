@@ -87,7 +87,7 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
  */
 function UpdateRow({ state, item, name }: { state: State; item: OpenItemView; name: string }) {
   const failure = state.home?.closeFailures[item.item_id];
-  const { title, change } = itemParts(item);
+  const { title, change } = itemParts(item, name);
   return (
     <div class="need-row update" data-testid="need-row" data-kind="update">
       <span class="need-kind">{KIND.update}</span>

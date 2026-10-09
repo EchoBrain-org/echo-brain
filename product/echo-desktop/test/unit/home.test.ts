@@ -23,10 +23,10 @@ let held: (() => void)[] = [];
 let holdSend = false;
 let answerSend: (() => void) | null = null;
 let sendFailure: { code: string; retryable: boolean } | null = null;
-/** What a sweep request answers ('fails': unavailable), the sweep run it queued, and what starting that run answers. */
+/** What a sweep request answers ('fails': unavailable), the sweep run it queued, and what starting that run answers ('fails': unavailable). */
 let sweepAnswer: { run_id: string } | { state: 'nothing_to_check' } | 'fails' = { state: 'nothing_to_check' };
 let sweep: PersonRunV1 | null = null;
-let sweepStarts: 'running' | 'busy' | 'done' | 'failed' = 'running';
+let sweepStarts: 'running' | 'busy' | 'done' | 'failed' | 'fails' = 'running';
 /** What an items read answers, when a test says. */
 let page: OpenItemsView | null = null;
 
@@ -115,6 +115,7 @@ beforeEach(() => {
         }
         if (params.request?.operation === 'start') {
           if (sweep && params.request.run_id === sweep.run_id) {
+            if (sweepStarts === 'fails') return unavailable;
             if (sweepStarts !== 'busy') sweep = sweepRun(sweepStarts);
             return ok({ state: sweepStarts });
           }
@@ -659,30 +660,54 @@ describe('Sweeps from Home', () => {
     expect(rpc.mock.calls).toHaveLength(calls);
   });
 
-  it('starts a due sweep kept queued by another run once it is next, asking for it only once', async () => {
+  it('starts a sweep that went back to the queue again, waiting longer after each start that starts nothing', async () => {
     granola = null;
     home = { ...emptyHome(), sweep_due: true };
     sweepAnswer = { run_id: sweepRun('pending').run_id };
-    sweepStarts = 'busy';
     const store = await start();
     expect(requests('start')).toHaveLength(1);
-    // Still queued: started again when the list says it is next.
+    // Its attempt timed out: the sweep is queued again, and for a while another run goes first.
+    sweep = sweepRun('pending');
+    sweepStarts = 'busy';
     await vi.advanceTimersByTimeAsync(5_000);
     expect(requests('start')).toHaveLength(2);
-    sweepStarts = 'running';
-    await vi.advanceTimersByTimeAsync(5_000);
+    // Each start that starts nothing waits longer: 10 s, then 20 s.
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(requests('start')).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(requests('start')).toHaveLength(3);
-    // Started: what it finds shows once it ends, and nothing more is asked for or started.
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(requests('start')).toHaveLength(3);
+    sweepStarts = 'running';
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(requests('start')).toHaveLength(4);
+    expect(new Set(requests('start').map(request => request.run_id))).toEqual(new Set([sweepRun('pending').run_id]));
+    // It ends: what it found shows, and no other sweep was asked for.
     sweep = sweepRun('done');
     home = { ...emptyHome(), items: [item('1', 'changed')] };
     await vi.advanceTimersByTimeAsync(5_000);
-    await vi.advanceTimersByTimeAsync(60_000);
     expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['check']);
     expect(requests('sweep')).toHaveLength(1);
-    expect(requests('start')).toHaveLength(3);
   });
 
-  it.each(['fails', 'failed'] as const)('shows nothing for a sweep that %s', async how => {
+  it('stops owing a sweep once a runs list no longer holds it', async () => {
+    granola = null;
+    home = { ...emptyHome(), sweep_due: true };
+    sweepAnswer = { run_id: sweepRun('pending').run_id };
+    await start();
+    expect(requests('sweep')).toHaveLength(1);
+    sweep = null;
+    const homeReads = requests('home').length;
+    await vi.advanceTimersByTimeAsync(5_000);
+    // Read as ended: what waits on you is read again, and then Home stops looking.
+    expect(requests('home')).toHaveLength(homeReads + 1);
+    const calls = rpc.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(rpc.mock.calls).toHaveLength(calls);
+    expect(requests('sweep')).toHaveLength(1);
+  });
+
+  it.each(['fails', 'failed'] as const)('shows nothing for a sweep that %s, and soon stops looking', async how => {
     granola = null;
     home = { ...emptyHome(), sweep_due: true };
     sweepAnswer = how === 'fails' ? 'fails' : { run_id: sweepRun('pending').run_id };
@@ -690,9 +715,12 @@ describe('Sweeps from Home', () => {
     const store = await start();
     expect(requests('sweep')).toHaveLength(1);
     expect(store.getState().home).toMatchObject({ loading: false, failure: undefined, rows: [] });
+    // A sweep that failed at once is seen ended on the next look at most; then nothing more is read.
+    await vi.advanceTimersByTimeAsync(5_000);
     const calls = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(120_000);
     expect(rpc.mock.calls).toHaveLength(calls);
+    expect(store.getState().home?.rows).toEqual([]);
   });
 });
 
@@ -799,7 +827,8 @@ describe('Check now', () => {
     run = impactRun('pending');
     sweepStarts = 'busy';
     const checking = store.checkNow('projectLine', project.name);
-    await vi.advanceTimersByTimeAsync(5_000);
+    // Busy: the next look, 10 s on, starts the impact check first.
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(requests('start').map(request => request.run_id)).toEqual([sweepRun('pending').run_id, run.run_id]);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(requests('start')).toHaveLength(2);
@@ -811,6 +840,61 @@ describe('Check now', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     await checking;
     expect(store.didItLandShown()).toMatchObject({ scope: 'project', id: project.project_id });
+  });
+
+  it('waits longer after each start that starts nothing, busy or failed', async () => {
+    granola = null;
+    page = linePage();
+    sweepAnswer = { run_id: sweepRun('pending').run_id };
+    sweepStarts = 'busy';
+    const store = await start();
+    await store.openProject(project);
+    const lists = () => requests('list').length;
+    const before = lists();
+    const checking = store.checkNow('projectLine', project.name);
+    await flush();
+    expect(requests('start')).toHaveLength(1);
+    // Busy: the next look is 10 s away.
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(lists()).toBe(before);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect([lists(), requests('start').length]).toEqual([before + 1, 2]);
+    // Busy again, then a start that fails: 20 s, then 40 s.
+    sweepStarts = 'fails';
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(lists()).toBe(before + 1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect([lists(), requests('start').length]).toEqual([before + 2, 3]);
+    await vi.advanceTimersByTimeAsync(39_000);
+    expect(lists()).toBe(before + 2);
+    sweepStarts = 'running';
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect([lists(), requests('start').length]).toEqual([before + 3, 4]);
+    // Started: back to the usual pace, and it ends.
+    sweep = sweepRun('done');
+    await vi.advanceTimersByTimeAsync(5_000);
+    await checking;
+    expect(store.didItLandShown()).toMatchObject({ scope: 'project', id: project.project_id });
+  });
+
+  it('stops following its sweep once its page goes, leaving Home the only one to look', async () => {
+    granola = null;
+    page = linePage();
+    sweepAnswer = { run_id: sweepRun('pending').run_id };
+    const store = await start();
+    await store.openProject(project);
+    void store.checkNow('projectLine', project.name);
+    await flush();
+    expect(store.getState().projectLine?.check).toBe('checking');
+    // Home: its read shows the sweep running, so Home looks again every 5 s; the line's loop reads nothing more.
+    store.goHome();
+    await flush();
+    const lists = requests('list').length;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(requests('list')).toHaveLength(lists + 1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(requests('list')).toHaveLength(lists + 2);
+    expect(requests('start')).toHaveLength(1);
   });
 
   it('says the check failed when its sweep fails, and Try again asks for another', async () => {

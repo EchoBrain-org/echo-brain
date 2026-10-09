@@ -72,32 +72,39 @@ export function itemTitle(item: OpenItemView): string {
 }
 
 /**
- * Each item's name for its rows and buttons ("Done: …", "Open in …", "Pick a
- * person: …"): its title. Where two items would share one (two items you
- * can't open), each adds what the decision requires of it; where they still
- * would, its decision when you can read it ("· from Pilot planning"); and
- * then where it is among those alike ("(2)").
+ * Each item's name for its rows, ticks and buttons ("Done: …", "Open in …",
+ * "Pick a person: …"): its title. Where two items would share one (two items
+ * you can't open), each adds what the decision requires of it; where they
+ * still would, its decision when you can read it and that tells them apart
+ * ("· from Pilot planning"); and then where it is among those alike ("(2)").
  */
 export function itemNames(items: readonly OpenItemView[]): ReadonlyMap<string, string> {
   let names = new Map(items.map(item => [item.item_id, itemTitle(item)]));
+  /** The items that share each name. */
   const alike = () => {
-    const counts = new Map<string, number>();
-    for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
-    return (name: string) => counts.get(name)! > 1;
+    const groups = new Map<string, OpenItemView[]>();
+    for (const item of items) groups.set(names.get(item.item_id)!, [...(groups.get(names.get(item.item_id)!) ?? []), item]);
+    return (item: OpenItemView) => groups.get(names.get(item.item_id)!)!;
   };
-  const tellApart = [(item: OpenItemView) => (item.expected ? ` → ${item.expected}` : ''), (item: OpenItemView) => (item.decision ? ` · from ${item.decision.title}` : '')];
+  const decided = (item: OpenItemView) => item.decision?.title ?? null;
+  const tellApart = [
+    (item: OpenItemView) => (item.expected ? ` → ${item.expected}` : ''),
+    // Only where the decisions differ: one decision's items (one Tell the owners? card) gain nothing by it.
+    (item: OpenItemView, others: readonly OpenItemView[]) => (item.decision && others.some(other => decided(other) !== item.decision!.title) ? ` · from ${item.decision.title}` : ''),
+  ];
   for (const words of tellApart) {
-    const shared = alike();
+    const sharing = alike();
     names = new Map(items.map(item => {
       const name = names.get(item.item_id)!;
-      return [item.item_id, shared(name) ? `${name}${words(item)}` : name];
+      const others = sharing(item);
+      return [item.item_id, others.length > 1 ? `${name}${words(item, others)}` : name];
     }));
   }
-  const shared = alike();
+  const sharing = alike();
   const seen = new Map<string, number>();
   return new Map(items.map(item => {
     const name = names.get(item.item_id)!;
-    if (!shared(name)) return [item.item_id, name];
+    if (sharing(item).length < 2) return [item.item_id, name];
     const position = (seen.get(name) ?? 0) + 1;
     seen.set(name, position);
     return [item.item_id, `${name} (${position})`];
@@ -123,12 +130,14 @@ export function itemChange(item: OpenItemView): string {
 }
 
 /**
- * An item and what the decision requires of it, on one line: its title, then
- * "· due Oct 30 → launch next week" (live details → `expected`).
+ * An item and what the decision requires of it, on one line: its title, or
+ * the name `itemNames` gave it, then "· due Oct 30 → launch next week" (live
+ * details → `expected`), leaving `expected` out when the name already says it.
  */
-export function itemParts(item: OpenItemView): { title: string; change: string } {
-  const change = itemChange(item);
-  return { title: itemTitle(item), change: change !== '' && liveDetails(item) !== null ? `· ${change}` : change };
+export function itemParts(item: OpenItemView, name = itemTitle(item)): { title: string; change: string } {
+  const details = liveDetails(item);
+  const expected = item.expected !== null && !name.includes(`→ ${item.expected}`) ? `→ ${item.expected}` : null;
+  return { title: name, change: [details === null ? null : `· ${details}`, expected].filter((part): part is string => part !== null).join(' ') };
 }
 
 /** What kind of thing an item is, named by its tool once you can open it: "Jira ticket", "Confluence page". */

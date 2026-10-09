@@ -3,7 +3,7 @@ import type { OpenItemView } from '../../shared/protocol.js';
 import { message } from '../messages.js';
 import { checkedAgo, itemCount, itemNames, landedGroups, landedNote, markable, shortNames } from '../needs.js';
 import { markLandedDone, moreDidItLand, openDidItLand, tickLanded, type DidItLandState } from '../store.js';
-import { Chip } from './send.js';
+import { Chip } from './open-items.js';
 
 /** One item: its name, what it says now and why it is in its part, and its owner. A landed item you may close has its tick. */
 function Line({ page, item, name, tick }: { page: DidItLandState; item: OpenItemView; name: string; tick: boolean }) {

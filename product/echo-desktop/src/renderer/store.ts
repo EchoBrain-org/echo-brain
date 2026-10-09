@@ -3410,16 +3410,15 @@ let openUnread = false;
 /** A check ended and what it found has not been read since: Home keeps looking until it has. */
 let resultOwed = false;
 /**
- * Home loads begun, counted; the one that asked for its due sweep, and the
- * one that started a sweep: each Home load asks for one and starts one at
- * most. A start answered `busy` started nothing.
+ * Home loads begun, counted, and the one that asked for its due sweep: each
+ * Home load asks for one new sweep at most (ruling R50). A sweep that is
+ * already queued is started as an impact check is.
  */
 let homeLoads = 0;
 let askedIn = 0;
-let sweptIn = 0;
 /**
- * The sweep Home asked for and started: what it finds is owed once a runs
- * list shows it ended, even if no list showed it going.
+ * The sweep Home asked for: what it finds is owed once a runs list shows it
+ * ended, or no longer holds it, even if no list showed it going.
  */
 let sweepOwed: string | null = null;
 
@@ -3446,7 +3445,7 @@ async function readHome(mine: number, quiet: boolean): Promise<void> {
     runsCommand({ schema_version: 1, operation: 'list' }),
     quiet ? Promise.resolve(null) : readOpen(),
   ]);
-  const swept = sweepOwed !== null && runs.status === 'fulfilled' && runs.value.runs.some(run => run.run_id === sweepOwed && !going(run));
+  const swept = sweepOwed !== null && runs.status === 'fulfilled' && !runs.value.runs.some(run => run.run_id === sweepOwed && going(run));
   const ended = runs.status === 'fulfilled' && (checkEnded(before, runs.value.runs) || swept);
   let open = eager;
   if (quiet && homeShown(mine) && (openUnread || resultOwed || ended)) {
@@ -3482,7 +3481,7 @@ async function readHome(mine: number, quiet: boolean): Promise<void> {
 
 let runPoll: ReturnType<typeof setTimeout> | null = null;
 let runSeq = 0;
-/** Polls in a row whose runs read (or start) failed: each waits longer than the one before. */
+/** Polls in a row whose runs read failed, or whose start started nothing: each waits longer than the one before. */
 let runFailures = 0;
 /** How often Home looks again while a check is going, and the longest it waits after failed reads. */
 const RUN_POLL_MS = 5_000;
@@ -3531,13 +3530,30 @@ export function runToStart(runs: readonly PersonRunV1[]): PersonRunV1 | undefine
   return queued.find(run => run.trigger === 'approved_record') ?? queued.find(run => run.trigger === 'sweep');
 }
 
+/** A start answered `busy`: another run goes first, and this one stays queued. */
+const BUSY: Failure = { code: 'busy', retryable: true };
+
+/**
+ * Starts a queued run. A start that starts nothing (refused, failed, or
+ * `busy`) is answered with why, so the next look waits longer, as after a
+ * failed runs read (ruling R50).
+ */
+async function startRun(run_id: string): Promise<Failure | undefined> {
+  try {
+    const { state: started } = await runsCommand({ schema_version: 1, operation: 'start', run_id });
+    return started === 'busy' ? BUSY : undefined;
+  } catch (error) {
+    return failureOf(error);
+  }
+}
+
 /**
  * Runs go only from your signed-in desktop: start the next queued one when
- * none is going, impact checks first; then look again when `runPollDelay`
- * says. Once no run is queued or going, a sweep Home says is due
- * (`sweepDue`) is asked for and started. A Home load asks for one sweep and
- * starts one at most. `failure` is the runs read's, when it failed: the list
- * is the last good one.
+ * none is going, impact checks first, then sweeps (a sweep's attempt that
+ * went back to the queue is started again like an impact check's); then look
+ * again when `runPollDelay` says. Once no run is queued or going, a sweep
+ * Home says is due (`sweepDue`) is asked for and started, once per Home load.
+ * `failure` is the runs read's, when it failed: the list is the last good one.
  */
 async function driveRuns(listed: readonly PersonRunV1[], publishing = false, failure?: Failure, sweepDue = false): Promise<void> {
   stopRunPolling();
@@ -3546,17 +3562,12 @@ async function driveRuns(listed: readonly PersonRunV1[], publishing = false, fai
   const current = () => mine === runSeq && homeShown() !== null;
   let failed = failure;
   const next = runToStart(listed);
-  if (next && (next.trigger !== 'sweep' || sweptIn !== load)) {
-    try {
-      const { state: started } = await runsCommand({ schema_version: 1, operation: 'start', run_id: next.run_id });
-      if (next.trigger === 'sweep' && started !== 'busy') sweptIn = load;
-    } catch (error) {
-      failed ??= failureOf(error);
-    }
+  if (next) {
+    failed ??= await startRun(next.run_id);
     if (!current()) return;
-  } else if (sweepDue && askedIn !== load && sweptIn !== load && !listed.some(going)) {
+  } else if (sweepDue && askedIn !== load && !listed.some(going)) {
     askedIn = load;
-    await startDueSweep(load);
+    failed ??= await startDueSweep();
     if (!current()) return;
   }
   runFailures = failed ? runFailures + 1 : 0;
@@ -3565,22 +3576,21 @@ async function driveRuns(listed: readonly PersonRunV1[], publishing = false, fai
 }
 
 /**
- * The sweep of your own items Home says is due, asked for and started for
- * Home load `load`. It makes no row: what it finds shows once it ends. A
- * failed one shows nothing (the next Home load may ask for another); one kept
- * queued (`busy`: another run goes first) starts once the runs list says it
- * is next.
+ * The sweep of your own items Home says is due, asked for and started. It
+ * makes no row: what it finds shows once a runs list shows it ended. A failed
+ * request shows nothing (the next Home load may ask again); a start that
+ * starts nothing is answered as `startRun` answers it.
  */
-async function startDueSweep(load: number): Promise<void> {
+async function startDueSweep(): Promise<Failure | undefined> {
+  let asked: RunsResults['sweep'];
   try {
-    const asked = await runsCommand({ schema_version: 1, operation: 'sweep', scope: 'mine' });
-    if (!('run_id' in asked)) return;
-    sweepOwed = asked.run_id;
-    const { state: started } = await runsCommand({ schema_version: 1, operation: 'start', run_id: asked.run_id });
-    if (started !== 'busy') sweptIn = load;
-    if (started === 'done') resultOwed = true;
-    if (started === 'done' || started === 'failed') sweepOwed = null;
-  } catch { /* the next Home load may ask again */ }
+    asked = await runsCommand({ schema_version: 1, operation: 'sweep', scope: 'mine' });
+  } catch {
+    return undefined;
+  }
+  if (!('run_id' in asked)) return undefined;
+  sweepOwed = asked.run_id;
+  return startRun(asked.run_id);
 }
 
 /** A fresh list updates the open card too, even if its check finished while hidden. */
@@ -4014,7 +4024,11 @@ export async function checkNow(key: LineKey, title: string): Promise<void> {
  * Check now's sweep, followed until it ends. It is started at once; if
  * another run goes first (`busy`), each runs list says what starts next,
  * impact checks before sweeps. The list is read at Home's pace
- * (`runPollDelay`), and not while ECHO is behind another app.
+ * (`runPollDelay`): longer after a failed read or a start that started
+ * nothing, and not while ECHO is behind another app. It follows only while
+ * its line's page shows: a project, or a decision's reader, which opens over
+ * a project or Mine. Home's loop polls only while Home shows, so the two
+ * never read the runs at once (one poller per run).
  */
 async function followSweep(key: LineKey, runId: string, title: string, ours: () => ItemsLine | null): Promise<void> {
   let next: string | undefined = runId;
@@ -4022,8 +4036,10 @@ async function followSweep(key: LineKey, runId: string, title: string, ours: () 
   let lastFailure: Failure | undefined;
   for (;;) {
     if (next !== undefined) {
-      try { await runsCommand({ schema_version: 1, operation: 'start', run_id: next }); } catch { /* the next list says how it stands */ }
+      const refused = await startRun(next);
       if (!ours()) return;
+      failures = refused ? failures + 1 : 0;
+      lastFailure = refused;
     }
     // The line waits on its sweep: it is in flight until a list shows it ended.
     await new Promise(resolve => setTimeout(resolve, runPollDelay({ runs: [], publishing: false, failures, lastFailure, owed: true })!));
@@ -4033,8 +4049,6 @@ async function followSweep(key: LineKey, runId: string, title: string, ours: () 
     let runs: readonly PersonRunV1[];
     try {
       runs = (await runsCommand({ schema_version: 1, operation: 'list' })).runs;
-      failures = 0;
-      lastFailure = undefined;
     } catch (error) {
       failures += 1;
       lastFailure = failureOf(error);
@@ -4052,6 +4066,11 @@ async function followSweep(key: LineKey, runId: string, title: string, ours: () 
     }
     if (!run || run.state === 'failed') { setLine(key, { ...line, check: 'failed' }); return; }
     next = runToStart(runs)?.run_id;
+    // Nothing to start: a run is going, ours or one before it; look again at the usual pace.
+    if (next === undefined) {
+      failures = 0;
+      lastFailure = undefined;
+    }
   }
 }
 
@@ -4086,20 +4105,43 @@ export function openOpenItems(scope: ItemsLine['scope'], id: string, title: stri
 /** More: the next page. */
 export function moreOpenItems(): Promise<void> { return loadOpenItems(true); }
 
-async function loadOpenItems(more: boolean): Promise<void> {
+function loadOpenItems(more: boolean): Promise<void> {
+  return loadItemsPage(openItemsShown, page => set({ openItems: page }), more);
+}
+
+/** What a page of a scope's items shows over another page: open items, and Did it land?. */
+interface ItemsPage {
+  seq: number;
+  loading: boolean;
+  failure?: Failure;
+  scope: 'mine' | 'record' | 'project';
+  /** The decision or the project; your own items name none. */
+  id?: string;
+  items: readonly OpenItemView[];
+  next: string | null;
+}
+
+/**
+ * The first page of a scope's items, or the next one (More), each opened live
+ * for you, joined to what `shown` shows: the items `keep` keeps, then what
+ * `withRead` takes from the read. A read for a view since left is dropped.
+ */
+async function loadItemsPage<View extends ItemsPage>(shown: () => View | null, show: (view: View) => void, more: boolean,
+  keep: (item: OpenItemView) => boolean = () => true, withRead: (view: View, read: OpenItemsView) => View = view => view): Promise<void> {
   const account = expect();
-  const page = openItemsShown();
+  const page = shown();
   if (!account || !page || (more && (!page.next || page.loading))) return;
   const mine = page.seq;
-  set({ openItems: { ...page, loading: true, failure: undefined } });
-  const result = await rpc('runs', { expect: account, request: {
-    schema_version: 1, operation: 'items', scope: page.scope, id: page.id, ...(more && page.next ? { cursor: page.next } : {}) } });
-  const current = openItemsShown();
+  show({ ...page, loading: true, failure: undefined });
+  const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope: page.scope, ...(page.id === undefined ? {} : { id: page.id }),
+    ...(more && page.next ? { cursor: page.next } : {}) } });
+  const current = shown();
   if (current?.seq !== mine) return;
-  if (!result.ok) { set({ openItems: { ...current, loading: false, failure: result.failure } }); accountLost(result.failure); return; }
+  if (!result.ok) { show({ ...current, loading: false, failure: result.failure }); accountLost(result.failure); return; }
   const read = result.value as OpenItemsView;
   const seen = new Set(more ? current.items.map(item => item.item_id) : []);
-  set({ openItems: { ...current, loading: false, items: [...(more ? current.items : []), ...read.items.filter(item => !seen.has(item.item_id))], next: read.next_cursor } });
+  show(withRead({ ...current, loading: false, items: [...(more ? current.items : []), ...read.items.filter(item => keep(item) && !seen.has(item.item_id))],
+    next: read.next_cursor }, read));
 }
 
 export function closeOpenItems(): void { set({ openItems: null }); }
@@ -4179,22 +4221,10 @@ export function openDidItLand(scope: DidItLandState['scope'], id: string | undef
 /** More: the next page. */
 export function moreDidItLand(): Promise<void> { return loadDidItLand(true); }
 
-/** A page of the scope's items, each opened live: the open ones are kept. */
-async function loadDidItLand(more: boolean): Promise<void> {
-  const account = expect();
-  const page = didItLandShown();
-  if (!account || !page || (more && (!page.next || page.loading))) return;
-  const mine = page.seq;
-  set({ didItLand: { ...page, loading: true, failure: undefined } });
-  const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope: page.scope, ...(page.id === undefined ? {} : { id: page.id }),
-    ...(more && page.next ? { cursor: page.next } : {}) } });
-  const current = didItLandShown();
-  if (current?.seq !== mine) return;
-  if (!result.ok) { set({ didItLand: { ...current, loading: false, failure: result.failure } }); accountLost(result.failure); return; }
-  const read = result.value as OpenItemsView;
-  const seen = new Set(more ? current.items.map(item => item.item_id) : []);
-  set({ didItLand: { ...current, loading: false, items: [...(more ? current.items : []), ...read.items.filter(item => item.state === 'open' && !seen.has(item.item_id))],
-    next: read.next_cursor, open: read.summary.open, checked_at: read.summary.last_checked_at } });
+/** A page of the scope's items, each opened live: the open ones are kept, with the scope's open count and latest check. */
+function loadDidItLand(more: boolean): Promise<void> {
+  return loadItemsPage(didItLandShown, page => set({ didItLand: page }), more, item => item.state === 'open',
+    (page, read) => ({ ...page, open: read.summary.open, checked_at: read.summary.last_checked_at }));
 }
 
 export function tickLanded(item_id: string): void {

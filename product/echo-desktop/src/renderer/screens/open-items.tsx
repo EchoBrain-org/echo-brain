@@ -1,10 +1,20 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { OpenItemView } from '../../shared/protocol.js';
 import { externalSourceProvider } from '../answer.js';
 import { colorFor, initials, when } from '../format.js';
 import { message } from '../messages.js';
 import { checkedAgo, itemChange, itemFrom, itemKind, itemTitle, STAGES, stageSince } from '../needs.js';
 import { closeCheckedItem, moreOpenItems, openItemInTool, openOpenItems, type CheckCardState, type ItemsLine, type OpenItemsState, type State } from '../store.js';
+
+/** A person, as a chip: their initials in their color, and their first name (Tell the owners?, Did it land?). */
+export function Chip({ person, label }: { person: { membership_id: string; name: string }; label: string }) {
+  return (
+    <span class="owner-chip">
+      <span class="face" style={{ background: colorFor(person.membership_id) }} aria-hidden="true">{initials(person.name)}</span>
+      <span class="owner-chip-name">{label}</span>
+    </span>
+  );
+}
 
 /** Items by who they wait on, each owner once, in the order of their oldest item. */
 function byOwner(items: readonly OpenItemView[]): { id: string; name: string; items: OpenItemView[] }[] {
@@ -95,12 +105,15 @@ const VERDICTS: Readonly<Record<NonNullable<OpenItemView['check']>['verdict'], s
  * may close it. Nothing closes before one is chosen.
  */
 export function CheckCard({ state, card }: { state: State; card: CheckCardState }) {
+  const box = useRef<HTMLDivElement>(null);
+  // Its main control takes the focus, as Tell the owners?'s and Did it land?'s do.
+  useEffect(() => { box.current?.querySelector<HTMLElement>('.decision-foot button:not(:disabled)')?.focus({ preventScroll: true }); }, [card.item.item_id]);
   const { item } = card;
   const title = itemTitle(item);
   const change = itemChange(item);
   const assignee = item.current?.assignee;
   return (
-    <div class="column decision">
+    <div class="column decision" ref={box}>
       <article class="decision-card" data-testid="check-card" aria-labelledby="check-title">
         <h1 id="check-title" class="decision-ask">{title}</h1>
         <div class="decision-from">{itemKind(item, state.tools?.items)}{assignee ? ` · now ${assignee}` : ''} · from <b>{itemFrom(item)}</b></div>
@@ -124,9 +137,9 @@ export function CheckCard({ state, card }: { state: State; card: CheckCardState 
 }
 
 /**
- * Check now, at the end of a decision's or a project's line (canvas 9.6,
- * 9.7): "Checking…" while its sweep is on its way, "Nothing open to check",
- * or "Check failed · Try again".
+ * Check now, at the end of a decision's or a project's line, the faint link
+ * the canvas draws (9.6, 9.7): "Checking…" while its sweep is on its way,
+ * "Nothing open to check", or "Check failed · Try again".
  */
 export function CheckNow({ line, onCheck }: { line: ItemsLine; onCheck: () => void }) {
   if (line.check === 'checking') return <span class="items-line-check faint" role="status">Checking…</span>;
@@ -134,5 +147,5 @@ export function CheckNow({ line, onCheck }: { line: ItemsLine; onCheck: () => vo
   if (line.check === 'failed') {
     return <span class="items-line-check" role="status"><span class="faint">Check failed · </span><button type="button" class="link-button" onClick={onCheck}>Try again</button></span>;
   }
-  return <button type="button" class="link-button" onClick={onCheck}>Check now</button>;
+  return <button type="button" class="need-open" onClick={onCheck}>Check now</button>;
 }

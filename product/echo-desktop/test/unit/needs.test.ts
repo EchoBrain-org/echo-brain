@@ -163,6 +163,26 @@ describe('what ECHO saw when it checked again', () => {
     expect(markable(items, { itm_00000002: true }).map(entry => entry.item_id)).toEqual(['itm_00000001']);
   });
 
+  it('names one decision\'s alike items by position, and a line never says twice what the decision requires', () => {
+    const decision = { approval_id: 'apr_1', record_sha256: 'sha256:1', title: 'Pilot planning', first_line: null, approved_at: '2026-10-07T10:00:00.000Z', project_ids: [] };
+    // Tell the owners?: one run's items, all of one decision, so the decision tells none apart.
+    const items = [
+      item({ item_id: 'itm_00000001', kind: 'page', expected: 'parts ordered for next week', decision }),
+      item({ item_id: 'itm_00000002', kind: 'page', expected: 'parts ordered for next week', decision }),
+      item({ item_id: 'itm_00000003', reach: 'unavailable', expected: null, decision }), item({ item_id: 'itm_00000004', reach: 'unavailable', expected: null, decision }),
+    ];
+    const names = itemNames(items);
+    expect(Object.fromEntries(names)).toEqual({
+      itm_00000001: 'A page you can\'t open → parts ordered for next week (1)', itm_00000002: 'A page you can\'t open → parts ordered for next week (2)',
+      itm_00000003: 'A Jira ticket ECHO couldn\'t read just now (1)', itm_00000004: 'A Jira ticket ECHO couldn\'t read just now (2)',
+    });
+    expect(itemParts(items[0]!, names.get('itm_00000001'))).toEqual({ title: 'A page you can\'t open → parts ordered for next week (1)', change: '' });
+    expect(itemParts(items[2]!, names.get('itm_00000003'))).toEqual({ title: 'A Jira ticket ECHO couldn\'t read just now (1)', change: '' });
+    // An item you opened keeps what it says now.
+    const opened = item({ current: { source: ticket, says_now: 'Planned.', due_at: '2026-10-30' } });
+    expect(itemParts(opened, 'ECHO-12 · Pilot launch → launch next week')).toEqual({ title: 'ECHO-12 · Pilot launch → launch next week', change: '· due Oct 30' });
+  });
+
   it('keeps names apart when what the decision requires does not', () => {
     const decision = (title: string) => ({ approval_id: 'apr_1', record_sha256: 'sha256:1', title, first_line: null, approved_at: '2026-10-07T10:00:00.000Z', project_ids: [] });
     const names = itemNames([

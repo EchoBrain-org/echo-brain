@@ -229,6 +229,8 @@ test('a Check row opens the item before anything is closed', async () => {
   await row.click();
   const card = app.page.getByTestId('check-card');
   await expect(card.getByRole('heading', { name: 'Thermostat PRD · Pilot scope' })).toBeVisible();
+  // Its main control has the focus, as on Tell the owners? and Did it land?.
+  await expect(card.getByRole('button', { name: 'Done', exact: true })).toBeFocused();
   await expect(card).toContainText('says "starts after freeze" → pilot starts next week');
   await expect(card).toContainText('Not what was decided · Checked 2 h ago by Mina Patel');
   await expect(card.getByRole('button', { name: 'Open in Confluence: Thermostat PRD · Pilot scope' })).toBeVisible();
@@ -249,6 +251,8 @@ test('Check now on a decision checks only that decision', async () => {
   const impact = app.page.getByTestId('impact-line');
   // One open, one landed (handled), one ECHO could not read (canvas 9.6).
   await expect(impact).toContainText('Impact · 1 open · 1 handled · 1 couldn\'t read · checked 2 h ago');
+  // The faint link the canvas draws (H6), as Home's Mark done is.
+  await expect(impact.getByRole('button', { name: 'Check now' })).toHaveCSS('color', 'rgba(240, 236, 230, 0.5)');
   await impact.getByRole('button', { name: 'Check now' }).click();
   await expect(impact).toContainText('Checking…');
   const landed = app.page.getByTestId('did-it-land');
@@ -284,4 +288,29 @@ test('Check now on a project shows what landed of its items', async () => {
   await app.page.getByTestId('back').click();
   await expect(line).toContainText('3 open items · from 1 decision · checked just now');
   await expect(line.getByRole('button', { name: 'Check now' })).toBeVisible();
+});
+
+test('Tell the owners? names apart items whose titles nothing tells apart', async () => {
+  app = await launch('granola-alike');
+  await app.page.getByTestId('need-row').filter({ hasText: 'need updating' }).click();
+  await expect(app.page.getByRole('heading', { name: 'Tell the owners?' })).toBeVisible();
+  await expect(app.page.getByRole('checkbox')).toHaveCount(6);
+  // Two pages Ari cannot open, with the same expected phrase, and two tickets ECHO couldn't read just now, with none.
+  for (const name of [
+    'A page you can\'t open → parts ordered for next week (1)', 'A page you can\'t open → parts ordered for next week (2)',
+    'A Jira ticket ECHO couldn\'t read just now (1)', 'A Jira ticket ECHO couldn\'t read just now (2)',
+  ]) {
+    await expect(app.page.getByRole('checkbox', { name, exact: true })).toBeChecked();
+    await expect(app.page.getByRole('button', { name: `Pick a person: ${name}`, exact: true })).toBeVisible();
+  }
+  const page = await app.page.content();
+  for (const withheld of ['Supplier brief', 'ECHO-41', 'ECHO-42']) expect(page).not.toContain(withheld);
+});
+
+test('Home starts its sweep again when an attempt goes back to the queue', async () => {
+  app = await launch('granola-sweep-requeued');
+  await expect(app.page.getByTestId('need-row').filter({ hasText: 'not what was decided' })).toBeVisible({ timeout: 30_000 });
+  // One sweep, asked for once and started twice: the attempt that went back to the queue, then the one that finished.
+  expect(sweeps()).toEqual([{ scope: 'mine', id: undefined }]);
+  expect(runOperations().filter(operation => operation === 'start')).toHaveLength(2);
 });
