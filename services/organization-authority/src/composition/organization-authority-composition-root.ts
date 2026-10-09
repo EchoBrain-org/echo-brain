@@ -51,7 +51,7 @@ import {
 } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { join } from "node:path";
-import { createStagingSyntheticPersonalMeetingProviderV1 } from "@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1";
+import { openStagingSyntheticPersonalProviderV1 } from "./staging/staging-synthetic-personal-provider-v1.js";
 import { runStagingSyntheticPersonalCanaryV1 } from "./staging/staging-synthetic-personal-canary-v1.js";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import {
@@ -184,20 +184,9 @@ export async function openOrganizationAuthorityService(
   // One instance for the personal appender and the Authority's readers.
   const policyProjectors = authorityRecordPolicyProjectorsV1();
   // Staging only: the owner's synthetic personal source carries the release canary and the fixture meetings.
-  const stagingSynthetic =
-    config.authority_url === STAGING_AUTHORITY_ORIGIN_V1
-      ? createStagingSyntheticPersonalMeetingProviderV1(
-          staging_synthetic_meetings_directory === undefined
-            ? {}
-            : {
-                fixtures_directory:
-                  assertStagingSyntheticMeetingSourceSelectionV1({
-                    authority_url: sharedConfig.authority_url,
-                    meetings_directory: staging_synthetic_meetings_directory,
-                  }),
-              },
-        )
-      : undefined;
+  const stagingSelected = config.authority_url === STAGING_AUTHORITY_ORIGIN_V1;
+  const stagingFixtures = staging_synthetic_meetings_directory === undefined ? undefined :
+    assertStagingSyntheticMeetingSourceSelectionV1({ authority_url: sharedConfig.authority_url, meetings_directory: staging_synthetic_meetings_directory });
   let stagingCanary:
     | ((
         release_id: string,
@@ -213,6 +202,7 @@ export async function openOrganizationAuthorityService(
       );
       let control:
         ReturnType<typeof openOrganizationControlDatabase> | undefined;
+      let synthetic: ReturnType<typeof openStagingSyntheticPersonalProviderV1> | undefined;
       // This root selects one personal intake runtime; a caller cannot silently replace its worker.
       try {
         if (existing?.processing !== undefined)
@@ -222,6 +212,10 @@ export async function openOrganizationAuthorityService(
           { fileMustExist: true },
         );
         control = openedControl;
+        if (stagingSelected) synthetic = openStagingSyntheticPersonalProviderV1({
+          authority_url: sharedConfig.authority_url, state_directory: sharedConfig.state_directory, coordinates: resources.coordinates,
+          ...(stagingFixtures === undefined ? {} : { fixtures_directory: stagingFixtures }),
+        });
         const targetCurrent = (target: {
           readonly connection_id: string;
           readonly external_identity_link_id: string;
@@ -462,11 +456,11 @@ export async function openOrganizationAuthorityService(
                 }),
             ],
           },
-          ...(stagingSynthetic === undefined
+          ...(synthetic === undefined
             ? {}
-            : { providers: [stagingSynthetic] }),
+            : { providers: [synthetic.provider] }),
         });
-        if (stagingSynthetic !== undefined)
+        if (synthetic !== undefined)
           stagingCanary = (release_id, signal) =>
             runStagingSyntheticPersonalCanaryV1({
               database: resources.database,
@@ -489,6 +483,7 @@ export async function openOrganizationAuthorityService(
               granola.close();
             } finally {
               try {
+                synthetic?.close();
                 openedControl.close();
               } finally {
                 existing?.close();
@@ -497,6 +492,7 @@ export async function openOrganizationAuthorityService(
           },
         };
       } catch (error) {
+        synthetic?.close();
         control?.close();
         existing?.close();
         throw error;
@@ -558,7 +554,7 @@ export async function openOrganizationAuthorityService(
         }),
       record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1,
       record_policy_fact_projectors: policyProjectors,
-      ...(stagingSynthetic === undefined
+      ...(!stagingSelected
         ? {}
         : {
             run_staging_synthetic_canary: (
