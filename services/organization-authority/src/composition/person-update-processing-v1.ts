@@ -30,7 +30,13 @@ export class PersonUpdateProcessingV1 {
     signal.throwIfAborted();
     const v2 = this.v2.claim();
     if (v2 === undefined) return;
-    return this.runV2(v2, signal);
+    try { await this.runV2(v2, signal); }
+    catch (error) {
+      if (signal.aborted) throw error; // Shutdown leaves the item reclaimable.
+      // An integrity failure or a stale completion fails one cycle; the item never stays claimable as 'processing'.
+      try { this.v2.defer(v2, false); } catch { /* it already left 'processing' */ }
+      throw error;
+    }
   }
   private async runV2(v2: PersonUpdateEnrichmentWorkItemV2, signal: AbortSignal): Promise<void> {
     this.v2.validate(v2); // V2 source bytes are authoritative, never model input until verified.

@@ -104,8 +104,8 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
 
 /**
  * Runs exactly one Organization Authority processing cycle. Recovery leads so
- * a restart completes an
- * already-finalized action before consuming new source input. Every operation
+ * a restart completes every recoverable finalized action before consuming new
+ * source input; a row that cannot publish waits for a later pass. Every operation
  * is awaited in order; `SerializedMeetingProcessingWorker` supplies the single
  * in-process serialization guarantee.
  */
@@ -335,17 +335,18 @@ export async function startOrganizationAuthorityServiceLifecycle(
               dependencies.additional_processing ?? startedApi.processing,
             );
           })
+          .catch((failure: unknown) => {
+            // `publicationPending` was already cleared when the run started;
+            // the only pre-start failure is the closed worker's aborted signal.
+            if (!closing) reportError(failure);
+          })
           .then(() => {
+            // Search and cards derive from durable state, so a failed run
+            // still wakes them.
             if (!closing) {
               search.request();
               requestApprovalPresentation();
             }
-          })
-          .catch((failure: unknown) => {
-            // `publicationPending` was already cleared when the run started;
-            // the only pre-start failure is the closed worker's aborted signal.
-            if (closing) return;
-            reportError(failure);
           })
           .finally(complete);
       });

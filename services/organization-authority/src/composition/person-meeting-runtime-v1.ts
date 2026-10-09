@@ -132,10 +132,11 @@ export function createPersonMeetingRuntimeV1(options: {
   }
   // Decisions survive disconnect/restart and need no provider access. A source whose provider is not selected in
   // this runtime keeps its decisions until it is (the core's state does not route to it).
-  async function publish(signal: AbortSignal) { await (await approvals()).processing.appendFinalizedApprovalsToV4(signal); }
+  // Recovery keeps going past a row that cannot publish; append reports it. Both throw when the core cannot be created.
   let after = '';
   const processing: OrganizationAuthorityProcessingCycleV1 = {
-    recoverV4Appends: publish, appendFinalizedApprovalsToV4: publish,
+    async recoverV4Appends(signal) { await (await approvals()).processing.recoverV4Appends(signal); },
+    async appendFinalizedApprovalsToV4(signal) { await (await approvals()).processing.appendFinalizedApprovalsToV4(signal); },
     async observeAndFinalizePendingApprovals() {}, async reconcileReadableSearchGeneration() {},
     async reconcileApprovalPresentations(signal) { return (await approvals()).processing.reconcileApprovalPresentations?.(signal); },
     async pollAndStageAdmittedMeetings(signal) {

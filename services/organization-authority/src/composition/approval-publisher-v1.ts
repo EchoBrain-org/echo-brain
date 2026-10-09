@@ -57,9 +57,10 @@ async function publisherAppendOptionsV1(context: ApprovalWorkflowContextV1): Pro
 
 /**
  * The one publisher: appends every approved, unpublished decision as an echo-approval-decision-ref-v1 record, writes its receipt and
- * runs the after-record hooks in that receipt's transaction. Each row is isolated: the first failure is rethrown after the pass, unless
- * the signal aborted. The core adds reconcileApprovalPresentations when it has presenters; the lifecycle requests search and presentation
- * after each successful pass.
+ * runs the after-record hooks in that receipt's transaction. Each row is isolated, shows as a failed record_append span, and is retried
+ * on every pass. Append rethrows the first row failure after the pass; recovery does not, so one unpublishable row cannot stop startup
+ * or the rest of a cycle. A failure of the whole pass (signer, page query, abort) throws from both. The core adds
+ * reconcileApprovalPresentations when it has presenters; the lifecycle requests search and presentation after each pass.
  */
 export function createApprovalPublisherV1(database: Database.Database, context: ApprovalWorkflowContextV1,
   hooks: readonly AfterApprovedRecordHookV1[]): ApprovalWorkflowProcessingV1 {
@@ -146,7 +147,7 @@ export function createApprovalPublisherV1(database: Database.Database, context: 
     });
   }
 
-  async function publish(signal: AbortSignal): Promise<void> {
+  async function publish(signal: AbortSignal, rethrowRows: boolean): Promise<void> {
     const options = await prepared();
     let afterSequence = 0, failed = false, first: unknown;
     for (;;) {
@@ -163,8 +164,9 @@ export function createApprovalPublisherV1(database: Database.Database, context: 
         }
       }
     }
-    // A visible failure; every other row was published. Search wakes on the next successful pass or cycle.
-    if (failed) throw first;
+    // Every other row was published; the failed row stays unpublished until a later pass.
+    if (failed && rethrowRows) throw first;
   }
-  return Object.freeze({ recoverV4Appends: publish, appendFinalizedApprovalsToV4: publish, async observeAndFinalizePendingApprovals() {} });
+  return Object.freeze({ recoverV4Appends: (signal: AbortSignal) => publish(signal, false),
+    appendFinalizedApprovalsToV4: (signal: AbortSignal) => publish(signal, true), async observeAndFinalizePendingApprovals() {} });
 }

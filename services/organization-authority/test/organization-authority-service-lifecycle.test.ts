@@ -13,6 +13,7 @@ import type {
   OrganizationAuthorityApiRuntimeConfig,
   RunningOrganizationAuthorityApiRuntime,
 } from "../src/composition/organization-authority-api-runtime.js";
+import { approvalCoreFixture } from "./fixtures/approval-core.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -114,6 +115,19 @@ describe("Organization Authority service lifecycle", () => {
     })).rejects.toThrow('pending signed append');
     expect(search).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
+  });
+  it("binds after a recovery pass in which one approval row cannot publish", async () => {
+    const f = await approvalCoreFixture();
+    f.core.decide("desktop", f.approve(), () => f.session);
+    const poisoned = f.withAppend(async () => { throw new Error("row cannot publish"); }).processing;
+    const runtime = await startLifecycle(60_000, {
+      processing: processing([]),
+      additional_processing: { ...processing([]), recoverV4Appends: poisoned.recoverV4Appends },
+    });
+    try {
+      expect(runtime.address.port).toBe(14_000);
+      expect(f.core.proposal(f.approvalId)!.status).toBe("publishing");
+    } finally { await runtime.close(); }
   });
   it("coalesces search wakes at completion and failure boundaries without self-retrying failures", async () => {
     vi.useFakeTimers();
@@ -302,16 +316,19 @@ describe("Organization Authority service lifecycle", () => {
     expect(events.slice(8)).toEqual(["api-close", "handle-clear"]);
   });
 
-  it("retries after an interrupted V4 append with recovery before another source poll", async () => {
+  it("retries after an interrupted V4 append with recovery before another source poll, still waking search and presentation", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
     let attempts = 0;
     const errors: string[] = [];
     const runtime = await startLifecycle(100, {
-      processing: processing(events, async () => {
-        attempts += 1;
-        if (attempts === 1) throw new Error("append interrupted");
-      }),
+      processing: {
+        ...processing(events, async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("append interrupted");
+        }),
+        reconcileApprovalPresentations: async () => { events.push("presentation"); },
+      },
       on_worker_error: (error) => {
         errors.push(error.message);
       },
@@ -324,11 +341,13 @@ describe("Organization Authority service lifecycle", () => {
       "stage",
       "finalize",
       "append",
+      "reconcile",
+      "presentation",
     ]);
     expect(errors).toEqual(["append interrupted"]);
 
     await vi.advanceTimersByTimeAsync(101);
-    expect(events.slice(6)).toEqual(["recover", "stage", "finalize", "append", "reconcile"]);
+    expect(events.slice(8)).toEqual(["recover", "stage", "finalize", "append", "reconcile", "presentation"]);
     expect(errors).toEqual(["append interrupted"]);
 
     await runtime.close();
@@ -937,12 +956,13 @@ describe("Organization Authority service lifecycle", () => {
 
     failNext = true;
     runtime.requestApprovalPublication();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(events).toEqual(["finalize", "append"]);
+    await vi.advanceTimersByTimeAsync(1);
+    // A failed wake still requests search: it derives only from the record log.
+    expect(events).toEqual(["finalize", "append", "reconcile"]);
     expect(errors.map((error) => error.message)).toEqual(["append unavailable"]);
 
     await vi.advanceTimersByTimeAsync(1_001);
-    expect(events.slice(2)).toEqual([
+    expect(events.slice(3)).toEqual([
       "recover",
       "stage",
       "finalize",

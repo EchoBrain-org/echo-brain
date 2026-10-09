@@ -708,7 +708,8 @@ describe('personal meeting intake uses the shared processing path', () => {
     const crashing = f.create(undefined, { approval_core: { after_record }, record_append: { async append(input) { await f.context.record_append.append(input); throw new Error('crash after append'); } } });
     const { pending, opened } = await f.pendingReview(crashing);
     await f.call(crashing, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-crash', action: 'approve', project_ids: [], share_transcript: false, owners: [] });
-    await expect(crashing.processing.recoverV4Appends(new AbortController().signal)).rejects.toThrow('crash after append');
+    // A row failure does not fail recovery; the row stays unpublished for the next pass.
+    await crashing.processing.recoverV4Appends(new AbortController().signal);
     expect(calls).toEqual([]);
     crashing.close();
     const restarted = f.create(undefined, { approval_core: { after_record } });

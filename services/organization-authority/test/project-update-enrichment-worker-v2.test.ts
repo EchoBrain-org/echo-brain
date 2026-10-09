@@ -98,13 +98,15 @@ describe('V2 project upload enrichment in the serialized Person worker', () => {
     expect(f.application.readUpload('member', receipt.context_id)).toMatchObject({ text: 'The customer prefers a telephone call.' });
   });
 
-  it('fails visibly before model handoff when immutable V2 source bytes are corrupt', async () => {
+  it('fails visibly before model handoff when immutable V2 source bytes are corrupt, then defers the item so the next cycle completes', async () => {
     const f = fixture(); const projectId = setupProject(f);
     const receipt = submit(f, projectId, 5);
     f.database.exec('DROP TRIGGER authority_person_updates_v2_immutable');
     f.database.prepare('UPDATE authority_person_updates_v2 SET text = ? WHERE context_id = ?').run('corrupt', receipt.context_id);
 
     await expect(f.worker().runOnce(new AbortController().signal)).rejects.toThrow('integrity');
+    expect(workState(f.database, receipt.context_id)).toEqual({ state: 'unavailable', search_hints: '' });
+    await f.worker().runOnce(new AbortController().signal);
     expect(f.generation.structured_output.generate).not.toHaveBeenCalled();
   });
 
