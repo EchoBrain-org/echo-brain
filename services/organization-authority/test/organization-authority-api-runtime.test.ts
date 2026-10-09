@@ -15,6 +15,7 @@ import {
   rmSync,
 } from "node:fs";
 import { Buffer } from "node:buffer";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -50,6 +51,100 @@ function root(): string {
   const value = realpathSync(created);
   roots.push(value);
   return value;
+}
+
+async function availablePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
+const OIDC = {
+  issuer: "https://issuer.example",
+  client_id: "founder-client",
+  redirect_uri: "https://authority.example/v2/session/oidc/callback",
+  tenant: { kind: "issuer" as const },
+  id_token_algorithms: ["RS256"],
+};
+
+/** Fresh genesis with the owner's session credentials and a private invitation directory. */
+function founder(
+  revision: string,
+  names = { organization: "Founder Organization", owner: "Founder" },
+) {
+  const parent = root();
+  const initialized = bootstrapOrganizationAuthorityState({
+    state_directory: join(parent, "state"),
+    organization_display_name: names.organization,
+    owner_display_name: names.owner,
+    created_at: new Date(Date.now() - 1_000).toISOString(),
+    creating_artifact_revision: revision,
+  });
+  const credentials = initializePersonSessionCredentials({
+    state_directory: initialized.state_directory,
+  });
+  const pkce = readPrivateAuthorityPersonSessionPkceKey(
+    credentials.pkce_sealing_key_reference,
+  );
+  const invitationDirectory = join(parent, "invitations");
+  mkdirSync(invitationDirectory, { mode: 0o700 });
+  chmodSync(invitationDirectory, 0o700);
+  /** Issues the owner another invitation and reads its artifact back. */
+  const invite = (name: string) => {
+    const path = join(invitationDirectory, name);
+    const issued = issuePersonOnboardingInvitation({
+      state_directory: initialized.state_directory,
+      oidc: OIDC,
+      pkce_sealing_key: pkce,
+      membership_id: initialized.owner_membership_id,
+      expected_email: "founder@example.com",
+      authority_url: "https://authority.example",
+      output_path: path,
+    });
+    return {
+      issued,
+      path,
+      body: JSON.parse(readFileSync(path, "utf8")) as {
+        login_grant: string;
+        expected_email?: string;
+      },
+    };
+  };
+  return { initialized, credentials, pkce, invite };
+}
+
+type SessionDependencies = ConstructorParameters<typeof PersonIdentitySessionApplication>[2];
+
+/** Person sessions over the given database, with Node crypto and the system clock unless one is given. */
+function sessionsFor(
+  database: ReturnType<typeof openAuthorityDatabase>,
+  pkce: Uint8Array,
+  dependencies: Omit<SessionDependencies, "clock" | "random" | "hash" | "pkce_sealer"> &
+    Partial<Pick<SessionDependencies, "clock">>,
+): PersonIdentitySessionApplication {
+  const crypto = new NodePersonSessionCrypto(pkce);
+  return new PersonIdentitySessionApplication(
+    new SqlitePersonSessionRepository(database),
+    OIDC,
+    {
+      clock: new SystemAuthorityClock(),
+      random: crypto,
+      hash: crypto,
+      pkce_sealer: crypto,
+      ...dependencies,
+    },
+  );
+}
+
+function consumedGrants(database: ReturnType<typeof openAuthorityDatabase>): unknown {
+  return database
+    .prepare(
+      "SELECT count(*) FROM authority_person_login_grants WHERE consumed_at IS NOT NULL",
+    )
+    .pluck()
+    .get();
 }
 
 class MockOidcProvider implements PersonSessionOidcAuthorizationProvider {
@@ -130,12 +225,7 @@ afterEach(() => {
 
 describe("Organization Authority API runtime", () => {
   it("runs V2 enrichment through the existing serialized meeting worker and drains it on shutdown", async () => {
-    const initialized = bootstrapOrganizationAuthorityState({
-      state_directory: join(root(), "state"), organization_display_name: "Worker fixture",
-      owner_display_name: "Owner", created_at: new Date(Date.now() - 1000).toISOString(),
-      creating_artifact_revision: "pc03-worker-composition",
-    });
-    const credentials = initializePersonSessionCredentials({ state_directory: initialized.state_directory });
+    const { initialized, credentials } = founder("pc03-worker-composition", { organization: "Worker fixture", owner: "Owner" });
     const database = openAuthorityDatabase(join(initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
     const actor = authorization({ organization_id: initialized.organization_id, principal_id: initialized.owner_principal_id, membership_id: initialized.owner_membership_id, membership_type: 'owner' });
     const application = createProjectContextApplicationV1({ authenticate: () => actor, repository: new SqliteProjectContextRepositoryV1(database) });
@@ -164,9 +254,8 @@ describe("Organization Authority API runtime", () => {
     const request = { schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: '00000000-0000-4000-8000-000000000012', title: 'Original', text: 'Call the customer.', project_id: project.project_id, audience: { kind: 'project', project_id: project.project_id } };
     const receipt = application.submitUpload('fixture', request);
     const config = {
-      state_directory: initialized.state_directory, host: '127.0.0.1' as const, port: 19995,
-      authority_url: 'https://authority.example',
-      oidc: { issuer: 'https://issuer.example', client_id: 'founder-client', redirect_uri: 'https://authority.example/v2/session/oidc/callback', tenant: { kind: 'issuer' as const }, id_token_algorithms: ['RS256'] },
+      state_directory: initialized.state_directory, host: '127.0.0.1' as const, port: await availablePort(),
+      authority_url: 'https://authority.example', oidc: OIDC,
       client_authentication: { method: 'none' as const }, pkce_key_file: credentials.pkce_sealing_key_reference.slice('file:'.length),
       answer_composition_generation_bundle: { load: () => generation }, record_input_codecs: HUMAN_ACT_RECORD_INPUT_CODECS_V4,
       record_policy_fact_projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2()]),
@@ -203,36 +292,18 @@ describe("Organization Authority API runtime", () => {
   });
 
   it("wires an injected external-identity application without selecting a provider", async () => {
-    const parent = root();
-    const initialized = bootstrapOrganizationAuthorityState({
-      state_directory: join(parent, "state"),
-      organization_display_name: "Founder Organization",
-      owner_display_name: "Founder",
-      created_at: new Date(Date.now() - 1_000).toISOString(),
-      creating_artifact_revision: "person-external-identity-runtime-test",
-    });
-    const credentials = initializePersonSessionCredentials({
-      state_directory: initialized.state_directory,
-    });
+    const { initialized, pkce } = founder("person-external-identity-runtime-test");
     const opened: PersonExternalIdentityRuntimeInputV1[] = [];
     let closed = 0;
     const runtime = await startOrganizationAuthorityApiRuntime(
       {
         state_directory: initialized.state_directory,
         host: "127.0.0.1",
-        port: 19_992,
+        port: await availablePort(),
         authority_url: "https://authority.example",
-        oidc: {
-          issuer: "https://issuer.example",
-          client_id: "founder-client",
-          redirect_uri: "https://authority.example/v2/session/oidc/callback",
-          tenant: { kind: "issuer" },
-          id_token_algorithms: ["RS256"],
-        },
+        oidc: OIDC,
         client_authentication: { method: "none" },
-        pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(
-          credentials.pkce_sealing_key_reference,
-        ),
+        pkce_sealing_key: pkce,
       },
       {
         oidc_provider: new MockOidcProvider(),
@@ -288,49 +359,8 @@ describe("Organization Authority API runtime", () => {
   });
 
   it("forwards a matching invitation address as login_hint and ignores a wrong one", async () => {
-    const parent = root();
-    const initialized = bootstrapOrganizationAuthorityState({
-      state_directory: join(parent, "state"),
-      organization_display_name: "Founder Organization",
-      owner_display_name: "Founder",
-      created_at: new Date(Date.now() - 1_000).toISOString(),
-      creating_artifact_revision: "clean-login-hint-test",
-    });
-    const oidc = {
-      issuer: "https://issuer.example",
-      client_id: "founder-client",
-      redirect_uri: "https://authority.example/v2/session/oidc/callback",
-      tenant: { kind: "issuer" as const },
-      id_token_algorithms: ["RS256"],
-    };
-    const credentials = initializePersonSessionCredentials({
-      state_directory: initialized.state_directory,
-    });
-    const pkce = readPrivateAuthorityPersonSessionPkceKey(
-      credentials.pkce_sealing_key_reference,
-    );
-    const invitationDirectory = join(parent, "invitations");
-    mkdirSync(invitationDirectory, { mode: 0o700 });
-    chmodSync(invitationDirectory, 0o700);
-    const issue = (
-      name: string,
-    ): { login_grant: string; expected_email?: string } => {
-      const path = join(invitationDirectory, name);
-      issuePersonOnboardingInvitation({
-        state_directory: initialized.state_directory,
-        oidc,
-        pkce_sealing_key: pkce,
-        membership_id: initialized.owner_membership_id,
-        expected_email: "founder@example.com",
-        authority_url: "https://authority.example",
-        output_path: path,
-      });
-      return JSON.parse(readFileSync(path, "utf8")) as {
-        login_grant: string;
-        expected_email?: string;
-      };
-    };
-    const first = issue("founder.invitation.json");
+    const { initialized, pkce, invite } = founder("clean-login-hint-test");
+    const first = invite("founder.invitation.json").body;
     // The address rides in the artifact so the client can name it and hint it.
     expect(first.expected_email).toBe("founder@example.com");
 
@@ -339,19 +369,7 @@ describe("Organization Authority API runtime", () => {
       { fileMustExist: true },
     );
     try {
-      const crypto = new NodePersonSessionCrypto(pkce);
-      const provider = new MockOidcProvider();
-      const sessions = new PersonIdentitySessionApplication(
-        new SqlitePersonSessionRepository(database),
-        oidc,
-        {
-          clock: new SystemAuthorityClock(),
-          random: crypto,
-          hash: crypto,
-          pkce_sealer: crypto,
-          oidc_provider: provider,
-        },
-      );
+      const sessions = sessionsFor(database, pkce, { oidc_provider: new MockOidcProvider() });
       const matched = sessions.beginOidcLogin({
         kind: "identity_bootstrap",
         login_grant: first.login_grant,
@@ -362,7 +380,7 @@ describe("Organization Authority API runtime", () => {
       // A hint the grant does not name must never reach the provider: it could
       // otherwise pre-select an account the Authority is bound to reject, which
       // is the exact way a one-time invitation gets spent.
-      const second = issue("second.invitation.json");
+      const second = invite("second.invitation.json").body;
       const mismatched = sessions.beginOidcLogin({
         kind: "identity_bootstrap",
         login_grant: second.login_grant,
@@ -371,7 +389,7 @@ describe("Organization Authority API runtime", () => {
       expect(mismatched.login_hint).toBeUndefined();
 
       // A malformed hint is dropped, not a reason to fail beginning a login.
-      const third = issue("third.invitation.json");
+      const third = invite("third.invitation.json").body;
       const malformed = sessions.beginOidcLogin({
         kind: "identity_bootstrap",
         login_grant: third.login_grant,
@@ -383,85 +401,27 @@ describe("Organization Authority API runtime", () => {
     }
   });
   it("retries a verified wrong bootstrap account without spending its invitation", async () => {
-    const parent = root();
-    const initialized = bootstrapOrganizationAuthorityState({
-      state_directory: join(parent, "state"),
-      organization_display_name: "Founder Organization",
-      owner_display_name: "Founder",
-      created_at: new Date(Date.now() - 1_000).toISOString(),
-      creating_artifact_revision: "clean-person-email-binding-test",
-    });
-    const oidc = {
-      issuer: "https://issuer.example",
-      client_id: "founder-client",
-      redirect_uri: "https://authority.example/v2/session/oidc/callback",
-      tenant: { kind: "issuer" as const },
-      id_token_algorithms: ["RS256"],
-    };
-    const credentials = initializePersonSessionCredentials({
-      state_directory: initialized.state_directory,
-    });
-    const pkce = readPrivateAuthorityPersonSessionPkceKey(
-      credentials.pkce_sealing_key_reference,
-    );
-    const invitationDirectory = join(parent, "invitations");
-    mkdirSync(invitationDirectory, { mode: 0o700 });
-    chmodSync(invitationDirectory, 0o700);
-    const invitationPath = join(invitationDirectory, "founder.invitation.json");
-    issuePersonOnboardingInvitation({
-      state_directory: initialized.state_directory,
-      oidc,
-      pkce_sealing_key: pkce,
-      membership_id: initialized.owner_membership_id,
-      expected_email: "founder@example.com",
-      authority_url: "https://authority.example",
-      output_path: invitationPath,
-    });
-    const invitation = JSON.parse(readFileSync(invitationPath, "utf8")) as {
-      login_grant: string;
-    };
-    const parallelInvitationPath = join(
-      invitationDirectory,
-      "parallel-founder.invitation.json",
-    );
-    issuePersonOnboardingInvitation({
-      state_directory: initialized.state_directory,
-      oidc,
-      pkce_sealing_key: pkce,
-      membership_id: initialized.owner_membership_id,
-      expected_email: "founder@example.com",
-      authority_url: "https://authority.example",
-      output_path: parallelInvitationPath,
-    });
-    const parallelInvitation = JSON.parse(
-      readFileSync(parallelInvitationPath, "utf8"),
-    ) as { login_grant: string };
+    const { initialized, pkce, invite } = founder("clean-person-email-binding-test");
+    const invitation = invite("founder.invitation.json").body;
+    const parallelInvitation = invite("parallel-founder.invitation.json").body;
     const databasePath = join(initialized.state_directory, "authority.sqlite");
     let database = openAuthorityDatabase(databasePath, { fileMustExist: true });
     try {
-      const crypto = new NodePersonSessionCrypto(pkce);
       let provider = new MockOidcProvider({
         email: "someone-else@example.com",
         email_verified: true,
       });
       const diagnostics: string[] = [];
+      // Reads the current database and provider, so a restart rebuilds over both.
       const createSessions = () =>
-        new PersonIdentitySessionApplication(
-          new SqlitePersonSessionRepository(database),
-          oidc,
-          {
-            clock: new SystemAuthorityClock(),
-            random: crypto,
-            hash: crypto,
-            pkce_sealer: crypto,
-            oidc_provider: provider,
-            diagnostics: {
-              oidcLoginDenied(reason) {
-                diagnostics.push(reason);
-              },
+        sessionsFor(database, pkce, {
+          oidc_provider: provider,
+          diagnostics: {
+            oidcLoginDenied(reason) {
+              diagnostics.push(reason);
             },
           },
-        );
+        });
       let sessions = createSessions();
       const begun = sessions.beginOidcLogin({
         kind: "identity_bootstrap",
@@ -630,14 +590,7 @@ describe("Organization Authority API runtime", () => {
       ).resolves.toMatchObject({
         membership_id: initialized.owner_membership_id,
       });
-      expect(
-        database
-          .prepare(
-            "SELECT count(*) FROM authority_person_login_grants WHERE consumed_at IS NOT NULL",
-          )
-          .pluck()
-          .get(),
-      ).toBe(2);
+      expect(consumedGrants(database)).toBe(2);
       expect(
         database
           .prepare("SELECT count(*) FROM authority_person_session_families")
@@ -647,22 +600,7 @@ describe("Organization Authority API runtime", () => {
 
       // A malformed or unverified bootstrap identity is not a wrong-account
       // retry: it remains terminal and spends this distinct invitation.
-      const invalidInvitationPath = join(
-        invitationDirectory,
-        "invalid-email.invitation.json",
-      );
-      issuePersonOnboardingInvitation({
-        state_directory: initialized.state_directory,
-        oidc,
-        pkce_sealing_key: pkce,
-        membership_id: initialized.owner_membership_id,
-        expected_email: "founder@example.com",
-        authority_url: "https://authority.example",
-        output_path: invalidInvitationPath,
-      });
-      const invalidInvitation = JSON.parse(
-        readFileSync(invalidInvitationPath, "utf8"),
-      ) as { login_grant: string };
+      const invalidInvitation = invite("invalid-email.invitation.json").body;
       provider.setClaims({
         email: "founder@example.com",
         email_verified: false,
@@ -678,33 +616,11 @@ describe("Organization Authority API runtime", () => {
           authorization_code: "unverified-email-code",
         }),
       ).rejects.toMatchObject({ code: "unauthorized" });
-      expect(
-        database
-          .prepare(
-            "SELECT count(*) FROM authority_person_login_grants WHERE consumed_at IS NOT NULL",
-          )
-          .pluck()
-          .get(),
-      ).toBe(3);
+      expect(consumedGrants(database)).toBe(3);
 
       // A second verified wrong account is terminal. The reservation is
       // durable across the restart, while the grant and attempt remain one-use.
-      const cappedInvitationPath = join(
-        invitationDirectory,
-        "capped-retry.invitation.json",
-      );
-      issuePersonOnboardingInvitation({
-        state_directory: initialized.state_directory,
-        oidc,
-        pkce_sealing_key: pkce,
-        membership_id: initialized.owner_membership_id,
-        expected_email: "founder@example.com",
-        authority_url: "https://authority.example",
-        output_path: cappedInvitationPath,
-      });
-      const cappedInvitation = JSON.parse(
-        readFileSync(cappedInvitationPath, "utf8"),
-      ) as { login_grant: string };
+      const cappedInvitation = invite("capped-retry.invitation.json").body;
       provider.setClaims({
         email: "someone-else@example.com",
         email_verified: true,
@@ -731,14 +647,7 @@ describe("Organization Authority API runtime", () => {
           authorization_code: "second-capped-wrong-email-code",
         }),
       ).rejects.toMatchObject({ code: "unauthorized" });
-      expect(
-        database
-          .prepare(
-            "SELECT count(*) FROM authority_person_login_grants WHERE consumed_at IS NOT NULL",
-          )
-          .pluck()
-          .get(),
-      ).toBe(4);
+      expect(consumedGrants(database)).toBe(4);
       expect(
         database
           .prepare(
@@ -751,22 +660,7 @@ describe("Organization Authority API runtime", () => {
       // A replayed or otherwise terminally redeemed code after the first
       // mismatch spends the invitation; it cannot clear the reservation and
       // turn the next browser return into another wrong-account retry.
-      const replayedInvitationPath = join(
-        invitationDirectory,
-        "replayed-code.invitation.json",
-      );
-      issuePersonOnboardingInvitation({
-        state_directory: initialized.state_directory,
-        oidc,
-        pkce_sealing_key: pkce,
-        membership_id: initialized.owner_membership_id,
-        expected_email: "founder@example.com",
-        authority_url: "https://authority.example",
-        output_path: replayedInvitationPath,
-      });
-      const replayedInvitation = JSON.parse(
-        readFileSync(replayedInvitationPath, "utf8"),
-      ) as { login_grant: string };
+      const replayedInvitation = invite("replayed-code.invitation.json").body;
       const replayedFirst = sessions.beginOidcLogin({
         kind: "identity_bootstrap",
         login_grant: replayedInvitation.login_grant,
@@ -791,79 +685,29 @@ describe("Organization Authority API runtime", () => {
         }),
       ).rejects.toMatchObject({ code: "unauthorized" });
       provider.setTerminalRedemptionFailure(false);
-      expect(
-        database
-          .prepare(
-            "SELECT count(*) FROM authority_person_login_grants WHERE consumed_at IS NOT NULL",
-          )
-          .pluck()
-          .get(),
-      ).toBe(5);
+      expect(consumedGrants(database)).toBe(5);
     } finally {
       database.close();
     }
   });
 
   it("releases retryable bootstrap redemption before consuming the invitation", async () => {
-    const parent = root();
-    const initialized = bootstrapOrganizationAuthorityState({
-      state_directory: join(parent, "state"),
-      organization_display_name: "Founder Organization",
-      owner_display_name: "Founder",
-      created_at: new Date(Date.now() - 1_000).toISOString(),
-      creating_artifact_revision: "clean-person-bootstrap-retry-test",
-    });
-    const oidc = {
-      issuer: "https://issuer.example",
-      client_id: "founder-client",
-      redirect_uri: "https://authority.example/v2/session/oidc/callback",
-      tenant: { kind: "issuer" as const },
-      id_token_algorithms: ["RS256"],
-    };
-    const credentials = initializePersonSessionCredentials({
-      state_directory: initialized.state_directory,
-    });
-    const pkce = readPrivateAuthorityPersonSessionPkceKey(
-      credentials.pkce_sealing_key_reference,
-    );
-    const invitations = join(parent, "invitations");
-    mkdirSync(invitations, { mode: 0o700 });
-    chmodSync(invitations, 0o700);
-    const invitationPath = join(invitations, "founder.invitation.json");
-    issuePersonOnboardingInvitation({
-      state_directory: initialized.state_directory,
-      oidc,
-      pkce_sealing_key: pkce,
-      membership_id: initialized.owner_membership_id,
-      expected_email: "founder@example.com",
-      authority_url: "https://authority.example",
-      output_path: invitationPath,
-    });
-    const invitation = JSON.parse(readFileSync(invitationPath, "utf8")) as {
-      login_grant: string;
-    };
+    const { initialized, pkce, invite } = founder("clean-person-bootstrap-retry-test");
+    const invitation = invite("founder.invitation.json").body;
     const database = openAuthorityDatabase(
       join(initialized.state_directory, "authority.sqlite"),
       { fileMustExist: true },
     );
     try {
       let now = new Date().toISOString();
-      const crypto = new NodePersonSessionCrypto(pkce);
-      const sessions = new PersonIdentitySessionApplication(
-        new SqlitePersonSessionRepository(database),
-        oidc,
-        {
-          clock: { now: () => now },
-          random: crypto,
-          hash: crypto,
-          pkce_sealer: crypto,
-          oidc_provider: {
-            async redeemAuthorizationCode() {
-              return { kind: "retryable_before_redemption" };
-            },
+      const sessions = sessionsFor(database, pkce, {
+        clock: { now: () => now },
+        oidc_provider: {
+          async redeemAuthorizationCode() {
+            return { kind: "retryable_before_redemption" };
           },
         },
-      );
+      });
       const first = sessions.beginOidcLogin({
         kind: "identity_bootstrap",
         login_grant: invitation.login_grant,
@@ -929,47 +773,21 @@ describe("Organization Authority API runtime", () => {
   });
 
   it("caps unauthenticated OIDC begins durably and releases expired capacity", () => {
-    const parent = root();
-    const initialized = bootstrapOrganizationAuthorityState({
-      state_directory: join(parent, "state"),
-      organization_display_name: "Founder Organization",
-      owner_display_name: "Founder",
-      created_at: new Date(Date.now() - 1_000).toISOString(),
-      creating_artifact_revision: "clean-person-oidc-capacity-test",
-    });
-    const pkce = readPrivateAuthorityPersonSessionPkceKey(
-      initializePersonSessionCredentials({
-        state_directory: initialized.state_directory,
-      }).pkce_sealing_key_reference,
-    );
+    const { initialized, pkce } = founder("clean-person-oidc-capacity-test");
     const database = openAuthorityDatabase(
       join(initialized.state_directory, "authority.sqlite"),
       { fileMustExist: true },
     );
     try {
       let now = new Date().toISOString();
-      const crypto = new NodePersonSessionCrypto(pkce);
-      const sessions = new PersonIdentitySessionApplication(
-        new SqlitePersonSessionRepository(database),
-        {
-          issuer: "https://issuer.example",
-          client_id: "founder-client",
-          redirect_uri: "https://authority.example/v2/session/oidc/callback",
-          tenant: { kind: "issuer" },
-          id_token_algorithms: ["RS256"],
-        },
-        {
-          clock: { now: () => now },
-          random: crypto,
-          hash: crypto,
-          pkce_sealer: crypto,
-          oidc_provider: {
-            async redeemAuthorizationCode() {
-              return { kind: "retryable_before_redemption" };
-            },
+      const sessions = sessionsFor(database, pkce, {
+        clock: { now: () => now },
+        oidc_provider: {
+          async redeemAuthorizationCode() {
+            return { kind: "retryable_before_redemption" };
           },
         },
-      );
+      });
       for (
         let index = 0;
         index < MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS;
@@ -1015,24 +833,7 @@ describe("Organization Authority API runtime", () => {
   });
 
   it("runs fresh genesis through initial-owner grant, OIDC bootstrap, refresh, and logout without legacy state", async () => {
-    const parent = root();
-    const initialized = bootstrapOrganizationAuthorityState({
-      state_directory: join(parent, "state"),
-      organization_display_name: "Founder Organization",
-      owner_display_name: "Founder",
-      created_at: new Date(Date.now() - 1_000).toISOString(),
-      creating_artifact_revision: "organization-authority-api-runtime-test",
-    });
-    const oidc = {
-      issuer: "https://issuer.example",
-      client_id: "founder-client",
-      redirect_uri: "https://authority.example/v2/session/oidc/callback",
-      tenant: { kind: "issuer" as const },
-      id_token_algorithms: ["RS256"],
-    };
-    const credentials = initializePersonSessionCredentials({
-      state_directory: initialized.state_directory,
-    });
+    const { initialized, credentials, pkce, invite } = founder("organization-authority-api-runtime-test");
     expect(credentials.pkce_sealing_key_reference).toContain(
       "person-session-pkce-sealing-key",
     );
@@ -1041,29 +842,11 @@ describe("Organization Authority API runtime", () => {
         state_directory: initialized.state_directory,
       }),
     ).toThrow();
-    const pkce = readPrivateAuthorityPersonSessionPkceKey(
-      credentials.pkce_sealing_key_reference,
-    );
-    const invitationDirectory = join(parent, "invitations");
-    mkdirSync(invitationDirectory, { mode: 0o700 });
-    chmodSync(invitationDirectory, 0o700);
-    const invitationPath = join(invitationDirectory, "founder.invitation.json");
-    const invitation = issuePersonOnboardingInvitation({
-      state_directory: initialized.state_directory,
-      oidc,
-      pkce_sealing_key: pkce,
-      membership_id: initialized.owner_membership_id,
-      expected_email: "founder@example.com",
-      authority_url: "https://authority.example",
-      output_path: invitationPath,
-    });
-    expect(invitation.output_path).toBe(invitationPath);
-    const invitationBody = JSON.parse(readFileSync(invitationPath, "utf8")) as {
-      login_grant: string;
-    };
+    const { issued, path: invitationPath, body: invitationBody } = invite("founder.invitation.json");
+    expect(issued.output_path).toBe(invitationPath);
     const apiConfig = {
-      state_directory: initialized.state_directory, host: "127.0.0.1" as const, port: 19_991,
-      authority_url: "https://authority.example", oidc,
+      state_directory: initialized.state_directory, host: "127.0.0.1" as const, port: await availablePort(),
+      authority_url: "https://authority.example", oidc: OIDC,
       client_authentication: { method: "none" as const }, pkce_sealing_key: pkce,
     };
     const apiDependencies = {
@@ -1211,31 +994,21 @@ describe("Organization Authority API runtime", () => {
       expect(expiredPage).not.toContain("refresh_token");
       expect(expiredPage).not.toContain('name="session"');
 
-      const noToolsV3 = await fetch(`${origin}/v3/person/tools`, {
-        headers: { authorization: `Bearer ${session.access_token as string}` },
-      });
-      expect(noToolsV3.status).toBe(200);
-      expect(await json(noToolsV3)).toEqual({
-        schema_version: 3,
-        kind: "echo-organization-person-tools",
-        organization_id: initialized.organization_id,
-        membership_id: initialized.owner_membership_id,
-        tools: [],
-      });
-      expect((await fetch(`${origin}/v3/person/tools`)).status).toBe(401);
-
-      const noToolsV4 = await fetch(`${origin}/v4/person/tools`, {
-        headers: { authorization: `Bearer ${session.access_token as string}` },
-      });
-      expect(noToolsV4.status).toBe(200);
-      expect(await json(noToolsV4)).toEqual({
-        schema_version: 4,
-        kind: "echo-organization-person-tools",
-        organization_id: initialized.organization_id,
-        membership_id: initialized.owner_membership_id,
-        tools: [],
-      });
-      expect((await fetch(`${origin}/v4/person/tools`)).status).toBe(401);
+      for (const version of [3, 4]) {
+        const tools = `${origin}/v${String(version)}/person/tools`;
+        const noTools = await fetch(tools, {
+          headers: { authorization: `Bearer ${session.access_token as string}` },
+        });
+        expect(noTools.status).toBe(200);
+        expect(await json(noTools)).toEqual({
+          schema_version: version,
+          kind: "echo-organization-person-tools",
+          organization_id: initialized.organization_id,
+          membership_id: initialized.owner_membership_id,
+          tools: [],
+        });
+        expect((await fetch(tools)).status).toBe(401);
+      }
 
       // Exercise the actual composed project application against fresh V7 storage.
       const projectHeaders = { authorization: `Bearer ${session.access_token as string}`, "content-type": "application/json" };
@@ -1303,7 +1076,7 @@ describe("Organization Authority API runtime", () => {
         expect(inspection.prepare("SELECT count(*) AS n FROM authority_person_update_work_v2").get()).toEqual({ n: 1 });
       } finally { inspection.close(); }
       await runtime.close();
-      runtime = await startOrganizationAuthorityApiRuntime({ ...apiConfig, port: 19996 }, apiDependencies);
+      runtime = await startOrganizationAuthorityApiRuntime({ ...apiConfig, port: await availablePort() }, apiDependencies);
       origin = `http://127.0.0.1:${runtime.address.port}`;
       expect(await post("/v1/person/projects", create, 201)).toEqual(created);
       expect(await post("/v2/person/updates", upload, 202)).toEqual(receipt);

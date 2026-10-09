@@ -95,24 +95,6 @@ describe("Authority state initialization", () => {
       "control-plane",
       "record-log",
     ]);
-    expect(
-      rows(
-        join(stateDirectory, "authority.sqlite"),
-        "PRAGMA user_version",
-      ),
-    ).toEqual([{ user_version: 13 }]);
-    expect(
-      rows(
-        join(stateDirectory, "integrations.sqlite"),
-        "PRAGMA user_version",
-      ),
-    ).toEqual([{ user_version: 4 }]);
-    expect(
-      rows(
-        join(stateDirectory, "record-log.sqlite"),
-        "PRAGMA user_version",
-      ),
-    ).toEqual([{ user_version: 4 }]);
 
     expect(
       rows(

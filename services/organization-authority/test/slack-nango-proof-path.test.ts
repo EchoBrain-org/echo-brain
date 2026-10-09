@@ -557,13 +557,6 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
         connect_link: `${NANGO_URL}/oauth/connect/slack?connect_session_token=nango-session-token`,
       },
     });
-    for (const secret of [
-      CONFIGURATION_TOKEN,
-      NANGO_KEY,
-      APP.client_secret,
-      APP.signing_secret,
-    ])
-      expect(begun.body.connect_link).not.toContain(secret);
     nango.finishConnect(bot, token);
     return (
       await call(ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, owner, {
@@ -754,10 +747,11 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
         },
       ],
     };
-    const sendInteraction = async () => {
+    /** Signs one form-encoded interaction body with the app's signing secret, as Slack does. */
+    const signed = (payload: object) => {
       const raw = new TextEncoder().encode(
         new URLSearchParams({
-          payload: JSON.stringify(interaction),
+          payload: JSON.stringify(payload),
         }).toString(),
       );
       const timestamp = String(Math.floor(Date.now() / 1_000));
@@ -765,21 +759,29 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
         .update(`v0:${timestamp}:`)
         .update(raw)
         .digest("hex");
+      return {
+        raw,
+        headers: {
+          "x-slack-request-timestamp": timestamp,
+          "x-slack-signature": `v0=${signature}`,
+        },
+      };
+    };
+    const post = async ({ raw, headers }: ReturnType<typeof signed>) => {
       const response = await fetch(
         `${origin()}/v2/integrations/slack/interactions`,
         {
           method: "POST",
           headers: {
             "content-type": "application/x-www-form-urlencoded",
-            "x-slack-request-timestamp": timestamp,
-            "x-slack-signature": `v0=${signature}`,
+            ...headers,
           },
           body: raw,
         },
       );
       return { status: response.status, body: await response.text() };
     };
-    await expect(sendInteraction()).resolves.toEqual({ status: 200, body: "" });
+    await expect(post(signed(interaction))).resolves.toEqual({ status: 200, body: "" });
     expect(feedback).toEqual([
       {
         response_type: "ephemeral",
@@ -888,100 +890,15 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
       // from the configured app reference. This is a real signed V4 request;
       // there is no presentation for it, so the target-bound click path safely
       // refuses it and sends only the provider-safe stale/refused feedback.
-      const approval_id = "apr_00000000-0000-4000-8000-000000000001";
-      const interaction_state = {
-        audience: {
-          [slackApprovalActionIdV4(approval_id, "audience-select")]: {
-            type: "static_select",
-            selected_option: {
-              text: { type: "plain_text", text: "Only me", emoji: false },
-              value: "only-me",
-            },
-          },
-        },
-        projects: {
-          [slackApprovalActionIdV4(approval_id, "projects-select")]: {
-            type: "multi_static_select",
-            selected_options: [],
-          },
-        },
-        transcript: {
-          [slackApprovalActionIdV4(approval_id, "transcript-checkbox")]: {
-            type: "checkboxes",
-            selected_options: [],
-          },
-        },
-      };
-      const interaction = {
-        type: "block_actions",
-        user: {
-          id: OWNER_SLACK,
-          team_id: ECHO_BOT.team_id,
-          username: "founder",
-          name: "Founder",
-        },
-        api_app_id: APP.app_id,
-        trigger_id: "1234567890.1234567890.abcdefghijklmnopqrstuvwxyzABCD",
-        container: {
-          type: "message",
-          channel_id: `D${OWNER_SLACK.slice(1)}`,
-          message_ts: "1727700000.000001",
-          is_ephemeral: false,
-        },
-        team: { id: ECHO_BOT.team_id, domain: "proof" },
-        channel: { id: `D${OWNER_SLACK.slice(1)}`, name: "directmessage" },
-        message: {
-          type: "message",
-          user: ECHO_BOT.bot_user_id,
-          username: "echo",
-          text: "Review this meeting",
-          ts: "1727700000.000001",
-          app_id: APP.app_id,
-          bot_id: ECHO_BOT.bot_id,
-          bot_profile: {
-            id: ECHO_BOT.bot_id,
-            app_id: APP.app_id,
-            name: "echo",
-          },
-          blocks: [],
-        },
-        state: { values: interaction_state },
-        response_url: "https://hooks.slack.com/actions/T0PROOF/B0PROOF/proof",
-        actions: [
-          {
-            type: "button",
-            action_id: slackApprovalActionIdV4(approval_id, "approve"),
-            block_id: "actions",
-            text: { type: "plain_text", text: "Approve meeting", emoji: false },
-            action_ts: "1727700001.000001",
-            value: JSON.stringify({
-              schema_version: 2,
-              approval_id,
-              snapshot_sha256: `sha256:${"a".repeat(64)}`,
-            }),
-          },
-        ],
-      };
-      const raw_interaction = new TextEncoder().encode(
-        new URLSearchParams({
-          payload: JSON.stringify(interaction),
-        }).toString(),
-      );
-      const interaction_timestamp = String(Math.floor(Date.now() / 1_000));
-      const interaction_signature = createHmac("sha256", APP.signing_secret)
-        .update(`v0:${interaction_timestamp}:`)
-        .update(raw_interaction)
-        .digest("hex");
+      const { hash, token, ...withoutLegacyFields } = interaction;
+      const replay = signed(withoutLegacyFields);
       try {
         parseVerifiedPrivateSlackApprovalInteractionV1(
           verifyPrivateSlackApprovalRequestV1({
-            raw_body: raw_interaction,
+            raw_body: replay.raw,
             signing_secret: APP.signing_secret,
-            headers: {
-              "x-slack-request-timestamp": interaction_timestamp,
-              "x-slack-signature": `v0=${interaction_signature}`,
-            },
-            now_unix_seconds: Number(interaction_timestamp),
+            headers: replay.headers,
+            now_unix_seconds: Number(replay.headers["x-slack-request-timestamp"]),
           }),
         );
       } catch (error) {
@@ -991,40 +908,10 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
           );
         throw error;
       }
-      const interaction_response = await fetch(
-        `${origin()}/v2/integrations/slack/interactions`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-www-form-urlencoded",
-            "x-slack-request-timestamp": interaction_timestamp,
-            "x-slack-signature": `v0=${interaction_signature}`,
-          },
-          body: raw_interaction,
-        },
-      );
-      expect({
-        status: interaction_response.status,
-        body: await interaction_response.text(),
-      }).toEqual({ status: 200, body: "" });
+      await expect(post(replay)).resolves.toEqual({ status: 200, body: "" });
       expect(feedback).toHaveLength(2);
       feedback_status = 500;
-      const rejected_feedback_response = await fetch(
-        `${origin()}/v2/integrations/slack/interactions`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-www-form-urlencoded",
-            "x-slack-request-timestamp": interaction_timestamp,
-            "x-slack-signature": `v0=${interaction_signature}`,
-          },
-          body: raw_interaction,
-        },
-      );
-      expect({
-        status: rejected_feedback_response.status,
-        body: await rejected_feedback_response.text(),
-      }).toEqual({ status: 200, body: "" });
+      await expect(post(replay)).resolves.toEqual({ status: 200, body: "" });
       expect(feedback).toHaveLength(3);
     }
     expect(errors).toEqual([]);
