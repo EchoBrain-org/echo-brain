@@ -69,6 +69,15 @@ async function stageRevision(state: SqliteAuthorityMeetingProcessingStateV1, adm
   assertActionable(successor);
   return successor;
 }
+/** The fixture meeting and decisions under another source meeting identity. */
+async function stageOtherMeeting(state: SqliteAuthorityMeetingProcessingStateV1, admission: AdmittedMeetingProcessingAdmissionV1, suffix: string) {
+  const other: MeetingDocument = { ...meeting, id: `meeting-${suffix}`, provenance: { ...meeting.provenance, external_id: `note-${suffix}`, canonical_revision: `sha256:note-${suffix}` } };
+  const candidate = await state.stageCandidate({ admission, meeting: other, review_policy: REVIEW_POLICY, decisions: { ...decisions, meeting_id: other.id, meeting_revision: other.provenance.canonical_revision,
+    signals: [{ ...decisions.signals[0]!, evidence: [{ meeting_id: other.id, block_id: "block-1" }] }] } });
+  assertActionable(candidate);
+  return candidate;
+}
+const rows = (value: Database.Database, table: string) => value.prepare(`SELECT COUNT(*) FROM ${table}`).pluck().get();
 
 describe("SQLite admitted meeting-processing state", () => {
   it("keeps personal source progress and approval delivery isolated in the shared tables", async () => {
@@ -97,34 +106,15 @@ describe("SQLite admitted meeting-processing state", () => {
     expect(() => value.transaction(() => state.assertCurrentSourceAdmission({ ...identity, version: "future" }))()).toThrow("current admitted source identity");
     value.prepare("UPDATE authority_memberships SET status='revoked',revoked_at=?,revocation_reason='founder-reset' WHERE membership_id='mem_test'").run(ADVANCED_AT);
     expect(() => value.transaction(() => state.assertCurrentSourceAdmission(identity))()).toThrow(AuthorityMeetingProcessingRevokedError);
-    expect(value.prepare("SELECT count(*) FROM authority_live_source_candidates_v2").pluck().get()).toBe(0);
+    expect(rows(value, "authority_live_source_candidates_v2")).toBe(0);
   });
 
-  it("rejects an admitted source whose persisted adapter differs from the configured boundary", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(value, {
-      source_adapter_id: "synthetic-fixture",
-      assert_live_cursor: fixtureCursorPolicy.assert_live_cursor,
-    }, "llm", undefined, FIXTURE_SOURCE_KEY);
-
-    await expect(state.readAdmission()).rejects.toThrow(
-      "admission adapter differs from its configured boundary",
-    );
-  });
-
-  it("rejects an admitted source whose persisted processor differs from the configured processor", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "synthetic-processor",
-      undefined,
-      FIXTURE_SOURCE_KEY,
-    );
-
-    await expect(state.readAdmission()).rejects.toThrow(
-      "admission processor differs from its configured processor",
-    );
+  it.each([
+    ["adapter", { source_adapter_id: "synthetic-fixture", assert_live_cursor: fixtureCursorPolicy.assert_live_cursor }, "llm", "admission adapter differs from its configured boundary"],
+    ["processor", fixtureCursorPolicy, "synthetic-processor", "admission processor differs from its configured processor"],
+  ] as const)("rejects an admitted source whose persisted %s differs from its configuration", async (_field, policy, processorAdapterId, message) => {
+    const state = new SqliteAuthorityMeetingProcessingStateV1(database(), policy, processorAdapterId, undefined, FIXTURE_SOURCE_KEY);
+    await expect(state.readAdmission()).rejects.toThrow(message);
   });
 
   it("rejects foreign admission identity and malformed canonical payloads before persistence", async () => {
@@ -158,11 +148,7 @@ describe("SQLite admitted meeting-processing state", () => {
       }),
     ).rejects.toThrow("meeting content block ids must be unique");
 
-    expect(
-      value.prepare("SELECT count(*) FROM authority_live_source_candidates_v2")
-        .pluck()
-        .get(),
-    ).toBe(0);
+    expect(rows(value, "authority_live_source_candidates_v2")).toBe(0);
   });
 
 it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["slack", "reject"]] as const)(
@@ -172,37 +158,7 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
       const frozen = state.freezeProposal({ candidate_id: first.candidate_id, approved_snapshot: snapshotFor(first), suggested_project_ids: [] });
       insertDecision(value, first.approval_id, frozen.approved_snapshot_sha256!, surface, action);
 
-      const revised: MeetingDocument = {
-        ...meeting,
-        provenance: {
-          ...meeting.provenance,
-          canonical_revision: `sha256:note-terminal-${surface}-${action}`,
-        },
-        content: [
-          {
-            id: "block-terminal",
-            kind: "note",
-            text: `A ${action} decision must remain final.`,
-          },
-        ],
-      };
-      const successor = await state.stageCandidate({
-        admission: current,
-        meeting: revised,
-        decisions: {
-          ...decisions,
-          meeting_revision: revised.provenance.canonical_revision,
-          signals: [
-            {
-              ...decisions.signals[0]!,
-              text: revised.content[0]!.text,
-              evidence: [{ meeting_id: revised.id, block_id: "block-terminal" }],
-            },
-          ],
-        },
-        review_policy: REVIEW_POLICY,
-      });
-      assertActionable(successor);
+      const successor = await stageRevision(state, current, `terminal-${surface}-${action}`);
 
       expect(state.readCandidateByApprovalId(first.approval_id)).toMatchObject({
         state: "staged",
@@ -574,17 +530,7 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
     const retriedDecisions: DecisionSet = {
       ...decisions,
       generated_at: NEXT_CUTOFF,
-      signals: [
-        {
-          id: "decision-1",
-          kind: "decision",
-          status: "decided",
-          text: "A later LLM observation of the same revision.",
-          subject: null,
-          confidence: 1,
-          evidence: [{ meeting_id: meeting.id, block_id: "block-1" }],
-        },
-      ],
+      signals: [{ ...decisions.signals[0]!, text: "A later LLM observation of the same revision." }],
     };
 
     await expect(
@@ -595,20 +541,8 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
         review_policy: REVIEW_POLICY,
       }),
     ).resolves.toEqual(original);
-    expect(
-      value
-        .prepare(
-          `SELECT COUNT(*) AS count FROM authority_live_source_candidates_v2`,
-        )
-        .get(),
-    ).toEqual({ count: 1 });
-    expect(
-      value
-        .prepare(
-          `SELECT COUNT(*) AS count FROM authority_live_approval_outbox_v2`,
-        )
-        .get(),
-    ).toEqual({ count: 1 });
+    expect(rows(value, "authority_live_source_candidates_v2")).toBe(1);
+    expect(rows(value, "authority_live_approval_outbox_v2")).toBe(1);
     expect(
       state.readFrozenCandidateForApproval(original.approval_id),
     ).toMatchObject({
@@ -636,20 +570,8 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
     });
     assertActionable(revised);
     expect(revised).not.toEqual(original);
-    expect(
-      value
-        .prepare(
-          `SELECT COUNT(*) AS count FROM authority_live_source_candidates_v2`,
-        )
-        .get(),
-    ).toEqual({ count: 2 });
-    expect(
-      value
-        .prepare(
-          `SELECT COUNT(*) AS count FROM authority_live_approval_outbox_v2`,
-        )
-        .get(),
-    ).toEqual({ count: 2 });
+    expect(rows(value, "authority_live_source_candidates_v2")).toBe(2);
+    expect(rows(value, "authority_live_approval_outbox_v2")).toBe(2);
   });
 
   it("records a folder-only provider revision without creating another review round", async () => {
@@ -708,13 +630,7 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
       state: "coalesced",
       review_lineage_id: first.review_lineage_id,
     });
-    expect(
-      value
-        .prepare(
-          `SELECT COUNT(*) AS count FROM authority_live_approval_outbox_v2`,
-        )
-        .get(),
-    ).toEqual({ count: 1 });
+    expect(rows(value, "authority_live_approval_outbox_v2")).toBe(1);
   });
 
   it("opens a new immutable review round for a semantic change", async () => {
@@ -732,17 +648,7 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
       decisions: {
         ...decisions,
         meeting_revision: edited.provenance.canonical_revision,
-        signals: [
-          {
-            id: "decision-edit",
-            kind: "decision",
-            status: "decided",
-            text: "Changed decision.",
-            subject: null,
-            confidence: 1,
-            evidence: [{ meeting_id: "meeting-1", block_id: "block-1" }],
-          },
-        ],
+        signals: [{ ...decisions.signals[0]!, id: "decision-edit", text: "Changed decision." }],
       },
       review_policy: REVIEW_POLICY,
     });
@@ -822,32 +728,7 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
 
   it("rejects impossible proposal transitions", async () => {
     const { value, state, current, candidate: first } = await actionableFixture();
-    const otherMeeting: MeetingDocument = {
-      ...meeting,
-      id: "meeting-other",
-      provenance: {
-        ...meeting.provenance,
-        external_id: "note-other",
-        canonical_revision: "sha256:note-other",
-      },
-    };
-    const queued = await state.stageCandidate({
-      admission: current,
-      meeting: otherMeeting,
-      decisions: {
-        ...decisions,
-        meeting_id: otherMeeting.id,
-        meeting_revision: otherMeeting.provenance.canonical_revision,
-        signals: [
-          {
-            ...decisions.signals[0]!,
-            evidence: [{ meeting_id: otherMeeting.id, block_id: "block-1" }],
-          },
-        ],
-      },
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(queued);
+    const queued = await stageOtherMeeting(state, current, "other");
     const update = (sql: string, ...args: unknown[]) => () => value.prepare(`UPDATE authority_live_approval_outbox_v2 SET ${sql} WHERE candidate_id = ?`).run(...args, queued.candidate_id);
     const snapshot = canonicalJson(snapshotFor(queued));
     expect(update("state = 'superseded', approved_snapshot_json = ?, approved_snapshot_sha256 = ?, suggested_projects_json = '[]', superseded_by_candidate_id = ?, superseded_at = ?, updated_at = ?",
@@ -904,33 +785,7 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
 
   it("keeps separate source meetings on independent review lineages", async () => {
     const { state, current, candidate: first } = await actionableFixture();
-    const otherMeeting: MeetingDocument = {
-      ...meeting,
-      id: "meeting-2",
-      provenance: {
-        ...meeting.provenance,
-        external_id: "note-2",
-        canonical_revision: "sha256:note-2",
-      },
-    };
-    const other = await state.stageCandidate({
-      admission: current,
-      meeting: otherMeeting,
-      decisions: {
-        ...decisions,
-        meeting_id: otherMeeting.id,
-        meeting_revision: otherMeeting.provenance.canonical_revision,
-        signals: [
-          {
-            ...decisions.signals[0]!,
-            evidence: [{ meeting_id: otherMeeting.id, block_id: "block-1" }],
-          },
-        ],
-      },
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(other);
-    expect(other).toMatchObject({ disposition: "actionable" });
+    const other = await stageOtherMeeting(state, current, "2");
     expect(other.review_lineage_id).not.toBe(first.review_lineage_id);
     expect(state.approvalIsCurrent(first.approval_id)).toBe(true);
     expect(state.approvalIsCurrent(other.approval_id)).toBe(true);

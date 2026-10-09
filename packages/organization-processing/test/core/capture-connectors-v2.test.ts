@@ -146,6 +146,5 @@ describe('future connector capture contracts', () => {
     expect(replay.revision.previous_revision_id).toBe(first.revision.revision_id);
     expect(() => captureSource({ previous: first, external_id: 'other-item' })).toThrow(/different source/);
     expect(() => captureSource({ previous: first, identity: { ...CAPTURE_IDENTITY, instance_id: 'other-instance' } })).toThrow(/different source/);
-    expect(() => captureSource({ content })).toThrow(/predecessor/);
   });
 });

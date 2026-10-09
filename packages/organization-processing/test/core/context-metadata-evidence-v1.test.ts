@@ -23,6 +23,11 @@ function snapshot(source = captureSource({ content: pointerTicket() })): Capture
     inputs: [{ source, annotation, annotation_representation_id: captureAnnotationIdV1(captureRevisionRefV1(source), annotation) }] } as const;
   return { ...body, snapshot_sha256: captureSnapshotSha256V1(body) };
 }
+function output(selected: CaptureDeriveSnapshotV1, facts: readonly unknown[]): unknown {
+  const body = { schema_version: 1, kind: 'echo-capture-derive-output-v1', input_snapshot_sha256: selected.snapshot_sha256,
+    producer: captureClassification(selected.inputs[0]!.source).producer, method: 'deterministic', output_schema: 'echo-capture-facts-v1', facts };
+  return { ...body, output_sha256: sourceContentSha256V1(body) };
+}
 
 describe('capture metadata evidence', () => {
   it('retains an observed ticket status from pointer-only metadata without inventing a change event', () => {
@@ -34,29 +39,23 @@ describe('capture metadata evidence', () => {
     { id: 'observed', kind: 'status_observed', evidence: { kind: 'payload_field', field: 'ticket.key' } },
     { id: 'proposed', kind: 'proposed', evidence: { kind: 'payload_field', field: 'ticket.status' } },
     { id: 'unknown', kind: 'status_observed', evidence: { kind: 'payload_field', field: 'message.author_ref' } },
+    // A non-whitelisted payload path, even when the payload has related metadata.
+    { id: 'unknown-path', kind: 'status_observed', evidence: { kind: 'payload_field', field: 'ticket.labels' } } as unknown as ContextActionObservationV1,
   ];
   it.each(invalidMetadataActions)('rejects metadata action evidence that cannot mean the action: %j', action => {
     expect(() => captureSource({ content: pointerTicket([action]) })).toThrow();
   });
-  it('rejects a non-whitelisted payload path even when the payload has related metadata', () => {
-    const forged = { id: 'unknown-path', kind: 'status_observed', evidence: { kind: 'payload_field', field: 'ticket.labels' } } as unknown as ContextActionObservationV1;
-    expect(() => captureSource({ content: pointerTicket([forged]) })).toThrow();
-  });
   it('allows output facts to cite the exact selected payload field from a pointer capture', () => {
     const selected = snapshot(); assertCaptureDeriveSnapshotV1(selected);
     const source = selected.inputs[0]!.source;
-    const body = { schema_version: 1, kind: 'echo-capture-derive-output-v1', input_snapshot_sha256: selected.snapshot_sha256,
-      producer: captureClassification(source).producer, method: 'deterministic', output_schema: 'echo-capture-facts-v1',
-      facts: [{ pillar: 'action', text: 'ECHO-1 has observed status in_progress.', evidence: [{ source_id: source.item.source_id, revision_id: source.revision.revision_id, field: 'ticket.status' }] }] } as const;
-    expect(() => assertCaptureDeriveOutputV1({ ...body, output_sha256: sourceContentSha256V1(body) }, selected)).not.toThrow();
-    const changed = { ...body, facts: [{ ...body.facts[0]!, evidence: [{ source_id: source.item.source_id, revision_id: source.revision.revision_id, field: 'message.author_ref' }] }] } as const;
-    expect(() => assertCaptureDeriveOutputV1({ ...changed, output_sha256: sourceContentSha256V1(changed) }, selected)).toThrow();
+    const fact = { pillar: 'action', text: 'ECHO-1 has observed status in_progress.', evidence: [{ source_id: source.item.source_id, revision_id: source.revision.revision_id, field: 'ticket.status' }] };
+    expect(() => assertCaptureDeriveOutputV1(output(selected, [fact]), selected)).not.toThrow();
+    const changed = { ...fact, evidence: [{ ...fact.evidence[0]!, field: 'message.author_ref' }] };
+    expect(() => assertCaptureDeriveOutputV1(output(selected, [changed]), selected)).toThrow();
   });
   it('does not allow a pointer capture to cite a made-up quoted span', () => {
     const selected = snapshot(); const source = selected.inputs[0]!.source;
-    const body = { schema_version: 1, kind: 'echo-capture-derive-output-v1', input_snapshot_sha256: selected.snapshot_sha256,
-      producer: captureClassification(source).producer, method: 'deterministic', output_schema: 'echo-capture-facts-v1',
-      facts: [{ pillar: 'content', text: 'Unsupported.', evidence: [{ source_id: source.item.source_id, revision_id: source.revision.revision_id, span: { passage_id: 'p1', start: 0, end: 1, quote: 'x' } }] }] } as const;
-    expect(() => assertCaptureDeriveOutputV1({ ...body, output_sha256: sourceContentSha256V1(body) }, selected)).toThrow(/outside/);
+    const fact = { pillar: 'content', text: 'Unsupported.', evidence: [{ source_id: source.item.source_id, revision_id: source.revision.revision_id, span: { passage_id: 'p1', start: 0, end: 1, quote: 'x' } }] };
+    expect(() => assertCaptureDeriveOutputV1(output(selected, [fact]), selected)).toThrow(/outside/);
   });
 });

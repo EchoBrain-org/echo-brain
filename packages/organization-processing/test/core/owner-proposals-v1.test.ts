@@ -67,7 +67,6 @@ describe("owner proposals V1", () => {
   it("clears every proposed owner and leaves a brief without proposals byte-identical", () => {
     const plain = brief([action(0, null), action(1, null)]);
     expect(withoutProposedOwnersV1(plain)).toBe(plain);
-    expect(JSON.stringify(withoutProposedOwnersV1(plain))).toBe(JSON.stringify(plain));
 
     const proposed = brief([action(0, "Priya Shah"), action(1, null)]);
     const cleared = withoutProposedOwnersV1(proposed);
