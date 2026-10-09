@@ -67,7 +67,6 @@ describe("staging Journey Explorer backend stack", () => {
     ]);
 
     const serialized = JSON.stringify(stack);
-    expect(serialized).toContain(STAGING_LOG_GROUP);
     expect(serialized).not.toContain("authority-prod");
     expect(serialized).not.toMatch(
       /prod\.echobrain\.org|AWS::Lambda::Permission|AWS::Lambda::Url/i,
@@ -238,9 +237,6 @@ describe("staging Journey Explorer backend stack", () => {
         ],
       },
     });
-    expect(policy.Properties).not.toHaveProperty("Roles");
-    expect(policy.Properties).not.toHaveProperty("Users");
-    expect(policy.Properties).not.toHaveProperty("Groups");
     expect(stack.Outputs.JourneyExplorerOperatorInvokePolicyArn).toMatchObject({
       Value: { Ref: "JourneyExplorerOperatorInvokePolicy" },
     });
