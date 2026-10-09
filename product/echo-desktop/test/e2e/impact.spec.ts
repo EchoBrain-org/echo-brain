@@ -26,12 +26,20 @@ async function approveFromHome(page: Page) {
   return page.getByTestId('need-row');
 }
 
-async function approveMeeting(page: Page) {
-  const row = await approveFromHome(page);
-  // The check runs by itself; its row becomes Impact and opens the card.
-  await expect(row).toHaveAttribute('data-kind', 'impact', { timeout: 30_000 });
+/** The finished check's card: its Send row opens Tell the owners?, whose Details are the decision's page. */
+async function openImpactCard(page: Page) {
+  const row = page.getByTestId('need-row');
+  await expect(row).toHaveAttribute('data-kind', 'send', { timeout: 30_000 });
   await row.click();
+  await expect(page.getByRole('heading', { name: 'Tell the owners?' })).toBeVisible();
+  await page.getByTestId('send-details').click();
   return page.getByTestId('decision');
+}
+
+async function approveMeeting(page: Page) {
+  await approveFromHome(page);
+  // The check runs by itself; what it found waits on Home, to send to the owners.
+  return openImpactCard(page);
 }
 
 test('approving a meeting shows its impact card once the check finishes', async ({}, testInfo) => {
@@ -55,12 +63,16 @@ test('approving a meeting shows its impact card once the check finishes', async 
   await expect(impact).toContainText('Mina Patel · ECHO-12 · Pilot launch');
   await expect(impact.getByText('1 item you can no longer open is hidden.')).toBeVisible();
   // Only outside items open in their tool; ECHO's own records do not.
-  await expect(impact.getByRole('button', { name: /^Open in / })).toHaveCount(1);
+  await expect(impact.getByRole('button', { name: /^Open in / })).toHaveCount(2);
   await impact.getByRole('button', { name: 'Open in Jira' }).click();
   await expect.poll(() => app.evaluate(() => (globalThis as { openedTickets?: string[] }).openedTickets)).toEqual([permalink]);
   await impact.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('impact-card.png') });
-  expect(runOperations()).toEqual(expect.arrayContaining(['list', 'start', 'view']));
+  // The card is a page of its own: no Got it. Back returns to Tell the owners?, as it was.
+  await expect(page.getByRole('button', { name: 'Got it' })).toHaveCount(0);
+  await page.getByTestId('back').click();
+  await expect(page.getByRole('heading', { name: 'Tell the owners?' })).toBeVisible();
+  expect(runOperations()).toEqual(expect.arrayContaining(['list', 'start', 'home', 'items', 'view']));
   expect(runOperations().filter(operation => operation === 'start')).toHaveLength(1);
 });
 
@@ -70,16 +82,20 @@ test('a publishing approval stays on Home until its impact run arrives and finis
   await expect(row).toContainText('publishing to ECHO');
   await expect(row).toHaveAttribute('data-kind', 'checking');
   await expect(run.page.getByTestId('home-clear')).toHaveCount(0);
-  await expect(row).toHaveAttribute('data-kind', 'impact', { timeout: 30_000 });
-  await row.click();
+  await openImpactCard(run.page);
   await expect(run.page.getByRole('heading', { name: 'Affected items' })).toBeVisible();
   expect(runOperations().filter(operation => operation === 'start')).toHaveLength(1);
 });
 
 test('a failed check gives its reason and offers Try again', async () => {
   run = await launch('granola-run-failed');
-  const meetings = await approveMeeting(run.page);
-  const impact = meetings.getByRole('region', { name: 'Impact' });
+  const row = await approveFromHome(run.page);
+  // A check that did not finish waits on you: its row opens the reason.
+  await expect(row).toHaveAttribute('data-kind', 'failed', { timeout: 30_000 });
+  await expect(row).toContainText('Approved · the check did not finish');
+  await expect(run.page.getByTestId('sidebar-badge')).toHaveText('1');
+  await row.click();
+  const impact = run.page.getByTestId('decision').getByRole('region', { name: 'Impact' });
   await expect(impact.getByText('The impact check failed.')).toBeVisible({ timeout: 30_000 });
   await impact.getByRole('button', { name: 'Try again' }).click();
   await expect.poll(runOperations).toContain('retry');

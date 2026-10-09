@@ -50,7 +50,50 @@ interface Contract {
   validatePersonOpenRequestV1(value: unknown): { ref: string; cursor?: string };
   validatePersonOpenResponseV1(value: unknown): unknown;
   validatePersonAnswerRequestV3(value: unknown): { question: string; project_id?: string; mine?: true };
+  validatePersonRunsRequestV1(value: unknown): RunsRequest;
+  validatePersonRunsResultV1(operation: string, value: unknown): unknown;
 }
+
+/** A runs request, as the contract's validator returns it. */
+interface RunsRequest {
+  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; item_id?: string; command_id?: string;
+  state?: 'open' | 'done' | 'not_relevant'; owner_membership_id?: string;
+  items?: { item_id: string; include: boolean; owner_membership_id?: string }[];
+}
+
+/**
+ * One open item (open items and Home v1): an item a decision's impact check
+ * found, one shared row, as the Authority keeps it. Rows hold pointers and
+ * ECHO's own words; what an item says now is `current`, given only to a
+ * viewer who could open it.
+ */
+interface OpenItem {
+  item_id: string; run_id: string; kind: 'ticket' | 'page';
+  decision: { approval_id: string; record_sha256: string; title: string; first_line: string | null; approved_at: string; project_ids: string[] };
+  /** Ari can read its decision. */
+  readable: boolean;
+  /** What opening it live gives Ari; null when Ari cannot open it. */
+  current: Record<string, unknown> | null;
+  relation: 'conflicts' | 'needs_updating'; expected: string;
+  approver: { membership_id: string; name: string };
+  owner: { membership_id: string; name: string; match: 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned' };
+  state: 'unsent' | 'open' | 'done' | 'not_relevant';
+  created_at: string; sent_at: string | null; state_set_at: string | null;
+}
+
+/** The granola modes whose projects are the meeting's: Thermostat redesign (Ari leads it) and Supplier review. */
+const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-home-fails-once', 'granola-all']);
+const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
+const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
+/** Who an impact check names, besides Ari: fictional people of the organization. */
+const MINA = { membership_id: 'mem_77777777-7777-4777-8777-777777777777', name: 'Mina Patel' };
+const RAFAEL = { membership_id: 'mem_88888888-8888-4888-8888-888888888888', name: 'Rafael Moreno' };
+const OKAFOR = { membership_id: 'mem_99999999-9999-4999-8999-999999999999', name: 'S. Okafor' };
+/** Another meeting waiting for Ari's approval, beside Pilot planning: granola-all's whole Home. */
+const SUPPLIER_SYNC = {
+  approval_id: 'apr_' + 'b'.repeat(64), title: 'Supplier sync', project_ids: [SUPPLIER], status: 'pending', decided_on: null,
+  first_line: 'Lead time stays six weeks.', action_count: 1, meeting_at: '2026-10-02T15:00:00.000Z',
+};
 
 /**
  * A fake-only list page: ten rows, so the desktop's More is exercised
@@ -130,6 +173,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let granolaReview: Record<string, unknown> | undefined;
   // The impact check of the approved meeting: none until it is approved.
   let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; lists: number; retried: boolean } | null = null;
+  // The people a meeting's impact check names, to pick as owners.
+  if (mode.startsWith('granola')) desktop.people.push(...[MINA, RAFAEL, OKAFOR].map(person => ({ membership_id: person.membership_id, display_name: person.name })));
   // Thirteen people: the organization's directory comes in two pages.
   if (mode === 'many-people') {
     desktop.people.push(...Array.from({ length: 9 }, (_, index) => ({
@@ -344,7 +389,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   };
   /** Your projects, in the list's order, as the mode has them. */
   const listed = (): { project_id: string; name: string; role: 'lead' | 'member' }[] => {
-    if (mode === 'granola') return [
+    if (GRANOLA_PROJECTS.has(mode)) return [
       { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign', role: 'lead' },
       { project_id: 'prj_44444444-4444-4444-8444-444444444444', name: 'Supplier review', role: 'member' },
     ];
@@ -440,6 +485,78 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }));
   });
 
+  // Open items. Ari's own check of Pilot planning finds two once it is done;
+  // in the owner modes Mina has sent Ari items of hers already.
+  const ARI = { membership_id: session.membership_id, name: 'Ari' };
+  const PILOT_RUN = 'run_00000000-0000-4000-8000-000000000020';
+  const PILOT_RECORD = sha('record:Pilot planning');
+  const ticket = (key: string, title: string, id: string) => ({ kind: 'ticket', label: `${key} · ${title}`, visibility: 'only_me', citation: {
+    kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: id, permalink: `https://example.atlassian.net/browse/${key}`, text_sha256: sha(`${key}: ${title}`) } });
+  const PRD_PAGE = { kind: 'page', label: 'Thermostat PRD · Pilot scope', visibility: 'only_me', citation: {
+    kind: 'page', tool_id: 'confluence', external_scope_id: CONFLUENCE_CLOUD, page_id: '12345', section_id: 'pilot-scope', version: '7',
+    permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345', text_sha256: sha('Thermostat PRD: Pilot scope') } };
+  const openItems: OpenItem[] = [];
+  const minaSent = (item: Omit<OpenItem, 'approver' | 'state' | 'sent_at' | 'state_set_at'> & { sent_at: string | null }): OpenItem =>
+    ({ ...item, approver: MINA, state: item.sent_at === null ? 'unsent' : 'open', state_set_at: item.sent_at });
+  if (mode === 'granola-owner' || mode === 'granola-home-fails-once') {
+    openItems.push(minaSent({
+      item_id: 'itm_00000000-0000-4000-8000-000000000041', run_id: 'run_00000000-0000-4000-8000-000000000041', kind: 'ticket',
+      decision: { approval_id: 'apr_' + 'c'.repeat(64), record_sha256: sha('record:Pilot planning, approved by Mina'), title: 'Pilot planning',
+        first_line: 'Launch the pilot next week.', approved_at: '2026-10-06T18:00:00.000Z', project_ids: [THERMOSTAT] },
+      readable: true, current: { citation: ticket('ECHO-12', 'Pilot launch', '10012'), says_now: 'The pilot launch is planned for the end of the month.',
+        assignee: 'Ari', status: 'In Progress', due_at: '2026-10-30' },
+      relation: 'conflicts', expected: 'launch next week', owner: { ...ARI, match: 'jira_account' }, created_at: '2026-10-06T18:05:00.000Z', sent_at: '2026-10-06T19:00:00.000Z',
+    }));
+    // A ticket Ari cannot open, from a decision Ari cannot read: only Send told Ari of it. In
+    // granola-home-fails-once Mina sends it after Home's second read.
+    openItems.push(minaSent({
+      item_id: 'itm_00000000-0000-4000-8000-000000000042', run_id: 'run_00000000-0000-4000-8000-000000000042', kind: 'ticket',
+      decision: { approval_id: 'apr_' + 'd'.repeat(64), record_sha256: sha('record:Vendor review'), title: 'Vendor review',
+        first_line: 'Order with six weeks of lead time.', approved_at: '2026-10-05T15:00:00.000Z', project_ids: [SUPPLIER] },
+      readable: false, current: null, relation: 'conflicts', expected: 'order six weeks ahead', owner: { ...ARI, match: 'picked' },
+      created_at: '2026-10-05T15:05:00.000Z', sent_at: mode === 'granola-owner' ? '2026-10-05T16:00:00.000Z' : null,
+    }));
+  }
+  if (mode === 'granola-all') {
+    openItems.push(minaSent({
+      item_id: 'itm_00000000-0000-4000-8000-000000000043', run_id: 'run_00000000-0000-4000-8000-000000000043', kind: 'ticket',
+      decision: { approval_id: 'apr_' + 'e'.repeat(64), record_sha256: sha('record:Kickoff review'), title: 'Kickoff review',
+        first_line: 'Freeze the firmware after the pilot.', approved_at: '2026-10-03T15:00:00.000Z', project_ids: [THERMOSTAT] },
+      readable: true, current: { citation: ticket('ECHO-7', 'Firmware freeze', '10007'), says_now: 'The firmware freezes before the pilot.',
+        assignee: 'Ari', status: 'To Do', due_at: '2026-11-04' },
+      relation: 'conflicts', expected: 'freeze after the pilot', owner: { ...ARI, match: 'name' }, created_at: '2026-10-03T15:05:00.000Z', sent_at: '2026-10-03T16:00:00.000Z',
+    }));
+  }
+  /** What Ari's check of Pilot planning found, written once when it is done: unsent, with exact owners or Ari. */
+  const writeFound = () => {
+    if (granolaRun?.state !== 'done' || openItems.some(item => item.run_id === PILOT_RUN)) return;
+    const decision = { approval_id: 'apr_' + 'a'.repeat(64), record_sha256: PILOT_RECORD, title: 'Pilot planning', first_line: 'Launch the pilot next week.',
+      approved_at: '2026-10-07T10:00:00.000Z', project_ids: Array.isArray(granolaReview?.project_ids) ? [...granolaReview.project_ids as string[]] : [] };
+    const unsent = { run_id: PILOT_RUN, decision, readable: true, approver: ARI, state: 'unsent' as const, created_at: '2026-10-07T10:05:00.000Z', sent_at: null, state_set_at: null };
+    openItems.push(
+      { ...unsent, item_id: 'itm_00000000-0000-4000-8000-000000000031', kind: 'ticket', relation: 'conflicts', expected: 'launch next week',
+        current: { citation: ticket('ECHO-12', 'Pilot launch', '10012'), says_now: 'The pilot launch is planned for the end of the month.',
+          assignee: 'Mina Patel', status: 'In Progress', due_at: '2026-10-30' }, owner: { ...MINA, match: 'jira_account' } },
+      { ...unsent, item_id: 'itm_00000000-0000-4000-8000-000000000032', kind: 'page', relation: 'needs_updating', expected: 'pilot starts next week',
+        current: { citation: PRD_PAGE, says_now: 'starts after freeze' }, owner: { ...ARI, match: 'approver' } },
+    );
+  };
+  const mineAsOwner = (item: OpenItem) => item.owner.membership_id === ARI.membership_id;
+  const involved = (item: OpenItem) => item.approver.membership_id === ARI.membership_id || mineAsOwner(item);
+  /** Ari sees a row whose decision Ari can read, and an item sent to Ari as its owner. */
+  const visible = (item: OpenItem) => item.readable || (mineAsOwner(item) && item.state !== 'unsent');
+  /** A row rebuilt for Ari: the decision only for a reader, what it says now only when Ari could open it. */
+  const itemView = (item: OpenItem) => ({
+    item_id: item.item_id, run_id: item.run_id, kind: item.kind, ...(item.readable ? { decision: item.decision } : {}), ...(item.current ? { current: item.current } : {}),
+    relation: item.relation, expected: item.expected, approver: { ...item.approver, active: true }, owner: { ...item.owner, active: true },
+    waits_on: item.state === 'unsent' ? 'approver' : 'owner', state: item.state, created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at,
+    check: null, can: { set_state: item.state !== 'unsent' && involved(item), assign: involved(item) },
+  });
+  /** Send commands applied, by command id: a resend gets the same answer. */
+  const sends = new Map<string, { sent: number; not_relevant: number }>();
+  let homeReads = 0;
+  let supplierSync: 'pending' | 'approved' | 'rejected' = 'pending';
+
   // Your connections to the organization's tools, as Tools changes them.
   let slackLinked = true;
   let jiraLinked = false;
@@ -511,62 +628,180 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         case 'open': return json({ id: meetingId, title: 'Pilot planning', notes: 'Launch the pilot next week.', summary: 'Decision: launch.', truncated: false });
         case 'watch': granolaWatch = true; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
-        case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' ? [review] : [] });
-        case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.',
+        case 'reviews': return json({ reviews: [
+          ...(granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' ? [review] : []),
+          ...(mode === 'granola-all' ? [{ ...SUPPLIER_SYNC, status: supplierSync, decided_on: supplierSync === 'pending' ? null : 'desktop' }] : []),
+        ] });
+        case 'review_open': if (body?.approval_id === SUPPLIER_SYNC.approval_id) {
+          return json({ review: { ...SUPPLIER_SYNC, status: supplierSync, decided_on: supplierSync === 'pending' ? null : 'desktop' }, snapshot_sha256: 'sha256:' + 'c'.repeat(64),
+            content: 'Supplier sync\nDecisions\nLead time stays six weeks.', owners: [{ signal_id: 'act-1', action: 'Update the supplier contract', proposed: 'Rafael Moreno' }],
+            suggested_projects: [{ project_id: SUPPLIER, name: 'Supplier review' }] });
+        }
+          return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.',
           owners: [{ signal_id: 'act-1', action: 'Send the revised quote', proposed: 'Rafael Moreno' }, { signal_id: 'act-2', action: 'Confirm the trace', proposed: 'Mina Patel' }],
           suggested_projects: [{ project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign' }] });
-        case 'review': granolaReview = body; granolaApproved = true;
+        case 'review': if (body?.approval_id === SUPPLIER_SYNC.approval_id) {
+          supplierSync = body?.action === 'approve' ? 'approved' : 'rejected';
+          return json({ status: supplierSync, decided_on: 'desktop' });
+        }
+          granolaReview = body; granolaApproved = true;
           if (body?.action === 'approve' && granolaRun === null && mode !== 'granola-publishing') granolaRun = { state: 'pending', error_code: null, lists: 0, retried: false };
+          // The approved meeting: in the projects it was approved into, where its record opens.
+          if (body?.action === 'approve' && !meetings.some(meeting => meeting.record_sha256 === PILOT_RECORD)) {
+            const projectIds = Array.isArray(body.project_ids) ? body.project_ids as string[] : [];
+            meetings.push({
+              record_sha256: PILOT_RECORD, title: 'Pilot planning', added_at: '2026-10-07T10:00:00.000Z', meeting_date: '2026-10-06',
+              visibility: projectIds.length > 0 ? 'project' : 'only_me', project_ids: projectIds, approver: session.membership_id,
+              started_at: '2026-10-06T16:00:00.000Z', timezone: 'Europe/London', participants: ['Ari', 'Mina Patel', 'Rafael Moreno'], approved_by: 'Ari',
+              atoms: [{ kind: 'decision', text: 'Launch the pilot next week.' }, { kind: 'action', text: 'Send the revised quote', owner: 'Rafael Moreno' },
+                { kind: 'action', text: 'Confirm the trace', owner: 'Mina Patel' }],
+            });
+          }
           return json(mode === 'granola-decided-in-slack' ? { status: 'approved', decided_on: 'slack' } : { status: 'publishing', decided_on: 'desktop' });
       }
     }
     // Impact checks: approving queues one run; a start runs it, and the second
-    // list after that finds it done (in granola-run-failed, failed until Try again).
+    // list after that finds it done (in granola-run-failed, failed until Try
+    // again). A done check has found two open items. Every answer passes the
+    // contract's own result check, as the Authority's does.
     if (method === 'POST' && path === '/v1/person/runs' && mode.startsWith('granola')) {
-      const runId = 'run_00000000-0000-4000-8000-000000000020';
+      const api = await contract();
+      let request: RunsRequest;
+      try {
+        request = api.validatePersonRunsRequestV1(body);
+      } catch {
+        return failure('invalid_request', 400);
+      }
+      const runId = PILOT_RUN;
       // Real publication is asynchronous: the first post-approval list can have no run yet.
-      if (mode === 'granola-publishing' && granolaApproved && granolaRun === null && body?.operation === 'list' && ++granolaPublicationReads >= 2) {
+      if (mode === 'granola-publishing' && granolaApproved && granolaRun === null && request.operation === 'list' && ++granolaPublicationReads >= 2) {
         granolaRun = { state: 'pending', error_code: null, lists: 0, retried: false };
       }
       const run = granolaRun;
       const row = (value: NonNullable<typeof run>) => ({ run_id: runId, trigger: 'approved_record', event_ref: 'apr_' + 'a'.repeat(64), state: value.state,
         error_code: value.error_code, created_at: '2026-10-07T10:00:00.000Z', updated_at: '2026-10-07T10:05:00.000Z' });
-      switch (body?.operation) {
+      const result = (operation: string, value: unknown) => json(api.validatePersonRunsResultV1(operation, value));
+      const now = () => new Date().toISOString();
+      if (request.operation === 'list' && run?.state === 'running' && ++run.lists >= 2) {
+        Object.assign(run, mode === 'granola-run-failed' && !run.retried ? { state: 'failed', error_code: 'research_failed' } : { state: 'done' });
+      }
+      writeFound();
+      // Mina sends Ari another item after Home's second read.
+      if (mode === 'granola-home-fails-once' && request.operation === 'home' && homeReads === 2) {
+        const later = openItems.find(item => item.state === 'unsent' && item.approver.membership_id === MINA.membership_id);
+        if (later) Object.assign(later, { state: 'open', sent_at: now(), state_set_at: now() });
+      }
+      const shown = openItems.filter(visible).sort((a, b) => a.created_at.localeCompare(b.created_at));
+      switch (request.operation) {
         case 'list':
-          if (run?.state === 'running' && ++run.lists >= 2) {
-            Object.assign(run, mode === 'granola-run-failed' && !run.retried ? { state: 'failed', error_code: 'research_failed' } : { state: 'done' });
-          }
-          return json({ runs: run ? [row(run)] : [] });
+          return result('list', { runs: run ? [row(run)] : [] });
         case 'start':
-          if (!run || body.run_id !== runId) return failure('not_found', 404);
+          if (!run || request.run_id !== runId) return failure('not_found', 404);
           if (run.state === 'pending') Object.assign(run, { state: 'running', lists: 0 });
-          return json({ state: run.state });
+          return result('start', { state: run.state });
         case 'retry':
-          if (run?.state !== 'failed' || body.run_id !== runId) return failure('not_found', 404);
+          if (run?.state !== 'failed' || request.run_id !== runId) return failure('not_found', 404);
           Object.assign(run, { state: 'pending', error_code: null, retried: true });
-          return json({ state: 'pending' });
+          return result('retry', { state: 'pending' });
         case 'view': {
-          if (run?.state !== 'done' || body.run_id !== runId) return failure('not_found', 404);
+          if (run?.state !== 'done' || request.run_id !== runId) return failure('not_found', 404);
           const record = (record_sha256: string, label: string) => ({ kind: 'decision', label, visibility: 'only_me',
             citation: { kind: 'approved_record', atom_id: sha(`atom:${label}`), record_sha256, policy_id: 'restricted-reviewer-person-v2' } });
-          return json({ checked_at: '2026-10-07T10:05:00.000Z', hidden: 1, card: {
+          return result('view', { checked_at: '2026-10-07T10:05:00.000Z', hidden: 1, card: {
             status: 'assessed',
             decided: [{ text: 'Launch the pilot next week.', citation_index: 0 }],
             affected: [
-              { citation_index: 1, says_now: 'The pilot launch is planned for the end of the month.', relation: 'conflicts', owner: 'Mina Patel',
+              { citation_index: 1, says_now: 'The pilot launch is planned for the end of the month.', relation: 'conflicts', expected: 'launch next week', owner: 'Mina Patel',
                 date_at_risk: { date: '2026-10-30', milestone: 'Pilot launch' } },
+              { citation_index: 3, says_now: 'The pilot starts after the freeze.', relation: 'needs_updating', expected: 'pilot starts next week' },
               { citation_index: 2, says_now: 'The pricing review approved the pilot budget.', relation: 'confirms' },
             ],
             unconfirmed: ['No supplier contract for the pilot was found.'],
             people: [{ name: 'Mina Patel', items: [1] }],
-            citations: [
-              record(sha('record:Pilot planning'), 'Pilot planning'),
-              { kind: 'ticket', label: 'ECHO-12 · Pilot launch', visibility: 'only_me', citation: {
-                kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: '10012',
-                permalink: 'https://example.atlassian.net/browse/ECHO-12', text_sha256: sha('ECHO-12: Pilot launch') } },
-              record(PRICING_REVIEW, 'Pricing review'),
-            ],
+            citations: [record(PILOT_RECORD, 'Pilot planning'), ticket('ECHO-12', 'Pilot launch', '10012'), record(PRICING_REVIEW, 'Pricing review'), PRD_PAGE],
           } });
+        }
+        // Home: the Send row while Ari's check has items not sent, the open items that wait on
+        // Ari, and how many Ari sent wait on others. granola-home-fails-once fails the second read.
+        case 'home': {
+          homeReads += 1;
+          if (mode === 'granola-home-fails-once' && homeReads === 2) return failure('unavailable', 503);
+          const unsent = shown.filter(item => item.run_id === runId && item.state === 'unsent');
+          const send = run?.state === 'done' && unsent.length > 0 ? [{
+            run_id: runId, decision: unsent[0]!.decision, items: unsent.length, kinds: [...new Set(unsent.map(item => item.kind))],
+            owners: [...new Set(unsent.filter(item => !mineAsOwner(item)).map(item => item.owner.name))], finished_at: '2026-10-07T10:05:00.000Z',
+          }] : [];
+          const sentAt = (item: OpenItem) => item.sent_at ?? item.created_at;
+          return result('home', {
+            send, items: shown.filter(item => item.state === 'open' && mineAsOwner(item)).sort((a, b) => sentAt(a).localeCompare(sentAt(b))).map(itemView),
+            landed: 0, waiting: shown.filter(item => item.state === 'open' && item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
+            last_checked_at: null,
+          });
+        }
+        case 'items': {
+          const { scope, id } = request;
+          const items = shown.filter(item =>
+            scope === 'mine' ? involved(item) : scope === 'run' ? item.run_id === id
+              : scope === 'record' ? item.readable && item.decision.record_sha256 === id : item.readable && item.decision.project_ids.includes(id!));
+          const records = [...new Set(items.filter(item => item.readable).map(item => item.decision.record_sha256))];
+          const count = (state: OpenItem['state'], of = items) => of.filter(item => item.state === state).length;
+          // Each decision's check: Ari's own (whatever its stage), and Mina's, done.
+          const pilotProjects = Array.isArray(granolaReview?.project_ids) ? granolaReview.project_ids as string[] : [];
+          const pilot = run !== null && granolaApproved && (scope === 'mine' || (scope === 'run' && id === runId) || (scope === 'record' && id === PILOT_RECORD) ||
+            (scope === 'project' && pilotProjects.includes(id!)));
+          const stages = [
+            ...(pilot ? [{ record_sha256: PILOT_RECORD, run_id: runId, state: run.state, error_code: run.error_code }] : []),
+            ...records.filter(record => record !== PILOT_RECORD).map(record => ({
+              record_sha256: record, run_id: items.find(item => item.decision.record_sha256 === record)!.run_id, state: 'done', error_code: null })),
+          ];
+          return result('items', { items: items.map(itemView), next_cursor: null, stages, summary: {
+            unsent: count('unsent'), open: count('open'), done: count('done'), not_relevant: count('not_relevant'), landed: 0, changed: 0, unreadable: 0,
+            decisions: records.length, last_checked_at: null, by_decision: records.map(record => {
+              const of = items.filter(item => item.decision.record_sha256 === record);
+              return { record_sha256: record, unsent: count('unsent', of), open: count('open', of) };
+            }),
+          } });
+        }
+        case 'item': {
+          const item = shown.find(entry => entry.item_id === request.item_id);
+          return item ? result('item', { item: itemView(item) }) : failure('not_found', 404);
+        }
+        // Send: once per command; a card drawn before the items changed is refused, and nothing is written.
+        case 'send': {
+          if (run?.state !== 'done' || request.run_id !== runId) return failure('not_found', 404);
+          const earlier = sends.get(request.command_id!);
+          if (earlier) return result('send', earlier);
+          const unsent = openItems.filter(item => item.run_id === runId && item.state === 'unsent');
+          const asked = request.items ?? [];
+          if (asked.length !== unsent.length || !unsent.every(item => asked.some(entry => entry.item_id === item.item_id))) return failure('stale_access_state', 409);
+          if (asked.some(entry => entry.owner_membership_id !== undefined && !desktop.people.some(person => person.membership_id === entry.owner_membership_id))) {
+            return failure('invalid_request', 400);
+          }
+          const at = now();
+          for (const entry of asked) {
+            const item = unsent.find(candidate => candidate.item_id === entry.item_id)!;
+            if (entry.owner_membership_id !== undefined) item.owner = { membership_id: entry.owner_membership_id, name: nameOf(entry.owner_membership_id), match: 'picked' };
+            Object.assign(item, { state: entry.include ? 'open' : 'not_relevant', sent_at: at, state_set_at: at });
+          }
+          const sent = { sent: asked.filter(entry => entry.include).length, not_relevant: asked.filter(entry => !entry.include).length };
+          sends.set(request.command_id!, sent);
+          return result('send', sent);
+        }
+        // Done or Not relevant: only the approver or the owner, and only once it was sent.
+        case 'set_state': {
+          const item = shown.find(entry => entry.item_id === request.item_id && involved(entry));
+          if (!item) return failure('not_found', 404);
+          if (item.state === 'unsent') return failure('invalid_request', 400);
+          Object.assign(item, { state: request.state, state_set_at: now() });
+          return result('set_state', { state: request.state });
+        }
+        case 'assign': {
+          const item = shown.find(entry => entry.item_id === request.item_id && involved(entry));
+          const person = desktop.people.find(entry => entry.membership_id === request.owner_membership_id);
+          if (!item) return failure('not_found', 404);
+          if (!person) return failure('invalid_request', 400);
+          item.owner = { membership_id: person.membership_id, name: person.display_name, match: 'reassigned' };
+          return result('assign', { owner: { membership_id: person.membership_id, name: person.display_name, active: true } });
         }
       }
     }
