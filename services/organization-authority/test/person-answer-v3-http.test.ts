@@ -69,12 +69,8 @@ describe("Agentic Ask HTTP capability gate", () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError("unavailable", "Ask deadline exhausted"); });
     const value = await server({ application: { ask, searchEvidence: vi.fn(), openEvidence: vi.fn() } });
     try {
-      const response = await fetch(`${value.url}${PERSON_ANSWER_PATH_V3}`, {
-        method: "POST", headers: { authorization: "Bearer token", "content-type": "application/json" },
-        body: JSON.stringify({ schema_version: 3, question: "What changed?" }),
-      });
-      expect(response.status).toBe(503);
-      await expect(response.json()).resolves.toEqual({ error: { code: "unavailable", message: "request failed" } });
+      expect(await post(value.url, PERSON_ANSWER_PATH_V3, { schema_version: 3, question: "What changed?" }))
+        .toEqual({ status: 503, body: { error: { code: "unavailable", message: "request failed" } } });
       expect(ask).toHaveBeenCalledTimes(1);
     } finally { await value.close(); }
   });
@@ -86,11 +82,7 @@ describe("Agentic Ask HTTP capability gate", () => {
       expect(capabilities.status).toBe(200);
       await expect(capabilities.json()).resolves.toEqual({ schema_version: 1, kind: "echo-person-capabilities-v1", agentic_ask_v1: false });
       expect(value.sessions.authenticateAccess).toHaveBeenCalledWith({ access_token: "token" });
-      const ask = await fetch(`${value.url}${PERSON_ANSWER_PATH_V3}`, {
-        method: "POST", headers: { authorization: "Bearer token", "content-type": "application/json" },
-        body: JSON.stringify({ schema_version: 3, question: "What changed?" }),
-      });
-      expect(ask.status).toBe(503);
+      expect((await post(value.url, PERSON_ANSWER_PATH_V3, { schema_version: 3, question: "What changed?" })).status).toBe(503);
     } finally { await value.close(); }
   });
 
@@ -100,11 +92,7 @@ describe("Agentic Ask HTTP capability gate", () => {
       const capabilities = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`, { headers: { authorization: "Bearer token" } });
       await expect(capabilities.json()).resolves.toEqual({ schema_version: 1, kind: "echo-person-capabilities-v1", agentic_ask_v1: true });
       for (const path of RETIRED_ASK_PATHS) {
-        const retired = await fetch(`${value.url}${path}`, {
-          method: "POST", headers: { authorization: "Bearer token", "content-type": "application/json" },
-          body: JSON.stringify({ schema_version: 2, question: "What changed?" }),
-        });
-        expect(retired.status).toBe(404);
+        expect((await post(value.url, path, { schema_version: 2, question: "What changed?" })).status).toBe(404);
       }
     } finally { await value.close(); }
   });

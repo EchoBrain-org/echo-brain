@@ -52,27 +52,32 @@ function grantProjectMembership(
   `).run(id, projectId, actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type, PROJECT_CONTEXT_NOW);
 }
 
+/** A V2 upload (request version 3 for a projects audience); only a single-project audience sets audience_project_id. */
 function addUpload(
   database: Database.Database,
-  audience: 'only_me' | 'team' | 'project',
-  audienceProjectId: string | null = null,
+  audience: 'only_me' | 'team' | 'project' | 'projects',
+  projectIds: readonly string[] = [],
 ): void {
   database.prepare(`
     INSERT INTO authority_person_updates_v2
       (organization_id, principal_id, membership_id, membership_type, request_id, request_version, context_id, payload_sha256,
        title, text, audience_kind, audience_project_id, audience_project_ids_json, submitted_association_project_ids_json, project_id, received_at)
-    VALUES (?, ?, ?, ?, '00000000-0000-4000-8000-000000000001', 2, ?, 'sha256:${'a'.repeat(64)}',
+    VALUES (?, ?, ?, ?, '00000000-0000-4000-8000-000000000001', ${audience === 'projects' ? 3 : 2}, ?, 'sha256:${'a'.repeat(64)}',
             'Original', 'The original body is immutable.', ?, ?, ?, '[]', NULL, ?)
-  `).run(OWNER.organization_id, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type, CONTEXT, audience, audienceProjectId, audienceProjectId === null ? '[]' : JSON.stringify([audienceProjectId]), PROJECT_CONTEXT_NOW);
+  `).run(OWNER.organization_id, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type, CONTEXT, audience, audience === 'project' ? projectIds[0] : null, JSON.stringify(projectIds), PROJECT_CONTEXT_NOW);
 }
-function addProjectsAudienceUpload(database: Database.Database, projectIds: readonly string[]): void {
-  database.prepare(`
-    INSERT INTO authority_person_updates_v2
-      (organization_id, principal_id, membership_id, membership_type, request_id, request_version, context_id, payload_sha256,
-       title, text, audience_kind, audience_project_id, audience_project_ids_json, submitted_association_project_ids_json, project_id, received_at)
-    VALUES (?, ?, ?, ?, '00000000-0000-4000-8000-000000000001', 3, ?, 'sha256:${'a'.repeat(64)}',
-            'Original', 'The original body is immutable.', 'projects', NULL, ?, '[]', NULL, ?)
-  `).run(OWNER.organization_id, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type, CONTEXT, JSON.stringify(projectIds), PROJECT_CONTEXT_NOW);
+
+/** The owner's ALPHA project-audience upload with an active ALPHA grant, captured once. */
+function projectUpload() {
+  const database = open();
+  addProject(database); grantProjectMembership(database, PROJECT_ALPHA); addUpload(database, 'project', [PROJECT_ALPHA]);
+  const authorization = new SqliteProjectUploadEnrichmentAuthorizationV1(database);
+  return { database, authorization, snapshot: authorization.capture(CONTEXT)! };
+}
+
+function revokeGrant(database: Database.Database, projectId: string): void {
+  database.prepare("UPDATE authority_project_memberships_v1 SET status = 'revoked', revoked_at = ? WHERE project_id = ? AND membership_id = ?")
+    .run(PROJECT_CONTEXT_NOW, projectId, OWNER.membership_id);
 }
 
 function expectDenied(action: () => void): void {
@@ -85,44 +90,32 @@ describe('SQLite project upload enrichment authorization V1', () => {
     addProject(database, PROJECT_ALPHA); addProject(database, PROJECT_BETA);
     grantProjectMembership(database, PROJECT_ALPHA, OWNER, 'pgm_11111111-1111-4111-8111-111111111111');
     grantProjectMembership(database, PROJECT_BETA, OWNER, 'pgm_22222222-2222-4222-8222-222222222222');
-    addProjectsAudienceUpload(database, [PROJECT_ALPHA, PROJECT_BETA]);
+    addUpload(database, 'projects', [PROJECT_ALPHA, PROJECT_BETA]);
     const authorization = new SqliteProjectUploadEnrichmentAuthorizationV1(database);
     const snapshot = authorization.capture(CONTEXT)!;
     expect(snapshot).toMatchObject({ context_id: CONTEXT, uploader: OWNER });
-    database.prepare("UPDATE authority_project_memberships_v1 SET status = 'revoked', revoked_at = ? WHERE project_id = ? AND membership_id = ?")
-      .run(PROJECT_CONTEXT_NOW, PROJECT_BETA, OWNER.membership_id);
+    revokeGrant(database, PROJECT_BETA);
     expectDenied(() => authorization.assertCurrent(snapshot));
   });
   it('captures the active uploader tenure and exact project-audience grant', () => {
-    const database = open();
-    addProject(database); grantProjectMembership(database, PROJECT_ALPHA); addUpload(database, 'project', PROJECT_ALPHA);
-    const authorization = new SqliteProjectUploadEnrichmentAuthorizationV1(database);
-
-    const snapshot = authorization.capture(CONTEXT);
+    const { authorization, snapshot } = projectUpload();
     expect(snapshot).toMatchObject({ context_id: CONTEXT, uploader: OWNER });
-    expect(snapshot?.authorization_sha256).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(() => authorization.assertCurrent(snapshot!)).not.toThrow();
+    expect(snapshot.authorization_sha256).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(() => authorization.assertCurrent(snapshot)).not.toThrow();
   });
 
   it('fails closed when a project-audience grant is revoked after capture without changing the original', () => {
-    const database = open();
-    addProject(database); grantProjectMembership(database, PROJECT_ALPHA); addUpload(database, 'project', PROJECT_ALPHA);
-    const authorization = new SqliteProjectUploadEnrichmentAuthorizationV1(database);
-    const snapshot = authorization.capture(CONTEXT)!;
+    const { database, authorization, snapshot } = projectUpload();
     const original = database.prepare('SELECT text, audience_kind, audience_project_id FROM authority_person_updates_v2 WHERE context_id = ?').get(CONTEXT);
 
-    database.prepare(`UPDATE authority_project_memberships_v1 SET status = 'revoked', revoked_at = ? WHERE project_id = ? AND membership_id = ?`)
-      .run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, OWNER.membership_id);
+    revokeGrant(database, PROJECT_ALPHA);
     expect(authorization.capture(CONTEXT)).toBeUndefined();
     expectDenied(() => authorization.assertCurrent(snapshot));
     expect(database.prepare('SELECT text, audience_kind, audience_project_id FROM authority_person_updates_v2 WHERE context_id = ?').get(CONTEXT)).toEqual(original);
   });
 
   it('does not treat a same-principal rejoin as the uploader tenure or its project grant', () => {
-    const database = open();
-    addProject(database); grantProjectMembership(database, PROJECT_ALPHA); addUpload(database, 'project', PROJECT_ALPHA);
-    const authorization = new SqliteProjectUploadEnrichmentAuthorizationV1(database);
-    const snapshot = authorization.capture(CONTEXT)!;
+    const { database, authorization, snapshot } = projectUpload();
 
     revokeMembership(database, OWNER);
     addMembership(database, REJOINED_OWNER, 'Owner returned', null);
@@ -133,13 +126,9 @@ describe('SQLite project upload enrichment authorization V1', () => {
   });
 
   it('rejects a stale project grant even when the same uploader tenure is granted again', () => {
-    const database = open();
-    addProject(database); grantProjectMembership(database, PROJECT_ALPHA); addUpload(database, 'project', PROJECT_ALPHA);
-    const authorization = new SqliteProjectUploadEnrichmentAuthorizationV1(database);
-    const stale = authorization.capture(CONTEXT)!;
+    const { database, authorization, snapshot: stale } = projectUpload();
 
-    database.prepare(`UPDATE authority_project_memberships_v1 SET status = 'revoked', revoked_at = ? WHERE project_id = ? AND membership_id = ?`)
-      .run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, OWNER.membership_id);
+    revokeGrant(database, PROJECT_ALPHA);
     grantProjectMembership(database, PROJECT_ALPHA, OWNER, 'pgm_33333333-3333-4333-8333-333333333333');
 
     expectDenied(() => authorization.assertCurrent(stale));
@@ -147,10 +136,7 @@ describe('SQLite project upload enrichment authorization V1', () => {
   });
 
   it('does not invalidate an eligible project upload for an unrelated project-role change', () => {
-    const database = open();
-    addProject(database); grantProjectMembership(database, PROJECT_ALPHA); addUpload(database, 'project', PROJECT_ALPHA);
-    const authorization = new SqliteProjectUploadEnrichmentAuthorizationV1(database);
-    const snapshot = authorization.capture(CONTEXT)!;
+    const { database, authorization, snapshot } = projectUpload();
 
     database.prepare(`UPDATE authority_project_memberships_v1 SET role = 'lead' WHERE project_id = ? AND membership_id = ?`)
       .run(PROJECT_ALPHA, OWNER.membership_id);
@@ -158,10 +144,7 @@ describe('SQLite project upload enrichment authorization V1', () => {
   });
 
   it('freezes and issues snapshots, rejecting copies or forged identity/digest', () => {
-    const database = open();
-    addProject(database); grantProjectMembership(database, PROJECT_ALPHA); addUpload(database, 'project', PROJECT_ALPHA);
-    const authorization = new SqliteProjectUploadEnrichmentAuthorizationV1(database);
-    const snapshot = authorization.capture(CONTEXT)!;
+    const { authorization, snapshot } = projectUpload();
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot.uploader)).toBe(true);
     expect(() => { (snapshot.uploader as { membership_id: string }).membership_id = MEMBER.membership_id; }).toThrow();
@@ -186,8 +169,7 @@ describe('SQLite project upload enrichment authorization V1', () => {
         (context_id, project_id, organization_id, associator_principal_id, associator_membership_id, associator_membership_type, associated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(CONTEXT, PROJECT_BETA, OWNER.organization_id, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type, PROJECT_CONTEXT_NOW);
-    database.prepare(`UPDATE authority_project_memberships_v1 SET status = 'revoked', revoked_at = ? WHERE project_id = ? AND membership_id = ?`)
-      .run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, OWNER.membership_id);
+    revokeGrant(database, PROJECT_ALPHA);
 
     expect(() => authorization.assertCurrent(snapshot)).not.toThrow();
   });

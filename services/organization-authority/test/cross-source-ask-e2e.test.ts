@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
@@ -35,9 +35,9 @@ const AUTHORITY = 'https://authority.example.test';
 const EMAIL = 'cross-source@example.test';
 const OIDC = { issuer: 'https://issuer.example.test', client_id: 'cross-source-client', redirect_uri: `${AUTHORITY}/v2/session/oidc/callback`, tenant: { kind: 'issuer' as const }, id_token_algorithms: ['RS256'] };
 
-async function fixture() {
+async function fixture(owned = roots) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-cross-source-ask-')));
-  chmodSync(root, 0o700); roots.push(root);
+  chmodSync(root, 0o700); owned.push(root);
   const initialized = bootstrapOrganizationAuthorityState({ state_directory: join(root, 'state'), organization_display_name: 'Cross-source fixture', owner_display_name: 'Fixture Owner', created_at: new Date(Date.now() - 1000).toISOString(), creating_artifact_revision: 'cross-source-http-test' });
   const credentials = initializePersonSessionCredentials({ state_directory: initialized.state_directory });
   const key = readPrivateAuthorityPersonSessionPkceKey(credentials.pkce_sealing_key_reference);
@@ -59,13 +59,17 @@ async function fixture() {
   return { initialized, config, oidc, login };
 }
 
+function finishingModel() {
+  const generate = vi.fn(async () => ({ parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }));
+  return { generate, answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } } };
+}
+
 it('selects the Slack live runtime for authenticated Ask without inventing a disconnected grant', async () => {
   const f = await fixture();
   const source = vi.fn(async () => undefined);
   const close = vi.fn();
   const slack_live_runtime_factory = vi.fn(() => ({ application: { source }, close }));
-  const generate = vi.fn(async () => ({ parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }));
-  const dependencies = { oidc_provider: f.oidc, live_connectors: [{ ...SLACK_LIVE_CONNECTOR, open: slack_live_runtime_factory }], answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } } };
+  const dependencies = { oidc_provider: f.oidc, live_connectors: [{ ...SLACK_LIVE_CONNECTOR, open: slack_live_runtime_factory }], answer_composition_generation: finishingModel().answer_composition_generation };
   const runtime = await startOrganizationAuthorityApiRuntime(f.config, dependencies);
   try {
     const origin = `http://127.0.0.1:${runtime.address.port}`;
@@ -94,10 +98,7 @@ it('registers two page connectors through one lifecycle, catalog, HTTP and versi
       },
     }),
   }));
-  const generate = vi.fn(async () => ({ parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }));
-  const runtime = await startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, live_connectors,
-    answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } },
-  });
+  const runtime = await startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, live_connectors, answer_composition_generation: finishingModel().answer_composition_generation });
   try {
     const origin = `http://127.0.0.1:${runtime.address.port}`;
     const token = await f.login(origin);
@@ -123,22 +124,29 @@ it('registers two page connectors through one lifecycle, catalog, HTTP and versi
   for (const call of calls) expect(call.close).toHaveBeenCalledTimes(1);
 });
 
-it.each([{ version: 4, schema: 5, mine: false }, { version: 4, schema: 5, mine: true }, { version: 5, schema: 6, mine: false }, { version: 5, schema: 6, mine: true }])('serves V$version Ask with no live connectors (mine=$mine)', async ({ version, schema, mine }) => {
-  const f = await fixture();
-  const generate = vi.fn(async () => ({ parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }));
-  const runtime = await startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc,
-    answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } },
+describe('one runtime without live connectors', () => {
+  // Kept out of `roots`: the file-level afterEach would delete this live state directory after the first case.
+  const shared: string[] = [];
+  const { generate, answer_composition_generation } = finishingModel();
+  let runtime: Awaited<ReturnType<typeof startOrganizationAuthorityApiRuntime>> | undefined;
+  let origin = ''; let token = '';
+  beforeAll(async () => {
+    const f = await fixture(shared);
+    runtime = await startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, answer_composition_generation });
+    origin = `http://127.0.0.1:${runtime.address.port}`;
+    token = await f.login(origin);
   });
-  try {
-    const origin = `http://127.0.0.1:${runtime.address.port}`;
-    const token = await f.login(origin);
+  afterAll(async () => { await runtime?.close(); shared.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
+  beforeEach(() => { generate.mockClear(); });
+
+  it.each([{ version: 4, schema: 5, mine: false }, { version: 4, schema: 5, mine: true }, { version: 5, schema: 6, mine: false }, { version: 5, schema: 6, mine: true }])('serves V$version Ask with no live connectors (mine=$mine)', async ({ version, schema, mine }) => {
     const response = await fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ schema_version: 3, question: 'What changed?', ...(mine ? { mine: true } : {}) }),
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ schema_version: schema, scope: { kind: mine ? 'mine' : 'global' }, citations: [] });
     expect(generate).toHaveBeenCalled();
-  } finally { await runtime.close(); }
+  });
 });
 
 it('closes already opened connectors if a later registered connector fails to start', async () => {
@@ -225,10 +233,6 @@ async function allSourceFixture() {
     async close() { await runtime.close(); database.close(); } };
 }
 
-function hasRequiredSourceCoverage(answer: ReturnType<typeof validatePersonAnswerResponseV5>): boolean {
-  return ['decision', 'document_passage', 'ticket', 'slack_message'].every(kind => answer.citations.some(item => item.kind === kind));
-}
-
 it('answers one authenticated HTTP question from approved Granola records, a document, Jira and Slack with current audited citations', async () => {
   const f = await allSourceFixture();
   try {
@@ -236,7 +240,6 @@ it('answers one authenticated HTTP question from approved Granola records, a doc
     expect(response.status).toBe(200);
     const answer = validatePersonAnswerResponseV5(response.body);
     expect(answer.outcome).toBe('answered');
-    expect(hasRequiredSourceCoverage(answer)).toBe(true);
     expect(answer.citations.map(item => item.kind).sort()).toEqual(['decision', 'document_passage', 'slack_message', 'slack_message', 'ticket']);
     expect(answer.citations.map(item => item.citation.kind).sort()).toEqual(['approved_record', 'slack_message', 'slack_message', 'source_revision', 'ticket']);
     expect(answer.citations.find(item => item.kind === 'decision')?.citation).toMatchObject({ record_sha256: f.seeded.approved_record_sha256 });
@@ -271,7 +274,6 @@ it('omits a disconnected Slack source without provider calls or fabricated Slack
     expect(response.status).toBe(200);
     const answer = validatePersonAnswerResponseV5(response.body);
     expect(answer.citations.map(item => item.kind).sort()).toEqual(['decision', 'document_passage', 'ticket']);
-    expect(hasRequiredSourceCoverage(answer)).toBe(false);
     expect(f.live.slackRead).not.toHaveBeenCalled();
     expect(f.prompts.join('\n')).not.toContain(SLACK_TEXT);
     expect(f.generate).toHaveBeenCalledTimes(4);

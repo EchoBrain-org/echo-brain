@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
-import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonDocumentMetadataV1, validatePersonDocumentTextV1, validatePersonDocumentSearchResultV1, type PersonDocumentUploadMetadataV1 } from '@echo-brain/organization-api';
@@ -9,15 +8,12 @@ import { createPersonDocumentApplicationV1 } from '../src/application/document-v
 import { extractDocument } from '../src/adapters/documents/document-extraction.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
-import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, insertLegacyTextV1, revokeMembership } from './fixtures/project-context-sqlite.js';
+import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, insertLegacyTextV1, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
 const databases: Database.Database[]=[];
 afterEach(()=>databases.splice(0).forEach(d=>d.close()));
 function setup(){
- const db=new Database(':memory:');databases.push(db);db.pragma('foreign_keys=ON');db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v13.sql',import.meta.url),'utf8'));
- db.prepare(`INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES (1,'oau_documents',?,'Document fixture','{}',?,?)`).run(OWNER.organization_id,PROJECT_CONTEXT_NOW,PROJECT_CONTEXT_NOW);
- db.prepare(`INSERT INTO authority_project_authorization_state_v1(organization_id,revision,updated_at) VALUES (?,0,?)`).run(OWNER.organization_id,PROJECT_CONTEXT_NOW);
- addMembership(db,OWNER,'Owner',null);addMembership(db,MEMBER,'Member','member@example.test');
+ const db=projectContextDatabase();databases.push(db);
  for(const project of [PROJECT_ALPHA,PROJECT_BETA]){db.prepare(`INSERT INTO authority_projects_v1(project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type) VALUES (?,?,?,?,?,?,?)`).run(project,OWNER.organization_id,project,PROJECT_CONTEXT_NOW,OWNER.principal_id,OWNER.membership_id,OWNER.membership_type);grant(db,project,OWNER);}
  grant(db,PROJECT_ALPHA,MEMBER);
  let time=PROJECT_CONTEXT_NOW;
@@ -32,8 +28,8 @@ function result(claim:{source_sha256:string},text:string){return {status:'ready'
 describe('Document custody and retrieval V1',()=>{
  it('retains an ordinary >8KiB PRD, exact download, immutable receipt replay and paged end-of-document search',()=>{
   const {app,repository,db}=setup();const bytes=Buffer.from('SCOUT requirement '.repeat(1600)+'terminal-needle');const request=input(bytes);const receipt=app.upload('owner',request,bytes);
-  expect(app.upload('owner',request,bytes)).toEqual(receipt);expect(app.original('member',receipt.document_id).bytes).toEqual(bytes);
-  const claim=repository.claimExtraction()!;expect(claim.bytes).toEqual(bytes);const text=bytes.toString(),chunks=Array.from({length:Math.ceil(text.length/3072)},(_,index)=>({anchor_kind:'paragraph' as const,anchor_start:index+1,text:text.slice(index*3072,(index+1)*3072)}));expect(repository.completeExtraction(claim,{...result(claim,'x'),chunks})).toBe(true);
+  expect(app.upload('owner',request,bytes)).toEqual(receipt);expect(Buffer.from(app.original('member',receipt.document_id).bytes).equals(bytes)).toBe(true);
+  const claim=repository.claimExtraction()!;expect(Buffer.from(claim.bytes).equals(bytes)).toBe(true);const text=bytes.toString(),chunks=Array.from({length:Math.ceil(text.length/3072)},(_,index)=>({anchor_kind:'paragraph' as const,anchor_start:index+1,text:text.slice(index*3072,(index+1)*3072)}));expect(repository.completeExtraction(claim,{...result(claim,'x'),chunks})).toBe(true);
   const page=validatePersonDocumentTextV1(app.text('member',receipt.document_id));expect(page.next_cursor).not.toBeNull();let cursor=page.next_cursor,remaining='';while(cursor!==null){const next=app.text('member',receipt.document_id,{cursor});remaining+=next.chunks.map(c=>c.text).join('');cursor=next.next_cursor;}expect(remaining).toContain('terminal-needle');
   const found=validatePersonDocumentSearchResultV1(app.search('member',search(PROJECT_ALPHA,'terminal-needle')));expect(found.documents[0]?.document_id).toBe(receipt.document_id);expect(found.documents[0]?.anchor).toEqual({kind:'paragraph',start:chunks.length});expect(app.upload('owner',request,bytes)).toEqual(receipt);
   expect(()=>app.upload('owner',{...request,title:'changed'},bytes)).toThrow(expect.objectContaining({code:'conflict'}));

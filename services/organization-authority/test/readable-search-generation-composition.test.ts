@@ -122,13 +122,12 @@ describe("readable-search generation composition", () => {
         record_head_hash: null,
         published_at: "2026-08-22T12:01:00.000Z",
       });
-      const generations = readdirSync(
-        join(
-          initialized.state_directory,
-          "record-retrieval",
-          "generations",
-        ),
+      const generationsDirectory = join(
+        initialized.state_directory,
+        "record-retrieval",
+        "generations",
       );
+      const generations = readdirSync(generationsDirectory);
       expect(generations).toEqual([pointer.generation_id]);
 
       const active_generation = {
@@ -144,38 +143,23 @@ describe("readable-search generation composition", () => {
           record_sha256: null,
         },
       };
-      clearReadableSearchActiveGenerationV1();
-      expect(() =>
+      const restartSearch = () =>
         searchReadableSearchGenerationV1({
           state_directory: initialized.state_directory,
           active_generation,
           reader: { principal_id: "restart", membership_id: "restart" },
           query: "restart",
-        }),
-      ).toThrow("active-generation handle is unavailable");
+        });
+      clearReadableSearchActiveGenerationV1();
+      expect(restartSearch).toThrow("active-generation handle is unavailable");
       expect(
         await reconciler.reconcile(new AbortController().signal),
       ).toMatchObject({
         status: "current",
         record_head: { position: 0, record_sha256: null },
       });
-      expect(
-        searchReadableSearchGenerationV1({
-          state_directory: initialized.state_directory,
-          active_generation,
-          reader: { principal_id: "restart", membership_id: "restart" },
-          query: "restart",
-        }).items,
-      ).toEqual([]);
-      expect(
-        readdirSync(
-          join(
-            initialized.state_directory,
-            "record-retrieval",
-            "generations",
-          ),
-        ),
-      ).toEqual(generations);
+      expect(restartSearch().items).toEqual([]);
+      expect(readdirSync(generationsDirectory)).toEqual(generations);
 
       const restartVerification = verifyAuthorityStateLineage(
         initialized.state_directory,
@@ -201,20 +185,30 @@ describe("related-atom snapshot projection", () => {
     timeout_ms: 1_000,
   });
 
-  function projectionSnapshot() {
+  /** The shared readable decision-atom literal; each test supplies identity, provenance and text. */
+  function decisionAtom(record_position: number, fields: {
+    readonly atom_id: Sha256Digest; readonly record_sha256: Sha256Digest; readonly text: string;
+    readonly reviewer_principal_id?: string | null; readonly reviewer_membership_id?: string | null;
+  }) {
     return {
-      record_head: { position: 2, record_sha256: digest("c") },
-      source_snapshot: {
-        atoms: [1, 2].map((position) => ({
-          authority_id: "authority", organization_id: "organization", state_lineage_id: "lineage",
-          atom_id: digest(String(position)), record_sha256: digest(position === 1 ? "b" : "c"),
-          record_position: position, atom_order: 0, item_kind: "decision",
-          text: `approved condition number ${position}`,
-          policy_id: "organization-member-readable-person-v2", policy_contract_sha256: digest("a"),
-          reviewer_principal_id: null, reviewer_membership_id: null,
-        })),
-      },
-    } as unknown as Parameters<typeof projectSnapshotRelatedAtomsV1>[0]["snapshot"];
+      record_position, atom_order: 0, item_kind: "decision",
+      policy_id: "organization-member-readable-person-v2", policy_contract_sha256: digest("a"),
+      reviewer_principal_id: null, reviewer_membership_id: null, ...fields,
+    };
+  }
+
+  function snapshotOf(atoms: readonly object[], record_head: { readonly position: number; readonly record_sha256: Sha256Digest }) {
+    return { record_head, source_snapshot: { atoms } } as unknown as Parameters<typeof projectSnapshotRelatedAtomsV1>[0]["snapshot"];
+  }
+
+  function projectionSnapshot() {
+    return snapshotOf([1, 2].map((position) => ({
+      authority_id: "authority", organization_id: "organization", state_lineage_id: "lineage",
+      ...decisionAtom(position, {
+        atom_id: digest(String(position)), record_sha256: digest(position === 1 ? "b" : "c"),
+        text: `approved condition number ${position}`,
+      }),
+    })), { position: 2, record_sha256: digest("c") });
   }
 
   function relatedResponse(input: { readonly user_prompt: string }) {
@@ -355,21 +349,7 @@ describe("related-atom snapshot projection", () => {
     const structured_output = {
       generate: async (input: { readonly user_prompt: string }) => {
         projectorCalls += 1;
-        const atoms = (
-          JSON.parse(input.user_prompt) as {
-            readonly atoms: readonly { readonly atom_id: string; readonly text: string }[];
-          }
-        ).atoms;
-        return {
-          relationships: [
-            {
-              left_atom_id: atoms[0]!.atom_id,
-              right_atom_id: atoms[1]!.atom_id,
-              left_supporting_excerpt: atoms[0]!.text,
-              right_supporting_excerpt: atoms[1]!.text,
-            },
-          ],
-        };
+        return relatedResponse(input);
       },
     };
     const atom = (
@@ -379,53 +359,40 @@ describe("related-atom snapshot projection", () => {
       reviewer_principal_id: string | null,
       reviewer_membership_id: string | null,
     ) =>
-      Object.freeze({
-        atom_id,
-        record_sha256,
-        record_position: Number.parseInt(atom_id.slice(-1), 16),
-        atom_order: 0,
-        text,
-        item_kind: "decision",
-        policy_id: "organization-member-readable-person-v2",
-        policy_contract_sha256: digest("a"),
-        reviewer_principal_id,
-        reviewer_membership_id,
-      });
-    const snapshot = {
-      record_head: { position: 5, record_sha256: digest("f") },
-      source_snapshot: {
-        atoms: [
-          atom(first, digest("b"), "first public condition", null, null),
-          atom(second, digest("c"), "second public condition", null, null),
-          {
-            ...atom(third, digest("d"), "first private condition", "p1", "m1"),
-            policy_id: "restricted-reviewer-person-v2",
-            policy_contract_sha256: digest("8"),
-          },
-          {
-            ...atom(fourth, digest("e"), "second private condition", "p1", "m1"),
-            policy_id: "restricted-reviewer-person-v2",
-            policy_contract_sha256: digest("8"),
-          },
-          {
-            ...atom(fifth, digest("d"), "first second-reviewer condition", "p2", "m2"),
-            policy_id: "restricted-reviewer-person-v2",
-            policy_contract_sha256: digest("8"),
-          },
-          {
-            ...atom(sixth, digest("e"), "second second-reviewer condition", "p2", "m2"),
-            policy_id: "restricted-reviewer-person-v2",
-            policy_contract_sha256: digest("8"),
-          },
-          {
-            ...atom(single, digest("b"), "single-record segment", null, null),
-            policy_contract_sha256: digest("9"),
-          },
-        ],
-      },
-    } as unknown as Parameters<
-      typeof projectSnapshotRelatedAtomsV1
-    >[0]["snapshot"];
+      Object.freeze(decisionAtom(Number.parseInt(atom_id.slice(-1), 16), {
+        atom_id, record_sha256, text, reviewer_principal_id, reviewer_membership_id,
+      }));
+    const snapshot = snapshotOf(
+      [
+        atom(first, digest("b"), "first public condition", null, null),
+        atom(second, digest("c"), "second public condition", null, null),
+        {
+          ...atom(third, digest("d"), "first private condition", "p1", "m1"),
+          policy_id: "restricted-reviewer-person-v2",
+          policy_contract_sha256: digest("8"),
+        },
+        {
+          ...atom(fourth, digest("e"), "second private condition", "p1", "m1"),
+          policy_id: "restricted-reviewer-person-v2",
+          policy_contract_sha256: digest("8"),
+        },
+        {
+          ...atom(fifth, digest("d"), "first second-reviewer condition", "p2", "m2"),
+          policy_id: "restricted-reviewer-person-v2",
+          policy_contract_sha256: digest("8"),
+        },
+        {
+          ...atom(sixth, digest("e"), "second second-reviewer condition", "p2", "m2"),
+          policy_id: "restricted-reviewer-person-v2",
+          policy_contract_sha256: digest("8"),
+        },
+        {
+          ...atom(single, digest("b"), "single-record segment", null, null),
+          policy_contract_sha256: digest("9"),
+        },
+      ],
+      { position: 5, record_sha256: digest("f") },
+    );
 
     const result = await projectSnapshotRelatedAtomsV1({
       snapshot,
@@ -457,30 +424,17 @@ describe("related-atom snapshot projection", () => {
 
   it("projects only the newest deterministic 200-atom window without dropping lexical input", async () => {
     const seen: string[][] = [];
-    const snapshot = {
-      record_head: { position: 201, record_sha256: digest("f") },
-      source_snapshot: {
-        atoms: Array.from({ length: 201 }, (_, index) => {
-          const position = index + 1;
-          const atomId =
-            `sha256:${position.toString(16).padStart(64, "0")}` as Sha256Digest;
-          return {
-            atom_id: atomId,
-            record_sha256: digest(position % 2 === 0 ? "b" : "c"),
-            record_position: position,
-            atom_order: 0,
-            text: `condition ${position}`,
-            item_kind: "decision",
-            policy_id: "organization-member-readable-person-v2",
-            policy_contract_sha256: digest("a"),
-            reviewer_principal_id: null,
-            reviewer_membership_id: null,
-          };
-        }),
-      },
-    } as unknown as Parameters<
-      typeof projectSnapshotRelatedAtomsV1
-    >[0]["snapshot"];
+    const snapshot = snapshotOf(
+      Array.from({ length: 201 }, (_, index) => {
+        const position = index + 1;
+        return decisionAtom(position, {
+          atom_id: `sha256:${position.toString(16).padStart(64, "0")}` as Sha256Digest,
+          record_sha256: digest(position % 2 === 0 ? "b" : "c"),
+          text: `condition ${position}`,
+        });
+      }),
+      { position: 201, record_sha256: digest("f") },
+    );
 
     const result = await projectSnapshotRelatedAtomsV1({
       snapshot,
@@ -514,26 +468,14 @@ describe("related-atom snapshot projection", () => {
   });
 
   it("does not call the projector when newest atoms exceed its text window before two records fit", async () => {
-    const snapshot = {
-      record_head: { position: 3, record_sha256: digest("f") },
-      source_snapshot: {
-        atoms: [3, 2, 1].map((position) => ({
-          atom_id:
-            `sha256:${position.toString(16).padStart(64, "0")}` as Sha256Digest,
-          record_sha256: digest(position % 2 === 0 ? "b" : "c"),
-          record_position: position,
-          atom_order: 0,
-          text: "x".repeat(100_000),
-          item_kind: "decision",
-          policy_id: "organization-member-readable-person-v2",
-          policy_contract_sha256: digest("a"),
-          reviewer_principal_id: null,
-          reviewer_membership_id: null,
-        })),
-      },
-    } as unknown as Parameters<
-      typeof projectSnapshotRelatedAtomsV1
-    >[0]["snapshot"];
+    const snapshot = snapshotOf(
+      [3, 2, 1].map((position) => decisionAtom(position, {
+        atom_id: `sha256:${position.toString(16).padStart(64, "0")}` as Sha256Digest,
+        record_sha256: digest(position % 2 === 0 ? "b" : "c"),
+        text: "x".repeat(100_000),
+      })),
+      { position: 3, record_sha256: digest("f") },
+    );
     let calls = 0;
 
     const result = await projectSnapshotRelatedAtomsV1({
