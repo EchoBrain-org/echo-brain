@@ -42,6 +42,22 @@ const SESSION = {
 
 const AUTHORITY_ID = id("oau", "000000000006");
 
+const INVITATION_V1 = {
+  schema_version: 1,
+  kind: "echo-person-onboarding-invitation",
+  authority_url: "https://authority.example",
+  login_grant: "G".repeat(43),
+  expires_at: "2026-08-21T00:15:00.000Z",
+} as const;
+
+/** The rotation a refresh of SESSION installs. */
+const NEXT = {
+  ...SESSION,
+  access_token: "B".repeat(43),
+  refresh_token: "S".repeat(43),
+  access_expires_at: "2026-08-18T12:10:00.000Z",
+};
+
 function withHome(run: (home: string) => void): void {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "echo-person-")));
   try {
@@ -75,25 +91,19 @@ describe("Person session store", () => {
   it("accepts exact v1 and v2 invitation shapes, never an additive v1 extension", () => {
     withHome((home) => {
       const path = join(home, "person-onboarding.json");
-      const base = {
-        kind: "echo-person-onboarding-invitation",
-        authority_url: "https://authority.example",
-        login_grant: "G".repeat(43),
-        expires_at: "2026-08-21T00:15:00.000Z",
-      } as const;
       const write = (value: object) => {
         writeFileSync(path, `${canonicalJson(value)}\n`, { mode: 0o600 });
         chmodSync(path, 0o600);
       };
 
-      write({ ...base, schema_version: 1 });
+      write(INVITATION_V1);
       expect(readPersonOnboardingInvitation(path)).toMatchObject({
         schema_version: 1,
-        login_grant: base.login_grant,
+        login_grant: INVITATION_V1.login_grant,
       });
 
       write({
-        ...base,
+        ...INVITATION_V1,
         schema_version: 2,
         expected_email: "founder@example.com",
       });
@@ -102,60 +112,20 @@ describe("Person session store", () => {
         expected_email: "founder@example.com",
       });
 
-      write({
-        ...base,
-        schema_version: 1,
-        expected_email: "founder@example.com",
-      });
-      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
-
-      write({ ...base, schema_version: 2 });
-      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
-
-      write({
-        ...base,
-        schema_version: 2,
-        expected_email: "Founder@example.com",
-      });
-      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
-
-      write({
-        ...base,
-        schema_version: 2,
-        expected_email: "founder;$(id)@example.com",
-      });
-      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
-
-      write({
-        ...base,
-        schema_version: 2,
-        expected_email: "founder@localhost",
-      });
-      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
-
-      write({
-        ...base,
-        schema_version: 2,
-        expected_email: "founder@example",
-      });
-      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
-
-      write({
-        ...base,
-        schema_version: 2,
-        expected_email: `${"a".repeat(65)}@example.com`,
-      });
-      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
-
-      write({
-        ...base,
-        schema_version: 2,
-        expected_email: `a@${"a".repeat(64)}.com`,
-      });
-      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
-
-      write({ ...base, schema_version: 1, unexpected: true });
-      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
+      for (const invalid of [
+        { schema_version: 1, expected_email: "founder@example.com" },
+        { schema_version: 2 },
+        { schema_version: 2, expected_email: "Founder@example.com" },
+        { schema_version: 2, expected_email: "founder;$(id)@example.com" },
+        { schema_version: 2, expected_email: "founder@localhost" },
+        { schema_version: 2, expected_email: "founder@example" },
+        { schema_version: 2, expected_email: `${"a".repeat(65)}@example.com` },
+        { schema_version: 2, expected_email: `a@${"a".repeat(64)}.com` },
+        { schema_version: 1, unexpected: true },
+      ]) {
+        write({ ...INVITATION_V1, ...invalid });
+        expect(() => readPersonOnboardingInvitation(path), JSON.stringify(invalid)).toThrow("invalid");
+      }
     });
   });
 
@@ -165,15 +135,7 @@ describe("Person session store", () => {
       const existing = "existing bytes must survive\n";
       writeFileSync(path, existing, { mode: 0o600 });
       chmodSync(path, 0o600);
-      expect(() =>
-        writePersonOnboardingInvitation(path, {
-          schema_version: 1,
-          kind: "echo-person-onboarding-invitation",
-          authority_url: "https://authority.example",
-          login_grant: "G".repeat(43),
-          expires_at: "2026-08-21T00:15:00.000Z",
-        }),
-      ).toThrow();
+      expect(() => writePersonOnboardingInvitation(path, INVITATION_V1)).toThrow();
       expect(readFileSync(path, "utf8")).toBe(existing);
       expect(lstatSync(path).mode & 0o777).toBe(0o600);
     });
@@ -192,15 +154,9 @@ describe("Person session store", () => {
       expect(preflightPersonOnboardingInvitationOutput(aliasPath)).toBe(
         canonicalPath,
       );
-      writePersonOnboardingInvitation(aliasPath, {
-        schema_version: 1,
-        kind: "echo-person-onboarding-invitation",
-        authority_url: "https://authority.example",
-        login_grant: "G".repeat(43),
-        expires_at: "2026-08-21T00:15:00.000Z",
-      });
+      writePersonOnboardingInvitation(aliasPath, INVITATION_V1);
       expect(readPersonOnboardingInvitation(aliasPath)).toMatchObject({
-        login_grant: "G".repeat(43),
+        login_grant: INVITATION_V1.login_grant,
       });
 
       const leafAlias = join(parentAlias, "leaf-alias.json");
@@ -240,14 +196,8 @@ describe("Person session store", () => {
       expect(() => store.read()).toThrow(PersonClientSessionUnavailableError);
       expect(() => store.claimRefresh()).toThrow(/already claimed/);
 
-      const next = {
-        ...SESSION,
-        access_token: "B".repeat(43),
-        refresh_token: "S".repeat(43),
-        access_expires_at: "2026-08-18T12:10:00.000Z",
-      };
-      store.completeRefresh(claimed, next);
-      expect(store.read().session).toEqual(next);
+      store.completeRefresh(claimed, NEXT);
+      expect(store.read().session).toEqual(NEXT);
     });
   });
 
@@ -264,14 +214,7 @@ describe("Person session store", () => {
       };
       store.install("https://authority.example", AUTHORITY_ID, installed);
 
-      expect(() =>
-        store.completeRefresh(claimed, {
-          ...SESSION,
-          access_token: "B".repeat(43),
-          refresh_token: "S".repeat(43),
-          access_expires_at: "2026-08-18T12:10:00.000Z",
-        }),
-      ).toThrow(/stale completion/);
+      expect(() => store.completeRefresh(claimed, NEXT)).toThrow(/stale completion/);
       // A stale release leaves a newer claim alone; the newer one restores.
       const newer = store.claimRefresh();
       store.releaseRefresh(claimed, false);
@@ -321,16 +264,12 @@ describe("Person session store recovery", () => {
     return store;
   }
 
-  it("reports a session written by an older release as unavailable", () => {
+  it.each([
+    ["a session written by an older release", LEGACY_STORE],
+    ["a truncated session file", '{"schema_version":1,"kind":"echo-per'],
+  ])("reports %s as unavailable", (_name, contents) => {
     withHome((home) => {
-      const store = plantStore(home, LEGACY_STORE);
-      expect(() => store.read()).toThrow(PersonClientSessionUnavailableError);
-    });
-  });
-
-  it("reports a truncated session file as unavailable", () => {
-    withHome((home) => {
-      const store = plantStore(home, '{"schema_version":1,"kind":"echo-per');
+      const store = plantStore(home, contents);
       expect(() => store.read()).toThrow(PersonClientSessionUnavailableError);
     });
   });
