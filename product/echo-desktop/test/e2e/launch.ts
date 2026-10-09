@@ -22,7 +22,11 @@ export async function launch(mode = ''): Promise<Launched> {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-desktop-home-')));
   const userData = mkdtempSync(join(tmpdir(), 'echo-desktop-data-'));
   const app = await electron.launch({
-    args: [join(root, 'build', 'main.cjs')],
+    args: [
+      // Hidden Linux windows otherwise delay Playwright's frame-based stability checks.
+      ...(process.platform === 'linux' ? ['--disable-frame-rate-limit'] : []),
+      join(root, 'build', 'main.cjs'),
+    ],
     env: {
       ...process.env,
       ECHO_HOME: home,
