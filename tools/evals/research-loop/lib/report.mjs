@@ -222,7 +222,7 @@ export function markdownReport(identity, report) {
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ...rendered.map(entry => `| ${entry.case_id} | ${entry.trigger} | ${entry.budget} | ${percent(entry.writer_parts_correct)} | ${percent(entry.card_items_listed)} | ${percent(entry.card_relations_correct)} | ${percent(entry.card_owners_correct)} | ${number(entry.card_invented)} |`),
     "",
-    "Sweep verdicts against the key: landed is landed, still open or changed is not landed, unreadable is no evidence. A verdict not assessed (null) is wrong, and so is every finding of a failed run.",
+    "The sweep result's own verdicts, checked by code against the key: landed is landed, still open or changed is not landed, unreadable is no evidence. A verdict not assessed (null) is wrong, and so is every finding of a failed run. \"Sweep verdicts correct\" under Research loop is a different measure: the judge's reading of the items research read.",
     "",
     "| Case | Budget | Runs | Verdicts right / findings | Not assessed |",
     "| --- | --- | --- | --- | --- |",

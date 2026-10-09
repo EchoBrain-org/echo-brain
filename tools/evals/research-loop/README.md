@@ -38,7 +38,10 @@ Sweep baselines must be taken after the change: their task text changed, and
 approved-record runs now return the impact card (a saved approved-record run
 without one is graded as failed). Sweep runs now also return the sweep result,
 and the judge sees it; a saved Sweep run without one is graded as failed, so
-take Sweep baselines on an endpoint that returns it.
+take Sweep baselines on an endpoint that returns it. A run graded as failed
+for a missing result is still scanned for restricted leaks, so regrading an
+older approved-record run without its card can report a leak that grading
+used to hide (it counts in "runs with restricted leaks").
 
 A case whose start request cannot be built (a meeting not bound, or a finding
 that cites only a transcript, which cannot start research in v1) is saved as a

@@ -95,6 +95,8 @@ export function datasetProblems(dataset) {
       if (!Array.isArray(entry.findings) || entry.findings.length === 0) problems.push(`${where}: Sweep needs findings`);
       for (const finding of entry.findings ?? []) for (const ref of finding.citations ?? []) problems.push(...refProblems(ref, meetings, `${where} finding`));
       if (!Array.isArray(entry.verdicts) || entry.verdicts.length !== (entry.findings ?? []).length || entry.verdicts.some(verdict => !VERDICTS.has(verdict.expected))) problems.push(`${where}: Sweep needs one valid verdict per finding`);
+      // A sweep result is graded by finding_index, so verdict i must be finding i's.
+      else if (entry.verdicts.some((verdict, index) => verdict.finding !== entry.findings[index]?.finding)) problems.push(`${where}: each Sweep verdict must name its own finding, in the findings' order`);
     }
     if (entry.trigger !== "sweep" && entry.state !== "S0") problems.push(`${where}: only Sweeps run at S1`);
     if (!Array.isArray(entry.parts) || (entry.parts.length === 0 && entry.expected_outcome !== "not_found")) problems.push(`${where}: parts are required unless nothing should be found`);

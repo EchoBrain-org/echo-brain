@@ -17,15 +17,23 @@ export function codeChecks(testCase, run, dataset) {
     return { ...base, status: run.outcome === "rejected" ? "rejected_at_ingress" : "failed", error: run.error ?? run.result?.error ?? null, ...nothing };
   }
   const rendered = run.result.rendered ?? null;
-  // An approved record's result is its card, a sweep's its sweep result: a run without one delivered nothing to grade (it predates the rendering endpoint).
-  if (rendered === null && (testCase.trigger === "approved_record" || testCase.trigger === "sweep")) {
-    const missing = testCase.trigger === "sweep" ? "sweep runs must return the sweep result" : "approved-record runs must return the impact card";
-    return { ...base, status: "failed", error: { code: "no_rendered_result", message: `${missing}; run them again on the current endpoint` }, ...nothing };
-  }
-  const card = testCase.trigger === "approved_record" ? rendered : null;
   const research = run.result.research;
   const items = research.items;
   const ask = run.result.ask ?? null;
+  // Leaks first: whatever else a completed run lacks, it released what research returned.
+  const leaks = [];
+  for (const ref of testCase.never_appears ?? []) {
+    for (const item of matching(items, ref, meetings)) leaks.push({ kind: "item", ref, item_id: item.id, title: item.title });
+  }
+  // The goal is the case's own text; everything else in the run came from research or a renderer (the card, or a sweep's lines and citations).
+  const scanned = JSON.stringify({ research: { ...research, goal: undefined }, ask, rendered });
+  for (const marker of leakMarkers(dataset.additions)) if (scanned.toLowerCase().includes(marker.toLowerCase())) leaks.push({ kind: "marker", marker });
+  // An approved record's result is its card, a sweep's its sweep result: a run without one delivered nothing to grade (it predates the rendering endpoint), but its leaks count.
+  if (rendered === null && (testCase.trigger === "approved_record" || testCase.trigger === "sweep")) {
+    const missing = testCase.trigger === "sweep" ? "sweep runs must return the sweep result" : "approved-record runs must return the impact card";
+    return { ...base, status: "failed", error: { code: "no_rendered_result", message: `${missing}; run them again on the current endpoint` }, ...nothing, leaks };
+  }
+  const card = testCase.trigger === "approved_record" ? rendered : null;
   const handedIds = new Set(testCase.trigger === "ask" ? ask?.writer_evidence ?? [] : items.filter(item => item.cited_by_plan).map(item => item.id));
   const parts = testCase.parts.map(part => {
     // Found: research discovered a supporting item (a page counts once discovered).
@@ -42,13 +50,6 @@ export function codeChecks(testCase, run, dataset) {
     };
   });
   const supportingIds = new Set(parts.flatMap(part => part.item_ids));
-  const leaks = [];
-  for (const ref of testCase.never_appears ?? []) {
-    for (const item of matching(items, ref, meetings)) leaks.push({ kind: "item", ref, item_id: item.id, title: item.title });
-  }
-  // The goal is the case's own text; everything else in the run came from research or a renderer (the card, or a sweep's lines and citations).
-  const scanned = JSON.stringify({ research: { ...research, goal: undefined }, ask, rendered });
-  for (const marker of leakMarkers(dataset.additions)) if (scanned.toLowerCase().includes(marker.toLowerCase())) leaks.push({ kind: "marker", marker });
   const distractorItems = items.filter(item => (testCase.distractors ?? []).some(ref => itemMatches(item, ref, meetings)));
   const noise = [...handedIds].filter(id => !supportingIds.has(id));
   const answer = ask?.response ?? null;

@@ -18,11 +18,11 @@ import { privateDirectory } from "../lib/private-files.mjs";
 const dataset = loadDataset();
 const meetings = new Map(dataset.additions.meetings.map(meeting => [meeting.id, meeting]));
 const titleOf = id => meetings.get(id).title;
+const digest = value => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 const ticket = (key, options = {}) => ({ id: options.id ?? "E1", source: "tickets", kind: "ticket", title: `${key}: Work item`,
-  citation: { kind: "ticket", tool_id: "jira", external_scope_id: "cloud", ticket_id: "10046", permalink: `https://echobrain.atlassian.net/browse/${key}`, text_sha256: "sha256:0" },
+  citation: { kind: "ticket", tool_id: "jira", external_scope_id: "cloud", ticket_id: "10046", permalink: `https://echobrain.atlassian.net/browse/${key}`, text_sha256: digest(`text-${key}`) },
   ...(options.owner === undefined ? {} : { attributes: { status: "To Do", owner: options.owner } }),
   read_in_full: options.read ?? true, opened: true, preloaded: false, cited_by_plan: options.cited ?? true, ...(options.text === undefined ? {} : { text: options.text }) });
-const digest = value => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 const recordCitation = id => ({ kind: "approved_record", atom_id: digest(`atom-${id}`), record_sha256: digest(`record-${id}`), policy_id: "organization-member-readable-person-v2" });
 const record = (meeting, kind, id) => ({ id, source: "meetings", kind, title: titleOf(meeting), citation: recordCitation(`${meeting}-${kind}`), text: "x", read_in_full: true, opened: true, preloaded: false, cited_by_plan: false });
 const bindings = { project_id: "prj_00000000-0000-4000-8000-000000000003", site: "https://echobrain.atlassian.net", cloud_id: "cloud-1",
@@ -64,7 +64,7 @@ function sweepResult(cited, entries, status = "assessed") {
 /** What research returns for the two-decimal propagation Sweep at S1: SW-22b, TC-D-06 and the PRD's functional requirements. */
 function propagationItems() {
   const prd = { id: "E3", source: "pages", kind: "page", title: "PRD — Mock Digital Thermometer · section 2", text: "## Functional requirements\nPRD-D01 shows one decimal place.",
-    citation: { kind: "page", tool_id: "confluence", external_scope_id: "cloud", page_id: "1409025", section_id: "s2", version: "5", permalink: "https://echobrain.atlassian.net/wiki/x?s=2", text_sha256: "sha256:0" },
+    citation: { kind: "page", tool_id: "confluence", external_scope_id: "cloud", page_id: "1409025", section_id: "s2", version: "5", permalink: "https://echobrain.atlassian.net/wiki/x?s=2", text_sha256: digest("text-1409025-s2") },
     read_in_full: true, opened: true, preloaded: true, cited_by_plan: true };
   return [ticket("THERM-18", { id: "E1" }), ticket("THERM-40", { id: "E2" }), prd];
 }
@@ -241,6 +241,7 @@ test("impact cards are graded on listed items, relations, owners, and invented i
   // A completed approved-record run without its card delivered nothing to grade.
   const bare = completedRun(testCase, run.result.research.items);
   assert.deepEqual([codeChecks(testCase, bare, dataset).status, runScores({ checks: codeChecks(testCase, bare, dataset), judge: null }).card_items_listed], ["failed", 0]);
+  assert.deepEqual(codeChecks(testCase, bare, dataset).error, { code: "no_rendered_result", message: "approved-record runs must return the impact card; run them again on the current endpoint" });
 });
 
 test("a card row is credited to the keyed section its chunk holds, not to the section the chunk before it started", () => {
@@ -305,6 +306,27 @@ test("sweep verdicts are graded by finding_index: a missing or repeated finding 
   assert.deepEqual(gradeSweep(key, { ...result(null, null, "unreadable", null), status: "not_assessed" }), { right: 1, total: 4, not_assessed: 3 });
 });
 
+test("each Sweep verdict names its own finding, in the findings' order, since sweep results are graded by finding_index", () => {
+  const sweep = dataset.cases.find(entry => entry.id === "sweep-two-decimal-propagation");
+  const problems = changed => datasetProblems({ ...dataset, cases: [{ ...sweep, ...changed }] });
+  assert.deepEqual(problems({}), []);
+  assert.ok(problems({ verdicts: [...sweep.verdicts].reverse() }).some(problem => problem.includes("in the findings' order")), "reordered verdicts");
+  assert.ok(problems({ verdicts: sweep.verdicts.map((verdict, index) => (index === 1 ? { ...verdict, finding: "TC-D-06 is open." } : verdict)) }).some(problem => problem.includes("in the findings' order")), "a verdict naming another finding");
+});
+
+test("a completed run without its rendered result still has its research scanned for restricted leaks", () => {
+  // Research returned the restricted M6 decision, and a ticket whose text names the restricted supplier.
+  const items = [ticket("THERM-18", { id: "E1", text: "Corvane signed off the rounding." }), record("M6", "decision", "E2")];
+  const failed = ["approved-record-t1-two-decimal-display", "sweep-two-decimal-propagation"].map(id => {
+    const testCase = caseById(id);
+    const checks = codeChecks(testCase, completedRun(testCase, items), dataset);
+    assert.deepEqual([checks.status, checks.error.code], ["failed", "no_rendered_result"], id);
+    assert.deepEqual(checks.leaks.map(leak => (leak.kind === "item" ? `${leak.ref.meeting}/${leak.ref.item}` : leak.marker)), ["M6/decision", "Corvane"], id);
+    return { checks, judge: null };
+  });
+  assert.equal(aggregate(failed).summary.runs_with_leaks, 2);
+});
+
 test("sweep runs are graded on their sweep result, never as an impact card, and a completed sweep run without one failed", () => {
   const testCase = caseById("sweep-two-decimal-propagation");
   const items = propagationItems();
@@ -340,15 +362,16 @@ test("a sweep run is complete and supported only when every verdict in its resul
     parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "not_applicable", answer_correct: "not_applicable" })),
     gaps: [], must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false,
     verdicts: testCase.verdicts.map(verdict => ({ finding: verdict.finding, judged: verdict.expected, matches_expected: true })), notes: "" });
-  const scores = entries => runScores({ checks: codeChecks(testCase, completedRun(testCase, items, undefined, sweepResult(items, entries)), dataset), judge });
+  const scores = (cited, entries) => runScores({ checks: codeChecks(testCase, completedRun(testCase, items, undefined, sweepResult(cited, entries)), dataset), judge });
   const right = [
     { verdict: "landed", line: "SW-22b now specifies two-decimal formatting.", cites: [0] },
     { verdict: "still_open", line: "TC-D-06 still expects one decimal.", cites: [1] },
     { verdict: "changed", line: "PRD-D01 now names three decimals, not two.", cites: [2] },
   ];
-  assert.equal(scores(right).complete_and_supported, true);
-  assert.equal(scores([right[0], right[1], { verdict: "landed", line: "PRD-D01 now requires two decimals.", cites: [2] }]).complete_and_supported, false);
-  assert.equal(scores([right[0], right[1], { verdict: null, line: "Not assessed." }]).complete_and_supported, false);
+  assert.equal(scores(items, right).complete_and_supported, true);
+  assert.equal(scores(items, [right[0], right[1], { verdict: "landed", line: "PRD-D01 now requires two decimals.", cites: [2] }]).complete_and_supported, false);
+  // The PRD finding was not judged, so the result cites only the two tickets (as the contract requires).
+  assert.equal(scores(items.slice(0, 2), [right[0], right[1], { verdict: null, line: "Not assessed." }]).complete_and_supported, false);
 });
 
 test("a case whose request cannot be built is recorded as not started and the run goes on", async () => {
@@ -493,6 +516,7 @@ test("reports count sweep verdicts per case and over all sweep cases, among the 
   assert.match(renderers, /\| Sweep result \| findings not assessed \| 1 \|/u);
   assert.match(renderers, /\| sweep-two-decimal-propagation \| background \| 2 \| 2 \/ 6 \| 1 \|/u);
   assert.match(renderers, /\| sweep-owner-and-requirement-followups \| background \| 1 \| 3 \/ 3 \| 0 \|/u);
+  assert.match(renderers, /"Sweep verdicts correct" under Research loop is a different measure: the judge's reading of the items research read\./u, "the two verdict measures are told apart");
   // Without a sweep case the counts are unknown, not zero.
   const askCase = caseById("bug-fix-dates-vs-dvt-review");
   const askOnly = aggregate([{ checks: codeChecks(askCase, completedRun(askCase, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [{ statements: [{}] }], citations: [] } }), dataset), judge: null }]);
