@@ -5,9 +5,9 @@ import type {
   Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, CreatedProject, DocumentSummary,
   Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, Member, MemberPage, Opened,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
-  ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, ImpactView,
+  ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, ImpactView, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
-import type { PersonRunsResultsV1 } from '@echo-brain/organization-api';
+import type { PersonOpenItemV1, PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
@@ -421,6 +421,38 @@ export function impactCardView(result: PersonRunsResultsV1['view']): ImpactView 
     sources: card.citations.map((entry, index) => v4Source(entry, `Item ${index + 1}`, true, true)),
     checked_at: result.checked_at, hidden: result.hidden,
   };
+}
+
+/**
+ * One open item, validated by the client. What it says now crosses only
+ * when the Authority opened it for this viewer (`reach: 'opened'`), its
+ * citation as a source "Open in …" can open; the tool's own coordinates stay
+ * behind. Any other `reach` says why there is none.
+ */
+export function openItemView(item: PersonOpenItemV1): OpenItemView {
+  const current = item.current;
+  return {
+    item_id: item.item_id, run_id: item.run_id, kind: item.kind,
+    ...(item.decision === undefined ? {} : { decision: item.decision }),
+    ...(current === undefined ? {} : { current: {
+      source: v4Source(current.citation, 'Item', true, true), says_now: current.says_now,
+      ...(current.assignee === undefined ? {} : { assignee: current.assignee }),
+      ...(current.status === undefined ? {} : { status: current.status }),
+      ...(current.due_at === undefined ? {} : { due_at: current.due_at }),
+    } }),
+    relation: item.relation, expected: item.expected, approver: item.approver, owner: item.owner, waits_on: item.waits_on, state: item.state,
+    created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at, check: item.check, can: item.can, reach: item.reach,
+  };
+}
+
+/** Home's part of the runs: Send rows, the items that wait on this viewer, and the counts of the rest. */
+export function homeView(result: PersonRunsResultsV1['home']): HomeView {
+  return { send: result.send, items: result.items.map(openItemView), landed: result.landed, waiting: result.waiting, last_checked_at: result.last_checked_at };
+}
+
+/** A page of a scope's open items, with the scope's summary and each decision's check. */
+export function openItemsView(result: PersonRunsResultsV1['items']): OpenItemsView {
+  return { items: result.items.map(openItemView), next_cursor: result.next_cursor, summary: result.summary, stages: result.stages };
 }
 
 function v4Statement(raw: unknown, sourceCount: number): AnswerStatement {

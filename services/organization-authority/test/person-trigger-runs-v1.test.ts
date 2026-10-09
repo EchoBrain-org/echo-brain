@@ -3,14 +3,17 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SqliteImpactItemsV1 } from '../src/adapters/persistence/sqlite/impact-items-v1.js';
+import { SqliteOpenItemPeopleV1 } from '../src/adapters/persistence/sqlite/open-item-people-v1.js';
 import { observeCoreRuntimeV1, coreRuntimeIdentityV1, annotateCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from '../src/composition/person-diagnostics-v1.js';
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from '../../../tests/support/telemetry-fixture-vocabulary-v1.js';
 
 import { SqliteTriggerRunsV1, enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
-import { createPersonTriggerRunsV1 } from '../src/composition/person-trigger-runs-v1.js';
+import { createPersonTriggerRunsV1, readStoredImpactCardV1 } from '../src/composition/person-trigger-runs-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
+import { openItemsFixture } from './fixtures/open-items.js';
 
 const captures: PersonDiagnosticsV1[] = [];
 afterEach(() => { for (const capture of captures.splice(0)) capture.close(); });
@@ -36,9 +39,13 @@ async function fixture(options: { readonly anchor?: () => typeof record; readonl
     renderInputs.push(input);
     return { rendered: await (options.render ?? (async () => card))(input), research: { items: [{ citation: record, title: 'Approved display' }, { citation: ticket, title: 'Kestrel cooling fan drift 0xC0FFEE' }] } };
   } }));
+  // Only the approver reads this "only me" decision.
+  const readableDecisions = ({ access_token, record_sha256s }: { readonly access_token: string; readonly record_sha256s: readonly string[] }) => new Map(access_token !== 'approver' ? [] :
+    record_sha256s.map(sha => [sha, { approval_id: f.approvalId, record_sha256: sha, title: 'Approved display', approved_at: now.toISOString(), project_ids: [] }] as const));
   const diagnostics = createPersonDiagnosticsV1({ sessions: { authenticateAccess: ({ access_token }) => auth(access_token) } });
   captures.push(diagnostics);
-  const create = (serviceRuns: SqliteTriggerRunsV1 = runs) => createPersonTriggerRunsV1({ runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordProjects: () => [] }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000 });
+  const create = (serviceRuns: SqliteTriggerRunsV1 = runs) => createPersonTriggerRunsV1({ runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordProjects: () => [], readableDecisions: readableDecisions as never }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000,
+    items: new SqliteImpactItemsV1(f.db, () => now), people: new SqliteOpenItemPeopleV1(f.db) });
   const app = create();
   const settled = async () => await vi.waitFor(() => expect(runs.read(f.person, row.run_id)!.state).not.toBe('running'));
   return { ...f, runs, row, app, create, research, diagnostics, desk, renderInputs, bindDesk, openCitation, settled, advance: (ms: number) => { now = new Date(now.getTime() + ms); } };
@@ -132,12 +139,23 @@ describe('durable approved-record trigger runs', () => {
     await expect(f.app.view({ access_token: 'approver', request: { schema_version: 1, operation: 'view', run_id: f.row.run_id } })).resolves.toMatchObject({ hidden: 1, card: { citations: [expect.anything()] } });
   });
 
+  it('stores what the record expects of a conflicting item and reads the stored card back', async () => {
+    const f = await fixture({ render: async () => ({ ...card, affected: [{ ...card.affected[0], expected: 'two decimals from DVT' }] }) });
+    await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }); await f.settled();
+    expect(JSON.parse(f.runs.read(f.person, f.row.run_id)!.result_json!).affected).toEqual([{ citation_index: 1, relation: 'conflicts', expected: 'two decimals from DVT' }]);
+    await expect(f.app.view({ access_token: 'approver', request: { schema_version: 1, operation: 'view', run_id: f.row.run_id } })).resolves.toMatchObject({ hidden: 0 });
+  });
+
   it('refuses an invalid stored pointer card before opening a citation', async () => {
     const f = await fixture(); await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }); await f.settled();
     const invalid = canonicalJson({ schema_version: 1, status: 'assessed', citations: [ticket], decided: [{ citation_index: 0, text: 'Outside ticket text must never persist.' }], affected: [], unconfirmed: [] });
     const malformed = f.create(new Proxy(f.runs, { get(target, property, receiver) {
       if (property === 'read') return (actor: typeof f.person, runId: string) => {
         const row = target.read(actor, runId);
+        return row === undefined ? undefined : { ...row, result_json: invalid };
+      };
+      if (property === 'readUnfenced') return (runId: string) => {
+        const row = target.readUnfenced(runId);
         return row === undefined ? undefined : { ...row, result_json: invalid };
       };
       return Reflect.get(target, property, receiver);
@@ -162,5 +180,88 @@ describe('durable approved-record trigger runs', () => {
     f.advance(1_001);
     expect(await restarted.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } })).toEqual({ state: 'running' });
     await f.settled(); expect(f.research).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads a stored card back with what the decision expects of each item (R6)', async () => {
+    const f = await fixture({ render: async () => ({ ...card, affected: [{ ...card.affected[0], expected: 'two decimals from DVT' }] }) });
+    await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }); await f.settled();
+    const stored = readStoredImpactCardV1(f.runs.read(f.person, f.row.run_id)!.result_json!);
+    expect(stored.affected).toEqual([{ citation_index: 1, relation: 'conflicts', expected: 'two decimals from DVT' }]);
+    expect(stored.decided).toEqual([{ text: 'Approved display decision.', citation_index: 0 }]);
+    expect(() => readStoredImpactCardV1('{')).toThrow(expect.objectContaining({ code: 'unavailable' }));
+  });
+});
+
+describe('open items written when an impact check finishes', () => {
+  it('writes one unsent item per conflict or needs-updating row at finish, with exact owners, and no outside text', async () => {
+    const f = await openItemsFixture({ outsideText: 'Kestrel cooling fan drift 0xC0FFEE' });
+    await f.finishImpactRun();
+    const rows = f.db.prepare('SELECT * FROM authority_impact_items_v1').all();
+    expect(rows).toHaveLength(2);                                        // the confirms row made none
+    expect(rows.map(row => (row as { owner_match: string }).owner_match).sort()).toEqual(['approver', 'jira_account']);
+    expect(JSON.stringify(rows)).not.toContain('0xC0FFEE');
+    expect(JSON.stringify(rows)).not.toContain('acct-mina');
+    expect(f.db.prepare('SELECT result_json FROM authority_trigger_runs_v1').pluck().all().join('')).not.toContain('0xC0FFEE');
+    const items = f.items.forRun(f.runId);
+    expect(items.find(item => item.pointer.kind === 'ticket')).toMatchObject({ state: 'unsent', relation: 'needs_updating', expected: 'launch next week', owner_membership_id: f.membership('mina'), owner_match: 'jira_account', record_sha256: f.record });
+    expect(items.find(item => item.pointer.kind === 'approved_record')).toMatchObject({ state: 'unsent', relation: 'conflicts', expected: 'pilot starts next week', owner_membership_id: f.membership('ari'), owner_match: 'approver' });
+    // One bulk assignee read, with the approver's own session.
+    expect(f.jira_owners.assignees).toHaveBeenCalledTimes(1);
+    expect(f.jira_owners.assignees).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'ari', ticket_ids: ['10012'] }));
+  });
+
+  it('matches an ECHO action owner by a name exactly one active member holds', async () => {
+    const f = await openItemsFixture({ actionOwner: 'rafael  MORENO' });
+    await f.finishImpactRun();
+    expect(f.items.forRun(f.runId).find(item => item.pointer.kind === 'approved_record')).toMatchObject({ owner_membership_id: f.membership('rafael'), owner_match: 'name' });
+  });
+
+  it('writes an item for each not-assessed row, with no relation or expected phrase', async () => {
+    const f = await openItemsFixture({ assessed: false });
+    await f.finishImpactRun();
+    const items = f.items.forRun(f.runId);
+    expect(items).toHaveLength(2);
+    expect(items.map(item => [item.relation, item.expected])).toEqual([[null, null], [null, null]]);
+  });
+
+  it('keeps one item per item key and gives the approver every ticket when the assignee read fails', async () => {
+    const f = await openItemsFixture({ duplicateTicket: true, jiraFails: true });
+    await f.finishImpactRun();
+    const items = f.items.forRun(f.runId);
+    expect(items.filter(item => item.pointer.kind === 'ticket')).toHaveLength(1);
+    expect(items.find(item => item.pointer.kind === 'ticket')).toMatchObject({ relation: 'needs_updating', expected: 'launch next week', owner_membership_id: f.membership('ari'), owner_match: 'approver' });
+  });
+
+  it('opens a finished card to any decision reader and to nobody else', async () => {
+    const f = await openItemsFixture();
+    await f.finishImpactRun();
+    const view = (access_token: string) => f.app.view({ access_token, request: { schema_version: 1, operation: 'view', run_id: f.runId } });
+    await expect(view('ari')).resolves.toMatchObject({ card: { decided: [{ text: 'The pilot starts next week.' }] } });
+    const mina = await view('mina');
+    expect(mina.card.affected).toHaveLength(3);
+    // The card is rebuilt with Mina's own access, on a desk bound to her session.
+    expect(f.bindDesk.mock.calls.at(-1)![2]).toMatchObject({ access_token: 'mina' });
+    await expect(view('okafor')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.app.view({ access_token: 'okafor', request: { schema_version: 1, operation: 'view', run_id: 'run_missing-run' } })).rejects.toMatchObject({ code: 'not_found' });
+    f.revoke('rafael');
+    await expect(view('rafael')).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
+  it('shows a decision reader the card without the item the desk refuses them', async () => {
+    const f = await openItemsFixture();
+    await f.finishImpactRun();
+    // Rafael reads the decision, but the desk refuses him the Jira ticket.
+    const rafael = await f.app.view({ access_token: 'rafael', request: { schema_version: 1, operation: 'view', run_id: f.runId } });
+    expect(rafael.hidden).toBe(1);
+    expect(rafael.card.citations.map(entry => entry.kind)).toEqual(['decision', 'action', 'page']);
+    expect(rafael.card.affected.map(row => row.relation)).toEqual(['conflicts', 'confirms']);
+    expect(rafael.card.decided).toEqual([{ text: 'The pilot starts next week.', citation_index: 0 }]);
+    // Nothing of the ticket: no key, id, link, or the assignee only its details name.
+    for (const withheld of ['ECHO-12', '10012', 'browse/', 'Mina Patel']) expect(JSON.stringify(rafael)).not.toContain(withheld);
+    expect(f.bindDesk.mock.calls.at(-1)![2]).toMatchObject({ access_token: 'rafael' });
+    // Mina, who can open it, sees the same card with the ticket.
+    const mina = await f.app.view({ access_token: 'mina', request: { schema_version: 1, operation: 'view', run_id: f.runId } });
+    expect(mina.hidden).toBe(0);
+    expect(mina.card.citations.map(entry => entry.kind)).toEqual(['decision', 'ticket', 'action', 'page']);
   });
 });

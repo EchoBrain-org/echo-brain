@@ -11,34 +11,58 @@ export type AfterApprovedRecordHookV1 = (transaction: Database.Database, event: 
 
 export type TriggerRunStateV1 = 'pending' | 'running' | 'done' | 'failed';
 export type TriggerRunErrorV1 = 'no_access' | 'unavailable' | 'timed_out' | 'research_failed';
+/** What a sweep re-checks: the caller's own open items, or those of one decision or one project. */
+export type TriggerRunScopeV1 =
+  | { readonly kind: 'mine' }
+  | { readonly kind: 'record'; readonly record_sha256: Sha256Digest }
+  | { readonly kind: 'project'; readonly project_id: string };
+/** An approved-record run carries its record and no scope; a sweep carries a scope and no record. */
 export interface TriggerRunRowV1 {
-  readonly run_id: string; readonly trigger: 'approved_record'; readonly event_ref: string;
-  readonly actor: ApprovalActorV1; readonly record_sha256: Sha256Digest; readonly state: TriggerRunStateV1;
-  readonly attempts: number; readonly lease_token: string | null; readonly lease_expires_at: string | null;
+  readonly run_id: string; readonly trigger: 'approved_record' | 'sweep'; readonly event_ref: string;
+  readonly actor: ApprovalActorV1; readonly record_sha256: Sha256Digest | null; readonly scope: TriggerRunScopeV1 | null;
+  readonly state: TriggerRunStateV1; readonly attempts: number; readonly lease_token: string | null; readonly lease_expires_at: string | null;
   readonly result_json: string | null; readonly error_code: TriggerRunErrorV1 | null; readonly created_at: string; readonly updated_at: string;
 }
 interface StoredRowV1 {
-  readonly run_id: string; readonly trigger: 'approved_record'; readonly event_ref: string;
+  readonly run_id: string; readonly trigger: 'approved_record' | 'sweep'; readonly event_ref: string;
   readonly organization_id: string; readonly principal_id: string; readonly membership_id: string;
-  readonly record_sha256: Sha256Digest; readonly state: TriggerRunStateV1; readonly attempts: number;
+  readonly record_sha256: Sha256Digest | null; readonly scope_kind: TriggerRunScopeV1['kind'] | null; readonly scope_id: string | null;
+  readonly state: TriggerRunStateV1; readonly attempts: number;
   readonly lease_token: string | null; readonly lease_expires_at: string | null; readonly result_json: string | null;
   readonly error_code: TriggerRunErrorV1 | null; readonly created_at: string; readonly updated_at: string;
 }
-const selectRows = `SELECT run_id, trigger, event_ref, organization_id, principal_id, membership_id, record_sha256,
+const selectRows = `SELECT run_id, trigger, event_ref, organization_id, principal_id, membership_id, record_sha256, scope_kind, scope_id,
   state, attempts, lease_token, lease_expires_at, result_json, error_code, created_at, updated_at FROM authority_trigger_runs_v1`;
+function publicScope(kind: StoredRowV1['scope_kind'], id: string | null): TriggerRunScopeV1 | null {
+  if (kind === null) return null;
+  if (kind === 'mine') return Object.freeze({ kind });
+  return Object.freeze(kind === 'record' ? { kind, record_sha256: id as Sha256Digest } : { kind, project_id: id! });
+}
+function storedScope(scope: TriggerRunScopeV1): readonly [kind: TriggerRunScopeV1['kind'], id: string | null] {
+  switch (scope.kind) {
+    case 'mine': return [scope.kind, null];
+    case 'record': return [scope.kind, scope.record_sha256];
+    case 'project': return [scope.kind, scope.project_id];
+    default: throw new TypeError('Sweep scope is invalid');
+  }
+}
 function publicRow(value: StoredRowV1): TriggerRunRowV1 {
   return Object.freeze({ run_id: value.run_id, trigger: value.trigger, event_ref: value.event_ref,
     actor: Object.freeze({ organization_id: value.organization_id, principal_id: value.principal_id, membership_id: value.membership_id }),
-    record_sha256: value.record_sha256, state: value.state, attempts: value.attempts, lease_token: value.lease_token,
+    record_sha256: value.record_sha256, scope: publicScope(value.scope_kind, value.scope_id), state: value.state, attempts: value.attempts, lease_token: value.lease_token,
     lease_expires_at: value.lease_expires_at, result_json: value.result_json, error_code: value.error_code,
     created_at: value.created_at, updated_at: value.updated_at });
 }
 
-/** Durable, actor-fenced runs for the only product trigger currently enabled. */
+/**
+ * Durable runs: an approved record's impact check, and sweeps that re-check open
+ * items. Actor-fenced, except the reads named unfenced, whose callers apply the
+ * open-items access policy before returning anything from them.
+ */
 export class SqliteTriggerRunsV1 {
   constructor(private readonly database: Database.Database, private readonly now: () => Date = () => new Date()) {
-    if (database.pragma('user_version', { simple: true }) !== 12 || database.pragma('foreign_keys', { simple: true }) !== 1) {
-      throw new Error('Trigger runs require Authority V12 state with foreign keys enabled');
+    if (database.pragma('user_version', { simple: true }) !== 13 || database.pragma('foreign_keys', { simple: true }) !== 1) {
+      throw new Error('Trigger runs require Authority V13 state with foreign keys enabled');
     }
   }
 
@@ -53,6 +77,33 @@ export class SqliteTriggerRunsV1 {
       event.reviewer.organization_id, event.reviewer.principal_id, event.reviewer.membership_id, event.record_sha256, timestamp, timestamp);
   }
 
+  /** One immediate transaction: the actor's pending or running sweep of the same scope, else a new pending one (`event_ref` = `sweep_<uuid>`). */
+  enqueueSweep(actor: ApprovalActorV1, scope: TriggerRunScopeV1): { readonly run_id: string; readonly created: boolean } {
+    const [scopeKind, scopeId] = storedScope(scope);
+    return this.immediate(() => {
+      const live = this.database.prepare(`SELECT run_id FROM authority_trigger_runs_v1
+        WHERE organization_id=? AND principal_id=? AND membership_id=? AND scope_kind=? AND ifnull(scope_id, '')=?
+          AND trigger = 'sweep' AND state IN ('pending', 'running')`).pluck().get(
+        actor.organization_id, actor.principal_id, actor.membership_id, scopeKind, scopeId ?? '') as string | undefined;
+      if (live !== undefined) return Object.freeze({ run_id: live, created: false });
+      const run_id = `run_${randomUUID()}`;
+      const timestamp = this.timestamp();
+      this.database.prepare(`INSERT INTO authority_trigger_runs_v1
+        (run_id, trigger, event_ref, organization_id, principal_id, membership_id, scope_kind, scope_id, state, attempts, created_at, updated_at)
+        VALUES (?, 'sweep', ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`).run(run_id, `sweep_${randomUUID()}`,
+        actor.organization_id, actor.principal_id, actor.membership_id, scopeKind, scopeId, timestamp, timestamp);
+      return Object.freeze({ run_id, created: true });
+    });
+  }
+
+  /** The actor's pending or running sweep of any scope. */
+  liveSweep(actor: ApprovalActorV1): TriggerRunRowV1 | undefined {
+    const found = this.database.prepare(`${selectRows} WHERE organization_id=? AND principal_id=? AND membership_id=?
+      AND trigger='sweep' AND state IN ('pending', 'running') ORDER BY created_at, run_id LIMIT 1`).get(
+      actor.organization_id, actor.principal_id, actor.membership_id) as StoredRowV1 | undefined;
+    return found === undefined ? undefined : publicRow(found);
+  }
+
   list(actor: ApprovalActorV1, limit: number): readonly TriggerRunRowV1[] {
     if (!Number.isFinite(limit)) throw new TypeError('Trigger run limit must be finite');
     const capped = Math.max(0, Math.min(100, Math.floor(limit)));
@@ -64,6 +115,19 @@ export class SqliteTriggerRunsV1 {
     const found = this.database.prepare(`${selectRows} WHERE run_id=? AND organization_id=? AND principal_id=? AND membership_id=?`).get(
       runId, actor.organization_id, actor.principal_id, actor.membership_id) as StoredRowV1 | undefined;
     return found === undefined ? undefined : publicRow(found);
+  }
+
+  /** Not fenced: callers must apply the open-items access policy before returning anything from it. */
+  readUnfenced(runId: string): TriggerRunRowV1 | undefined {
+    const found = this.database.prepare(`${selectRows} WHERE run_id=?`).get(runId) as StoredRowV1 | undefined;
+    return found === undefined ? undefined : publicRow(found);
+  }
+
+  /** The approved-record runs of these records. Not fenced, as above. */
+  impactRunsFor(recordSha256s: readonly Sha256Digest[]): readonly TriggerRunRowV1[] {
+    if (recordSha256s.length === 0) return [];
+    return (this.database.prepare(`${selectRows} WHERE trigger='approved_record' AND record_sha256 IN (SELECT value FROM json_each(?))
+      ORDER BY created_at, run_id`).all(JSON.stringify([...new Set(recordSha256s)])) as StoredRowV1[]).map(publicRow);
   }
 
   claim(actor: ApprovalActorV1, runId: string, leaseMs: number): { readonly kind: 'claimed'; readonly lease_token: string } | { readonly kind: 'running' | 'busy' | 'done' | 'failed' | 'not_found' } {
@@ -107,12 +171,15 @@ export class SqliteTriggerRunsV1 {
     });
   }
 
-  finish(runId: string, leaseToken: string, result: { readonly json: string; readonly sha256: Sha256Digest }): boolean {
+  /** `then` runs inside the same immediate transaction, only when this call moved the run to done. */
+  finish(runId: string, leaseToken: string, result: { readonly json: string; readonly sha256: Sha256Digest }, then?: (transaction: Database.Database) => void): boolean {
     return this.immediate(() => {
       const timestamp = this.timestamp();
-      return this.database.prepare(`UPDATE authority_trigger_runs_v1 SET state='done', lease_token=NULL, lease_expires_at=NULL,
+      const finished = this.database.prepare(`UPDATE authority_trigger_runs_v1 SET state='done', lease_token=NULL, lease_expires_at=NULL,
       result_json=?, result_sha256=?, error_code=NULL, updated_at=? WHERE run_id=? AND state='running' AND lease_token=? AND lease_expires_at>?`).run(
       result.json, result.sha256, timestamp, runId, leaseToken, timestamp).changes === 1;
+      if (finished) then?.(this.database);
+      return finished;
     });
   }
 
@@ -125,9 +192,11 @@ export class SqliteTriggerRunsV1 {
     });
   }
 
+  /** failed → pending for approved-record runs only; a failed sweep stays failed and the next sweep replaces it. */
   retry(actor: ApprovalActorV1, runId: string): boolean {
     return this.immediate(() => this.database.prepare(`UPDATE authority_trigger_runs_v1 SET state='pending', attempts=0, lease_token=NULL,
-      lease_expires_at=NULL, error_code=NULL, updated_at=? WHERE run_id=? AND organization_id=? AND principal_id=? AND membership_id=? AND state='failed'`).run(
+      lease_expires_at=NULL, error_code=NULL, updated_at=? WHERE run_id=? AND organization_id=? AND principal_id=? AND membership_id=? AND state='failed'
+      AND trigger='approved_record'`).run(
       this.timestamp(), runId, actor.organization_id, actor.principal_id, actor.membership_id).changes === 1);
   }
 

@@ -1,4 +1,6 @@
-import type { PersonImpactCardV1, PersonMeetingRequestV2, PersonMeetingResultsV2, PersonRunsRequestV1, PersonRunsResultsV1 } from '@echo-brain/organization-api';
+import type {
+  PersonImpactCardV1, PersonMeetingRequestV2, PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
+} from '@echo-brain/organization-api';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
 // validated output, and the renderer never sees a token, a path or a
@@ -405,12 +407,43 @@ export interface ImpactView extends Omit<PersonImpactCardV1, 'citations'> {
   readonly checked_at: string;
   readonly hidden: number;
 }
-/** The impact checks of your own approvals: list, start, retry, and view a finished one. */
+/**
+ * What an open item says now, read live for you in this request and never
+ * stored: its citation as a source "Open in …" can open, and its details.
+ */
+export interface OpenItemCurrent extends Omit<PersonOpenItemCurrentV1, 'citation'> {
+  readonly source: AnswerSource;
+}
+/**
+ * One open item a decision found, as you may see it: its decision only when
+ * you can read it, and what it says now only when you could open it. `reach`
+ * says how that live read went: `opened`, refused to you (`no_access`), not
+ * answered just now (`unavailable`: an outage, never lost access), or not tried
+ * (`not_read`).
+ */
+export interface OpenItemView extends Omit<PersonOpenItemV1, 'current'> {
+  readonly current?: OpenItemCurrent;
+}
+/** Home's part of the runs: Send rows, the items that wait on you, and what waits on others. */
+export interface HomeView extends Omit<PersonRunsResultsV1['home'], 'items'> {
+  readonly items: readonly OpenItemView[];
+}
+/** A page of a scope's open items, its summary, and each decision's check. */
+export interface OpenItemsView extends Omit<PersonRunsResultsV1['items'], 'items'> {
+  readonly items: readonly OpenItemView[];
+}
+/** The impact checks of your own approvals, and the open items they found. */
 export interface RunsResults {
   list: PersonRunsResultsV1['list'];
   start: PersonRunsResultsV1['start'];
   retry: PersonRunsResultsV1['retry'];
   view: ImpactView;
+  home: HomeView;
+  items: OpenItemsView;
+  item: OpenItemView;
+  send: PersonRunsResultsV1['send'];
+  set_state: PersonRunsResultsV1['set_state'];
+  assign: PersonRunsResultsV1['assign'];
 }
 
 export interface HostMethods {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, changeView, createdView, directoryView, employeesView, failureView, impactCardView, invitationView, listView, membersView, noteMatchesView,
-  noteTitle, openView, revokedView, NotReadable, projectMatchesView, projectPageView, projectSettingsView, projectView, receiptView, recordView,
+  abandonView, answerView, changeView, createdView, directoryView, employeesView, failureView, homeView, impactCardView, invitationView, listView, membersView, noteMatchesView,
+  noteTitle, openItemsView, openItemView, openView, revokedView, NotReadable, projectMatchesView, projectPageView, projectSettingsView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import type { ApprovedRecord } from '../../src/shared/protocol.js';
@@ -61,6 +61,30 @@ describe('view models copy only what the renderer may see', () => {
       checked_at: '2026-10-07T10:05:00.000Z', hidden: 2,
     });
     expect(JSON.stringify(view)).not.toContain('private-tenant');
+  });
+  it('an open item turns its live citation into a source it can open, and an item you cannot open stays without one', () => {
+    const permalink = 'https://example.atlassian.net/browse/ECHO-12';
+    const citation = { kind: 'ticket', label: 'ECHO-12 · Pilot launch', visibility: 'only_me', citation: {
+      kind: 'ticket', tool_id: 'jira', external_scope_id: 'private-tenant', ticket_id: '10012', permalink, text_sha256: sha('3') } } as const;
+    const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name: 'Mina Patel', active: true };
+    const decision = { approval_id: 'apr_1', record_sha256: sha('2'), title: 'Pilot planning', first_line: null, approved_at: '2026-10-07T10:00:00.000Z', project_ids: [] };
+    const base = {
+      item_id: 'itm_00000001', run_id: 'run_00000001', kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: person,
+      owner: { ...person, match: 'jira_account' }, waits_on: 'owner', state: 'open', created_at: '2026-10-07T10:05:00.000Z', sent_at: '2026-10-07T11:00:00.000Z',
+      state_set_at: '2026-10-07T11:00:00.000Z', check: null, can: { set_state: true, assign: true }, reach: 'no_access',
+    } as const;
+    const opened = { ...base, decision, reach: 'opened', current: { citation, says_now: 'Planned for the end of the month.', due_at: '2026-10-30' } };
+    const home = homeView({ send: [], items: [opened, base], landed: 0, waiting: 1, last_checked_at: null } as unknown as Parameters<typeof homeView>[0]);
+    expect(home.items[0]).toEqual({ ...base, decision, reach: 'opened', current: { source: { kind: 'ticket', tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink },
+      says_now: 'Planned for the end of the month.', due_at: '2026-10-30' } });
+    expect(home.items[1]).toStrictEqual(base);
+    expect(home).toMatchObject({ send: [], landed: 0, waiting: 1, last_checked_at: null });
+    expect(JSON.stringify(home)).not.toContain('private-tenant');
+    const page = openItemsView({ items: [opened], next_cursor: null, stages: [], summary: { unsent: 0, open: 1, done: 0, not_relevant: 0, landed: 0, changed: 0,
+      unreadable: 0, decisions: 1, last_checked_at: null, by_decision: [{ record_sha256: sha('2'), unsent: 0, open: 1 }] } } as unknown as Parameters<typeof openItemsView>[0]);
+    expect(page.items[0]?.current?.source).toEqual({ kind: 'ticket', tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink });
+    expect(page.summary.by_decision).toEqual([{ record_sha256: sha('2'), unsent: 0, open: 1 }]);
+    expect(openItemView(opened as unknown as Parameters<typeof openItemView>[0]).current?.source).toMatchObject({ kind: 'ticket' });
   });
 
   it('status keeps the account and nothing else', () => {

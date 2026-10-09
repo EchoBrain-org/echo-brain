@@ -633,7 +633,7 @@ describe("workspace source boundaries", () => {
   it("ships only the current baselines", () => {
     const expectedByRoot: Record<string, string[]> = {
       "packages/organization-authority-kernel": [
-        "authority-baseline-v12.sql",
+        "authority-baseline-v13.sql",
       ],
       "packages/organization-control-plane": [
         "organization-control-plane-baseline-v4.sql",

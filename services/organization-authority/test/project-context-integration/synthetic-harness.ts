@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { applyAuthorityBaselineV12 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { applyAuthorityBaselineV13 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import {
   validatePersonUpdateSubmitV2,
   type PersonUpdateSubmitV2, type PersonUploadAudienceV2, type ProjectIdV1,
@@ -24,7 +24,7 @@ export { PEOPLE };
 function scenarioDatabase(path: string): Database.Database {
   const database = new Database(path);
   database.pragma('foreign_keys = ON');
-  applyAuthorityBaselineV12(database);
+  applyAuthorityBaselineV13(database);
   database.prepare(`INSERT INTO authority_metadata
     (singleton, authority_id, organization_id, organization_display_name, descriptor_json, created_at, last_observed_at)
     VALUES (1, 'oau_00000000-0000-4000-8000-000000000006', ?, 'PC06 synthetic', '{}', ?, ?)`)

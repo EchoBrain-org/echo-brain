@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
-import { applyAuthorityBaselineV12 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV13 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import type { AuthorityPersonMembershipBinding } from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -137,7 +137,7 @@ export async function meetingWorld(options: {
 } = {}): Promise<MeetingWorldV1> {
   const authority: Database.Database = new Database(":memory:");
   authority.pragma("foreign_keys = ON");
-  applyAuthorityBaselineV12(authority);
+  applyAuthorityBaselineV13(authority);
   authority.prepare(`INSERT INTO authority_metadata
     (singleton, authority_id, organization_id, organization_display_name, descriptor_json, created_at, last_observed_at)
     VALUES (1, ?, ?, 'Meetings', '{}', ?, ?)`).run(COORDINATES.authority_id, COORDINATES.organization_id, NOW, NOW);

@@ -33,7 +33,7 @@ import {
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { applyAuthorityBaselineV12 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV13 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -43,7 +43,7 @@ import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sq
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { addMembership } from "./fixtures/project-context-sqlite.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
-import { EMP_A, OWNER, SHARED, T, UNJOINED, meetingWorld } from "./fixtures/person-meeting-world.js";
+import { EMP_A, OWNER, PROJ_X, SHARED, T, UNJOINED, meetingWorld } from "./fixtures/person-meeting-world.js";
 
 import { independentRecordCoverageFixture, rolloutCoverageFixture } from "./retrieval-coverage-fixture.js";
 
@@ -248,7 +248,7 @@ afterEach(() => {
 
 function setup(pointer = true) {
   const authority = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV12(authority);
+  applyAuthorityBaselineV13(authority);
   authority
     .prepare(
       `INSERT INTO authority_metadata
@@ -1925,6 +1925,59 @@ describe("Person Layer 2 route: an approved record's projects (research trigger 
       expect(() => route.recordProjects({ access_token: "owner", record_sha256: canonicalSha256("missing") })).toThrow(notFound);
       expect(() => route.recordProjects({ access_token: "nobody", record_sha256: w.digest("r4") })).toThrow(expect.objectContaining({ code: "unauthorized" }));
       expect(audited()).toBe(before);
+    } finally { w.close(); }
+  });
+});
+
+describe("Person Layer 2 route: readable decisions for open items (open items and Home v1)", () => {
+  const audited = (w: Awaited<ReturnType<typeof meetingWorld>>) => (w.authority.prepare("SELECT count(*) AS count FROM authority_person_read_decision_audit_v2").get() as { readonly count: number }).count;
+
+  it("names the records the reader can read now, with what a list row shows of each, and audits nothing", async () => {
+    const w = await meetingWorld();
+    try {
+      const route = w.route();
+      const before = audited(w);
+      const found = route.readableDecisions({ access_token: "emp_a", record_sha256s: [w.digest("r4"), w.digest("r1"), w.digest("r3"), w.digest("r6"), canonicalSha256("missing"), w.digest("r4"), "sha256:nope" as Sha256Digest] });
+      // r6 is in a project emp_a left; a missing or malformed digest is the same miss.
+      expect([...found.keys()].sort()).toEqual([w.digest("r1"), w.digest("r3"), w.digest("r4")].sort());
+      expect(found.get(w.digest("r4"))).toEqual({ approval_id: "apr_r4", record_sha256: w.digest("r4"), title: "Pricing review", approved_at: expect.any(String), project_ids: [SHARED] });
+      expect(found.get(w.digest("r1"))).toMatchObject({ approval_id: "apr_r1", title: "Weekly sync", project_ids: [] });
+      // r3 is also in a project emp_a never joined; that project's id never leaves the route.
+      expect(found.get(w.digest("r3"))!.project_ids).toEqual([SHARED]);
+      // A meeting with no title reads as the person list names it.
+      expect(route.readableDecisions({ access_token: "owner", record_sha256s: [w.digest("r2")] }).get(w.digest("r2"))).toMatchObject({ title: "Approved meeting", project_ids: [] });
+      expect(route.readableDecisions({ access_token: "emp_c", record_sha256s: [w.digest("r4"), w.digest("r2")] }).size).toBe(0);
+      expect(route.readableDecisions({ access_token: "emp_a", record_sha256s: [] }).size).toBe(0);
+      expect(() => route.readableDecisions({ access_token: "nobody", record_sha256s: [w.digest("r4")] })).toThrow(expect.objectContaining({ code: "unauthorized" }));
+      expect(audited(w)).toBe(before);
+      // The approval time is the person list's own time for the meeting.
+      expect(found.get(w.digest("r4"))!.approved_at).toBe(route.openMeeting({ access_token: "emp_a", record_sha256: w.digest("r4") }).row.added_at);
+      // Current grants decide: after leaving SHARED, r4 is no longer readable.
+      w.leave(SHARED, EMP_A);
+      expect(route.readableDecisions({ access_token: "emp_a", record_sha256s: [w.digest("r4")] }).size).toBe(0);
+    } finally { w.close(); }
+  });
+
+  it("lists the records a reader can read in one project now, newest first, and audits nothing", async () => {
+    const w = await meetingWorld();
+    try {
+      const route = w.route();
+      const before = audited(w);
+      expect(route.projectRecords({ access_token: "emp_a", project_id: SHARED, limit: 500 })).toEqual([w.digest("r4"), w.digest("r3")]);
+      expect(route.projectRecords({ access_token: "emp_a", project_id: SHARED, limit: 1 })).toEqual([w.digest("r4")]);
+      expect(route.projectRecords({ access_token: "owner", project_id: SHARED, limit: 500 })).toEqual([w.digest("r4"), w.digest("r3")]);
+      // A project the reader does not hold lists nothing, whatever it holds.
+      expect(route.projectRecords({ access_token: "emp_c", project_id: SHARED, limit: 500 })).toEqual([]);
+      expect(route.projectRecords({ access_token: "owner", project_id: UNJOINED, limit: 500 })).toEqual([]);
+      expect(route.projectRecords({ access_token: "emp_a", project_id: PROJ_X, limit: 500 })).toEqual([]);
+      w.grant(UNJOINED, OWNER);
+      expect(route.projectRecords({ access_token: "owner", project_id: UNJOINED, limit: 500 })).toEqual([w.digest("r3")]);
+      const invalid = expect.objectContaining({ code: "invalid_request" });
+      expect(() => route.projectRecords({ access_token: "emp_a", project_id: SHARED, limit: 0 })).toThrow(invalid);
+      expect(() => route.projectRecords({ access_token: "emp_a", project_id: SHARED, limit: 501 })).toThrow(invalid);
+      expect(() => route.projectRecords({ access_token: "emp_a", project_id: "prj_nope", limit: 5 })).toThrow(invalid);
+      expect(() => route.projectRecords({ access_token: "nobody", project_id: SHARED, limit: 5 })).toThrow(expect.objectContaining({ code: "unauthorized" }));
+      expect(audited(w)).toBe(before);
     } finally { w.close(); }
   });
 });

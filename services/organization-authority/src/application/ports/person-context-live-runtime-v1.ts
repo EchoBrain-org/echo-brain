@@ -4,6 +4,7 @@ import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authori
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceCitationV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { PersonLiveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
+import type { JiraOwnerAccountsV1 } from './jira-owner-accounts-v1.js';
 
 /** Current ECHO-project grant; each provider resolves its own external mapping. */
 export type PersonContextProjectAuthorizationV1 = (access_token: string, project_id: string) => Readonly<{ role: 'lead' | 'member'; authorization_sha256: Sha256Digest }>;
@@ -30,6 +31,8 @@ export interface PersonLiveConnectorDefinitionV1 {
 }
 export interface OpenedPersonLiveConnectorV1 extends Omit<OpenedPersonContextLiveRuntimeV1<PersonLiveEvidenceCitationV1>, 'connection_http'> {
   readonly connection_http?: ProviderHttpApplicationV1;
+  /** Jira's assignee accounts, for matching an impact check's owners to members; only the Jira runtime has them. */
+  readonly owners?: JiraOwnerAccountsV1;
 }
 export interface PersonLiveConnectorSourceV1 extends Omit<PersonLiveConnectorDefinitionV1, 'open'> {
   readonly application: PersonContextLiveApplicationV1<PersonLiveEvidenceCitationV1>;

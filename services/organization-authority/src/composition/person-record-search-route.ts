@@ -12,6 +12,7 @@ import {
   PERSON_LIST_TEXT_MAX_BYTES_V1,
   PERSON_OPEN_ATOMS_BUDGET_BYTES_V1,
   PERSON_OPEN_ATOMS_MAX_V1,
+  validateProjectIdV1,
   type PersonAnswerCitationV3,
   type PersonOpenMeetingAtomV1,
   type ProjectIdV1,
@@ -277,13 +278,28 @@ export interface PersonRecordAnchorV1 {
   recordAnchor(input: { readonly access_token: string; readonly record_sha256: Sha256Digest }): Extract<PersonAnswerCitationV3, { readonly kind: "approved_record" }>;
 }
 
+/** A decision as an open item names it (open items and Home v1, section 7): ECHO data only. */
+export interface PersonReadableDecisionV1 {
+  readonly approval_id: string; readonly record_sha256: Sha256Digest; readonly title: string;
+  readonly approved_at: string; readonly project_ids: readonly ProjectIdV1[];
+}
+
+/** Which decisions an open item's viewer can read (open items and Home v1, section 4). */
+export interface PersonReadableDecisionsV1 {
+  /** The records among these that this person can read now (the exact Layer 1 check `admittedRecord`), with what a list row shows of each. A lookup, not a release: nothing is audited. */
+  readableDecisions(input: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[] }): ReadonlyMap<Sha256Digest, PersonReadableDecisionV1>;
+  /** The records this person can read in one project now, newest first, at most `limit` (at most 500). */
+  projectRecords(input: { readonly access_token: string; readonly project_id: string; readonly limit: number }): readonly Sha256Digest[];
+}
+
 export type PersonRecordSearchRouteV1 =
   PersonRecordSearchHttpApplicationV1 &
     PersonRecordSearchBatchApplicationV1 &
     PersonEvidenceDeskRecordsV1 &
     PersonMeetingItemsPortV1 &
     PersonRecordProjectsV1 &
-    PersonRecordAnchorV1;
+    PersonRecordAnchorV1 &
+    PersonReadableDecisionsV1;
 
 export interface CreatePersonRecordSearchRouteV1Options {
   readonly state_directory: string;
@@ -563,6 +579,9 @@ const MEETING_COLLECT_MAX = 26;
 const MEETING_WAITING_MINE_MAX = 100;
 const MEETING_PART_MAX = 65_535;
 const RECORD_SHA256 = /^sha256:[0-9a-f]{64}$/;
+/** The most records one project lookup returns, and the candidates it reads per page. */
+const PROJECT_RECORDS_MAX = 500;
+const PROJECT_RECORDS_PAGE = 100;
 const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 type MeetingCollectionState = {
@@ -848,16 +867,20 @@ export function createPersonRecordSearchRouteV1(
     return result;
   }
 
-  /** The Layer 1 exact read with current grants: the only admission for open. */
-  function admittedRecord(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, recordSha256: Sha256Digest) {
+  /** The Layer 1 exact read with current grants, or undefined when this reader cannot read the record now. */
+  function readableRecord(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, recordSha256: Sha256Digest) {
     const rows = new PersonRecordReaderV1(options.record).list({
       authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
       principal_id: authorization.principal_id, membership_id: authorization.membership_id,
       ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }),
       record_sha256: recordSha256, limit: 1,
     });
-    if (rows.length !== 1 || rows[0]!.record_sha256 !== recordSha256) itemNotFound();
-    return rows[0]!;
+    return rows.length === 1 && rows[0]!.record_sha256 === recordSha256 ? rows[0]! : undefined;
+  }
+
+  /** The Layer 1 exact read with current grants: the only admission for open. */
+  function admittedRecord(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, recordSha256: Sha256Digest) {
+    return readableRecord(authorization, projects, recordSha256) ?? itemNotFound();
   }
 
   /**
@@ -1435,6 +1458,52 @@ export function createPersonRecordSearchRouteV1(
       const projects = captureRecordProjectsV1(options.capture_projects, authorization);
       const admitted = admittedRecord(authorization, projects, input.record_sha256);
       return recordAssociations([{ record_position: admitted.position, record_sha256: admitted.record_sha256 }], projects.project_ids).get(admitted.record_sha256) ?? Object.freeze([]);
+    },
+    readableDecisions(input: Parameters<PersonReadableDecisionsV1["readableDecisions"]>[0]): ReturnType<PersonReadableDecisionsV1["readableDecisions"]> {
+      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+      assertExpectedOrganization(authorization);
+      const projects = captureRecordProjectsV1(options.capture_projects, authorization);
+      // A malformed digest, like a record this reader cannot read, is simply not in the answer.
+      const readable = [...new Set(input.record_sha256s)].flatMap((recordSha256) => {
+        const row = typeof recordSha256 === "string" && RECORD_SHA256.test(recordSha256) ? readableRecord(authorization, projects, recordSha256) : undefined;
+        return row === undefined ? [] : [row];
+      });
+      const associations = recordAssociations(readable.map((row) => ({ record_position: row.position, record_sha256: row.record_sha256 })), projects.project_ids);
+      const found = new Map<Sha256Digest, PersonReadableDecisionV1>();
+      for (const row of readable) {
+        // The envelope helpers and the fallback title the person list uses for a meeting row.
+        const record = approvedRecord(row.position, row.record_sha256);
+        found.set(row.record_sha256, Object.freeze({
+          approval_id: row.approval_id, record_sha256: row.record_sha256,
+          title: boundedTextV1(record.brief.meeting.title, PERSON_LIST_TEXT_MAX_BYTES_V1) ?? "Approved meeting",
+          approved_at: record.added_at,
+          project_ids: Object.freeze([...(associations.get(row.record_sha256) ?? [])]),
+        }));
+      }
+      return found;
+    },
+    projectRecords(input: Parameters<PersonReadableDecisionsV1["projectRecords"]>[0]): readonly Sha256Digest[] {
+      if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > PROJECT_RECORDS_MAX) invalidRequest();
+      let projectId: string;
+      try { projectId = validateProjectIdV1(input.project_id); } catch { invalidRequest(); }
+      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+      assertExpectedOrganization(authorization);
+      const projects = captureRecordProjectsV1(options.capture_projects, authorization);
+      // A project the reader does not hold lists nothing, the same as a project with no records.
+      if (!projects.project_ids.includes(projectId)) return Object.freeze([]);
+      const found: Sha256Digest[] = [];
+      let before = Number.MAX_SAFE_INTEGER;
+      // The project's records newest first, each through the exact Layer 1 read with current grants.
+      while (found.length < input.limit) {
+        const candidates = options.record.prepare(`SELECT record_position, record_sha256 FROM organization_record_project_association_v1
+          WHERE project_id = ? AND record_position < ? ORDER BY record_position DESC LIMIT ?`).all(projectId, before, PROJECT_RECORDS_PAGE) as readonly { readonly record_position: number; readonly record_sha256: Sha256Digest }[];
+        for (const candidate of candidates) {
+          if (found.length < input.limit && readableRecord(authorization, projects, candidate.record_sha256) !== undefined) found.push(candidate.record_sha256);
+        }
+        if (candidates.length < PROJECT_RECORDS_PAGE) break;
+        before = candidates.at(-1)!.record_position;
+      }
+      return Object.freeze(found);
     },
     revalidateMeetingRelease(input: Parameters<PersonMeetingItemsPortV1["revalidateMeetingRelease"]>[0]): void {
       const witness = meetingReleases.get(input.release);

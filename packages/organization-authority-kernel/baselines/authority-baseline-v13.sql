@@ -1,6 +1,6 @@
--- Authority baseline V12: independent personal meeting-source progress, one approval proposal per meeting with one shared decision table,
+-- Authority baseline V13: independent personal meeting-source progress, one approval proposal per meeting with one shared decision table,
 -- plus project context, raw Person uploads, and optional search enrichment.
--- Fresh initialization only; no V11-to-V12 transition or backfill exists, and
+-- Fresh initialization only; no V12-to-V13 transition or backfill exists, and
 -- this file is never an in-place upgrade.
 
 CREATE TABLE authority_metadata (
@@ -772,10 +772,12 @@ BEGIN SELECT RAISE(ABORT, 'approval decision audience needs active project membe
 
 CREATE TABLE authority_trigger_runs_v1 (
   run_id TEXT PRIMARY KEY CHECK (run_id GLOB 'run_*' AND length(run_id) BETWEEN 8 AND 64),
-  trigger TEXT NOT NULL CHECK (trigger IN ('approved_record')),
+  trigger TEXT NOT NULL CHECK (trigger IN ('approved_record', 'sweep')),
   event_ref TEXT NOT NULL CHECK (length(event_ref) BETWEEN 1 AND 128),
   organization_id TEXT NOT NULL, principal_id TEXT NOT NULL, membership_id TEXT NOT NULL,
-  record_sha256 TEXT NOT NULL CHECK (record_sha256 LIKE 'sha256:%'),
+  record_sha256 TEXT CHECK (record_sha256 IS NULL OR record_sha256 LIKE 'sha256:%'),
+  scope_kind TEXT CHECK (scope_kind IS NULL OR scope_kind IN ('mine', 'record', 'project')),
+  scope_id TEXT CHECK (scope_id IS NULL OR length(scope_id) BETWEEN 1 AND 128),
   state TEXT NOT NULL CHECK (state IN ('pending', 'running', 'done', 'failed')),
   attempts INTEGER NOT NULL CHECK (attempts BETWEEN 0 AND 3),
   lease_token TEXT, lease_expires_at TEXT CHECK (lease_expires_at IS NULL OR unixepoch(lease_expires_at) IS NOT NULL),
@@ -785,6 +787,9 @@ CREATE TABLE authority_trigger_runs_v1 (
   created_at TEXT NOT NULL CHECK (unixepoch(created_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
   UNIQUE (trigger, event_ref),
+  CHECK ((trigger = 'approved_record') = (record_sha256 IS NOT NULL)),
+  CHECK ((trigger = 'sweep') = (scope_kind IS NOT NULL)),
+  CHECK ((scope_kind IS NOT NULL AND scope_kind IN ('record', 'project')) = (scope_id IS NOT NULL)),
   CHECK ((lease_token IS NULL) = (lease_expires_at IS NULL)),
   CHECK ((state = 'running') = (lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)),
   CHECK ((result_json IS NULL) = (result_sha256 IS NULL)),
@@ -792,6 +797,11 @@ CREATE TABLE authority_trigger_runs_v1 (
   CHECK ((state = 'failed') = (error_code IS NOT NULL))
 ) STRICT;
 CREATE INDEX authority_trigger_runs_by_actor_v1 ON authority_trigger_runs_v1 (organization_id, principal_id, membership_id, created_at);
+CREATE INDEX authority_trigger_runs_by_record_v1 ON authority_trigger_runs_v1 (record_sha256) WHERE record_sha256 IS NOT NULL;
+-- One live sweep per person and scope.
+CREATE UNIQUE INDEX authority_trigger_runs_one_live_sweep_v1 ON authority_trigger_runs_v1
+  (organization_id, principal_id, membership_id, scope_kind, ifnull(scope_id, ''))
+  WHERE trigger = 'sweep' AND state IN ('pending', 'running');
 CREATE TRIGGER authority_trigger_run_approved_record_v1
 BEFORE INSERT ON authority_trigger_runs_v1
 WHEN NEW.trigger = 'approved_record' AND NOT EXISTS (
@@ -806,7 +816,8 @@ CREATE TRIGGER authority_trigger_run_identity_immutable_v1
 BEFORE UPDATE ON authority_trigger_runs_v1
 WHEN NEW.run_id != OLD.run_id OR NEW.trigger != OLD.trigger OR NEW.event_ref != OLD.event_ref
   OR NEW.organization_id != OLD.organization_id OR NEW.principal_id != OLD.principal_id OR NEW.membership_id != OLD.membership_id
-  OR NEW.record_sha256 != OLD.record_sha256 OR NEW.created_at != OLD.created_at
+  OR NEW.record_sha256 IS NOT OLD.record_sha256 OR NEW.scope_kind IS NOT OLD.scope_kind OR NEW.scope_id IS NOT OLD.scope_id
+  OR NEW.created_at != OLD.created_at
 BEGIN SELECT RAISE(ABORT, 'trigger run identity is immutable'); END;
 CREATE TRIGGER authority_trigger_run_transition_v1
 BEFORE UPDATE OF state ON authority_trigger_runs_v1
@@ -819,6 +830,76 @@ BEGIN SELECT RAISE(ABORT, 'a finished trigger run is frozen'); END;
 CREATE TRIGGER authority_trigger_run_delete_denied_v1
 BEFORE DELETE ON authority_trigger_runs_v1
 BEGIN SELECT RAISE(ABORT, 'trigger run deletion is denied'); END;
+
+-- Open items (ADR-0033): one shared row per item an approved decision affects. Rows hold pointers,
+-- ECHO's own expected phrase, member ids and check verdicts; never a word read from outside ECHO.
+CREATE TABLE authority_impact_items_v1 (
+  item_id TEXT PRIMARY KEY CHECK (item_id GLOB 'itm_*' AND length(item_id) BETWEEN 8 AND 64),
+  run_id TEXT NOT NULL REFERENCES authority_trigger_runs_v1(run_id),
+  item_key TEXT NOT NULL CHECK (item_key LIKE 'sha256:%'),
+  pointer_json TEXT NOT NULL CHECK (json_valid(pointer_json) AND json_type(pointer_json) = 'object'),
+  record_sha256 TEXT NOT NULL CHECK (record_sha256 LIKE 'sha256:%'),
+  organization_id TEXT NOT NULL,
+  approver_principal_id TEXT NOT NULL,
+  approver_membership_id TEXT NOT NULL REFERENCES authority_memberships(membership_id),
+  relation TEXT CHECK (relation IS NULL OR relation IN ('conflicts', 'needs_updating')),
+  expected TEXT CHECK (expected IS NULL OR length(expected) BETWEEN 1 AND 120),
+  owner_membership_id TEXT NOT NULL REFERENCES authority_memberships(membership_id),
+  owner_match TEXT NOT NULL CHECK (owner_match IN ('jira_account', 'name', 'picked', 'approver', 'reassigned')),
+  owner_set_by TEXT REFERENCES authority_memberships(membership_id),
+  owner_set_at TEXT CHECK (owner_set_at IS NULL OR unixepoch(owner_set_at) IS NOT NULL),
+  state TEXT NOT NULL CHECK (state IN ('unsent', 'open', 'done', 'not_relevant')),
+  state_set_by TEXT REFERENCES authority_memberships(membership_id),
+  state_set_at TEXT CHECK (state_set_at IS NULL OR unixepoch(state_set_at) IS NOT NULL),
+  sent_at TEXT CHECK (sent_at IS NULL OR unixepoch(sent_at) IS NOT NULL),
+  send_command_id TEXT CHECK (send_command_id IS NULL OR length(send_command_id) BETWEEN 1 AND 128),
+  checked_verdict TEXT CHECK (checked_verdict IS NULL OR checked_verdict IN ('landed', 'still_open', 'changed', 'unreadable')),
+  checked_by TEXT REFERENCES authority_memberships(membership_id),
+  checked_at TEXT CHECK (checked_at IS NULL OR unixepoch(checked_at) IS NOT NULL),
+  checked_run_id TEXT REFERENCES authority_trigger_runs_v1(run_id),
+  created_at TEXT NOT NULL CHECK (unixepoch(created_at) IS NOT NULL),
+  updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
+  UNIQUE (run_id, item_key),
+  CHECK (relation IS NOT NULL OR expected IS NULL),
+  CHECK ((state = 'unsent') = (sent_at IS NULL)),
+  CHECK ((sent_at IS NULL) = (send_command_id IS NULL)),
+  CHECK ((state_set_by IS NULL) = (state_set_at IS NULL)),
+  CHECK ((owner_set_by IS NULL) = (owner_set_at IS NULL)),
+  CHECK ((checked_verdict IS NULL) = (checked_at IS NULL) AND (checked_at IS NULL) = (checked_by IS NULL) AND (checked_by IS NULL) = (checked_run_id IS NULL))
+) STRICT;
+CREATE INDEX authority_impact_items_by_owner_v1 ON authority_impact_items_v1 (organization_id, owner_membership_id, state);
+CREATE INDEX authority_impact_items_by_approver_v1 ON authority_impact_items_v1 (organization_id, approver_membership_id, state);
+CREATE INDEX authority_impact_items_by_record_v1 ON authority_impact_items_v1 (record_sha256, state);
+CREATE TRIGGER authority_impact_item_insert_v1
+BEFORE INSERT ON authority_impact_items_v1
+WHEN NEW.state != 'unsent' OR NEW.state_set_by IS NOT NULL OR NEW.owner_set_by IS NOT NULL OR NEW.checked_at IS NOT NULL
+  OR NEW.owner_match NOT IN ('jira_account', 'name', 'approver')
+  OR NOT EXISTS (SELECT 1 FROM authority_trigger_runs_v1 r WHERE r.run_id = NEW.run_id AND r.trigger = 'approved_record' AND r.state = 'done'
+    AND r.record_sha256 = NEW.record_sha256 AND r.organization_id = NEW.organization_id
+    AND r.principal_id = NEW.approver_principal_id AND r.membership_id = NEW.approver_membership_id)
+BEGIN SELECT RAISE(ABORT, 'an open item starts unsent from its finished impact run'); END;
+CREATE TRIGGER authority_impact_item_identity_immutable_v1
+BEFORE UPDATE ON authority_impact_items_v1
+WHEN NEW.item_id != OLD.item_id OR NEW.run_id != OLD.run_id OR NEW.item_key != OLD.item_key OR NEW.pointer_json != OLD.pointer_json
+  OR NEW.record_sha256 != OLD.record_sha256 OR NEW.organization_id != OLD.organization_id
+  OR NEW.approver_principal_id != OLD.approver_principal_id OR NEW.approver_membership_id != OLD.approver_membership_id
+  OR NEW.relation IS NOT OLD.relation OR NEW.expected IS NOT OLD.expected OR NEW.created_at != OLD.created_at
+BEGIN SELECT RAISE(ABORT, 'open item identity is immutable'); END;
+CREATE TRIGGER authority_impact_item_send_v1
+BEFORE UPDATE OF state, sent_at, send_command_id ON authority_impact_items_v1
+WHEN (OLD.state = 'unsent' AND NEW.state NOT IN ('unsent', 'open', 'not_relevant'))
+  OR (OLD.state != 'unsent' AND (NEW.state = 'unsent' OR NEW.sent_at IS NOT OLD.sent_at OR NEW.send_command_id IS NOT OLD.send_command_id))
+BEGIN SELECT RAISE(ABORT, 'open item state move is not allowed'); END;
+-- Any change to the last check needs a strictly newer checked_at; the first check comes from NULL.
+CREATE TRIGGER authority_impact_item_check_newer_v1
+BEFORE UPDATE OF checked_verdict, checked_by, checked_at, checked_run_id ON authority_impact_items_v1
+WHEN (NEW.checked_verdict IS NOT OLD.checked_verdict OR NEW.checked_by IS NOT OLD.checked_by
+    OR NEW.checked_at IS NOT OLD.checked_at OR NEW.checked_run_id IS NOT OLD.checked_run_id)
+  AND (NEW.checked_at IS NULL OR (OLD.checked_at IS NOT NULL AND NEW.checked_at <= OLD.checked_at))
+BEGIN SELECT RAISE(ABORT, 'a last check is replaced only by a newer one'); END;
+CREATE TRIGGER authority_impact_item_delete_denied_v1
+BEFORE DELETE ON authority_impact_items_v1
+BEGIN SELECT RAISE(ABORT, 'open item deletion is denied'); END;
 
 CREATE INDEX authority_memberships_current
   ON authority_memberships (principal_id, status, membership_id);
@@ -2171,7 +2252,7 @@ BEGIN
    WHERE organization_id = OLD.organization_id;
 END;
 
-PRAGMA user_version = 12;
+PRAGMA user_version = 13;
 
 -- A malformed legacy retained note must not pin the source-admission worker.
 -- The disposition carries no title, body, request ID or exception text.

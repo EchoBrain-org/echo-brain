@@ -15,9 +15,10 @@ const ICONS = { imported_meeting: Calendar, note: Note, document: Page, meeting:
 /**
  * One row: what kind it is, its title (a document's kind and size under it),
  * the names of your projects it is filed in, who can read it, and when it was
- * added. A project's own page leaves the projects out.
+ * added. A project's own page leaves the projects out, and says on a
+ * decision's row how many of its items are open.
  */
-export function ItemRow({ item, testid, projects, onOpen }: { item: ListItem; testid: string; projects: boolean; onOpen: () => void }) {
+export function ItemRow({ item, testid, projects, open, onOpen }: { item: ListItem; testid: string; projects: boolean; open?: number | undefined; onOpen: () => void }) {
   const Icon = ICONS[item.ref.kind];
   return (
     <button type="button" class="row item-row" data-testid={testid} data-kind={item.ref.kind} onClick={onOpen}>
@@ -29,6 +30,7 @@ export function ItemRow({ item, testid, projects, onOpen }: { item: ListItem; te
         </span>
       ) : <span class="name">{item.title}</span>}
       {projects && item.projects.length > 0 && <span class="projects" data-testid="item-projects">{item.projects.join(', ')}</span>}
+      {open !== undefined && open > 0 && <span class="open-count" data-testid="item-open">{open} open</span>}
       <Mark visibility={item.visibility} />
       <span class="meta">{when(item.added_at)}</span>
     </button>

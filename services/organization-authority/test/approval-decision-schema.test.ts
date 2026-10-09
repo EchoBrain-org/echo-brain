@@ -1,20 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV12,
+  applyAuthorityBaselineV13,
   AUTHORITY_BASELINE_APPLICATION_ID_V1,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V12,
-  authorityBaselineSha256V12,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V13,
+  authorityBaselineSha256V13,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
-const AUTHORITY_BASELINE_SHA256_V12 =
-  "sha256:14e5a3cb1351db83f43822cd49baf6ab4c1b562c832ef792b718486f8fbb15ef";
+const AUTHORITY_BASELINE_SHA256_V13 =
+  "sha256:1a5b5bb18fc629c6e84eb0170a4f2e93aa0087fa4ceb09d9bcfb790caaeb59aa";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-30T00:00:00.000Z";
 
 function openedCurrentDatabase() {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV12(database);
+  applyAuthorityBaselineV13(database);
   return database;
 }
 
@@ -185,9 +185,9 @@ describe("Authority approval decision schema", () => {
   it("retains the current proposal and decision schema", () => {
     const database = openedCurrentDatabase();
     try {
-      expect(authorityBaselineSha256V12()).toBe(AUTHORITY_BASELINE_SHA256_V12);
+      expect(authorityBaselineSha256V13()).toBe(AUTHORITY_BASELINE_SHA256_V13);
       expect(database.pragma("application_id", { simple: true })).toBe(AUTHORITY_BASELINE_APPLICATION_ID_V1);
-      expect(database.pragma("user_version", { simple: true })).toBe(AUTHORITY_BASELINE_SCHEMA_VERSION_V12);
+      expect(database.pragma("user_version", { simple: true })).toBe(AUTHORITY_BASELINE_SCHEMA_VERSION_V13);
       const columns = (table: string) => database.prepare(`PRAGMA table_info(${table})`).all().map((row) => (row as { readonly name: string }).name);
       expect(columns("authority_live_approval_outbox_v2")).toEqual([
         "candidate_id", "approval_id", "stage_command_id", "state", "approved_snapshot_json", "approved_snapshot_sha256",
@@ -364,7 +364,7 @@ describe("Authority approval decision schema", () => {
   it("refuses to relabel occupied state as a fresh database", () => {
     const database = openedCurrentDatabase();
     try {
-      expect(() => applyAuthorityBaselineV12(database)).toThrow(
+      expect(() => applyAuthorityBaselineV13(database)).toThrow(
         /completely empty database/,
       );
     } finally {

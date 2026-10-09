@@ -39,7 +39,7 @@ export function Sidebar({ state }: { state: State }) {
   const current = !state.concealed && state.route.page === 'project' ? state.route.project.project_id : null;
   const mine = !state.concealed && state.route.page === 'mine';
   const tools = !state.concealed && state.route.page === 'tools';
-  const home = !state.concealed && (state.route.page === 'home' || state.route.page === 'decision');
+  const home = !state.concealed && (state.route.page === 'home' || state.route.page === 'decision' || state.route.page === 'send');
   const needs = needsCount(state);
   const archived = state.archivedProjects;
   const [archivedOpen, setArchivedOpen] = useState(false);

@@ -10,19 +10,21 @@ import { ChangeLine, changeShownInPlace } from './screens/change.js';
 import { Back, Saved, SidebarIcon, Warning } from './screens/icons.js';
 import { Mine } from './screens/mine.js';
 import { NewProject } from './screens/new-project.js';
+import { OpenItems } from './screens/open-items.js';
 import { Organization } from './screens/organization.js';
 import { People } from './screens/people.js';
 import { MembersButton, Project } from './screens/project.js';
 import { ProjectSettings, ProjectSettingsButton } from './screens/project-settings.js';
 import { Reader } from './screens/reader.js';
+import { Send } from './screens/send.js';
 import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
-  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeProjects, closeReader,
-  closeSheet, closeSigninForm, conceal, findingSheet, getState, goHome, hostFailed, keepNewProject, matchesShown, openCapture, openMine, pageCovered,
-  refreshStatus, resume, retryStart, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization,
-  useStore, WARNINGS, windowShown, windowTakesDrop, type State,
+  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeOpenItems, closePicker,
+  closeProjects, closeReader, closeSheet, closeSigninForm, conceal, findingSheet, getState, goHome, hostFailed, keepNewProject, matchesShown, openCapture, openItemsShown, openMine,
+  pageCovered, refreshStatus, resume, retryStart, returnToSend, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar,
+  trayOrganization, useStore, WARNINGS, windowShown, windowTakesDrop, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -52,7 +54,9 @@ function escape(): void {
 
 /**
  * Back steps back one level: a sheet (or what is open in it), compose, the
- * answer (and the source beside it), reader, then a project or People & invites.
+ * answer (and the source beside it), open items, reader, then a project or
+ * People & invites. Pick a person closes first; a decision opened as Tell the
+ * owners?' Details goes back to the card.
  */
 function back(): void {
   const state = getState();
@@ -67,10 +71,13 @@ function back(): void {
   // Escape closes the Projects list first, and only the list.
   if (state.compose && !state.compose.hidden) return state.compose.picking ? closeProjects() : closeCompose();
   if (state.ask) return closeAsk();
+  if (openItemsShown(state)) return closeOpenItems();
   if (state.reader?.menu !== undefined && state.reader.menu !== 'closed') return toggleReaderMenu();
   if (state.reader) return closeReader();
   if (state.organization?.confirm) return cancelRevoke();
   if (state.organization?.menu) return toggleEmployeeMenu(state.organization.menu);
+  if (state.route.page === 'send' && state.send?.picker) return closePicker();
+  if (state.route.page === 'decision' && state.decision?.back !== undefined) return returnToSend();
   if (state.route.page !== 'home') return goHome();
 }
 
@@ -122,6 +129,8 @@ function App() {
 
   const inProject = state.route.page === 'project' ? state.route.project : null;
   const decision = state.route.page === 'decision' ? state.decision : null;
+  const send = state.route.page === 'send' ? state.send : null;
+  const openItems = openItemsShown(state);
   const organization = state.route.page === 'organization' ? state.organization : null;
   const mine = state.route.page === 'mine';
   const tools = state.route.page === 'tools' ? state.tools : null;
@@ -129,11 +138,13 @@ function App() {
   // answer or an original shows until ECHO is back. Project rows stay (Home's
   // and the sidebar's), so a file dragged from Finder can still be dropped on one.
   const covered = pageCovered(state);
-  const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : mine ? 'Mine' : decision ? 'Decision' : null;
+  const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : mine ? 'Mine' : decision || send ? 'Decision' : null;
   const title = covered ? 'ECHO' : state.ask ? 'Ask' : pageName ?? 'ECHO';
-  // Back leaves Ask for the page it was asked from; asked over a reader, Back goes to the reader.
-  const backLabel = covered ? null : state.ask && state.reader ? 'Back'
-    : state.ask || state.reader ? pageName ?? 'Home' : pageName ? 'Home' : null;
+  // Back leaves Ask for the page it was asked from; asked over a reader (or open items), Back goes to it.
+  // Open items opened over a reader go back to the reader; Details go back to Tell the owners?.
+  const over = state.reader !== null || openItems !== null;
+  const backLabel = covered ? null : (state.ask && over) || (openItems && state.reader) ? 'Back'
+    : state.ask || over ? pageName ?? 'Home' : decision?.back !== undefined ? 'Back' : pageName ? 'Home' : null;
   const pane = !covered && state.ask !== null && state.sources?.open != null;
   // A project change not shown where it was asked for shows at the top of the page.
   const banner = state.change && !state.concealed && !changeShownInPlace(state) ? state.change : null;
@@ -145,11 +156,13 @@ function App() {
       <main class={`page${mine && !covered && !state.ask && !state.reader ? ' top' : ''}`}>
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} />
+          : openItems ? <OpenItems page={openItems} />
           : state.reader ? <Reader state={state} reader={state.reader} backTo={pageName ?? 'Home'} />
           : inProject ? <Project state={state} project={inProject} />
           : organization ? <Organization state={state} page={organization} />
           : tools ? <Tools state={state} page={tools} />
           : decision ? <Decision state={state} decision={decision} />
+          : send ? <Send state={state} send={send} />
           : mine ? <Mine state={state} /> : <Home state={state} />}
       </main>
       {/* Always there, so a screen reader announces each toast as it appears. A save only Mine shows opens it. */}

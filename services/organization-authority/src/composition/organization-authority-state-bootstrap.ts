@@ -30,9 +30,9 @@ import {
   readableSearchPlaneBaselineSha256,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import {
-  applyAuthorityBaselineV12,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V12,
-  authorityBaselineSha256V12,
+  applyAuthorityBaselineV13,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V13,
+  authorityBaselineSha256V13,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
@@ -345,8 +345,8 @@ export function bootstrapOrganizationAuthorityState(
     creating_artifact_revision: input.creating_artifact_revision,
     schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V12,
-        schema_sha256: authorityBaselineSha256V12(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V13,
+        schema_sha256: authorityBaselineSha256V13(),
       },
       "control-plane": {
         database_schema_version:
@@ -379,7 +379,7 @@ export function bootstrapOrganizationAuthorityState(
       },
     },
     top_level_appliers: {
-      authority: { apply: applyAuthorityBaselineV12 },
+      authority: { apply: applyAuthorityBaselineV13 },
       "control-plane": { apply: applyOrganizationControlBaselineV4 },
       "record-log": { apply: applyOrganizationRecordLogBaselineV4 },
     },

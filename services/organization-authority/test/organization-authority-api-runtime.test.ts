@@ -1175,13 +1175,15 @@ describe("Organization Authority API runtime", () => {
       expect(session.membership_id).toBe(initialized.owner_membership_id);
       expect(session.display_name).toBe("Founder");
 
-      const unavailableRuns = await fetch(`${origin}/v1/person/runs`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${session.access_token as string}`, "content-type": "application/json" },
-        body: JSON.stringify({ schema_version: 1, operation: "list" }),
-      });
-      expect(unavailableRuns.status).toBe(503);
-      expect(await json(unavailableRuns)).toMatchObject({ error: { code: "unavailable" } });
+      for (const operation of ["list", "home"]) {
+        const unavailableRuns = await fetch(`${origin}/v1/person/runs`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${session.access_token as string}`, "content-type": "application/json" },
+          body: JSON.stringify({ schema_version: 1, operation }),
+        });
+        expect(unavailableRuns.status).toBe(503);
+        expect(await json(unavailableRuns)).toMatchObject({ error: { code: "unavailable" } });
+      }
 
       const recoveryBegin = await fetch(`${origin}/v2/session/oidc/begin`, {
         method: "POST",

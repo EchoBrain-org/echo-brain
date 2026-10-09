@@ -172,10 +172,10 @@ test('a meeting added through Granola reaches Home as a decision to approve, wit
       { signal_id: 'act-2', owner: 'Mina Patel' },
     ],
   });
-  // Back on Home: the row says the check is on its way, then that it found what it changes.
+  // Back on Home: the row says the check is on its way, then what it found waits to be sent.
   await expect(page.getByTestId('title')).toHaveText('ECHO');
   await expect(page.getByTestId('toast')).toContainText('Approved');
-  await expect(page.getByTestId('need-row')).toHaveAttribute('data-kind', /checking|impact/);
+  await expect(page.getByTestId('need-row')).toHaveAttribute('data-kind', /checking|send/);
 });
 
 test('approves a meeting into two projects with an edited owner', async () => {

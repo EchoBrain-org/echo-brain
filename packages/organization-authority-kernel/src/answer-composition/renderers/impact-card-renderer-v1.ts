@@ -28,7 +28,7 @@ type Entry = AgenticEvidenceBundleItemV1;
 export interface ImpactCardTriggerInputV1 { readonly record: unknown }
 type Draft = {
   readonly decided: readonly { readonly id: string; readonly text: string }[];
-  readonly affected: readonly { readonly id: string; readonly says_now: string; readonly relation: PersonImpactRelationV1; readonly date_at_risk?: { readonly date: string; readonly milestone: string } }[];
+  readonly affected: readonly { readonly id: string; readonly says_now: string; readonly relation: PersonImpactRelationV1; readonly expected?: string; readonly date_at_risk?: { readonly date: string; readonly milestone: string } }[];
 };
 
 /** The card's call runs in its own span; the audit records it as an `answer` call. */
@@ -62,6 +62,7 @@ export const IMPACT_CARD_PROMPT = [
   "  - id: the item's id.",
   "  - says_now: one short line on what the item says now, from its text or details. Describe a ticket whose title is an instruction as what it asks for (\"THERM-46 asks for two decimals\").",
   "  - relation: \"confirms\" when the item already agrees with the record; \"conflicts\" when it says something the record contradicts; \"needs_updating\" when the record changes something it describes, so it is now out of date.",
+  "  - expected: for \"conflicts\" and \"needs_updating\", a short phrase (under 15 words) of what the record requires of this item, in the record's own terms (\"launch next week\", \"two decimals from DVT\"). Never a date, name, number or fact that only the item states. \"\" for \"confirms\".",
   "  - date_at_risk: a date the item itself states (its due date, or a YYYY-MM-DD date in its title or text) that the record puts at risk; \"\" when none. A date whose date_kind is created or version_created is when the item was written, never a deadline.",
   "  - milestone: what that date is measured against, such as a build, gate or release; \"\" when there is no date at risk.",
   "",
@@ -73,7 +74,7 @@ export const IMPACT_CARD_PROMPT = [
   "- If the record affects none of the items, return \"affected\": [].",
   "",
   "Reply with ONLY a JSON object in exactly this shape:",
-  "{\"decided\":[{\"id\":\"E1\",\"text\":\"<one line>\"}],\"affected\":[{\"id\":\"E5\",\"says_now\":\"<one line>\",\"relation\":\"conflicts\",\"date_at_risk\":\"\",\"milestone\":\"\"}]}",
+  "{\"decided\":[{\"id\":\"E1\",\"text\":\"<one line>\"}],\"affected\":[{\"id\":\"E5\",\"says_now\":\"<one line>\",\"relation\":\"conflicts\",\"expected\":\"<short phrase>\",\"date_at_risk\":\"\",\"milestone\":\"\"}]}",
 ].join("\n");
 
 const ID = { type: "string", maxLength: 16 } as const;
@@ -83,8 +84,9 @@ const IMPACT_CARD_SCHEMA: StructuredGenerationJsonSchema = Object.freeze({
       type: "object", additionalProperties: false, required: ["id", "text"], properties: { id: ID, text: { type: "string", maxLength: LIMITS.line_chars } },
     } },
     affected: { type: "array", maxItems: LIMITS.affected, items: {
-      type: "object", additionalProperties: false, required: ["id", "says_now", "relation", "date_at_risk", "milestone"], properties: {
+      type: "object", additionalProperties: false, required: ["id", "says_now", "relation", "expected", "date_at_risk", "milestone"], properties: {
         id: ID, says_now: { type: "string", maxLength: LIMITS.line_chars }, relation: { type: "string", enum: [...RELATIONS] },
+        expected: { type: "string", maxLength: LIMITS.expected_chars },
         date_at_risk: { type: "string", maxLength: 10 }, milestone: { type: "string", maxLength: LIMITS.milestone_chars },
       },
     } },
@@ -106,11 +108,13 @@ function parseCard(value: unknown): Draft {
     const entry = object(raw); const id = cleanId(entry?.id); const saysNow = line(entry?.says_now, LIMITS.line_chars);
     const relation = RELATIONS.find(value => value === cleanLine(entry?.relation, 32).toLowerCase().replace(/[\s-]+/gu, "_"));
     if (id === null || saysNow.length === 0 || relation === undefined) return [];
+    // What the record requires is kept only for an item it conflicts with or changes.
+    const expected = relation === "confirms" ? "" : line(entry?.expected, LIMITS.expected_chars);
     const date = cleanLine(entry?.date_at_risk, 10); const milestone = line(entry?.milestone, LIMITS.milestone_chars);
-    return [{ id, says_now: saysNow, relation, ...(isPersonImpactCardDateV1(date) && milestone.length > 0 ? { date_at_risk: { date, milestone } } : {}) }];
+    return [{ id, says_now: saysNow, relation, ...(expected.length > 0 ? { expected } : {}), ...(isPersonImpactCardDateV1(date) && milestone.length > 0 ? { date_at_risk: { date, milestone } } : {}) }];
   });
-  // The free text a model writes: decided lines, what items say now, milestones. The relation is a closed value.
-  const lines = [...decided.map(entry => entry.text), ...affected.flatMap(entry => [entry.says_now, ...(entry.date_at_risk === undefined ? [] : [entry.date_at_risk.milestone])])];
+  // The free text a model writes: decided lines, what items say now, what the record expects of them, milestones. The relation is a closed value.
+  const lines = [...decided.map(entry => entry.text), ...affected.flatMap(entry => [entry.says_now, ...(entry.expected === undefined ? [] : [entry.expected]), ...(entry.date_at_risk === undefined ? [] : [entry.date_at_risk.milestone])])];
   if (lines.some(text => SUGGESTED_EDIT.some(rule => rule.test(text)))) throw new AgenticAskOutputErrorV1("write what the record decided and what each item says now, never what to change");
   if (lines.some(text => OWNERSHIP_CLAIM.test(text))) throw new AgenticAskOutputErrorV1("never say who owns, is assigned to or is responsible for anything; the card adds owners from item details");
   return { decided, affected };
@@ -195,7 +199,7 @@ export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1
     };
     const shown = new Map([...record, ...items].map(entry => [entry.short, entry]));
     let decided: PersonImpactCardV1["decided"] = [];
-    let rows: { readonly entry: Entry; readonly says_now: string; readonly relation?: PersonImpactRelationV1; readonly date_at_risk?: PersonImpactAffectedV1["date_at_risk"] }[];
+    let rows: { readonly entry: Entry; readonly says_now: string; readonly relation?: PersonImpactRelationV1; readonly expected?: string; readonly date_at_risk?: PersonImpactAffectedV1["date_at_risk"] }[];
     if (draft !== null) {
       // Only items the model was shown: a record item is decided, any other may be affected, each once.
       const isRecord = (id: string) => record.some(entry => entry.short === id);
