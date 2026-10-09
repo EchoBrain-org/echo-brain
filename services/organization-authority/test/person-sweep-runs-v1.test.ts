@@ -15,6 +15,7 @@ afterEach(() => { for (const capture of captures.splice(0)) capture.close(); });
 
 type Verdict = PersonSweepVerdictV1 | null;
 type SweepScope = { readonly scope: 'mine' } | { readonly scope: 'record' | 'project'; readonly id: string };
+type DeskScope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string };
 const HOUR = 3_600_000;
 const MINE = { scope: 'mine' } as const;
 const NOTHING = { state: 'nothing_to_check' } as const;
@@ -28,14 +29,18 @@ function runOf(result: PersonRunsResultsV1['sweep']): string {
 /**
  * Ari's decision after Send (the open-items fixture): the Jira ticket and the
  * other decision's action, both open. A sweep's model says `verdicts` of each
- * finding, by the kind of the item it is about (null: not assessed), and
+ * finding, by the kind of the item it is about (null: not assessed), or as a
+ * function of that kind and the scope of the desk the sweep was bound to; it
  * writes outside words into its lines and labels, which nothing may store.
  * Sweeps wait for their research until `settled` lets them finish, so a test
  * can change the world while a sweep is in flight.
  */
-async function sweepFixture(options: OpenItemsFixtureOptionsV1 & { readonly owner?: FixturePerson; readonly verdicts?: Partial<Record<string, Verdict>> } = {}) {
+async function sweepFixture(options: OpenItemsFixtureOptionsV1 & { readonly owner?: FixturePerson;
+  readonly verdicts?: Partial<Record<string, Verdict>> | ((kind: string, desk: DeskScope) => Verdict) } = {}) {
   const f = await sentFixture(options);
-  const verdicts = options.verdicts ?? {};
+  const given = options.verdicts ?? {};
+  const verdictOf = (kind: string): Verdict => (typeof given === 'function'
+    ? given(kind, (f.bindDesk.mock.calls.at(-1)![2] as unknown as { readonly scope: DeskScope }).scope) : given[kind] ?? null);
   /** Each sweep's findings, as its research was given them. */
   const findings: SweepTriggerInputV1['findings'][] = [];
   let release!: () => void;
@@ -47,9 +52,10 @@ async function sweepFixture(options: OpenItemsFixtureOptionsV1 & { readonly owne
     const citations: unknown[] = [];
     const results = input.findings.map((finding, finding_index) => {
       const pointer = finding.citations[0] as { readonly kind: string };
-      const verdict = verdicts[pointer.kind] ?? null;
+      const verdict = verdictOf(pointer.kind);
       if (verdict === null || verdict === 'unreadable') return { finding_index, verdict, line: verdict === null ? 'Not assessed.' : 'ECHO could not read this item.', citation_indexes: [] };
-      citations.push({ citation: pointer, kind: pointer.kind === 'approved_record' ? 'action' : pointer.kind, label: `Now ${f.outsideText}`, visibility: 'only_me' });
+      const kind = pointer.kind === 'approved_record' ? 'action' : pointer.kind === 'source_revision' ? 'document_passage' : pointer.kind;
+      citations.push({ citation: pointer, kind, label: `Now ${f.outsideText}`, visibility: 'only_me' });
       return { finding_index, verdict, line: `It reads ${f.outsideText} now.`, citation_indexes: [citations.length - 1] };
     });
     return { findings: results, status: personSweepResultStatusV1(results), citations };
@@ -302,6 +308,36 @@ describe('what a sweep checks and how', () => {
     await f.settled(next.run_id);
     // Both were checked by now; the ticket longest ago.
     expect(kinds()).toEqual(['ticket', 'approved_record']);
+  });
+
+  it('reads a project sweep in its project only when every item\'s decision is in that project alone (R75)', async () => {
+    // A desk scoped to project A cannot read what lies only in project B, such as this ECHO document; on a wider desk it reads.
+    const f = await sweepFixture({ owner: 'mina', verdicts: (kind, desk) => (kind === 'source_revision' && desk.kind === 'project' ? 'unreadable' : 'landed') });
+    const document = { kind: 'source_revision', source_id: `source:${'d'.repeat(64)}`, revision_id: 'revision-1', source_sha256: canonicalSha256('B document'),
+      representation_sha256: canonicalSha256('B document text'), anchor_sha256: canonicalSha256('B document anchor') };
+    f.db.transaction(() => f.items.insertForRun(f.db, f.runs.readUnfenced(f.runId)!, [{ item_key: impactItemKeyV1(document)!, pointer: document,
+      relation: 'needs_updating', expected: 'launch next week', owner_membership_id: f.membership('ari'), owner_match: 'approver' }]))();
+    const documentItem = f.items.forRun(f.runId).find(row => row.pointer.kind === 'source_revision')!;
+    expect(f.items.send({ run_id: f.runId, by: f.membership('ari'), command_id: 'send-2', choices: [{ item_id: documentItem.item_id, include: true, owner_membership_id: f.membership('mina') }] }))
+      .toMatchObject({ kind: 'sent', sent: 1 });
+    const desk = () => (f.bindDesk.mock.calls.at(-1)![2] as unknown as { readonly scope: DeskScope }).scope;
+    // The decision is in projects A and B, so its impact check read everywhere Ari may read: a sweep of project A does too.
+    const inOneProject = f.readable.getMockImplementation()!;
+    f.readable.mockImplementation(input => new Map([...inOneProject(input)].map(([record, decision]) => [record, { ...decision, project_ids: [f.projectA, f.projectB] as never }])));
+    const wide = await f.queueAndStart('ari', { scope: 'project', id: f.projectA });
+    await f.settled(wide.run_id);
+    expect(desk()).toEqual({ kind: 'global' });
+    expect(f.items.read(documentItem.item_id)!.check).toMatchObject({ verdict: 'landed', run_id: wide.run_id });
+    const ofRecord = await f.queueAndStart('ari', { scope: 'record', id: f.record });
+    await f.settled(ofRecord.run_id);
+    expect(desk()).toEqual({ kind: 'global' });
+    // A decision in project A alone still reads in project A.
+    f.readable.mockImplementation(inOneProject);
+    for (const scope of [{ scope: 'project', id: f.projectA }, { scope: 'record', id: f.record }] as const) {
+      const narrow = await f.queueAndStart('ari', scope);
+      await f.settled(narrow.run_id);
+      expect(desk(), JSON.stringify(scope)).toEqual({ kind: 'project', project_id: f.projectA });
+    }
   });
 
   it('checks at most twenty items at a time; the others wait for the next sweep', async () => {

@@ -13,12 +13,11 @@ import { impactCardLineV1 } from '@echo-brain/organization-authority-kernel/answ
 import { SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/sweep-renderer-v1';
 import type { SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { TriggerRunRowV1, TriggerRunScopeV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
-import { openItemDecisionAccessV1 } from './open-items-policy-v1.js';
 import {
   assessOpenItemsV1, openItemDecisionPartsV1, openItemKindV1, sweepScopeOpenItemsV1,
   type AssessedOpenItemV1, type OpenItemsContextV1, type OpenItemSourcesV1, type OpenItemViewerV1,
 } from './person-open-items-v1.js';
-import type { PersonRecordAnchorV1, PersonRecordProjectsV1 } from './person-record-search-route.js';
+import type { PersonRecordAnchorV1 } from './person-record-search-route.js';
 
 /**
  * A sweep's own work (open items and Home v1, section 6; ADR-0033): which
@@ -40,7 +39,7 @@ export interface SweepCountsV1 {
 /** Where a sweep reads its items and their decisions, and writes its checks. */
 export interface PersonSweepSourcesV1 extends OpenItemSourcesV1 {
   readonly items: OpenItemSourcesV1['items'] & Pick<SqliteImpactItemsV1, 'read' | 'recordCheck'>;
-  readonly records: OpenItemSourcesV1['records'] & PersonRecordAnchorV1 & PersonRecordProjectsV1;
+  readonly records: OpenItemSourcesV1['records'] & PersonRecordAnchorV1;
 }
 /** Where research reads: a project, or everything the person may read. */
 type DeskScope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string };
@@ -69,17 +68,24 @@ function countsOf(findings: readonly Pick<PersonSweepFindingResultV1, 'verdict'>
 }
 
 /**
- * A project sweep reads in its project; a decision's, in the decision's
- * project when the caller is shown the decision; any other, everywhere the
- * caller may read.
+ * Where a sweep of a decision or a project reads (R75): in one project only
+ * when every item it checks comes from a decision the caller is shown that is
+ * in exactly that one project, the rule the impact run that found the items
+ * used (a project sweep's decisions are all in its project). Otherwise, and
+ * for `mine`, everywhere the caller may read, still fenced by their own
+ * access, so an item of a decision's other project is not refused and
+ * recorded as unreadable.
  */
-function deskScopeOf(sources: PersonSweepSourcesV1, viewer: OpenItemViewerV1, scope: TriggerRunScopeV1, context: OpenItemsContextV1): DeskScope {
-  if (scope.kind === 'project') return Object.freeze({ kind: 'project', project_id: scope.project_id });
-  if (scope.kind === 'record' && openItemDecisionAccessV1({ reads_decision: context.decisions.has(scope.record_sha256) }).see_decision) {
-    const projects = sources.records.recordProjects({ access_token: viewer.token, record_sha256: scope.record_sha256 });
-    return projects.length === 1 ? Object.freeze({ kind: 'project', project_id: projects[0]! }) : GLOBAL;
+function deskScopeOf(scope: TriggerRunScopeV1, context: OpenItemsContextV1, checked: readonly AssessedOpenItemV1[]): DeskScope {
+  if (scope.kind === 'mine') return GLOBAL;
+  const projects = new Set<string>();
+  for (const { row, access } of checked) {
+    const decision = access.see_decision ? context.decisions.get(row.record_sha256) : undefined;
+    if (decision === undefined || decision.project_ids.length !== 1) return GLOBAL;
+    projects.add(decision.project_ids[0]!);
   }
-  return GLOBAL;
+  const [only] = projects;
+  return projects.size === 1 && only !== undefined ? Object.freeze({ kind: 'project', project_id: only }) : GLOBAL;
 }
 
 /** The items the caller still sees as the sweep finishes, each read again and asked of the policy again. */
@@ -137,7 +143,7 @@ export async function sweepOpenItemsV1(input: {
     };
   });
 
-  const research = await input.research(deskScopeOf(sources, viewer, run.scope, context));
+  const research = await input.research(deskScopeOf(run.scope, context, checked));
   const event = SWEEP.parseEvent({ findings }) as SweepTriggerInputV1;
   const output = await research.renderWithResearch({ trigger: SWEEP.name, brief: SWEEP.brief(event), renderer: SWEEP_RENDERER_V1, trigger_input: event, signal: input.signal });
   const result = validatePersonSweepResultV1(output.rendered, findings.length);
