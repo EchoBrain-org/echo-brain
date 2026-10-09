@@ -20,6 +20,13 @@ export interface OpenItemFactsV1 {
    * their `sent_at`, so `sent_at` alone does not answer this.
    */
   readonly sent_to_owner: boolean;
+  /**
+   * The item's stage. An unsent item waits on its approver to send it (on the
+   * decision's project leads when the approver has left), and nobody sets its
+   * state or reassigns it before Send: Send picks its owner. A closed item
+   * waits on no one.
+   */
+  readonly state: 'unsent' | 'open' | 'done' | 'not_relevant';
   /** The viewer passes the exact record check for the item's decision now. */
   readonly reads_decision: boolean;
   /** The viewer is an active lead of one of the decision's projects. */
@@ -32,7 +39,7 @@ export interface OpenItemAccessV1 {
   readonly see_outside: boolean;
   readonly set_state: boolean;
   readonly assign: boolean;
-  /** Who the item waits on now: the owner, else the approver, else the decision's project leads. */
+  /** Who the item waits on now: the owner, else the approver, else the decision's project leads; an unsent item, its approver, else the leads. */
   readonly waits_on: 'owner' | 'approver' | 'leads';
   readonly waits_on_viewer: boolean;
 }
@@ -40,13 +47,15 @@ export function openItemAccessV1(facts: OpenItemFactsV1): OpenItemAccessV1 {
   const owner = facts.viewer === facts.owner;
   const approver = facts.viewer === facts.approver;
   const see_row = facts.reads_decision || (owner && facts.sent_to_owner);
-  const waits_on = facts.owner_active ? 'owner' as const : facts.approver_active ? 'approver' as const : 'leads' as const;
+  const unsent = facts.state === 'unsent';
+  const closed = facts.state === 'done' || facts.state === 'not_relevant';
+  const waits_on = !unsent && facts.owner_active ? 'owner' as const : facts.approver_active ? 'approver' as const : 'leads' as const;
   return Object.freeze({
     see_row,
     see_outside: see_row && facts.opens_item === true,
-    set_state: see_row && (approver || owner),
-    assign: see_row && (approver || owner || facts.leads_decision_project),
+    set_state: see_row && !unsent && (approver || owner),
+    assign: see_row && !unsent && (approver || owner || facts.leads_decision_project),
     waits_on,
-    waits_on_viewer: see_row && (waits_on === 'owner' ? owner : waits_on === 'approver' ? approver : facts.leads_decision_project),
+    waits_on_viewer: see_row && !closed && (waits_on === 'owner' ? owner : waits_on === 'approver' ? approver : facts.leads_decision_project),
   });
 }
