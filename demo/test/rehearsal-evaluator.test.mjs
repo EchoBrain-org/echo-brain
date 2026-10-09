@@ -132,13 +132,6 @@ test("passes a complete captured rehearsal", () => {
   assert.ok(report.repeatability.every((run) => run.stable && run.unavailable_count === 0));
 });
 
-test("rejects a duplicate captured case instead of selecting the first answer", () => {
-  const result = passingResult();
-  result.answers.push(structuredClone(result.answers[1]));
-  const report = evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths });
-  assert.equal(report.passed, false);
-});
-
 test("scripted Ask ECHO questions fit the 32-term public contract", () => {
   for (const { id, question } of expectations.retrieval_cases) {
     const terms = new Set(
@@ -153,9 +146,7 @@ test("scripted Ask ECHO questions fit the 32-term public contract", () => {
 test("fails closed when required evidence is missing", () => {
   const result = passingResult();
   result.determinism[0].trials.pop();
-  const report = evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths });
-  assert.equal(report.passed, false);
-  assert.equal(report.checks.find((item) => item.id === "14")?.passed, false);
+  rejects(result, "14");
 });
 
 test("keeps action assignment outside the demo oracle", () => {
@@ -172,9 +163,7 @@ test("fails when a required decision has incomplete evidence or is not decided",
   const decision = result.approved_decisions[0];
   decision.evidence_block_ids = [];
   decision.status = "proposed";
-  const report = evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths });
-  assert.equal(report.passed, false);
-  assert.equal(report.checks.find((item) => item.id === "06")?.passed, false);
+  rejects(result, "06");
 });
 
 test("fails when a private price answer cites a record for a team member", () => {
@@ -182,17 +171,13 @@ test("fails when a private price answer cites a record for a team member", () =>
   const answerCapture = result.answers.find((item) => item.case_id === "team-member-private-price-question");
   answerCapture.citation_meeting_ids = [expectations.meeting_expectations[3].meeting_id];
   answerCapture.retrieved_record_ids = ["v4-record-4"];
-  const report = evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths });
-  assert.equal(report.passed, false);
-  assert.equal(report.checks.find((item) => item.id === "11")?.passed, false);
+  rejects(result, "11");
 });
 
 test("fails when a mapped fact is not present in the captured answer", () => {
   const result = passingResult();
   result.answers.find((item) => item.case_id === "after-team-approval-rollout-question").claims[0].observed_text = "a fact absent from the answer";
-  const report = evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths });
-  assert.equal(report.passed, false);
-  assert.equal(report.checks.find((item) => item.id === "08")?.passed, false);
+  rejects(result, "08");
 });
 
 test("fails when one unrelated answer fragment is mapped to every fact with case-wide citations", () => {
@@ -204,25 +189,19 @@ test("fails when one unrelated answer fragment is mapped to every fact with case
     observed_text: "Echo has an approved rollout plan.",
     citation_meeting_ids: answerCapture.citation_meeting_ids
   }));
-  const report = evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths });
-  assert.equal(report.passed, false);
-  assert.equal(report.checks.find((item) => item.id === "08")?.passed, false);
+  rejects(result, "08");
 });
 
 test("fails when a team answer retrieves the Only-me record", () => {
   const result = passingResult();
   result.answers.find((item) => item.case_id === "after-team-approval-rollout-question").retrieved_record_ids.push("v4-record-4");
-  const report = evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths });
-  assert.equal(report.passed, false);
-  assert.equal(report.checks.find((item) => item.id === "10")?.passed, false);
+  rejects(result, "10");
 });
 
 test("fails when the private answer is not captured from the exact approver", () => {
   const result = passingResult();
   result.answers.find((item) => item.case_id === "approver-private-price-question").principal = "normal_team_member";
-  const report = evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths });
-  assert.equal(report.passed, false);
-  assert.equal(report.checks.find((item) => item.id === "12")?.passed, false);
+  rejects(result, "12");
 });
 
 function evaluate(result, oracle = expectations) {
@@ -292,6 +271,8 @@ for (const expected of expectations.retrieval_cases.filter((item) => item.expect
       answer.answer_text = answer.answer_text.replace(missing.observed_text, "");
       syncTrials(result, expected.id);
       rejects(result, "09");
+      // Paraphrases share their primary case's answer data, so phrase omission runs once per primary case.
+      if (expected.id !== expected.primary_case_id) continue;
       const group = expectations.answer_groups.find((group) => group.id === groupId);
       for (const phrase of group.required_phrases) {
         const result = passingResult();

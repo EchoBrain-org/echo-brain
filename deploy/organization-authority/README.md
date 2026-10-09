@@ -456,6 +456,67 @@ A rehearsal stage receipt staged before the move is refused as invalid;
 re-stage it under a new operation ID, and delete any leftover captured
 `slack-*` files by hand.
 
+### Custom synthetic staging meetings
+
+On an onboarded staging Authority, the owner can submit a custom meeting through
+the installed Person CLI. Deploy a reviewed server and matching CLI that support
+this operation through the existing current-host release lane. It is additive to
+V13; no reset, Granola connection, host file copy, or source-profile change is
+needed. Production does not mount the synthetic provider.
+
+Create a UTF-8 JSON file with exactly these four fields (48 KiB maximum):
+
+```json
+{
+  "id": "synthetic-custom-launch-exception-1",
+  "title": "Launch exception rehearsal",
+  "notes": "Synthetic rehearsal only. Decision: start the next phase while the documented gate is still on hold. No new passing test evidence exists.",
+  "transcript": ""
+}
+```
+
+Use `notes` for notes and `transcript` for a synthetic transcript; leave the unused
+field empty. At least one must contain text. Notes never become a transcript.
+The server adds a `SYNTHETIC STAGING - ` title prefix and synthetic provenance.
+IDs must start with `synthetic-custom-`, contain only lowercase ASCII letters,
+digits and hyphens, and be at most 128 characters. Titles are at most 200 characters.
+
+```sh
+echo-brain person tools meetings --tool synthetic \
+  --meeting-file /absolute/private/meeting.json --retain \
+  --echo-project prj_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+
+echo-brain person tools meetings --tool synthetic \
+  --request '{"schema_version":2,"tool_id":"synthetic","operation":"home"}'
+
+echo-brain person tools meetings --tool synthetic \
+  --request '{"schema_version":2,"tool_id":"synthetic","operation":"reviews"}'
+```
+
+Use an actual joined project ID, or omit `--echo-project` for no suggestion.
+`--retain` explicitly permits storing the fixture and processing it. CLI
+submission must use `--meeting-file`; `--request` refuses `submit` so meeting
+content stays out of command-line arguments and shell history. The queued
+receipt is not an approval: the usual worker extracts decisions and presents
+one proposal for the owner to review on the desktop or its linked Slack DM.
+Approval then uses the ordinary record publisher and automatic impact check.
+Jira and Confluence project mappings and readable source evidence are still
+needed to assess conflicts with those tools. Submission never writes to them.
+
+Retry the same file and project after an unknown outcome. An ID is immutable
+within its personal source; changed content requires a new ID. Duplicate retries
+reuse the extraction and proposal. The private, lineage-bound
+`state/staging-synthetic-meetings.sqlite` sidecar preserves submissions over
+service restarts. Storage is bounded to 100 custom meetings per personal source
+and 1,000 per Authority lineage. A failure after storing content but before
+queueing may leave a retained, unqueued fixture; retrying the same submission
+queues it. There is no deletion or overwrite operation. The existing archive
+and reset lane remains the way to replace a whole disposable rehearsal.
+Before downgrading to a server without custom submission, let its pending
+custom imports finish or cancel them using `cancel_import` with the source key
+and meeting ID from `home`. An older provider cannot pull custom meeting IDs.
+Retain the sidecar with the Authority state when restoring this release.
+
 ### Fresh four-meeting staging rehearsal
 
 Use the normal clean Authority for a fresh staging rehearsal with the four
@@ -466,7 +527,8 @@ available only for `authority-staging.echobrain.org`.
 Finalization queues the notes. To replace these notes
 or start with a clean corpus, first use `replace-rehearsal` to archive the
 unreleased state, then prepare again. There is no selective corpus reset or
-post-finalize source change.
+post-finalize replacement of this bundled corpus. Additional meetings can use
+the custom submission command above.
 
 Prepare a separate current-user-owned mode-`0700` directory containing exactly
 these mode-`0600` files. Use the fixture preparer to make the owner-specific
@@ -492,8 +554,8 @@ The four required filenames are
 into `clean-data/meetings`, binds the normal Compose environment to it, and
 keeps the normal release profile, AWS logs, and runtime observability. The
 credential bundle requires no Granola inputs. Without the optional directory,
-the owner's synthetic source holds no fixture notes; content enters
-only through the explicit release-bound canary request. The wrapper carries the
+the owner's synthetic source holds no bundled fixture notes; content enters
+through an explicit release-bound canary request or custom submission. The wrapper carries the
 same selected directory through setup finalization and normal service startup;
 the Compose default is empty.
 

@@ -9,7 +9,7 @@ import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persiste
 import { SqlitePersonAgenticAskAuditV1 } from "../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { createPersonAnswerV3Route } from "../src/composition/person-answer-v3-route.js";
-import { createPersonLiveAnswerRouteV1 } from "../src/composition/person-live-answer-route-v1.js";
+import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from "../src/composition/person-live-answer-route-v1.js";
 import type { PersonPageCitationV1, PersonTicketCitationV1 } from "@echo-brain/organization-api";
 import type { PersonLiveEvidenceItemV1, PersonLiveEvidenceSourceV1 } from "@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1";
 import { PersonRecordSearchIndexLagV1 } from "../src/composition/person-record-search-route.js";
@@ -194,9 +194,12 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(owner.parts[0]!.statements[0]!.private).toBe(true); expect(owner.direct).toBeUndefined();
   });
 
-  it("stops before the answer if access is revoked during research", async () => {
-    const f = fixture(); f.upload("Atlas plan", "The launch window is October."); f.revokeAfterStep(2);
-    await expect(f.ask()).rejects.toThrow("membership revoked"); expect(f.roles).toEqual(["step", "step"]);
+  it.each([
+    { name: "stops before the answer if access is revoked during research", shortcut: false, step: 2, roles: ["step", "step"] },
+    { name: "revalidates after research before releasing evidence to the answer", shortcut: true, step: 1, roles: ["step"] },
+  ])("$name", async ({ shortcut, step, roles }) => {
+    const f = fixture({ small_scope_shortcut: shortcut }); f.upload("Atlas plan", "The launch window is October."); f.revokeAfterStep(step);
+    await expect(f.ask()).rejects.toThrow("membership revoked"); expect(f.roles).toEqual(roles);
     expect(auditRow(f.database)).toBeUndefined();
   });
 
@@ -243,15 +246,6 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(f.roles).toEqual(["step", "step", "step", "answer"]);
   });
 
-  it("revalidates after research before releasing evidence to the answer", async () => {
-    const f = fixture({ small_scope_shortcut: true });
-    f.upload("Atlas plan", "The launch window is October.");
-    f.revokeAfterStep(1);
-    await expect(f.ask()).rejects.toThrow("membership revoked");
-    expect(f.roles).toEqual(["step"]);
-    expect(auditRow(f.database)).toBeUndefined();
-  });
-
   it("cancels before publication and records one cancelled terminal audit", async () => {
     const f = fixture({ small_scope_shortcut: true });
     f.upload("Atlas plan", "The launch window is October.");
@@ -269,6 +263,14 @@ describe("Agentic Ask V5 combined request-local sources", () => {
     const result = Object.freeze({ items: Object.freeze([item]), truncated: false, receipt_digests: Object.freeze([item.receipt_sha256]) });
     return Object.freeze({ tool_id, search: vi.fn(async () => result), list: vi.fn(async () => result), open: vi.fn(async () => result), revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}) });
   };
+  const liveRoute = (f: ReturnType<typeof fixture>, model: StructuredGenerationPort, live_sources: CreatePersonLiveAnswerRouteOptionsV1["live_sources"]) => createPersonLiveAnswerRouteV1({
+    authority_id: "oau_fixture", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
+    sessions: { authenticateAccess: () => authorization(OWNER) } as never,
+    originals: f.originals, records: { initializeDesk() { throw new PersonRecordSearchIndexLagV1(); } } as never,
+    model, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 1_000 },
+    audit: { forRequest: () => ({ append: () => undefined }), forLiveRequest: () => ({ record: async () => canonicalSha256("live-audit") }) } as never,
+    live_sources,
+  }, 6);
 
   it("combines stored evidence, a work item and a live page in one V6 answer without provider-specific planner paths", async () => {
     const f = fixture();
@@ -296,14 +298,7 @@ describe("Agentic Ask V5 combined request-local sources", () => {
         ? { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "open", evidence: [] }] }], actions: [{ tool: "search", args: { query: "EVT Tuesday" } }] }
         : { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "found", evidence: listed.map(item => item.id) }] }], actions: [{ tool: "finish", args: {} }] };
     } };
-    const route = createPersonLiveAnswerRouteV1({
-      authority_id: "oau_fixture", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
-      sessions: { authenticateAccess: () => authorization(OWNER) } as never,
-      originals: f.originals, records: { initializeDesk() { throw new PersonRecordSearchIndexLagV1(); } } as never,
-      model, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 1_000 },
-      audit: { forRequest: () => ({ append: () => undefined }), forLiveRequest: () => ({ record: async () => canonicalSha256("live-audit") }) } as never,
-      live_sources: [{ ...LEGACY_TICKET_CONNECTOR_V1, application: { source: async () => ticketSource } }, { ...LEGACY_PAGE_CONNECTOR_V1, application: { source: async () => pageSource } }],
-    }, 6);
+    const route = liveRoute(f, model, [{ ...LEGACY_TICKET_CONNECTOR_V1, application: { source: async () => ticketSource } }, { ...LEGACY_PAGE_CONNECTOR_V1, application: { source: async () => pageSource } }]);
     const answer = await route.ask({ access_token: "owner", request: { schema_version: 3, question: "When does EVT start?" } });
     expect(answer).toMatchObject({ schema_version: 6, outcome: "answered" });
     expect(answer.citations.map(value => value.kind).sort()).toEqual(["document_passage", "page", "ticket"]);
@@ -314,14 +309,7 @@ describe("Agentic Ask V5 combined request-local sources", () => {
   it("does not silently omit a denied page source or broaden to another page scope", async () => {
     const f = fixture();
     const denied = vi.fn(async () => { throw new AuthorityOperationError("unauthorized", "provider denied"); });
-    const route = createPersonLiveAnswerRouteV1({
-      authority_id: "oau_fixture", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
-      sessions: { authenticateAccess: () => authorization(OWNER) } as never,
-      originals: f.originals, records: { initializeDesk() { throw new PersonRecordSearchIndexLagV1(); } } as never,
-      model: { generate: async () => { throw new Error("model must not run"); } }, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 1_000 },
-      audit: { forRequest: () => ({ append: () => undefined }), forLiveRequest: () => ({ record: async () => canonicalSha256("live-audit") }) } as never,
-      live_sources: [{ ...LEGACY_PAGE_CONNECTOR_V1, application: { source: denied } }],
-    }, 6);
+    const route = liveRoute(f, { generate: async () => { throw new Error("model must not run"); } }, [{ ...LEGACY_PAGE_CONNECTOR_V1, application: { source: denied } }]);
     await expect(route.ask({ access_token: "owner", request: { schema_version: 3, question: "When does EVT start?" } })).rejects.toMatchObject({ code: "unauthorized" });
     expect(denied).toHaveBeenCalledTimes(1);
   });

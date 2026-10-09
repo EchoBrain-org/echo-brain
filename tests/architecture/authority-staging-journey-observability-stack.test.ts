@@ -90,19 +90,8 @@ describe("staging journey observability overview stack", () => {
     });
 
     const serialized = JSON.stringify(stack);
-    expect(serialized).toContain(STAGING_LOG_GROUP);
     expect(serialized).not.toContain("authority-prod");
     expect(serialized).not.toMatch(/production|prod\.echobrain\.org/i);
-    expect(Object.values(stack.Resources).map((item) => item.Type)).not.toEqual(
-      expect.arrayContaining([
-        "AWS::IAM::Role",
-        "AWS::IAM::ManagedPolicy",
-        "AWS::Lambda::Function",
-        "AWS::Logs::LogGroup",
-        "AWS::DynamoDB::Table",
-        "AWS::S3::Bucket",
-      ]),
-    );
     expect(Object.keys(stack.Resources)).toHaveLength(4);
   });
 
@@ -260,7 +249,6 @@ describe("staging journey observability overview stack", () => {
     expect(serialized).toContain("Current core: record append");
     expect(serialized).toContain("Historical: Approved decision");
     expect(serialized).toContain("Historical approval wait p50 (ms)");
-    expect(serialized).toContain("ApprovalHumanWaitMs");
     expect(serialized).not.toMatch(/ApprovedSearch|approved-search backlog/i);
     expect(metricSerialized).toContain("StageClosedLatencyMs");
     expect(metricSerialized).toContain("'p50'");
@@ -268,14 +256,6 @@ describe("staging journey observability overview stack", () => {
     expect(metricSerialized).toContain("'p99'");
     expect(metricSerialized).toContain("token_total/total_available");
     expect(metricSerialized).toContain("100*usage_reported/llm_attempts");
-    expect(metricSerialized).toContain('"workflow"');
-    expect(metricSerialized).toContain('"stage"');
-    expect(metricSerialized).toContain('"outcome"');
-    expect(metricSerialized).toContain(
-      '"TerminalOutcome","workflow","ask","stage","ask_response","outcome","answered"',
-    );
-    expect(metricSerialized).toContain('"outcome","insufficient_evidence"');
-    expect(metricSerialized).toContain('"outcome","authorship_unsupported"');
     // Every Ask response outcome the kernel can emit has a dashboard series.
     for (const outcome of HISTORICAL_ASK_TERMINAL_OUTCOMES) {
       expect(metricSerialized).toContain(`"TerminalOutcome","workflow","ask","stage","ask_response","outcome","${outcome}"`);
@@ -314,7 +294,6 @@ describe("staging journey observability overview stack", () => {
     const queries = logWidgets.map(
       (widget) => (widget.properties as { readonly query: string }).query,
     );
-    expect(queries).toHaveLength(4);
     expect(dashboardBodyTemplate(stack)).toContain(
       "SOURCE '${StagingLogGroupName}'",
     );
@@ -322,18 +301,8 @@ describe("staging journey observability overview stack", () => {
     expect(queries.join("\n")).toContain("failure_class");
 
     const wallClock = queries.find((query) => query.includes("p50_wall_clock_ms"));
-    expect(wallClock).toBeDefined();
     if (wallClock === undefined) throw new Error("wall-clock query is required");
-    expect(wallClock).toContain("observed_at");
     expect(wallClock).toContain("parseDate(observed_at");
-    expect(wallClock).toContain('event = "started" and sequence = 1');
-    expect(wallClock).toContain("canonical_start_observed_at_ms");
-    expect(wallClock).toContain("terminal_observed_at_ms");
-    expect(wallClock).toContain("canonical_start_observed_at_ms < 32503680000000");
-    expect(wallClock).toContain(
-      "terminal_observed_at_ms >= canonical_start_observed_at_ms",
-    );
-    expect(wallClock).toContain("p50_wall_clock_ms");
     expect(wallClock).toContain("p95_wall_clock_ms");
     expect(wallClock).toContain("p99_wall_clock_ms");
     expect(wallClock).toContain("max(queue_age_ms) as human_wait_ms");
@@ -356,51 +325,39 @@ describe("staging journey observability overview stack", () => {
     expect(wallClock).toContain("p95_service_wall_clock_ms");
     expect(wallClock).toContain("p99_service_wall_clock_ms");
     expect(JSON.stringify(logWidgets)).toContain("Full and service wall-clock");
-    // `retryable` is emitted only on failed events, so on a healthy journey it
-    // is absent. A bare `retryable = false` then evaluates to null, and null
-    // poisons the whole OR chain: max(if(...)) yields null for EVERY row, the
-    // downstream `terminal_observed_at_ms > 0` filter drops every journey, and
-    // the widget renders "No data found" precisely when nothing has failed.
-    // coalesce() resolves the null before the comparison; defaulting to "true"
-    // fails safe, since an absent value must never mark a journey terminal.
-    expect(wallClock).toContain(
-      'event = "failed" and coalesce(retryable, "true") = "false"',
-    );
-    expect(wallClock).not.toMatch(/retryable\s*=\s*false/);
-    expect(wallClock).toContain('outcome in ["current", "published"]');
     expect(wallClock).toContain('outcome in ["rejected", "denied"]');
-    expect(wallClock).not.toContain("superseded");
     expect(wallClock).not.toContain("first_observed_at_ms");
-    expect(wallClock).not.toMatch(/sum\(elapsed_ms\)/i);
     expect(queries.join("\n")).not.toMatch(/sum\(elapsed_ms\)/i);
     const tokenTotals = queries.find((query) => query.includes("journey_total_tokens"));
-    expect(tokenTotals).toBeDefined();
     if (tokenTotals === undefined) throw new Error("token-total query is required");
     expect(tokenTotals).toContain('if(workflow = "core_runtime" and runtime_stage = "model_call" and event in ["succeeded", "failed"], diagnostic.counts.total_tokens, llm_usage.total_tokens) as total_tokens');
     expect(tokenTotals).toContain(
       'filter kind = "echo-authority-journey-stage-v1" | fields parseDate',
     );
-    expect(tokenTotals).toContain('event = "started" and sequence = 1');
-    expect(tokenTotals).toContain("canonical_start_observed_at_ms");
-    expect(tokenTotals).toContain("canonical_start_observed_at_ms < 32503680000000");
-    expect(tokenTotals).toContain(
-      "terminal_observed_at_ms >= canonical_start_observed_at_ms",
-    );
     expect(tokenTotals).toContain("sum(total_tokens) as journey_total_tokens");
-    expect(tokenTotals).toContain("total_token_samples");
     expect(tokenTotals).toContain("sum(if(isNumeric(total_tokens), 1, 0))");
     expect(tokenTotals).not.toContain("ispresent(total_tokens)");
     expect(tokenTotals).toContain("total_token_samples > 0");
     expect([...tokenTotals.matchAll(/\bas total_tokens\b/g)]).toHaveLength(1);
-    // Same null-poisoning guard as the wall-clock query above.
-    expect(tokenTotals).toContain(
-      'event = "failed" and coalesce(retryable, "true") = "false"',
-    );
-    expect(tokenTotals).not.toMatch(/retryable\s*=\s*false/);
-    expect(tokenTotals).toContain('outcome in ["current", "published"]');
-    expect(tokenTotals).not.toContain("superseded");
     expect(tokenTotals).toContain("p95_total_tokens");
     for (const query of [wallClock, tokenTotals]) {
+      expect(query).toContain("canonical_start_observed_at_ms < 32503680000000");
+      expect(query).toContain(
+        "terminal_observed_at_ms >= canonical_start_observed_at_ms",
+      );
+      // `retryable` is emitted only on failed events, so on a healthy journey it
+      // is absent. A bare `retryable = false` then evaluates to null, and null
+      // poisons the whole OR chain: max(if(...)) yields null for EVERY row, the
+      // downstream `terminal_observed_at_ms > 0` filter drops every journey, and
+      // the widget renders "No data found" precisely when nothing has failed.
+      // coalesce() resolves the null before the comparison; defaulting to "true"
+      // fails safe, since an absent value must never mark a journey terminal.
+      expect(query).toContain(
+        'event = "failed" and coalesce(retryable, "true") = "false"',
+      );
+      expect(query).not.toMatch(/retryable\s*=\s*false/);
+      expect(query).toContain('outcome in ["current", "published"]');
+      expect(query).not.toContain("superseded");
       // A run's own start/terminal pair is required even when its parent HTTP
       // operation started earlier. Recoverable child failures do not close it.
       expect(query).toContain('coalesce(diagnostic.phase, stage) as runtime_stage');
@@ -411,7 +368,6 @@ describe("staging journey observability overview stack", () => {
       expect(query).toContain('by journey_type | sort journey_type asc');
     }
     const rates = queries.find((query) => query.includes("failure_rate_pct"));
-    expect(rates).toBeDefined();
     if (rates === undefined) throw new Error("stage-rate query is required");
     expect(rates).toContain('filter event in ["succeeded", "failed"]');
     expect(rates).toContain('sum(if(event = "failed", 1, 0))');

@@ -11,6 +11,21 @@ const request = (value: Record<string, unknown>) => ({ schema_version: 2, tool_i
   action: 'approve', project_ids: [projectA], share_transcript: false, owners: [], ...value });
 
 describe('person meetings v2', () => {
+  it('accepts an explicitly retained custom staging meeting', () => {
+    const input = { schema_version: 2, tool_id: 'synthetic', operation: 'submit', retain: true, project_id: projectA,
+      meeting: { id: 'synthetic-custom-dvt-review', title: 'DVT exception review', notes: '', transcript: 'Decision: begin PVT with DVT still on hold.' } };
+    expect(validatePersonMeetingRequestV2(input)).toEqual(input);
+  });
+  it.each([
+    { tool_id: 'granola' }, { retain: false }, { retain: undefined }, { project_id: 'invalid' },
+    { meeting: { id: 'synthetic-release-canary', title: 'Test', notes: 'Test', transcript: '' } },
+    { meeting: { id: 'synthetic-custom-one', title: 'Test', notes: '', transcript: ' ' } },
+    { meeting: { id: 'synthetic-custom-one', title: 'Test', notes: 'Test', transcript: '', provenance: {} } },
+    { meeting: { id: 'synthetic-custom-one', title: 'Test', notes: '界'.repeat(17000), transcript: '' } },
+  ])('refuses unsafe or ambiguous custom submission: %j', overrides => {
+    expect(() => validatePersonMeetingRequestV2({ schema_version: 2, tool_id: 'synthetic', operation: 'submit', retain: true, project_id: projectA,
+      meeting: { id: 'synthetic-custom-one', title: 'Test', notes: 'Test', transcript: '' }, ...overrides })).toThrow();
+  });
   it.each([
     ['more than twenty project ids', { project_ids: Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`) }],
     ['unsorted project ids', { project_ids: [projectB, projectA] }],

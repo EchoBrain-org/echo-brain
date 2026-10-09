@@ -102,7 +102,7 @@ describe('person diagnostics HTTP integration', () => {
   it('forwards capture selection on the ordinary Ask and run start routes, rejecting it for retry/view', async () => {
     const ask = vi.fn(async () => ({ schema_version: 6 as const, kind: 'echo-clean-person-answer-v6' as const, scope: { kind: 'global' as const }, outcome: 'not_found' as const, citations: [], parts: [{ question: 'What changed?', status: 'not_found' as const, statements: [], gap: 'No evidence found.' }] }));
     const runs = { list: vi.fn(async () => ({ runs: [] })), start: vi.fn(async () => ({ state: 'running' as const })), retry: vi.fn(), view: vi.fn(),
-      home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
+      home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), sweep: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
     const base = await origin({ ask: { ask }, runs });
     const askRequest = { schema_version: 3, question: 'What changed?', capture_id };
     const startRequest = { schema_version: 1, operation: 'start', run_id, capture_id };

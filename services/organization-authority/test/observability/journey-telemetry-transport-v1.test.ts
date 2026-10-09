@@ -78,8 +78,12 @@ describe('shared operational telemetry transport', () => {
     for (const environment of ['staging', 'production'] as const) {
       for (const values of [
         { ...baked, ECHO_STAGING_JOURNEY_TELEMETRY_V1: undefined },
+        { ...baked, ECHO_STAGING_JOURNEY_TELEMETRY_V1: 'false' },
         { ...baked, ECHO_SOURCE_SHA: 'CUSTOMER-TEXT' },
+        { ...baked, ECHO_SOURCE_SHA: identity.release_sha.toUpperCase() },
         { ...baked, ECHO_BUILD_NUMBER: '01' },
+        { ...baked, ECHO_BUILD_NUMBER: '0' },
+        { ...baked, ECHO_BUILD_NUMBER: '1.5' },
         { ...baked, ECHO_BUILD_NUMBER: String(Number.MAX_SAFE_INTEGER + 1) },
       ]) {
         const transport = createJourneyTelemetryTransportFromEnvironmentV1(environment, values, { write: () => { throw new Error('disabled transport wrote'); } });

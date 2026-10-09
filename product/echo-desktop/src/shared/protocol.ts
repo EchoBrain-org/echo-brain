@@ -432,7 +432,7 @@ export interface HomeView extends Omit<PersonRunsResultsV1['home'], 'items'> {
 export interface OpenItemsView extends Omit<PersonRunsResultsV1['items'], 'items'> {
   readonly items: readonly OpenItemView[];
 }
-/** The impact checks of your own approvals, and the open items they found. */
+/** The impact checks of your own approvals, the open items they found, and the sweeps that recheck them. */
 export interface RunsResults {
   list: PersonRunsResultsV1['list'];
   start: PersonRunsResultsV1['start'];
@@ -444,6 +444,7 @@ export interface RunsResults {
   send: PersonRunsResultsV1['send'];
   set_state: PersonRunsResultsV1['set_state'];
   assign: PersonRunsResultsV1['assign'];
+  sweep: PersonRunsResultsV1['sweep'];
 }
 
 export interface HostMethods {

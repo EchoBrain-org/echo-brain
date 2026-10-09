@@ -74,7 +74,6 @@ describe('client update CLI presentation', () => {
       expect(formatClientUpdateError(code, { tty: true, json: false })).toContain('Contact the release operator before retrying.');
       expect(JSON.parse(formatClientUpdateError(code, { tty: false, json: false }))).toEqual({ ok: false, error: code });
     }
-    expect(formatClientUpdateError('activation_mismatch', { tty: true, json: false })).toContain('Contact the release operator before retrying.');
     const text = renderClientUpdateResult(result('available', { available_release: 'clean-v1-release-b\u001b[2J' }), { tty: true, json: false, mode: 'check', automatic: true });
     expect(text).toContain('Available release: unknown.');
     expect(text).not.toContain('\u001b');

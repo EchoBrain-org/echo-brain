@@ -38,14 +38,24 @@ function setup(input: { now?: () => string; authorization?: () => PersonAccessAu
     repository,
     browser_provider: input.browser_provider ?? (() => provider), now: input.now ?? (() => NOW),
   });
-  return { workflow, provider, authorizationUrl, verifyCallback, commit, repository };
+  /** Returns from Slack to the callback with the state of the latest begin. */
+  const callback = (code = "code") =>
+    workflow.callback(new URLSearchParams({ state: authorizationUrl.mock.calls.at(-1)![0].state, code }));
+  /** Holds the next callback proof until the returned release is called. */
+  const hold = () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    verifyCallback.mockImplementationOnce(async () => { await held; return { user_id: "U123", team_id: "T123", verification_evidence_sha256: canonicalSha256("proof") }; });
+    return release;
+  };
+  return { workflow, provider, authorizationUrl, verifyCallback, commit, repository, callback, hold };
 }
 
 describe("Slack browser identity link workflow", () => {
-  it("does not persist a callback proof until the authenticated status poll", async () => {
-    const { workflow, authorizationUrl, commit } = setup();
+  it.each(["U123", "W123"])("does not persist a callback proof for Slack subject %s until the authenticated status poll", async (user_id) => {
+    const { workflow, callback, commit } = setup({ proof: { user_id, team_id: "T123" } });
     const begun = await workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
-    await workflow.callback(new URLSearchParams({ state: authorizationUrl.mock.calls[0]![0].state, code: "code" }));
+    await callback();
     expect(commit).not.toHaveBeenCalled();
     await expect(workflow.status({ attempt_id: begun.attempt_id }, "bearer")).resolves.toMatchObject({ status: "complete", failure_reason: null });
     expect(commit).toHaveBeenCalledOnce();
@@ -54,41 +64,26 @@ describe("Slack browser identity link workflow", () => {
 
   it("refuses a status poll from a different current Person session", async () => {
     let current = authorization;
-    const { workflow, authorizationUrl, commit } = setup({ authorization: () => current });
+    const { workflow, callback, commit } = setup({ authorization: () => current });
     const begun = await workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
-    await workflow.callback(new URLSearchParams({ state: authorizationUrl.mock.calls[0]![0].state, code: "code" }));
+    await callback();
     current = { ...authorization, session_family_id: "psf_00000000-0000-4000-8000-000000000002" };
     await expect(workflow.status({ attempt_id: begun.attempt_id }, "bearer")).rejects.toMatchObject({ code: "unauthorized" });
     expect(commit).not.toHaveBeenCalled();
   });
 
-  it("exposes only a safe failure when Slack proves a different workspace", async () => {
-    const { workflow, authorizationUrl, commit } = setup({ proof: { user_id: "U123", team_id: "TOTHER" } });
-    const begun = await workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
-    await workflow.callback(new URLSearchParams({ state: authorizationUrl.mock.calls[0]![0].state, code: "secret-code" }));
-    await expect(workflow.status({ attempt_id: begun.attempt_id }, "bearer")).resolves.toEqual(expect.objectContaining({ status: "failed", failure_reason: "provider_rejected" }));
-    expect(commit).not.toHaveBeenCalled();
-  });
-
-  it("accepts Slack's W-prefixed subject format", async () => {
-    const { workflow, authorizationUrl, commit } = setup({ proof: { user_id: "W123", team_id: "T123" } });
-    const begun = await workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
-    await workflow.callback(new URLSearchParams({ state: authorizationUrl.mock.calls[0]![0].state, code: "code" }));
-    await expect(workflow.status({ attempt_id: begun.attempt_id }, "bearer")).resolves.toMatchObject({ status: "complete" });
-    expect(commit).toHaveBeenCalledOnce();
-  });
-
   it("marks a rejected callback invalid-output without exporting OAuth material", async () => {
-    const { workflow, authorizationUrl } = setup({ proof: { user_id: "U123", team_id: "TOTHER" } });
+    const { workflow, callback, commit } = setup({ proof: { user_id: "U123", team_id: "TOTHER" } });
     const begun = await workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
     const events: CoreRuntimeObservationV1[] = [];
     const content: unknown[] = [];
     await observeCoreRuntimeV1("http_request", async () => {
-      await workflow.callback(new URLSearchParams({ state: authorizationUrl.mock.calls[0]![0].state, code: "sensitive-oauth-code" }));
+      await callback("sensitive-oauth-code");
     }, { observer: (event) => { events.push(event); }, content_observer: (event) => { content.push(event); } });
     expect(events.some((event) => event.phase === "person_tool_completion" && event.event === "succeeded" && event.result === "invalid_output")).toBe(true);
     expect(JSON.stringify([events, content])).not.toContain("sensitive-oauth-code");
     await expect(workflow.status({ attempt_id: begun.attempt_id }, "bearer")).resolves.toMatchObject({ status: "failed", failure_reason: "provider_rejected" });
+    expect(commit).not.toHaveBeenCalled();
   });
 
   it("cancels, expires, and treats an absent process-memory attempt as safely expired", async () => {
@@ -157,16 +152,14 @@ describe("Slack browser identity link workflow", () => {
 
   it("expires a proof that returns after its five-minute browser window", async () => {
     let now = NOW;
-    let release: (() => void) | undefined;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    const { workflow, authorizationUrl, verifyCallback, commit } = setup({ now: () => now });
-    verifyCallback.mockImplementationOnce(async () => { await held; return { user_id: "U123", team_id: "T123", verification_evidence_sha256: canonicalSha256("proof") }; });
+    const { workflow, callback, hold, verifyCallback, commit } = setup({ now: () => now });
+    const release = hold();
     const begun = await workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
-    const callback = workflow.callback(new URLSearchParams({ state: authorizationUrl.mock.calls[0]![0].state, code: "code" }));
+    const pending = callback();
     await vi.waitFor(() => expect(verifyCallback).toHaveBeenCalledOnce());
     now = "2026-09-10T22:06:00.000Z";
-    release!();
-    await callback;
+    release();
+    await pending;
     await expect(workflow.status({ attempt_id: begun.attempt_id }, "bearer")).resolves.toMatchObject({ status: "expired" });
     expect(commit).not.toHaveBeenCalled();
   });
@@ -174,50 +167,42 @@ describe("Slack browser identity link workflow", () => {
   it("reports a changed organization tool and a real durable-link conflict safely", async () => {
     const unavailable = setup();
     const first = await unavailable.workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
-    await unavailable.workflow.callback(new URLSearchParams({ state: unavailable.authorizationUrl.mock.calls[0]![0].state, code: "code" }));
+    await unavailable.callback();
     unavailable.repository.activeSlackOrganizationTool.mockReturnValue(null);
     await expect(unavailable.workflow.status({ attempt_id: first.attempt_id }, "bearer")).resolves.toMatchObject({ status: "failed", failure_reason: "tool_unavailable" });
 
     const conflict = setup();
     conflict.commit.mockImplementationOnce(() => { const error = new Error("already linked"); error.name = "PersonSlackIdentityLinkConflictError"; throw error; });
     const second = await conflict.workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000002" }, "bearer");
-    await conflict.workflow.callback(new URLSearchParams({ state: conflict.authorizationUrl.mock.calls[0]![0].state, code: "code" }));
+    await conflict.callback();
     await expect(conflict.workflow.status({ attempt_id: second.attempt_id }, "bearer")).resolves.toMatchObject({ status: "failed", failure_reason: "identity_conflict" });
   });
 
   it("consumes callback state once and cannot commit after cancellation during exchange", async () => {
-    let release: (() => void) | undefined;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    const { workflow, authorizationUrl, verifyCallback, commit } = setup();
-    verifyCallback.mockImplementationOnce(async () => { await held; return { user_id: "U123", team_id: "T123", verification_evidence_sha256: canonicalSha256("proof") }; });
+    const { workflow, callback, hold, verifyCallback, commit } = setup();
+    const release = hold();
     const begun = await workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
-    const state = authorizationUrl.mock.calls[0]![0].state;
-    const first = workflow.callback(new URLSearchParams({ state, code: "code" }));
+    const first = callback();
     await vi.waitFor(() => expect(verifyCallback).toHaveBeenCalledOnce());
-    await workflow.callback(new URLSearchParams({ state, code: "second-code" }));
+    await callback("second-code");
     await workflow.cancel({ attempt_id: begun.attempt_id }, "bearer");
-    release!();
+    release();
     await first;
     await expect(workflow.status({ attempt_id: begun.attempt_id }, "bearer")).resolves.toMatchObject({ status: "cancelled" });
     expect(commit).not.toHaveBeenCalled();
   });
 
   it("invalidates an in-flight callback for its membership across session families", async () => {
-    let release: (() => void) | undefined;
-    const held = new Promise<void>((resolve) => { release = resolve; });
     let current = authorization;
-    const { workflow, authorizationUrl, verifyCallback, commit } = setup({ authorization: () => current });
-    verifyCallback.mockImplementationOnce(async () => {
-      await held;
-      return { user_id: "U123", team_id: "T123", verification_evidence_sha256: canonicalSha256("proof") };
-    });
+    const { workflow, callback, hold, verifyCallback, commit } = setup({ authorization: () => current });
+    const release = hold();
     const begun = await workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
-    const callback = workflow.callback(new URLSearchParams({ state: authorizationUrl.mock.calls[0]![0].state, code: "code" }));
+    const pending = callback();
     await vi.waitFor(() => expect(verifyCallback).toHaveBeenCalledOnce());
     current = { ...authorization, session_family_id: "psf_00000000-0000-4000-8000-000000000002" };
     workflow.invalidateMembership(authorization.membership_id);
-    release!();
-    await callback;
+    release();
+    await pending;
 
     await expect(workflow.status({ attempt_id: begun.attempt_id }, "bearer")).rejects.toMatchObject({ code: "unauthorized" });
     current = authorization;

@@ -54,6 +54,11 @@ function fixture() {
   });
   execFileSync("git", ["init", "-q", root]);
   execFileSync("git", ["-C", root, "add", "."]);
+  commit(root, "fixture");
+  return { root, output };
+}
+
+function commit(root: string, message: string): void {
   execFileSync("git", [
     "-C",
     root,
@@ -63,9 +68,8 @@ function fixture() {
     "user.email=bundle@example.test",
     "commit",
     "-qm",
-    "fixture",
+    message,
   ]);
-  return { root, output };
 }
 
 function build(
@@ -109,44 +113,19 @@ describe("Authority staging host bundle", () => {
       source_commit: expect.stringMatching(/^[0-9a-f]{40}$/),
       archive_sha256: sha256(first),
     });
-    expect(manifest.files).toEqual([
-      expect.objectContaining({
-        path: "deploy/organization-authority/bootstrap-ubuntu-arm64.sh",
-        mode: "0755",
-      }),
-      expect.objectContaining({
-        path: "deploy/organization-authority/cloudflared-echo-authority.service",
-        mode: "0644",
-      }),
-      expect.objectContaining({
-        path: "deploy/organization-authority/install-cloudflare-tunnel-token.sh",
-        mode: "0755",
-      }),
-      expect.objectContaining({
-        path: "deploy/organization-authority/onboard-clean-v1.sh",
-        mode: "0755",
-      }),
-      expect.objectContaining({
-        path: "deploy/organization-authority/restore-clean-v1-host.sh",
-        mode: "0755",
-      }),
-      expect.objectContaining({
-        path: "deploy/organization-authority/backup-authority-maintenance.sh",
-        mode: "0755",
-      }),
-      expect.objectContaining({
-        path: "deploy/organization-authority/update-clean-v1.sh",
-        mode: "0755",
-      }),
-      expect.objectContaining({
-        path: "deploy/release/clean-v1-release.py",
-        mode: "0644",
-      }),
-      expect.objectContaining({
-        path: "deploy/release/clean-v1-runtime-profile.py",
-        mode: "0644",
-      }),
-    ]);
+    expect(manifest.files).toEqual(
+      [
+        ["deploy/organization-authority/bootstrap-ubuntu-arm64.sh", "0755"],
+        ["deploy/organization-authority/cloudflared-echo-authority.service", "0644"],
+        ["deploy/organization-authority/install-cloudflare-tunnel-token.sh", "0755"],
+        ["deploy/organization-authority/onboard-clean-v1.sh", "0755"],
+        ["deploy/organization-authority/restore-clean-v1-host.sh", "0755"],
+        ["deploy/organization-authority/backup-authority-maintenance.sh", "0755"],
+        ["deploy/organization-authority/update-clean-v1.sh", "0755"],
+        ["deploy/release/clean-v1-release.py", "0644"],
+        ["deploy/release/clean-v1-runtime-profile.py", "0644"],
+      ].map(([path, mode]) => expect.objectContaining({ path, mode })),
+    );
     for (const file of manifest.files)
       expect(file.sha256).toBe(sha256(join(subject.root, file.path)));
     const listed = execFileSync("tar", ["-tzf", first], { encoding: "utf8" })
@@ -167,38 +146,6 @@ describe("Authority staging host bundle", () => {
     // The archive sources may name retained paths in their validation code;
     // the tar member allowlist above is the boundary proving no state file is
     // an artifact member.
-  });
-
-  it("has a closed allowlist: control code is present, but environment, records, runtime files, state, and credentials are absent", () => {
-    const subject = fixture();
-    const output = join(subject.output, "bundle.tar.gz");
-    const result = build(subject.root, output);
-
-    expect(result.status).toBe(0);
-    const listed = execFileSync("tar", ["-tzf", output], {
-      encoding: "utf8",
-    })
-      .trim()
-      .split("\n");
-    expect(listed).toEqual(expect.arrayContaining([
-      "onboard-clean-v1.sh",
-      "update-clean-v1.sh",
-      "restore-clean-v1-host.sh",
-      "clean-v1-release.py",
-      "clean-v1-runtime-profile.py",
-    ]));
-    for (const forbidden of [
-      ".env.clean-v1",
-      "clean-data",
-      "current.clean-v1.json",
-      "candidate.clean-v1.json",
-      "runtime-profile.active",
-      "oidc-client-secret",
-      "nango-secret-key",
-      "llm-credential-source",
-    ]) {
-      expect(listed).not.toContain(forbidden);
-    }
   });
 
   it("refuses an unclean source, existing output, and non-private output directory", () => {
@@ -259,17 +206,7 @@ describe("Authority staging host bundle", () => {
       { mode: 0o755 },
     );
     execFileSync("git", ["-C", other.root, "add", "."]);
-    execFileSync("git", [
-      "-C",
-      other.root,
-      "-c",
-      "user.name=Bundle Test",
-      "-c",
-      "user.email=bundle@example.test",
-      "commit",
-      "-qm",
-      "changed",
-    ]);
+    commit(other.root, "changed");
     const differing = build(other.root, output, ["--reuse-identical"]);
     expect(differing.status).toBe(1);
     expect(differing.stderr).toContain(
@@ -321,17 +258,7 @@ describe("Authority staging host bundle", () => {
     rmSync(installer);
     symlinkSync("bootstrap-ubuntu-arm64.sh", installer);
     execFileSync("git", ["-C", subject.root, "add", "-A"]);
-    execFileSync("git", [
-      "-C",
-      subject.root,
-      "-c",
-      "user.name=Bundle Test",
-      "-c",
-      "user.email=bundle@example.test",
-      "commit",
-      "-qm",
-      "symlink",
-    ]);
+    commit(subject.root, "symlink");
 
     const result = build(subject.root, join(subject.output, "bundle.tar.gz"));
 

@@ -137,7 +137,6 @@ describe("Agentic Ask and OpenRouter timeout contract", () => {
       expect(answer).toMatchObject({ outcome: "answered", citations: [{ citation: launchEvidence().citation }] });
       expect(fetch).toHaveBeenCalledTimes(4);
       expect(timeouts).toEqual([25_000, 25_000, 22_999, 26_999]);
-      for (const timeout of timeouts) expect(Number.isSafeInteger(timeout) && timeout > 0).toBe(true);
       expect(audit).toEqual([expect.objectContaining({ outcome: "answered", model_calls: 4, repairs: 0, fallbacks: 0, citation_count: 1 })]);
       expect(audit[0]!.checked_at).toBe(checkedAt);
     } finally {

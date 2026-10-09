@@ -49,7 +49,6 @@ describe('request-owned research trace', () => {
     expect(output.response.outcome).toBe('answered');
     const requests = events.filter(event => event.kind === 'model_request');
     const responses = events.filter(event => event.kind === 'model_response');
-    expect(requests).toHaveLength(replies.length);
     expect(requests.map(event => event.call_id)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(requests.map(event => event.recovery)).toEqual([false, false, false, true, false, false]);
     expect(responses.map(event => event.value)).toEqual(replies);
@@ -74,7 +73,6 @@ describe('request-owned research trace', () => {
       { id: 3, round: 3, tool: 'open', args: { id: 'E2' } },
       { id: 4, round: 4, tool: 'finish', args: {} },
     ]);
-    expect(events.filter(event => event.kind === 'tool_request' && event.tool === 'finish')).toHaveLength(1);
     expect(events).toContainEqual(expect.objectContaining({ kind: 'tool_response', tool_call_id: 4, round: 4, tool: 'finish', result: { tool: 'finish' } }));
     const expanded = events.find(event => event.kind === 'tool_response' && event.tool_call_id === 2);
     expect(expanded).toMatchObject({ result: beforeLinkedRead.last_results[0] });

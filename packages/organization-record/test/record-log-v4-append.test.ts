@@ -27,6 +27,7 @@ import {
 import {
   OrganizationRecordAppenderV4,
   V4RecordIdempotencyConflictError,
+  type V4ReceiptFactory,
   type V4RecordEnvelopeView
 } from "../src/log/record-log-v4-append.js";
 import { PersonRecordReaderV1 } from "../src/retrieve/person-record-reader-v1.js";
@@ -41,7 +42,7 @@ import {
   organizationRecordLogBaselineSha256V4,
 } from "../src/persistence/record-log-baseline.js";
 import { openOrganizationRecordDatabase } from "../src/persistence/open-organization-record-database.js";
-import { COORDINATES, RECORD_INPUT_CODECS, appendInput, database, protocolAuthority, receiptFactory } from './fixtures/record-append-fixture.js';
+import { COORDINATES, RECORD_INPUT_CODECS, appendInput, authorizationWitness, database, humanAct, protocolAuthority, receiptFactory } from './fixtures/record-append-fixture.js';
 
 describe("organization record log baseline V4", () => {
   it("creates fresh immutable project audience, association, and transcript-grant facts", () => {
@@ -365,10 +366,6 @@ describe("V4 organization-record append", () => {
         policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
       });
       const first = await app.append(approved);
-      expect(await app.append(approved)).toMatchObject({
-        outcome: "duplicate",
-        position: first.position,
-      });
       await app.append(
         appendInput({
           authority,
@@ -407,16 +404,45 @@ describe("V4 organization-record append", () => {
     try {
       const authority = protocolAuthority();
       const app = new OrganizationRecordAppenderV4(db, COORDINATES);
-      let oldest: { readonly record_sha256: Sha256Digest } | undefined;
-      for (let index = 0; index < 101; index += 1) {
-        const appended = await app.append(
-          appendInput({
-            authority,
-            approval_id: `approval-exact-page-${index}`,
-            policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-          }),
-        );
-        if (index === 0) oldest = appended;
+      const oldest = await app.append(
+        appendInput({
+          authority,
+          approval_id: "approval-exact-page-0",
+          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+        }),
+      );
+      // Unsigned member-readable filler pushes the oldest record past a full page.
+      const unsignedReceipt: V4ReceiptFactory = {
+        ...receiptFactory(authority, { sign_calls: { value: 0 } }),
+        sign: async ({ receipt_seed }) => ({ body: receipt_seed }),
+        verify: ({ receipt }) => receipt as JsonObject,
+      };
+      for (let index = 1; index < 101; index += 1) {
+        const approval_id = `approval-exact-page-${index}`;
+        const human = humanAct(approval_id, "approve", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, 1);
+        await app.append({
+          approval_id,
+          action: "approve",
+          semantic_idempotency_key: human.semantic_idempotency_key,
+          receipt_issued_at: "2026-08-21T12:02:00.000Z",
+          authorization_witness: authorizationWitness(human),
+          envelope_factory: {
+            create: async (allocation) => ({
+              record_sha256: sha256Digest(approval_id),
+              body: {
+                schema_version: 4, kind: "echo-organization-record-envelope-v4",
+                envelope_id: `envelope-${approval_id}`, ...COORDINATES,
+                semantic_idempotency_key: human.semantic_idempotency_key,
+                predecessor_position: allocation.predecessor_position,
+                predecessor_record_sha256: allocation.predecessor_record_sha256,
+                human_act_resolution_ref: human.human_act_resolution_ref,
+                event: human.event,
+              },
+            }) as unknown as JsonObject,
+            verify: (value) => value as V4RecordEnvelopeView & JsonObject,
+          },
+          receipt_factory: unsignedReceipt,
+        });
       }
       const restricted = await app.append(
         appendInput({
@@ -431,13 +457,13 @@ describe("V4 organization-record append", () => {
         principal_id: "principal-other",
         membership_id: "membership-other",
       };
-      expect(oldest).toBeDefined();
+      expect(reader.list({ ...readerInput, limit: 100 }).map((r) => r.position)).not.toContain(1);
       expect(reader.list({
         ...readerInput,
         principal_id: "principal-1",
         membership_id: "membership-1",
-        record_sha256: oldest!.record_sha256,
-      })).toMatchObject([{ position: 1, record_sha256: oldest!.record_sha256 }]);
+        record_sha256: oldest.record_sha256,
+      })).toMatchObject([{ position: 1, record_sha256: oldest.record_sha256 }]);
       expect(reader.list({ ...readerInput, record_sha256: restricted.record_sha256 })).toEqual([]);
       expect(reader.list({ ...readerInput, record_sha256: sha256Digest("missing-exact-record") })).toEqual([]);
     } finally {

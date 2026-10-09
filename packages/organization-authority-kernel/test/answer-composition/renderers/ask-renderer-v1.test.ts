@@ -62,7 +62,6 @@ describe("Ask renderer", () => {
     // The writer reads the previewed passage too, but a failed writer's records stay limited to what research read.
     expect(rendered.result.writer_evidence).toEqual(["E1", "E2"]);
     expect(rendered.result.response).toMatchObject({ schema_version: 5, kind: "echo-clean-person-answer-v5", outcome: "partial", parts: [{ status: "records_only", records: [{ text: read.text, citation_indexes: [0] }] }], citations: [{ citation: read.citation }] });
-    expect(rendered.result.response.citations).toHaveLength(1);
     expect(rendered).toMatchObject({ cited: ["E1"], outcome: "partial", fallbacks: 1 });
     expect(run.trace).toEqual(["context:E1,E2", "revalidate", "generate", "revalidate", "generate"]);
   });
@@ -77,121 +76,84 @@ describe("Ask renderer", () => {
     }
   });
 
-  it("keeps a full cited Jira anchor answered while neutrally noting omitted links", async () => {
-    const item = record("jira-anchor", "THERMO-17 reports that the pilot may proceed after the gate.");
-    const limited = {
-      ...bundle([{ item, full: true, touched: 1 }], ["E1"]),
-      rounds: [{ round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E1"], truncated: true } }] }],
-      coverage: { reads: [{ tool: "open" as const, source: "tickets", returned_items: 1, truncated: true, notice: false, unavailable: false }], inventories: [], notices: [] },
-    };
-    const rendered = await alone({
-      bundle: limited,
-      replies: [{ sentences: [{ text: "THERMO-17 reports that the pilot may proceed after the gate.", evidence: ["E1"] }], not_found: [] }], version: 6,
-    }).render("Can the pilot proceed?");
+  const LIMITED_COVERAGE = "Some source coverage was incomplete, so relevant context may be missing.";
+  const gate = () => record("gate", "Approved: the pilot may proceed after the gate.");
+  const contextThenBody = () => bundle([{ item: record("context", "Related context."), full: false, touched: 1 }, { item: record("body", "Approved: the pilot may proceed after the gate."), full: true, touched: 2 }], ["E2"]);
+  it.each<{ readonly name: string; readonly research: AgenticEvidenceBundleV1; readonly text: string; readonly cited: string; readonly notice: string | null }>([
+    {
+      name: "keeps a full cited Jira anchor answered while neutrally noting omitted links",
+      research: {
+        ...bundle([{ item: record("jira-anchor", "THERMO-17 reports that the pilot may proceed after the gate."), full: true, touched: 1 }], ["E1"]),
+        rounds: [{ round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E1"], truncated: true } }] }],
+        coverage: { reads: [{ tool: "open" as const, source: "tickets", returned_items: 1, truncated: true, notice: false, unavailable: false }], inventories: [], notices: [] },
+      },
+      text: "THERMO-17 reports that the pilot may proceed after the gate.", cited: "E1", notice: LIMITED_COVERAGE,
+    },
+    {
+      name: "notes a limited open when it returns a different cited body id",
+      research: {
+        ...contextThenBody(),
+        rounds: [{ round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E2"], truncated: true } }] }],
+        coverage: { reads: [{ tool: "open" as const, source: "pages", returned_items: 1, truncated: true, notice: false, unavailable: false }], inventories: [], notices: [] },
+      },
+      text: "The pilot may proceed after the gate.", cited: "E2", notice: LIMITED_COVERAGE,
+    },
+    {
+      name: "keeps a fully supported stopped-research answer answered with a neutral notice",
+      research: bundle([{ item: gate(), full: true, touched: 1 }], ["E1"], false),
+      text: "The pilot may proceed after the gate.", cited: "E1", notice: "Research stopped before it finished, so relevant context may be missing.",
+    },
+    {
+      name: "keeps a completed answer answered when an unrelated source was truncated",
+      research: {
+        ...bundle([{ item: gate(), full: true, touched: 1 }], ["E1"]),
+        rounds: [{ round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "search", args: { query: "unrelated history" }, result: { items: ["E2"], opened: [], truncated: true } }] }],
+        coverage: { reads: [{ tool: "search" as const, source: "documents", returned_items: 1, truncated: true, notice: false, unavailable: false }], inventories: [{ source: "documents", truncated: true }], notices: ["An unrelated document search was cut short."] },
+      },
+      text: "The pilot may proceed after the gate.", cited: "E1", notice: "An unrelated document search was cut short.",
+    },
+    {
+      name: "keeps a fully opened cited record answered after a limited inventory",
+      research: {
+        ...bundle([{ item: gate(), full: true, touched: 1 }], ["E1"]),
+        rounds: [
+          { round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "list", args: { source: "meetings" }, result: { items: ["E1"], opened: [], more: true } }] },
+          { round: 2, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E1"] } }] },
+        ],
+        coverage: { reads: [{ tool: "list" as const, source: "meetings", returned_items: 1, truncated: false, notice: false, unavailable: false }], inventories: [{ source: "meetings", more: true }], notices: [] },
+      },
+      text: "The pilot may proceed after the gate.", cited: "E1", notice: null,
+    },
+    {
+      name: "clears a limited returned body notice after a later clean open of that body",
+      research: {
+        ...contextThenBody(),
+        rounds: [
+          { round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E2"], truncated: true } }] },
+          { round: 2, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E2"] } }] },
+        ],
+        coverage: { reads: [], inventories: [], notices: [] },
+      },
+      text: "The pilot may proceed after the gate.", cited: "E2", notice: null,
+    },
+    {
+      name: "does not turn an unfulfilled planner need into a missing user requirement",
+      research: {
+        ...bundle([{ item: gate(), full: true, touched: 1 }], ["E1"]),
+        plan: [{ part: 1, question: "Can the pilot proceed?", notes: "", needs: [
+          { need: "pilot decision", status: "found" as const, evidence: ["E1"] },
+          { need: "an unrelated optional context item", status: "not_found" as const, evidence: [] },
+        ] }],
+      },
+      text: "The pilot may proceed after the gate.", cited: "E1", notice: null,
+    },
+  ])("$name", async ({ research, text, cited, notice }) => {
+    const rendered = await alone({ bundle: research, replies: [{ sentences: [{ text, evidence: [cited] }], not_found: [] }], version: 6 }).render("Can the pilot proceed?");
     expect(rendered.outcome).toBe("answered");
     expect(rendered.result.response.parts[0]).toMatchObject({ status: "answered" });
     expect(rendered.result.response.parts[0]).not.toHaveProperty("gap");
-    expect(rendered.result.response.notice).toBe("Some source coverage was incomplete, so relevant context may be missing.");
-  });
-
-  it("notes a limited open when it returns a different cited body id", async () => {
-    const context = record("context", "Related context.");
-    const body = record("body", "Approved: the pilot may proceed after the gate.");
-    const limited = {
-      ...bundle([{ item: context, full: false, touched: 1 }, { item: body, full: true, touched: 2 }], ["E2"]),
-      rounds: [{ round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E2"], truncated: true } }] }],
-      coverage: { reads: [{ tool: "open" as const, source: "pages", returned_items: 1, truncated: true, notice: false, unavailable: false }], inventories: [], notices: [] },
-    };
-    const rendered = await alone({
-      bundle: limited,
-      replies: [{ sentences: [{ text: "The pilot may proceed after the gate.", evidence: ["E2"] }], not_found: [] }], version: 6,
-    }).render("Can the pilot proceed?");
-    expect(rendered).toMatchObject({ outcome: "answered", result: { response: { notice: "Some source coverage was incomplete, so relevant context may be missing." } } });
-  });
-
-  it("keeps a fully supported stopped-research answer answered with a neutral notice", async () => {
-    const item = record("gate", "Approved: the pilot may proceed after the gate.");
-    const stopped = bundle([{ item, full: true, touched: 1 }], ["E1"], false);
-    const rendered = await alone({
-      bundle: stopped,
-      replies: [{ sentences: [{ text: "The pilot may proceed after the gate.", evidence: ["E1"] }], not_found: [] }], version: 6,
-    }).render("Can the pilot proceed?");
-    expect(rendered.outcome).toBe("answered");
-    expect(rendered.result.response.parts[0]).toMatchObject({ status: "answered" });
-    expect(rendered.result.response.parts[0]).not.toHaveProperty("gap");
-    expect(rendered.result.response.notice).toBe("Research stopped before it finished, so relevant context may be missing.");
-  });
-
-  it("keeps a completed answer answered when an unrelated source was truncated", async () => {
-    const item = record("gate", "Approved: the pilot may proceed after the gate.");
-    const unrelated = {
-      ...bundle([{ item, full: true, touched: 1 }], ["E1"]),
-      rounds: [{ round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "search", args: { query: "unrelated history" }, result: { items: ["E2"], opened: [], truncated: true } }] }],
-      coverage: { reads: [{ tool: "search" as const, source: "documents", returned_items: 1, truncated: true, notice: false, unavailable: false }], inventories: [{ source: "documents", truncated: true }], notices: ["An unrelated document search was cut short."] },
-    };
-    const rendered = await alone({
-      bundle: unrelated,
-      replies: [{ sentences: [{ text: "The pilot may proceed after the gate.", evidence: ["E1"] }], not_found: [] }], version: 6,
-    }).render("Can the pilot proceed?");
-    expect(rendered).toMatchObject({ outcome: "answered" });
-    expect(rendered.result.response.parts[0]).toMatchObject({ status: "answered" });
-    expect(rendered.result.response.parts[0]).not.toHaveProperty("gap");
-  });
-
-  it("keeps a fully opened cited record answered after a limited inventory", async () => {
-    const item = record("gate", "Approved: the pilot may proceed after the gate.");
-    const openedAfterList = {
-      ...bundle([{ item, full: true, touched: 1 }], ["E1"]),
-      rounds: [
-        { round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "list", args: { source: "meetings" }, result: { items: ["E1"], opened: [], more: true } }] },
-        { round: 2, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E1"] } }] },
-      ],
-      coverage: { reads: [{ tool: "list" as const, source: "meetings", returned_items: 1, truncated: false, notice: false, unavailable: false }], inventories: [{ source: "meetings", more: true }], notices: [] },
-    };
-    const rendered = await alone({
-      bundle: openedAfterList,
-      replies: [{ sentences: [{ text: "The pilot may proceed after the gate.", evidence: ["E1"] }], not_found: [] }], version: 6,
-    }).render("Can the pilot proceed?");
-    expect(rendered).toMatchObject({ outcome: "answered" });
-    expect(rendered.result.response.parts[0]).toMatchObject({ status: "answered" });
-    expect(rendered.result.response.parts[0]).not.toHaveProperty("gap");
-  });
-
-  it("clears a limited returned body notice after a later clean open of that body", async () => {
-    const context = record("context", "Related context.");
-    const body = record("body", "Approved: the pilot may proceed after the gate.");
-    const reopened = {
-      ...bundle([{ item: context, full: false, touched: 1 }, { item: body, full: true, touched: 2 }], ["E2"]),
-      rounds: [
-        { round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E2"], truncated: true } }] },
-        { round: 2, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E2"] } }] },
-      ],
-      coverage: { reads: [], inventories: [], notices: [] },
-    };
-    const rendered = await alone({
-      bundle: reopened,
-      replies: [{ sentences: [{ text: "The pilot may proceed after the gate.", evidence: ["E2"] }], not_found: [] }], version: 6,
-    }).render("Can the pilot proceed?");
-    expect(rendered).toMatchObject({ outcome: "answered" });
-    expect(rendered.result.response).not.toHaveProperty("notice");
-  });
-
-  it("does not turn an unfulfilled planner need into a missing user requirement", async () => {
-    const item = record("gate", "Approved: the pilot may proceed after the gate.");
-    const plannerExtra = {
-      ...bundle([{ item, full: true, touched: 1 }], ["E1"]),
-      plan: [{ part: 1, question: "Can the pilot proceed?", notes: "", needs: [
-        { need: "pilot decision", status: "found" as const, evidence: ["E1"] },
-        { need: "an unrelated optional context item", status: "not_found" as const, evidence: [] },
-      ] }],
-    };
-    const rendered = await alone({
-      bundle: plannerExtra,
-      replies: [{ sentences: [{ text: "The pilot may proceed after the gate.", evidence: ["E1"] }], not_found: [] }], version: 6,
-    }).render("Can the pilot proceed?");
-    expect(rendered).toMatchObject({ outcome: "answered" });
-    expect(rendered.result.response.parts[0]).toMatchObject({ status: "answered" });
-    expect(rendered.result.response.parts[0]).not.toHaveProperty("gap");
+    if (notice === null) expect(rendered.result.response).not.toHaveProperty("notice");
+    else expect(rendered.result.response.notice).toBe(notice);
   });
 
   it("writes only when the time the runner leaves it covers a writer call", async () => {

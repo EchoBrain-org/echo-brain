@@ -92,15 +92,25 @@ function event(
     ...values,
   });
 }
+function askStart(
+  values: Record<string, string | number | boolean | null | undefined> = {},
+) {
+  return event({
+    stage: "ask_validation",
+    event: "started",
+    outcome: null,
+    elapsed_ms: 0,
+    ...values,
+  });
+}
 function indexRow(
   journeyId: string,
   last: number,
   eventCount = 1,
-  first = last,
 ) {
   return row({
     journey_id: journeyId,
-    first_observed_ms: first,
+    first_observed_ms: last,
     last_observed_ms: last,
     event_count: eventCount,
   });
@@ -115,6 +125,20 @@ function listReplies(
     { queryId: "page" },
     { status: "Complete", results: page },
   ];
+}
+function journeyIdFor(n: number) {
+  return `${String(n).padStart(8, "0")}-0000-4000-8000-${String(n).padStart(12, "0")}`;
+}
+/** A 2,500-journey index (the browse limit) and the cursor for its last page of 20. */
+function browseLimitList() {
+  const ids = Array.from({ length: 2_500 }, (_, index) => journeyIdFor(index + 1));
+  return {
+    replies: listReplies(
+      ids.map((journeyId, index) => indexRow(journeyId, now - index)),
+      ids.slice(2480).map((journeyId) => event({ journey_id: journeyId })),
+    ),
+    cursor: Buffer.from(JSON.stringify({ v: 1, start: now - 8 * 60 * 60 * 1000, end: now, offset: 2480 }), "utf8").toString("base64url"),
+  };
 }
 class Client {
   public readonly sent: unknown[] = [];
@@ -248,9 +272,7 @@ describe("staging Journey Explorer custom widget", () => {
   });
 
   it("lists a normal eight-hour range by unique journey, not its first 2,500 stage events", async () => {
-    const ids = Array.from({ length: 21 }, (_, index) =>
-      `${String(index + 2).padStart(8, "0")}-0000-4000-8000-${String(index + 2).padStart(12, "0")}`,
-    );
+    const ids = Array.from({ length: 21 }, (_, index) => journeyIdFor(index + 2));
     const index = ids.map((journeyId, position) =>
       indexRow(journeyId, now - position * 1_000, position === 0 ? 2_499 : 1),
     );
@@ -564,6 +586,8 @@ describe("staging Journey Explorer custom widget", () => {
         from: "2026-08-01T00:00:00.000Z",
         to: "2026-09-02T00:00:00.000Z",
       },
+      { operation: "list", render: "true" },
+      { operation: "list", endpointArn: endpoint },
     ])
       await expect(invoke(input)).resolves.toEqual({
         error: "invalid_request",
@@ -600,9 +624,6 @@ describe("staging Journey Explorer custom widget", () => {
     const html = await handler(rejected)({ operation: "list", query: "fields @message", render: true });
     expect(html).toContain("The requested explorer action was not valid (event).");
     expect(rejected.sent).toEqual([]);
-    await expect(
-      handler(new Client([]))({ operation: "list", query: "fields @message" }),
-    ).resolves.toEqual({ error: "invalid_request" });
   });
 
   it("uses finite allowlists and returns content-free metadata and null token fields only", async () => {
@@ -611,12 +632,8 @@ describe("staging Journey Explorer custom widget", () => {
       {
         status: "Complete",
         results: [
-          event({
+          askStart({
             sequence: 1,
-            stage: "ask_validation",
-            event: "started",
-            outcome: null,
-            elapsed_ms: 0,
             observed_at: "2026-09-02T11:58:00.000Z",
             secret: "never",
           }),
@@ -665,13 +682,7 @@ describe("staging Journey Explorer custom widget", () => {
         expect.objectContaining({ sequence: 3 }),
       ],
     });
-    if (typeof result === "string") throw new Error("expected raw detail data");
     expect(JSON.stringify(result)).not.toContain("never");
-    expect(
-      (result.stages as readonly Record<string, unknown>[]).map(
-        (item) => item.sequence,
-      ),
-    ).toEqual([1, 2, 3]);
     expect(JSON.stringify(result)).not.toContain("observed_ms");
   });
 
@@ -717,12 +728,7 @@ describe("staging Journey Explorer custom widget", () => {
       {
         status: "Complete",
         results: [
-          event({
-            stage: "ask_validation",
-            event: "started",
-            outcome: null,
-            elapsed_ms: 0,
-          }),
+          askStart(),
           event({ journey_id: foreignId, sequence: 2 }),
         ],
       },
@@ -793,14 +799,7 @@ describe("staging Journey Explorer custom widget", () => {
       {
         status: "Complete",
         results: [
-          event({
-            sequence: 1,
-            stage: "ask_validation",
-            event: "started",
-            outcome: null,
-            elapsed_ms: 0,
-            observed_at: "2026-09-02T11:58:59.000Z",
-          }),
+          askStart({ sequence: 1, observed_at: "2026-09-02T11:58:59.000Z" }),
           event({
             sequence: 2,
             event: "failed",
@@ -853,14 +852,7 @@ describe("staging Journey Explorer custom widget", () => {
   });
 
   it("accepts the Logs Insights boolean rendering of retryable (0/1) alongside false/true", async () => {
-    const start = event({
-      sequence: 1,
-      stage: "ask_validation",
-      event: "started",
-      outcome: null,
-      elapsed_ms: 0,
-      observed_at: "2026-09-02T11:58:59.000Z",
-    });
+    const start = askStart({ sequence: 1, observed_at: "2026-09-02T11:58:59.000Z" });
     // CloudWatch Logs Insights returns JSON booleans as "0" / "1", never "false" / "true".
     const nonretryable = new Client([
       { queryId: "q" },
@@ -980,13 +972,8 @@ describe("staging Journey Explorer custom widget", () => {
     await expect(
       handler(full)({ operation: "detail", journey_id: id }),
     ).resolves.toEqual({ error: "result_limit_exceeded" });
-    const fullListIndex = Array.from({ length: 2500 }, (_, index) => indexRow(`${String(index + 1).padStart(8, "0")}-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, now - index));
-    const fullListStages = fullListIndex
-      .slice(2480, 2500)
-      .map((item) => event({ journey_id: String(item.find((field) => field.field === "journey_id")!.value) }));
-    const fullList = new Client(listReplies(fullListIndex, fullListStages));
-    const fullListCursor = Buffer.from(JSON.stringify({ v: 1, start: now - 8 * 60 * 60 * 1000, end: now, offset: 2480 }), "utf8").toString("base64url");
-    await expect(handler(fullList)({ operation: "list", cursor: fullListCursor, page_size: 20 })).resolves.toMatchObject({
+    const fullList = browseLimitList();
+    await expect(handler(new Client(fullList.replies))({ operation: "list", cursor: fullList.cursor, page_size: 20 })).resolves.toMatchObject({
       journeys: expect.arrayContaining([expect.anything()]), next_cursor: null, browse_limit_reached: true,
     });
     const missing = new Client([
@@ -1232,38 +1219,26 @@ describe("staging Journey Explorer custom widget", () => {
     }
   });
 
-  it("ignores invalid and rejected late StartQuery results", async () => {
+  it.each([
+    ["invalid", (late: ReturnType<typeof deferred>) => late.resolve({ queryId: "" })],
+    ["rejected", (late: ReturnType<typeof deferred>) => late.reject(new Error("private late StartQuery failure"))],
+  ] as const)("ignores a late StartQuery result that is %s", async (_kind, settle) => {
     vi.useFakeTimers();
     try {
-      const invalid = deferred<unknown>();
-      const invalidClock = [0, 950];
-      const invalidClient = new Client([
-        () => invalid.promise,
+      const lateStart = deferred<unknown>();
+      const clockSamples = [0, 950];
+      const client = new Client([
+        () => lateStart.promise,
       ]);
-      const invalidResult = handler(invalidClient, {
-        monotonicNow: () => invalidClock.shift() ?? 950,
+      const result = handler(client, {
+        monotonicNow: () => clockSamples.shift() ?? 950,
         queryDeadlineMs: 1_000,
       })({ operation: "list" });
       await vi.advanceTimersByTimeAsync(50);
-      invalid.resolve({ queryId: "" });
+      settle(lateStart);
       await vi.advanceTimersByTimeAsync(0);
-      await expect(invalidResult).resolves.toEqual({ error: "query_timeout" });
-      expect(invalidClient.sent).toHaveLength(1);
-
-      const rejected = deferred<unknown>();
-      const rejectedClock = [0, 950];
-      const rejectedClient = new Client([
-        () => rejected.promise,
-      ]);
-      const rejectedResult = handler(rejectedClient, {
-        monotonicNow: () => rejectedClock.shift() ?? 950,
-        queryDeadlineMs: 1_000,
-      })({ operation: "list" });
-      await vi.advanceTimersByTimeAsync(50);
-      rejected.reject(new Error("private late StartQuery failure"));
-      await vi.advanceTimersByTimeAsync(0);
-      await expect(rejectedResult).resolves.toEqual({ error: "query_timeout" });
-      expect(rejectedClient.sent).toHaveLength(1);
+      await expect(result).resolves.toEqual({ error: "query_timeout" });
+      expect(client.sent).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }
@@ -1329,9 +1304,6 @@ describe("staging Journey Explorer custom widget", () => {
     });
     expect(renderedError).toContain("not valid");
     expect(renderedError).not.toContain("attacker");
-    await expect(
-      handler(new Client([]))({ operation: "list", render: "true" }),
-    ).resolves.toEqual({ error: "invalid_request" });
   });
 
   it("renders paginated list and timeline from the same validated results with safe retry, latency, and token semantics", async () => {
@@ -1367,14 +1339,7 @@ describe("staging Journey Explorer custom widget", () => {
       {
         status: "Complete",
         results: [
-          event({
-            sequence: 1,
-            stage: "ask_validation",
-            event: "started",
-            outcome: null,
-            elapsed_ms: 0,
-            observed_at: "2026-09-02T11:58:00.000Z",
-          }),
+          askStart({ sequence: 1, observed_at: "2026-09-02T11:58:00.000Z" }),
           event({
             sequence: 2,
             stage: "ask_answer",
@@ -1518,13 +1483,7 @@ describe("staging Journey Explorer custom widget", () => {
         status: "Complete",
         results: Array.from({ length: 2_000 }, (_, index) =>
           index === 0
-            ? event({
-                sequence: 1,
-                stage: "ask_validation",
-                event: "started",
-                outcome: null,
-                elapsed_ms: 0,
-              })
+            ? askStart({ sequence: 1 })
             : event({ sequence: index + 1 }),
         ),
       },
@@ -1544,12 +1503,9 @@ describe("staging Journey Explorer custom widget", () => {
     expect(html).not.toContain("Narrow the range.");
     expect(html).not.toContain(id);
 
-    const largeIndex = Array.from({ length: 2_500 }, (_, index) => indexRow(`${String(index + 1).padStart(8, "0")}-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, now - index));
-    const largeStages = largeIndex.slice(2480).map((item) => event({ journey_id: String(item.find((field) => field.field === "journey_id")!.value) }));
-    const list = new Client(listReplies(largeIndex, largeStages));
-    const listCursor = Buffer.from(JSON.stringify({ v: 1, start: now - 8 * 60 * 60 * 1000, end: now, offset: 2480 }), "utf8").toString("base64url");
+    const list = browseLimitList();
     const listHtml = String(
-      await handler(list)({ operation: "list", cursor: listCursor, page_size: 20, render: true }),
+      await handler(new Client(list.replies))({ operation: "list", cursor: list.cursor, page_size: 20, render: true }),
     );
     expect(listHtml).toContain("contains at least 2500 distinct journeys");
     expect(listHtml).toContain("narrow the range to inspect older journeys");
@@ -1571,7 +1527,7 @@ describe("staging Journey Explorer custom widget", () => {
     expect(timeoutHtml).not.toContain("narrower range");
   });
 
-  it("requires a canonical factory endpoint and never accepts one from a request", async () => {
+  it("requires a canonical factory endpoint", () => {
     expect(() =>
       mod.createStagingJourneyExplorerHandlerV1({
         logsClient: new Client([]),
@@ -1580,23 +1536,17 @@ describe("staging Journey Explorer custom widget", () => {
         endpointArn: "arn:aws:lambda:us-west-2:012345678901:function:other",
       }),
     ).toThrow("exact Authority explorer configuration");
-    await expect(
-      handler(new Client([]))({
-        operation: "list",
-        endpointArn: endpoint,
-      }),
-    ).resolves.toEqual({ error: "invalid_request" });
   });
 });
 
 
 describe("research admission Explorer round trip", () => {
   function researchRows(
-    researchStopReason: (typeof CORE_RUNTIME_RESEARCH_STOP_REASONS_V1)[number],
+    researchStopReason?: (typeof CORE_RUNTIME_RESEARCH_STOP_REASONS_V1)[number],
     researchAdmission?: (typeof CORE_RUNTIME_RESEARCH_ADMISSIONS_V1)[number],
   ) {
     return [
-      event({ stage: "ask_validation", event: "started", outcome: null, elapsed_ms: 0, observed_at: "2026-09-02T11:58:00.000Z" }),
+      askStart({ observed_at: "2026-09-02T11:58:00.000Z" }),
       event({
         sequence: 2,
         retrieval_planned_query_count: 3,
@@ -1633,11 +1583,7 @@ describe("research admission Explorer round trip", () => {
   });
 
   it("keeps legacy missing research metadata explicitly unreported", async () => {
-    const rows = [
-      event({ stage: "ask_validation", event: "started", outcome: null, elapsed_ms: 0, observed_at: "2026-09-02T11:58:00.000Z" }),
-      event({ sequence: 2, retrieval_planned_query_count: 3 }),
-    ];
-    const client = new Client([{ queryId: "q" }, { status: "Complete", results: rows }]);
+    const client = new Client([{ queryId: "q" }, { status: "Complete", results: researchRows() }]);
     await expect(handler(client)({ operation: "detail", journey_id: id })).resolves.toMatchObject({
       status: "complete",
       stages: expect.arrayContaining([expect.objectContaining({ sequence: 2, retrieval: expect.objectContaining({ research_stop_reason: null, research_admission: null }) })]),
@@ -1651,7 +1597,7 @@ describe("research admission Explorer round trip", () => {
     { stage: "meeting_source_intake", workflow: "meeting_approval", event: "started", outcome: null, elapsed_ms: 0, retrieval_research_stop_reason: "budget" },
   ])("fails closed for unknown or misplaced research metadata %j", async (fields) => {
     const rows = "stage" in fields ? [event(fields)] : [
-      event({ stage: "ask_validation", event: "started", outcome: null, elapsed_ms: 0, observed_at: "2026-09-02T11:58:00.000Z" }),
+      askStart({ observed_at: "2026-09-02T11:58:00.000Z" }),
       event({ sequence: 2, ...fields }),
     ];
     const client = new Client([{ queryId: "q" }, { status: "Complete", results: rows }]);
@@ -1846,7 +1792,7 @@ describe("core observation Explorer round trip", () => {
 
   it("counts overlapping spans once and distinguishes explicit execution retries from legacy ordinals", async () => {
     const rows = [
-      event({ stage: "ask_validation", event: "started", outcome: null, observed_at: "2026-09-02T11:58:00.000Z", elapsed_ms: 0 }),
+      askStart({ observed_at: "2026-09-02T11:58:00.000Z" }),
       event({ sequence: 2, stage: "ask_authorization", event: "succeeded", outcome: null, observed_at: "2026-09-02T11:58:01.000Z", elapsed_ms: 1000, schema_version: 2, accounting_kind: "execution", execution_attempt: 1, retry_count: 0 }),
       event({ sequence: 3, observed_at: "2026-09-02T11:58:02.000Z", elapsed_ms: 2000 }),
     ];

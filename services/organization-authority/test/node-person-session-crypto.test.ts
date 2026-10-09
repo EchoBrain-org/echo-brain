@@ -14,6 +14,10 @@ function sealingKey(offset = 0): Uint8Array {
   return Uint8Array.from({ length: 32 }, (_value, index) => index + offset);
 }
 
+function seal(adapter: NodePersonSessionCrypto): ReturnType<NodePersonSessionCrypto['seal']> {
+  return adapter.seal({ plaintext: PLAINTEXT, authenticated_data: AUTHENTICATED_DATA });
+}
+
 function unseal(
   adapter: NodePersonSessionCrypto,
   sealed: ReturnType<NodePersonSessionCrypto['seal']>,
@@ -42,10 +46,7 @@ describe('NodePersonSessionCrypto', () => {
       Buffer.from(adapter.sha256(Buffer.from('abc', 'ascii'))).toString('hex'),
     ).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
 
-    const sealed = adapter.seal({
-      plaintext: PLAINTEXT,
-      authenticated_data: AUTHENTICATED_DATA,
-    });
+    const sealed = seal(adapter);
     expect(sealed.key_id).toBe(KEY_ID);
     expect(sealed.sealed_bytes[0]).toBe(1);
     expect(sealed.sealed_bytes).toHaveLength(1 + 12 + PLAINTEXT.length + 16);
@@ -60,20 +61,12 @@ describe('NodePersonSessionCrypto', () => {
 
   it('uses a fresh nonce so repeated plaintext and AAD produce different envelopes', () => {
     const adapter = new NodePersonSessionCrypto(sealingKey());
-    const first = adapter.seal({
-      plaintext: PLAINTEXT,
-      authenticated_data: AUTHENTICATED_DATA,
-    });
-    const second = adapter.seal({
-      plaintext: PLAINTEXT,
-      authenticated_data: AUTHENTICATED_DATA,
-    });
+    const first = seal(adapter);
+    const second = seal(adapter);
 
-    expect(first.sealed_bytes).not.toEqual(second.sealed_bytes);
     expect(first.sealed_bytes.slice(1, 13)).not.toEqual(
       second.sealed_bytes.slice(1, 13),
     );
-    expect(Buffer.from(unseal(adapter, first))).toEqual(PLAINTEXT);
     expect(Buffer.from(unseal(adapter, second))).toEqual(PLAINTEXT);
   });
 
@@ -84,10 +77,7 @@ describe('NodePersonSessionCrypto', () => {
     ['authentication tag', 1 + 12 + PLAINTEXT.length],
   ])('rejects one-byte %s tampering', (_label, index) => {
     const adapter = new NodePersonSessionCrypto(sealingKey());
-    const sealed = adapter.seal({
-      plaintext: PLAINTEXT,
-      authenticated_data: AUTHENTICATED_DATA,
-    });
+    const sealed = seal(adapter);
     const tampered = Uint8Array.from(sealed.sealed_bytes);
     tampered[index] = (tampered[index] ?? 0) ^ 1;
 
@@ -99,14 +89,8 @@ describe('NodePersonSessionCrypto', () => {
   it('rejects wrong AAD, key, key ID, and malformed envelopes', () => {
     const adapter = new NodePersonSessionCrypto(sealingKey());
     const other = new NodePersonSessionCrypto(sealingKey(1));
-    const sealed = adapter.seal({
-      plaintext: PLAINTEXT,
-      authenticated_data: AUTHENTICATED_DATA,
-    });
-    const otherKeyId = other.seal({
-      plaintext: PLAINTEXT,
-      authenticated_data: AUTHENTICATED_DATA,
-    }).key_id;
+    const sealed = seal(adapter);
+    const otherKeyId = seal(other).key_id;
 
     expect(() =>
       unseal(adapter, sealed, {

@@ -3,11 +3,17 @@ import { asEnumerableRecord, assertExactKeys, assertTimestamp, utf8ByteLength, f
 import type { PersonToolHostV1 } from './person-tool-client.js';
 
 export const PERSON_MEETINGS_PATH_V2 = '/v1/person/meetings';
+export const PERSON_SYNTHETIC_MEETING_MAX_BYTES_V1 = 48 * 1024;
+/** Explicit content kinds; submitting notes never manufactures a transcript. */
+export interface PersonSyntheticMeetingV1 {
+  readonly id: string; readonly title: string; readonly notes: string; readonly transcript: string;
+}
 export type PersonMeetingOperationV2 =
   | { readonly operation: 'home' } | { readonly operation: 'reviews' }
   | { readonly operation: 'browse'; readonly folder_id: string } | { readonly operation: 'open'; readonly meeting_id: string }
   | { readonly operation: 'watch'; readonly folder_id: string | null; readonly project_id: string | null; readonly settings_sha256: string; readonly retain: true }
   | { readonly operation: 'import'; readonly meeting_id: string; readonly project_id: string | null; readonly retain: true }
+  | { readonly operation: 'submit'; readonly meeting: PersonSyntheticMeetingV1; readonly project_id: string | null; readonly retain: true }
   | { readonly operation: 'cancel_import'; readonly source_key: string; readonly meeting_id: string }
   | { readonly operation: 'review_open'; readonly approval_id: string }
   | { readonly operation: 'review'; readonly approval_id: string; readonly command_id: string; readonly snapshot_sha256: string; readonly action: 'approve' | 'reject'; readonly project_ids: readonly string[]; readonly share_transcript: boolean; readonly owners: readonly { readonly signal_id: string; readonly owner: string }[] };
@@ -31,6 +37,7 @@ export interface PersonMeetingResultsV2 {
   home: PersonMeetingHomeV2; browse: { readonly meetings: readonly PersonMeetingRowV2[] };
   open: { readonly id: string; readonly title: string; readonly notes: string; readonly summary: string; readonly truncated: boolean };
   watch: { readonly status: 'saved' }; import: { readonly status: 'queued' }; cancel_import: { readonly status: 'cancelled' };
+  submit: { readonly status: 'queued'; readonly meeting_id: string };
   reviews: { readonly reviews: readonly PersonMeetingReviewV2[] };
   review_open: { readonly review: PersonMeetingReviewV2; readonly snapshot_sha256: string; readonly content: string; readonly owners: readonly { readonly signal_id: string; readonly action: string; readonly proposed: string }[]; readonly suggested_projects: readonly { readonly project_id: string; readonly name: string }[] };
   review: { readonly status: 'publishing' | 'approved' | 'rejected'; readonly decided_on: 'desktop' | 'slack' };
@@ -38,6 +45,7 @@ export interface PersonMeetingResultsV2 {
 const fields: Record<PersonMeetingOperationV2['operation'], readonly string[]> = {
   home: [], reviews: [], browse: ['folder_id'], open: ['meeting_id'],
   watch: ['folder_id', 'project_id', 'settings_sha256', 'retain'], import: ['meeting_id', 'project_id', 'retain'],
+  submit: ['meeting', 'project_id', 'retain'],
   cancel_import: ['source_key', 'meeting_id'], review_open: ['approval_id'],
   review: ['approval_id', 'command_id', 'snapshot_sha256', 'action', 'project_ids', 'share_transcript', 'owners'],
 };
@@ -46,6 +54,17 @@ function text(value: unknown, maximum = 256): asserts value is string {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\u0000-\u001f\u007f]/.test(value)) fail(label);
 }
 function digest(value: unknown): asserts value is string { text(value); if (!/^sha256:[a-f0-9]{64}$/.test(value)) fail('Invalid meeting digest'); }
+export function validatePersonSyntheticMeetingV1(value: unknown): PersonSyntheticMeetingV1 {
+  const row = asEnumerableRecord(value, 'Synthetic meeting');
+  assertExactKeys(row, ['id', 'title', 'notes', 'transcript'], 'Synthetic meeting');
+  text(row.id, 128); text(row.title, 200);
+  if (!/^synthetic-custom-[a-z0-9][a-z0-9-]*$/.test(row.id) || row.title.trim() !== row.title ||
+      typeof row.notes !== 'string' || typeof row.transcript !== 'string' ||
+      (!row.notes.trim() && !row.transcript.trim()) ||
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(row.notes + row.transcript) ||
+      utf8ByteLength(JSON.stringify(row)) > PERSON_SYNTHETIC_MEETING_MAX_BYTES_V1) fail('Invalid synthetic meeting');
+  return Object.freeze({ ...row }) as unknown as PersonSyntheticMeetingV1;
+}
 function projectIds(value: unknown): asserts value is readonly string[] {
   if (!Array.isArray(value) || value.length > 20) fail(label);
   let previous: string | undefined;
@@ -69,6 +88,7 @@ export function validatePersonMeetingRequestV2(value: unknown): PersonMeetingReq
   for (const key of fields[operation]) {
     const item = row[key];
     if (key === 'retain') { if (item !== true) fail('Meeting retention consent is required'); }
+    else if (key === 'meeting') validatePersonSyntheticMeetingV1(item);
     else if (key === 'share_transcript') { if (typeof item !== 'boolean') fail(label); }
     else if (key === 'project_ids') projectIds(item);
     else if (key === 'owners') ownerChoices(item);
@@ -76,6 +96,7 @@ export function validatePersonMeetingRequestV2(value: unknown): PersonMeetingReq
     else { text(item); if (key.endsWith('_sha256')) digest(item); }
   }
   if ('project_id' in row && row.project_id !== null) validateProjectIdV1(row.project_id);
+  if (operation === 'submit' && row.tool_id !== 'synthetic') fail('Custom meetings require the synthetic staging tool');
   if (operation === 'review') {
     const review = row as PersonMeetingRequestV2 & { readonly operation: 'review' };
     text(row.command_id, 128);
@@ -89,7 +110,7 @@ export function validatePersonMeetingRequestV2(value: unknown): PersonMeetingReq
 export function validatePersonMeetingResultV2<K extends keyof PersonMeetingResultsV2>(operation: K, value: unknown): PersonMeetingResultsV2[K] {
   const row = asEnumerableRecord(value, 'Personal meeting response');
   const keys = { home: ['connected','email','workspace','folders','settings_sha256','sources'], browse: ['meetings'], open: ['id','title','notes','summary','truncated'],
-    watch: ['status'], import: ['status'], cancel_import: ['status'], reviews: ['reviews'], review_open: ['review','snapshot_sha256','content','owners','suggested_projects'], review: ['status','decided_on'] };
+    watch: ['status'], import: ['status'], submit: ['status','meeting_id'], cancel_import: ['status'], reviews: ['reviews'], review_open: ['review','snapshot_sha256','content','owners','suggested_projects'], review: ['status','decided_on'] };
   assertExactKeys(row, keys[operation], 'Personal meeting response');
   if (utf8ByteLength(JSON.stringify(row)) > 120_000) fail('Personal meeting response exceeds its bound');
   const object = (value: unknown, keys: readonly string[]) => { const item = asEnumerableRecord(value, 'Meeting response item'); assertExactKeys(item, keys, 'Meeting response item'); return item; };
@@ -127,7 +148,8 @@ export function validatePersonMeetingResultV2<K extends keyof PersonMeetingResul
     text(row.id); text(row.title, 256);
     if (typeof row.notes !== 'string' || row.notes.length > 8000 || typeof row.summary !== 'string' || row.summary.length > 8000 || typeof row.truncated !== 'boolean') fail('Invalid meeting preview');
   }
-  const statuses = { watch: ['saved'], import: ['queued'], cancel_import: ['cancelled'], review: ['publishing','approved','rejected'] };
+  const statuses = { watch: ['saved'], import: ['queued'], submit: ['queued'], cancel_import: ['cancelled'], review: ['publishing','approved','rejected'] };
+  if (operation === 'submit') { text(row.meeting_id, 128); if (!/^synthetic-custom-[a-z0-9][a-z0-9-]*$/.test(row.meeting_id)) fail('Invalid synthetic meeting id'); }
   if (operation in statuses && !(statuses[operation as keyof typeof statuses] as readonly unknown[]).includes(row.status)) fail('Invalid meeting outcome');
   if (operation === 'review' && !['desktop', 'slack'].includes(String(row.decided_on))) fail('Invalid meeting decision surface');
   return Object.freeze({ ...row }) as unknown as PersonMeetingResultsV2[K];

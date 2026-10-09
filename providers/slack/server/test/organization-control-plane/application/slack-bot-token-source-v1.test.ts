@@ -21,15 +21,6 @@ function secretStore(): FileOrganizationSecretStore {
   return new FileOrganizationSecretStore(join(directory, "secrets"));
 }
 
-/** The source reads only the provider ids, the reference digest and the state hash. */
-function stored(reference: object, stateSha256: `sha256:${string}` = canonicalSha256({ state: "nango" })): StoredSlackConnectionV1 {
-  return {
-    connection: { provider_tenant_id: "T0TEAM", provider_app_id: "A0APP1", provider_bot_user_id: "U0BOT" },
-    state: { credential_reference_sha256: canonicalSha256(reference) },
-    state_sha256: stateSha256,
-  } as unknown as StoredSlackConnectionV1;
-}
-
 function nangoFake(): NangoConnectionClientV1 & { getSlackConnection: ReturnType<typeof vi.fn> } {
   let issued = 0;
   return {
@@ -40,13 +31,18 @@ function nangoFake(): NangoConnectionClientV1 & { getSlackConnection: ReturnType
   } as unknown as NangoConnectionClientV1 & { getSlackConnection: ReturnType<typeof vi.fn> };
 }
 
-function nangoConnection(secrets: FileOrganizationSecretStore) {
+/** The source reads only the provider ids, the reference digest and the state hash. */
+function nangoConnection(secrets: FileOrganizationSecretStore): StoredSlackConnectionV1 {
   const reference = secrets.create(serializeSlackAppCredentialsV1({
     kind: "echo-slack-app-credentials-v1", app_id: "A0APP1", client_id: "1234.5678",
     client_secret: "client-secret-value", signing_secret: "signing-secret-value",
     nango_connection_id: "nango-conn-1",
   }));
-  return stored(reference);
+  return {
+    connection: { provider_tenant_id: "T0TEAM", provider_app_id: "A0APP1", provider_bot_user_id: "U0BOT" },
+    state: { credential_reference_sha256: canonicalSha256(reference) },
+    state_sha256: canonicalSha256({ state: "nango" }),
+  } as unknown as StoredSlackConnectionV1;
 }
 
 describe("Slack bot-token source V1", () => {

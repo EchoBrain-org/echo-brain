@@ -7,7 +7,7 @@ import {
   APPROVAL_DECISION_RECORD_SHA256_PATH_V1, approvalDecisionReceiptJsonV1, createApprovalCoreV1, createApprovalPublisherV1,
   type AfterApprovedRecordEventV1, type AfterApprovedRecordHookV1, type ApprovalDecisionBodyV1,
 } from '../src/composition/approval-core-v1.js';
-import { buildApprovalDecisionRecordV1, projectApprovalDecisionApproverV1 } from '../src/composition/approval-decision-projection-v1.js';
+import { buildApprovalDecisionRecordV1 } from '../src/composition/approval-decision-projection-v1.js';
 import { confirmedOwners } from '../src/composition/person-meeting-items-v1.js';
 import { coreRuntimeIdentityV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 
@@ -66,33 +66,18 @@ describe('approval publisher: the brief', () => {
     expect(publishedCount(f)).toBe(1);
     expect(f.recordCount()).toBe(1);
   });
-  it.each([[[]], [['A']], [['A', 'B']]] as const)('publishes the exact audience and owners (projects %j)', async (names) => {
-    const f = await approvalCoreFixture({ projects: 2, owners: { 'act-1': 'Rafael Moreno', 'act-2': 'Jules Ortega' } });
-    const project_ids = names.map(n => f.project(n)).sort();
-    f.core.decide('desktop', f.approve({ project_ids, owners: [{ signal_id: 'act-1', owner: 'Rafael M.' }] }), () => f.session);
-    await f.core.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
-    const ref = f.lastRecord().body.human_act_resolution_ref;
-    expect(ref.kind).toBe('echo-approval-decision-ref-v1');
-    expect(ref.surface).toBe('desktop');
-    expect(ref.audience_project_ids).toEqual(project_ids);
-    expect(ref.association_project_ids).toEqual(project_ids);
-    expect(ref.action_owners).toEqual([{ signal_id: 'act-1', owner: 'Rafael M.' }]); // act-2 cleared, so absent
-    expect(ref.selected_policy_id).toBe(project_ids.length === 0 ? 'restricted-reviewer-person-v2' : 'project-members-readable-person-v1');
-    expect(ref.provider_action_kind).toBe('echo-approval-decision-v1');
-    const actions = f.lastRecord().body.event.approved_snapshot.approved_payload.brief.actions as { owner: unknown }[];
-    expect(actions.length).toBeGreaterThan(0);
-    expect(actions.every(action => action.owner === null)).toBe(true);
-  });
   it('runs every hook once inside the receipt transaction, even after a crash between append and receipt', async () => {
     const calls: unknown[] = [];
     const f = await approvalCoreFixture({ after_record: [(tx, event) => { expect(tx.inTransaction).toBe(true); calls.push(event); }] });
     f.core.decide('desktop', f.approve(), () => f.session);
     const interrupted = await f.withAppend(async (input, append) => { await append(input); throw new Error('crash after append'); });
     await expect(interrupted.processing.recoverV4Appends(new AbortController().signal)).rejects.toThrow('crash');
+    expect(f.receipt()).toBeNull();
     expect(calls).toHaveLength(0);
     await f.core.processing.recoverV4Appends(new AbortController().signal);
     await f.core.processing.recoverV4Appends(new AbortController().signal);
     expect(f.recordCount()).toBe(1);
+    expect(f.core.proposal(f.approvalId)!.status).toBe('approved');
     expect(calls).toEqual([expect.objectContaining({ approval_id: f.approvalId, record_sha256: expect.stringMatching(/^sha256:/) })]);
   });
   it('writes no record and runs no hook for a rejection', async () => {
@@ -101,6 +86,8 @@ describe('approval publisher: the brief', () => {
     f.core.decide('desktop', f.reject(), () => f.session);
     await f.core.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
     expect(f.recordCount()).toBe(0);
+    expect(f.receipt()).toBeNull();
+    expect(f.core.proposal(f.approvalId)!.status).toBe('rejected');
     expect(calls).toEqual([]);
   });
 });
@@ -160,7 +147,7 @@ describe('approval publisher: hooks', () => {
     expect(logged(f)).toEqual(['run']);
     expect(calls).toHaveLength(1);
   });
-  it('refuses an async hook function at registration', async () => {
+  it('refuses async hook functions and after_record entries that are not functions at registration', async () => {
     const f = await approvalCoreFixture();
     let ran = 0;
     const hook = async () => { ran++; throw new Error('x'); };
@@ -168,6 +155,11 @@ describe('approval publisher: hooks', () => {
     expect(() => createApprovalPublisherV1(f.db, f.context, [hook as unknown as AfterApprovedRecordHookV1])).toThrow(/synchronous/);
     await expect(f.create({}, { after_record: [async () => {}] as unknown as AfterApprovedRecordHookV1[] })).rejects.toThrow(TypeError);
     await expect(createApprovalCoreV1(f.db, f.context, { suggestions: () => [], projects: () => {}, after_record: [async function* () {}] as unknown as AfterApprovedRecordHookV1[] })).rejects.toThrow(/synchronous/);
+    for (const bad of [[1], [null], ['hook'], [{}]] as unknown as AfterApprovedRecordHookV1[][]) {
+      expect(() => createApprovalPublisherV1(f.db, f.context, bad)).toThrow(TypeError);
+      await expect(f.create({}, { after_record: bad })).rejects.toThrow(TypeError);
+    }
+    expect(() => createApprovalPublisherV1(f.db, f.context, 'hooks' as unknown as AfterApprovedRecordHookV1[])).toThrow(TypeError);
     f.core.decide('desktop', f.approve(), () => f.session);
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
     expect(ran).toBe(0);
@@ -190,14 +182,6 @@ describe('approval publisher: hooks', () => {
     expect(calls).toBe(1);
     expect(publishedCount(f)).toBe(1);
     expect(f.recordCount()).toBe(1);
-  });
-  it('rejects after_record entries that are not functions', async () => {
-    const f = await approvalCoreFixture();
-    for (const bad of [[1], [null], ['hook'], [{}]] as unknown as AfterApprovedRecordHookV1[][]) {
-      expect(() => createApprovalPublisherV1(f.db, f.context, bad)).toThrow(TypeError);
-      await expect(f.create({}, { after_record: bad })).rejects.toThrow(TypeError);
-    }
-    expect(() => createApprovalPublisherV1(f.db, f.context, 'hooks' as unknown as AfterApprovedRecordHookV1[])).toThrow(TypeError);
   });
 });
 
@@ -227,7 +211,7 @@ describe('approval publisher: R30(d) two publishers', () => {
     expect(f.receipt()).toBe(stored);
   });
   it('refuses a zero-change receipt that names another record', async () => {
-    const f = await approvalCoreFixture({ file: true });
+    const f = await approvalCoreFixture();
     f.core.decide('desktop', f.approve(), () => f.session);
     let count = 0;
     const shared = f.context.record_append;
@@ -282,7 +266,6 @@ describe('approval publisher: records', () => {
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
     const record = f.lastRecord(), ref = record.body.human_act_resolution_ref;
     expect(ref).toMatchObject({ surface: 'slack', command_id: 'slack:k1', audit_event_id: 'audit:slack:k1' });
-    expect(projectApprovalDecisionApproverV1(record)).toMatchObject({ approval_id: f.approvalId, membership_id: f.actor.membership_id });
     expect(f.core.proposal(f.approvalId)!.status).toBe('approved');
   });
   it('rebuilds the identical reference on recovery', async () => {
@@ -291,13 +274,11 @@ describe('approval publisher: records', () => {
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
     const row = f.db.prepare('SELECT sequence, body_json FROM authority_approval_decisions_v1').get() as { sequence: number; body_json: string };
     const frozen = f.context.state.readFrozenCandidateForApproval(f.approvalId)!;
-    const build = () => buildApprovalDecisionRecordV1({ coordinates: f.context.coordinates, decision: { sequence: row.sequence, body: JSON.parse(row.body_json) },
+    const built = buildApprovalDecisionRecordV1({ coordinates: f.context.coordinates, decision: { sequence: row.sequence, body: JSON.parse(row.body_json) },
       candidate_sha256: frozen.candidate_semantic_sha256 as `sha256:${string}`, approved_snapshot: frozen.approved_snapshot });
-    const built = build();
     const record = f.lastRecord();
     expect(built.semantic_idempotency_key).toBe(record.body.semantic_idempotency_key);
     expect(canonicalJson(built.human_act_record_input.approval_decision_ref_v1 as unknown as JsonValue)).toBe(canonicalJson(record.body.human_act_resolution_ref));
-    expect(canonicalJson(build() as unknown as JsonValue)).toBe(canonicalJson(built as unknown as JsonValue));
   });
   it('publishes an Only-me approval that shares its transcript', async () => {
     const f = await approvalCoreFixture();
@@ -313,7 +294,6 @@ describe('approval publisher: records', () => {
     const f = await approvalCoreFixture();
     f.core.decide('desktop', f.approve({ share_transcript: true }), () => f.session);
     const body = decisionBody(f, f.approvalId);
-    expect(body.transcript_source).toMatchObject({ source_sha256: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) });
     // Retention changes after the decision (the revision rows are otherwise immutable).
     f.db.exec('DROP TRIGGER authority_source_revisions_v1_update_denied');
     f.db.prepare('UPDATE authority_source_revisions_v1 SET revision_sha256=?').run('0'.repeat(64));
@@ -353,31 +333,29 @@ describe('approval publisher: records', () => {
     const binding = { policy_id: 'restricted-reviewer-person-v2' as const, policy_contract_sha256: ref.policy_contract_sha256 };
     expect(() => f.snapshotAtoms(repeat, { policyBinding: () => binding, project: () => { throw new Error('unused'); } })).toThrow('confirmed action owners must name each action once');
   });
-  it.each([[[], false], [[], true], [['A'], false], [['A'], true], [['A', 'B'], false], [['A', 'B'], true]] as const)('publishes the exact audience %j (share %s) and recovers once', async (names, share) => {
-    const f = await approvalCoreFixture();
+  it.each([[[], false], [[], true], [['A'], false], [['A'], true], [['A', 'B'], false], [['A', 'B'], true]] as const)('publishes the exact audience %j (share %s) and owners, and recovers once', async (names, share) => {
+    const f = await approvalCoreFixture({ owners: { 'act-1': 'Rafael Moreno', 'act-2': 'Jules Ortega' } });
     const ids = names.map(name => f.project(name));
-    expect(f.core.decide('desktop', f.approve({ project_ids: ids, share_transcript: share }), () => f.session)).toMatchObject({ kind: 'decided', status: 'publishing' });
+    const request = f.approve({ project_ids: ids, share_transcript: share, owners: [{ signal_id: 'act-1', owner: 'Rafael M.' }] });
+    expect(f.core.decide('desktop', request, () => f.session)).toMatchObject({ kind: 'decided', status: 'publishing' });
     const resumed = await f.create();
     await resumed.processing.recoverV4Appends(signal());
-    expect(resumed.decide('desktop', f.approve({ project_ids: ids, share_transcript: share }), () => f.session)).toMatchObject({ kind: 'replayed', status: 'approved' });
+    expect(resumed.decide('desktop', request, () => f.session)).toMatchObject({ kind: 'replayed', status: 'approved' });
     await resumed.processing.recoverV4Appends(signal());
     expect(f.recordCount()).toBe(1);
-    const envelope = f.lastRecord();
-    expect(envelope.body.human_act_resolution_ref.share_transcript).toBe(share);
-    expect(envelope.body.human_act_resolution_ref.audience_project_ids).toEqual(ids);
-    expect(envelope.body.human_act_resolution_ref.association_project_ids).toEqual(ids);
-    expect(projectApprovalDecisionApproverV1(envelope)?.membership_id).toBe(f.actor.membership_id);
-    expect(resumed.decide('desktop', f.approve({ project_ids: ids, share_transcript: !share }), () => f.session).kind).toBe('already_decided');
-  });
-  it('recovers an append committed just before the local receipt was saved', async () => {
-    const f = await approvalCoreFixture();
-    f.core.decide('desktop', f.approve(), () => f.session);
-    const interrupted = f.withAppend(async (input, append) => { await append(input); throw new Error('interrupted after signed append'); });
-    await expect(interrupted.processing.recoverV4Appends(signal())).rejects.toThrow('interrupted');
-    expect(f.receipt()).toBeNull();
-    await f.core.processing.recoverV4Appends(signal());
-    expect(f.recordCount()).toBe(1);
-    expect(f.core.proposal(f.approvalId)!.status).toBe('approved');
+    const envelope = f.lastRecord(), ref = envelope.body.human_act_resolution_ref;
+    expect(ref.kind).toBe('echo-approval-decision-ref-v1');
+    expect(ref.surface).toBe('desktop');
+    expect(ref.share_transcript).toBe(share);
+    expect(ref.audience_project_ids).toEqual(ids);
+    expect(ref.association_project_ids).toEqual(ids);
+    expect(ref.action_owners).toEqual([{ signal_id: 'act-1', owner: 'Rafael M.' }]); // act-2 cleared, so absent
+    expect(ref.selected_policy_id).toBe(ids.length === 0 ? 'restricted-reviewer-person-v2' : 'project-members-readable-person-v1');
+    expect(ref.provider_action_kind).toBe('echo-approval-decision-v1');
+    const actions = envelope.body.event.approved_snapshot.approved_payload.brief.actions as { owner: unknown }[];
+    expect(actions.length).toBeGreaterThan(0);
+    expect(actions.every(action => action.owner === null)).toBe(true);
+    expect(resumed.decide('desktop', { ...request, share_transcript: !share }, () => f.session).kind).toBe('already_decided');
   });
   it('stores the receipt wrapper with the record digest at $.record_sha256', async () => {
     const f = await approvalCoreFixture();
@@ -424,14 +402,6 @@ describe('approval publisher: failures', () => {
     expect(f.recordCount()).toBe(0);
     expect(core.proposal(f.approvalId)!.status).toBe('publishing');
   });
-  it('a rejection writes no record and keeps no receipt', async () => {
-    const f = await approvalCoreFixture();
-    expect(f.core.decide('desktop', f.reject(), () => f.session)).toMatchObject({ kind: 'decided', status: 'rejected' });
-    await f.core.processing.recoverV4Appends(signal());
-    expect(f.receipt()).toBeNull();
-    expect(f.recordCount()).toBe(0);
-    expect(f.core.proposal(f.approvalId)!.status).toBe('rejected');
-  });
   it('refuses to publish inside an open Authority transaction', async () => {
     const f = await approvalCoreFixture();
     f.core.decide('desktop', f.approve(), () => f.session);
@@ -457,12 +427,5 @@ describe('approval publisher: failures', () => {
     expect(inspections).toBeGreaterThanOrEqual(2);
     await publisher.appendFinalizedApprovalsToV4(signal());
     expect(publishedCount(f)).toBe(1);
-  });
-  it('builds a frozen publisher over the brief signature', async () => {
-    const f = await approvalCoreFixture();
-    const publisher = createApprovalPublisherV1(f.db, f.context, []);
-    expect(Object.isFrozen(publisher)).toBe(true);
-    expect(publisher.reconcileApprovalPresentations).toBeUndefined();
-    await publisher.observeAndFinalizePendingApprovals(signal());
   });
 });

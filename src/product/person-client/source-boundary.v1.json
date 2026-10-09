@@ -206,7 +206,8 @@
       "from": "src/product/person-client/composition.ts",
       "allowed_imports": [
         "src/product/person-client/commands.ts",
-        "src/product/person-client/client-update-cli.ts"
+        "src/product/person-client/client-update-cli.ts",
+        "src/product/person-client/synthetic-meeting-tool.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/provider-jira-client",
@@ -348,6 +349,18 @@
       "allowed_external_packages": [],
       "allowed_node_builtins": [
         "path"
+      ]
+    },
+    {
+      "name": "person-client-synthetic-meeting-tool",
+      "from": "src/product/person-client/synthetic-meeting-tool.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "fs"
       ]
     }
   ]

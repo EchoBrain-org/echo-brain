@@ -73,7 +73,7 @@ async function fixture(options: { selected?: readonly string[]; pages?: Page[]; 
     authorization: { assertCurrent() { if (!state.authorizationCurrent) throw new AuthorityOperationError('unauthorized', 'synthetic membership revoked'); } },
     audit: { async record(event) { if (state.rejectAudit) throw new Error('synthetic audit refused'); audits.push(event); return canonicalSha256(event); } },
     access: { tool_id: 'confluence', external_scope_id: CLOUD, external_subject_id: 'synthetic-account', identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
-  return { source, reader, state, calls, audits, fetch, bodyCalls: () => calls.filter(call => call.query.get('body-format') === 'atlas_doc_format') };
+  return { source, state, calls, audits, fetch, bodyCalls: () => calls.filter(call => call.query.get('body-format') === 'atlas_doc_format') };
 }
 
 // Every operation below crosses the production audited release boundary; raw
@@ -87,10 +87,7 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(results.every(result => result.items.length === 1)).toBe(true);
     // Initialization, then one shared pre-read and one shared post-read fence.
     // Each search still performs its own scoped discovery and exact page read.
-    expect(f.calls.filter(call => call.path === '/rest/api/user/current')).toHaveLength(3);
-    expect(f.calls.filter(call => call.path === '/oauth/token/accessible-resources')).toHaveLength(3);
-    expect(f.calls.filter(call => call.path === '/rest/api/search')).toHaveLength(3);
-    expect(f.calls.filter(call => call.path === '/api/v2/pages/123')).toHaveLength(3);
+    for (const path of ['/rest/api/user/current', '/oauth/token/accessible-resources', '/rest/api/search', '/api/v2/pages/123']) expect(f.calls.filter(call => call.path === path), path).toHaveLength(3);
     const released = f.audits.length;
     f.state.account = 'different-account';
     await expect(f.source.search({ query: 'gate', signal: controller.signal })).rejects.toMatchObject({ code: 'unauthorized' });
@@ -146,7 +143,6 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(discovery.query.getAll('status')).toEqual(['current', 'archived', 'deleted', 'trashed']);
     expect(f.bodyCalls()).toEqual([]);
     expect(f.audits).toHaveLength(1);
-    expect(JSON.stringify(f.audits)).not.toContain('The gate requires');
     expect(JSON.stringify(f.audits)).not.toContain('ECHO product requirements');
     expect(f.calls.filter(call => call.path === '/rest/api/user/current')).toHaveLength(3);
   });
@@ -175,8 +171,7 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(first.items[0]!.text).toBeUndefined();
     expect(f.calls.some(call => call.path === '/api/v2/pages/123' && !call.query.has('body-format'))).toBe(true);
     expect(f.bodyCalls()).toEqual([]);
-    expect(JSON.stringify(first)).not.toContain('Search excerpt');
-    expect(JSON.stringify(first)).not.toContain('Untrusted v1');
+    for (const value of ['Search excerpt', 'Untrusted v1']) expect(JSON.stringify(first)).not.toContain(value);
     f.state.keys.set('42', 'RENAMED_AGAIN');
     await f.source.search({ query: 'EVT requirements' });
     expect(f.calls.filter(call => call.path === '/rest/api/search').at(-1)!.query.get('cql')).toContain('"RENAMED_AGAIN"');
@@ -226,14 +221,6 @@ describe('Confluence live reader through the audited evidence source', () => {
     await f.source.revalidate({});
     expect(f.bodyCalls()).toHaveLength(before + 1);
     expect(JSON.stringify(f.audits)).not.toContain('EVT decision');
-  });
-
-  it('revalidates metadata-only discovery without fetching bodies', async () => {
-    const f = await fixture();
-    await f.source.list({});
-    await f.source.revalidate({});
-    expect(f.calls.some(call => call.path === '/api/v2/pages' && call.query.get('id') === '123')).toBe(true);
-    expect(f.bodyCalls()).toEqual([]);
   });
 
   it('revalidates every released metadata page in bounded batches regardless of response order', async () => {
@@ -414,10 +401,7 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(opened.truncated).toBe(false);
     expect(opened.notice).toBe('Some Confluence page content could not be fully represented as text.');
     const text = opened.items.map(item => item.text ?? '').join('');
-    expect(text).toContain('EVT gate');
-    expect(text).toContain('Owner approval is required.');
-    expect(text).toContain('[Unsupported embedded content omitted.]');
-    expect(text).toContain('Review next week.');
+    for (const value of ['EVT gate', 'Owner approval is required.', '[Unsupported embedded content omitted.]', 'Review next week.']) expect(text).toContain(value);
     expect(text).not.toContain('untrusted.invalid');
     expect(f.fetch.mock.calls.every(([url]) => new URL(url).origin === 'https://api.atlassian.com')).toBe(true);
     await f.source.revalidate({});

@@ -74,16 +74,19 @@ describe('view models copy only what the renderer may see', () => {
       state_set_at: '2026-10-07T11:00:00.000Z', check: null, can: { set_state: true, assign: true }, reach: 'no_access',
     } as const;
     const opened = { ...base, decision, reach: 'opened', current: { citation, says_now: 'Planned for the end of the month.', due_at: '2026-10-30' } };
-    const home = homeView({ send: [], items: [opened, base], landed: 0, waiting: 1, last_checked_at: null } as unknown as Parameters<typeof homeView>[0]);
+    const home = homeView({ send: [], items: [opened, base], landed: 0, waiting: 1, last_checked_at: null, sweep_due: true } as unknown as Parameters<typeof homeView>[0]);
     expect(home.items[0]).toEqual({ ...base, decision, reach: 'opened', current: { source: { kind: 'ticket', tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink },
       says_now: 'Planned for the end of the month.', due_at: '2026-10-30' } });
     expect(home.items[1]).toStrictEqual(base);
-    expect(home).toMatchObject({ send: [], landed: 0, waiting: 1, last_checked_at: null });
+    expect(home).toMatchObject({ send: [], landed: 0, waiting: 1, last_checked_at: null, sweep_due: true });
     expect(JSON.stringify(home)).not.toContain('private-tenant');
-    const page = openItemsView({ items: [opened], next_cursor: null, stages: [], summary: { unsent: 0, open: 1, done: 0, not_relevant: 0, landed: 0, changed: 0,
-      unreadable: 0, decisions: 1, last_checked_at: null, by_decision: [{ record_sha256: sha('2'), unsent: 0, open: 1 }] } } as unknown as Parameters<typeof openItemsView>[0]);
+    const stage = { record_sha256: sha('2'), run_id: 'run_00000001', state: 'done', error_code: null, mine: true } as const;
+    const page = openItemsView({ items: [opened], next_cursor: null, stages: [stage], summary: { unsent: 0, open: 1, done: 0, not_relevant: 0, landed: 0, changed: 0,
+      unreadable: 0, decisions: 1, last_checked_at: null, by_decision: [{ record_sha256: sha('2'), unsent: 0, open: 1, landed: 0, unreadable: 0 }] } } as unknown as Parameters<typeof openItemsView>[0]);
+    // Whether a decision's check is your own crosses with its stage.
+    expect(page.stages).toEqual([stage]);
     expect(page.items[0]?.current?.source).toEqual({ kind: 'ticket', tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink });
-    expect(page.summary.by_decision).toEqual([{ record_sha256: sha('2'), unsent: 0, open: 1 }]);
+    expect(page.summary.by_decision).toEqual([{ record_sha256: sha('2'), unsent: 0, open: 1, landed: 0, unreadable: 0 }]);
     expect(openItemView(opened as unknown as Parameters<typeof openItemView>[0]).current?.source).toMatchObject({ kind: 'ticket' });
   });
 

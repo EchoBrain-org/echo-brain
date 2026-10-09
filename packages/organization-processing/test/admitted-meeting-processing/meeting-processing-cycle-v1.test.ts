@@ -185,7 +185,8 @@ class FakeState implements AuthorityMeetingProcessingStateV1 {
       instance_id: input.meeting.provenance.source.instance_id,
       external_id: input.meeting.provenance.external_id,
     });
-    const reviewPolicyFields = {
+    const shared = {
+      review_input_sha256: reviewInputSha256,
       review_policy_id: input.review_policy.policy_id,
       review_policy_contract_sha256:
         input.review_policy.policy_contract_sha256,
@@ -194,44 +195,25 @@ class FakeState implements AuthorityMeetingProcessingStateV1 {
       review_policy_consequence_sha256:
         input.review_policy.policy_consequence_sha256,
     };
+    const fresh = {
+      ...shared,
+      candidate_id: "cnd_test",
+      candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
+      review_lineage_id: reviewLineageId,
+      review_semantic_sha256: `sha256:${"d".repeat(64)}`,
+    };
     const candidate: MeetingProcessingCandidateV1 = reusable !== undefined
       ? {
-          ...reviewPolicyFields,
+          ...shared,
           candidate_id: "cnd_test_coalesced",
           candidate_semantic_sha256: `sha256:${"e".repeat(64)}`,
           review_lineage_id: reusable.review_lineage_id,
-          review_input_sha256: reviewInputSha256,
           review_semantic_sha256: reusable.review_semantic_sha256,
-          disposition: "coalesced",
-          approval_id: null,
-          stage_command_id: null,
-          state: "coalesced",
+          disposition: "coalesced", approval_id: null, stage_command_id: null, state: "coalesced",
         }
       : actionable
-      ? {
-          ...reviewPolicyFields,
-          candidate_id: "cnd_test",
-          candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
-          review_lineage_id: reviewLineageId,
-          review_input_sha256: reviewInputSha256,
-          review_semantic_sha256: `sha256:${"d".repeat(64)}`,
-          disposition: "actionable",
-          approval_id: "apr_test",
-          stage_command_id: "pas_test",
-          state: "queued",
-        }
-      : {
-          ...reviewPolicyFields,
-          candidate_id: "cnd_test",
-          candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
-          review_lineage_id: reviewLineageId,
-          review_input_sha256: reviewInputSha256,
-          review_semantic_sha256: `sha256:${"d".repeat(64)}`,
-          disposition: "no_signals",
-          approval_id: null,
-          stage_command_id: null,
-          state: "no_signals",
-        };
+      ? { ...fresh, disposition: "actionable", approval_id: "apr_test", stage_command_id: "pas_test", state: "queued" }
+      : { ...fresh, disposition: "no_signals", approval_id: null, stage_command_id: null, state: "no_signals" };
     this.sourceRevisions.set(
       `${input.meeting.provenance.external_id}:${input.meeting.provenance.canonical_revision}`,
       { ...candidate, ...input },
@@ -334,19 +316,49 @@ function stager(
   };
 }
 
+type CycleOptions = ConstructorParameters<typeof AdmittedMeetingProcessingCycleV1>[0];
+type DefaultedCycleOption = "source_cursor_policy" | "processor" | "stager";
+
 function liveCycle(
-  options: Omit<
-    ConstructorParameters<typeof AdmittedMeetingProcessingCycleV1>[0],
-    "source_cursor_policy"
-  > &
-    Partial<Pick<ConstructorParameters<typeof AdmittedMeetingProcessingCycleV1>[0], "source_cursor_policy">>,
+  options: Omit<CycleOptions, DefaultedCycleOption> &
+    Partial<Pick<CycleOptions, DefaultedCycleOption>>,
 ): AdmittedMeetingProcessingCycleV1 {
   return new AdmittedMeetingProcessingCycleV1({
     ...options,
+    processor: options.processor ?? processor(),
+    stager: options.stager ?? stager({ kind: "staged", stage_id: "never" }),
     source_cursor_policy:
       options.source_cursor_policy ?? fixtureCursorPolicy,
   });
 }
+
+/** Frozen-candidate fields shared by every seeded snapshot; callers add the handoff fields. */
+function frozenCandidate(
+  current: AdmittedMeetingProcessingAdmissionV1,
+  value: MeetingDocument,
+  frozenDecisions: DecisionSet,
+) {
+  return {
+    candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
+    review_lineage_id: "rli_test",
+    review_input_sha256: `sha256:${"c".repeat(64)}`,
+    review_semantic_sha256: `sha256:${"d".repeat(64)}`,
+    review_policy_id: REVIEW_POLICY.policy_id,
+    review_policy_contract_sha256: REVIEW_POLICY.policy_contract_sha256,
+    review_policy_consequence_text: REVIEW_POLICY.policy_consequence_text,
+    review_policy_consequence_sha256: REVIEW_POLICY.policy_consequence_sha256,
+    admission: current,
+    meeting: value,
+    decisions: frozenDecisions,
+  };
+}
+
+const phases = (events: readonly MeetingProcessingWorkerTelemetryEventV1[]) =>
+  events.map((event) =>
+    event.kind === "echo-clean-live-worker-phase-v1"
+      ? `${event.cycle_phase}:${event.event}`
+      : event.event,
+  );
 
 describe("admitted meeting-processing cycle", () => {
   it.each(["fixed", "resolved"] as const)("rejects %s on-request policy before admission, analysis or cursor advancement", async (kind) => {
@@ -362,7 +374,6 @@ describe("admitted meeting-processing cycle", () => {
       },
       processor: processor((value) => { extracted = true; return decisions(value); }),
       state,
-      stager: stager({ kind: "staged", stage_id: "never" }),
     });
     await expect(cycle.runOnce()).rejects.toThrow("automatic meeting processing requires automatic source analysis policy");
     expect(admitted).toBe(false);
@@ -388,7 +399,6 @@ describe("admitted meeting-processing cycle", () => {
       },
       processor: processor(() => { events.push("analysis"); throw new Error("analysis unavailable"); }),
       state,
-      stager: stager({ kind: "staged", stage_id: "never" }),
     });
     await expect(cycle.runOnce()).rejects.toThrow("analysis unavailable");
     expect(events).toEqual(["admitted", "analysis"]);
@@ -407,7 +417,6 @@ describe("admitted meeting-processing cycle", () => {
       },
       processor: processor((value) => { extracted = true; return decisions(value); }),
       state,
-      stager: stager({ kind: "staged", stage_id: "never" }),
     });
     await expect(cycle.runOnce()).rejects.toThrow("source custody unavailable");
     expect(extracted).toBe(false);
@@ -419,7 +428,6 @@ describe("admitted meeting-processing cycle", () => {
     new AdapterError("temporarily_unavailable", "provider temporarily unavailable", true),
     new AdapterError("rate_limited", "provider rate limited", true),
     new AdapterError("timeout", "provider timed out", true),
-    new AdapterError("temporarily_unavailable", "LLM output contained invalid or unsupported signal grounding at stage: evidence_quote", true),
     new Error("provider outcome unknown"),
   ])("holds a failed extraction instead of spending again on an unchanged review input: $message", async (failure) => {
     let calls = 0;
@@ -477,7 +485,6 @@ describe("admitted meeting-processing cycle", () => {
     const options = {
       source: source({ meetings: [meeting()] }), processor: extraction,
       state: new FakeState({ ...admission(), processor: { ...admission().processor, version: extraction.identity.version } }),
-      stager: stager({ kind: "staged", stage_id: "never" }),
       extraction_attempts: new RecordingExtractionAttempts(),
     };
     await expect(liveCycle(options).runOnce()).rejects.toThrow("grounding at stage: evidence_quote");
@@ -493,7 +500,6 @@ describe("admitted meeting-processing cycle", () => {
     const run = (value: MeetingDocument) => liveCycle({
       source: source({ meetings: [value] }), state, extraction_attempts,
       processor: processor(() => { calls += 1; throw new Error("generation failed"); }),
-      stager: stager({ kind: "staged", stage_id: "never" }),
     }).runOnce();
     await expect(run(meeting())).rejects.toThrow("generation failed");
     const sameInput = {
@@ -523,7 +529,6 @@ describe("admitted meeting-processing cycle", () => {
     const options = {
       source: source({ meetings: [meeting()] }), state, extraction_attempts,
       processor: processor((value) => { calls += 1; return decisions(value); }),
-      stager: stager({ kind: "staged", stage_id: "never" }),
     };
     await expect(liveCycle(options).runOnce()).rejects.toThrow("candidate persistence unavailable");
     await expect(liveCycle(options).runOnce()).rejects.toThrow("extraction_on_hold");
@@ -555,7 +560,6 @@ describe("admitted meeting-processing cycle", () => {
     const options = {
       source: source({ meetings: [meeting()] }), state: new FakeState(admission()), extraction_attempts,
       processor: processor(() => { calls += 1; throw new Error("provider outcome unknown"); }),
-      stager: stager({ kind: "staged", stage_id: "never" }),
     };
     await expect(liveCycle(options).runOnce()).rejects.toThrow("attempt completion unavailable");
     await expect(liveCycle(options).runOnce()).rejects.toThrow("extraction_on_hold");
@@ -587,22 +591,12 @@ describe("admitted meeting-processing cycle", () => {
     const observed = meeting();
     const state = new FakeState(current);
     state.seedFrozenCandidate({
+      ...frozenCandidate(current, observed, noSignals(observed)),
       candidate_id: "cnd_frozen",
-      candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
-      review_lineage_id: "rli_test",
-      review_input_sha256: `sha256:${"c".repeat(64)}`,
-      review_semantic_sha256: `sha256:${"d".repeat(64)}`,
-      review_policy_id: REVIEW_POLICY.policy_id,
-      review_policy_contract_sha256: REVIEW_POLICY.policy_contract_sha256,
-      review_policy_consequence_text: REVIEW_POLICY.policy_consequence_text,
-      review_policy_consequence_sha256: REVIEW_POLICY.policy_consequence_sha256,
       disposition: "no_signals",
       approval_id: null,
       stage_command_id: null,
       state: "no_signals",
-      admission: current,
-      meeting: observed,
-      decisions: noSignals(observed),
     });
     for (let index = 0; index < 2; index += 1) {
       const cycle = liveCycle({
@@ -611,7 +605,6 @@ describe("admitted meeting-processing cycle", () => {
           throw new Error("frozen revision must not invoke extraction");
         }),
         state,
-        stager: stager({ kind: "staged", stage_id: "never" }),
       });
       await expect(cycle.runOnce()).resolves.toMatchObject({ kind: "already_processed" });
     }
@@ -623,7 +616,6 @@ describe("admitted meeting-processing cycle", () => {
     const observedMeeting = meeting();
     const cycle = liveCycle({
       source: source({ meetings: [observedMeeting], next_cursor: undefined }),
-      processor: processor(),
       state: new FakeState(admission()),
       stager: stager({ kind: "staged", stage_id: "stage-1" }),
     });
@@ -677,9 +669,7 @@ describe("admitted meeting-processing cycle", () => {
       const events: MeetingProcessingWorkerTelemetryEventV1[] = [];
       const cycle = liveCycle({
         source: scenario.source,
-        processor: processor(),
         state: scenario.state,
-        stager: stager({ kind: "staged", stage_id: "never" }),
       });
       cycle.setWorkerLifecycle(
         new MeetingProcessingWorkerLifecycleV1((event) => events.push(event)),
@@ -710,20 +700,13 @@ describe("admitted meeting-processing cycle", () => {
         meeting_id: "wrong-meeting",
       })),
       state: new FakeState(admission()),
-      stager: stager({ kind: "staged", stage_id: "never" }),
     });
     cycle.setWorkerLifecycle(
       new MeetingProcessingWorkerLifecycleV1((event) => events.push(event)),
     );
 
     await expect(cycle.runOnce()).rejects.toThrow();
-    expect(
-      events.map((event) =>
-        event.kind === "echo-clean-live-worker-phase-v1"
-          ? `${event.cycle_phase}:${event.event}`
-          : event.event,
-      ),
-    ).toEqual([
+    expect(phases(events)).toEqual([
       "source_intake:started",
       "source_intake:succeeded",
       "extraction:started",
@@ -743,7 +726,6 @@ describe("admitted meeting-processing cycle", () => {
         return decisions(value);
       }),
       state,
-      stager: stager({ kind: "staged", stage_id: "never" }),
     });
     cycle.setWorkerLifecycle(
       new MeetingProcessingWorkerLifecycleV1((event) => {
@@ -763,39 +745,7 @@ describe("admitted meeting-processing cycle", () => {
     );
     expect(extracts).toBe(0);
     expect(state.candidates).toEqual([]);
-    expect(
-      events.map((event) =>
-        event.kind === "echo-clean-live-worker-phase-v1"
-          ? `${event.cycle_phase}:${event.event}`
-          : event.event,
-      ),
-    ).toEqual(["source_intake:started", "source_intake:succeeded"]);
-  });
-
-  it("polls one admitted post-cutoff fixture source cursor, stages durably, then advances", async () => {
-    const current = admission();
-    const state = new FakeState(current);
-    const downstream = stager({ kind: "staged", stage_id: "stage-1" });
-    const cycle = liveCycle({
-      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
-      processor: processor(),
-      state,
-      stager: downstream,
-    });
-
-    await expect(cycle.runOnce()).resolves.toEqual({
-      kind: "staged",
-      stage_id: "stage-1",
-      cursor_advanced: true,
-    });
-    expect(downstream.calls).toBe(1);
-    expect(state.candidates).toHaveLength(1);
-    expect(state.advances).toEqual([
-      {
-        expected_cursor: current.source.cursor,
-        next_cursor: "fixture-source:v1:next",
-      },
-    ]);
+    expect(phases(events)).toEqual(["source_intake:started", "source_intake:succeeded"]);
   });
 
   it("does not advance when the downstream approval target is revoked or drifted", async () => {
@@ -809,7 +759,6 @@ describe("admitted meeting-processing cycle", () => {
           meetings: [meeting()],
           next_cursor: "fixture-source:v1:next",
         }),
-        processor: processor(),
         state,
         stager: stager(result),
       });
@@ -819,6 +768,7 @@ describe("admitted meeting-processing cycle", () => {
         cursor_advanced: false,
       });
       expect(state.advances).toEqual([]);
+      expect(state.candidates).toHaveLength(1);
     }
   });
 
@@ -837,25 +787,13 @@ describe("admitted meeting-processing cycle", () => {
     };
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
-      processor: processor(),
       state,
       stager: downstream,
     });
     await expect(cycle.runOnce()).resolves.toEqual({ kind: "staged", stage_id: "stage-1", cursor_advanced: true });
     expect(order).toEqual(["stage:0", "reconcile:1"]);
-  });
-
-  it("state_drift gives not_staged without advancing", async () => {
-    const state = new FakeState(admission());
-    const cycle = liveCycle({
-      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
-      processor: processor(),
-      state,
-      stager: stager({ kind: "state_drift" }),
-    });
-    await expect(cycle.runOnce()).resolves.toEqual({ kind: "not_staged", reason: "state_drift", cursor_advanced: false });
-    expect(state.advances).toEqual([]);
     expect(state.candidates).toHaveLength(1);
+    expect(state.advances).toEqual([{ expected_cursor: current.source.cursor, next_cursor: "fixture-source:v1:next" }]);
   });
 
   it("admits and advances the next meeting before surfacing an older delivery failure", async () => {
@@ -870,7 +808,6 @@ describe("admitted meeting-processing cycle", () => {
     };
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
-      processor: processor(),
       state,
       stager: downstream,
     });
@@ -897,7 +834,6 @@ describe("admitted meeting-processing cycle", () => {
     };
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
-      processor: processor(),
       state,
       stager: downstream,
     });
@@ -911,7 +847,6 @@ describe("admitted meeting-processing cycle", () => {
     const state = new FailingCursorAdvanceState(admission());
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
-      processor: processor(),
       state,
       stager: {
         stage: async () => { throw new Error("proposal freeze refused"); },
@@ -928,7 +863,6 @@ describe("admitted meeting-processing cycle", () => {
     const state = new FakeState(admission(), "state_drift");
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
-      processor: processor(),
       state,
       stager: stager({ kind: "staged", stage_id: "stage-1" }),
     });
@@ -941,49 +875,34 @@ describe("admitted meeting-processing cycle", () => {
     expect(state.advances).toHaveLength(1);
   });
 
-  it("CAS advances an empty fixture source page with a distinct next cursor", async () => {
+  it.each([
+    ["advanced", { kind: "empty_cursor_advanced", cursor_advanced: true }],
+    ["state_drift", { kind: "empty_cursor_not_advanced", reason: "state_drift", cursor_advanced: false }],
+    ["revoked", { kind: "empty_cursor_not_advanced", reason: "revoked", cursor_advanced: false }],
+  ] as const)("CAS advances an empty fixture source page only when its cursor fence is %s", async (fence, expected) => {
     const current = admission();
-    const emptyState = new FakeState(current);
-    const empty = liveCycle({
+    const state = new FakeState(current, fence);
+    const cycle = liveCycle({
       source: source({ meetings: [], next_cursor: "fixture-source:v1:next" }),
-      processor: processor(),
-      state: emptyState,
-      stager: stager({ kind: "staged", stage_id: "never" }),
+      state,
     });
-    await expect(empty.runOnce()).resolves.toEqual({
-      kind: "empty_cursor_advanced",
-      cursor_advanced: true,
-    });
-    expect(emptyState.advances).toEqual([
+    await expect(cycle.runOnce()).resolves.toEqual(expected);
+    expect(state.advances).toEqual([
       {
         expected_cursor: current.source.cursor,
         next_cursor: "fixture-source:v1:next",
       },
     ]);
+    expect(state.candidates).toEqual([]);
   });
 
-  it("never advances an empty page when its cursor fence drifts or is revoked", async () => {
-    for (const result of ["state_drift", "revoked"] as const) {
-      const state = new FakeState(admission(), result);
-      const cycle = liveCycle({
-        source: source({ meetings: [], next_cursor: "fixture-source:v1:next" }),
-        processor: processor(),
-        state,
-        stager: stager({ kind: "staged", stage_id: "never" }),
-      });
-      await expect(cycle.runOnce()).resolves.toEqual({
-        kind: "empty_cursor_not_advanced",
-        reason: result,
-        cursor_advanced: false,
-      });
-      expect(state.advances).toHaveLength(1);
-      expect(state.candidates).toEqual([]);
-    }
-  });
-
-  it("records no-signal revisions without Slack staging, then CAS advances", async () => {
+  it.each([
+    ["advanced", { kind: "no_signals_cursor_advanced", cursor_advanced: true }],
+    ["state_drift", { kind: "no_signals_cursor_not_advanced", reason: "state_drift", cursor_advanced: false }],
+    ["revoked", { kind: "no_signals_cursor_not_advanced", reason: "revoked", cursor_advanced: false }],
+  ] as const)("records no-signal revisions without Slack staging, then CAS advances only when the fence is %s", async (fence, expected) => {
     const current = admission();
-    const state = new FakeState(current);
+    const state = new FakeState(current, fence);
     const downstream = stager({ kind: "staged", stage_id: "never" });
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
@@ -991,10 +910,7 @@ describe("admitted meeting-processing cycle", () => {
       state,
       stager: downstream,
     });
-    await expect(cycle.runOnce()).resolves.toEqual({
-      kind: "no_signals_cursor_advanced",
-      cursor_advanced: true,
-    });
+    await expect(cycle.runOnce()).resolves.toEqual(expected);
     expect(state.candidates).toHaveLength(1);
     expect(state.candidates[0]!.decisions.signals).toEqual([]);
     expect(downstream.calls).toBe(0);
@@ -1146,82 +1062,67 @@ describe("admitted meeting-processing cycle", () => {
   });
 
   it("retries a queued revision with only its frozen snapshot", async () => {
-    for (const stateName of ["queued"] as const) {
-      const current = admission();
-      const state = new FakeState(current);
-      const originalMeeting = meeting();
-      const originalDecisions = decisions(originalMeeting);
-      state.seedFrozenCandidate({
-        candidate_id: `cnd_${stateName}`,
-        candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
-        review_lineage_id: "rli_test",
-        review_input_sha256: `sha256:${"c".repeat(64)}`,
-        review_semantic_sha256: `sha256:${"d".repeat(64)}`,
-        review_policy_id: REVIEW_POLICY.policy_id,
+    const current = admission();
+    const state = new FakeState(current);
+    const originalMeeting = meeting();
+    const originalDecisions = decisions(originalMeeting);
+    state.seedFrozenCandidate({
+      ...frozenCandidate(current, originalMeeting, originalDecisions),
+      candidate_id: "cnd_queued",
+      disposition: "actionable",
+      approval_id: "apr_queued",
+      stage_command_id: "pas_queued",
+      state: "queued",
+    });
+    let extracts = 0;
+    let retried: Parameters<ApprovalWorkflowStagerV1["stage"]>[0] | undefined;
+    const downstream: ApprovalWorkflowStagerV1 = {
+      stage: async (input) => {
+        retried = input;
+        return { kind: "staged", stage_id: "stage-1" };
+      },
+      reconcilePendingDeliveries: async () => {},
+      reconcileSuperseded: async () => {},
+    };
+    const changedObservation: MeetingDocument = {
+      ...originalMeeting,
+      provenance: {
+        ...originalMeeting.provenance,
+        observed_at: "2026-08-22T02:06:04.005Z",
+      },
+    };
+    const cycle = liveCycle({
+      source: source({
+        meetings: [changedObservation],
+        next_cursor: current.source.cursor,
+      }),
+      processor: processor((value) => {
+        extracts += 1;
+        return decisions(value);
+      }),
+      state,
+      stager: downstream,
+    });
+
+    await expect(cycle.runOnce()).resolves.toEqual({
+      kind: "staged",
+      stage_id: "stage-1",
+      cursor_advanced: false,
+    });
+    expect(extracts).toBe(0);
+    expect(retried).toEqual({
+      admission: current,
+      candidate: expect.objectContaining({
+        state: "queued",
         review_policy_contract_sha256:
           REVIEW_POLICY.policy_contract_sha256,
         review_policy_consequence_text:
           REVIEW_POLICY.policy_consequence_text,
-        review_policy_consequence_sha256:
-          REVIEW_POLICY.policy_consequence_sha256,
-        disposition: "actionable",
-        approval_id: `apr_${stateName}`,
-        stage_command_id: `pas_${stateName}`,
-        state: stateName,
-        admission: current,
-        meeting: originalMeeting,
-        decisions: originalDecisions,
-      });
-      let extracts = 0;
-      let retried: Parameters<ApprovalWorkflowStagerV1["stage"]>[0] | undefined;
-      const downstream: ApprovalWorkflowStagerV1 = {
-        stage: async (input) => {
-          retried = input;
-          return { kind: "staged", stage_id: "stage-1" };
-        },
-        reconcilePendingDeliveries: async () => {},
-        reconcileSuperseded: async () => {},
-      };
-      const changedObservation: MeetingDocument = {
-        ...originalMeeting,
-        provenance: {
-          ...originalMeeting.provenance,
-          observed_at: "2026-08-22T02:06:04.005Z",
-        },
-      };
-      const cycle = liveCycle({
-        source: source({
-          meetings: [changedObservation],
-          next_cursor: current.source.cursor,
-        }),
-        processor: processor((value) => {
-          extracts += 1;
-          return decisions(value);
-        }),
-        state,
-        stager: downstream,
-      });
-
-      await expect(cycle.runOnce()).resolves.toEqual({
-        kind: "staged",
-        stage_id: "stage-1",
-        cursor_advanced: false,
-      });
-      expect(extracts).toBe(0);
-      expect(retried).toEqual({
-        admission: current,
-        candidate: expect.objectContaining({
-          state: stateName,
-          review_policy_contract_sha256:
-            REVIEW_POLICY.policy_contract_sha256,
-          review_policy_consequence_text:
-            REVIEW_POLICY.policy_consequence_text,
-        }),
-        meeting: originalMeeting,
-        decisions: originalDecisions,
-      });
-      expect(state.advances).toEqual([]);
-    }
+      }),
+      meeting: originalMeeting,
+      decisions: originalDecisions,
+    });
+    expect(state.advances).toEqual([]);
   });
 
   it("reconciles a durably staged candidate after a restart", async () => {
@@ -1229,23 +1130,12 @@ describe("admitted meeting-processing cycle", () => {
     const state = new FakeState(current);
     const originalMeeting = meeting();
     state.seedFrozenCandidate({
+      ...frozenCandidate(current, originalMeeting, decisions(originalMeeting)),
       candidate_id: "cnd_staged",
-      candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
-      review_lineage_id: "rli_test",
-      review_input_sha256: `sha256:${"c".repeat(64)}`,
-      review_semantic_sha256: `sha256:${"d".repeat(64)}`,
-      review_policy_id: REVIEW_POLICY.policy_id,
-      review_policy_contract_sha256: REVIEW_POLICY.policy_contract_sha256,
-      review_policy_consequence_text: REVIEW_POLICY.policy_consequence_text,
-      review_policy_consequence_sha256:
-        REVIEW_POLICY.policy_consequence_sha256,
       disposition: "actionable",
       approval_id: "apr_staged",
       stage_command_id: "pas_staged",
       state: "staged",
-      admission: current,
-      meeting: originalMeeting,
-      decisions: decisions(originalMeeting),
     });
     let extracts = 0;
     let stages = 0;
@@ -1313,38 +1203,11 @@ describe("admitted meeting-processing cycle", () => {
     expect(state.advances).toEqual([]);
   });
 
-  it("does not advance no-signal meetings when the Authority cursor fence drifts or is revoked", async () => {
-    for (const result of ["state_drift", "revoked"] as const) {
-      const state = new FakeState(admission(), result);
-      const downstream = stager({ kind: "staged", stage_id: "never" });
-      const cycle = liveCycle({
-        source: source({
-          meetings: [meeting()],
-          next_cursor: "fixture-source:v1:next",
-        }),
-        processor: processor(noSignals),
-        state,
-        stager: downstream,
-      });
-      await expect(cycle.runOnce()).resolves.toEqual({
-        kind: "no_signals_cursor_not_advanced",
-        reason: result,
-        cursor_advanced: false,
-      });
-      expect(state.candidates).toHaveLength(1);
-      expect(state.candidates[0]!.decisions.signals).toEqual([]);
-      expect(downstream.calls).toBe(0);
-      expect(state.advances).toHaveLength(1);
-    }
-  });
-
   it("does not advance a terminal empty poll, accept historical cursors, or process a page larger than one", async () => {
     const emptyState = new FakeState(admission());
     const empty = liveCycle({
       source: source({ meetings: [] }),
-      processor: processor(),
       state: emptyState,
-      stager: stager({ kind: "staged", stage_id: "never" }),
     });
     await expect(empty.runOnce()).resolves.toEqual({
       kind: "empty",
@@ -1359,9 +1222,7 @@ describe("admitted meeting-processing cycle", () => {
     };
     const historyCycle = liveCycle({
       source: source({ meetings: [], next_cursor: "fixture-source:v1:next" }),
-      processor: processor(),
       state: new FakeState(historical),
-      stager: stager({ kind: "staged", stage_id: "never" }),
     });
     await expect(historyCycle.runOnce()).rejects.toThrow(
       "fixture source v1 incremental cursor",
@@ -1371,9 +1232,7 @@ describe("admitted meeting-processing cycle", () => {
       source: source({
         meetings: [meeting(), { ...meeting(), id: "meeting-2" }],
       }),
-      processor: processor(),
       state: new FakeState(admission()),
-      stager: stager({ kind: "staged", stage_id: "never" }),
     });
     await expect(pageCycle.runOnce()).rejects.toThrow("source batch exceeds the requested pull limit");
   });
@@ -1411,7 +1270,6 @@ describe("admitted meeting-processing cycle", () => {
     };
     const cycle = liveCycle({
       source: fixtureAdapter,
-      processor: processor(),
       state: new FakeState(fixtureAdmission),
       stager: stager({ kind: "staged", stage_id: "fixture-stage" }),
       source_cursor_policy: fixtureBoundary,
@@ -1437,7 +1295,6 @@ describe("admitted meeting-processing cycle", () => {
     };
     const cycle = liveCycle({
       source: slowSource,
-      processor: processor(),
       state: new FakeState(admission()),
       stager: stager({ kind: "staged", stage_id: "stage-1" }),
     });

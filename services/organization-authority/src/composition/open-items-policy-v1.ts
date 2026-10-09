@@ -14,10 +14,11 @@ export interface OpenItemFactsV1 {
   readonly approver_active: boolean;
   readonly owner_active: boolean;
   /**
-   * The item has gone to its owner: it is `open`, or was before it closed.
-   * Send opens the items it ticks, and a later click can open one too. False
-   * while the item is `unsent`, and for an item Send left unticked that no
-   * one has opened since. Send closes those as `not_relevant` but still sets
+   * The item has reached its owner: it was sent, and Send included it, or it
+   * is `open` or `done` since (an approver who reopens an item Send left
+   * unticked hands it to its owner, who must be able to see what waits on
+   * them). False while the item is `unsent`, and for an item Send left
+   * unticked that stays `not_relevant`. Send closes those but still sets
    * their `sent_at`, so `sent_at` alone does not answer this.
    */
   readonly sent_to_owner: boolean;
@@ -56,13 +57,22 @@ export function openItemAccessV1(facts: OpenItemFactsV1): OpenItemAccessV1 {
   return Object.freeze({
     see_row,
     // An owner who cannot read the decision sees who sent the item, never the decision itself.
-    see_decision: facts.reads_decision,
+    see_decision: openItemDecisionAccessV1(facts).see_decision,
     see_outside: see_row && facts.opens_item === true,
     set_state: see_row && !unsent && (approver || owner),
     assign: see_row && !unsent && (approver || owner || facts.leads_decision_project),
     waits_on,
     waits_on_viewer: see_row && !closed && (waits_on === 'owner' ? owner : waits_on === 'approver' ? approver : facts.leads_decision_project),
   });
+}
+
+/**
+ * Who sees a decision: its title, first decided line, approval time and
+ * projects on a row, its counts in a summary, its impact check's stage, and
+ * its name in a sweep's findings. Those who pass the exact record check now.
+ */
+export function openItemDecisionAccessV1(facts: { readonly reads_decision: boolean }): { readonly see_decision: boolean } {
+  return Object.freeze({ see_decision: facts.reads_decision });
 }
 
 /** Who may send a run's items: its approver, while they can read the decision. */

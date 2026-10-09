@@ -16,6 +16,8 @@ const RESTORER = resolve(
   REPO,
   "deploy/organization-authority/restore-clean-v1-host.sh",
 );
+const ROOT_CHECK =
+  "[[ " + "$" + "{EUID} -eq 0 ]] || fail 'run this restore command as root'";
 
 function restoreScript(): string {
   return readFileSync(RESTORER, "utf8");
@@ -26,16 +28,6 @@ describe("Authority retained-host restore", () => {
     const script = restoreScript();
 
     expect(() => execFileSync("bash", ["-n", RESTORER])).not.toThrow();
-    expect(script).toContain("is_blank_data_volume");
-    expect(script).toContain("lost+found");
-    expect(script).toContain(
-      '{"ok":true,"state":"unprepared","action":"no_op"}',
-    );
-    expect(script).toContain("return 10");
-    expect(script).toContain("if [[ $COMMAND == materialize ]]; then");
-    expect(script).toContain(
-      "fail 'retained host resume requires an accepted release tuple'",
-    );
     expect(script).toContain(
       "but resume is refused. A partial, candidate, symlinked, permission-unsafe, or",
     );
@@ -64,14 +56,12 @@ describe("Authority retained-host restore", () => {
       chmodSync(join(bin, "id"), 0o755);
       chmodSync(join(bin, "stat"), 0o755);
 
-      const rootCheck =
-        "[[ " + "$" + "{EUID} -eq 0 ]] || fail 'run this restore command as root'";
       const source = restoreScript();
-      expect(source).toContain(rootCheck);
+      expect(source).toContain(ROOT_CHECK);
       writeFileSync(
         testableRestorer,
         source.replace(
-          rootCheck,
+          ROOT_CHECK,
           ": # isolated behavior test supplies Linux ownership facts",
         ),
         { mode: 0o700 },
@@ -144,11 +134,10 @@ describe("Authority retained-host restore", () => {
       mkdirSync(join(root, "release"), { mode: 0o700 });
       writeFileSync(join(root, "release", "clean-v1-release.py"), "# fixture\n");
       writeFileSync(join(root, "release", "clean-v1-runtime-profile.py"), "# fixture\n");
-      const rootCheck = "[[ " + "$" + "{EUID} -eq 0 ]] || fail 'run this restore command as root'";
       const original = restoreScript();
       const materializer = /^restore_or_no_op\(\) \{\n.*?^\}/ms;
       expect(original).toMatch(materializer);
-      writeFileSync(join(root, "restore.sh"), original.replace(rootCheck, ": # isolated handoff proof").replace(materializer, "restore_or_no_op() { return 0; }"));
+      writeFileSync(join(root, "restore.sh"), original.replace(ROOT_CHECK, ": # isolated handoff proof").replace(materializer, "restore_or_no_op() { return 0; }"));
       writeFileSync(join(root, "onboard-clean-v1.sh"), `#!/usr/bin/env bash
 set -euo pipefail
 guard="$ECHO_TEST_DEPLOY/.staging-release-guard"

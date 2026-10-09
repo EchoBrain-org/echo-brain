@@ -55,7 +55,11 @@ function fixture(hosting: 'cloudfront' | 's3' = 'cloudfront') {
     if (args[1] === 'execute-change-set') { state.executes += 1; state.stackExists = true; }
   };
   const dependencies = { aws, awsNoOutput, readTemplate: () => TEMPLATE, runtime: () => COMMIT, operationId: UUID };
-  return { directory, receipt, calls, state, dependencies };
+  const overrideAws = (override: (args: string[], base: typeof aws) => any) => {
+    const base = dependencies.aws;
+    dependencies.aws = args => override(args, base);
+  };
+  return { directory, receipt, calls, state, dependencies, overrideAws };
 }
 
 afterEach(() => { for (const directory of temporary.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -95,44 +99,38 @@ describe('client update staging feed operator', () => {
     expect(f.state.creates).toBe(1);
   });
 
-  it('binds execution to the canonical remote change-set template', () => {
-    const f = fixture();
-    planClientUpdateStaging({ output: f.receipt }, f.dependencies);
-    const aws = f.dependencies.aws;
-    f.dependencies.aws = (args: string[]) => args[0] === 'cloudformation' && args[1] === 'get-template'
-      ? { TemplateBody: '{"Resources":{"Unexpected":{}}}' }
-      : aws(args);
-    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: CHANGE_SET }, f.dependencies)).toThrow('remote_template_binding_mismatch');
+  it.each(['cloudfront', 's3'] as const)('binds %s execution to the same source and canonical remote template as its plan', hosting => {
+    const f = fixture(hosting);
+    const approveChangeSet = hosting === 's3' ? S3_CHANGE_SET : CHANGE_SET;
+    planClientUpdateStaging({ output: f.receipt, hosting }, f.dependencies);
+    f.dependencies.runtime = () => 'b'.repeat(40);
+    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet }, f.dependencies)).toThrow('exact_reviewed_runtime_required');
+    f.dependencies.runtime = () => COMMIT;
+    f.overrideAws((args, aws) => args[1] === 'get-template' ? { TemplateBody: '{"Resources":{"Unexpected":{}}}' } : aws(args));
+    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet }, f.dependencies)).toThrow('remote_template_binding_mismatch');
+    expect(f.state.executes).toBe(0);
+  });
+
+  it.each([['cloudfront', 'planning'], ['cloudfront', 'execution'], ['s3', 'planning'], ['s3', 'execution']] as const)('rejects %s resource injection during %s', (hosting, stage) => {
+    const f = fixture(hosting);
+    if (stage === 'execution') planClientUpdateStaging({ output: f.receipt, hosting }, f.dependencies);
+    f.overrideAws((args, aws) => {
+      const response = aws(args);
+      if (args[1] === 'describe-change-set' && response.Changes) response.Changes.push({ ResourceChange: { LogicalResourceId: 'UnexpectedRole', ResourceType: 'AWS::IAM::Role', Action: 'Add' } });
+      return response;
+    });
+    expect(() => stage === 'execution'
+      ? executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: hosting === 's3' ? S3_CHANGE_SET : CHANGE_SET }, f.dependencies)
+      : planClientUpdateStaging({ output: f.receipt, hosting }, f.dependencies)).toThrow('change_set_boundary_violation');
     expect(f.state.executes).toBe(0);
   });
 
   it('surfaces exact change-set early-validation failures before it becomes reviewable', () => {
     const f = fixture();
-    const aws = f.dependencies.aws;
-    f.dependencies.aws = (args: string[]) => args[0] === 'cloudformation' && args[1] === 'describe-events'
+    f.overrideAws((args, aws) => args[0] === 'cloudformation' && args[1] === 'describe-events'
       ? { OperationEvents: [{ Status: 'VALIDATION_FAILED' }] }
-      : aws(args);
+      : aws(args));
     expect(() => planClientUpdateStaging({ output: f.receipt }, f.dependencies)).toThrow('predeploy_validation_failed');
-    expect(f.state.executes).toBe(0);
-  });
-
-  it('refuses a change set that adds an unrelated resource before it can be executed', () => {
-    const f = fixture();
-    f.dependencies.aws = (args: string[]) => {
-      if (args[0] === 'sts') return { Account: '904560150024', Arn: 'arn:aws:sts::904560150024:assumed-role/AWSReservedSSO_AdministratorAccess_abc/operator' };
-      if (args[1] === 'describe-stacks') return { Stacks: [] };
-      if (args[1] === 'describe-change-set') return { ChangeSetId: CHANGE_SET, StackId: STACK_ID, StackName: 'echo-client-update-staging-v1', Status: 'CREATE_COMPLETE', Changes: [{ ResourceChange: { LogicalResourceId: 'UnexpectedRole', ResourceType: 'AWS::IAM::Role', Action: 'Add' } }] };
-      throw new Error('unexpected');
-    };
-    expect(() => planClientUpdateStaging({ output: f.receipt }, f.dependencies)).toThrow('change_set_boundary_violation');
-    expect(f.state.executes).toBe(0);
-  });
-
-  it('requires the exact reviewed runtime that created the plan', () => {
-    const f = fixture();
-    planClientUpdateStaging({ output: f.receipt }, f.dependencies);
-    f.dependencies.runtime = () => 'b'.repeat(40);
-    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: CHANGE_SET }, f.dependencies)).toThrow('exact_reviewed_runtime_required');
     expect(f.state.executes).toBe(0);
   });
 
@@ -179,8 +177,7 @@ describe('direct S3 client update staging feed operator', () => {
 
   it('accepts an explicitly absent account public-access configuration', () => {
     const f = fixture('s3');
-    const aws = f.dependencies.aws;
-    f.dependencies.aws = args => args[0] === 's3control' ? { PublicAccessBlockConfiguration: null } : aws(args);
+    f.overrideAws((args, aws) => args[0] === 's3control' ? { PublicAccessBlockConfiguration: null } : aws(args));
     expect(planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies).state).toBe('planned');
     expect(f.state.creates).toBe(1);
   });
@@ -192,11 +189,10 @@ describe('direct S3 client update staging feed operator', () => {
     other.dependencies.operationId = '22222222-2222-4222-8222-222222222222';
     planClientUpdateStaging({ output: other.receipt, hosting: 's3' }, other.dependencies);
     const competingReceipt = readFileSync(other.receipt);
-    const aws = f.dependencies.aws;
-    f.dependencies.aws = args => {
+    f.overrideAws((args, aws) => {
       if (args[0] === 'sts' && !existsSync(f.receipt)) writeFileSync(f.receipt, competingReceipt, { flag: 'wx', mode: 0o600 });
       return aws(args);
-    };
+    });
     expect(() => planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies)).toThrow('receipt_destination_exists');
     expect(f.state.creates).toBe(0);
     expect(readFileSync(f.receipt)).toEqual(competingReceipt);
@@ -204,10 +200,9 @@ describe('direct S3 client update staging feed operator', () => {
 
   it.each(['BlockPublicPolicy', 'RestrictPublicBuckets'])('stops before planning when account %s is enabled', flag => {
     const f = fixture('s3');
-    const aws = f.dependencies.aws;
-    f.dependencies.aws = args => args[0] === 's3control'
+    f.overrideAws((args, aws) => args[0] === 's3control'
       ? { PublicAccessBlockConfiguration: { BlockPublicAcls: true, IgnorePublicAcls: true, BlockPublicPolicy: false, RestrictPublicBuckets: false, [flag]: true } }
-      : aws(args);
+      : aws(args));
     expect(() => planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies)).toThrow('account_public_access_blocks_s3_feed');
     expect(f.state.creates).toBe(0);
     expect(existsSync(f.receipt)).toBe(false);
@@ -217,10 +212,9 @@ describe('direct S3 client update staging feed operator', () => {
     const f = fixture('s3');
     planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies);
     const original = readFileSync(f.receipt);
-    const aws = f.dependencies.aws;
-    f.dependencies.aws = args => args[0] === 's3control'
+    f.overrideAws((args, aws) => args[0] === 's3control'
       ? { PublicAccessBlockConfiguration: { BlockPublicAcls: true, IgnorePublicAcls: true, BlockPublicPolicy: true, RestrictPublicBuckets: false } }
-      : aws(args);
+      : aws(args));
     expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies)).toThrow('account_public_access_blocks_s3_feed');
     expect(readFileSync(f.receipt)).toEqual(original);
     expect(f.state.executes).toBe(0);
@@ -228,63 +222,48 @@ describe('direct S3 client update staging feed operator', () => {
 
   it.each([{}, { PublicAccessBlockConfiguration: {} }, { PublicAccessBlockConfiguration: { BlockPublicPolicy: 'false' } }])('does not treat an unknown account configuration as absent: %j', response => {
     const f = fixture('s3');
-    const aws = f.dependencies.aws;
-    f.dependencies.aws = args => args[0] === 's3control' ? response : aws(args);
+    f.overrideAws((args, aws) => args[0] === 's3control' ? response : aws(args));
     expect(() => planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies)).toThrow('account_public_access_check_unconfirmed');
     expect(f.state.creates).toBe(0);
   });
 
   it('does not swallow an account inspection failure', () => {
     const f = fixture('s3');
-    const aws = f.dependencies.aws;
-    f.dependencies.aws = args => { if (args[0] === 's3control') throw new Error('aws_operation_unconfirmed'); return aws(args); };
+    f.overrideAws((args, aws) => { if (args[0] === 's3control') throw new Error('aws_operation_unconfirmed'); return aws(args); });
     expect(() => planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies)).toThrow('aws_operation_unconfirmed');
     expect(f.state.creates).toBe(0);
   });
 
   it.each([
-    'https://another-bucket.s3.us-west-2.amazonaws.com/feed.json',
-    'https://echo-feed-staging-123.s3.us-east-1.amazonaws.com/feed.json',
-    'https://s3.us-west-2.amazonaws.com/echo-feed-staging-123/feed.json',
-    'http://echo-feed-staging-123.s3-website-us-west-2.amazonaws.com/feed.json',
-    'https://d111111abcdef8.cloudfront.net/feed.json',
-    'https://updates.example.com/feed.json',
-    `${S3_FEED_URL}?signature=example`,
-    `${S3_FEED_URL}#fragment`,
-    'https://user:pass@echo-feed-staging-123.s3.us-west-2.amazonaws.com/feed.json',
-    'https://echo-feed-staging-123.s3.us-west-2.amazonaws.com:443/feed.json',
-    'https://echo-feed-staging-123.s3.us-west-2.amazonaws.com/path/../feed.json',
-  ])('rejects a completed stack with a noncanonical feed output: %s', feed => {
+    ...[
+      'https://another-bucket.s3.us-west-2.amazonaws.com/feed.json',
+      'https://echo-feed-staging-123.s3.us-east-1.amazonaws.com/feed.json',
+      'https://s3.us-west-2.amazonaws.com/echo-feed-staging-123/feed.json',
+      'http://echo-feed-staging-123.s3-website-us-west-2.amazonaws.com/feed.json',
+      'https://d111111abcdef8.cloudfront.net/feed.json',
+      'https://updates.example.com/feed.json',
+      `${S3_FEED_URL}?signature=example`,
+      `${S3_FEED_URL}#fragment`,
+      'https://user:pass@echo-feed-staging-123.s3.us-west-2.amazonaws.com/feed.json',
+      'https://echo-feed-staging-123.s3.us-west-2.amazonaws.com:443/feed.json',
+      'https://echo-feed-staging-123.s3.us-west-2.amazonaws.com/path/../feed.json',
+    ].map(feed => ({ problem: `a noncanonical feed output: ${feed}`, bucket: 'echo-feed-staging-123', feed })),
+    ...['bucket.with.dots', 'UPPERCASE', 'short-', 'a'].map(bucket => ({
+      problem: `an invalid HTTPS bucket name even when feed output agrees: ${bucket}`, bucket, feed: `https://${bucket}.s3.us-west-2.amazonaws.com/feed.json`,
+    })),
+  ])('rejects a completed stack with $problem', ({ bucket, feed }) => {
     const f = fixture('s3');
     planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies);
     executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies);
     f.state.complete = true;
-    const aws = f.dependencies.aws;
-    f.dependencies.aws = args => {
+    f.overrideAws((args, aws) => {
       const response = aws(args);
-      if (args[1] === 'describe-stacks') response.Stacks[0].Outputs.find((item: { OutputKey: string }) => item.OutputKey === 'FeedUrl').OutputValue = feed;
+      if (args[1] === 'describe-stacks') response.Stacks[0].Outputs = [{ OutputKey: 'BucketName', OutputValue: bucket }, { OutputKey: 'FeedUrl', OutputValue: feed }];
       return response;
-    };
+    });
     expect(statusClientUpdateStaging({ receipt: f.receipt }, f.dependencies).state).toBe('unconfirmed');
     expect(JSON.parse(readFileSync(f.receipt, 'utf8')).outputs).toBeNull();
     expect(f.state.executes).toBe(1);
-  });
-
-  it.each(['bucket.with.dots', 'UPPERCASE', 'short-', 'a'])('rejects an invalid HTTPS bucket name even when feed output agrees: %s', bucket => {
-    const f = fixture('s3');
-    planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies);
-    executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies);
-    f.state.complete = true;
-    const aws = f.dependencies.aws;
-    f.dependencies.aws = args => {
-      const response = aws(args);
-      if (args[1] === 'describe-stacks') response.Stacks[0].Outputs = [
-        { OutputKey: 'BucketName', OutputValue: bucket },
-        { OutputKey: 'FeedUrl', OutputValue: `https://${bucket}.s3.us-west-2.amazonaws.com/feed.json` },
-      ];
-      return response;
-    };
-    expect(statusClientUpdateStaging({ receipt: f.receipt }, f.dependencies).state).toBe('unconfirmed');
   });
 
   it('never converts or overwrites an existing CloudFront receipt', () => {
@@ -309,38 +288,11 @@ describe('direct S3 client update staging feed operator', () => {
     expect(f.state.executes).toBe(0);
   });
 
-  it.each(['planning', 'execution'])('rejects resource injection during %s', stage => {
-    const f = fixture('s3');
-    if (stage === 'execution') planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies);
-    const aws = f.dependencies.aws;
-    f.dependencies.aws = args => {
-      const response = aws(args);
-      if (args[1] === 'describe-change-set' && response.Changes) response.Changes.push({ ResourceChange: { LogicalResourceId: 'UnexpectedRole', ResourceType: 'AWS::IAM::Role', Action: 'Add' } });
-      return response;
-    };
-    expect(() => stage === 'execution'
-      ? executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies)
-      : planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies)).toThrow('change_set_boundary_violation');
-    expect(f.state.executes).toBe(0);
-  });
-
   it('refuses an existing S3 stack instead of updating, deleting, or reusing it', () => {
     const f = fixture('s3');
     f.state.stackExists = true;
     expect(() => planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies)).toThrow('staging_feed_stack_already_exists');
     expect(f.state.creates).toBe(0);
-    expect(f.state.executes).toBe(0);
-  });
-
-  it('binds an S3 execution to the same source and canonical remote template as its plan', () => {
-    const f = fixture('s3');
-    planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies);
-    f.dependencies.runtime = () => 'b'.repeat(40);
-    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies)).toThrow('exact_reviewed_runtime_required');
-    f.dependencies.runtime = () => COMMIT;
-    const aws = f.dependencies.aws;
-    f.dependencies.aws = args => args[1] === 'get-template' ? { TemplateBody: '{"Resources":{"Unexpected":{}}}' } : aws(args);
-    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies)).toThrow('remote_template_binding_mismatch');
     expect(f.state.executes).toBe(0);
   });
 });

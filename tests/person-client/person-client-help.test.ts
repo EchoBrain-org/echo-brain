@@ -15,24 +15,52 @@ async function help(argv: readonly string[]): Promise<string> {
 }
 
 describe("Person client help", () => {
-  it('documents Jira through shared tool commands and the explicit ticket-capable Ask version', async () => {
-    await expect(help(['tools', 'connect', '--help'])).resolves.toContain('--tool jira [--no-wait]');
-    await expect(help(['tools', 'status', '--help'])).resolves.toContain('--tool jira --attempt-id <value>');
-    await expect(help(['tools', 'cancel', '--help'])).resolves.toContain('--tool jira --attempt-id <value>');
-    await expect(help(['tools', 'disconnect', '--help'])).resolves.toContain('--tool jira');
-    await expect(help(['ask', '--help'])).resolves.toContain('--tickets');
-  });
-  it("documents the supported Person commands without constructing a session", async () => {
-    await expect(help(["--help"])).resolves.toContain(
-      "usage: echo-brain person <command> [options]",
-    );
-    await expect(help(["--help"])).resolves.toContain("employee");
-    await expect(help(["--help"])).resolves.toContain("ask");
-    await expect(help(["--help"])).resolves.toContain("directory   Find people in your organization by name.");
+  it.each([
+    [["tools", "connect", "--help"], "--tool jira [--no-wait]"],
+    [["tools", "status", "--help"], "--tool jira --attempt-id <value>"],
+    [["tools", "cancel", "--help"], "--tool jira --attempt-id <value>"],
+    [["tools", "disconnect", "--help"], "--tool jira"],
+    [["ask", "--help"], "--tickets"],
+    [["tools", "--help"], "echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings> --tool <tool>"],
+    [["tools", "setup", "--help"], "--tool slack [--reconnect] [--existing-app <value>] [--no-wait]"],
+    [["tools", "connect", "--help"], "--method dm-code --slack-user"],
+    [["tools", "status", "--help"], "--tool slack --attempt-id <value>"],
+    [["login", "--help"], "--invitation <path> | --authority-url <url>"],
+    [["records", "--help"], "[--limit <1-100>] [--query <text>]"],
+    [["status", "--help"], "echo-brain person status"],
+    [["logout", "--help"], "echo-brain person logout"],
+    [["ask", "--help"], "echo-brain person ask --question <text> [--project <project-id> | --mine]"],
+    [["open", "--help"], "usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]"],
+    [["evidence", "search", "--help"], "echo-brain person evidence search [--query <text>]"],
+    [["evidence", "open", "--help"], "echo-brain person evidence open --item <citation-json>"],
+    [["ask-source", "--help"], "echo-brain person ask-source --source-id <source-id>"],
+    [["transcript", "--help"], "echo-brain person transcript --approval-id <id> --source-id <source-id>"],
+    [["employee", "--help"], "<list|invite|reissue|revoke>"],
+    [["employee", "list", "--help"], "echo-brain person employee list"],
+    [["employee", "invite", "--help"], "--name <name> --email <email> --out <absolute-path>"],
+    [["employee", "reissue", "--help"], "--email <email> --out <absolute-path>"],
+    [["employee", "revoke", "--help"], "--email <email>"],
+    // Every versioned upload and project-context command documents itself without a session.
+    [["updates", "submit-v3", "--help"], "--association-project-ids-json"],
+    [["updates", "status-v3", "--help"], "--request-id <uuid>"],
+    [["updates", "search-v3", "--help"], "--query <text>"],
+    [["documents", "upload-v2", "--help"], "--audience-project-ids-json"],
+    [["documents", "status-v2", "--help"], "--request-id <uuid>"],
+    [["documents", "search-v2", "--help"], "--query <text>"],
+    [["documents", "download-v2", "--help"], "--document-id <id>"],
+    [["projects", "search-v2", "--help"], "--query <text>"],
+    [["updates", "--help"], "<submit-v3|status-v3|search|search-v3>"],
+    [["documents", "--help"], "<upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate>"],
+    [["projects", "--help"], "<list-v2|create|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate|search-v2>"],
+  ])("documents %j with %s", async (argv, needle) => {
+    await expect(help(argv)).resolves.toContain(needle);
   });
 
-  it("starts the Person help with the model-free list, open and scoped ask", async () => {
+  it("starts the Person help with usage, the model-free list, open and scoped ask", async () => {
     const text = await help(["--help"]);
+    expect(text).toContain("usage: echo-brain person <command> [options]");
+    expect(text).toContain("employee");
+    expect(text).toContain("directory   Find people in your organization by name.");
     expect(text.indexOf("Start here:")).toBeGreaterThan(-1);
     expect(text.indexOf("Start here:")).toBeLessThan(text.indexOf("Commands:"));
     expect(text).toContain("\nlist shows only what you can read now; next_cursor means more.\n");
@@ -47,82 +75,12 @@ describe("Person client help", () => {
     expect(text).not.toContain("--project-id");
   });
 
-  it("documents sign-in, reads, session commands, and nested employee commands", async () => {
-    await expect(help(["tools", "--help"])).resolves.toContain("echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings> --tool <tool>");
-    await expect(help(["tools", "setup", "--help"])).resolves.toContain("--tool slack [--reconnect] [--existing-app <value>] [--no-wait]");
-    await expect(help(["tools", "connect", "--help"])).resolves.toContain("--method dm-code --slack-user");
-    await expect(help(["tools", "status", "--help"])).resolves.toContain("--tool slack --attempt-id <value>");
-    await expect(help(["login", "--help"])).resolves.toContain(
-      "--invitation <path> | --authority-url <url>",
-    );
-    await expect(help(["records", "--help"])).resolves.toContain(
-      "[--limit <1-100>] [--query <text>]",
-    );
-    await expect(help(["status", "--help"])).resolves.toContain(
-      "echo-brain person status",
-    );
-    await expect(help(["logout", "--help"])).resolves.toContain(
-      "echo-brain person logout",
-    );
-    await expect(help(["ask", "--help"])).resolves.toContain(
-      "echo-brain person ask --question <text> [--project <project-id> | --mine]",
-    );
+  it("documents list without overstating what it covers", async () => {
     // An agent reads this help: it must not overstate what list covers, and must say how a waiting page fails.
     const listHelp = await help(["list", "--help"]);
     expect(listHelp).toContain("not Slack messages or shared transcripts");
     expect(listHelp).toContain("fails with unavailable (503): retry the same --cursor later");
-    await expect(help(["list", "--help"])).resolves.toContain(
-      "usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]",
-    );
-    await expect(help(["open", "--help"])).resolves.toContain(
-      "usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]",
-    );
-    await expect(help(["evidence", "search", "--help"])).resolves.toContain(
-      "echo-brain person evidence search [--query <text>]",
-    );
-    await expect(help(["evidence", "open", "--help"])).resolves.toContain(
-      "echo-brain person evidence open --item <citation-json>",
-    );
-    await expect(help(["ask-source", "--help"])).resolves.toContain(
-      "echo-brain person ask-source --source-id <source-id>",
-    );
-    await expect(help(["transcript", "--help"])).resolves.toContain(
-      "echo-brain person transcript --approval-id <id> --source-id <source-id>",
-    );
-    await expect(help(["employee", "--help"])).resolves.toContain(
-      "<list|invite|reissue|revoke>",
-    );
-    await expect(help(["employee", "list", "--help"])).resolves.toContain(
-      "echo-brain person employee list",
-    );
-    await expect(help(["employee", "invite", "--help"])).resolves.toContain(
-      "--name <name> --email <email> --out <absolute-path>",
-    );
-    await expect(help(["employee", "reissue", "--help"])).resolves.toContain(
-      "--email <email> --out <absolute-path>",
-    );
-    await expect(help(["employee", "revoke", "--help"])).resolves.toContain(
-      "--email <email>",
-    );
-  });
-
-  it("documents every versioned upload and project-context command without a session", async () => {
-    const modern = [
-      ["updates", "submit-v3", "--help", "--association-project-ids-json"],
-      ["updates", "status-v3", "--help", "--request-id <uuid>"],
-      ["updates", "search-v3", "--help", "--query <text>"],
-      ["documents", "upload-v2", "--help", "--audience-project-ids-json"],
-      ["documents", "status-v2", "--help", "--request-id <uuid>"],
-      ["documents", "search-v2", "--help", "--query <text>"],
-      ["documents", "download-v2", "--help", "--document-id <id>"],
-      ["projects", "search-v2", "--help", "--query <text>"],
-    ] as const;
-    for (const [parent, action, flag, required] of modern) {
-      await expect(help([parent, action, flag])).resolves.toContain(required);
-    }
-    await expect(help(["updates", "--help"])).resolves.toContain("<submit-v3|status-v3|search|search-v3>");
-    await expect(help(["documents", "--help"])).resolves.toContain("<upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate>");
-    await expect(help(["projects", "--help"])).resolves.toContain("<list-v2|create|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate|search-v2>");
+    expect(listHelp).toContain("usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]");
   });
 
   it("refuses each retired command, and its help, as unknown before any session or network use", async () => {
@@ -132,7 +90,7 @@ describe("Person client help", () => {
       ["updates", "submit"], ["updates", "status"], ["updates", "read"], ["updates", "read-v3"],
       ["slack-connect-cancel"], ["slack-link"], ["slack-connect-begin"], ["slack-connect-status"], ["slack-disconnect"],
       ["jira"], ["jira", "connect"], ["jira", "complete"], ["jira", "disconnect"],
-      ["tools", "bogus"],
+      ["tools", "bogus"], ["readable-search"],
     ];
     for (const argv of retired.flatMap(command => [command, [...command, "--help"]])) {
       let stdout = "";

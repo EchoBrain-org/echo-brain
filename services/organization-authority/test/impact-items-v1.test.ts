@@ -145,6 +145,19 @@ describe('SQLite open items v1', () => {
     expect(f.items.assign('itm_missing', f.rafael, ARI)).toBeUndefined();
   });
 
+  it('says whether Send included each item: unknown before Send, then as Send chose, whatever happens later', async () => {
+    const f = await doneRunWithItems(['46', '47']);
+    const [ticked, unticked] = f.items.forRun(f.run.run_id);
+    expect([ticked!.send_included, unticked!.send_included]).toEqual([null, null]);
+    f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: ticked!.item_id, include: true }, { item_id: unticked!.item_id, include: false }] });
+    expect(f.items.read(ticked!.item_id)).toMatchObject({ state: 'open', send_included: true });
+    expect(f.items.read(unticked!.item_id)).toMatchObject({ state: 'not_relevant', send_included: false });
+    f.advance(1_000);
+    f.items.setState(ticked!.item_id, 'not_relevant', ARI);
+    f.items.setState(unticked!.item_id, 'open', ARI);
+    expect(f.items.forRun(f.run.run_id).map(row => [row.state, row.send_included])).toEqual([['not_relevant', true], ['open', false]]);
+  });
+
   it('requires a matching initial Send choice and freezes that choice after Send', async () => {
     const f = await doneRunWithItems(['46']);
     const item = f.items.forRun(f.run.run_id)[0]!;

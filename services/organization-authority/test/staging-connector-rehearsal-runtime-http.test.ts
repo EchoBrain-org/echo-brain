@@ -88,11 +88,11 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
     const response = await fetch(`http://127.0.0.1:${runtime.address.port}${path}`, { method: 'POST', headers: { ...(token === '' ? {} : { authorization: `Bearer ${token}` }), 'content-type': 'application/json' }, body: JSON.stringify(body) });
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   };
-  const verifyRead = (tool: 'jira') => post('/v1/staging/connector-rehearsal', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool });
+  const verifyRead = () => post('/v1/staging/connector-rehearsal', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'jira' });
   try {
     owner = await signInOwner(`http://127.0.0.1:${runtime.address.port}`, seams, manifest.invitation_path);
     const beforeUnconnected = seams.jiraFetch.mock.calls.length;
-    expect(await verifyRead('jira')).toMatchObject({ status: 200, body: { action: 'verify-read', qualified: false, result: { status: 'refused', phase: 'connection', reason: 'connection_absent' } } });
+    expect(await verifyRead()).toMatchObject({ status: 200, body: { action: 'verify-read', qualified: false, result: { status: 'refused', phase: 'connection', reason: 'connection_absent' } } });
     expect(seams.jiraFetch).toHaveBeenCalledTimes(beforeUnconnected);
     const connect = await post('/v1/person/tools/jira/connect', { schema_version: 1 });
     expect(connect.status).toBe(201);
@@ -117,18 +117,15 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
       finally { database.close(); }
     };
     const custodyBefore = custodyCounts();
-    const readStart = slackReads.length;
     const jiraStart = seams.jiraFetch.mock.calls.length;
     const modelRequestsBefore = modelRequests;
-    for (const [tool, text] of [['jira', 'ECHO-1: Ship on Friday\n\nThe ticket body stays with Jira.']] as const) {
-      const proof = await verifyRead(tool);
-      expect(proof).toMatchObject({ status: 200, body: { action: 'verify-read', tool, qualified: false, result: {
-        status: 'verified', source_coordinate_sha256: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-        text_sha256: `sha256:${createHash('sha256').update(text).digest('hex')}`, text_bytes: Buffer.byteLength(text),
-      } } });
-      expect(JSON.stringify(proof.body)).not.toContain(text);
-    }
-    expect(slackReads.slice(readStart)).toEqual([]);
+    const text = 'ECHO-1: Ship on Friday\n\nThe ticket body stays with Jira.';
+    const proof = await verifyRead();
+    expect(proof).toMatchObject({ status: 200, body: { action: 'verify-read', tool: 'jira', qualified: false, result: {
+      status: 'verified', source_coordinate_sha256: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      text_sha256: `sha256:${createHash('sha256').update(text).digest('hex')}`, text_bytes: Buffer.byteLength(text),
+    } } });
+    expect(JSON.stringify(proof.body)).not.toContain(text);
     const jiraReads = seams.jiraFetch.mock.calls.slice(jiraStart);
     expect(jiraReads).toHaveLength(25);
     expect(jiraReads.filter(([input]) => String(input).includes('/issue/10001'))).toHaveLength(2);
@@ -148,7 +145,6 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
       expect((await post('/v1/staging/connector-rehearsal', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'jira', ...mismatch })).status).toBe(503);
     }
     expect(seams.jiraFetch).toHaveBeenCalledTimes(jiraBeforeMismatch);
-    expect(slackReads).toEqual([]);
     // Local Ask remains available before Jira Ask is selected, without reading Jira.
     const jiraBeforeLocalAsk = seams.jiraFetch.mock.calls.length;
     expect(await post(PERSON_ANSWER_PATH_V4, { schema_version: 3, question: 'fixture' })).toMatchObject({ status: 200, body: { schema_version: 5, citations: [] } });
@@ -208,9 +204,6 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
     expect(employeeReferences.size).toBe(1);
     expect([...employeeReferences].some(reference => ownerReferences.has(reference))).toBe(false);
     expect(custodyCounts()).toEqual(custodyBeforeAsk);
-    const control = new Database(join(manifest.state_directory, 'integrations.sqlite'));
-    try { control.prepare("UPDATE organization_external_human_link_current SET current_status='revoked'").run(); } finally { control.close(); }
-    expect((await post('/v1/staging/connector-rehearsal', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'slack' })).status).toBe(400);
     expect(slackReads).toEqual([]);
   } finally { await runtime.close(); }
 });

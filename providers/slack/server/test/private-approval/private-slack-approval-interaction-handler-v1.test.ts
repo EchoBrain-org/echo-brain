@@ -1,12 +1,11 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { createPrivateSlackApprovalInteractionHandlerV1 } from "../../src/private-approval/private-slack-approval-interaction-handler-v1.js";
+import {
+  createPrivateSlackApprovalInteractionHandlerV1,
+  type PrivateSlackApprovalInteractionHandlerInputV1,
+} from "../../src/private-approval/private-slack-approval-interaction-handler-v1.js";
 import { createPrivateSlackApprovalHttpAdapterV1 } from "../../src/private-approval/private-slack-approval-http-adapter-v1.js";
 import { slackApprovalActionIdV4 } from "../../src/private-approval/slack-approval-card-v4.js";
-import {
-  verifiedSlackResponseUrlV1,
-  verifyPrivateSlackApprovalRequestV1,
-} from "../../src/private-approval/private-slack-approval-interaction-protocol-v1.js";
 
 const SECRET = "not-a-real-signing-secret",
   NOW = 1_800_000_000,
@@ -89,14 +88,21 @@ function request(raw_body: Uint8Array) {
   };
 }
 
+function handlerWith(
+  overrides: Omit<PrivateSlackApprovalInteractionHandlerInputV1, "signing_secret"> &
+    Partial<PrivateSlackApprovalInteractionHandlerInputV1>,
+) {
+  return createPrivateSlackApprovalInteractionHandlerV1({
+    signing_secret: () => SECRET,
+    now_unix_seconds: () => NOW,
+    ...overrides,
+  });
+}
+
 describe("private Slack interaction handler", () => {
   it("waits for a parsed durable click before sending an empty HTTP acknowledgement", async () => {
     const click = vi.fn(() => ({ outcome: "decided" as const }));
-    const handler = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: () => SECRET,
-      now_unix_seconds: () => NOW,
-      click,
-    });
+    const handler = handlerWith({ click });
     const signed = request(body());
     await expect(
       createPrivateSlackApprovalHttpAdapterV1(handler).accept({
@@ -115,29 +121,10 @@ describe("private Slack interaction handler", () => {
   });
   it("sends stale feedback only to a verified, narrowly valid Slack response URL", async () => {
     const feedback = vi.fn(async () => {}),
-      handler = createPrivateSlackApprovalInteractionHandlerV1({
-        signing_secret: () => SECRET,
-        now_unix_seconds: () => NOW,
-        click: () => ({ outcome: "stale" }),
-        feedback,
-      });
-    const signed = request(
-      body("https://hooks.slack.com/actions/T000/B000/fake"),
+      handler = handlerWith({ click: () => ({ outcome: "stale" }), feedback });
+    await handler.accept(
+      request(body("https://hooks.slack.com/actions/T000/B000/fake")),
     );
-    expect(
-      verifiedSlackResponseUrlV1(
-        verifyPrivateSlackApprovalRequestV1({
-          raw_body: signed.raw_body,
-          signing_secret: SECRET,
-          headers: {
-            "x-slack-request-timestamp": signed.slack_request_timestamp,
-            "x-slack-signature": signed.slack_signature,
-          },
-          now_unix_seconds: NOW,
-        }),
-      ),
-    ).toBe("https://hooks.slack.com/actions/T000/B000/fake");
-    await handler.accept(signed);
     expect(feedback).toHaveBeenCalledWith(
       expect.objectContaining({
         response_url: "https://hooks.slack.com/actions/T000/B000/fake",
@@ -150,9 +137,7 @@ describe("private Slack interaction handler", () => {
     const signed = request(
       body("https://hooks.slack.com/actions/T000/B000/fake"),
     );
-    const failure = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: () => SECRET,
-      now_unix_seconds: () => NOW,
+    const failure = handlerWith({
       click: () => ({ outcome: "refused" }),
       feedback: async () => {
         throw new Error("transport failed");
@@ -161,9 +146,7 @@ describe("private Slack interaction handler", () => {
     await expect(failure.accept(signed)).resolves.toEqual({
       kind: "acknowledged",
     });
-    const timeout = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: () => SECRET,
-      now_unix_seconds: () => NOW,
+    const timeout = handlerWith({
       click: () => ({ outcome: "refused" }),
       feedback: async () => new Promise<void>(() => {}),
       feedback_timeout_ms: 1,
@@ -175,12 +158,7 @@ describe("private Slack interaction handler", () => {
   it("never calls the decision or feedback transport for an invalid HMAC", async () => {
     const click = vi.fn(),
       feedback = vi.fn(),
-      handler = createPrivateSlackApprovalInteractionHandlerV1({
-        signing_secret: () => SECRET,
-        now_unix_seconds: () => NOW,
-        click,
-        feedback,
-      });
+      handler = handlerWith({ click, feedback });
     await expect(
       handler.accept({
         ...request(body("https://hooks.slack.com/actions/T/B/fake")),
@@ -192,11 +170,10 @@ describe("private Slack interaction handler", () => {
   });
   it("refuses safely when no active Slack connection can supply a signing secret", async () => {
     const click = vi.fn();
-    const handler = createPrivateSlackApprovalInteractionHandlerV1({
+    const handler = handlerWith({
       signing_secret: () => {
         throw new Error("inactive");
       },
-      now_unix_seconds: () => NOW,
       click,
     });
     await expect(handler.accept(request(body()))).rejects.toMatchObject({

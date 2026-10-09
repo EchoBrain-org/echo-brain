@@ -26,7 +26,7 @@ import {
   readableSearchPlaneBaselineSha256,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import Database from "better-sqlite3";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readOrganizationAuthoritySetupManifest,
   runOrganizationAuthoritySetupCli,
@@ -50,6 +50,7 @@ const temporaryDirectories: string[] = [];
 const STAGING_ORIGIN = "https://authority-staging.echobrain.org";
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const path of temporaryDirectories.splice(0)) {
     rmSync(path, { recursive: true, force: true });
   }
@@ -105,6 +106,75 @@ function dependencies(order: string[],): OrganizationAuthoritySetupCliDependenci
 /** Durable setup facts after the owner set up Slack in the ECHO app. */
 const CONNECTED_STAGE = Object.freeze({ credentials_ready: true, slack_connected: true, invitation_file_present: true });
 
+type OwnerSetupStatus = ReturnType<NonNullable<OrganizationAuthoritySetupCliDependencies["read_initial_owner_setup_status"]>>;
+/** Every initial-owner prerequisite met, before any meeting source. */
+const OWNER_READY: OwnerSetupStatus = Object.freeze({
+  founder_oidc_bound: true, founder_slack_link_active: true, llm_credential_valid: true, source_admission_present: false,
+});
+/** The same owner once staging finalize admitted their synthetic source. */
+const OWNER_SYNTHETIC: OwnerSetupStatus = Object.freeze({
+  founder_oidc_bound: true, founder_slack_link_active: true, llm_credential_valid: true,
+  source_mode: "staging_synthetic", source_admission_present: true,
+});
+
+/** Slack connected in the app and the given owner status, ready to finalize. */
+function finalizeDeps(
+  base: OrganizationAuthoritySetupCliDependencies,
+  owner: OwnerSetupStatus = OWNER_READY,
+): OrganizationAuthoritySetupCliDependencies {
+  return { ...base, read_setup_stage: () => CONNECTED_STAGE, read_initial_owner_setup_status: () => owner };
+}
+
+const QUIET = { stdout: () => undefined, stderr: () => undefined };
+
+/** Runs one setup command, asserts its exit code and returns its raw output. */
+async function cli(
+  args: readonly string[],
+  deps?: OrganizationAuthoritySetupCliDependencies,
+  expectedExit = 0,
+) {
+  let stdout = "";
+  let stderr = "";
+  const status = await runOrganizationAuthoritySetupCli(
+    args,
+    { stdout: (value) => (stdout += value), stderr: (value) => (stderr += value) },
+    deps,
+  );
+  expect(status, stderr).toBe(expectedExit);
+  return {
+    stdout,
+    stderr,
+    get json() {
+      return JSON.parse(stdout) as Record<string, unknown>;
+    },
+  };
+}
+
+function writePrivate(path: string, text: string): void {
+  writeFileSync(path, text, { mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
+function inviteArgv(input: Parameters<OrganizationAuthoritySetupCliDependencies["issue_invitation"]>[0]): string[] {
+  return [
+    "invite",
+    "--state-dir",
+    input.state_directory,
+    "--oidc-config",
+    input.oidc_config_path,
+    "--pkce-key-file",
+    input.pkce_key_file,
+    "--membership-id",
+    input.membership_id,
+    "--expected-email",
+    input.expected_email,
+    "--authority-url",
+    input.authority_url,
+    "--out",
+    input.output_path,
+  ];
+}
+
 function readyStatusDependencies(
   order: string[],
   complete: () => boolean = () => false,
@@ -131,6 +201,11 @@ function readyStatusDependencies(
       complete: complete(),
     }),
   };
+}
+
+/** Ready prerequisites with canary evidence derived from durable state, as in production. */
+function canaryFreeDeps(): OrganizationAuthoritySetupCliDependencies {
+  return { ...readyStatusDependencies([]), read_setup_canary_evidence: undefined };
 }
 
 interface DurableCanaryFixtureOptions {
@@ -235,138 +310,192 @@ function buildInputForCanary(
   };
 }
 
+type SetupManifest = ReturnType<typeof readOrganizationAuthoritySetupManifest>;
+type RecordHead = { position: number; record_sha256: Sha256Digest };
+
+/** Appends one approved V4 record per entry, each after the previous; returns the head. */
+function appendApprovedRecords(
+  state: string,
+  manifest: SetupManifest,
+  entries: readonly {
+    readonly approval_id: string;
+    readonly envelope_id: string;
+    readonly record_sha256: Sha256Digest;
+    readonly semantic_sha256: Sha256Digest;
+  }[],
+): RecordHead {
+  const record = new Database(join(state, "record-log.sqlite"));
+  let head: RecordHead | undefined;
+  try {
+    for (const [index, entry] of entries.entries()) {
+      const position = index + 1;
+      const envelope = canonicalJson({
+        body: {
+          schema_version: 4,
+          kind: "echo-organization-record-envelope-v4",
+          authority_id: manifest.authority_id,
+          organization_id: manifest.organization_id,
+          state_lineage_id: manifest.state_lineage_id,
+          envelope_id: entry.envelope_id,
+          event: { kind: "approved" },
+          semantic_idempotency_key: entry.semantic_sha256,
+          human_act_resolution_ref: { approval_id: entry.approval_id, action: "approve" },
+          predecessor_position: head?.position ?? null,
+          predecessor_record_sha256: head?.record_sha256 ?? null,
+        },
+        record_sha256: entry.record_sha256,
+      });
+      const receipt = canonicalJson({
+        schema_version: 2,
+        kind: "echo-organization-record-receipt-v2",
+        authority_id: manifest.authority_id,
+        organization_id: manifest.organization_id,
+        state_lineage_id: manifest.state_lineage_id,
+        envelope_id: entry.envelope_id,
+        semantic_idempotency_key: entry.semantic_sha256,
+        event_kind: "approved",
+        record_position: position,
+        record_sha256: entry.record_sha256,
+        predecessor_record_sha256: head?.record_sha256 ?? null,
+        record_head_position: position,
+        record_head_sha256: entry.record_sha256,
+        issued_at: SYNTHETIC_ISSUED_AT,
+      });
+      record
+        .prepare(
+          `INSERT INTO organization_record_log
+           (position, envelope_id, event_kind, approval_id, action,
+            semantic_idempotency_key, canonical_envelope, envelope_sha256,
+            predecessor_position, predecessor_record_sha256, record_sha256,
+            receipt_payload, receipt_issued_at)
+           VALUES (?, ?, 'approved', ?, 'approve', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          position,
+          entry.envelope_id,
+          entry.approval_id,
+          entry.semantic_sha256,
+          envelope,
+          sha256Digest(envelope),
+          head?.position ?? null,
+          head?.record_sha256 ?? null,
+          entry.record_sha256,
+          receipt,
+          SYNTHETIC_ISSUED_AT,
+        );
+      head = { position, record_sha256: entry.record_sha256 };
+    }
+  } finally {
+    record.close();
+  }
+  if (head === undefined) throw new Error("fixture evidence has no records");
+  return head;
+}
+
+/** Points the active readable-search generation at a built generation. */
+function insertActiveGeneration(
+  authority: Database.Database,
+  manifest: SetupManifest,
+  built: ReturnType<typeof buildReadableSearchGenerationV1>,
+  head: { readonly position: number; readonly record_sha256: Sha256Digest | null },
+  retrievalContractSha256: Sha256Digest,
+  publishedAt: string,
+): void {
+  authority
+    .prepare(
+      `INSERT INTO authority_readable_search_active_generation
+       (singleton, organization_id, generation_id, manifest_sha256,
+        retrieval_contract_sha256, record_head_position, record_head_hash,
+        published_at)
+       VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      manifest.organization_id,
+      built.manifest.generation_id,
+      built.manifest_sha256,
+      retrievalContractSha256,
+      head.position,
+      head.record_sha256,
+      publishedAt,
+    );
+}
+
+/** One owner read audit; a null result count records nothing and "other" names another member. */
+function appendOwnerAudit(
+  audit: SqlitePersonRecordReadAuditV1,
+  manifest: SetupManifest,
+  read: {
+    readonly mode: "layer1" | "layer2";
+    readonly checked_at: string;
+    readonly session_family_id: string;
+    readonly result_count?: number | null | undefined;
+    readonly owner_tuple?: "owner" | "other" | undefined;
+  },
+): void {
+  if (read.result_count === null) return;
+  audit.append({
+    read_mode: read.mode,
+    authority_id: manifest.authority_id,
+    organization_id: manifest.organization_id,
+    state_lineage_id: manifest.state_lineage_id,
+    principal_id:
+      read.owner_tuple === "other" ? "prn_other" : manifest.owner_principal_id,
+    membership_id:
+      read.owner_tuple === "other" ? "mem_other" : manifest.owner_membership_id,
+    session_family_id: read.session_family_id,
+    result_count: read.result_count ?? 1,
+    response_sha256: sha256Digest(`${read.mode}-${read.checked_at}`),
+    checked_at: read.checked_at,
+  });
+}
+
 function installDurableCanaryFixture(
   state: string,
   options: DurableCanaryFixtureOptions = {},
 ): void {
   const manifest = readOrganizationAuthoritySetupManifest(state);
-  const issuedAt = "2026-08-23T00:00:00.000Z";
-  const recordSha256 = sha256Digest("founder-canary-record");
-  const semanticSha256 = sha256Digest("founder-canary-semantic");
-  const envelopeId = "env_founder_canary";
   const approvalId = "apr_founder_canary";
-  const envelope = canonicalJson({
-    body: {
-      schema_version: 4,
-      kind: "echo-organization-record-envelope-v4",
-      authority_id: manifest.authority_id,
-      organization_id: manifest.organization_id,
-      state_lineage_id: manifest.state_lineage_id,
-      envelope_id: envelopeId,
-      event: { kind: "approved" },
-      semantic_idempotency_key: semanticSha256,
-      human_act_resolution_ref: { approval_id: approvalId, action: "approve" },
-      predecessor_position: null,
-      predecessor_record_sha256: null,
-    },
-    record_sha256: recordSha256,
-  });
-  const receipt = canonicalJson({
-    schema_version: 2,
-    kind: "echo-organization-record-receipt-v2",
-    authority_id: manifest.authority_id,
-    organization_id: manifest.organization_id,
-    state_lineage_id: manifest.state_lineage_id,
-    envelope_id: envelopeId,
-    semantic_idempotency_key: semanticSha256,
-    event_kind: "approved",
-    record_position: 1,
-    record_sha256: recordSha256,
-    predecessor_record_sha256: null,
-    record_head_position: 1,
-    record_head_sha256: recordSha256,
-    issued_at: issuedAt,
-  });
-  const record = new Database(join(state, "record-log.sqlite"));
-  try {
-    record
-      .prepare(
-        `INSERT INTO organization_record_log
-         (position, envelope_id, event_kind, approval_id, action,
-          semantic_idempotency_key, canonical_envelope, envelope_sha256,
-          predecessor_position, predecessor_record_sha256, record_sha256,
-          receipt_payload, receipt_issued_at)
-         VALUES (1, ?, 'approved', ?, 'approve', ?, ?, ?, NULL, NULL, ?, ?, ?)`,
-      )
-      .run(
-        envelopeId,
-        approvalId,
-        semanticSha256,
-        envelope,
-        sha256Digest(envelope),
-        recordSha256,
-        receipt,
-        issuedAt,
-      );
-  } finally {
-    record.close();
-  }
+  const head = appendApprovedRecords(state, manifest, [{
+    approval_id: approvalId,
+    envelope_id: "env_founder_canary",
+    record_sha256: sha256Digest("founder-canary-record"),
+    semantic_sha256: sha256Digest("founder-canary-semantic"),
+  }]);
   const built = buildReadableSearchGenerationV1(
     buildInputForCanary(
       state,
       manifest,
-      { position: 1, record_sha256: recordSha256 },
+      head,
       !options.pointer_uses_disabled_projector_contract,
     ),
   );
   const authority = new Database(join(state, "authority.sqlite"));
   try {
-    const pointerCurrent = options.pointer_current ?? true;
-    const pointerContractCurrent = options.pointer_current_contract ?? true;
-    authority
-      .prepare(
-        `INSERT INTO authority_readable_search_active_generation
-         (singleton, organization_id, generation_id, manifest_sha256,
-          retrieval_contract_sha256, record_head_position, record_head_hash,
-          published_at)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        manifest.organization_id,
-        built.manifest.generation_id,
-        built.manifest_sha256,
-        pointerContractCurrent
-          ? built.manifest.retrieval_contract_sha256
-          : sha256Digest("stale-retrieval-contract"),
-        pointerCurrent ? 1 : 0,
-        pointerCurrent ? recordSha256 : null,
-        "2026-08-23T00:00:01.000Z",
-      );
+    insertActiveGeneration(
+      authority,
+      manifest,
+      built,
+      (options.pointer_current ?? true) ? head : { position: 0, record_sha256: null },
+      (options.pointer_current_contract ?? true)
+        ? built.manifest.retrieval_contract_sha256
+        : sha256Digest("stale-retrieval-contract"),
+      "2026-08-23T00:00:01.000Z",
+    );
     const audit = new SqlitePersonRecordReadAuditV1(authority);
-    const appendAudit = (
-      mode: "layer1" | "layer2",
-      resultCount: number | null | undefined,
-      ownerTuple: "owner" | "other" | undefined,
-      checkedAt: string,
-    ) => {
-      if (resultCount === null) return;
-      audit.append({
-        read_mode: mode,
-        authority_id: manifest.authority_id,
-        organization_id: manifest.organization_id,
-        state_lineage_id: manifest.state_lineage_id,
-        principal_id:
-          ownerTuple === "other" ? "prn_other" : manifest.owner_principal_id,
-        membership_id:
-          ownerTuple === "other" ? "mem_other" : manifest.owner_membership_id,
-        session_family_id: "sfm_founder_canary",
-        result_count: resultCount ?? 1,
-        response_sha256: sha256Digest(`${mode}-${checkedAt}`),
-        checked_at: checkedAt,
-      });
-    };
-    appendAudit(
-      "layer1",
-      options.layer1_result_count,
-      options.layer1_owner_tuple,
-      "2026-08-23T00:00:02.000Z",
-    );
-    appendAudit(
-      "layer2",
-      options.layer2_result_count,
-      options.layer2_owner_tuple,
-      "2026-08-23T00:00:03.000Z",
-    );
+    appendOwnerAudit(audit, manifest, {
+      mode: "layer1",
+      checked_at: "2026-08-23T00:00:02.000Z",
+      session_family_id: "sfm_founder_canary",
+      result_count: options.layer1_result_count,
+      owner_tuple: options.layer1_owner_tuple,
+    });
+    appendOwnerAudit(audit, manifest, {
+      mode: "layer2",
+      checked_at: "2026-08-23T00:00:03.000Z",
+      session_family_id: "sfm_founder_canary",
+      result_count: options.layer2_result_count,
+      owner_tuple: options.layer2_owner_tuple,
+    });
     if (options.synthetic_canary !== "none") {
       const semantic = insertStagingSyntheticSource(authority, manifest, {
         adapter_id: options.synthetic_canary === "granola" ? "granola-person-mcp" : STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1,
@@ -503,75 +632,16 @@ function installSyntheticFixtureApprovalEvidence(
     ...(shape === "pending" ? [] : [{ meeting_id: "fictional-budget-sync", approval_id: "apr_synthetic_fixture_1", approved: shape === "all" }]),
     ...(shape === "canary" ? [{ meeting_id: STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, approval_id: "apr_synthetic_canary", approved: true }] : []),
   ];
-  const approved = proposals.filter((proposal) => proposal.approved);
-  const record = new Database(join(state, "record-log.sqlite"));
-  let head: { position: number; record_sha256: Sha256Digest } | undefined;
-  try {
-    for (const [index, proposal] of approved.entries()) {
-      const position = index + 1;
-      const recordSha256 = sha256Digest(`synthetic-fixture-record-${String(position)}`);
-      const semanticIdempotencyKey = sha256Digest(`synthetic-fixture-semantic-${String(position)}`);
-      const envelopeId = `env_synthetic_fixture_${String(position)}`;
-      const envelope = canonicalJson({
-        body: {
-          schema_version: 4,
-          kind: "echo-organization-record-envelope-v4",
-          authority_id: manifest.authority_id,
-          organization_id: manifest.organization_id,
-          state_lineage_id: manifest.state_lineage_id,
-          envelope_id: envelopeId,
-          event: { kind: "approved" },
-          semantic_idempotency_key: semanticIdempotencyKey,
-          human_act_resolution_ref: { approval_id: proposal.approval_id, action: "approve" },
-          predecessor_position: head?.position ?? null,
-          predecessor_record_sha256: head?.record_sha256 ?? null,
-        },
-        record_sha256: recordSha256,
-      });
-      const receipt = canonicalJson({
-        schema_version: 2,
-        kind: "echo-organization-record-receipt-v2",
-        authority_id: manifest.authority_id,
-        organization_id: manifest.organization_id,
-        state_lineage_id: manifest.state_lineage_id,
-        envelope_id: envelopeId,
-        semantic_idempotency_key: semanticIdempotencyKey,
-        event_kind: "approved",
-        record_position: position,
-        record_sha256: recordSha256,
-        predecessor_record_sha256: head?.record_sha256 ?? null,
-        record_head_position: position,
-        record_head_sha256: recordSha256,
-        issued_at: SYNTHETIC_ISSUED_AT,
-      });
-      record
-        .prepare(
-          `INSERT INTO organization_record_log
-           (position, envelope_id, event_kind, approval_id, action,
-            semantic_idempotency_key, canonical_envelope, envelope_sha256,
-            predecessor_position, predecessor_record_sha256, record_sha256,
-            receipt_payload, receipt_issued_at)
-           VALUES (?, ?, 'approved', ?, 'approve', ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          position,
-          envelopeId,
-          proposal.approval_id,
-          semanticIdempotencyKey,
-          envelope,
-          sha256Digest(envelope),
-          head?.position ?? null,
-          head?.record_sha256 ?? null,
-          recordSha256,
-          receipt,
-          SYNTHETIC_ISSUED_AT,
-        );
-      head = { position, record_sha256: recordSha256 };
-    }
-  } finally {
-    record.close();
-  }
-  if (head === undefined) throw new Error("synthetic fixture evidence has no records");
+  const head = appendApprovedRecords(
+    state,
+    manifest,
+    proposals.filter((proposal) => proposal.approved).map((proposal, index) => ({
+      approval_id: proposal.approval_id,
+      envelope_id: `env_synthetic_fixture_${String(index + 1)}`,
+      record_sha256: sha256Digest(`synthetic-fixture-record-${String(index + 1)}`),
+      semantic_sha256: sha256Digest(`synthetic-fixture-semantic-${String(index + 1)}`),
+    })),
+  );
   const built = buildReadableSearchGenerationV1(
     buildInputForCanary(state, manifest, head, true),
   );
@@ -581,40 +651,13 @@ function installSyntheticFixtureApprovalEvidence(
       pending: shape === "pending" ? ["fictional-budget-sync"] : [],
     });
     for (const [index, proposal] of proposals.entries()) insertSyntheticProposal(authority, semantic, { index, ...proposal });
-    authority
-      .prepare(
-        `INSERT INTO authority_readable_search_active_generation
-         (singleton, organization_id, generation_id, manifest_sha256,
-          retrieval_contract_sha256, record_head_position, record_head_hash,
-          published_at)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        manifest.organization_id,
-        built.manifest.generation_id,
-        built.manifest_sha256,
-        built.manifest.retrieval_contract_sha256,
-        head.position,
-        head.record_sha256,
-        "2026-08-23T00:00:01.000Z",
-      );
+    insertActiveGeneration(authority, manifest, built, head, built.manifest.retrieval_contract_sha256, "2026-08-23T00:00:01.000Z");
     const audit = new SqlitePersonRecordReadAuditV1(authority);
-    for (const [mode, checkedAt] of [
+    for (const [mode, checked_at] of [
       ["layer1", "2026-08-23T00:00:02.000Z"],
       ["layer2", "2026-08-23T00:00:03.000Z"],
     ] as const) {
-      audit.append({
-        read_mode: mode,
-        authority_id: manifest.authority_id,
-        organization_id: manifest.organization_id,
-        state_lineage_id: manifest.state_lineage_id,
-        principal_id: manifest.owner_principal_id,
-        membership_id: manifest.owner_membership_id,
-        session_family_id: "sfm_synthetic_fixture",
-        result_count: 1,
-        response_sha256: sha256Digest(`${mode}-${checkedAt}`),
-        checked_at: checkedAt,
-      });
+      appendOwnerAudit(audit, manifest, { mode, checked_at, session_family_id: "sfm_synthetic_fixture" });
     }
   } finally {
     authority.close();
@@ -668,32 +711,24 @@ describe("Organization Authority setup coordinator", () => {
   it("bootstrap does not touch Slack: reset, credentials, manifest v3 and invitation", async () => {
     const state = stateDirectory();
     const order: string[] = [];
-    let stdout = "";
-    let stderr = "";
     // The retired channel flag is refused before bootstrap changes anything.
-    expect(await runOrganizationAuthoritySetupCli(
+    const refused = await cli(
       [...bootstrapArgs(state), "--slack-approval-channel-id", "C123"],
-      { stdout: (value) => (stdout += value), stderr: (value) => (stderr += value) },
       dependencies(order),
-    )).toBe(1);
-    expect(order).toEqual([]);
-    expect(stdout).toBe("");
-    expect(stderr).toContain("usage:");
-    stderr = "";
-    const status = await runOrganizationAuthoritySetupCli(
-      bootstrapArgs(state),
-      { stdout: (value) => (stdout += value), stderr: (value) => (stderr += value) },
-      dependencies(order),
+      1,
     );
+    expect(order).toEqual([]);
+    expect(refused.stdout).toBe("");
+    expect(refused.stderr).toContain("usage:");
+    const bootstrapped = await cli(bootstrapArgs(state), dependencies(order));
 
-    expect(stderr).toBe("");
-    expect(status).toBe(0);
+    expect(bootstrapped.stderr).toBe("");
     expect(order).toEqual([
       "initialize:2026-08-22T12:00:00.000Z:clean-founder-v1",
       "credentials",
       expect.stringMatching(/^invite:mem_/),
     ]);
-    expect(JSON.parse(stdout)).toEqual({
+    expect(bootstrapped.json).toEqual({
       ok: true,
       invitation_path: join(state, "onboarding", "founder-person-invitation.json"),
       next_step: "resume_bootstrap",
@@ -714,22 +749,19 @@ describe("Organization Authority setup coordinator", () => {
 
   it("refuses a v1 manifest from before in-app Slack setup", async () => {
     const state = stateDirectory();
-    await runOrganizationAuthoritySetupCli(bootstrapArgs(state), { stdout: () => undefined, stderr: () => undefined }, dependencies([]));
+    await cli(bootstrapArgs(state), dependencies([]));
     const path = join(state, "onboarding", "clean-founder-v1.json");
     const manifest = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> & { setup_seed: Record<string, unknown> };
     const v1 = { ...manifest, schema_version: 1, kind: "echo-clean-founder-onboarding-manifest-v1",
       slack_approval_channel_id: "C123", slack_connection_id: "con_00000000-0000-4000-8000-000000000001",
       setup_seed: { ...manifest.setup_seed, slack_connection_id: "con_00000000-0000-4000-8000-000000000001" } };
-    writeFileSync(path, `${canonicalJson(v1)}\n`, { mode: 0o600 });
-    chmodSync(path, 0o600);
+    writePrivate(path, `${canonicalJson(v1)}\n`);
 
     expect(() => readOrganizationAuthoritySetupManifest(state)).toThrow(
       "organization setup manifest predates in-app Slack setup; install this release's host tooling, then run replace-rehearsal",
     );
-    let stderr = "";
-    expect(await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state],
-      { stdout: () => undefined, stderr: (value) => (stderr += value) }, dependencies([]))).toBe(1);
-    expect(stderr).toContain("install this release's host tooling, then run replace-rehearsal");
+    expect((await cli(["resume", "--state-dir", state], dependencies([]), 1)).stderr)
+      .toContain("install this release's host tooling, then run replace-rehearsal");
   });
 
   it("keeps a default-path v2 owner invitation usable when bootstrap resumes", async () => {
@@ -743,105 +775,52 @@ describe("Organization Authority setup coordinator", () => {
       initialize_credentials: async (stateDirectory) => {
         const status = await runOrganizationAuthorityPersonAdministrationCli(
           ["credentials-init", "--state-dir", stateDirectory],
-          { stdout: () => undefined, stderr: () => undefined },
+          QUIET,
         );
         expect(status).toBe(0);
       },
       issue_invitation: async (input) => {
         invitationIssues += 1;
-        const status = await runOrganizationAuthorityPersonAdministrationCli(
-          [
-            "invite",
-            "--state-dir",
-            input.state_directory,
-            "--oidc-config",
-            input.oidc_config_path,
-            "--pkce-key-file",
-            input.pkce_key_file,
-            "--membership-id",
-            input.membership_id,
-            "--expected-email",
-            input.expected_email,
-            "--authority-url",
-            input.authority_url,
-            "--out",
-            input.output_path,
-          ],
-          { stdout: () => undefined, stderr: () => undefined },
-        );
+        const status = await runOrganizationAuthorityPersonAdministrationCli(inviteArgv(input), QUIET);
         expect(status).toBe(0);
       },
     };
-    let stderr = "";
-    const io = {
-      stdout: () => undefined,
-      stderr: (value: string) => (stderr += value) };
 
-    const bootstrapStatus = await runOrganizationAuthoritySetupCli(
-      bootstrapArgs(state),
-      io,
-      defaultPathDependencies,
-    );
-    expect(bootstrapStatus, stderr).toBe(0);
+    await cli(bootstrapArgs(state), defaultPathDependencies);
     const manifest = readOrganizationAuthoritySetupManifest(state);
     expect(JSON.parse(readFileSync(manifest.invitation_path, "utf8")),).toMatchObject({
       schema_version: 2,
       expected_email: "founder@example.com",
     });
 
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        ["resume", "--state-dir", state],
-        io,
-        defaultPathDependencies,
-      ),
-    ).toBe(0);
+    await cli(["resume", "--state-dir", state], defaultPathDependencies);
     expect(invitationIssues).toBe(1);
+
+    /** Rewrites an issued invitation as a pre-v2 artifact at the owner's invitation path. */
+    const writeLegacyInvitation = (from: string) => {
+      const legacy = JSON.parse(readFileSync(from, "utf8")) as Record<string, unknown>;
+      delete legacy.expected_email;
+      legacy.schema_version = 1;
+      writePrivate(manifest.invitation_path, `${canonicalJson(legacy)}\n`);
+    };
 
     // A pre-v2 artifact remains a usable legacy invitation when its grant is
     // otherwise valid. This protects a setup resumed after an older release.
-    const legacy = JSON.parse(
-      readFileSync(manifest.invitation_path, "utf8"),
-    ) as Record<string, unknown>;
-    delete legacy.expected_email;
-    legacy.schema_version = 1;
-    writeFileSync(
-      manifest.invitation_path,
-      `${canonicalJson(legacy)}\n`,
-      { mode: 0o600 ,}
-    );
-    chmodSync(manifest.invitation_path, 0o600);
-    let statusOutput = "";
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        ["status", "--state-dir", state],
-        { ...io, stdout: (value) => (statusOutput += value) ,}
-      ),
-    ).toBe(0);
-    expect(JSON.parse(statusOutput)).toMatchObject({
+    writeLegacyInvitation(manifest.invitation_path);
+    expect((await cli(["status", "--state-dir", state])).json).toMatchObject({
       founder_invitation_valid: true,
     });
 
     // A manifest alone cannot opt an identity into legacy issuance.
+    const manifestPath = join(state, "onboarding", "clean-founder-v1.json");
     const historicManifest = JSON.parse(
-      readFileSync(join(state, "onboarding", "clean-founder-v1.json"), "utf8"),
+      readFileSync(manifestPath, "utf8"),
     ) as Record<string, unknown>;
     historicManifest.owner_email = "founder@localhost";
-    writeFileSync(
-      join(state, "onboarding", "clean-founder-v1.json"),
-      `${canonicalJson(historicManifest)}\n`,
-      { mode: 0o600 },
-    );
-    chmodSync(join(state, "onboarding", "clean-founder-v1.json"), 0o600);
+    writePrivate(manifestPath, `${canonicalJson(historicManifest)}\n`);
     unlinkSync(manifest.invitation_path);
 
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        ["resume", "--state-dir", state],
-        io,
-        defaultPathDependencies,
-      ),
-    ).toBe(1);
+    await cli(["resume", "--state-dir", state], defaultPathDependencies, 1);
     expect(existsSync(manifest.invitation_path)).toBe(false);
 
     // A pre-a612c9e owner grant is immutable evidence that this exact broad
@@ -877,13 +856,7 @@ describe("Organization Authority setup coordinator", () => {
       authority.close();
     }
 
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        ["resume", "--state-dir", state],
-        io,
-        defaultPathDependencies,
-      ),
-    ).toBe(0);
+    await cli(["resume", "--state-dir", state], defaultPathDependencies);
     expect(invitationIssues).toBe(1);
     expect(
       JSON.parse(readFileSync(manifest.invitation_path, "utf8")),
@@ -893,45 +866,17 @@ describe("Organization Authority setup coordinator", () => {
     ).not.toHaveProperty("expected_email");const mismatchedPath = join(dirname(manifest.invitation_path), "other.json",);
     expect(
       await runOrganizationAuthorityPersonAdministrationCli(
-        [
-          "invite",
-          "--state-dir",
-          manifest.state_directory,
-          "--oidc-config",
-          manifest.oidc_config_path,
-          "--pkce-key-file",
-          manifest.pkce_key_file,
-          "--membership-id",
-          manifest.owner_membership_id,
-          "--expected-email",
-          "other@example.com",
-          "--authority-url",
-          manifest.authority_url,
-          "--out",
-          mismatchedPath,
-        ],
-        { stdout: () => undefined, stderr: () => undefined },
+        inviteArgv({
+          ...manifest,
+          membership_id: manifest.owner_membership_id,
+          expected_email: "other@example.com",
+          output_path: mismatchedPath,
+        }),
+        QUIET,
       ),
     ).toBe(0);
-    const mismatchedLegacy = JSON.parse(
-      readFileSync(mismatchedPath, "utf8"),
-    ) as Record<string, unknown>;
-    delete mismatchedLegacy.expected_email;
-    mismatchedLegacy.schema_version = 1;
-    writeFileSync(
-      manifest.invitation_path,
-      `${canonicalJson(mismatchedLegacy)}\n`,
-      { mode: 0o600 },
-    );
-    chmodSync(manifest.invitation_path, 0o600);
-    statusOutput = "";
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        ["status", "--state-dir", state],
-        { ...io, stdout: (value) => (statusOutput += value) ,}
-      ),
-    ).toBe(0);
-    expect(JSON.parse(statusOutput)).toMatchObject({
+    writeLegacyInvitation(mismatchedPath);
+    expect((await cli(["status", "--state-dir", state])).json).toMatchObject({
       founder_invitation_valid: false,
     });
   });
@@ -939,31 +884,10 @@ describe("Organization Authority setup coordinator", () => {
   it("rejects a noncanonical owner email before creating state or connecting Slack", async () => {
     const state = stateDirectory();
     const order: string[] = [];
-    let stderr = "";
-    const status = await runOrganizationAuthoritySetupCli(
-      [
-        "bootstrap",
-        "--state-dir",
-        state,
-        "--organization-name",
-        "ECHO",
-        "--owner-display-name",
-        "Founder",
-        "--owner-email",
-        "Founder@Example.com",
-        "--authority-url",
-        "https://authority.example",
-        "--oidc-config",
-        join(dirname(state), "oidc.json"),
-      ],
-      {
-        stdout: () => undefined,
-        stderr: (value) => (stderr += value) },
-      dependencies(order),
-    );
+    const args = bootstrapArgs(state).map((arg) =>
+      arg === "founder@example.com" ? "Founder@Example.com" : arg);
 
-    expect(status).toBe(1);
-    expect(stderr).toContain("canonical lowercase email");
+    expect((await cli(args, dependencies(order), 1)).stderr).toContain("canonical lowercase email");
     expect(order).toEqual([]);
   });
 
@@ -971,16 +895,10 @@ describe("Organization Authority setup coordinator", () => {
     const state = stateDirectory();
     const order: string[] = [];
     writeFileSync(join(dirname(state), "oidc.json"), "{}", { mode: 0o600 });
-    let stderr = "";
 
-    const result = await runOrganizationAuthoritySetupCli(
-      bootstrapArgs(state),
-      { stdout: () => undefined, stderr: (value) => (stderr += value) },
-      dependencies(order),
-    );
+    const result = await cli(bootstrapArgs(state), dependencies(order), 1);
 
-    expect(result).toBe(1);
-    expect(stderr).toContain("OIDC config has an unexpected shape");
+    expect(result.stderr).toContain("OIDC config has an unexpected shape");
     expect(order).toEqual([]);
     expect(existsSync(state)).toBe(false);
     expect(existsSync(`${state}.clean-founder-setup-plan-v1.json`)).toBe(false);
@@ -988,20 +906,14 @@ describe("Organization Authority setup coordinator", () => {
 
   it("rejects a legacy onboarding manifest shape instead of treating it as compatible", async () => {
     const state = stateDirectory();
-    const order: string[] = [];
-    await runOrganizationAuthoritySetupCli(
-      bootstrapArgs(state),
-      { stdout: () => undefined, stderr: () => undefined },
-      dependencies(order),
-    );
+    await cli(bootstrapArgs(state), dependencies([]));
     const path = join(state, "onboarding", "clean-founder-v1.json");
     const manifest = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
     delete manifest.setup_seed;
     delete manifest.owner_email;
     delete manifest.organization_name;
     delete manifest.owner_display_name;
-    writeFileSync(path, JSON.stringify(manifest), { mode: 0o600 });
-    chmodSync(path, 0o600);
+    writePrivate(path, JSON.stringify(manifest));
 
     expect(() => readOrganizationAuthoritySetupManifest(state)).toThrow(
       "organization setup manifest is invalid",
@@ -1011,228 +923,64 @@ describe("Organization Authority setup coordinator", () => {
   it("refuses resume when state exists but its exact setup plan is missing", async () => {
     const state = stateDirectory();
     mkdirSync(state, { mode: 0o700 });
-    let stderr = "";
 
-    const result = await runOrganizationAuthoritySetupCli(
-      ["resume", "--state-dir", state],
-      {
-        stdout: () => undefined,
-        stderr: (value) => (stderr += value),
-      },
-      dependencies([]),
-    );
+    const result = await cli(["resume", "--state-dir", state], dependencies([]), 1);
 
-    expect(result).toBe(1);
-    expect(stderr).toContain("restore the exact setup plan");
-    expect(stderr).toContain("new state directory");
+    expect(result.stderr).toContain("restore the exact setup plan");
+    expect(result.stderr).toContain("new state directory");
   });
 
-  it("finalizes from the private manifest without asking for IDs", async () => {
-    const state = stateDirectory();
+  it.each([
+    ["queues fixture meetings on the exact staging Authority", OWNER_READY],
+    ["queues the fixture meetings again on a synthetic finalize retry", OWNER_SYNTHETIC],
+  ] as const)("%s", async (_name, owner) => {
+    const state = stateDirectory(STAGING_ORIGIN);
     const order: string[] = [];
     const deps = dependencies(order);
-    await runOrganizationAuthoritySetupCli(
-      [
-        "bootstrap",
-        "--state-dir",
-        state,
-        "--organization-name",
-        "ECHO",
-        "--owner-display-name",
-        "Founder",
-        "--owner-email",
-        "founder@example.com",
-        "--authority-url",
-        "https://authority.example",
-        "--oidc-config",
-        join(dirname(state), "oidc.json"),
-      ],
-      {
-        stdout: () => undefined,
-        stderr: () => undefined },
-      deps,
-    );
+    await cli(bootstrapArgs(state, STAGING_ORIGIN), deps);
     order.splice(0);
-    let stdout = "";
-    const status = await runOrganizationAuthoritySetupCli(
-      ["finalize", "--state-dir", state],
-      {
-        stdout: (value) => (stdout += value),
-        stderr: () => undefined },
-      {
-        ...deps,
-        read_setup_stage: () => CONNECTED_STAGE,
-        read_initial_owner_setup_status: () => ({
-          founder_oidc_bound: true,
-          founder_slack_link_active: true,
-          llm_credential_valid: true,
-          source_admission_present: false,
-        }),
-      },
+    await cli(
+      ["finalize", "--state-dir", state, "--staging-synthetic-meetings-dir", "/echo-clean/meetings"],
+      finalizeDeps(deps, owner),
     );
-
-    expect(status).toBe(0);
-    expect(order).toEqual([]);
-    expect(stdout).not.toContain("con_clean-founder");
-    expect(JSON.parse(stdout)).toMatchObject({ source_mode: "none", source_admission_present: false });
-  });
-
-  it("queues fixture meetings only for the exact staging Authority", async () => {
-    const state = stateDirectory("https://authority-staging.echobrain.org");
-    const order: string[] = [];
-    const deps = dependencies(order);
-    const io = { stdout: () => undefined, stderr: () => undefined };
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        bootstrapArgs(state, "https://authority-staging.echobrain.org"),
-        io,
-        deps,
-      ),
-    ).toBe(0);
-    order.splice(0);
-    const result = await runOrganizationAuthoritySetupCli(
-      [
-        "finalize",
-        "--state-dir",
-        state,
-        "--staging-synthetic-meetings-dir",
-        "/echo-clean/meetings",
-      ],
-      io,
-      {
-        ...deps,
-        read_setup_stage: () => CONNECTED_STAGE,
-        read_initial_owner_setup_status: () => ({
-          founder_oidc_bound: true,
-          founder_slack_link_active: true,
-          llm_credential_valid: true,
-          source_admission_present: false,
-        }),
-      },
-    );
-    expect(result).toBe(0);
     expect(order).toEqual(["queue-synthetic:/echo-clean/meetings"]);
+  });
 
+  it("refuses fixture meetings outside the exact staging Authority", async () => {
+    const deps = dependencies([]);
     const productionState = stateDirectory();
-    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(productionState), io, deps)).toBe(0);
-    let stderr = "";
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        [
-          "finalize",
-          "--state-dir",
-          productionState,
-          "--staging-synthetic-meetings-dir",
-          "/echo-clean/meetings",
-        ],
-        { ...io, stderr: (value) => (stderr += value) },
-        {
-          ...deps,
-          read_setup_stage: () => CONNECTED_STAGE,
-          read_initial_owner_setup_status: () => ({
-            founder_oidc_bound: true,
-            founder_slack_link_active: true,
-            llm_credential_valid: true,
-            source_admission_present: false,
-          }),
-        },
-      ),
-    ).toBe(1);
-    expect(stderr).toContain("staging synthetic meeting source is allowed only");
-  });
-
-  it("queues the fixture meetings again on a synthetic finalize retry", async () => {
-    const state = stateDirectory("https://authority-staging.echobrain.org");
-    const order: string[] = [];
-    const io = { stdout: () => undefined, stderr: () => undefined };
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        bootstrapArgs(state, "https://authority-staging.echobrain.org"),
-        io,
-        dependencies(order),
-      ),
-    ).toBe(0);
-    order.splice(0);
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        [
-          "finalize",
-          "--state-dir",
-          state,
-          "--staging-synthetic-meetings-dir",
-          "/echo-clean/meetings",
-        ],
-        io,
-        {
-          ...dependencies(order),
-          read_setup_stage: () => CONNECTED_STAGE,
-          read_initial_owner_setup_status: () => ({
-            founder_oidc_bound: true,
-            founder_slack_link_active: true,
-            llm_credential_valid: true,
-            source_mode: "staging_synthetic",
-            source_admission_present: true,
-          }),
-        },
-      ),
-    ).toBe(0);
-    expect(order).toEqual(["queue-synthetic:/echo-clean/meetings"]);
+    await cli(bootstrapArgs(productionState), deps);
+    const refused = await cli(
+      ["finalize", "--state-dir", productionState, "--staging-synthetic-meetings-dir", "/echo-clean/meetings"],
+      finalizeDeps(deps),
+      1,
+    );
+    expect(refused.stderr).toContain("staging synthetic meeting source is allowed only");
   });
 
   it("sets up the owner's synthetic source for the canary when staging finalize has no fixtures", async () => {
     const state = stateDirectory(STAGING_ORIGIN);
     const order: string[] = [];
-    const io = { stdout: () => undefined, stderr: () => undefined };
-    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state, STAGING_ORIGIN), io, dependencies(order))).toBe(0);
+    await cli(bootstrapArgs(state, STAGING_ORIGIN), dependencies(order));
     order.splice(0);
-    let stdout = "";
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        ["finalize", "--state-dir", state],
-        { ...io, stdout: (value) => (stdout += value) },
-        {
-          ...dependencies(order),
-          read_setup_stage: () => CONNECTED_STAGE,
-          read_initial_owner_setup_status: () => ({
-            founder_oidc_bound: true,
-            founder_slack_link_active: true,
-            llm_credential_valid: true,
-            source_admission_present: false,
-          }),
-        },
-      ),
-    ).toBe(0);
+    const finalized = await cli(["finalize", "--state-dir", state], finalizeDeps(dependencies(order)));
     expect(order).toEqual(["queue-synthetic:canary"]);
-    expect(JSON.parse(stdout)).toMatchObject({ source_mode: "staging_canary", source_admission_present: true, canary_status: "not_complete" });
+    expect(finalized.json).toMatchObject({ source_mode: "staging_canary", source_admission_present: true, canary_status: "not_complete" });
   });
 
   it("finalize queues fixture meetings into the owner's synthetic source and admits no organization source", async () => {
     const state = stateDirectory(STAGING_ORIGIN);
     const { queue_staging_synthetic_meetings: _stub, ...real } = dependencies([]);
-    const io = { stdout: () => undefined, stderr: () => undefined };
-    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state, STAGING_ORIGIN), io, real)).toBe(0);
+    await cli(bootstrapArgs(state, STAGING_ORIGIN), real);
     const manifest = readOrganizationAuthoritySetupManifest(state);
     mkdirSync(dirname(manifest.llm_credential_file), { recursive: true, mode: 0o700 });
     writeFileSync(manifest.llm_credential_file, "l".repeat(40), { mode: 0o600 });
     chmodSync(manifest.llm_credential_file, 0o600);
-    let stdout = "";
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        ["finalize", "--state-dir", state, "--staging-synthetic-meetings-dir", fictionalFixtureDirectory()],
-        { ...io, stdout: (value) => (stdout += value) },
-        {
-          ...real,
-          read_setup_stage: () => CONNECTED_STAGE,
-          read_initial_owner_setup_status: () => ({
-            founder_oidc_bound: true,
-            founder_slack_link_active: true,
-            llm_credential_valid: true,
-            source_admission_present: false,
-          }),
-        },
-      ),
-    ).toBe(0);
-    expect(JSON.parse(stdout)).toMatchObject({ source_mode: "staging_synthetic", source_admission_present: true });
+    const finalized = await cli(
+      ["finalize", "--state-dir", state, "--staging-synthetic-meetings-dir", fictionalFixtureDirectory()],
+      finalizeDeps(real),
+    );
+    expect(finalized.json).toMatchObject({ source_mode: "staging_synthetic", source_admission_present: true });
     const authority = new Database(join(state, "authority.sqlite"), { readonly: true });
     try {
       expect(authority.prepare("SELECT count(*) FROM authority_live_source_admission_v2 WHERE source_key = ?").pluck().get("1")).toBe(0);
@@ -1252,42 +1000,24 @@ describe("Organization Authority setup coordinator", () => {
     } finally {
       authority.close();
     }
-    stdout = "";
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        ["status", "--state-dir", state],
-        { ...io, stdout: (value) => (stdout += value) },
-        { ...real, read_setup_stage: () => CONNECTED_STAGE },
-      ),
-    ).toBe(0);
-    expect(JSON.parse(stdout)).toMatchObject({ source_mode: "staging_synthetic", source_admission_present: true });
+    expect((await cli(["status", "--state-dir", state], { ...real, read_setup_stage: () => CONNECTED_STAGE })).json)
+      .toMatchObject({ source_mode: "staging_synthetic", source_admission_present: true });
   });
 
   it("rejects a fixture selector outside finalization", async () => {
     const state = stateDirectory();
-    let stderr = "";
     expect(
-      await runOrganizationAuthoritySetupCli(
-        [
-          "status",
-          "--state-dir",
-          state,
-          "--staging-synthetic-meetings-dir",
-          "/echo-clean/meetings",
-        ],
-        {
-          stdout: () => undefined,
-          stderr: (value) => (stderr += value) },
+      (await cli(
+        ["status", "--state-dir", state, "--staging-synthetic-meetings-dir", "/echo-clean/meetings"],
         dependencies([]),
-      ),
-    ).toBe(1);
-    expect(stderr).toContain("usage:");
+        1,
+      )).stderr,
+    ).toContain("usage:");
   });
 
   it("reports a synthetic admitted source without demanding the release canary record", async () => {
     const state = stateDirectory("https://authority-staging.echobrain.org");
     const order: string[] = [];
-    const io = { stdout: () => undefined, stderr: () => undefined };
     const deps: OrganizationAuthoritySetupCliDependencies = {
       ...dependencies(order),
       read_setup_stage: () => ({
@@ -1295,13 +1025,7 @@ describe("Organization Authority setup coordinator", () => {
         slack_connected: true,
         invitation_file_present: false,
       }),
-      read_initial_owner_setup_status: () => ({
-        founder_oidc_bound: true,
-        founder_slack_link_active: true,
-        llm_credential_valid: true,
-        source_admission_present: true,
-        source_mode: "staging_synthetic",
-      }),
+      read_initial_owner_setup_status: () => OWNER_SYNTHETIC,
       read_setup_canary_evidence: () => ({
         source_progress_observed: true,
         synthetic_staging_canary_observed: false,
@@ -1312,22 +1036,8 @@ describe("Organization Authority setup coordinator", () => {
         complete: true,
       }),
     };
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        bootstrapArgs(state, "https://authority-staging.echobrain.org"),
-        io,
-        deps,
-      ),
-    ).toBe(0);
-    let stdout = "";
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        ["status", "--state-dir", state],
-        { ...io, stdout: (value) => (stdout += value) },
-        deps,
-      ),
-    ).toBe(0);
-    expect(JSON.parse(stdout)).toMatchObject({
+    await cli(bootstrapArgs(state, "https://authority-staging.echobrain.org"), deps);
+    expect((await cli(["status", "--state-dir", state], deps)).json).toMatchObject({
       source_mode: "staging_synthetic",
       source_admission_present: true,
       synthetic_staging_canary_observed: false,
@@ -1339,17 +1049,11 @@ describe("Organization Authority setup coordinator", () => {
     const state = stateDirectory();
     const order: string[] = [];
     const base = dependencies(order);
-    await runOrganizationAuthoritySetupCli(
-      bootstrapArgs(state),
-      { stdout: () => undefined, stderr: () => undefined },
-      base,
-    );
+    await cli(bootstrapArgs(state), base);
     order.splice(0);
 
-    let stderr = "";
-    const result = await runOrganizationAuthoritySetupCli(
+    const result = await cli(
       ["finalize", "--state-dir", state],
-      { stdout: () => undefined, stderr: (value) => (stderr += value) },
       {
         ...base,
         read_initial_owner_setup_status: () => ({
@@ -1359,11 +1063,11 @@ describe("Organization Authority setup coordinator", () => {
           source_admission_present: false,
         }),
       },
+      1,
     );
 
-    expect(result).toBe(1);
     // The real durable stage: nobody has set up Slack in the ECHO app yet.
-    expect(stderr).toContain(
+    expect(result.stderr).toContain(
       "organization setup finalize requires initial-owner OIDC binding, organization Slack connection, initial-owner Slack identity link, LLM credential",
     );
     expect(order).toEqual([]);
@@ -1373,32 +1077,13 @@ describe("Organization Authority setup coordinator", () => {
     const state = stateDirectory();
     const order: string[] = [];
     const base = dependencies(order);
-    await runOrganizationAuthoritySetupCli(
-      bootstrapArgs(state),
-      { stdout: () => undefined, stderr: () => undefined },
-      base,
-    );
+    await cli(bootstrapArgs(state), base);
     order.splice(0);
     writeFileSync(join(state, "state-lineage-root.v2.json"), "{}", { mode: 0o600 ,});
 
-    let stderr = "";
-    const result = await runOrganizationAuthoritySetupCli(
-      ["finalize", "--state-dir", state],
-      { stdout: () => undefined, stderr: (value) => (stderr += value) },
-      {
-        ...base,
-        read_setup_stage: () => CONNECTED_STAGE,
-        read_initial_owner_setup_status: () => ({
-          founder_oidc_bound: true,
-          founder_slack_link_active: true,
-          llm_credential_valid: true,
-          source_admission_present: false,
-        }),
-      },
-    );
+    const result = await cli(["finalize", "--state-dir", state], finalizeDeps(base), 1);
 
-    expect(result).toBe(1);
-    expect(stderr).toContain("valid state-lineage root manifest");
+    expect(result.stderr).toContain("valid state-lineage root manifest");
     expect(order).toEqual([]);
   });
 
@@ -1406,28 +1091,17 @@ describe("Organization Authority setup coordinator", () => {
     const state = stateDirectory();
     const order: string[] = [];
     const base = dependencies(order);
-    await runOrganizationAuthoritySetupCli(bootstrapArgs(state), { stdout: () => undefined, stderr: () => undefined }, base);
+    await cli(bootstrapArgs(state), base);
     order.splice(0);
-    const deps: OrganizationAuthoritySetupCliDependencies = {
-      ...base,
-      read_initial_owner_setup_status: () => ({
-        founder_oidc_bound: true, founder_slack_link_active: true, llm_credential_valid: true,
-        source_admission_present: false,
-      }),
-      read_setup_stage: () => CONNECTED_STAGE,
-    };
-    let stdout = "";
-    const io = { stdout: (value: string) => { stdout += value; }, stderr: () => undefined };
-    expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, deps)).toBe(0);
-    expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, deps)).toBe(0);
+    const deps = finalizeDeps(base);
+    const finalize = ["finalize", "--state-dir", state];
+    const stdout = (await cli(finalize, deps)).stdout + (await cli(finalize, deps)).stdout;
     expect(order).toEqual([]);
     for (const line of stdout.trim().split("\n")) {
       expect(JSON.parse(line)).toMatchObject({ source_mode: "none", source_admission_present: false });
     }
     for (const command of ["status", "resume"]) {
-      stdout = "";
-      expect(await runOrganizationAuthoritySetupCli([command, "--state-dir", state], io, deps)).toBe(0);
-      expect(JSON.parse(stdout)).toMatchObject({
+      expect((await cli([command, "--state-dir", state], deps)).json).toMatchObject({
         next_step: "complete", runtime_status: "ready_to_start", canary_status: "not_required",
         source_admission_present: false, source_progress_observed: false,
         approved_record_present: false, owner_layer1_read_after_head: false,
@@ -1449,23 +1123,18 @@ describe("Organization Authority setup coordinator", () => {
         source_admission_present: false,
       }),
     };
-    let stdout = "";
-    const io = { stdout: (value: string) => (stdout += value), stderr: () => undefined };
-    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, deps)).toBe(0);
-    expect(JSON.parse(stdout)).toMatchObject({
+    const bootstrapped = await cli(bootstrapArgs(state), deps);
+    expect(bootstrapped.json).toMatchObject({
       next_step: "connect_slack_in_app",
       next_instruction: "An owner runs person tools setup --tool slack and pastes a Slack app configuration token.",
     });
-    expect(stdout).not.toContain("invitation_path");
+    expect(bootstrapped.stdout).not.toContain("invitation_path");
     expect(order).toEqual(["initialize:2026-08-22T12:00:00.000Z:clean-founder-v1"]);
 
     stage.slack_connected = true;
-    stdout = "";
-    expect(await runOrganizationAuthoritySetupCli(["status", "--state-dir", state], io, deps)).toBe(0);
-    expect(JSON.parse(stdout)).toMatchObject({ slack_connected: true, next_step: "complete_founder_slack_link" });
-    stdout = "";
-    expect(await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps)).toBe(0);
-    expect(JSON.parse(stdout)).toMatchObject({
+    expect((await cli(["status", "--state-dir", state], deps)).json)
+      .toMatchObject({ slack_connected: true, next_step: "complete_founder_slack_link" });
+    expect((await cli(["resume", "--state-dir", state], deps)).json).toMatchObject({
       next_step: "complete_founder_slack_link",
       next_instruction: "The owner runs person tools connect --tool slack to link their own Slack.",
     });
@@ -1473,62 +1142,34 @@ describe("Organization Authority setup coordinator", () => {
 
   it("installs only the LLM credential from a private file without printing its value", async () => {
     const state = stateDirectory();
-    const order: string[] = [];
-    await runOrganizationAuthoritySetupCli(
-      bootstrapArgs(state),
-      {
-        stdout: () => undefined,
-        stderr: () => undefined },
-      dependencies(order),
-    );
+    await cli(bootstrapArgs(state), dependencies([]));
     const credentialDirectory = join(state, "credentials");
     mkdirSync(credentialDirectory, { recursive: true, mode: 0o700 });
     chmodSync(credentialDirectory, 0o700);
     const sourceDirectory = join(dirname(state), "private-inputs");
     mkdirSync(sourceDirectory, { mode: 0o700 });
-    const values = {
-      granola: `grn_${"g".repeat(40)}`,
-      owner: "founder@example.com",
-      llm: "l".repeat(40),
-    };
-    const sources = {
-      granola: join(sourceDirectory, "granola"),
-      owner: join(sourceDirectory, "owner-email"),
-      llm: join(sourceDirectory, "llm"),
-    };
-    for (const [name, path] of Object.entries(sources)) {
-      writeFileSync(path, values[name as keyof typeof values], { mode: 0o600 });
-      chmodSync(path, 0o600);
-    }
-    let stdout = "";
-    let stderr = "";
-    const result = await runOrganizationAuthoritySetupCli(
-      [
-        "credentials-install",
-        "--state-dir",
-        state,
-        "--llm-credential-file",
-        sources.llm,
-      ],
-      {
-        stdout: (value) => (stdout += value),
-        stderr: (value) => (stderr += value) },
-    );
+    const llm = "l".repeat(40);
+    const source = join(sourceDirectory, "llm");
+    writePrivate(source, llm);
 
-    expect(result).toBe(0);
-    expect(stderr).toBe("");
-    expect(JSON.parse(stdout)).toMatchObject({
+    const installed = await cli([
+      "credentials-install",
+      "--state-dir",
+      state,
+      "--llm-credential-file",
+      source,
+    ]);
+
+    expect(installed.stderr).toBe("");
+    expect(installed.json).toMatchObject({
       ok: true,
       credentials_ready: true,
     });
-    for (const value of Object.values(values)) expect(stdout).not.toContain(value);
+    expect(installed.stdout).not.toContain(llm);
+    expect(installed.stdout).not.toContain("founder@example.com");
     expect(readFileSync(join(credentialDirectory, "llm-credential"), "utf8"),)
-      .toBe(values.llm);
-    for (const filename of ["llm-credential"]) {
-      expect(statSync(join(credentialDirectory, filename)).mode & 0o777).toBe(
-        0o600,
-      );
-    }
+      .toBe(llm);
+    expect(statSync(join(credentialDirectory, "llm-credential")).mode & 0o777).toBe(0o600);
   });
 
   it("resumes a lost bootstrap response from the durable plan", async () => {
@@ -1560,22 +1201,13 @@ describe("Organization Authority setup coordinator", () => {
       },
       read_setup_stage: () => stage,
     };
-    const io = {
-      stdout: () => undefined,
-      stderr: () => undefined };
 
-    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, deps),).toBe(1);
-    let status = "";
-    expect(
-      await runOrganizationAuthoritySetupCli(["status", "--state-dir", state], {
-        ...io,
-        stdout: (value) => (status += value),
-      }),
-    ).toBe(0);
-    expect(status).not.toContain("founder@example.com");
-    expect(status).not.toContain(state);
-    expect(status).not.toContain("oau_");
-    expect(JSON.parse(status)).toMatchObject({
+    await cli(bootstrapArgs(state), deps, 1);
+    const status = await cli(["status", "--state-dir", state]);
+    expect(status.stdout).not.toContain("founder@example.com");
+    expect(status.stdout).not.toContain(state);
+    expect(status.stdout).not.toContain("oau_");
+    expect(status.json).toMatchObject({
       setup_plan_present: true,
       genesis_published: false,
       next_step: "resume_bootstrap",
@@ -1583,18 +1215,12 @@ describe("Organization Authority setup coordinator", () => {
 
     resetFails = false;
     failAfter = "credentials";
-    expect(
-      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps,),
-    ).toBe(1);
+    await cli(["resume", "--state-dir", state], deps, 1);
     failAfter = "invitation";
-    expect(
-      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps,),
-    ).toBe(1);
+    await cli(["resume", "--state-dir", state], deps, 1);
     expect(order.filter((value) => value === "credentials")).toHaveLength(1);
     failAfter = undefined;
-    expect(
-      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps,),
-    ).toBe(0);
+    await cli(["resume", "--state-dir", state], deps);
     expect(order.filter((value) => value === "invitation")).toHaveLength(1);
   });
 
@@ -1604,22 +1230,9 @@ describe("Organization Authority setup coordinator", () => {
     const order: string[] = [];
     let canaryComplete = false;
     const deps = readyStatusDependencies(order, () => canaryComplete);
-    const io = {
-      stdout: () => undefined,
-      stderr: () => undefined };
-    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state, STAGING_ORIGIN), io, deps),).toBe(0);
+    await cli(bootstrapArgs(state, STAGING_ORIGIN), deps);
 
-    let incompleteOutput = "";
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        ["status", "--state-dir", state],
-        { ...io, stdout: (value) => (incompleteOutput += value) },
-        deps,
-      ),
-    ).toBe(0);
-    const incomplete = JSON.parse(incompleteOutput) as Record<string, unknown>;
-    expect(incomplete).not.toHaveProperty("slack_approval_binding_active");
-    expect(incomplete).toMatchObject({
+    expect((await cli(["status", "--state-dir", state], deps)).json).toMatchObject({
       next_step: "ready_to_start",
       canary_status: "not_complete",
       source_progress_observed: false,
@@ -1630,16 +1243,8 @@ describe("Organization Authority setup coordinator", () => {
     });
 
     canaryComplete = true;
-    let completeOutput = "";
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        ["status", "--state-dir", state],
-        { ...io, stdout: (value) => (completeOutput += value) },
-        deps,
-      ),
-    ).toBe(0);
-    const complete = JSON.parse(completeOutput) as Record<string, unknown>;
-    expect(complete).toMatchObject({
+    const complete = await cli(["status", "--state-dir", state], deps);
+    expect(complete.json).toMatchObject({
       next_step: "complete",
       canary_status: "complete",
       source_progress_observed: true,
@@ -1648,24 +1253,14 @@ describe("Organization Authority setup coordinator", () => {
       owner_layer1_read_after_head: true,
       owner_layer2_read_after_generation: true,
     });
-    expect(completeOutput).not.toContain("oau_");
-    expect(completeOutput).not.toContain("org_");
-    expect(completeOutput).not.toContain("prn_");
-    expect(completeOutput).not.toContain("sha256:");
-    expect(completeOutput).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
-    expect(complete).not.toHaveProperty("slack_verification");
-    expect(complete).not.toHaveProperty("granola_admission_proof");
-    expect(complete).not.toHaveProperty("next_instruction");
+    expect(complete.stdout).not.toContain("oau_");
+    expect(complete.stdout).not.toContain("org_");
+    expect(complete.stdout).not.toContain("prn_");
+    expect(complete.stdout).not.toContain("sha256:");
+    expect(complete.stdout).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+    expect(complete.json).not.toHaveProperty("next_instruction");
 
-    let resumedOutput = "";
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        ["resume", "--state-dir", state],
-        { ...io, stdout: (value) => (resumedOutput += value) },
-        deps,
-      ),
-    ).toBe(0);
-    expect(JSON.parse(resumedOutput)).toMatchObject({ next_step: "complete" });
+    expect((await cli(["resume", "--state-dir", state], deps)).json).toMatchObject({ next_step: "complete" });
   });
 
   it.each([
@@ -1708,67 +1303,34 @@ describe("Organization Authority setup coordinator", () => {
       layer1Read,
       layer2Read,
     ) => {
-      const originalHost = process.env.ECHO_CLEAN_AUTHORITY_HOST;
-      const originalReleaseId = process.env.ECHO_CLEAN_RELEASE_ID;
-      process.env.ECHO_CLEAN_AUTHORITY_HOST = "authority-staging.echobrain.org";
-      process.env.ECHO_CLEAN_RELEASE_ID = CURRENT_RELEASE;
-      try {
-        const state = stateDirectory(STAGING_ORIGIN);
-        const prereq = readyStatusDependencies([]);
-        const productionDependencies: OrganizationAuthoritySetupCliDependencies = {
-          ...prereq,
-          read_setup_canary_evidence: undefined,
-        };
-        const io = {
-          stdout: () => undefined,
-          stderr: () => undefined };
-        expect(
-          await runOrganizationAuthoritySetupCli(bootstrapArgs(state, STAGING_ORIGIN), io, productionDependencies,),
-        ).toBe(0);
-        installDurableCanaryFixture(state, fixtureOptions);
+      vi.stubEnv("ECHO_CLEAN_AUTHORITY_HOST", "authority-staging.echobrain.org");
+      vi.stubEnv("ECHO_CLEAN_RELEASE_ID", CURRENT_RELEASE);
+      const state = stateDirectory(STAGING_ORIGIN);
+      const productionDependencies = canaryFreeDeps();
+      await cli(bootstrapArgs(state, STAGING_ORIGIN), productionDependencies);
+      installDurableCanaryFixture(state, fixtureOptions);
 
-        let stdout = "";
-        expect(
-          await runOrganizationAuthoritySetupCli(
-            ["status", "--state-dir", state],
-            { ...io, stdout: (value) => (stdout += value) },
-            productionDependencies,
-          ),
-        ).toBe(0);
-        const status = JSON.parse(stdout) as Record<string, unknown>;
-        expect(status).toMatchObject({
-          source_progress_observed: sourceProgress,
-          synthetic_staging_canary_observed: sourceProgress,
-          approved_record_present: approvedRecord,
-          active_generation_current: activeGeneration,
-          owner_layer1_read_after_head: layer1Read,
-          owner_layer2_read_after_generation: layer2Read,
-          next_step:
-            sourceProgress && approvedRecord && activeGeneration && layer1Read && layer2Read
-              ? "complete"
-              : "ready_to_start",
-        });
-      } finally {
-        if (originalHost === undefined) delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
-        else process.env.ECHO_CLEAN_AUTHORITY_HOST = originalHost;
-        if (originalReleaseId === undefined) delete process.env.ECHO_CLEAN_RELEASE_ID;
-        else process.env.ECHO_CLEAN_RELEASE_ID = originalReleaseId;
-      }
+      expect((await cli(["status", "--state-dir", state], productionDependencies)).json).toMatchObject({
+        source_progress_observed: sourceProgress,
+        synthetic_staging_canary_observed: sourceProgress,
+        approved_record_present: approvedRecord,
+        active_generation_current: activeGeneration,
+        owner_layer1_read_after_head: layer1Read,
+        owner_layer2_read_after_generation: layer2Read,
+        next_step:
+          sourceProgress && approvedRecord && activeGeneration && layer1Read && layer2Read
+            ? "complete"
+            : "ready_to_start",
+      });
     },
   );
 
   it("completes source-free outside staging even when no rehearsal evidence exists", async () => {
     const state = stateDirectory();
-    const productionDependencies: OrganizationAuthoritySetupCliDependencies = {
-      ...readyStatusDependencies([]),
-      read_setup_canary_evidence: undefined,
-    };
-    const io = { stdout: () => undefined, stderr: () => undefined };
-    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, productionDependencies)).toBe(0);
+    const productionDependencies = canaryFreeDeps();
+    await cli(bootstrapArgs(state), productionDependencies);
     for (const command of ["status", "resume"]) {
-      let stdout = "";
-      expect(await runOrganizationAuthoritySetupCli([command, "--state-dir", state], { ...io, stdout: (value) => (stdout += value) }, productionDependencies)).toBe(0);
-      expect(JSON.parse(stdout)).toMatchObject({
+      expect((await cli([command, "--state-dir", state], productionDependencies)).json).toMatchObject({
         next_step: "complete", canary_status: "not_required",
         source_progress_observed: false, synthetic_staging_canary_observed: false, approved_record_present: false,
       });
@@ -1784,113 +1346,56 @@ describe("Organization Authority setup coordinator", () => {
     "requires every synthetic fixture meeting approved before synthetic completion: %s",
     async (_name, shape, nextStep) => {
       const state = stateDirectory(STAGING_ORIGIN);
-      const io = {
-        stdout: () => undefined,
-        stderr: () => undefined };
-      const dependencies: OrganizationAuthoritySetupCliDependencies = {
-        ...readyStatusDependencies([]),
-        read_initial_owner_setup_status: () => ({
-          founder_oidc_bound: true,
-          founder_slack_link_active: true,
-          llm_credential_valid: true,
-          source_mode: "staging_synthetic",
-          source_admission_present: true,
-        }),
-        read_setup_canary_evidence: undefined,
+      const deps: OrganizationAuthoritySetupCliDependencies = {
+        ...canaryFreeDeps(),
+        read_initial_owner_setup_status: () => OWNER_SYNTHETIC,
       };
-      expect(
-        await runOrganizationAuthoritySetupCli(
-          bootstrapArgs(state, STAGING_ORIGIN),
-          io,
-          dependencies,
-        ),
-      ).toBe(0);
+      await cli(bootstrapArgs(state, STAGING_ORIGIN), deps);
       installSyntheticFixtureApprovalEvidence(state, shape);
-      let stdout = "";
-      expect(
-        await runOrganizationAuthoritySetupCli(
-          ["status", "--state-dir", state],
-          { ...io, stdout: (value) => (stdout += value) },
-          dependencies,
-        ),
-      ).toBe(0);
-      expect(JSON.parse(stdout)).toMatchObject({ next_step: nextStep });
+      expect((await cli(["status", "--state-dir", state], deps)).json).toMatchObject({ next_step: nextStep });
     },
   );
 
   it("reports canary evidence once the current release's synthetic canary proposal has an approved record, only on staging", async () => {
-    const originalHost = process.env.ECHO_CLEAN_AUTHORITY_HOST;
-    const originalReleaseId = process.env.ECHO_CLEAN_RELEASE_ID;
-    const io = {
-      stdout: () => undefined,
-      stderr: () => undefined };
-    const productionDependencies: OrganizationAuthoritySetupCliDependencies = {
-      ...readyStatusDependencies([]),
-      read_setup_canary_evidence: undefined,
-    };
-    const statusAfter = async (authorityUrl: string, synthetic: "owner" | "granola", release = CURRENT_RELEASE) => {
+    const productionDependencies = canaryFreeDeps();
+    const installed = async (authorityUrl: string, release = CURRENT_RELEASE) => {
       const state = stateDirectory(authorityUrl);
-      expect(
-        await runOrganizationAuthoritySetupCli(
-          bootstrapArgs(state, authorityUrl),
-          io,
-          productionDependencies,
-        ),
-      ).toBe(0);
-      installDurableCanaryFixture(state, { synthetic_canary: synthetic, synthetic_canary_release: release });
-      let stdout = "";
-      expect(
-        await runOrganizationAuthoritySetupCli(
-          ["status", "--state-dir", state],
-          { ...io, stdout: (value) => (stdout += value) },
-          productionDependencies,
-        ),
-      ).toBe(0);
-      return JSON.parse(stdout) as Record<string, unknown>;
+      await cli(bootstrapArgs(state, authorityUrl), productionDependencies);
+      installDurableCanaryFixture(state, { synthetic_canary: "owner", synthetic_canary_release: release });
+      return state;
     };
-    try {
-      process.env.ECHO_CLEAN_AUTHORITY_HOST = "authority-staging.echobrain.org";
-      process.env.ECHO_CLEAN_RELEASE_ID = CURRENT_RELEASE;
-      expect(await statusAfter(STAGING_ORIGIN, "owner")).toMatchObject({
-        source_progress_observed: true,
-        synthetic_staging_canary_observed: true,
-        next_step: "complete",
-      });
-      // An approved canary from an earlier release is not evidence for the running one.
-      expect(await statusAfter(STAGING_ORIGIN, "owner", "clean-v1-staging-earlier-release")).toMatchObject({
-        synthetic_staging_canary_observed: false,
-        next_step: "ready_to_start",
-      });
-      // A canary-shaped proposal from another meeting tool is not synthetic evidence.
-      expect(await statusAfter(STAGING_ORIGIN, "granola")).toMatchObject({
-        source_progress_observed: false,
-        synthetic_staging_canary_observed: false,
-        next_step: "ready_to_start",
-      });
-      // Outside staging the synthetic source is not evidence, and none is required.
-      expect(await statusAfter("https://authority.example", "owner")).toMatchObject({
-        synthetic_staging_canary_observed: false,
-        canary_status: "not_required",
-        next_step: "complete",
-      });
-      delete process.env.ECHO_CLEAN_RELEASE_ID;
-      expect(await statusAfter(STAGING_ORIGIN, "owner")).toMatchObject({
-        synthetic_staging_canary_observed: false,
-        next_step: "ready_to_start",
-      });
-      process.env.ECHO_CLEAN_RELEASE_ID = CURRENT_RELEASE;
-      delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
-      expect(await statusAfter(STAGING_ORIGIN, "owner")).toMatchObject({
-        synthetic_staging_canary_observed: false,
-        next_step: "ready_to_start",
-      });
-    } finally {
-      if (originalHost === undefined)
-        delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
-      else process.env.ECHO_CLEAN_AUTHORITY_HOST = originalHost;
-      if (originalReleaseId === undefined)
-        delete process.env.ECHO_CLEAN_RELEASE_ID;
-      else process.env.ECHO_CLEAN_RELEASE_ID = originalReleaseId;
-    }
+    const statusOf = async (state: string) =>
+      (await cli(["status", "--state-dir", state], productionDependencies)).json;
+    vi.stubEnv("ECHO_CLEAN_AUTHORITY_HOST", "authority-staging.echobrain.org");
+    vi.stubEnv("ECHO_CLEAN_RELEASE_ID", CURRENT_RELEASE);
+    const current = await installed(STAGING_ORIGIN);
+    expect(await statusOf(current)).toMatchObject({
+      source_progress_observed: true,
+      synthetic_staging_canary_observed: true,
+      next_step: "complete",
+    });
+    // An approved canary from an earlier release is not evidence for the running one.
+    expect(await statusOf(await installed(STAGING_ORIGIN, "clean-v1-staging-earlier-release"))).toMatchObject({
+      synthetic_staging_canary_observed: false,
+      next_step: "ready_to_start",
+    });
+    // Outside staging the synthetic source is not evidence, and none is required.
+    expect(await statusOf(await installed("https://authority.example"))).toMatchObject({
+      synthetic_staging_canary_observed: false,
+      canary_status: "not_required",
+      next_step: "complete",
+    });
+    // Status is read-only, so the same staging state is judged again under each environment.
+    vi.stubEnv("ECHO_CLEAN_RELEASE_ID", undefined);
+    expect(await statusOf(current)).toMatchObject({
+      synthetic_staging_canary_observed: false,
+      next_step: "ready_to_start",
+    });
+    vi.stubEnv("ECHO_CLEAN_RELEASE_ID", CURRENT_RELEASE);
+    vi.stubEnv("ECHO_CLEAN_AUTHORITY_HOST", undefined);
+    expect(await statusOf(current)).toMatchObject({
+      synthetic_staging_canary_observed: false,
+      next_step: "ready_to_start",
+    });
   });
 });

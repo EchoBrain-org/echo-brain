@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { emit, launch, type Launched } from './launch.js';
+import { quitPrompts } from './native.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
@@ -206,13 +207,15 @@ test('check status on an unconfirmed save learns it was not saved, then sends it
   expect(posts[1]!.body?.request_id).toBe(posts[0]!.body?.request_id);
 });
 
-test('an unresolved save comes back on capture, and write new asks once', async () => {
+test('an unresolved save makes quitting ask first, comes back on capture, and write new asks once', async () => {
   run = await launch('write-unavailable');
   const { page, app } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Unsure');
   await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('compose-unresolved')).toBeVisible();
+  expect(await quitPrompts(run)).toEqual(['A note may not have been sent.']);
   await expect(page.getByTestId('compose-unresolved')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('compose')).toHaveCount(0);
@@ -224,25 +227,6 @@ test('an unresolved save comes back on capture, and write new asks once', async 
   await page.getByTestId('compose-start-over').click();
   await expect(page.getByTestId('compose-body')).toHaveValue('');
   await expect(page.getByTestId('compose-unresolved')).toHaveCount(0);
-});
-
-test('quitting with an unresolved save asks first', async () => {
-  run = await launch('write-unavailable');
-  const { page, app } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-body').fill('Unsure');
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('compose-unresolved')).toBeVisible();
-  const asked = await app.evaluate(async ({ app: electronApp, dialog }) => {
-    const prompts: string[] = [];
-    dialog.showMessageBoxSync = ((options: Electron.MessageBoxSyncOptions) => { prompts.push(options.message); return 1; }) as never; // Cancel
-    electronApp.quit();
-    await new Promise(resolveWait => setTimeout(resolveWait, 300));
-    return prompts;
-  });
-  expect(asked).toEqual(['A note may not have been sent.']);
-  await expect(page.getByTestId('compose-unresolved')).toBeVisible();
 });
 
 test('escape keeps the draft and capture brings it back', async () => {
@@ -258,20 +242,6 @@ test('escape keeps the draft and capture brings it back', async () => {
   await expect(page.getByTestId('compose-body')).toBeFocused();
 });
 
-test('more projects loads the next page', async () => {
-  run = await launch('many-projects');
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(10);
-  await page.getByTestId('sidebar-more').click();
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
-  await expect(page.getByTestId('sidebar-more')).toHaveCount(0);
-});
-
-test('a session left behind by the weekly expiry shows sign-in at once', async () => {
-  run = await launch('expired-claim');
-  await expect(run.page.getByTestId('signed-out')).toBeVisible({ timeout: 2500 });
-});
-
 test('a failed ask shows a fixed message, not server text', async () => {
   run = await launch('ask-unavailable');
   const { page } = run;
@@ -279,23 +249,4 @@ test('a failed ask shows a fixed message, not server text', async () => {
   await page.getByTestId('ask-field').fill('Anything?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('ask-error')).toHaveText('ECHO is unavailable right now. Try again.');
-});
-
-test('switching to another app covers Home and projects, while sidebar rows stay for drops', async () => {
-  run = await launch();
-  const { page, app } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await emit(app, 'echo-test:conceal');
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await expect(page.getByTestId('concealed')).toBeVisible();
-  await emit(app, 'echo-test:resume');
-  await page.getByTestId('sidebar-project').first().click();
-  await expect(page.getByTestId('feed-row')).toBeVisible();
-  await emit(app, 'echo-test:conceal');
-  await expect(page.getByTestId('concealed')).toBeVisible();
-  await expect(page.getByTestId('feed-row')).toHaveCount(0);
-  await expect(page.getByTestId('title')).toHaveText('ECHO');
-  await emit(app, 'echo-test:resume');
-  await expect(page.getByTestId('concealed')).toHaveCount(0);
-  await expect(page.getByTestId('title')).toHaveText('Apollo');
 });

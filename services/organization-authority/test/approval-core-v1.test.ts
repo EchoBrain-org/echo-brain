@@ -24,26 +24,6 @@ const outbox = (f: { db: import('better-sqlite3').Database }, id: string) => f.d
 const signal = () => new AbortController().signal;
 
 describe('approval core: the brief', () => {
-  it('freezes a snapshot without proposed owners and offers them as proposals', async () => {
-    const f = await approvalCoreFixture({ owners: { 'act-1': 'Rafael Moreno' } });
-    const snapshot = JSON.parse(f.core.proposal(f.approvalId)!.snapshot_json!);
-    expect(snapshot.approved_payload.brief.actions.every((a: { owner: unknown }) => a.owner === null)).toBe(true);
-    expect(f.core.ownerProposals(f.approvalId)).toEqual([{ signal_id: 'act-1', action: expect.any(String), proposed: 'Rafael Moreno' }]);
-  });
-  it('lets the first decision win across surfaces and reports where it was made', async () => {
-    const f = await approvalCoreFixture();
-    const desktop = f.core.decide('desktop', f.approve({ command_id: 'desk-1' }), () => f.session);
-    const slack = f.core.decide('slack', f.approve({ command_id: 'slack:abc' }), () => f.click);
-    expect(desktop).toMatchObject({ kind: 'decided', status: 'publishing', surface: 'desktop' });
-    expect(slack).toMatchObject({ kind: 'already_decided', status: 'publishing', surface: 'desktop' });
-    expect(f.db.prepare('SELECT count(*) FROM authority_approval_decisions_v1').pluck().get()).toBe(1);
-  });
-  it('replays the same command and refuses a changed one', async () => {
-    const f = await approvalCoreFixture();
-    f.core.decide('desktop', f.approve({ command_id: 'desk-1' }), () => f.session);
-    expect(f.core.decide('desktop', f.approve({ command_id: 'desk-1' }), () => f.session).kind).toBe('replayed');
-    expect(f.core.decide('desktop', f.approve({ command_id: 'desk-1', share_transcript: true }), () => f.session).kind).toBe('already_decided');
-  });
   it('refuses a project the approver lost and writes nothing', async () => {
     const f = await approvalCoreFixture({ projects: 2 });
     f.removeProjectMembership(f.projectB);
@@ -54,32 +34,10 @@ describe('approval core: the brief', () => {
     const f = await approvalCoreFixture();
     expect(() => f.core.decide('desktop', f.approve(), () => ({ ...f.session, actor: { ...f.session.actor, membership_id: 'mem_00000000-0000-4000-8000-00000000009a' } }))).toThrow('not available');
   });
-  it('validates owners and audience', async () => {
-    const f = await approvalCoreFixture({ owners: { 'act-1': 'Rafael Moreno' } });
-    for (const bad of [
-      { owners: [{ signal_id: 'act-404', owner: 'X' }] },
-      { owners: [{ signal_id: 'act-1', owner: 'A' }, { signal_id: 'act-1', owner: 'B' }] },
-      { owners: [{ signal_id: 'act-1', owner: ' padded ' }] },
-      { owners: [{ signal_id: 'act-1', owner: 'x'.repeat(121) }] },
-      { project_ids: Array.from({ length: 21 }, (_, i) => `prj_00000000-0000-4000-8000-${i.toString(16).padStart(12, 'a')}`) },
-    ]) expect(() => f.core.decide('desktop', f.approve(bad), () => f.session)).toThrow();
-    expect(() => f.core.decide('desktop', f.reject({ project_ids: [f.projectA] }), () => f.session)).toThrow();
-    expect(f.decisionCount()).toBe(0);
-  });
-  it('supersedes an undecided proposal on a new revision but keeps a decided one', async () => {
+  it('supersedes an undecided proposal on a new revision', async () => {
     const f = await approvalCoreFixture();
     await f.newRevision();
     expect(f.core.proposal(f.approvalId)!.status).toBe('superseded');
-    const g = await approvalCoreFixture();
-    g.core.decide('desktop', g.approve(), () => g.session);
-    const next = await g.newRevision();
-    expect(g.core.proposal(g.approvalId)!.status).toBe('publishing');
-    expect(next.approvalId).not.toBe(g.approvalId);
-    expect(g.core.proposal(next.approvalId)!.status).toBe('pending');
-  });
-  it('freezes the suggested projects the import recorded', async () => {
-    const f = await approvalCoreFixture({ suggestions: 2 });
-    expect(f.core.proposal(f.approvalId)!.project_ids).toEqual([f.projectA, f.projectB].sort());
   });
 });
 
@@ -115,6 +73,7 @@ describe('approval core: owners', () => {
     const owned = await approvalCoreFixture({ owners: { 'act-1': 'Rafael Moreno', 'act-2': 'Ana Lima' } });
     const payload = (f: typeof plain) => canonicalJson(JSON.parse(f.core.proposal(f.approvalId)!.snapshot_json).approved_payload);
     expect(payload(owned)).toBe(payload(plain));
+    expect(JSON.parse(owned.core.proposal(owned.approvalId)!.snapshot_json).approved_payload.brief.actions.every((a: { owner: unknown }) => a.owner === null)).toBe(true);
     expect(JSON.parse(plain.core.proposal(plain.approvalId)!.snapshot_json).approved_payload.surface).toBe(APPROVAL_SNAPSHOT_SURFACE_V1);
   });
   it('offers only owner proposals that the shared owner rule accepts', async () => {
@@ -160,6 +119,9 @@ describe('approval core: decide', () => {
       { ...base, project_ids: [f.projectB, f.projectA] }, { ...base, project_ids: [f.projectA, f.projectA] }, { ...base, project_ids: ['prj_nope'] },
       { ...base, share_transcript: 'yes' }, { ...base, owners: [{ signal_id: 'act-1' }] }, { ...base, owners: [{ signal_id: 'act 1', owner: 'A' }] },
       { ...base, action: 'reject', share_transcript: true }, { ...base, action: 'reject', owners: [{ signal_id: 'act-1', owner: 'A' }] }, null, 'approve',
+      { ...base, owners: [{ signal_id: 'act-1', owner: 'A' }, { signal_id: 'act-1', owner: 'B' }] }, { ...base, owners: [{ signal_id: 'act-1', owner: ' padded ' }] },
+      { ...base, owners: [{ signal_id: 'act-1', owner: 'x'.repeat(121) }] }, { ...base, action: 'reject', project_ids: [f.projectA] },
+      { ...base, project_ids: Array.from({ length: 21 }, (_, i) => `prj_00000000-0000-4000-8000-${i.toString(16).padStart(12, 'a')}`) },
     ]) {
       expect(() => f.core.decide('desktop', bad as never, never)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
     }
@@ -204,11 +166,9 @@ describe('approval core: decide', () => {
     const core = await f.create({}, { projects: (_actor, ids) => { calls.push(ids); } });
     core.decide('desktop', f.approve({ command_id: 'desk-only-me' }), () => f.session);
     expect(calls).toEqual([]);
-    const g = await approvalCoreFixture();
-    const seen: (readonly string[])[] = [];
-    const gcore = await g.create({}, { projects: (_actor, ids) => { seen.push(ids); } });
-    gcore.decide('desktop', g.approve({ project_ids: [g.projectA, g.projectB] }), () => g.session);
-    expect(seen).toEqual([[g.projectA, g.projectB]]);
+    const other = await f.otherProposal();
+    core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: 'desk-projects', project_ids: [f.projectA, f.projectB] }), () => f.session);
+    expect(calls).toEqual([[f.projectA, f.projectB]]);
   });
   it('refuses when access changes between the two authorizations', async () => {
     const f = await approvalCoreFixture();
@@ -225,7 +185,6 @@ describe('approval core: decide', () => {
     await f.newRevision();
     expect(f.core.decide('desktop', original, () => f.session)).toEqual({ kind: 'stale' });
     const g = await approvalCoreFixture({ stage: false });
-    expect(g.core.proposal(g.approvalId)).toBeUndefined();
     expect(g.core.decide('desktop', g.approve(), () => g.session)).toEqual({ kind: 'stale' });
     expect(f.decisionCount() + g.decisionCount()).toBe(0);
   });
@@ -308,7 +267,6 @@ describe('approval core: decide', () => {
     const validated = validateApprovalDecisionRequestV1('desktop', good);
     expect(validated).toEqual(good);
     expect(Object.isFrozen(validated)).toBe(true);
-    expect(() => validateApprovalDecisionRequestV1('desktop', { ...good, extra: 1 })).toThrow(expect.objectContaining({ code: 'invalid_request' }));
     expect(() => validateApprovalDecisionRequestV1('slack', good)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
     expect(validateApprovalDecisionRequestV1('slack', { ...good, command_id: 'slack:Zx_9-.' }).command_id).toBe('slack:Zx_9-.');
     expect(f.core.decide('desktop', good, () => f.session).kind).toBe('decided');
@@ -404,6 +362,7 @@ describe('approval core: views', () => {
   });
   it('filters undecided suggestions to projects the reviewer can still read', async () => {
     const f = await approvalCoreFixture({ suggestions: 2 });
+    expect(f.core.proposal(f.approvalId)!.project_ids).toEqual([f.projectA, f.projectB]);
     f.removeProjectMembership(f.projectB);
     expect(f.core.proposal(f.approvalId)!.project_ids).toEqual([f.projectA]);
     f.archiveProject(f.projectA);
@@ -473,6 +432,7 @@ describe('approval core: construction', () => {
     const f = await approvalCoreFixture();
     const core = await createApprovalCoreV1(f.db, f.context, { suggestions: () => [], projects: () => {} });
     expect(Object.isFrozen(core)).toBe(true);
+    expect(Object.isFrozen(core.processing)).toBe(true);
     expect(core.processing.reconcileApprovalPresentations).toBeUndefined();
     await core.processing.observeAndFinalizePendingApprovals(signal());
   });

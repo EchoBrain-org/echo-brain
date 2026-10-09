@@ -11,7 +11,7 @@ const servers: Server[] = [];
 
 async function withSocket(
   body: string,
-  options: Readonly<{ status?: number; content_type?: string }> = {},
+  options: Readonly<{ status?: number }> = {},
 ): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "echo-canary-client-"));
   directories.push(directory);
@@ -22,7 +22,7 @@ async function withSocket(
     expect(request.headers["content-length"]).toBe("0");
     request.resume();
     response.writeHead(options.status ?? 200, {
-      "content-type": options.content_type ?? "application/json; charset=utf-8",
+      "content-type": "application/json; charset=utf-8",
     });
     response.end(body);
   });
@@ -32,6 +32,10 @@ async function withSocket(
   });
   servers.push(server);
   return socketPath;
+}
+
+function requestCanary(socket_path: string) {
+  return requestStagingSyntheticPrivateDmCanaryV1({ release_id: RELEASE_ID, socket_path });
 }
 
 afterEach(async () => {
@@ -58,63 +62,31 @@ describe("staging synthetic private-DM canary client", () => {
   it.each(["staged", "quarantined"] as const)(
     "uses only the private socket and returns a bounded %s receipt",
     async (approvalOutcome) => {
-    const socket_path = await withSocket(
-      JSON.stringify({
+      const receipt = {
         schema_version: 1,
         kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
         release_id: RELEASE_ID,
         approval_outcome: approvalOutcome,
         approval_id: "apr_private",
-      }),
-    );
-
-    await expect(
-      requestStagingSyntheticPrivateDmCanaryV1({
-        release_id: RELEASE_ID,
-        socket_path,
-      }),
-    ).resolves.toEqual({
-      schema_version: 1,
-      kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
-      release_id: RELEASE_ID,
-      approval_outcome: approvalOutcome,
-      approval_id: "apr_private",
-    });
+      };
+      await expect(requestCanary(await withSocket(JSON.stringify(receipt)))).resolves.toEqual(receipt);
     },
   );
 
-  it("refuses a receipt for another release or a non-success socket response", async () => {
-    const wrong_release_socket = await withSocket(
+  it.each([
+    [
+      "a receipt for another release",
       JSON.stringify({
         schema_version: 1,
         kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
         release_id: "clean-v1-other-release",
         approval_outcome: "not_actionable",
       }),
-    );
-    await expect(
-      requestStagingSyntheticPrivateDmCanaryV1({
-        release_id: RELEASE_ID,
-        socket_path: wrong_release_socket,
-      }),
-    ).rejects.toThrow("receipt is invalid");
-
-    const failure_socket = await withSocket("{}", { status: 500 });
-    await expect(
-      requestStagingSyntheticPrivateDmCanaryV1({
-        release_id: RELEASE_ID,
-        socket_path: failure_socket,
-      }),
-    ).rejects.toThrow("receipt is invalid");
-  });
-
-  it("rejects an oversized private-socket response without waiting for timeout", async () => {
-    const oversized_socket = await withSocket("x".repeat(1_025));
-    await expect(
-      requestStagingSyntheticPrivateDmCanaryV1({
-        release_id: RELEASE_ID,
-        socket_path: oversized_socket,
-      }),
-    ).rejects.toThrow("receipt is invalid");
+      {},
+    ],
+    ["a non-success socket response", "{}", { status: 500 }],
+    ["an oversized private-socket response without waiting for timeout", "x".repeat(1_025), {}],
+  ])("refuses %s", async (_label, body, options) => {
+    await expect(requestCanary(await withSocket(body, options))).rejects.toThrow("receipt is invalid");
   });
 });

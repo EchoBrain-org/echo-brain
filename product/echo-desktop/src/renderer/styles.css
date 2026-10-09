@@ -505,10 +505,11 @@ button.toast:hover { background: #211f1f; }
 .need-row.approve .need-kind { color: var(--accent-text); }
 .need-row.send .need-kind { color: #8fb8e8; }
 .need-row.update .need-kind { color: #9ed3a2; }
-.need-row.check .need-kind, .need-row.failed .need-kind { color: var(--danger); }
+.need-row.review .need-kind, .need-row.failed .need-kind { color: var(--danger); }
 .need-row.checking .need-kind { color: var(--faint); }
 .need-text { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .need-title { font-size: 14.5px; font-weight: 500; line-height: 1.35; }
+.need-change { font-size: 13px; line-height: 1.4; color: var(--muted); overflow-wrap: anywhere; }
 .need-detail { font-size: 12px; color: var(--faint); }
 .need-detail b { font-weight: 500; color: rgba(240, 236, 230, 0.72); }
 .need-error { font-size: 12px; }
@@ -525,8 +526,9 @@ button.toast:hover { background: #211f1f; }
 .need-side .asking { gap: 4px; }
 .home-clear { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 14px; color: var(--faint); }
 .home-clear svg { opacity: 0.6; }
-/* Under the rows, and under "Nothing needs you": what you sent that waits on others. */
-.needs-foot { flex-shrink: 0; margin-top: auto; padding: 10px 12px 4px; font-size: 12.5px; color: rgba(240, 236, 230, 0.45); }
+/* Under the rows, and under "Nothing needs you": what matches its decision now, what waits on others, when ECHO last checked; View. */
+.needs-foot { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 10px 12px 4px; font-size: 12.5px; color: rgba(240, 236, 230, 0.45); }
+.needs-foot-words { flex-grow: 1; min-width: 0; }
 .side-row .badge { min-width: 18px; height: 18px; padding: 0 6px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--on-accent); background: var(--accent); }
 .sidebar-list .archived-projects { margin-top: 8px; }
 .sidebar-list .archived-heading { padding: 8px 10px 4px; }
@@ -581,7 +583,38 @@ button.toast:hover { background: #211f1f; }
 button.items-line-open:hover, button.items-line:hover { color: var(--text); }
 button.items-line:hover { background: rgba(240, 236, 230, 0.08); }
 .items-line .link-button { flex-shrink: 0; padding: 2px 6px; }
+.items-line .need-open { flex-shrink: 0; }
+.items-line-check { flex-shrink: 0; display: flex; align-items: center; padding: 2px 6px; white-space: nowrap; }
+.items-line-check .link-button { padding: 2px 4px; }
 .project-line { margin-bottom: 6px; }
+
+/* An item's card: whose it is, the decision, what it says now beside what the decision needs, and ECHO's last check. */
+.item-card-head { display: flex; align-items: flex-start; gap: 12px; }
+.item-card-name { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.item-card-name .decision-from { margin-top: 0; }
+.item-card-head .need-open { flex-shrink: 0; margin-top: 1px; }
+.item-card-label { font-size: 12px; font-weight: 600; color: var(--faint); }
+.item-card-decision { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.item-card-decided { font-size: 16px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.item-card-boxes { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.item-card-box { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 10px; font-size: 14px; line-height: 1.4; background: rgba(240, 236, 230, 0.05); overflow-wrap: anywhere; }
+.item-card-check { font-size: 13px; color: var(--muted); }
+.item-card-check.changed { color: var(--danger); }
+.item-card-check.landed { color: #9ed3a2; }
+
+/* Your open items: one line per item, how it stands and its owner; a match you may close has Close. */
+#item-status-head:focus { outline: none; }
+.status-group-head { font-size: 12px; font-weight: 600; color: var(--muted); }
+.status-line { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.status-text { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+.status-text b { font-weight: 500; }
+.status-word { flex-shrink: 0; font-size: 12.5px; white-space: nowrap; }
+.status-word.landed { color: #9ed3a2; }
+.status-word.still_open { color: var(--accent-text); }
+.status-word.changed { color: var(--danger); }
+.status-word.unreadable, .status-word.unchecked { color: rgba(240, 236, 230, 0.45); }
+.status-line .need-open { flex-shrink: 0; }
+.status-foot { display: flex; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
 .item-row .open-count { flex-shrink: 0; font-size: 12px; color: var(--faint); white-space: nowrap; }
 
 /* A decision's or a project's open items: grouped by owner, oldest first, each with its stage and age. */

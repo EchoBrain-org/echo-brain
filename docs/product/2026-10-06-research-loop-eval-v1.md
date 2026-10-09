@@ -371,3 +371,19 @@ and within budget.
   requests through it keep the product's 240-character question limit, so the
   over-long case is measured as an ingress rejection.
 - The dataset has 29 cases: 19 development and 10 held out.
+- Implementation note, 2026-10-08: the evaluation now also grades a Sweep's
+  rendered result, the verdict per finding that the sweep renderer of the
+  [research trigger contract](2026-10-06-research-trigger-contract-v1.md)
+  returns, checked by code against the key. `landed` counts as landed,
+  `still_open` and `changed` as not landed, and `unreadable` as no evidence.
+  Each key verdict is compared with the result's entry for the same finding
+  position, so a case's key verdicts must follow its findings' order (the
+  dataset's `validate` fails on a key that does not). A null verdict is wrong
+  and is counted as not assessed. A Sweep run that fails, one that cannot
+  start included, scores zero: every finding counts as wrong. So does a run
+  that completes without a sweep result, and what its research returned is
+  still scanned for restricted leaks. Verdicts are counted, not averaged: per
+  case over its runs, then over all Sweep cases. The judge's Sweep verdicts,
+  read from the items research read, stay a separate measure
+  (`tools/evals/research-loop/README.md`). "Round one grades Check and Sweep
+  on the research result only" above describes round one.

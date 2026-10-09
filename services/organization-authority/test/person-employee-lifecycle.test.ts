@@ -148,24 +148,30 @@ describe("Person employee lifecycle", () => {
     );
     try {
       const origin = `http://127.0.0.1:${String(runtime.address.port)}`;
+      const employees = (token?: string, method = "GET", body?: unknown, extraHeaders: Record<string, string> = {}) =>
+        fetch(`${origin}/v1/person/employees`, {
+          method,
+          headers: {
+            ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+            ...(body === undefined ? {} : { "content-type": "application/json" }),
+            ...extraHeaders,
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+      const begin = (login_grant: unknown) => fetch(`${origin}/v2/session/oidc/begin`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "identity_bootstrap", login_grant }),
+      });
       const founderGrant = (JSON.parse(readFileSync(founderInvitation, "utf8")) as { login_grant: string }).login_grant;
       const founder = await login(origin, founderGrant);
       const founderAccess = founder.access_token as string;
-      const invite = await fetch(`${origin}/v1/person/employees`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${founderAccess}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ name: "Jane Doe", email: "jane@example.com" }),
-      });
+      const invite = await employees(founderAccess, "POST", { name: "Jane Doe", email: "jane@example.com" });
       expect(invite.status).toBe(201);
       const first = await json(invite);
       expect(Object.keys(first).sort()).toEqual(["expires_at", "login_grant"]);
 
-      const pendingRoster = await fetch(`${origin}/v1/person/employees`, {
-        headers: { authorization: `Bearer ${founderAccess}` },
-      });
+      const pendingRoster = await employees(founderAccess);
       expect(pendingRoster.status).toBe(200);
       expect(await json(pendingRoster)).toEqual({
         schema_version: 1,
@@ -180,11 +186,7 @@ describe("Person employee lifecycle", () => {
         ],
       });
 
-      const secondEmployee = await fetch(`${origin}/v1/person/employees`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
-        body: JSON.stringify({ name: "John Doe", email: "john@example.com" }),
-      });
+      const secondEmployee = await employees(founderAccess, "POST", { name: "John Doe", email: "john@example.com" });
       expect(secondEmployee.status).toBe(201);
 
       // The durable store can contain historical provider identities that are
@@ -193,17 +195,9 @@ describe("Person employee lifecycle", () => {
       // covers the booted state.
       const legacyEmail = "alice@localhost";
       const seededEmail = "alice-seed@example.com";
-      const rejectedLegacyInvite = await fetch(`${origin}/v1/person/employees`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
-        body: JSON.stringify({ name: "Alice Legacy", email: legacyEmail }),
-      });
+      const rejectedLegacyInvite = await employees(founderAccess, "POST", { name: "Alice Legacy", email: legacyEmail });
       expect(rejectedLegacyInvite.status).toBe(400);
-      const seededLegacyEmployee = await fetch(`${origin}/v1/person/employees`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
-        body: JSON.stringify({ name: "Alice Legacy", email: seededEmail }),
-      });
+      const seededLegacyEmployee = await employees(founderAccess, "POST", { name: "Alice Legacy", email: seededEmail });
       expect(seededLegacyEmployee.status).toBe(201);
       const legacyDatabase = openAuthorityDatabase(
         join(initialized.state_directory, "authority.sqlite"),
@@ -226,9 +220,7 @@ describe("Person employee lifecycle", () => {
       } finally {
         legacyDatabase.close();
       }
-      const legacyRoster = await fetch(`${origin}/v1/person/employees`, {
-        headers: { authorization: `Bearer ${founderAccess}` },
-      });
+      const legacyRoster = await employees(founderAccess);
       expect(legacyRoster.status).toBe(200);
       expect((await json(legacyRoster)).employees).toEqual(
         expect.arrayContaining([
@@ -240,60 +232,25 @@ describe("Person employee lifecycle", () => {
         ]),
       );
 
-      const duplicate = await fetch(`${origin}/v1/person/employees`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
-        body: JSON.stringify({ name: "Jane Doe", email: "jane@example.com" }),
-      });
+      const duplicate = await employees(founderAccess, "POST", { name: "Jane Doe", email: "jane@example.com" });
       expect(duplicate.status).toBe(409);
 
-      const reissue = await fetch(`${origin}/v1/person/employees`, {
-        method: "PUT",
-        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
-        body: JSON.stringify({ email: "jane@example.com" }),
-      });
+      const reissue = await employees(founderAccess, "PUT", { email: "jane@example.com" });
       expect(reissue.status).toBe(201);
       const second = await json(reissue);
-      const secondReissue = await fetch(`${origin}/v1/person/employees`, {
-        method: "PUT",
-        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
-        body: JSON.stringify({ email: "jane@example.com" }),
-      });
+      const secondReissue = await employees(founderAccess, "PUT", { email: "jane@example.com" });
       expect(secondReissue.status).toBe(201);
       const third = await json(secondReissue);
-      const oldGrant = await fetch(`${origin}/v2/session/oidc/begin`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind: "identity_bootstrap", login_grant: first.login_grant }),
-      });
+      const oldGrant = await begin(first.login_grant);
       expect(oldGrant.status).toBe(401);
-      const supersededGrant = await fetch(`${origin}/v2/session/oidc/begin`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind: "identity_bootstrap", login_grant: second.login_grant }),
-      });
+      const supersededGrant = await begin(second.login_grant);
       expect(supersededGrant.status).toBe(401);
 
       provider.email = "jane@example.com";
       const employee = await login(origin, third.login_grant as string);
       const employeeAccess = employee.access_token as string;
-      const redundantReissue = await fetch(`${origin}/v1/person/employees`, {
-        method: "PUT",
-        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
-        body: JSON.stringify({ email: "jane@example.com" }),
-      });
+      const redundantReissue = await employees(founderAccess, "PUT", { email: "jane@example.com" });
       expect(redundantReissue.status).toBe(409);
-      const employeeDenied = await fetch(`${origin}/v1/person/employees`, {
-        headers: { authorization: `Bearer ${employeeAccess}` },
-      });
-      expect(employeeDenied.status).toBe(401);
-
-      const employeeWriteDenied = await fetch(`${origin}/v1/person/employees`, {
-        method: "PUT",
-        headers: { authorization: `Bearer ${employeeAccess}`, "content-type": "application/json" },
-        body: JSON.stringify({ email: "jane@example.com" }),
-      });
-      expect(employeeWriteDenied.status).toBe(401);
 
       // A modified client can call every route and claim any local role. The
       // Authority derives the role from its own current session/membership.
@@ -302,15 +259,7 @@ describe("Person employee lifecycle", () => {
           const body = method === "POST"
             ? { name: "Unauthorized", email: "unauthorized@example.com" }
             : { email: "john@example.com" };
-          const denied = await fetch(`${origin}/v1/person/employees`, {
-            method,
-            headers: {
-              ...(token ? { authorization: `Bearer ${token}` } : {}),
-              "content-type": "application/json",
-              "x-echo-membership-type": "owner",
-            },
-            ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
-          });
+          const denied = await employees(token, method, method === "GET" ? undefined : body, { "content-type": "application/json", "x-echo-membership-type": "owner" });
           expect(denied.status, `${method} must reject non-owner access`).toBe(401);
           expect(await denied.text()).not.toContain("login_grant");
         }
@@ -318,26 +267,16 @@ describe("Person employee lifecycle", () => {
       for (const token of [employeeAccess, "forged-owner-access-token", undefined]) {
         await expectManagementDenied(token);
       }
-      const forgedRole = await fetch(`${origin}/v1/person/employees`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${employeeAccess}`, "content-type": "application/json" },
-        body: JSON.stringify({ name: "Unauthorized", email: "unauthorized@example.com", membership_type: "owner" }),
-      });
+      const forgedRole = await employees(employeeAccess, "POST", { name: "Unauthorized", email: "unauthorized@example.com", membership_type: "owner" });
       expect(forgedRole.status).toBe(400);
-      const afterDenied = await fetch(`${origin}/v1/person/employees`, {
-        headers: { authorization: `Bearer ${founderAccess}` },
-      });
+      const afterDenied = await employees(founderAccess);
       const afterDeniedEmployees = (await json(afterDenied)).employees as Array<Record<string, unknown>>;
       expect(afterDeniedEmployees.some((entry) => entry.email === "unauthorized@example.com")).toBe(false);
       expect(afterDeniedEmployees.find((entry) => entry.email === "john@example.com")).toMatchObject({
         membership_status: "active", invitation_state: "pending",
       });
 
-      const legacyReissue = await fetch(`${origin}/v1/person/employees`, {
-        method: "PUT",
-        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
-        body: JSON.stringify({ email: legacyEmail }),
-      });
+      const legacyReissue = await employees(founderAccess, "PUT", { email: legacyEmail });
       expect(legacyReissue.status).toBe(201);
       provider.email = legacyEmail;
       const legacyEmployee = await login(
@@ -346,9 +285,7 @@ describe("Person employee lifecycle", () => {
       );
       expect(legacyEmployee.access_token).toEqual(expect.any(String));
 
-      const redeemedRoster = await fetch(`${origin}/v1/person/employees`, {
-        headers: { authorization: `Bearer ${founderAccess}` },
-      });
+      const redeemedRoster = await employees(founderAccess);
       expect(redeemedRoster.status).toBe(200);
       const redeemedEmployees = (await json(redeemedRoster)).employees as Array<Record<string, unknown>>;
       expect(redeemedEmployees).toEqual(
@@ -374,21 +311,11 @@ describe("Person employee lifecycle", () => {
         ]),
       );
 
-      const revoke = await fetch(`${origin}/v1/person/employees`, {
-        method: "DELETE",
-        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
-        body: JSON.stringify({ email: "jane@example.com" }),
-      });
+      const revoke = await employees(founderAccess, "DELETE", { email: "jane@example.com" });
       expect(revoke.status).toBe(204);
-      const legacyRevoke = await fetch(`${origin}/v1/person/employees`, {
-        method: "DELETE",
-        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
-        body: JSON.stringify({ email: legacyEmail }),
-      });
+      const legacyRevoke = await employees(founderAccess, "DELETE", { email: legacyEmail });
       expect(legacyRevoke.status).toBe(204);
-      const revokedRoster = await fetch(`${origin}/v1/person/employees`, {
-        headers: { authorization: `Bearer ${founderAccess}` },
-      });
+      const revokedRoster = await employees(founderAccess);
       expect(revokedRoster.status).toBe(200);
       const revokedEmployees = (await json(revokedRoster)).employees as Array<Record<string, unknown>>;
       expect(revokedEmployees).toEqual(
@@ -413,11 +340,7 @@ describe("Person employee lifecycle", () => {
       expect(revokedRead.status).toBe(401);
       await expectManagementDenied(employeeAccess);
 
-      const replacement = await fetch(`${origin}/v1/person/employees`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
-        body: JSON.stringify({ name: "Jane Doe Again", email: "jane@example.com" }),
-      });
+      const replacement = await employees(founderAccess, "POST", { name: "Jane Doe Again", email: "jane@example.com" });
       expect(replacement.status).toBe(201);
       const replacementInvitation = await json(replacement);
       expect(replacementInvitation.login_grant).not.toBe(second.login_grant);
@@ -427,9 +350,7 @@ describe("Person employee lifecycle", () => {
         headers: { authorization: `Bearer ${rehired.access_token as string}` },
       });
       expect(rehiredRead.status).toBe(200);
-      const rehiredRoster = await fetch(`${origin}/v1/person/employees`, {
-        headers: { authorization: `Bearer ${founderAccess}` },
-      });
+      const rehiredRoster = await employees(founderAccess);
       expect(rehiredRoster.status).toBe(200);
       const currentEmployees = (await json(rehiredRoster)).employees as Array<Record<string, unknown>>;
       expect(currentEmployees.filter((entry) => entry.email === "jane@example.com")).toEqual([

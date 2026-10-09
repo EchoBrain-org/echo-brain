@@ -53,34 +53,29 @@ function privateDirectory(label: string) {
   return path;
 }
 
-function inputDirectory() {
-  const path = privateDirectory("echo-authority-onboarding-input-");
-  for (const name of INPUT_FILES) {
+function privateFiles(label: string, names: readonly string[]) {
+  const path = privateDirectory(label);
+  for (const name of names) {
     const file = join(path, name);
     writeFileSync(file, `${name}\n`, { mode: 0o600 });
     chmodSync(file, 0o600);
   }
   return path;
+}
+
+function inputDirectory() {
+  return privateFiles("echo-authority-onboarding-input-", INPUT_FILES);
 }
 
 function reusableStagingInputDirectory() {
-  const path = privateDirectory("echo-authority-rehearsal-input-");
-  for (const name of REUSABLE_INPUT_FILES) {
-    const file = join(path, name);
-    writeFileSync(file, `${name}\n`, { mode: 0o600 });
-    chmodSync(file, 0o600);
-  }
-  return path;
+  return privateFiles("echo-authority-rehearsal-input-", REUSABLE_INPUT_FILES);
 }
 
 function stagingSyntheticMeetingsDirectory() {
-  const path = privateDirectory("echo-authority-staging-meetings-");
-  for (const name of STAGING_SYNTHETIC_MEETING_FILES) {
-    const file = join(path, name);
-    writeFileSync(file, `${name}\n`, { mode: 0o600 });
-    chmodSync(file, 0o600);
-  }
-  return path;
+  return privateFiles(
+    "echo-authority-staging-meetings-",
+    STAGING_SYNTHETIC_MEETING_FILES,
+  );
 }
 
 function tarEntries(path: string) {
@@ -571,15 +566,49 @@ function called(
   );
 }
 
+function count(
+  fake: ReturnType<typeof fakeAws>,
+  service: string,
+  operation: string,
+) {
+  return fake.calls.filter(
+    ([actualService, actualOperation]) =>
+      actualService === service && actualOperation === operation,
+  ).length;
+}
+
+// Fresh private input, archive, and fake AWS, planned as the ordinary complete
+// transfer or as the four-fixture rehearsal that reuses provider inputs.
+function planned(
+  fakeOptions: Parameters<typeof fakeAws>[0] = {},
+  mode: "complete" | "reuse" = "complete",
+) {
+  const reuse = mode === "reuse";
+  const source = reuse ? reusableStagingInputDirectory() : inputDirectory();
+  const archive = privateDirectory("echo-authority-onboarding-archive-");
+  const config = reuse
+    ? privateConfig(source, archive, stagingSyntheticMeetingsDirectory(), true)
+    : privateConfig(source, archive);
+  const fake = fakeAws(fakeOptions);
+  return { archive, fake, plan: planOnboardingTransfer(config, fake) };
+}
+
+function failOnSecondReplace() {
+  let replacements = 0;
+  return (path: string, receipt: unknown) => {
+    replacements += 1;
+    if (replacements === 2) throw new Error("post-send disk failure");
+    writeFileSync(path, `${JSON.stringify(receipt)}\n`, { mode: 0o600 });
+  };
+}
+
 afterEach(() => {
   while (temporary.length) rmSync(temporary.pop()!, { recursive: true, force: true });
 });
 
 describe("Authority staging onboarding transfer", () => {
   it("leaves thirty minutes for review before the fixed access expiry", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fakeAws());
+    const { plan } = planned();
     const receipt = JSON.parse(readFileSync(plan.receipt_path, "utf8"));
 
     expect(receipt.access_expires_at).toBe("1970-01-01T00:30:00Z");
@@ -773,14 +802,7 @@ describe("Authority staging onboarding transfer", () => {
   });
 
   it("keeps the remote-prepared transfer receipt when rehearsal completion cannot be written", () => {
-    const source = reusableStagingInputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const meetings = stagingSyntheticMeetingsDirectory();
-    const fake = fakeAws();
-    const plan = planOnboardingTransfer(
-      privateConfig(source, archive, meetings, true),
-      fake,
-    );
+    const { fake, plan } = planned({}, "reuse");
 
     expect(() => executeOnboardingTransfer(plan.receipt_path, {
       ...fake,
@@ -794,18 +816,11 @@ describe("Authority staging onboarding transfer", () => {
     expect(executeOnboardingTransfer(plan.receipt_path, fake)).toMatchObject({
       state: "staged_awaiting_human",
     });
-    expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "send-command")).toHaveLength(1);
+    expect(count(fake, "ssm", "send-command")).toBe(1);
   });
 
   it("keeps a recoverable tracking receipt if final rehearsal completion replacement fails after courier cleanup", () => {
-    const source = reusableStagingInputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const meetings = stagingSyntheticMeetingsDirectory();
-    const fake = fakeAws();
-    const plan = planOnboardingTransfer(
-      privateConfig(source, archive, meetings, true),
-      fake,
-    );
+    const { archive, fake, plan } = planned({}, "reuse");
 
     expect(() => executeOnboardingTransfer(plan.receipt_path, {
       ...fake,
@@ -823,7 +838,7 @@ describe("Authority staging onboarding transfer", () => {
       state: "staged_awaiting_human",
     });
     expect(existsSync(plan.receipt_path)).toBe(false);
-    expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "send-command")).toHaveLength(1);
+    expect(count(fake, "ssm", "send-command")).toBe(1);
   });
 
   it("blocks a new rehearsal plan when that operation already has a durable completion", () => {
@@ -846,14 +861,7 @@ describe("Authority staging onboarding transfer", () => {
   });
 
   it("writes a rehearsal completion when cleanup reconciles an already submitted successful command", () => {
-    const source = reusableStagingInputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const meetings = stagingSyntheticMeetingsDirectory();
-    const fake = fakeAws();
-    const plan = planOnboardingTransfer(
-      privateConfig(source, archive, meetings, true),
-      fake,
-    );
+    const { fake, plan } = planned({}, "reuse");
     const receipt = JSON.parse(readFileSync(plan.receipt_path, "utf8"));
     Object.assign(receipt, {
       state: "ssm_submitted",
@@ -867,7 +875,7 @@ describe("Authority staging onboarding transfer", () => {
       state: "staged_awaiting_human",
     });
     expect(existsSync(plan.receipt_path)).toBe(false);
-    expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "send-command")).toHaveLength(0);
+    expect(count(fake, "ssm", "send-command")).toBe(0);
   });
 
   it("binds the selected fixture mode into the receipt before the local controller can disappear", () => {
@@ -888,10 +896,7 @@ describe("Authority staging onboarding transfer", () => {
   });
 
   it("uses no-output runners for AWS waits and distinct deterministic grant and clear execution tokens", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws();
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
+    const { fake, plan } = planned();
     expect(executeOnboardingTransfer(plan.receipt_path, fake)).toEqual({ action: "execute", state: "prepared" });
     expect(fake.calls.some((args) => args[0] === "cloudformation" && args[1] === "describe-stacks" && args[2] === "--region")).toBe(true);
     const waits = fake.calls.filter((args) => args[1] === "wait");
@@ -914,19 +919,13 @@ describe("Authority staging onboarding transfer", () => {
   });
 
   it("polls an in-progress SSM command past the waiter window before a terminal success", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws({ ssmStatuses: Array(25).fill("InProgress") });
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
+    const { fake, plan } = planned({ ssmStatuses: Array(25).fill("InProgress") });
     expect(executeOnboardingTransfer(plan.receipt_path, fake)).toEqual({ action: "execute", state: "prepared" });
-    expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "get-command-invocation").length).toBeGreaterThan(25);
+    expect(count(fake, "ssm", "get-command-invocation")).toBeGreaterThan(25);
   });
 
   it("does not send SSM when the pre-send submission receipt cannot be persisted", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws();
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
+    const { fake, plan } = planned();
     expect(() => executeOnboardingTransfer(plan.receipt_path, {
       ...fake,
       replaceReceipt: () => { throw new Error("disk unavailable"); },
@@ -935,43 +934,25 @@ describe("Authority staging onboarding transfer", () => {
   });
 
   it("quarantines a post-send receipt-write failure until grant expiry plus the bounded delivery and execution margin", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws();
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
-    let replacements = 0;
-    const persist = (path: string, receipt: unknown) => {
-      replacements += 1;
-      if (replacements === 2) throw new Error("post-send disk failure");
-      writeFileSync(path, `${JSON.stringify(receipt)}\n`, { mode: 0o600 });
-    };
+    const { fake, plan } = planned();
     expect(() => executeOnboardingTransfer(plan.receipt_path, {
       ...fake,
-      replaceReceipt: persist,
+      replaceReceipt: failOnSecondReplace(),
     })).toThrow("ssm_command_submission_unproven");
-    expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "send-command")).toHaveLength(1);
+    expect(count(fake, "ssm", "send-command")).toBe(1);
     expect(() => cleanupOnboardingTransfer(plan.receipt_path, fake)).toThrow("ssm_command_submission_quarantined");
     expect(called(fake, "s3api", "delete-object")).toBe(false);
-    expect(fake.calls.filter((args) => args[0] === "cloudformation" && args[1] === "execute-change-set")).toHaveLength(1);
+    expect(count(fake, "cloudformation", "execute-change-set")).toBe(1);
     const receipt = JSON.parse(readFileSync(plan.receipt_path, "utf8"));
     fake.setClock(Date.parse(receipt.access_expires_at) + 12 * 60 * 1000);
     expect(cleanupOnboardingTransfer(plan.receipt_path, fake)).toEqual({ action: "cleanup", state: "cleaned" });
   });
 
   it("bases quarantine on the later pre-send timestamp and never reports an unknown send as prepared", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws({ grantWaitAdvanceMs: 40 * 60 * 1000 });
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
-    let replacements = 0;
-    const persist = (path: string, receipt: unknown) => {
-      replacements += 1;
-      if (replacements === 2) throw new Error("post-send disk failure");
-      writeFileSync(path, `${JSON.stringify(receipt)}\n`, { mode: 0o600 });
-    };
+    const { fake, plan } = planned({ grantWaitAdvanceMs: 40 * 60 * 1000 });
     expect(() => executeOnboardingTransfer(plan.receipt_path, {
       ...fake,
-      replaceReceipt: persist,
+      replaceReceipt: failOnSecondReplace(),
     })).toThrow("ssm_command_submission_unproven");
     const receipt = JSON.parse(readFileSync(plan.receipt_path, "utf8"));
     const oldUnsafeThreshold = Date.parse(receipt.access_expires_at) + 12 * 60 * 1000;
@@ -986,19 +967,13 @@ describe("Authority staging onboarding transfer", () => {
   });
 
   it("treats an initial InvocationDoesNotExist as bounded pending before exact success", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws({ invocationMissingCount: 1 });
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
+    const { fake, plan } = planned({ invocationMissingCount: 1 });
     expect(executeOnboardingTransfer(plan.receipt_path, fake)).toEqual({ action: "execute", state: "prepared" });
-    expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "get-command-invocation")).toHaveLength(2);
+    expect(count(fake, "ssm", "get-command-invocation")).toBe(2);
   });
 
   it("passes the plugin execution timeout, cancels at the local deadline, and refuses cleanup until cancellation is terminal", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws({ ssmStatuses: Array(100).fill("InProgress") });
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
+    const { fake, plan } = planned({ ssmStatuses: Array(100).fill("InProgress") });
     expect(() => executeOnboardingTransfer(plan.receipt_path, fake)).toThrow("ssm_command_terminal_unproven");
     const send = fake.calls.find((args) => args[0] === "ssm" && args[1] === "send-command")!;
     const parameters = JSON.parse(send[send.indexOf("--parameters") + 1]!) as { executionTimeout: string[] };
@@ -1009,33 +984,24 @@ describe("Authority staging onboarding transfer", () => {
   });
 
   it("never lets public cleanup revoke or delete while the submitted SSM command is nonterminal, then reconciles exact success", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws({ ssmStatuses: Array(1000).fill("InProgress") });
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
+    const { fake, plan } = planned({ ssmStatuses: Array(1000).fill("InProgress") });
     expect(() => executeOnboardingTransfer(plan.receipt_path, fake)).toThrow("ssm_command_terminal_unproven");
     expect(() => cleanupOnboardingTransfer(plan.receipt_path, fake)).toThrow("ssm_command_terminal_unproven");
     expect(called(fake, "s3api", "delete-object")).toBe(false);
     fake.setSsmStatuses(["Success"]);
     expect(cleanupOnboardingTransfer(plan.receipt_path, fake)).toEqual({ action: "cleanup", state: "prepared_cleaned" });
-    expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "send-command")).toHaveLength(1);
+    expect(count(fake, "ssm", "send-command")).toBe(1);
   });
 
   it("cleans only after a cancellation reaches a terminal failed status", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws({ ssmStatuses: [...Array(73).fill("InProgress"), "Failed"] });
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
+    const { fake, plan } = planned({ ssmStatuses: [...Array(73).fill("InProgress"), "Failed"] });
     expect(() => executeOnboardingTransfer(plan.receipt_path, fake)).toThrow("onboarding_transfer_failed_cleaned");
     expect(called(fake, "ssm", "cancel-command")).toBe(true);
     expect(called(fake, "s3api", "delete-object")).toBe(true);
   });
 
   it("accepts the exact success marker when cancellation races with completion", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws({ ssmStatuses: [...Array(73).fill("InProgress"), "Cancelling", "Success"] });
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
+    const { fake, plan } = planned({ ssmStatuses: [...Array(73).fill("InProgress"), "Cancelling", "Success"] });
     expect(executeOnboardingTransfer(plan.receipt_path, fake)).toEqual({ action: "execute", state: "prepared" });
     expect(called(fake, "ssm", "cancel-command")).toBe(true);
   });
@@ -1045,7 +1011,7 @@ describe("Authority staging onboarding transfer", () => {
     const archive = privateDirectory("echo-authority-onboarding-archive-");
     const config = privateConfig(source, archive);
     expect(() => planOnboardingTransfer(config, fakeAws({ headFails: true }))).toThrow("head failed");
-    expect(existsSync(join(archive, "onboarding-transfer-001.json"))).toBe(false);
+    expect(existsSync(join(archive, "onboarding-transfer-onboarding-transfer-001.json"))).toBe(false);
     expect(() => planOnboardingTransfer(config, fakeAws({ nonIamChange: true }))).toThrow("change_set_boundary_violation");
   });
 
@@ -1056,7 +1022,7 @@ describe("Authority staging onboarding transfer", () => {
     writeFileSync(join(archive, "onboarding-transfer-onboarding-transfer-001.json"), "{}\n", { mode: 0o600 });
     const fake = fakeAws();
     expect(() => planOnboardingTransfer(config, fake)).toThrow("receipt_destination_exists");
-    expect(fake.calls.some((args) => args[0] === "s3" && args[1] === "put-object")).toBe(false);
+    expect(called(fake, "s3api", "put-object")).toBe(false);
   });
 
   it("refuses a preexisting exact courier key before PutObject", () => {
@@ -1103,10 +1069,7 @@ describe("Authority staging onboarding transfer", () => {
   });
 
   it("recovers a sole version committed before a PutObject client error, then plans and cleans normally", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws({ putThrowsCommitted: true });
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
+    const { fake, plan } = planned({ putThrowsCommitted: true });
 
     expect(existsSync(plan.receipt_path)).toBe(true);
     const put = fake.calls.find((args) => args[0] === "s3api" && args[1] === "put-object")!;
@@ -1127,48 +1090,35 @@ describe("Authority staging onboarding transfer", () => {
     expect(fake.calls.some((args) => args[0] === "s3api" && args[1] === "abort-multipart-upload")).toBe(false);
   });
 
-  it("keeps an actionable uploading receipt and archive when ambiguous Put reconciliation cannot prove inventory", () => {
+  it.each([
+    ["ambiguous Put reconciliation cannot prove inventory", { inventoryFailsAfterPut: true }],
+    ["Put reconciliation finds multiple versions", { ambiguousPut: true }],
+  ] as const)("keeps an actionable uploading receipt and archive when %s", (_case, options) => {
     const source = inputDirectory();
     const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws({ putThrowsCommitted: true, inventoryFailsAfterPut: true });
+    const fake = fakeAws({ putThrowsCommitted: true, ...options });
     const config = privateConfig(source, archive);
 
     expect(() => planOnboardingTransfer(config, fake)).toThrow("onboarding_transfer_cleanup_required");
     const receiptPath = join(archive, "onboarding-transfer-onboarding-transfer-001.json");
     expect(existsSync(receiptPath)).toBe(true);
     expect(existsSync(join(archive, "onboarding-transfer-001.tar.gz"))).toBe(true);
-  });
-
-  it("keeps an actionable uploading receipt and archive when Put reconciliation finds multiple versions", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws({ putThrowsCommitted: true, ambiguousPut: true });
-    const config = privateConfig(source, archive);
-
-    expect(() => planOnboardingTransfer(config, fake)).toThrow("onboarding_transfer_cleanup_required");
-    const receiptPath = join(archive, "onboarding-transfer-onboarding-transfer-001.json");
-    expect(existsSync(receiptPath)).toBe(true);
-    expect(existsSync(join(archive, "onboarding-transfer-001.tar.gz"))).toBe(true);
-    expect(() => cleanupOnboardingTransfer(receiptPath, fake)).toThrow("object_key_ownership_unproven");
-    expect(existsSync(receiptPath)).toBe(true);
+    if ("ambiguousPut" in options) {
+      expect(() => cleanupOnboardingTransfer(receiptPath, fake)).toThrow("object_key_ownership_unproven");
+      expect(existsSync(receiptPath)).toBe(true);
+    }
   });
 
   it("preserves recovery material when exact absence is unproved and permits an explicit cleanup retry", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws({ deleteFailsOnce: true });
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
+    const { fake, plan } = planned({ deleteFailsOnce: true });
     expect(() => executeOnboardingTransfer(plan.receipt_path, fake)).toThrow("onboarding_transfer_cleanup_required");
     expect(existsSync(plan.receipt_path)).toBe(true);
     expect(cleanupOnboardingTransfer(plan.receipt_path, fake)).toEqual({ action: "cleanup", state: "prepared_cleaned" });
-    expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "send-command")).toHaveLength(1);
+    expect(count(fake, "ssm", "send-command")).toBe(1);
   });
 
   it("refuses cleanup when post-delete exact-key inventory is truncated", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws({ truncateCleanupInventory: true });
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
+    const { fake, plan } = planned({ truncateCleanupInventory: true });
     const inventoryCall = (args: string[]) =>
       args[0] === "s3api" &&
       ["list-object-versions", "list-multipart-uploads"].includes(args[1]!);
@@ -1182,10 +1132,7 @@ describe("Authority staging onboarding transfer", () => {
   });
 
   it("refuses an expiring grant before execution and cleans its courier object", () => {
-    const source = inputDirectory();
-    const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws();
-    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
+    const { fake, plan } = planned();
     const receipt = JSON.parse(readFileSync(plan.receipt_path, "utf8"));
     receipt.access_expires_at = "1970-01-01T00:00:00Z";
     writeFileSync(plan.receipt_path, `${JSON.stringify(receipt)}\n`, { mode: 0o600 });

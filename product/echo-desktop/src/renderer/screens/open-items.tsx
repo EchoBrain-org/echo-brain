@@ -1,8 +1,20 @@
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { OpenItemView } from '../../shared/protocol.js';
+import { externalSourceProvider } from '../answer.js';
 import { colorFor, initials, when } from '../format.js';
 import { message } from '../messages.js';
-import { itemChange, itemTitle, STAGES, stageSince } from '../needs.js';
-import { moreOpenItems, openOpenItems, type OpenItemsState } from '../store.js';
+import { approvedMeeting, checkLine, itemChange, itemKind, itemNow, itemTitle, itemWhose, STAGES, stageSince } from '../needs.js';
+import { closeCardItem, moreOpenItems, openItemInTool, openOpenItems, type ItemCardState, type ItemsLine, type OpenItemsState, type State } from '../store.js';
+
+/** A person, as a chip: their initials in their color, and their first name (Tell the owners?, Your open items). */
+export function Chip({ person, label }: { person: { membership_id: string; name: string }; label: string }) {
+  return (
+    <span class="owner-chip">
+      <span class="face" style={{ background: colorFor(person.membership_id) }} aria-hidden="true">{initials(person.name)}</span>
+      <span class="owner-chip-name">{label}</span>
+    </span>
+  );
+}
 
 /** Items by who they wait on, each owner once, in the order of their oldest item. */
 function byOwner(items: readonly OpenItemView[]): { id: string; name: string; items: OpenItemView[] }[] {
@@ -62,4 +74,94 @@ export function OpenItems({ page }: { page: OpenItemsState }) {
       )}
     </div>
   );
+}
+
+/**
+ * Open in Jira (or the item's own tool), only for an item ECHO opened for you
+ * just now: the tool checks your access when it opens. Its name says which
+ * item, as Done's does.
+ */
+export function OpenInTool({ state, item, name }: { state: State; item: OpenItemView; name: string }) {
+  const [failed, setFailed] = useState(false);
+  const source = item.reach === 'opened' ? item.current?.source : undefined;
+  if (!source || !('permalink' in source)) return null;
+  const label = `Open in ${externalSourceProvider(source, state.tools?.items)}`;
+  return <>
+    <button type="button" class="need-open" title={source.permalink} aria-label={`${label}: ${name}`}
+      onClick={async () => { setFailed(false); setFailed(!(await openItemInTool(item))); }}>{label}</button>
+    {failed && <span class="error need-error">The item could not be opened. Try again.</span>}
+  </>;
+}
+
+/**
+ * The item a changed item's row opened (ruling 3; R67): whose it is to
+ * update, the decision it came from (when you can read it), what it says now
+ * beside what the decision needs, what ECHO saw when it last checked it,
+ * Open in its tool when ECHO opened it for you, and Mark updated or No change
+ * needed when you may close it. Nothing closes before one is chosen.
+ */
+export function ItemCard({ state, card }: { state: State; card: ItemCardState }) {
+  const box = useRef<HTMLDivElement>(null);
+  // Its main control takes the focus, as Tell the owners?'s does.
+  useEffect(() => { box.current?.querySelector<HTMLElement>('.decision-foot button:not(:disabled)')?.focus({ preventScroll: true }); }, [card.item.item_id]);
+  const { item } = card;
+  const title = itemTitle(item);
+  const assignee = item.current?.assignee;
+  const checked = checkLine(item.check);
+  const { decision } = item;
+  return (
+    <div class="column decision" ref={box}>
+      <article class="decision-card" data-testid="item-card" aria-labelledby="item-card-title">
+        <div class="item-card-head">
+          <div class="item-card-name">
+            <h1 id="item-card-title" class="decision-ask">{title}</h1>
+            <div class="decision-from">
+              {itemKind(item, state.tools?.items)} · {itemWhose(item, state.status?.account?.membership_id ?? null)}{assignee ? ` · now ${assignee}` : ''}
+            </div>
+          </div>
+          <OpenInTool state={state} item={item} name={title} />
+        </div>
+        {decision ? (
+          <section class="item-card-decision" aria-labelledby="item-card-decision">
+            <div id="item-card-decision" class="item-card-label">The decision</div>
+            <div class="item-card-decided">{decision.first_line ?? decision.title}</div>
+            <div class="faint">{approvedMeeting(decision, ' · ')}</div>
+          </section>
+        ) : <div class="faint">Sent by {item.approver.name}</div>}
+        <div class="item-card-boxes">
+          <section class="item-card-box" aria-labelledby="item-card-now">
+            <div id="item-card-now" class="item-card-label">Now</div>
+            <div>{itemNow(item)}</div>
+          </section>
+          {item.expected !== null && (
+            <section class="item-card-box" aria-labelledby="item-card-needs">
+              <div id="item-card-needs" class="item-card-label">The decision needs</div>
+              <div>{item.expected}</div>
+            </section>
+          )}
+        </div>
+        {checked && <div class={`item-card-check ${item.check!.verdict}`}>{checked}</div>}
+        {item.can.set_state && (
+          <div class="decision-foot">
+            <button type="button" class="primary-button small" onClick={() => closeCardItem('done')}>Mark updated</button>
+            <button type="button" class="plain-button" onClick={() => closeCardItem('not_relevant')}>No change needed</button>
+          </div>
+        )}
+      </article>
+    </div>
+  );
+}
+
+/**
+ * Check now, at the end of a decision's or a project's line, the faint link
+ * the canvas draws (9.6, 9.7): "Checking…" while its sweep is on its way,
+ * "Nothing open to check", or "Check failed · Try again".
+ */
+export function CheckNow({ line, onCheck }: { line: ItemsLine; onCheck: () => void }) {
+  if (line.check === 'checking') return <span class="items-line-check faint" role="status">Checking…</span>;
+  if (line.check === 'nothing') return <span class="items-line-check faint" role="status">Nothing open to check</span>;
+  if (line.check === 'failed') {
+    return <span class="items-line-check" role="status"><span class="faint">Check failed · </span><button type="button" class="link-button" onClick={onCheck}>Try again</button></span>;
+  }
+  return <button type="button" class="need-open" onClick={onCheck}>Check now</button>;
 }

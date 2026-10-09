@@ -41,6 +41,10 @@ const OBSERVATION = {
   challenge_message_ts: CHALLENGE_MESSAGE_TS,
   challenge_code: CHALLENGE_CODE,
 } as const;
+const OPENED_IM = {
+  ok: true,
+  channel: { id: CHALLENGE.channel_id, is_im: true, user: "U123HUMAN" },
+} as const;
 
 function slackResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), {
@@ -131,7 +135,7 @@ describe("SlackWebIdentityProviderV1", () => {
 
   it("posts a code-free challenge bound to its attempt marker", async () => {
     const fetch = slackFetch(
-      observedHuman(), { ok: true, channel: { id: CHALLENGE.channel_id, is_im: true, user: "U123HUMAN" } },
+      observedHuman(), OPENED_IM,
       CONNECTION,
       { ok: true, bot: BOT },
       {
@@ -170,7 +174,7 @@ describe("SlackWebIdentityProviderV1", () => {
   it("observes exactly one human reply in the bound challenge thread", async () => {
     const provider = new SlackWebIdentityProviderV1({
       fetch: slackFetch(
-      observedHuman(), { ok: true, channel: { id: CHALLENGE.channel_id, is_im: true, user: "U123HUMAN" } },
+      observedHuman(), OPENED_IM,
         CONNECTION,
         { ok: true, bot: BOT },
         observedThread(challengeReply()),
@@ -201,7 +205,7 @@ describe("SlackWebIdentityProviderV1", () => {
     ],
   ])("rejects %s", async (_label, thread) => {
     const provider = new SlackWebIdentityProviderV1({
-      fetch: slackFetch(observedHuman(), { ok: true, channel: { id: CHALLENGE.channel_id, is_im: true, user: "U123HUMAN" } }, CONNECTION, { ok: true, bot: BOT }, thread),
+      fetch: slackFetch(observedHuman(), OPENED_IM, CONNECTION, { ok: true, bot: BOT }, thread),
     });
 
     await expect(
@@ -212,7 +216,7 @@ describe("SlackWebIdentityProviderV1", () => {
   it("rejects a challenge when its expected connection has changed", async () => {
     const provider = new SlackWebIdentityProviderV1({
       fetch: slackFetch(
-      observedHuman(), { ok: true, channel: { id: CHALLENGE.channel_id, is_im: true, user: "U123HUMAN" } },
+      observedHuman(), OPENED_IM,
         { ...CONNECTION, team_id: "T999OTHER" },
         { ok: true, bot: BOT },
       ),

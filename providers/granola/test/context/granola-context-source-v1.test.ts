@@ -48,13 +48,18 @@ function meetingSource(note: GranolaMeetingContentInputV1) {
   return { source };
 }
 
+const capture = (source: MeetingSourceAdapter) =>
+  createGranolaContextSourceV1({ source, now: () => "2026-07-16T01:00:00.000Z" });
+
+async function pulledMeeting() {
+  const { source } = meetingSource(detail);
+  return { source, meeting: (await source.pull({ limit: 1 })).meetings[0]! };
+}
+
 describe("Granola context capture source", () => {
   it("wraps one configured Granola meeting source and retains its normalized observation", async () => {
     const { source } = meetingSource(detail);
-    const adapter = createGranolaContextSourceV1({
-      source,
-      now: () => "2026-07-16T01:00:00.000Z",
-    });
+    const adapter = capture(source);
 
     const batch = await adapter.pull({ limit: 1 });
 
@@ -98,7 +103,6 @@ describe("Granola context capture source", () => {
       },
     });
     const representation = batch.sources[0]!.content.representation;
-    expect(representation.kind).toBe("full_snapshot");
     if (representation.kind === "full_snapshot") {
       expect(representation.passages.map((passage) => passage.text)).toEqual([
         "## Decision\nShip the canonical bridge.",
@@ -113,8 +117,7 @@ describe("Granola context capture source", () => {
   });
 
   it("keeps replay revisions semantic while changed normalized content changes them", async () => {
-    const { source } = meetingSource(detail);
-    const meeting = (await source.pull({ limit: 1 })).meetings[0]!;
+    const { meeting } = await pulledMeeting();
     const content = mapGranolaMeetingToContextCaptureContentV1(meeting);
     const identity = {
       kind: "source" as const,
@@ -155,8 +158,7 @@ describe("Granola context capture source", () => {
 
   it("keeps an ordinary multi-line snapshot exact while bounding its anchor set", async () => {
     const lines = Array.from({ length: 40 }, (_, index) => `Line ${index + 1}`).join("\n");
-    const { source } = meetingSource(detail);
-    const meeting = (await source.pull({ limit: 1 })).meetings[0]!;
+    const { meeting } = await pulledMeeting();
     const captured = mapGranolaMeetingToContextCaptureContentV1({
       ...meeting,
       content: [{ ...meeting.content[0]!, text: lines }],
@@ -166,7 +168,6 @@ describe("Granola context capture source", () => {
     if (representation.kind === "full_snapshot") {
       expect(representation.text).toBe(lines);
       expect(representation.passages).toHaveLength(1);
-      expect(representation.passages.length).toBeLessThanOrEqual(32);
       expect(representation.text.slice(
         representation.passages[0]!.start,
         representation.passages[0]!.end,
@@ -175,12 +176,9 @@ describe("Granola context capture source", () => {
   });
 
   it("rejects a returned meeting whose provenance is not the configured source", async () => {
-    const { source } = meetingSource(detail);
-    const meeting = (await source.pull({ limit: 1 })).meetings[0]!;
+    const { source, meeting } = await pulledMeeting();
     const wrongProvenance: MeetingSourceAdapter = {
-      identity: source.identity,
-      validateConfig: (candidate) => source.validateConfig(candidate),
-      healthCheck: (operation) => source.healthCheck(operation),
+      ...source,
       pull: async () => ({
         meetings: [{
           ...meeting,
@@ -191,10 +189,7 @@ describe("Granola context capture source", () => {
         }],
       }),
     };
-    const adapter = createGranolaContextSourceV1({
-      source: wrongProvenance,
-      now: () => "2026-07-16T01:00:00.000Z",
-    });
+    const adapter = capture(wrongProvenance);
 
     await expect(adapter.pull({ limit: 1 })).rejects.toMatchObject({
       code: "permanently_rejected",
@@ -211,10 +206,7 @@ describe("Granola context capture source", () => {
       healthCheck: (operation) => source.healthCheck(operation),
       pull: (request, operation) => source.pull(request, operation),
     };
-    const adapter = createGranolaContextSourceV1({
-      source: driftingSource,
-      now: () => "2026-07-16T01:00:00.000Z",
-    });
+    const adapter = capture(driftingSource);
     identity = { ...identity, instance_id: "other-instance" };
 
     await expect(adapter.pull({ limit: 1 })).rejects.toMatchObject({
@@ -225,10 +217,7 @@ describe("Granola context capture source", () => {
 
   it("classifies a note with no source meeting start as a plain-text note", async () => {
     const { source } = meetingSource({ ...detail, calendar_event: undefined });
-    const adapter = createGranolaContextSourceV1({
-      source,
-      now: () => "2026-07-16T01:00:00.000Z",
-    });
+    const adapter = capture(source);
 
     const batch = await adapter.pull({ limit: 1 });
 
@@ -244,15 +233,8 @@ describe("Granola context capture source", () => {
       summary_markdown: "A".repeat(129 * 1024),
     };
     const { source } = meetingSource(oversized);
-    const adapter = createGranolaContextSourceV1({
-      source,
-      now: () => "2026-07-16T01:00:00.000Z",
-    });
+    const adapter = capture(source);
 
-    await expect(adapter.pull({ limit: 1 })).rejects.toMatchObject({
-      code: "permanently_rejected",
-      retryable: false,
-    } satisfies Partial<AdapterError>);
     await expect(adapter.pull({ limit: 1 })).rejects.toMatchObject({
       code: "permanently_rejected",
       retryable: false,

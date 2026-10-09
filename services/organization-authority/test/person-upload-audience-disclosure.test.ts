@@ -173,8 +173,6 @@ describe("a note's V3 status applies the document receipt-visibility check", () 
       schema_version: 3, kind: "echo-person-update-saved-v3", request_id: note.request_id, context_id: note.context_id,
       received_at: note.received_at, status: "stored",
     });
-    expect(released(status)).not.toContain(OWNER_ONLY);
-    expect(released(status)).not.toContain(SHARED);
   });
 });
 

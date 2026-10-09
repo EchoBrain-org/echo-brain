@@ -46,7 +46,7 @@ describe('impact owner matching', () => {
       { pointer: ticket('10046'), owner_name: 'Mina Patel' },
       { pointer: record(), owner_name: 'Rafael Moreno' },
       { pointer: page(), owner_name: 'Someone' },
-      { pointer: ticket('10047') },
+      { pointer: ticket('10047'), owner_name: 'Rafael Moreno' },
     ], approver: ARI, access_token: 'tok', people: people({ 'Rafael Moreno': ['mem_rafael'] }), jira });
     expect(result).toEqual([
       { owner_membership_id: MINA.membership_id, owner_match: 'jira_account' },
@@ -89,12 +89,6 @@ describe('impact owner matching', () => {
     expect(await matchImpactOwnersV1({ candidates: [{ pointer: ticket('10046') }, { pointer: record(), owner_name: 'Rafael Moreno' }],
       approver: ARI, access_token: 'tok', people: brokenDirectory, jira: fakeJira({ assignees: new Map([['10046', 'acct-mina']]), people: { 'acct-mina': [MINA] } }) }))
       .toEqual([APPROVER, APPROVER]);
-  });
-
-  it('never matches a Jira ticket by display name', async () => {
-    const result = await matchImpactOwnersV1({ candidates: [{ pointer: ticket('10046'), owner_name: 'Rafael Moreno' }], approver: ARI, access_token: 'tok',
-      people: people({ 'Rafael Moreno': ['mem_rafael'] }), jira: fakeJira({ assignees: new Map(), people: {} }) });
-    expect(result[0]!.owner_match).toBe('approver');
   });
 
   it('matches an ECHO document action by name and leaves every other item with the approver', async () => {

@@ -1,6 +1,4 @@
-import { once } from 'node:events';
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -13,17 +11,13 @@ import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } f
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
 import { readPrivateAuthorityPersonSessionPkceKey } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
 import { FIXTURE_CONFLUENCE_CLOUD_V1 as CLOUD, FIXTURE_CONFLUENCE_SITE_V1 as SITE, fakeConfluenceCloudFetchV1, fakeConfluenceNangoV1 } from './fixtures/fake-confluence-v1.js';
+import { port } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
 
 const EMAIL = 'founder@example.test';
 const AUTHORITY = 'https://authority.example.test';
 const OIDC = { issuer: 'https://issuer.example.test', client_id: 'fixture-client', redirect_uri: `${AUTHORITY}/v2/session/oidc/callback`, tenant: { kind: 'issuer' as const }, id_token_algorithms: ['RS256'] };
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
-
-async function port(): Promise<number> {
-  const server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening');
-  const result = (server.address() as { port: number }).port; const closed = once(server, 'close'); server.close(); await closed; return result;
-}
 
 /** Production Authority composition with synthetic OIDC/model/provider boundaries. */
 it('catalogs, connects, maps, cites, and disconnects Confluence page evidence through the V6 Ask route', async () => {

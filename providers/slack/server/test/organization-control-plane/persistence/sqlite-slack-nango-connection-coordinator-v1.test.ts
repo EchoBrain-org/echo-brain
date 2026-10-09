@@ -12,7 +12,7 @@ import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredential
 import { buildOrganizationToolConnectionContractV2 } from "../../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, type OrganizationSecretStore, type VerifiedSlackConnection } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { slackConnectionVerificationEvidenceSha256V1 } from "../../../src/organization-control-plane/application/slack-connection-verification-evidence-v1.js";
-import { readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1, type StoredSlackConnectionV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
+import { readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { activateNangoSlackConnectionV1, rebindNangoSlackConnectionV1, SlackConnectionConflictError, SlackConnectionRefusedErrorV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 
 /** The six scopes the retired public-channel option granted; a legacy token may still hold them. */
@@ -160,13 +160,15 @@ function refs(state: TestState): string[] {
   return state.secrets.listReferences().map((reference) => reference.secret_handle_id).sort();
 }
 
-function seedOwnerLink(database: Database.Database, active: StoredSlackConnectionV1): `sha256:${string}` {
-  const linkSha = canonicalSha256({ link: "owner", tenant: active.connection.provider_tenant_id });
-  database.prepare("INSERT INTO organization_external_human_link_contracts VALUES (?, ?, ?, ?)").run("clm_owner", linkSha, '{"link":"owner"}', NOW);
-  database
-    .prepare("INSERT INTO organization_external_human_link_current VALUES (?, ?, 'https://slack.com', 'workspace', ?, ?, 'U_OWNER', 'prn_owner', 'mem_owner', 'active', ?)")
-    .run("clm_owner", linkSha, active.connection.provider_tenant_id, active.connection.provider_enterprise_id, NOW);
-  return linkSha;
+/** Activates a first connection and returns its stored state, its active bundle and the lost-connection fence a rebind presents. */
+async function connected(
+  state: TestState,
+  input: { readonly nango?: NangoSlackConnectionV1; readonly verifier?: ReturnType<typeof authTest> } = {},
+) {
+  const created = await activate(state, { credential: pendingBundle(state), nango: input.nango ?? nangoInstall(), verifier: input.verifier });
+  const active = readActiveSlackConnectionV1(state.database)!;
+  const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+  return { created, active, activeBundle, lost: { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" } };
 }
 
 const PREDATES_IN_APP_SETUP = "stored Slack connection predates in-app setup; install this release's host tooling, then run replace-rehearsal";
@@ -203,30 +205,26 @@ describe("Nango Slack connection activation v1", () => {
   it("keeps a baseline rebind exact: a six-scope token is a workspace mismatch", async () => {
     const state = setup();
     const initial = nangoInstall();
-    const created = await activate(state, { credential: pendingBundle(state), nango: initial, verifier: canonicalAuthTest(initial) });
-    const active = readActiveSlackConnectionV1(state.database)!;
-    const credential = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    const { active, activeBundle: credential, lost } = await connected(state, { nango: initial, verifier: canonicalAuthTest(initial) });
     const expanded = nangoInstall({ granted_scopes: LEGACY_SIX_SCOPES });
     await expectRefused(rebind(state, { credential, nango: { ...expanded, connection_id: "nango-conn-2" }, verifier: canonicalAuthTest(expanded),
-      rebind: { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" } }), "workspace_mismatch");
+      rebind: lost }), "workspace_mismatch");
     expect(readActiveSlackConnectionV1(state.database)).toEqual(active);
   });
 
   it("keeps a connection stored with the legacy six scopes: reconnect writes nothing, rebind needs the same six", async () => {
     const state = setup();
     const legacy = nangoInstall({ granted_scopes: LEGACY_SIX_SCOPES });
-    const created = await activate(state, { credential: pendingBundle(state), nango: legacy, verifier: canonicalAuthTest(legacy) });
+    const { created, active, activeBundle: credential, lost } = await connected(state, { nango: legacy, verifier: canonicalAuthTest(legacy) });
     expect(created.state.observed_granted_scopes).toEqual([...LEGACY_SIX_SCOPES].sort());
-    const active = readActiveSlackConnectionV1(state.database)!;
-    const credential = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
     const reconnected = await activate(state, { credential, nango: legacy, verifier: canonicalAuthTest(legacy) });
     expect(reconnected).toMatchObject({ kind: "reconnected", state: created.state });
     const four = nangoInstall({ granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1 });
     await expectRefused(rebind(state, { credential, nango: { ...four, connection_id: "nango-conn-2" }, verifier: canonicalAuthTest(four),
-      rebind: { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" } }), "workspace_mismatch");
+      rebind: lost }), "workspace_mismatch");
     expect(readActiveSlackConnectionV1(state.database)).toEqual(active);
     const rebound = await rebind(state, { credential, nango: { ...legacy, connection_id: "nango-conn-2" }, verifier: canonicalAuthTest(legacy),
-      rebind: { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" } });
+      rebind: lost });
     expect(rebound).toMatchObject({ kind: "reconnected", state: active.state });
   });
 
@@ -316,9 +314,8 @@ describe("Nango Slack connection activation v1", () => {
 
   it("reconnects on the same Nango connection without any write, keeping the state hash", async () => {
     const state = setup();
-    const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
+    const { created, activeBundle } = await connected(state);
     const before = refs(state);
-    const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
 
     const result = await activate(state, { credential: activeBundle, nango: nangoInstall(), connection_id: "con_nango_2" });
 
@@ -330,8 +327,7 @@ describe("Nango Slack connection activation v1", () => {
 
   it("refuses a different Nango connection id for the same app, writing nothing", async () => {
     const state = setup();
-    const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
-    const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    const { activeBundle } = await connected(state);
 
     await expectRefused(
       activate(state, { credential: activeBundle, nango: nangoInstall({ connection_id: "nango-conn-2" }), connection_id: "con_nango_2" }),
@@ -343,8 +339,7 @@ describe("Nango Slack connection activation v1", () => {
 
   it("refuses a reconnect that lands on a different bot as a workspace mismatch, writing nothing", async () => {
     const state = setup();
-    const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
-    const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    const { created, activeBundle } = await connected(state);
 
     await expectRefused(
       activate(state, { credential: activeBundle, nango: nangoInstall(), verifier: authTest(nangoInstall(), { bot_id: "B02" }), connection_id: "con_nango_2" }),
@@ -357,10 +352,7 @@ describe("Nango Slack connection activation v1", () => {
 
   it("refuses a rebind to another team, bot or verification evidence as a workspace mismatch, writing nothing", async () => {
     const state = setup();
-    const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
-    const active = readActiveSlackConnectionV1(state.database)!;
-    const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
-    const lost = { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" };
+    const { created, active, activeBundle, lost } = await connected(state);
     const replacement = nangoInstall({ connection_id: "nango-conn-2" });
 
     for (const [nango, verified] of [
@@ -378,11 +370,8 @@ describe("Nango Slack connection activation v1", () => {
 
   it("refuses a rebind once the active state or its bundle changed since the install began", async () => {
     const state = setup();
-    const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
-    const active = readActiveSlackConnectionV1(state.database)!;
-    const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    const { created, activeBundle, lost } = await connected(state);
     const nango = nangoInstall({ connection_id: "nango-conn-2" });
-    const lost = { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" };
 
     for (const [credential, rebound] of [
       [activeBundle, { ...lost, state_sha256: canonicalSha256({ state: "other" }) }],
@@ -396,9 +385,7 @@ describe("Nango Slack connection activation v1", () => {
 
   it("runs the lost-connection and owner fences after Slack verification, before replacing the bundle", async () => {
     const state = setup();
-    const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
-    const active = readActiveSlackConnectionV1(state.database)!;
-    const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    const { created, activeBundle, lost } = await connected(state);
     let verified = false;
     let lostChecked = false;
     let ownerChecked = false;
@@ -413,7 +400,7 @@ describe("Nango Slack connection activation v1", () => {
     await expect(rebind(state, {
       credential: activeBundle,
       nango,
-      rebind: { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" },
+      rebind: lost,
       verifier,
       assert_lost: async () => {
         expect(verified).toBe(true);
@@ -434,7 +421,6 @@ describe("Nango Slack connection activation v1", () => {
     const state = setup();
     await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
     const active = readActiveSlackConnectionV1(state.database)!;
-    seedOwnerLink(state.database, active);
     const replacement = pendingBundle(state, "A0APP2");
     const before = refs(state);
 

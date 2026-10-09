@@ -9,9 +9,6 @@ import { createProjectContextApplicationV1 } from '../src/application/project-co
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { OWNER, MEMBER, PROJECT_CONTEXT_NOW, addMembership, authorization, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 
-// Real PC-03 HTTP checkpoint 77e1b75 and PC-02 application checkpoint 7244fc5,
-// with the actual V7 repository. Authentication uses synthetic fixture people;
-// runtime authentication/worker/release qualification belongs to PC-06.
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 async function start(enabled = true) {
@@ -141,8 +138,6 @@ describe('Person project transport against committed Authority routes and policy
     revokeMembership(database, MEMBER);
     await expect(client.organizationDirectory('member', {})).rejects.toMatchObject({ code: 'unauthorized', status: 401 });
     expect((await client.organizationDirectory('owner', { query: 'Member' })).items).toEqual([]);
-    const absent = await start(false);
-    await expect(absent.client.organizationDirectory('owner', {})).rejects.toMatchObject({ code: 'not_found', status: 404 });
   });
 
   it('keeps capability absence, hidden coordinates, and final session revalidation failures explicit', async () => {

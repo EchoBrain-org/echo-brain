@@ -7,6 +7,7 @@ import {
   SqliteProjectContextRepositoryV1,
 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { decodeProjectCursorV1 } from "../src/adapters/persistence/sqlite/project-context-cursor-v1.js";
+import { validateProjectContextSearchV1, validateProjectPageRequestV1 } from "@echo-brain/organization-api";
 import type { PersonUpdateSubmitV2, PersonUploadAudienceV2, ProjectIdV1 } from "@echo-brain/organization-api";
 import type {
   ProjectAuthorizationScopeV1,
@@ -40,6 +41,20 @@ function requestId(value: number): string {
 
 function open(path = ":memory:"): { database: Database.Database; repository: SqliteProjectContextRepositoryV1 } {
   const database = projectContextDatabase(path);
+  databases.push(database);
+  return { database, repository: new SqliteProjectContextRepositoryV1(database, () => PROJECT_CONTEXT_NOW) };
+}
+
+function tempPath(): string {
+  const root = mkdtempSync(join(tmpdir(), "project-context-"));
+  roots.push(root);
+  return join(root, "authority.sqlite");
+}
+
+/** A second handle on an existing file database, without re-seeding it. */
+function reopen(path: string): { database: Database.Database; repository: SqliteProjectContextRepositoryV1 } {
+  const database = new Database(path);
+  database.pragma("foreign_keys = ON");
   databases.push(database);
   return { database, repository: new SqliteProjectContextRepositoryV1(database, () => PROJECT_CONTEXT_NOW) };
 }
@@ -106,6 +121,32 @@ function addMember(repository: SqliteProjectContextRepositoryV1, projectId: Proj
   );
 }
 
+function addDirectoryMembers(database: Database.Database): void {
+  for (let number = 4; number <= 13; number += 1) {
+    addMembership(database, {
+      organization_id: OWNER.organization_id,
+      principal_id: `prn_directory_${number}`,
+      membership_id: `mem_00000000-0000-4000-8000-${String(number).padStart(12, "0")}`,
+      membership_type: "employee",
+    }, `Directory ${number}`, `directory-${number}@example.test`);
+  }
+}
+
+/** Runs `op` in a write transaction whose callback catches its failure, so the outer transaction still commits. */
+function attempt(repository: SqliteProjectContextRepositoryV1, op: (transaction: ProjectContextWriteTransactionV1) => unknown): void {
+  repository.withWriteTransaction(transaction => {
+    try {
+      op(transaction);
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+    }
+  });
+}
+
+function expectNotFound(action: () => void): void {
+  expect(action).toThrow(expect.objectContaining({ code: "not_found" }));
+}
+
 describe("SQLite project context V1", () => {
   it("modern association edits affect only the requested project and never rewrite initial receipt coordinates", () => {
     const { database, repository } = open();
@@ -135,15 +176,7 @@ describe("SQLite project context V1", () => {
       snapshot(transaction, OWNER, { operation: "members", project_id: project.project_id }), { project_id: project.project_id },
     ).items.find(item => item.membership_id === MEMBER.membership_id))).toMatchObject({ role: "lead" });
 
-    for (let number = 4; number <= 13; number += 1) {
-      const suffix = String(number).padStart(12, "0");
-      addMembership(database, {
-        organization_id: OWNER.organization_id,
-        principal_id: `prn_directory_${number}`,
-        membership_id: `mem_00000000-0000-4000-8000-${suffix}`,
-        membership_type: "employee",
-      }, `Directory ${number}`, `directory-${number}@example.test`);
-    }
+    addDirectoryMembers(database);
     repository.withReadTransaction(transaction => {
       const first = transaction.searchDirectory(
         snapshot(transaction, OWNER, { operation: "directory", project_id: project.project_id }), { project_id: project.project_id, limit: 10 },
@@ -161,15 +194,7 @@ describe("SQLite project context V1", () => {
 
   it("lets any active member page the organization directory with no project, and denies revoked or foreign callers", () => {
     const { database, repository } = open();
-    for (let number = 4; number <= 13; number += 1) {
-      const suffix = String(number).padStart(12, "0");
-      addMembership(database, {
-        organization_id: OWNER.organization_id,
-        principal_id: `prn_directory_${number}`,
-        membership_id: `mem_00000000-0000-4000-8000-${suffix}`,
-        membership_type: "employee",
-      }, `Directory ${number}`, `directory-${number}@example.test`);
-    }
+    addDirectoryMembers(database);
     const LEFT: AuthorityPersonMembershipBinding = { ...OWNER, principal_id: "prn_left", membership_id: "mem_44444444-4444-4444-8444-444444444444", membership_type: "employee" };
     addMembership(database, LEFT, "Left Person", "left@example.test");
     revokeMembership(database, LEFT);
@@ -292,19 +317,14 @@ describe("SQLite project context V1", () => {
   });
 
   it("is replay-safe across restart and never restores a lost project grant", () => {
-    const root = mkdtempSync(join(tmpdir(), "project-context-replay-"));
-    roots.push(root);
-    const path = join(root, "authority.sqlite");
+    const path = tempPath();
     const first = open(path);
     const project = createProject(first.repository, OWNER, 20);
     setMember(first.repository, project.project_id, OWNER, MEMBER, "member", 21);
     const receipt = submit(first.repository, project.project_id, { kind: "team" }, 22);
     first.database.close();
 
-    const database = new Database(path);
-    database.pragma("foreign_keys = ON");
-    databases.push(database);
-    const recovered = new SqliteProjectContextRepositoryV1(database, () => PROJECT_CONTEXT_NOW);
+    const recovered = reopen(path).repository;
     const replay = submit(recovered, project.project_id, { kind: "team" }, 22);
     expect(replay).toEqual(receipt);
     expect(() => submit(recovered, project.project_id, { kind: "only_me" }, 22)).toThrow(expect.objectContaining({ code: "conflict" }));
@@ -468,19 +488,6 @@ describe("SQLite project context V1", () => {
     })).toThrow();
   });
 
-  it("returns no cursor after the final full page and cages a second repository handle", () => {
-    const { database, repository } = open();
-    createProject(repository, OWNER, 80);
-    createProject(repository, OWNER, 81);
-    const page = repository.withReadTransaction(transaction => transaction.listProjects(
-      snapshot(transaction, OWNER, { operation: "project_list" }), { limit: 2 },
-    ));
-    expect(page.items).toHaveLength(2);
-    expect(page.next_cursor).toBeNull();
-    const secondHandle = new SqliteProjectContextRepositoryV1(database, () => PROJECT_CONTEXT_NOW);
-    expect(() => repository.withReadTransaction(() => secondHandle.withReadTransaction(() => undefined))).toThrow();
-  });
-
   it("emits a continuation for a full first page and null on the final full project, roster, feed, and search page", () => {
     const database = projectContextDatabase();
     databases.push(database);
@@ -563,19 +570,6 @@ describe("SQLite project context V1", () => {
     expect(() => submit(second.repository, null, { kind: "only_me" }, 1300)).toThrow(expect.objectContaining({ code: "rate_limited" }));
   });
 
-  it("rolls V2 original, work, association, and replay receipt back when durable work insertion fails", () => {
-    const { database, repository } = open();
-    const project = createProject(repository, OWNER, 1400);
-    database.exec(`CREATE TRIGGER fixture_v2_work_failure
-      BEFORE INSERT ON authority_person_update_work_v2
-      BEGIN SELECT RAISE(ABORT, 'fixture work failure'); END`);
-    expect(() => submit(repository, project.project_id, { kind: "project", project_id: project.project_id }, 1401)).toThrow("fixture work failure");
-    expect(database.prepare("SELECT count(*) AS n FROM authority_person_updates_v2").get()).toEqual({ n: 0 });
-    expect(database.prepare("SELECT count(*) AS n FROM authority_person_update_work_v2").get()).toEqual({ n: 0 });
-    expect(database.prepare("SELECT count(*) AS n FROM authority_project_context_associations_v1").get()).toEqual({ n: 0 });
-    expect(database.prepare("SELECT count(*) AS n FROM authority_project_command_receipts_v1 WHERE request_id = ?").get(requestId(1401))).toEqual({ n: 0 });
-  });
-
   it("round-trips the largest valid original byte-for-byte through generic and project reads", () => {
     const { repository } = open();
     const project = createProject(repository, OWNER, 1500);
@@ -598,14 +592,9 @@ describe("SQLite project context V1", () => {
   });
 
   it("prevents an actual second SQLite handle from nesting transaction access", () => {
-    const root = mkdtempSync(join(tmpdir(), "project-context-cross-handle-"));
-    roots.push(root);
-    const path = join(root, "authority.sqlite");
+    const path = tempPath();
     const first = open(path);
-    const secondDatabase = new Database(path);
-    secondDatabase.pragma("foreign_keys = ON");
-    databases.push(secondDatabase);
-    const second = new SqliteProjectContextRepositoryV1(secondDatabase, () => PROJECT_CONTEXT_NOW);
+    const second = reopen(path).repository;
     expect(() => first.repository.withReadTransaction(() => second.withReadTransaction(() => undefined))).toThrow("not reentrant");
   });
 
@@ -678,5 +667,225 @@ describe("SQLite project context V1", () => {
        VALUES (?, ?, 'invalid', ?, ?, ?, 'owner')`,
     ).run("prj_99999999-9999-4999-8999-999999999999", OUTSIDE_ORGANIZATION, PROJECT_CONTEXT_NOW, OWNER.principal_id, OWNER.membership_id)).toThrow();
     expect(database.pragma("foreign_key_check")).toEqual([]);
+  });
+});
+
+describe("project context adversarial authorization", () => {
+  it("filters a hidden corrupt original before validation, leaving it indistinguishable from a missing context", () => {
+    const { database, repository } = open();
+    const project = createProject(repository, OWNER, 1);
+    setMember(repository, project.project_id, OWNER, MEMBER, "member", 2);
+    const receipt = submit(repository, project.project_id, { kind: "only_me" }, 3);
+
+    database.exec("DROP TRIGGER authority_person_updates_v2_immutable");
+    database.prepare("UPDATE authority_person_updates_v2 SET text = 'corrupted' WHERE context_id = ?").run(receipt.context_id);
+
+    repository.withReadTransaction(transaction => {
+      const feed = transaction.feed(
+        snapshot(transaction, MEMBER, { operation: "feed", project_id: project.project_id }),
+        { project_id: project.project_id, limit: 10 },
+      );
+      const search = transaction.search(
+        snapshot(transaction, MEMBER, { operation: "search", project_id: project.project_id }),
+        { project_id: project.project_id, query: "durable", limit: 10 },
+      );
+      expect(feed.items).toEqual([]);
+      expect(search.items).toEqual([]);
+      expectNotFound(() => transaction.readContext(
+        snapshot(transaction, MEMBER, { operation: "context_read", project_id: project.project_id, context_id: receipt.context_id }),
+        project.project_id,
+        receipt.context_id,
+      ));
+      expectNotFound(() => transaction.readContext(
+        snapshot(transaction, MEMBER, { operation: "context_read", project_id: project.project_id, context_id: `ctx_${"f".repeat(64)}` }),
+        project.project_id,
+        `ctx_${"f".repeat(64)}`,
+      ));
+    });
+  });
+
+  it("does not let loss of an association grant change the uploader's team audience or remove authority", () => {
+    const { repository } = open();
+    const associationProject = createProject(repository, OWNER, 10);
+    setMember(repository, associationProject.project_id, OWNER, MEMBER, "lead", 11);
+    const receipt = submit(repository, associationProject.project_id, { kind: "team" }, 12);
+    const removal = {
+      schema_version: 1 as const,
+      kind: "echo-project-member-remove-v1" as const,
+      request_id: requestId(13),
+      project_id: associationProject.project_id,
+      membership_id: OWNER.membership_id,
+    };
+    repository.withWriteTransaction(transaction => transaction.removeMember(
+      snapshot(transaction, MEMBER, { operation: "member_remove", request: removal }), removal,
+    ));
+
+    repository.withReadTransaction(transaction => {
+      expect(transaction.readUpload(
+        snapshot(transaction, OWNER, { operation: "upload_read", context_id: receipt.context_id }), receipt.context_id,
+      )).toMatchObject({ context_id: receipt.context_id, audience: { kind: "team" } });
+      expectNotFound(() => transaction.readProject(
+        snapshot(transaction, OWNER, { operation: "project_read", project_id: associationProject.project_id }),
+        associationProject.project_id,
+      ));
+    });
+
+    const dissociation = {
+      schema_version: 1 as const,
+      kind: "echo-project-context-dissociate-v1" as const,
+      request_id: requestId(14),
+      project_id: associationProject.project_id,
+      context_id: receipt.context_id,
+    };
+    repository.withWriteTransaction(transaction => transaction.dissociateContext(
+      snapshot(transaction, OWNER, { operation: "dissociate", request: dissociation }), dissociation,
+    ));
+  });
+
+  it("rejects a forged witness and denies project-audience admission without the exact audience-project grant", () => {
+    const { database, repository } = open();
+    const audienceProject = createProject(repository, OWNER, 20);
+    const associationProject = createProject(repository, OWNER, 21);
+    setMember(repository, associationProject.project_id, OWNER, MEMBER, "member", 22);
+    const request: PersonUpdateSubmitV2 = {
+      schema_version: 2,
+      kind: "echo-person-update-submit-v2",
+      request_id: requestId(23),
+      title: "Out of scope audience",
+      text: "Membership in the association project cannot authorize the audience project.",
+      project_id: associationProject.project_id,
+      audience: { kind: "project", project_id: audienceProject.project_id },
+    };
+
+    repository.withWriteTransaction(transaction => {
+      const admitted = snapshot(transaction, MEMBER, { operation: "upload_submit", request });
+      const forged = { ...admitted, grants: [] } as typeof admitted;
+      expect(() => transaction.submitUpload(forged, request)).toThrow("snapshot escaped or was forged");
+      expectNotFound(() => transaction.submitUpload(admitted, request));
+    });
+    expect(database.prepare("SELECT count(*) AS n FROM authority_person_updates_v2").get()).toEqual({ n: 0 });
+  });
+});
+
+describe("project context adversarial query inputs", () => {
+  it("does not turn an empty project search into an authorized feed when a caller bypasses the wire codec", () => {
+    const { repository } = open();
+    const project = createProject(repository, OWNER, 1);
+    submit(repository, project.project_id, { kind: "team" }, 2);
+
+    const request = { project_id: project.project_id, query: "", limit: 10 };
+    expect(() => validateProjectContextSearchV1(request)).toThrow();
+    expect(() => repository.withReadTransaction(transaction => transaction.search(
+      snapshot(transaction, OWNER, { operation: "search", project_id: project.project_id }),
+      request,
+    ))).toThrow();
+  });
+
+  it("returns the contract invalid-request outcome for an out-of-bound page size instead of computing an invalid cursor", () => {
+    const { repository } = open();
+    createProject(repository, OWNER, 3);
+
+    const request = { limit: 0 };
+    expect(() => validateProjectPageRequestV1(request)).toThrow();
+    expect(() => repository.withReadTransaction(transaction => transaction.listProjects(
+      snapshot(transaction, OWNER, { operation: "project_list" }), request,
+    ))).toThrow(expect.objectContaining({ code: "invalid_request" }));
+  });
+});
+
+describe("project context adversarial storage", () => {
+  it("does not commit an upload prefix when its callback catches a durable work failure", () => {
+    const { database, repository } = open();
+    const request: PersonUpdateSubmitV2 = {
+      schema_version: 2,
+      kind: "echo-person-update-submit-v2",
+      request_id: requestId(1),
+      title: "Atomic admission",
+      text: "The work row must commit with the original and replay receipt.",
+      project_id: null,
+      audience: { kind: "only_me" },
+    };
+    database.exec(`CREATE TRIGGER fixture_work_failure
+      BEFORE INSERT ON authority_person_update_work_v2
+      BEGIN SELECT RAISE(ABORT, 'fixture work failure'); END`);
+
+    repository.withWriteTransaction(transaction => {
+      expect(() => transaction.submitUpload(snapshot(transaction, OWNER, { operation: "upload_submit", request }), request)).toThrow("fixture work failure");
+    });
+
+    expect(database.prepare("SELECT count(*) AS n FROM authority_person_updates_v2").get()).toEqual({ n: 0 });
+    expect(database.prepare("SELECT count(*) AS n FROM authority_person_update_work_v2").get()).toEqual({ n: 0 });
+    expect(database.prepare("SELECT count(*) AS n FROM authority_project_command_receipts_v1").get()).toEqual({ n: 0 });
+  });
+
+  it("does not leave a ghost project when a caught create failure is retried after restart", () => {
+    const path = tempPath();
+    const { database, repository } = open(path);
+    const request = {
+      schema_version: 1 as const,
+      kind: "echo-project-create-v1" as const,
+      request_id: requestId(2),
+      name: "Restart-safe project",
+    };
+    database.exec(`CREATE TRIGGER fixture_membership_failure
+      BEFORE INSERT ON authority_project_memberships_v1
+      BEGIN SELECT RAISE(ABORT, 'fixture membership failure'); END`);
+
+    attempt(repository, transaction => transaction.createProject(snapshot(transaction, OWNER, { operation: "create", request }), request));
+    expect.soft(database.prepare("SELECT count(*) AS n FROM authority_projects_v1").get()).toEqual({ n: 0 });
+    database.exec("DROP TRIGGER fixture_membership_failure");
+    database.close();
+
+    const { database: reopened, repository: recovered } = reopen(path);
+    recovered.withWriteTransaction(transaction => transaction.createProject(snapshot(transaction, OWNER, { operation: "create", request }), request));
+
+    expect(reopened.prepare("SELECT count(*) AS n FROM authority_projects_v1").get()).toEqual({ n: 1 });
+    expect(reopened.prepare("SELECT count(*) AS n FROM authority_project_command_receipts_v1 WHERE request_id = ?").get(request.request_id)).toEqual({ n: 1 });
+  });
+
+  it("rolls an initial association back when its insert fails after original and work admission", () => {
+    const { database, repository } = open();
+    const project = createProject(repository, OWNER, 3);
+    const request: PersonUpdateSubmitV2 = {
+      schema_version: 2,
+      kind: "echo-person-update-submit-v2",
+      request_id: requestId(4),
+      title: "Association fence",
+      text: "All upload admission rows must roll back if the initial association fails.",
+      project_id: project.project_id,
+      audience: { kind: "team" },
+    };
+    database.exec(`CREATE TRIGGER fixture_association_failure
+      BEFORE INSERT ON authority_project_context_associations_v1
+      BEGIN SELECT RAISE(ABORT, 'fixture association failure'); END`);
+
+    attempt(repository, transaction => transaction.submitUpload(snapshot(transaction, OWNER, { operation: "upload_submit", request }), request));
+
+    expect(database.prepare("SELECT count(*) AS n FROM authority_person_updates_v2 WHERE request_id = ?").get(request.request_id)).toEqual({ n: 0 });
+    expect(database.prepare("SELECT count(*) AS n FROM authority_person_update_work_v2").get()).toEqual({ n: 0 });
+    expect(database.prepare("SELECT count(*) AS n FROM authority_project_context_associations_v1").get()).toEqual({ n: 0 });
+    expect(database.prepare("SELECT count(*) AS n FROM authority_project_command_receipts_v1 WHERE request_id = ?").get(request.request_id)).toEqual({ n: 0 });
+  });
+
+  it("rolls a newly-added association back when recording its replay receipt fails", () => {
+    const { database, repository } = open();
+    const project = createProject(repository, OWNER, 5);
+    const receipt = submit(repository, null, { kind: "only_me" }, 6);
+    const request = {
+      schema_version: 1 as const,
+      kind: "echo-project-context-associate-v1" as const,
+      request_id: requestId(7),
+      project_id: project.project_id,
+      context_id: receipt.context_id,
+    };
+    database.exec(`CREATE TRIGGER fixture_association_receipt_failure
+      BEFORE INSERT ON authority_project_command_receipts_v1
+      WHEN NEW.request_id = '${request.request_id}'
+      BEGIN SELECT RAISE(ABORT, 'fixture association receipt failure'); END`);
+
+    attempt(repository, transaction => transaction.associateContext(snapshot(transaction, OWNER, { operation: "associate", request }), request));
+
+    expect(database.prepare("SELECT count(*) AS n FROM authority_project_context_associations_v1 WHERE context_id = ?").get(receipt.context_id)).toEqual({ n: 0 });
+    expect(database.prepare("SELECT count(*) AS n FROM authority_project_command_receipts_v1 WHERE request_id = ?").get(request.request_id)).toEqual({ n: 0 });
   });
 });

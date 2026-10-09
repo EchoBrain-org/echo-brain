@@ -1,4 +1,5 @@
 import {
+  PERSON_SWEEP_RESULT_LIMITS_V1,
   validatePersonEvidenceOpenRequestV1,
   validatePersonPageCitationV1,
   validatePersonQueryText,
@@ -9,6 +10,7 @@ import { agenticDataSlotV1, agenticStartingSlotV1, type AgenticBriefV1 } from ".
 import type { AgenticRendererV1 } from "./agentic-renderer-v1.js";
 import { AGENTIC_RESEARCH_BUDGETS_V1 } from "./agentic-research-v1.js";
 import { IMPACT_CARD_RENDERER_V1 } from "./renderers/impact-card-renderer-v1.js";
+import { SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from "./renderers/sweep-renderer-v1.js";
 
 /**
  * Trigger definitions (research trigger contract v1, section 1). Adding a
@@ -52,7 +54,8 @@ export interface AgenticTriggerDefinitionV1<Event> {
   readonly recipients: "actor_only";
 }
 
-const MAX_FINDINGS = 20;
+/** As many findings as a sweep result holds. */
+const MAX_FINDINGS = PERSON_SWEEP_RESULT_LIMITS_V1.findings;
 const MAX_FINDING_CITATIONS = 12;
 
 /** Freezes a definition and gives its brief the budget its label names, so the two can never disagree. */
@@ -88,7 +91,7 @@ function citation(value: unknown, label: string): unknown {
 
 interface AskEventV1 { readonly question: string }
 interface ApprovedRecordEventV1 { readonly record: unknown }
-interface SweepEventV1 { readonly findings: readonly { readonly finding: string; readonly expected: string; readonly citations: readonly unknown[] }[] }
+type SweepEventV1 = SweepTriggerInputV1;
 
 const ask = define<AskEventV1>({
   name: "ask", budget: "live", acts_as: "requester", scope: "requested", recipients: "actor_only",
@@ -125,7 +128,7 @@ const SWEEP_TASK = [
 ].join("\n");
 
 const sweep = define<SweepEventV1>({
-  name: "sweep", budget: "background", acts_as: "requester", scope: "requested", recipients: "actor_only",
+  name: "sweep", budget: "background", acts_as: "requester", scope: "requested", recipients: "actor_only", renderer: SWEEP_RENDERER_V1,
   parseEvent(input: unknown): SweepEventV1 {
     const findings = fields(input, ["findings"], "Sweep").findings;
     if (!Array.isArray(findings) || findings.length === 0 || findings.length > MAX_FINDINGS) invalid(`Sweep needs 1 to ${MAX_FINDINGS} findings`);

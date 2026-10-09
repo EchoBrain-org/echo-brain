@@ -45,6 +45,7 @@ function payload(
     readonly action?: "approve" | "reject" | "audience-select";
     readonly audience?: "only-me" | "projects";
     readonly projects?: readonly string[];
+    readonly project_options?: readonly unknown[];
     readonly owners?: Readonly<Record<string, string | null>>;
     readonly snapshot?: string | null;
     readonly response_url?: string;
@@ -78,7 +79,7 @@ function payload(
     projects: {
       [slackApprovalActionIdV4(APPROVAL_ID, "projects-select")]: {
         type: "multi_static_select",
-        selected_options: (input.projects ?? []).map((id) => ({
+        selected_options: input.project_options ?? (input.projects ?? []).map((id) => ({
           text: plain(id === PROJECT_A ? "Alpha" : "Beta"),
           value: id,
           description: plain("Current project members can read this record"),
@@ -153,6 +154,17 @@ function payload(
     ],
   };
 }
+function unsigned(raw: Uint8Array) {
+  return verifyPrivateSlackApprovalRequestV1({
+    raw_body: raw,
+    signing_secret: SECRET,
+    headers: {
+      "x-slack-request-timestamp": String(NOW),
+      "x-slack-signature": "v0=00".padEnd(67, "0"),
+    },
+    now_unix_seconds: NOW,
+  });
+}
 function parse(value: unknown) {
   return parseVerifiedPrivateSlackApprovalInteractionV1(verify(form(value)));
 }
@@ -209,33 +221,7 @@ describe("private Slack approval interaction V4", () => {
         (block as { block_id?: string }).block_id?.endsWith("-projects"),
       ) as { element: { options: readonly unknown[] } }
     ).element.options;
-    expect(
-      parse(
-        payload({
-          audience: "projects",
-          state: {
-            audience: {
-              [slackApprovalActionIdV4(APPROVAL_ID, "audience-select")]: {
-                type: "static_select",
-                selected_option: { text: plain("Projects"), value: "projects" },
-              },
-            },
-            projects: {
-              [slackApprovalActionIdV4(APPROVAL_ID, "projects-select")]: {
-                type: "multi_static_select",
-                selected_options: projects,
-              },
-            },
-            transcript: {
-              [slackApprovalActionIdV4(APPROVAL_ID, "transcript-checkbox")]: {
-                type: "checkboxes",
-                selected_options: [],
-              },
-            },
-          },
-        }),
-      ),
-    ).toMatchObject({
+    expect(parse(payload({ audience: "projects", project_options: projects }))).toMatchObject({
       disposition: "resolution",
       audience: "projects",
       project_ids: [PROJECT_A],
@@ -320,36 +306,13 @@ describe("private Slack approval interaction V4", () => {
   });
   it("keeps original-byte HMAC, freshness and body-size enforcement before parsing", () => {
     const raw = form(payload());
-    expect(() =>
-      verifyPrivateSlackApprovalRequestV1({
-        raw_body: raw,
-        signing_secret: SECRET,
-        headers: {
-          "x-slack-request-timestamp": String(NOW),
-          "x-slack-signature": "v0=00".padEnd(67, "0"),
-        },
-        now_unix_seconds: NOW,
-      }),
-    ).toThrow(PrivateSlackApprovalInteractionError);
+    expect(() => unsigned(raw)).toThrow(PrivateSlackApprovalInteractionError);
     expect(() =>
       verify(raw, NOW + PRIVATE_SLACK_APPROVAL_INTERACTION_MAX_AGE_SECONDS + 1),
     ).toThrow(PrivateSlackApprovalInteractionError);
-    expect(() =>
-      verifyPrivateSlackApprovalRequestV1({
-        raw_body: new Uint8Array(64 * 1024 + 1),
-        signing_secret: SECRET,
-        headers: {
-          "x-slack-request-timestamp": String(NOW),
-          "x-slack-signature": "v0=00".padEnd(67, "0"),
-        },
-        now_unix_seconds: NOW,
-      }),
-    ).toThrow(PrivateSlackApprovalInteractionError);
-  });
-  it("acknowledges signed V4 selector changes without a decision intent", () => {
-    expect(parse(payload({ action: "audience-select" }))).toMatchObject({
-      disposition: "presentation_change",
-    });
+    expect(() => unsigned(new Uint8Array(64 * 1024 + 1))).toThrow(
+      PrivateSlackApprovalInteractionError,
+    );
   });
   it("accepts only the expected Slack type for each V4 no-op control", () => {
     const cases: readonly [string, string][] = [

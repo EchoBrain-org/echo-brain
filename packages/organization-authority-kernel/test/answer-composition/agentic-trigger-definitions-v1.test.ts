@@ -1,10 +1,12 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
+import { PERSON_SWEEP_RESULT_LIMITS_V1 } from "@echo-brain/organization-api";
 import { describe, expect, it } from "vitest";
 import { STEP_PROMPT, TASK_RULE_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticStartingSlotV1, fillAgenticTaskV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_BUDGETS_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1, AGENTIC_TRIGGER_NAMES_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
 import { IMPACT_CARD_RENDERER_V1 } from "../../src/answer-composition/renderers/impact-card-renderer-v1.js";
+import { SWEEP_RENDERER_V1 } from "../../src/answer-composition/renderers/sweep-renderer-v1.js";
 
 const record = { kind: "approved_record", atom_id: canonicalSha256("atom"), record_sha256: canonicalSha256("record"), policy_id: "organization-member-readable-person-v2" };
 const ticket = { kind: "ticket", tool_id: "jira", external_scope_id: "cloud-1", ticket_id: "10046", permalink: "https://therm.example.test/browse/THERM-46", text_sha256: canonicalSha256("ticket") };
@@ -33,10 +35,10 @@ describe("trigger definitions", () => {
     expect(definition("ask")).toMatchObject({ acts_as: "requester", scope: "requested" });
     expect(definition("sweep")).toMatchObject({ acts_as: "requester", scope: "requested" });
     expect(definition("approved_record")).toMatchObject({ acts_as: "approver", scope: "record_project" });
-    // The approved record renders an impact card; Ask's writer is composed by the runner, and Sweep is research only.
+    // The approved record renders an impact card and Sweep its verdicts; Ask's writer is composed by the runner.
     expect(definition("approved_record").renderer).toBe(IMPACT_CARD_RENDERER_V1);
+    expect(definition("sweep").renderer).toBe(SWEEP_RENDERER_V1);
     expect(definition("ask").renderer).toBeUndefined();
-    expect(definition("sweep").renderer).toBeUndefined();
   });
 
   it("runs each brief on its definition's budget profile, from one label-to-budget table", () => {
@@ -100,10 +102,22 @@ describe("Sweep definition", () => {
     expect(filled(value, ["E7"])).toContain('1. "Ship {{starting:1}} first" Expected: "{{starting:2}} done". Cited then: E7.');
   });
 
+  it("refuses a finding that cites a Slack message: no desk can read one yet (R62)", () => {
+    const slack = { kind: "slack_message", team_id: "T0THERM", channel_id: "C0THERM", message_ts: "1700000000.000100",
+      permalink: "https://therm.slack.com/archives/C0THERM/p1700000000000100", text_sha256: canonicalSha256("slack") };
+    // Alone, or beside items a sweep does read.
+    for (const citations of [[slack], [slack, record], [ticket, slack]]) {
+      refused("sweep", { findings: [{ finding: "Launch moved in chat", expected: "launch next week", citations }] });
+    }
+    refused("sweep", { findings: [{ finding: "Firmware formats two decimals", expected: "SW-22b updated", citations: [ticket] }, { finding: "f", expected: "e", citations: [slack] }] });
+  });
+
   it("refuses empty, unbounded or malformed findings", () => {
     const one = findings[0]!;
+    // As many findings as a sweep result holds, and no more.
+    expect(brief("sweep", { findings: Array.from({ length: PERSON_SWEEP_RESULT_LIMITS_V1.findings }, () => one) }).starting).toHaveLength(1);
     for (const input of [
-      { findings: [] }, { findings: Array.from({ length: 21 }, () => one) }, { findings: [{ ...one, citations: [] }] },
+      { findings: [] }, { findings: Array.from({ length: PERSON_SWEEP_RESULT_LIMITS_V1.findings + 1 }, () => one) }, { findings: [{ ...one, citations: [] }] },
       { findings: [{ ...one, citations: Array.from({ length: 13 }, () => ticket) }] }, { findings: [{ ...one, note: "x" }] },
       { findings: [{ ...one, finding: " " }] }, { findings: [{ ...one, expected: "two\nlines" }] }, { findings: [{ ...one, citations: [{ kind: "ticket" }] }] },
       { findings: [one], extra: true }, {},

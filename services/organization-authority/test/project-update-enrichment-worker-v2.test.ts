@@ -42,6 +42,18 @@ function setupProject(f: ReturnType<typeof fixture>) {
   return project.project_id;
 }
 
+function submit(f: ReturnType<typeof fixture>, projectId: string, number: number, title = 'Customer notes') {
+  return f.application.submitUpload('owner', {
+    schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: requestId(number),
+    title, text: 'The customer prefers a telephone call.', project_id: projectId,
+    audience: { kind: 'project', project_id: projectId },
+  });
+}
+
+function workState(database: Database.Database, contextId: string) {
+  return database.prepare('SELECT state, search_hints FROM authority_person_update_work_v2 WHERE context_id = ?').get(contextId);
+}
+
 describe('V2 project upload enrichment in the serialized Person worker', () => {
   it('validates and enriches a V3 projects-audience upload through the same requested-only worker', async () => {
     const f = fixture();
@@ -54,33 +66,23 @@ describe('V2 project upload enrichment in the serialized Person worker', () => {
       audience: { kind: 'projects', project_ids: projectIds },
     });
     await f.worker().runOnce(new AbortController().signal);
-    expect(f.database.prepare('SELECT state, search_hints FROM authority_person_update_work_v2 WHERE context_id = ?').get(receipt.context_id))
-      .toEqual({ state: 'ready', search_hints: 'customer telephone preference' });
+    expect(workState(f.database, receipt.context_id)).toEqual({ state: 'ready', search_hints: 'customer telephone preference' });
     expect(f.generation.structured_output.generate).toHaveBeenCalledTimes(1);
   });
 
   it('validates immutable V2 source bytes, captures eligibility before generation, and persists optional hints', async () => {
     const f = fixture(); const projectId = setupProject(f);
-    const receipt = f.application.submitUpload('owner', {
-      schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: requestId(3),
-      title: 'Customer notes', text: 'The customer prefers a telephone call.', project_id: projectId,
-      audience: { kind: 'project', project_id: projectId },
-    });
+    const receipt = submit(f, projectId, 3);
 
     await f.worker().runOnce(new AbortController().signal);
-    expect(f.database.prepare('SELECT state, search_hints FROM authority_person_update_work_v2 WHERE context_id = ?').get(receipt.context_id))
-      .toEqual({ state: 'ready', search_hints: 'customer telephone preference' });
+    expect(workState(f.database, receipt.context_id)).toEqual({ state: 'ready', search_hints: 'customer telephone preference' });
     expect(f.application.readUpload('member', receipt.context_id)).toMatchObject({ text: 'The customer prefers a telephone call.' });
     expect(f.generation.structured_output.generate).toHaveBeenCalledTimes(1);
   });
 
   it('stops hints after audience-project revoke/rejoin while another current reader can still read the original', async () => {
     const f = fixture(); const projectId = setupProject(f);
-    const receipt = f.application.submitUpload('owner', {
-      schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: requestId(4),
-      title: 'Customer notes', text: 'The customer prefers a telephone call.', project_id: projectId,
-      audience: { kind: 'project', project_id: projectId },
-    });
+    const receipt = submit(f, projectId, 4);
     f.generation.structured_output.generate.mockImplementationOnce(async () => {
       f.database.prepare("UPDATE authority_project_memberships_v1 SET status = 'revoked', revoked_at = ? WHERE project_id = ? AND membership_id = ?")
         .run(PROJECT_CONTEXT_NOW, projectId, OWNER.membership_id);
@@ -92,18 +94,13 @@ describe('V2 project upload enrichment in the serialized Person worker', () => {
     });
 
     await f.worker().runOnce(new AbortController().signal);
-    expect(f.database.prepare('SELECT state, search_hints FROM authority_person_update_work_v2 WHERE context_id = ?').get(receipt.context_id))
-      .toEqual({ state: 'unavailable', search_hints: '' });
+    expect(workState(f.database, receipt.context_id)).toEqual({ state: 'unavailable', search_hints: '' });
     expect(f.application.readUpload('member', receipt.context_id)).toMatchObject({ text: 'The customer prefers a telephone call.' });
   });
 
   it('fails visibly before model handoff when immutable V2 source bytes are corrupt', async () => {
     const f = fixture(); const projectId = setupProject(f);
-    const receipt = f.application.submitUpload('owner', {
-      schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: requestId(5),
-      title: 'Customer notes', text: 'The customer prefers a telephone call.', project_id: projectId,
-      audience: { kind: 'project', project_id: projectId },
-    });
+    const receipt = submit(f, projectId, 5);
     f.database.exec('DROP TRIGGER authority_person_updates_v2_immutable');
     f.database.prepare('UPDATE authority_person_updates_v2 SET text = ? WHERE context_id = ?').run('corrupt', receipt.context_id);
 
@@ -113,11 +110,7 @@ describe('V2 project upload enrichment in the serialized Person worker', () => {
 
   it('never completes one claimed source with another source eligibility snapshot', () => {
     const f = fixture(); const projectId = setupProject(f);
-    for (const number of [6, 7]) f.application.submitUpload('owner', {
-      schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: requestId(number),
-      title: `Customer notes ${number}`, text: 'The customer prefers a telephone call.', project_id: projectId,
-      audience: { kind: 'project', project_id: projectId },
-    });
+    for (const number of [6, 7]) submit(f, projectId, number, `Customer notes ${number}`);
     const work = new SqlitePersonUpdateEnrichmentWorkV2(f.database, new SqliteProjectUploadEnrichmentAuthorizationV1(f.database), () => PROJECT_CONTEXT_NOW);
     const first = work.claim()!;
     f.database.prepare("UPDATE authority_person_update_work_v2 SET retry_at = '2027-01-01T00:00:00.000Z' WHERE context_id = ?").run(first.context_id);
@@ -128,7 +121,6 @@ describe('V2 project upload enrichment in the serialized Person worker', () => {
     expect(firstEligibility.context_id).not.toBe(secondEligibility.context_id);
     expect(() => work.enriched(first, secondEligibility, 'customer', canonicalSha256('fixture')))
       .toThrow(expect.objectContaining({ code: 'unauthorized' }));
-    expect(f.database.prepare('SELECT state, search_hints FROM authority_person_update_work_v2 WHERE context_id = ?').get(first.context_id))
-      .toEqual({ state: 'processing', search_hints: '' });
+    expect(workState(f.database, first.context_id)).toEqual({ state: 'processing', search_hints: '' });
   });
 });

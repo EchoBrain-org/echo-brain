@@ -1,5 +1,4 @@
 import { sha256Digest, type Sha256Digest } from "@echo-brain/federation-protocol";
-import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import {
   organizationMemberReadablePersonPolicyContractSha256,
   projectMembersReadablePersonPolicyContractSha256,
@@ -14,6 +13,7 @@ import type { PersonRecordSearchRouteV1 } from "../src/composition/person-record
 import { releasableBodyV1 } from "../src/application/person-item-text-v1.js";
 import { validatePersonOpenResponseV1 } from "@echo-brain/organization-api";
 import { COORDINATES } from "../../../packages/organization-record/test/fixtures/record-append-fixture.js";
+import { failure } from "./authority-failure.js";
 import { EMP_A, EMP_B, OWNER, SHARED, T, UNJOINED, admittedTranscriptV1, meetingWorld, type ReaderToken } from "./fixtures/person-meeting-world.js";
 import { SIGNED_APPROVAL_PRIVATE_MARKER } from "./fixtures/signed-approval-decision-v1.js";
 
@@ -101,14 +101,6 @@ async function world(options: { readonly long?: boolean } = {}) {
       (grant.policy_id === "project-members-readable-person-v1" && grant.policy_contract_sha256 === projectMembersReadablePersonPolicyContractSha256()),
   });
   return { ...w, originals, probed: () => w.route({ transcript_probe: (input) => originals.probeApprovedMeetingTranscriptV1(input) }) };
-}
-
-function failure(operation: () => unknown): { readonly code: string; readonly message: string } {
-  try { operation(); } catch (error) {
-    if (error instanceof AuthorityOperationError) return { code: error.code, message: error.message };
-    throw error;
-  }
-  throw new Error("expected an Authority failure");
 }
 
 function pages(route: PersonRecordSearchRouteV1, token: ReaderToken, record_sha256: Sha256Digest) {

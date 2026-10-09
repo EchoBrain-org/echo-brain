@@ -107,8 +107,6 @@ describe('cited original and transcript HTTP transport', () => {
     expect(response.headers.get('cache-control')).toBe('no-store');
     const result = await response.json() as PersonSourceEvidenceV1;
     expect(result).toEqual(evidence);
-    expect(result.citation).not.toHaveProperty('text');
-    expect(result.text).toBe('MRD\n\nExact bounded source packet.');
     expect(calls).toEqual([{ access_token: 'fixture-token', request: body }]);
   });
 

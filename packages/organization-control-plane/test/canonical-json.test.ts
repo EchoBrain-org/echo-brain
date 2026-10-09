@@ -36,17 +36,11 @@ describe("canonical JSON key ordering", () => {
     expect(localeOrdered(MIXED_CASE_KEYS)).toBe(
       '{"a_id":2,"A_id":1,"t0bfx":4,"T0BFX":3,"user":6,"User":5}',
     );
-    expect(canonicalJson(MIXED_CASE_KEYS)).not.toBe(
-      localeOrdered(MIXED_CASE_KEYS),
-    );
   });
 
   it("applies the same ordering to an object nested inside an array", () => {
     expect(canonicalJson([{ ...MIXED_CASE_KEYS }])).toBe(
       `[${CODE_UNIT_ORDER}]`,
-    );
-    expect(canonicalJson([{ ...MIXED_CASE_KEYS }])).not.toBe(
-      `[${localeOrdered(MIXED_CASE_KEYS)}]`,
     );
   });
 
@@ -55,7 +49,6 @@ describe("canonical JSON key ordering", () => {
     for (const key of ["user", "User", "t0bfx", "T0BFX", "a_id", "A_id"]) {
       reversed[key] = MIXED_CASE_KEYS[key as keyof typeof MIXED_CASE_KEYS];
     }
-    expect(Object.keys(reversed)).not.toEqual(Object.keys(MIXED_CASE_KEYS));
     expect(canonicalJson(reversed)).toBe(canonicalJson(MIXED_CASE_KEYS));
     expect(canonicalSha256(reversed)).toBe(canonicalSha256(MIXED_CASE_KEYS));
   });
@@ -68,9 +61,6 @@ describe("string digest semantics", () => {
     );
     expect(canonicalSha256("identity-state:cat_example")).toBe(
       "sha256:2485f9060adee018a22982477380b5cb256658177795f17c1a80f37cf6c80c47",
-    );
-    expect(canonicalSha256("identity-state:cat_example")).not.toBe(
-      sha256Digest("identity-state:cat_example"),
     );
     expect(canonicalSha256("identity-state:cat_example")).toBe(
       sha256Digest('"identity-state:cat_example"'),

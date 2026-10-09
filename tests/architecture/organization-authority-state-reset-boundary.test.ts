@@ -25,9 +25,6 @@ const WORKSPACE_EXPORTS: ReadonlyMap<string, WorkspaceExport> = new Map(
 );
 
 const ALLOWED_LEAF_IMPORTS = new Set([
-  "@echo-brain/federation-protocol",
-  "@echo-brain/organization-api",
-  "@echo-brain/organization-protocol",
   "better-sqlite3",
   "node:async_hooks",
   "node:perf_hooks",
@@ -125,7 +122,12 @@ function exportIsTypeOnly(node: ts.ExportDeclaration): boolean {
   return node.exportClause.elements.every((element) => element.isTypeOnly);
 }
 
+// Pure in the file bytes, so the overlapping entry closures parse each file once.
+const SPECIFIERS = new Map<string, readonly string[]>();
+
 function staticRuntimeModuleSpecifiers(path: string): readonly string[] {
+  const cached = SPECIFIERS.get(path);
+  if (cached !== undefined) return cached;
   const source = ts.createSourceFile(
     path,
     readFileSync(join(REPO, path), "utf8"),
@@ -152,6 +154,7 @@ function staticRuntimeModuleSpecifiers(path: string): readonly string[] {
     ts.forEachChild(node, visit);
   };
   visit(source);
+  SPECIFIERS.set(path, specifiers);
   return specifiers;
 }
 
@@ -181,7 +184,6 @@ describe("Organization Authority executable closure boundaries", () => {
   for (const entry of CLEAN_ENTRIES) {
     it(`${entry} excludes retired machine and migration runtime`, () => {
       const closure = cleanClosure(entry);
-      expect(closure).toContain(entry);
       for (const path of closure) {
         for (const forbidden of FORBIDDEN_SELECTED_MODULES) {
           expect(path, `${entry} reaches forbidden module ${path}`).not.toMatch(

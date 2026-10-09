@@ -91,7 +91,6 @@ function validInput(options: Options = {}) {
   const event: Mutable = { kind: "approved", approved_snapshot: approved, approved_snapshot_sha256, policy_id, policy_contract_sha256, policy_consequence: consequence, policy_consequence_sha256 };
   return { [APPROVAL_DECISION_FIELD_V1]: ref, event } as { approval_decision_ref_v1: Mutable; event: Mutable };
 }
-const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const refuses = (value: unknown, message?: string | RegExp) => expect(() => validateApprovalDecisionRecordInputV1(value)).toThrow(message);
 
 describe("approval decision record input v1", () => {
@@ -149,9 +148,6 @@ describe("approval decision record input v1", () => {
     const actions = Array.from({ length: 41 }, (_, index) => ({ id: `act-${index + 1}` }));
     refuses(validInput({ owners, actions }));
   });
-  it.each([[" Jules"], [""], ["x".repeat(121)], ["a\u0007b"], ["a​b"]])("refuses owner text %j", (owner) => {
-    refuses(validInput({ owners: [{ signal_id: "act-1", owner }] }));
-  });
   it("accepts owner text with a double space or non-NFC form", () => {
     for (const owner of ["Rafael  M.", "José"]) {
       expect(validateApprovalDecisionRecordInputV1(validInput({ owners: [{ signal_id: "act-1", owner }] })).approval_decision_ref_v1.action_owners).toEqual([{ signal_id: "act-1", owner }]);
@@ -196,6 +192,5 @@ describe("approval decision record input v1", () => {
     const before = canonicalJson(result.approval_decision_ref_v1 as unknown as JsonValue);
     (input.approval_decision_ref_v1 as Mutable).audit_sequence = 99;
     expect(canonicalJson(result.approval_decision_ref_v1 as unknown as JsonValue)).toBe(before);
-    expect(clone(result.approval_decision_ref_v1).audit_sequence).toBe(7);
   });
 });

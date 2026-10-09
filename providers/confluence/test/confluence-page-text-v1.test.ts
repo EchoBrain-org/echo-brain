@@ -4,6 +4,7 @@ import { normalizeConfluencePageDocumentV1 } from '../src/confluence-page-text-v
 const text = (value: string) => ({ type: 'text', text: value });
 const paragraph = (value: string) => ({ type: 'paragraph', content: [text(value)] });
 const document = (...content: unknown[]) => JSON.stringify({ type: 'doc', version: 1, content });
+const nested = (depth: number): unknown => depth === 0 ? paragraph('Too deep') : { type: 'panel', content: [nested(depth - 1)] };
 
 describe('Confluence native ADF page text', () => {
   it('preserves headings, gate table relationships, lists, links and Unicode', () => {
@@ -63,15 +64,9 @@ describe('Confluence native ADF page text', () => {
     document(text('\u0000')), document(text('\ud800')), document(text('\u0085')),
     document({ type: 'text', text: 'bad', content: [] }), document({ type: 'taskItem', attrs: { state: 'unknown' } }),
     document({ type: 'date', attrs: { timestamp: 'invalid' } }), 'x'.repeat(1024 * 1024 + 1),
+    // Nesting, node count and total released text are bounded independently.
+    document(nested(65)), document(...Array.from({ length: 50_001 }, () => ({ type: 'hardBreak' }))), document(text('x'.repeat(512 * 1024 + 1))),
   ])('rejects malformed or excessive native documents', value => {
     expect(() => normalizeConfluencePageDocumentV1(value)).toThrow();
-  });
-
-  it('bounds nesting, node count and total released text independently', () => {
-    let nested: unknown = paragraph('Too deep');
-    for (let depth = 0; depth < 65; depth++) nested = { type: 'panel', content: [nested] };
-    for (const value of [document(nested), document(...Array.from({ length: 50_001 }, () => ({ type: 'hardBreak' }))), document(text('x'.repeat(512 * 1024 + 1)))]) {
-      expect(() => normalizeConfluencePageDocumentV1(value)).toThrow();
-    }
   });
 });

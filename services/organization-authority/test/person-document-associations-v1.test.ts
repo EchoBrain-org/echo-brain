@@ -11,7 +11,7 @@ import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sq
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import { createPersonDocumentUploadStagingV1 } from '../src/adapters/files/document-upload-staging-v1.js';
-import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, insertLegacyTextV1, revokeMembership } from './fixtures/project-context-sqlite.js';
+import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, insertLegacyTextV1, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 
 const databases: Database.Database[] = [];
 const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
@@ -20,11 +20,7 @@ afterEach(async () => {
   databases.splice(0).forEach(db => db.close());
 });
 function setup() {
-  const db = new Database(':memory:'); databases.push(db); db.pragma('foreign_keys=ON');
-  db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v13.sql', import.meta.url), 'utf8'));
-  db.prepare(`INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES (1,'oau_associations',?,'Associations','{}',?,?)`).run(OWNER.organization_id, PROJECT_CONTEXT_NOW, PROJECT_CONTEXT_NOW);
-  db.prepare('INSERT INTO authority_project_authorization_state_v1(organization_id,revision,updated_at) VALUES (?,0,?)').run(OWNER.organization_id, PROJECT_CONTEXT_NOW);
-  addMembership(db, OWNER, 'Owner', null); addMembership(db, MEMBER, 'Member', 'member@example.test');
+  const db = projectContextDatabase(); databases.push(db);
   for (const project of [PROJECT_ALPHA, PROJECT_BETA]) {
     db.prepare('INSERT INTO authority_projects_v1(project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type) VALUES (?,?,?,?,?,?,?)').run(project, OWNER.organization_id, project, PROJECT_CONTEXT_NOW, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type);
     grant(db, project, OWNER, 'lead');
@@ -185,7 +181,7 @@ describe('document project associations', () => {
     expect(db.prepare('SELECT count(*) n FROM authority_person_document_associations_v1').get()).toEqual({ n: 0 });
   });
   it('shares request identities with document uploads and project commands in both directions and with retained legacy uploads', () => {
-    const { app, db, upload, bytes } = setup(); const saved = upload();
+    const { app, db, upload } = setup(); const saved = upload();
     const projects = createProjectContextApplicationV1({ authenticate: () => authorization(OWNER), repository: new SqliteProjectContextRepositoryV1(db, () => PROJECT_CONTEXT_NOW) });
     const create = (request_id: string) => projects.createProject('owner', { schema_version: 1, kind: 'echo-project-create-v1', request_id, name: 'Shared namespace' });
     const text = (request_id: string) => insertLegacyTextV1(db, OWNER, { request_id, title: 'Legacy', text: 'text', visibility: 'team' });
@@ -194,6 +190,6 @@ describe('document project associations', () => {
     const textRequest = randomUUID(); text(textRequest); expect(() => app.associate('owner', { ...associate(saved.document_id), request_id: textRequest })).toThrow(expect.objectContaining({ code: 'conflict' }));
     const request = associate(saved.document_id); app.associate('owner', request);
     expect(() => create(request.request_id)).toThrow(expect.objectContaining({ code: 'conflict' }));
-    expect(() => app.upload('owner', { schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: request.request_id, filename: 'SCOUT.md', title: 'SCOUT', content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: 'team' }, project_id: null }, bytes)).toThrow(expect.objectContaining({ code: 'conflict' }));
+    expect(() => upload('owner', { request_id: request.request_id })).toThrow(expect.objectContaining({ code: 'conflict' }));
   });
 });

@@ -4,10 +4,12 @@ import {
   chmodSync,
   chownSync,
   copyFileSync,
+  cpSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -15,7 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   createRecordPolicyFactProjectorRegistryV1,
   createPersonPolicyFactProjectorV2,
@@ -35,7 +37,10 @@ import { canonicalJsonForTest as canonical } from "../support/test-canonical-jso
 
 const REPO = resolve(import.meta.dirname, "../..");
 const TOOL = join(REPO, "tools", "verify-authority-recovery.mjs");
+const REFUSED = /^offline recovery verification refused$/;
 const roots: string[] = [];
+let templateParent: string | undefined;
+let template = "";
 const TEST_READ_ONLY_MOUNT = Object.freeze({
   mount_id: "test-read-only-mount",
   mount_point: "/",
@@ -56,9 +61,8 @@ function root(): string {
   return created;
 }
 
-async function writeFixture(): Promise<string> {
-  const parent = root();
-  const cleanData = join(parent, "clean-data");
+/** Bootstraps and reconciles the clean-data template once; tests mutate copies. */
+async function buildTemplate(cleanData: string): Promise<string> {
   const stateDirectory = join(cleanData, "state");
   const releaseDirectory = join(cleanData, "release");
   const privateDirectory = join(cleanData, "private");
@@ -111,6 +115,39 @@ async function writeFixture(): Promise<string> {
     record.close();
   }
   return writeReleaseTuple(cleanData);
+}
+
+/** A fresh copy of the template with every directory and file mode restored. */
+function writeFixture(): string {
+  const cleanData = join(root(), "clean-data");
+  cpSync(template, cleanData, { recursive: true });
+  const restoreModes = (source: string, target: string): void => {
+    const metadata = lstatSync(source);
+    chmodSync(target, metadata.mode & 0o7777);
+    if (metadata.isDirectory())
+      for (const name of readdirSync(source))
+        restoreModes(join(source, name), join(target, name));
+  };
+  restoreModes(template, cleanData);
+  return cleanData;
+}
+
+function environmentPath(cleanData: string): string {
+  return join(
+    cleanData,
+    "release",
+    "runtime-environments",
+    "clean-v1-20260825-001.env",
+  );
+}
+
+function retrievalDatabasePath(cleanData: string): string {
+  const lineage = verifyAuthorityStateLineage(join(cleanData, "state"));
+  const retrievalDatabase = lineage.databases.find((database) =>
+    database.role.startsWith("retrieval-"),
+  );
+  expect(retrievalDatabase).toBeDefined();
+  return retrievalDatabase!.path;
 }
 
 function writeReleaseTuple(cleanData: string): string {
@@ -213,26 +250,30 @@ function runtimeEnvironment(
   ].join("\n");
 }
 
-async function run(
+function verify(
   cleanData: string,
   mountInspector: (path: string) => MountInspection = () =>
     TEST_READ_ONLY_MOUNT,
 ) {
-  try {
-    const result = await verifyAuthorityRecovery({
-      cleanData,
-      sourceRoot: REPO,
-      mountInspector,
-    });
-    return { status: 0, stdout: `${canonical(result)}\n`, stderr: "" };
-  } catch {
-    return {
-      status: 1,
-      stdout: "",
-      stderr: "authority offline recovery verification failed\n",
-    };
-  }
+  return verifyAuthorityRecovery({
+    cleanData,
+    sourceRoot: REPO,
+    mountInspector,
+  });
 }
+
+beforeAll(async () => {
+  templateParent = mkdtempSync(
+    join(tmpdir(), "echo-authority-recovery-verifier-template-"),
+  );
+  chmodSync(templateParent, 0o700);
+  template = await buildTemplate(join(templateParent, "clean-data"));
+});
+
+afterAll(() => {
+  if (templateParent !== undefined)
+    rmSync(templateParent, { recursive: true, force: true });
+});
 
 afterEach(() => {
   for (const value of roots.splice(0))
@@ -241,11 +282,9 @@ afterEach(() => {
 
 describe("authority offline recovery verifier", () => {
   it("validates an offline release tuple, lineage, primary databases, and published retrieval databases", async () => {
-    const cleanData = await writeFixture();
-    const result = await run(cleanData);
+    const result = await verify(writeFixture());
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({
+    expect(result).toEqual({
       schema_version: 1,
       kind: "echo-authority-offline-recovery-verification-v1",
       ok: true,
@@ -262,143 +301,93 @@ describe("authority offline recovery verifier", () => {
       retrieval_sqlite_database_count: 3,
       retrieval_sqlite_integrity_valid: true,
     });
-    expect(result.stdout).not.toContain("provider-credential");
-    expect(result.stdout).not.toContain("never read");
+    expect(JSON.stringify(result)).not.toContain("provider-credential");
+    expect(JSON.stringify(result)).not.toContain("never read");
   });
 
-  it("fails closed before reporting when a release tuple file is unsafe", async () => {
-    const cleanData = await writeFixture();
-    chmodSync(join(cleanData, "release", "runtime-profile.active"), 0o644);
-    const result = await run(cleanData);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe(
-      "authority offline recovery verification failed\n",
-    );
-  });
-
-  it("refuses a connector rehearsal profile or sidecar in an offline backup restore", async () => {
-    const cleanData = await writeFixture();
-    const environment = join(
-      cleanData,
-      "release",
-      "runtime-environments",
-      "clean-v1-20260825-001.env",
-    );
-    writeFileSync(
-      environment,
-      `${readFileSync(environment, "utf8")}\nECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=/echo-clean/private/staging-connector-rehearsal.json`,
-      { mode: 0o600 },
-    );
-    expect((await run(cleanData)).status).toBe(1);
-
-    const second = await writeFixture();
-    mkdirSync(join(second, "staging-connector-rehearsal-v1"), { mode: 0o700 });
-    expect((await run(second)).status).toBe(1);
+  it.each([
+    [
+      "an unsafe release tuple file mode",
+      (cleanData: string) =>
+        chmodSync(join(cleanData, "release", "runtime-profile.active"), 0o644),
+    ],
+    [
+      "a connector rehearsal profile in the runtime environment",
+      (cleanData: string) =>
+        writeFileSync(
+          environmentPath(cleanData),
+          `${readFileSync(environmentPath(cleanData), "utf8")}\nECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=/echo-clean/private/staging-connector-rehearsal.json`,
+          { mode: 0o600 },
+        ),
+    ],
+    [
+      "a connector rehearsal sidecar in an offline backup restore",
+      (cleanData: string) =>
+        mkdirSync(join(cleanData, "staging-connector-rehearsal-v1"), {
+          mode: 0o700,
+        }),
+    ],
+    [
+      "a state SQLite symlink before lineage or SQLite inspection",
+      (cleanData: string) => {
+        const database = join(cleanData, "state", "authority.sqlite");
+        unlinkSync(database);
+        symlinkSync(join(cleanData, "private", "provider-credential"), database);
+      },
+    ],
+    [
+      "a retrieval SQLite symlink before lineage or SQLite inspection",
+      (cleanData: string) => {
+        const database = retrievalDatabasePath(cleanData);
+        unlinkSync(database);
+        symlinkSync(join(cleanData, "private", "provider-credential"), database);
+      },
+    ],
+    [
+      "a primary SQLite hot-state sidecar before immutable reads",
+      (cleanData: string) =>
+        writeFileSync(join(cleanData, "state", "authority.sqlite-wal"), "hot"),
+    ],
+    [
+      "a retrieval SQLite hot-state sidecar before immutable reads",
+      (cleanData: string) =>
+        writeFileSync(`${retrievalDatabasePath(cleanData)}-shm`, "hot"),
+    ],
+    [
+      "an environment runtime identity that does not own private state",
+      (cleanData: string) => {
+        const privateOwner = lstatSync(join(cleanData, "private"));
+        writeFileSync(
+          environmentPath(cleanData),
+          readFileSync(environmentPath(cleanData), "utf8").replace(
+            `ECHO_CLEAN_AUTHORITY_UID=${privateOwner.uid}`,
+            `ECHO_CLEAN_AUTHORITY_UID=${privateOwner.uid + 1}`,
+          ),
+          { mode: 0o600 },
+        );
+      },
+    ],
+  ])("refuses %s", async (_name, mutate) => {
+    const cleanData = writeFixture();
+    mutate(cleanData);
+    await expect(verify(cleanData)).rejects.toThrow(REFUSED);
   });
 
   it("refuses a restored Confluence grant store without qualifying or changing its contents", async () => {
-    const cleanData = await writeFixture();
+    const cleanData = writeFixture();
     const store = join(cleanData, "state", "confluence-person-connections.sqlite");
     const synthetic = "synthetic stale Confluence connection metadata must not be reused";
     writeFileSync(store, synthetic, { mode: 0o600 });
     const before = lstatSync(store);
 
-    const result = await run(cleanData);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe("authority offline recovery verification failed\n");
+    await expect(verify(cleanData)).rejects.toThrow(REFUSED);
     expect(readFileSync(store, "utf8")).toBe(synthetic);
     expect(lstatSync(store).mtimeMs).toBe(before.mtimeMs);
   });
 
-  it("refuses a state SQLite symlink before lineage or SQLite inspection", async () => {
-    const cleanData = await writeFixture();
-    const database = join(cleanData, "state", "authority.sqlite");
-    unlinkSync(database);
-    symlinkSync(join(cleanData, "private", "provider-credential"), database);
-
-    const result = await run(cleanData);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe(
-      "authority offline recovery verification failed\n",
-    );
-    expect(`${result.stdout}${result.stderr}`).not.toContain(
-      "provider-credential",
-    );
-    expect(`${result.stdout}${result.stderr}`).not.toContain("private");
-  });
-
-  it("refuses a retrieval SQLite symlink before lineage or SQLite inspection", async () => {
-    const cleanData = await writeFixture();
-    const lineage = verifyAuthorityStateLineage(join(cleanData, "state"));
-    const retrievalDatabase = lineage.databases.find((database) =>
-      database.role.startsWith("retrieval-"),
-    );
-    expect(retrievalDatabase).toBeDefined();
-    unlinkSync(retrievalDatabase!.path);
-    symlinkSync(
-      join(cleanData, "private", "provider-credential"),
-      retrievalDatabase!.path,
-    );
-
-    const result = await run(cleanData);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe(
-      "authority offline recovery verification failed\n",
-    );
-    expect(`${result.stdout}${result.stderr}`).not.toContain(
-      "provider-credential",
-    );
-    expect(`${result.stdout}${result.stderr}`).not.toContain("private");
-  });
-
-  it("refuses a primary SQLite hot-state sidecar before immutable reads", async () => {
-    const cleanData = await writeFixture();
-    writeFileSync(join(cleanData, "state", "authority.sqlite-wal"), "hot");
-
-    const result = await run(cleanData);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe(
-      "authority offline recovery verification failed\n",
-    );
-  });
-
-  it("refuses a retrieval SQLite hot-state sidecar before immutable reads", async () => {
-    const cleanData = await writeFixture();
-    const lineage = verifyAuthorityStateLineage(join(cleanData, "state"));
-    const retrievalDatabase = lineage.databases.find((database) =>
-      database.role.startsWith("retrieval-"),
-    );
-    expect(retrievalDatabase).toBeDefined();
-    writeFileSync(`${retrievalDatabase!.path}-shm`, "hot");
-
-    const result = await run(cleanData);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe(
-      "authority offline recovery verification failed\n",
-    );
-  });
-
   it("refuses a runtime environment snapshot with a duplicate, missing, or unexpected field", async () => {
-    const cleanData = await writeFixture();
-    const environmentPath = join(
-      cleanData,
-      "release",
-      "runtime-environments",
-      "clean-v1-20260825-001.env",
-    );
-    const valid = readFileSync(environmentPath, "utf8");
+    const cleanData = writeFixture();
+    const valid = readFileSync(environmentPath(cleanData), "utf8");
     const variants = [
       valid.replace(
         "ECHO_CLEAN_RELEASE_ID=clean-v1-20260825-001",
@@ -412,18 +401,13 @@ describe("authority offline recovery verifier", () => {
     ];
 
     for (const value of variants) {
-      writeFileSync(environmentPath, value, { mode: 0o600 });
-      const result = await run(cleanData);
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toBe(
-        "authority offline recovery verification failed\n",
-      );
+      writeFileSync(environmentPath(cleanData), value, { mode: 0o600 });
+      await expect(verify(cleanData)).rejects.toThrow(REFUSED);
     }
   });
 
-  it("the CLI refuses a clean-data directory that is not on a Linux read-only mount", async () => {
-    const cleanData = await writeFixture();
+  it("the CLI refuses a clean-data directory that is not on a Linux read-only mount", () => {
+    const cleanData = writeFixture();
     const result = spawnSync(
       process.execPath,
       [TOOL, "--clean-data", cleanData, "--source-root", REPO],
@@ -472,51 +456,21 @@ describe("authority offline recovery verifier", () => {
   });
 
   it("refuses when the read-only mount changes before the final attestation", async () => {
-    const cleanData = await writeFixture();
+    const cleanData = writeFixture();
     let inspections = 0;
-    const result = await run(cleanData, () => {
-      inspections += 1;
-      return inspections === 1
-        ? TEST_READ_ONLY_MOUNT
-        : {
-            ...TEST_READ_ONLY_MOUNT,
-            mount_id: "changed-read-only-mount",
-          };
-    });
+    await expect(
+      verify(cleanData, () => {
+        inspections += 1;
+        return inspections === 1
+          ? TEST_READ_ONLY_MOUNT
+          : {
+              ...TEST_READ_ONLY_MOUNT,
+              mount_id: "changed-read-only-mount",
+            };
+      }),
+    ).rejects.toThrow(REFUSED);
 
     expect(inspections).toBe(2);
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe(
-      "authority offline recovery verification failed\n",
-    );
-  });
-
-  it("refuses when the environment runtime identity does not own private state", async () => {
-    const cleanData = await writeFixture();
-    const environmentPath = join(
-      cleanData,
-      "release",
-      "runtime-environments",
-      "clean-v1-20260825-001.env",
-    );
-    const privateOwner = lstatSync(join(cleanData, "private"));
-    writeFileSync(
-      environmentPath,
-      readFileSync(environmentPath, "utf8").replace(
-        `ECHO_CLEAN_AUTHORITY_UID=${privateOwner.uid}`,
-        `ECHO_CLEAN_AUTHORITY_UID=${privateOwner.uid + 1}`,
-      ),
-      { mode: 0o600 },
-    );
-
-    const result = await run(cleanData);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe(
-      "authority offline recovery verification failed\n",
-    );
   });
 
   it.skipIf(
@@ -527,7 +481,7 @@ describe("authority offline recovery verifier", () => {
   )(
     "fails closed when a private entry has a different numeric owner",
     async () => {
-      const cleanData = await writeFixture();
+      const cleanData = writeFixture();
       const alternateGroup = process.getgroups!().find(
         (group) => group !== process.getgid!(),
       );
@@ -537,13 +491,7 @@ describe("authority offline recovery verifier", () => {
         process.getuid!(),
         alternateGroup!,
       );
-      const result = await run(cleanData);
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toBe(
-        "authority offline recovery verification failed\n",
-      );
+      await expect(verify(cleanData)).rejects.toThrow(REFUSED);
     },
   );
 });

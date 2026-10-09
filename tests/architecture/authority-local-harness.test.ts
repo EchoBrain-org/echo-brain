@@ -128,6 +128,37 @@ function runTool(
   });
 }
 
+function tupleEnvironment(tuple: ReturnType<typeof externalTuple>) {
+  return {
+    ECHO_LOCAL_AUTHORITY_HTTP_PORT: String(tuple.ports.http),
+    ECHO_LOCAL_AUTHORITY_HTTPS_PORT: String(tuple.ports.https),
+    ...nangoEnvironment(tuple.nango.secret_key_file),
+  };
+}
+
+function upTuple(
+  state: string,
+  tuple: ReturnType<typeof externalTuple>,
+  trap: { readonly path: string },
+  environment: Record<string, string> = tupleEnvironment(tuple),
+) {
+  return runTool(
+    [
+      "up", "--state-dir", state, "--image", tuple.image, "--source-revision", tuple.source_revision,
+      "--release-id", tuple.release_id, "--runtime-profile-sha256", tuple.runtime_profile_sha256, "--no-build",
+    ],
+    trap.path,
+    environment,
+  );
+}
+
+function generatedDirectory(state: string) {
+  const generated = join(state, "generated");
+  mkdirSync(generated, { mode: 0o700 });
+  currentOwnership(generated, 0o700);
+  return generated;
+}
+
 afterEach(() => {
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true });
@@ -229,46 +260,20 @@ describe("Authority local harness", () => {
   it("refuses a tuple change after down-like complete state before Docker", () => {
     const root = temporaryRoot();
     const key = nangoKeyFile(root);
-    const state = completeOwnedState(root, externalTuple(key));
+    const tuple = externalTuple(key);
+    const state = completeOwnedState(root, tuple);
     const trap = dockerTrap(root);
-    const result = runTool(
-      [
-        "up",
-        "--state-dir",
-        state,
-        "--image",
-        "authority:changed",
-        "--source-revision",
-        "a".repeat(40),
-        "--release-id",
-        "clean-v1-test",
-        "--runtime-profile-sha256",
-        "profile-test",
-        "--no-build",
-      ],
-      trap.path,
-      nangoEnvironment(key),
-    );
+    const result = upTuple(state, { ...tuple, image: "authority:changed" }, trap, nangoEnvironment(key));
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("different tuple or Nango settings; run reset");
     expect(() => realpathSync(trap.calls)).toThrow();
 
     // The same tuple with another Nango integration is refused too.
-    const tuple = externalTuple(key);
-    const otherIntegration = runTool(
-      [
-        "up", "--state-dir", state, "--image", tuple.image, "--source-revision", tuple.source_revision,
-        "--release-id", tuple.release_id, "--runtime-profile-sha256", tuple.runtime_profile_sha256, "--no-build",
-      ],
-      trap.path,
-      {
-        ECHO_LOCAL_AUTHORITY_HTTP_PORT: String(tuple.ports.http),
-        ECHO_LOCAL_AUTHORITY_HTTPS_PORT: String(tuple.ports.https),
-        ...nangoEnvironment(key),
-        ECHO_LOCAL_NANGO_INTEGRATION: "slack-other",
-      },
-    );
+    const otherIntegration = upTuple(state, tuple, trap, {
+      ...tupleEnvironment(tuple),
+      ECHO_LOCAL_NANGO_INTEGRATION: "slack-other",
+    });
     expect(otherIntegration.status).toBe(1);
     expect(otherIntegration.stderr).toContain("different tuple or Nango settings; run reset");
     expect(() => realpathSync(trap.calls)).toThrow();
@@ -278,9 +283,7 @@ describe("Authority local harness", () => {
     const root = temporaryRoot();
     const { nango: _nango, ...tuple } = externalTuple(nangoKeyFile(root));
     const state = completeOwnedState(root, tuple as ReturnType<typeof externalTuple>);
-    const generated = join(state, "generated");
-    mkdirSync(generated, { mode: 0o700 });
-    currentOwnership(generated, 0o700);
+    const generated = generatedDirectory(state);
     // The overlay a pre-Nango harness wrote: no command override and one state mount.
     const overlay = localOverlay({ state, ports: tuple.ports, localSource: tuple.source_revision });
     expect(overlay).not.toContain("command:");
@@ -309,33 +312,10 @@ describe("Authority local harness", () => {
     const root = temporaryRoot();
     const tuple = externalTuple(nangoKeyFile(root));
     const state = completeOwnedState(root, tuple);
-    const generated = join(state, "generated");
-    mkdirSync(generated, { mode: 0o700 });
-    currentOwnership(generated, 0o700);
+    const generated = generatedDirectory(state);
     symlinkSync(join(root, "outside"), join(generated, "compose.local.yaml"));
     const trap = dockerTrap(root);
-    const result = runTool(
-      [
-        "up",
-        "--state-dir",
-        state,
-        "--image",
-        tuple.image,
-        "--source-revision",
-        tuple.source_revision,
-        "--release-id",
-        tuple.release_id,
-        "--runtime-profile-sha256",
-        tuple.runtime_profile_sha256,
-        "--no-build",
-      ],
-      trap.path,
-      {
-        ECHO_LOCAL_AUTHORITY_HTTP_PORT: String(tuple.ports.http),
-        ECHO_LOCAL_AUTHORITY_HTTPS_PORT: String(tuple.ports.https),
-        ...nangoEnvironment(tuple.nango.secret_key_file),
-      },
-    );
+    const result = upTuple(state, tuple, trap);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("generated local Compose overlay");
@@ -372,9 +352,7 @@ describe("Authority local harness", () => {
     const root = temporaryRoot();
     const tuple = externalTuple(nangoKeyFile(root));
     const state = completeOwnedState(root, tuple);
-    const generated = join(state, "generated");
-    mkdirSync(generated, { mode: 0o700 });
-    currentOwnership(generated, 0o700);
+    const generated = generatedDirectory(state);
     const overlay = join(generated, "compose.local.yaml");
     writeFileSync(
       overlay,
@@ -389,28 +367,7 @@ describe("Authority local harness", () => {
     currentOwnership(overlay, 0o600);
     symlinkSync(join(root, "outside"), join(generated, "local-input.json"));
     const trap = dockerTrap(root);
-    const result = runTool(
-      [
-        "up",
-        "--state-dir",
-        state,
-        "--image",
-        tuple.image,
-        "--source-revision",
-        tuple.source_revision,
-        "--release-id",
-        tuple.release_id,
-        "--runtime-profile-sha256",
-        tuple.runtime_profile_sha256,
-        "--no-build",
-      ],
-      trap.path,
-      {
-        ECHO_LOCAL_AUTHORITY_HTTP_PORT: String(tuple.ports.http),
-        ECHO_LOCAL_AUTHORITY_HTTPS_PORT: String(tuple.ports.https),
-        ...nangoEnvironment(tuple.nango.secret_key_file),
-      },
-    );
+    const result = upTuple(state, tuple, trap);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("generated local input record");

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { validatePersonSourceEvidenceV1 } from "@echo-brain/organization-api";
 import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID } from "@echo-brain/organization-record/organization-record-api-v1";
-import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1 } from "@echo-brain/organization-processing/core";
+import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1, type MeetingDocument } from "@echo-brain/organization-processing/core";
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonTextSourceInboxV1 } from "../src/adapters/persistence/sqlite/person-text-source-v1.js";
@@ -16,7 +16,7 @@ import { createProjectContextApplicationV1 } from "../src/application/project-co
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
 import type { OriginalContextCitationV1 } from "../src/application/ports/person-original-context-retrieval-v1.js";
-import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization } from "./fixtures/project-context-sqlite.js";
+import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
 
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) database.close(); });
@@ -31,17 +31,8 @@ function grant(database: Database.Database, projectId: string, actor: typeof OWN
 }
 
 function fixture() {
-  const database = new Database(":memory:");
+  const database = projectContextDatabase();
   databases.push(database);
-  database.pragma("foreign_keys=ON");
-  database.exec(readFileSync(new URL("../../../packages/organization-authority-kernel/baselines/authority-baseline-v13.sql", import.meta.url), "utf8"));
-  database.prepare(`INSERT INTO authority_metadata
-    (singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at)
-    VALUES (1,'oau_original_context',?,'Original context fixture','{}',?,?)`).run(OWNER.organization_id, PROJECT_CONTEXT_NOW, PROJECT_CONTEXT_NOW);
-  database.prepare("INSERT INTO authority_project_authorization_state_v1(organization_id,revision,updated_at) VALUES (?,0,?)")
-    .run(OWNER.organization_id, PROJECT_CONTEXT_NOW);
-  addMembership(database, OWNER, "Owner", null);
-  addMembership(database, MEMBER, "Member", "member@example.test");
   for (const projectId of [PROJECT_ALPHA, PROJECT_BETA]) {
     database.prepare(`INSERT INTO authority_projects_v1
       (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
@@ -62,6 +53,18 @@ function fixture() {
       checked_at: new Date(checkedMilliseconds += 1_000).toISOString(),
     }),
   }, OWNER.organization_id);
+  const leave = (projectId: string) => database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?")
+    .run(PROJECT_CONTEXT_NOW, projectId, MEMBER.membership_id);
+  const admit = (meeting: MeetingDocument) => pullAndAdmitSourceBatchV1({
+    source: new MeetingSourceBridgeV1({
+      identity: meeting.provenance.source,
+      validateConfig: () => ({ ok: true, errors: [] }),
+      healthCheck: async () => ({ status: "healthy" as const, checked_at: PROJECT_CONTEXT_NOW }),
+      pull: async () => ({ meetings: [meeting], next_cursor: `${meeting.id}-next` }),
+    }),
+    request: { limit: 1 },
+    admission: { store: new SqliteSourceAdmissionStoreV1(database), scope: { organization_id: OWNER.organization_id, custody_ref: `organization:${OWNER.organization_id}`, access_policy_ref: "meeting-fixture", analysis_policy: "automatic" } },
+  });
 
   const uploadChunks = (title: string, chunks: readonly string[], changes: {
     readonly audience?: { readonly kind: "only_me" | "team" } | { readonly kind: "project"; readonly project_id: string };
@@ -112,7 +115,7 @@ function fixture() {
     expect(await worker.runOnce(new AbortController().signal)).toBe("admitted");
   };
 
-  return { database, retrieval, repository, documents, upload, uploadChunks, admitLegacyTeamNote };
+  return { database, retrieval, repository, documents, upload, uploadChunks, admitLegacyTeamNote, leave, admit };
 }
 
 function texts(result: ReturnType<SqlitePersonOriginalContextRetrievalV1["deskSearch"]>): readonly string[] {
@@ -282,7 +285,7 @@ describe("adversarial original-context retrieval", () => {
     expect(texts(released).join("\n")).toContain("archive-ask-marker");
     const citation = citationOf(released.release.released_atoms[0]!);
     expect(f.retrieval.read({ access_token: "member", scope, citation }).atom.text).toContain("archive-ask-marker");
-    f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
+    f.leave(PROJECT_ALPHA);
     expect(() => f.retrieval.read({ access_token: "member", scope, citation })).toThrow();
   });
 
@@ -331,11 +334,11 @@ describe("adversarial original-context retrieval", () => {
     const global = search("sharedmodernmarker");
     const scoped = search("sharedmodernmarker", PROJECT_ALPHA);
     const citation = citationOf(global.release.released_atoms[0]!);
-    f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
+    f.leave(PROJECT_ALPHA);
     expect(() => f.retrieval.revalidate({ access_token: "member", release: scoped.release })).toThrow();
     expect(() => f.retrieval.revalidate({ access_token: "member", release: global.release })).not.toThrow();
     expect(f.retrieval.read({ access_token: "member", scope: { kind: "global" }, citation }).atom.text).toContain("sharedmodernmarker");
-    f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_BETA, MEMBER.membership_id);
+    f.leave(PROJECT_BETA);
     expect(() => f.retrieval.revalidate({ access_token: "member", release: global.release })).toThrow();
     expect(() => f.retrieval.read({ access_token: "member", scope: { kind: "global" }, citation })).toThrow();
   });
@@ -363,16 +366,7 @@ describe("adversarial original-context retrieval", () => {
       capture: { state: "complete" as const, components: [] }, participants: [], artifacts: [],
       content: [{ id: "note-1", kind: "note" as const, text: "rawmeetingsecretmarker must never enter Ask originals" }],
     };
-    const bridge = new MeetingSourceBridgeV1({
-      identity: meeting.provenance.source,
-      validateConfig: () => ({ ok: true, errors: [] }),
-      healthCheck: async () => ({ status: "healthy" as const, checked_at: PROJECT_CONTEXT_NOW }),
-      pull: async () => ({ meetings: [meeting], next_cursor: "meeting-adversarial-next" }),
-    });
-    await pullAndAdmitSourceBatchV1({
-      source: bridge, request: { limit: 1 },
-      admission: { store: new SqliteSourceAdmissionStoreV1(f.database), scope: { organization_id: OWNER.organization_id, custody_ref: `organization:${OWNER.organization_id}`, access_policy_ref: "meeting-fixture", analysis_policy: "automatic" } },
-    });
+    await f.admit(meeting);
     const raw = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "rawmeetingsecretmarker" });
     expect(raw.items).toEqual([]);
     expect(texts(raw).join(" ")).not.toContain("rawmeetingsecretmarker");
@@ -392,19 +386,9 @@ describe("adversarial original-context retrieval", () => {
         { id: "transcript-3", kind: "transcript" as const, text: "An unattributed line." },
       ],
     };
-    const bridge = new MeetingSourceBridgeV1({
-      identity: meeting.provenance.source,
-      validateConfig: () => ({ ok: true, errors: [] }),
-      healthCheck: async () => ({ status: "healthy" as const, checked_at: PROJECT_CONTEXT_NOW }),
-      pull: async () => ({ meetings: [meeting], next_cursor: "meeting-transcript-next" }),
-    });
-    await pullAndAdmitSourceBatchV1({
-      source: bridge, request: { limit: 1 },
-      admission: { store: new SqliteSourceAdmissionStoreV1(f.database), scope: { organization_id: OWNER.organization_id, custody_ref: `organization:${OWNER.organization_id}`, access_policy_ref: "meeting-fixture", analysis_policy: "automatic" } },
-    });
+    await f.admit(meeting);
     const source = f.database.prepare("SELECT source_id,revision_id,('sha256:' || revision_sha256) AS source_sha256 FROM authority_source_revisions_v1").get() as { source_id: `source:${string}`; revision_id: string; source_sha256: `sha256:${string}` };
     let enabled = true;
-    const policy = PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
     let validPolicyContract = true;
     let revokeAtFinalFence = false;
     let armedGrantLookups = 0;
@@ -418,8 +402,7 @@ describe("adversarial original-context retrieval", () => {
         return found.filter(value => input.source_id === undefined || value.source_id === input.source_id);
       }, find: () => {
         if (revokeAtFinalFence && ++armedGrantLookups === 2) {
-          f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?")
-            .run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
+          f.leave(PROJECT_ALPHA);
           grant(f.database, PROJECT_ALPHA, MEMBER, "member");
         }
         return enabled ? transcriptGrant() : null;
@@ -429,11 +412,11 @@ describe("adversarial original-context retrieval", () => {
       return {
         approval_id: "apr_transcript_fixture", record_position: 1,
         record_sha256: sha256Digest("transcript-record"),
-        policy_id: policy,
+        policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
         policy_contract_sha256: sha256Digest("transcript-contract"),
         source_id: source.source_id, revision_id: source.revision_id, source_sha256: source.source_sha256,
         reviewer_principal_id: null, reviewer_membership_id: null,
-        audience_project_ids: policy === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID ? [PROJECT_ALPHA, PROJECT_BETA] : [], association_project_ids: [PROJECT_ALPHA, PROJECT_BETA],
+        audience_project_ids: [PROJECT_ALPHA, PROJECT_BETA], association_project_ids: [PROJECT_ALPHA, PROJECT_BETA],
       } as const;
     }
     const citation = { kind: "approved_meeting_transcript" as const, approval_id: "apr_transcript_fixture", ...source };
@@ -522,8 +505,7 @@ describe("adversarial original-context retrieval", () => {
     const f = fixture();
     f.upload("Shared evidence", "uncited-revocation-marker", { project_id: PROJECT_ALPHA });
     const released = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "uncited-revocation-marker" });
-    f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?")
-      .run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
+    f.leave(PROJECT_ALPHA);
     expect(f.retrieval.revalidate({ access_token: "member", release: released.release })).toMatchObject({ checked_at: expect.any(String) });
   });
 
@@ -532,8 +514,7 @@ describe("adversarial original-context retrieval", () => {
     f.upload("Selected project", "selected-project-revocation-marker", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA });
     const scoped = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, query: "selected-project-revocation-marker" });
     const global = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "selected-project-revocation-marker" });
-    f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?")
-      .run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
+    f.leave(PROJECT_ALPHA);
     expect(() => f.retrieval.revalidate({ access_token: "member", release: scoped.release }))
       .toThrow(expect.objectContaining({ code: "unauthorized" }));
     expect(() => f.retrieval.revalidate({ access_token: "member", release: global.release }))
@@ -679,8 +660,7 @@ describe("adversarial original-context retrieval", () => {
         .toThrow(expect.objectContaining({ code: "unauthorized" }));
     }
     expect(proofAuditCount()).toBe(before + 1);
-    f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?")
-      .run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
+    f.leave(PROJECT_ALPHA);
     expect(() => f.retrieval.read({ access_token: "member", scope, citation }))
       .toThrow(expect.objectContaining({ code: "unauthorized" }));
     expect(() => f.retrieval.read({ access_token: "member", scope: { kind: "global" }, citation }))

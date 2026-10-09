@@ -2,26 +2,23 @@ import { describe, expect, it } from "vitest";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, type RecordInputCodecV4, type ValidatedRecordInputV4 } from "../src/record-input-codec-v4.js";
 
+const reference = { schema_version: 1, kind: "fixture-resolution-v1", authority_id: "authority", organization_id: "organization",
+  state_lineage_id: "lineage", approval_id: "approval", action: "reject" as const, audit_event_id: "audit", audit_sequence: 1,
+  audit_entry_sha256: canonicalSha256("audit"), provider_action_kind: "fixture-action-v1", provider_action_schema_version: 1,
+  provider_action_sha256: canonicalSha256("action"), authorization_proof_sha256: canonicalSha256("authorization") };
+
 function alternate(): RecordInputCodecV4 {
-  const reference = { schema_version: 1, kind: "fixture-resolution-v1", authority_id: "authority", organization_id: "organization",
-    state_lineage_id: "lineage", approval_id: "approval", action: "reject" as const, audit_event_id: "audit", audit_sequence: 1,
-    audit_entry_sha256: canonicalSha256("audit"), provider_action_kind: "fixture-action-v1", provider_action_schema_version: 1,
-    provider_action_sha256: canonicalSha256("action"), authorization_proof_sha256: canonicalSha256("authorization") };
-  const result: ValidatedRecordInputV4 = { human_act_resolution_ref: reference, event: { kind: "rejected" }, semantic_idempotency_key: canonicalSha256(reference) };
+  const expected = { ...reference };
+  const result: ValidatedRecordInputV4 = { human_act_resolution_ref: expected, event: { kind: "rejected" }, semantic_idempotency_key: canonicalSha256(expected) };
   const decode = (ref: unknown, event: unknown) => {
-    if (canonicalSha256(ref) !== canonicalSha256(reference) || canonicalSha256(event) !== canonicalSha256(result.event)) throw new Error("fixture exact contract mismatch");
+    if (canonicalSha256(ref) !== canonicalSha256(expected) || canonicalSha256(event) !== canonicalSha256(result.event)) throw new Error("fixture exact contract mismatch");
     return result;
   };
-  return { input_reference_field: "fixture_resolution_ref", reference_kind: reference.kind, reference_schema_version: 1,
+  return { input_reference_field: "fixture_resolution_ref", reference_kind: expected.kind, reference_schema_version: 1,
     validateInput(value) { const input = value as { fixture_resolution_ref: unknown; event: unknown }; return decode(input.fixture_resolution_ref, input.event); },
     fromReference: decode,
   };
 }
-
-const reference = { schema_version: 1, kind: "fixture-resolution-v1", authority_id: "authority", organization_id: "organization",
-  state_lineage_id: "lineage", approval_id: "approval", action: "reject", audit_event_id: "audit", audit_sequence: 1,
-  audit_entry_sha256: canonicalSha256("audit"), provider_action_kind: "fixture-action-v1", provider_action_schema_version: 1,
-  provider_action_sha256: canonicalSha256("action"), authorization_proof_sha256: canonicalSha256("authorization") };
 
 describe("closed V4 record codec composition", () => {
   it("selects an independent exact contract without changing the envelope or generic decoder", () => {

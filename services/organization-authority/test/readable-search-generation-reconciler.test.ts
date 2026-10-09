@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyAuthorityBaselineV13 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import {
   ReadableSearchGenerationReconcilerV1,
+  type ReadableSearchGenerationReconcilerV1Options,
   type ReadableSearchRecordHeadV1,
+  type ReadableSearchSnapshotV1,
 } from "../src/composition/readable-search-generation-reconciler.js";
 
 const ORGANIZATION_ID = "org_clean";
@@ -38,6 +40,50 @@ function head(position: number): ReadableSearchRecordHeadV1 {
   });
 }
 
+function generation(record_head: ReadableSearchRecordHeadV1, retrieval_contract_sha256 = CONTRACT) {
+  return { generation_id: GENERATION, manifest_sha256: MANIFEST, retrieval_contract_sha256, record_head };
+}
+
+/** A reconciler pinned to `current`; tests override only the seams they exercise. */
+function reconciler<Snapshot extends ReadableSearchSnapshotV1>(
+  authority: Database.Database,
+  current: ReadableSearchRecordHeadV1,
+  overrides: Partial<ReadableSearchGenerationReconcilerV1Options<Snapshot>> = {},
+): ReadableSearchGenerationReconcilerV1<Snapshot> {
+  return new ReadableSearchGenerationReconcilerV1<Snapshot>({
+    authority, organization_id: ORGANIZATION_ID,
+    retrieval_contract_sha256: CONTRACT, read_record_head: () => current,
+    capture_snapshot: () => ({ record_head: current }) as Snapshot,
+    build_generation: () => generation(current),
+    now: () => NOW,
+    ...overrides,
+  });
+}
+
+function insertPrior(authority: Database.Database, prior: ReadableSearchRecordHeadV1): void {
+  authority
+    .prepare(
+      `INSERT INTO authority_readable_search_active_generation (
+         singleton, organization_id, generation_id, manifest_sha256,
+         retrieval_contract_sha256, record_head_position, record_head_hash,
+         published_at
+       ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      ORGANIZATION_ID,
+      canonicalSha256({ generation: "prior" }),
+      canonicalSha256({ manifest: "prior" }),
+      CONTRACT,
+      prior.position,
+      prior.record_sha256,
+      NOW,
+    );
+}
+
+function active(authority: Database.Database, column = "count(*)"): unknown {
+  return authority.prepare(`SELECT ${column} FROM authority_readable_search_active_generation`).pluck().get();
+}
+
 afterEach(() => {
   for (const value of databases.splice(0)) value.close();
 });
@@ -46,18 +92,12 @@ describe("readable-search generation reconciliation", () => {
   it("observes each real build boundary under one shared operation identity", async () => {
     const events: { stage: string; event: string; operation_id: string }[] = [];
     const current = head(2);
-    const reconciler = new ReadableSearchGenerationReconcilerV1({
-      authority: database(), organization_id: ORGANIZATION_ID,
-      retrieval_contract_sha256: CONTRACT, read_record_head: () => current,
-      capture_snapshot: () => ({ record_head: current }),
+    const value = reconciler(database(), current, {
       enrich_snapshot: async (snapshot) => snapshot,
-      build_generation: () => ({ generation_id: GENERATION, manifest_sha256: MANIFEST,
-        retrieval_contract_sha256: CONTRACT, record_head: current }),
       prepare_generation: () => undefined,
       observation: (event: { stage: string; event: string; operation_id: string }) => { events.push(event); },
-      now: () => NOW,
     });
-    await expect(reconciler.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "published" });
+    await expect(value.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "published" });
     expect(events.filter((event) => event.event === "succeeded").map((event) => event.stage))
       .toEqual(["search_snapshot", "search_enrichment", "search_build", "search_validation", "search_publication", "search_reconciliation"]);
     expect(new Set(events.map((event) => event.operation_id)).size).toBe(1);
@@ -67,24 +107,11 @@ describe("readable-search generation reconciliation", () => {
     const authority = database();
     const current = head(2);
     const capture = vi.fn(() => ({ record_head: current, atoms: [] }));
-    const build = vi.fn(() => ({
-      generation_id: GENERATION,
-      manifest_sha256: MANIFEST,
-      retrieval_contract_sha256: CONTRACT,
-      record_head: current,
-    }));
-    const reconciler = new ReadableSearchGenerationReconcilerV1({
-      authority,
-      organization_id: ORGANIZATION_ID,
-      retrieval_contract_sha256: CONTRACT,
-      read_record_head: () => current,
-      capture_snapshot: capture,
-      build_generation: build,
-      now: () => NOW,
-    });
+    const build = vi.fn(() => generation(current));
+    const value = reconciler(authority, current, { capture_snapshot: capture, build_generation: build });
 
     await expect(
-      reconciler.reconcile(new AbortController().signal),
+      value.reconcile(new AbortController().signal),
     ).resolves.toMatchObject({ status: "published", record_head: current });
     expect(
       authority
@@ -102,7 +129,7 @@ describe("readable-search generation reconciliation", () => {
     });
 
     await expect(
-      reconciler.reconcile(new AbortController().signal),
+      value.reconcile(new AbortController().signal),
     ).resolves.toEqual({ status: "current", record_head: current });
     expect(capture).toHaveBeenCalledTimes(1);
     expect(build).toHaveBeenCalledTimes(1);
@@ -111,99 +138,34 @@ describe("readable-search generation reconciliation", () => {
   it("rebuilds when only the immutable retrieval contract changes at an unchanged head", async () => {
     const authority = database();
     const current = head(2);
-    authority
-      .prepare(
-        `INSERT INTO authority_readable_search_active_generation (
-           singleton, organization_id, generation_id, manifest_sha256,
-           retrieval_contract_sha256, record_head_position, record_head_hash,
-           published_at
-         ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        ORGANIZATION_ID,
-        canonicalSha256({ generation: "prior" }),
-        canonicalSha256({ manifest: "prior" }),
-        CONTRACT,
-        current.position,
-        current.record_sha256,
-        NOW,
-      );
+    insertPrior(authority, current);
     const capture = vi.fn(() => ({ record_head: current }));
-    const build = vi.fn(() => ({
-      generation_id: GENERATION,
-      manifest_sha256: MANIFEST,
-      retrieval_contract_sha256: UPDATED_CONTRACT,
-      record_head: current,
-    }));
-    const reconciler = new ReadableSearchGenerationReconcilerV1({
-      authority,
-      organization_id: ORGANIZATION_ID,
-      retrieval_contract_sha256: UPDATED_CONTRACT,
-      read_record_head: () => current,
-      capture_snapshot: capture,
-      build_generation: build,
-      now: () => NOW,
+    const build = vi.fn(() => generation(current, UPDATED_CONTRACT));
+    const value = reconciler(authority, current, {
+      retrieval_contract_sha256: UPDATED_CONTRACT, capture_snapshot: capture, build_generation: build,
     });
 
     await expect(
-      reconciler.reconcile(new AbortController().signal),
+      value.reconcile(new AbortController().signal),
     ).resolves.toMatchObject({ status: "published", record_head: current });
     expect(capture).toHaveBeenCalledOnce();
     expect(build).toHaveBeenCalledOnce();
-    expect(
-      authority
-        .prepare(
-          "SELECT retrieval_contract_sha256 FROM authority_readable_search_active_generation",
-        )
-        .pluck()
-        .get(),
-    ).toBe(UPDATED_CONTRACT);
+    expect(active(authority, "retrieval_contract_sha256")).toBe(UPDATED_CONTRACT);
   });
 
   it("leaves the prior pointer untouched when a build fails", async () => {
     const authority = database();
-    const prior = head(1);
-    authority
-      .prepare(
-        `INSERT INTO authority_readable_search_active_generation (
-           singleton, organization_id, generation_id, manifest_sha256,
-           retrieval_contract_sha256, record_head_position, record_head_hash,
-           published_at
-         ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        ORGANIZATION_ID,
-        canonicalSha256({ generation: "prior" }),
-        canonicalSha256({ manifest: "prior" }),
-        CONTRACT,
-        prior.position,
-        prior.record_sha256,
-        NOW,
-      );
-    const current = head(2);
-    const reconciler = new ReadableSearchGenerationReconcilerV1({
-      authority,
-      organization_id: ORGANIZATION_ID,
-      retrieval_contract_sha256: CONTRACT,
-      read_record_head: () => current,
-      capture_snapshot: () => ({ record_head: current }),
+    insertPrior(authority, head(1));
+    const value = reconciler(authority, head(2), {
       build_generation: () => {
         throw new Error("generation interrupted");
       },
-      now: () => NOW,
     });
 
     await expect(
-      reconciler.reconcile(new AbortController().signal),
+      value.reconcile(new AbortController().signal),
     ).rejects.toThrow("generation interrupted");
-    expect(
-      authority
-        .prepare(
-          "SELECT record_head_position FROM authority_readable_search_active_generation",
-        )
-        .pluck()
-        .get(),
-    ).toBe(1);
+    expect(active(authority, "record_head_position")).toBe(1);
   });
 
   it("enriches only a stale snapshot after capture and before the pure build", async () => {
@@ -221,36 +183,26 @@ describe("readable-search generation reconciliation", () => {
     const build = vi.fn((snapshot: typeof captured) => {
       order.push("build");
       expect(snapshot).toBe(enriched);
-      return {
-        generation_id: GENERATION,
-        manifest_sha256: MANIFEST,
-        retrieval_contract_sha256: CONTRACT,
-        record_head: current,
-      };
+      return generation(current);
     });
-    const reconciler = new ReadableSearchGenerationReconcilerV1({
-      authority,
-      organization_id: ORGANIZATION_ID,
-      retrieval_contract_sha256: CONTRACT,
-      read_record_head: () => current,
+    const value = reconciler(authority, current, {
       capture_snapshot: () => {
         order.push("capture");
         return captured;
       },
       enrich_snapshot: enrich,
       build_generation: build,
-      now: () => NOW,
     });
 
     await expect(
-      reconciler.reconcile(new AbortController().signal),
+      value.reconcile(new AbortController().signal),
     ).resolves.toMatchObject({ status: "published" });
     expect(order).toEqual(["capture", "enrich", "build"]);
     expect(enrich).toHaveBeenCalledOnce();
     expect(build).toHaveBeenCalledOnce();
 
     await expect(
-      reconciler.reconcile(new AbortController().signal),
+      value.reconcile(new AbortController().signal),
     ).resolves.toMatchObject({ status: "current" });
     expect(enrich).toHaveBeenCalledOnce();
   });
@@ -260,30 +212,17 @@ describe("readable-search generation reconciliation", () => {
     const current = head(1);
     const controller = new AbortController();
     const build = vi.fn();
-    const reconciler = new ReadableSearchGenerationReconcilerV1({
-      authority,
-      organization_id: ORGANIZATION_ID,
-      retrieval_contract_sha256: CONTRACT,
-      read_record_head: () => current,
-      capture_snapshot: () => ({ record_head: current }),
+    const value = reconciler(authority, current, {
       enrich_snapshot: async (snapshot) => {
         controller.abort();
         return snapshot;
       },
       build_generation: build as never,
-      now: () => NOW,
     });
 
-    await expect(reconciler.reconcile(controller.signal)).rejects.toThrow();
+    await expect(value.reconcile(controller.signal)).rejects.toThrow();
     expect(build).not.toHaveBeenCalled();
-    expect(
-      authority
-        .prepare(
-          "SELECT count(*) FROM authority_readable_search_active_generation",
-        )
-        .pluck()
-        .get(),
-    ).toBe(0);
+    expect(active(authority)).toBe(0);
   });
 
   it("skips obsolete build work after held enrichment and publishes the newest head on retry", async () => {
@@ -291,46 +230,37 @@ describe("readable-search generation reconciliation", () => {
     let current = head(2);
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
-    const build = vi.fn((snapshot: { record_head: ReadableSearchRecordHeadV1 }) => ({
-      generation_id: GENERATION, manifest_sha256: MANIFEST,
-      retrieval_contract_sha256: CONTRACT, record_head: snapshot.record_head,
-    }));
-    const reconciler = new ReadableSearchGenerationReconcilerV1({
-      authority, organization_id: ORGANIZATION_ID,
-      retrieval_contract_sha256: CONTRACT, read_record_head: () => current,
+    const build = vi.fn((snapshot: { record_head: ReadableSearchRecordHeadV1 }) => generation(snapshot.record_head));
+    // Both reads follow the mutable head, so the retry captures head(4).
+    const value = reconciler(authority, current, {
+      read_record_head: () => current,
       capture_snapshot: () => ({ record_head: current }),
       enrich_snapshot: async (snapshot) => { await held; return snapshot; },
-      build_generation: build, now: () => NOW,
+      build_generation: build,
     });
-    const pending = reconciler.reconcile(new AbortController().signal);
+    const pending = value.reconcile(new AbortController().signal);
     expect(build).not.toHaveBeenCalled();
-    expect(authority.prepare("SELECT count(*) FROM authority_readable_search_active_generation").pluck().get()).toBe(0);
+    expect(active(authority)).toBe(0);
     current = head(4);
     release();
     await expect(pending).resolves.toEqual({ status: "superseded", captured_head: head(2), current_head: head(4) });
     expect(build).not.toHaveBeenCalled();
-    await expect(reconciler.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "published", record_head: head(4) });
+    await expect(value.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "published", record_head: head(4) });
     expect(build).toHaveBeenCalledOnce();
-    expect(authority.prepare("SELECT record_head_position FROM authority_readable_search_active_generation").pluck().get()).toBe(4);
+    expect(active(authority, "record_head_position")).toBe(4);
   });
 
   it("rejects enrichment that changes the captured record head", async () => {
     const authority = database();
     const current = head(1);
     const build = vi.fn();
-    const reconciler = new ReadableSearchGenerationReconcilerV1({
-      authority,
-      organization_id: ORGANIZATION_ID,
-      retrieval_contract_sha256: CONTRACT,
-      read_record_head: () => current,
-      capture_snapshot: () => ({ record_head: current }),
+    const value = reconciler(authority, current, {
       enrich_snapshot: async () => ({ record_head: head(2) }),
       build_generation: build as never,
-      now: () => NOW,
     });
 
     await expect(
-      reconciler.reconcile(new AbortController().signal),
+      value.reconcile(new AbortController().signal),
     ).rejects.toThrow("enrichment changed its captured record head");
     expect(build).not.toHaveBeenCalled();
   });
@@ -340,36 +270,18 @@ describe("readable-search generation reconciliation", () => {
     const captured = head(2);
     const advanced = head(3);
     let reads = 0;
-    const reconciler = new ReadableSearchGenerationReconcilerV1({
-      authority,
-      organization_id: ORGANIZATION_ID,
-      retrieval_contract_sha256: CONTRACT,
+    const value = reconciler(authority, captured, {
       read_record_head: () => (++reads < 3 ? captured : advanced),
-      capture_snapshot: () => ({ record_head: captured }),
-      build_generation: () => ({
-        generation_id: GENERATION,
-        manifest_sha256: MANIFEST,
-        retrieval_contract_sha256: CONTRACT,
-        record_head: captured,
-      }),
-      now: () => NOW,
     });
 
     await expect(
-      reconciler.reconcile(new AbortController().signal),
+      value.reconcile(new AbortController().signal),
     ).resolves.toEqual({
       status: "superseded",
       captured_head: captured,
       current_head: advanced,
     });
-    expect(
-      authority
-        .prepare(
-          "SELECT count(*) FROM authority_readable_search_active_generation",
-        )
-        .pluck()
-        .get(),
-    ).toBe(0);
+    expect(active(authority)).toBe(0);
   });
 
   it("checks cancellation before building and before pointer publication", async () => {
@@ -378,44 +290,17 @@ describe("readable-search generation reconciliation", () => {
     const beforeBuild = new AbortController();
     beforeBuild.abort();
     const build = vi.fn();
-    const reconciler = new ReadableSearchGenerationReconcilerV1({
-      authority,
-      organization_id: ORGANIZATION_ID,
-      retrieval_contract_sha256: CONTRACT,
-      read_record_head: () => current,
-      capture_snapshot: () => ({ record_head: current }),
-      build_generation: build as never,
-      now: () => NOW,
-    });
-    await expect(reconciler.reconcile(beforeBuild.signal)).rejects.toThrow();
+    await expect(reconciler(authority, current, { build_generation: build as never }).reconcile(beforeBuild.signal)).rejects.toThrow();
     expect(build).not.toHaveBeenCalled();
 
     const duringBuild = new AbortController();
-    const second = new ReadableSearchGenerationReconcilerV1({
-      authority,
-      organization_id: ORGANIZATION_ID,
-      retrieval_contract_sha256: CONTRACT,
-      read_record_head: () => current,
-      capture_snapshot: () => ({ record_head: current }),
+    const second = reconciler(authority, current, {
       build_generation: () => {
         duringBuild.abort();
-        return {
-          generation_id: GENERATION,
-          manifest_sha256: MANIFEST,
-          retrieval_contract_sha256: CONTRACT,
-          record_head: current,
-        };
+        return generation(current);
       },
-      now: () => NOW,
     });
     await expect(second.reconcile(duringBuild.signal)).rejects.toThrow();
-    expect(
-      authority
-        .prepare(
-          "SELECT count(*) FROM authority_readable_search_active_generation",
-        )
-        .pluck()
-        .get(),
-    ).toBe(0);
+    expect(active(authority)).toBe(0);
   });
 });
