@@ -23,15 +23,23 @@ export function createOpenRouterDecisionProcessor(config: AdapterConfig, options
   fetchImpl?: typeof fetch;
   now?: () => string;
   now_ms?: () => number;
+  /** Admits each generation call; it wraps the call, so queued time never counts against the request timeout. */
+  limit?: <T>(signal: AbortSignal | undefined, op: () => Promise<T>) => Promise<T>;
 } = {}) {
   const timeout = config.settings['request_timeout_ms'];
+  const client = new OpenRouterClient({
+    credentialRef: config.credential_ref ?? '',
+    credentialResolver: options.credentialResolver ?? (() => undefined),
+    ...(typeof timeout === 'number' ? { requestTimeoutMs: timeout } : {}),
+    ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+  });
+  const limit = options.limit;
   return createLlmDecisionProcessor(config, {
-    client: new OpenRouterClient({
-      credentialRef: config.credential_ref ?? '',
-      credentialResolver: options.credentialResolver ?? (() => undefined),
-      ...(typeof timeout === 'number' ? { requestTimeoutMs: timeout } : {}),
-      ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
-    }),
+    client: limit === undefined ? client : {
+      provider: client.provider,
+      verifyModel: (model, signal) => client.verifyModel(model, signal),
+      generateStructured: (request) => limit(request.signal, () => client.generateStructured(request)),
+    },
     validateProviderConfig: validateOpenRouterDecisionProcessorConfig,
     identityEndpoint: null,
     ...(options.now === undefined ? {} : { now: options.now }),

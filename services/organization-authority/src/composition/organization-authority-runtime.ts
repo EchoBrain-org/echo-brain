@@ -30,6 +30,7 @@ import {
 import type { OrganizationAuthorityApiRuntimeConfig, OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
+import { createModelCallLimiterV1, limitStructuredGenerationPortV1, type ModelCallLimiterV1, type ModelCallPriorityV1 } from "./model-call-limiter-v1.js";
 
 /** The staging release canary's outcome; the deploy receipt reads `approval_outcome = kind` and `approval_id`. */
 export interface StagingSyntheticCanaryOutcomeV1 {
@@ -52,6 +53,8 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly staging_research_eval_v1?: true;
   /** Explicit answer-composition bundle. This generic root does not select one. */
   readonly answer_composition_generation_bundle: AnswerCompositionGenerationBundleV1;
+  /** The one model-call limiter, shared with extraction by the root that selects the provider; one is made when absent. */
+  readonly model_call_limiter?: ModelCallLimiterV1;
   /** Exact durable record-resolution protocols admitted into append and retrieval. */
   readonly record_input_codecs: RecordInputCodecRegistryV4;
   readonly record_policy_fact_projectors: RecordPolicyFactProjectorRegistryV1;
@@ -222,7 +225,12 @@ export async function openOrganizationAuthorityRuntime(
     const answerGeneration =
       dependencies.api?.answer_composition_generation ??
       config.answer_composition_generation_bundle.load();
-    const relatedAtomProjector = relatedAtomProjectorBinding(answerGeneration);
+    const limiter = config.model_call_limiter ?? createModelCallLimiterV1();
+    const limited = (priority: ModelCallPriorityV1): AnswerCompositionGenerationBindingV1 => Object.freeze({ ...answerGeneration,
+      structured_output: limitStructuredGenerationPortV1(answerGeneration.structured_output, (signal, op) => limiter.run(priority, signal, op)) });
+    // Ask is interactive; notes, search maintenance and trigger research wait behind it.
+    const backgroundGeneration = limited("background");
+    const relatedAtomProjector = relatedAtomProjectorBinding(backgroundGeneration);
     const readableSearchContract = readableSearchGenerationContractV1({
       related_atom_projector: relatedAtomProjector.profile,
     });
@@ -243,7 +251,7 @@ export async function openOrganizationAuthorityRuntime(
         processing: new OrganizationAuthorityProcessingCoordinator(
           readableSearch,
           createPersonUpdateProcessingV1(
-            answerGeneration,
+            backgroundGeneration,
             new SqlitePersonUpdateEnrichmentWorkV2(
               authority,
               new SqliteProjectUploadEnrichmentAuthorizationV1(authority),
@@ -253,7 +261,8 @@ export async function openOrganizationAuthorityRuntime(
         api: {
           ...baseApiDependencies,
           ...(preparedPerson === undefined ? {} : { person_http_runtime_factory: preparedPerson.attach }),
-          answer_composition_generation: answerGeneration,
+          answer_composition_generation: limited("interactive"),
+          answer_composition_background: backgroundGeneration.structured_output,
           readable_search_retrieval_contract_sha256:
             readableSearchContract.retrieval_contract_sha256,
         },

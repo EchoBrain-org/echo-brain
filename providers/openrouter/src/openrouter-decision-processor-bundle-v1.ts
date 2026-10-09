@@ -15,6 +15,8 @@ import type { DecisionProcessorBundleV1 } from "@echo-brain/organization-process
  */
 export function createOpenRouterDecisionProcessorBundleV1(input: {
   readonly credential_file: string;
+  /** Provider-neutral admission for each extraction call; it does not change processor commitments. */
+  readonly limit?: <T>(signal: AbortSignal | undefined, op: () => Promise<T>) => Promise<T>;
 }): DecisionProcessorBundleV1 {
   const credentialReference = `file:${input.credential_file}`;
   let commitmentsChecked = false;
@@ -56,6 +58,7 @@ export function createOpenRouterDecisionProcessorBundleV1(input: {
       const processor = createOpenRouterDecisionProcessor(config, {
         credentialResolver: (reference) =>
           reference === credentialReference ? credential : undefined,
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
       });
       const validation = processor.validateConfig(config);
       if (!validation.ok) {
