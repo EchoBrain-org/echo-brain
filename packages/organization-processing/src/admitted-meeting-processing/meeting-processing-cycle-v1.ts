@@ -20,7 +20,8 @@ import type {
   MeetingProcessingWorkerPhaseV1,
 } from "./meeting-processing-worker-lifecycle.js";
 import type { AdmittedMeetingSourceCursorPolicyV1 } from "./admitted-meeting-source-cursor-policy-v1.js";
-import type { ExtractionAttemptStoreV1 } from "./extraction-attempt-store-v1.js";
+import type { ExtractionAttemptKeyV1, ExtractionAttemptReservationV1, ExtractionAttemptStoreV1 } from "./extraction-attempt-store-v1.js";
+import { classifyExtractionFailureStageV1, type ExtractionFailureStageV1 } from "./extraction-failure-stage-v1.js";
 import {
   reviewInputSha256V1,
   reviewLineageIdV1,
@@ -72,6 +73,34 @@ export interface AuthorityMeetingProcessingStateV1 {
     readonly expected_cursor: string;
     readonly next_cursor: string;
   }): Promise<"advanced" | "state_drift" | "revoked">;
+  /**
+   * Durably parks a retained revision whose extraction failed, under its exact
+   * attempt-ledger key, and returns the stage it holds: the stored stage is kept
+   * while the key and attempt are unchanged. Never moves the cursor.
+   */
+  holdExtraction(input: HoldExtractionInputV1): Promise<ExtractionFailureStageV1>;
+  /** This source's parked revisions, oldest first. */
+  listHeldExtractions(): Promise<readonly HeldExtractionV1[]>;
+  /** Rebuilds a parked revision from retained source custody, digests verified. */
+  readHeldMeeting(held: HeldExtractionV1): Promise<MeetingDocument>;
+}
+
+export interface HoldExtractionInputV1 {
+  readonly meeting: MeetingDocument;
+  readonly key: ExtractionAttemptKeyV1;
+  readonly attempt: number;
+  readonly failure_stage: ExtractionFailureStageV1;
+}
+
+/** A parked revision: identifiers and an allowlisted stage only, never meeting text. */
+export interface HeldExtractionV1 {
+  readonly external_id: string;
+  readonly source_id: string;
+  readonly revision_id: string;
+  readonly key: ExtractionAttemptKeyV1;
+  readonly attempt: number;
+  readonly failure_stage: ExtractionFailureStageV1;
+  readonly held_at: string;
 }
 
 export interface MeetingProcessingCandidateSnapshotInputV1 {
@@ -207,6 +236,12 @@ export type AdmittedMeetingProcessingCycleResultV1 =
       readonly kind: "already_processed_cursor_not_advanced";
       readonly reason: "revoked" | "state_drift";
       readonly cursor_advanced: false;
+    }
+  | {
+      /** The revision is durably parked; later meetings no longer wait behind it. */
+      readonly kind: "held";
+      readonly stage: ExtractionFailureStageV1;
+      readonly cursor_advanced: boolean;
     };
 
 export interface AdmittedMeetingProcessingCycleV1Options {
@@ -286,6 +321,19 @@ function inputFingerprint(
   ])}`;
 }
 
+/**
+ * The stage a blocked reservation parks with when no held row already names one.
+ * A pending reservation parks as interrupted whatever its age; a lease check for
+ * an attempt still in flight elsewhere belongs here.
+ */
+function blockedExtractionStageV1(
+  blocked: Extract<ExtractionAttemptReservationV1, { readonly status: "blocked" }>,
+): ExtractionFailureStageV1 {
+  if (blocked.outcome === "pending") return "interrupted";
+  if (blocked.outcome === "succeeded") return "output_not_saved";
+  return blocked.failure_code === "cancelled" ? "cancelled" : "not_recorded";
+}
+
 function operationContext(
   signal: AbortSignal | undefined,
 ): { readonly signal: AbortSignal } | undefined {
@@ -355,9 +403,13 @@ function rebindDecisionsToRevision(
 /**
  * Performs exactly one serialized source poll. It never imports history: its
  * only cursor comes from a previously admitted source, and
- * it advances that cursor only after either a verified empty provider page or
+ * it advances that cursor only after a verified empty provider page, after
  * the candidate and approval outbox are durably recorded for independent
- * delivery.
+ * delivery, or after a revision whose extraction failed is durably parked
+ * (only with an attempt ledger; an aborted run is never parked). A parked
+ * revision stays in source custody for an operator-authorized retry. Advancing
+ * past a queued import consumes it, so its "Save to" projects are recorded as
+ * suggestions whether its revision was staged or parked.
  */
 export class AdmittedMeetingProcessingCycleV1 {
   private running: Promise<AdmittedMeetingProcessingCycleResultV1> | undefined;
@@ -506,7 +558,9 @@ export class AdmittedMeetingProcessingCycleV1 {
         signal,
       );
     }
-    const decisions = await this.phase("extraction", async () => {
+    const extraction = await this.phase("extraction", async (): Promise<
+      { readonly decisions: DecisionSet } | { readonly held: AdmittedMeetingProcessingCycleResultV1 }
+    > => {
       const reviewInputSha256 = reviewInputSha256V1({
         meeting,
         processor: {
@@ -537,7 +591,7 @@ export class AdmittedMeetingProcessingCycleV1 {
           meeting,
           this.options.processor.identity,
         );
-        return rebound;
+        return { decisions: rebound };
       }
 
       signal?.throwIfAborted();
@@ -562,7 +616,12 @@ export class AdmittedMeetingProcessingCycleV1 {
       const attempts = this.options.extraction_attempts;
       const claim = attempts?.reserve(extractionKey);
       if (claim?.status === "blocked") {
-        throw new AdapterError("permanently_rejected", "extraction_on_hold", false);
+        // No model call: a crash or failure after an earlier attempt converges
+        // here, parking the revision again and moving intake past it.
+        const stage = await this.options.state.holdExtraction({
+          meeting, key: extractionKey, attempt: claim.attempt, failure_stage: blockedExtractionStageV1(claim),
+        });
+        return { held: await this.finishHeld(stage, admission, batch.next_cursor) };
       }
       let receivedOutput = false;
       let extracted: DecisionSet;
@@ -582,16 +641,29 @@ export class AdmittedMeetingProcessingCycleV1 {
           this.options.processor.identity,
         );
       } catch (error) {
-        if (claim !== undefined) attempts!.complete({
+        if (claim === undefined) throw error;
+        const aborted = signal?.aborted === true;
+        const complete = () => attempts!.complete({
           key: extractionKey,
           attempt: claim.attempt,
           claim_id: claim.claim_id,
           outcome: "failed",
-          failure_code: signal?.aborted === true ? "cancelled"
+          failure_code: aborted ? "cancelled"
             : receivedOutput ? "invalid_output"
             : error instanceof AdapterError ? error.code : "unknown",
         });
-        throw error;
+        if (aborted) { complete(); throw error; }
+        // Park before closing the attempt, so every crash window leaves a
+        // blocked reservation that parks again without a model call.
+        let stage: ExtractionFailureStageV1;
+        try {
+          stage = await this.options.state.holdExtraction({
+            meeting, key: extractionKey, attempt: claim.attempt,
+            failure_stage: classifyExtractionFailureStageV1(error, { aborted, received_output: receivedOutput }),
+          });
+        } catch { complete(); throw error; }
+        complete();
+        return { held: await this.finishHeld(stage, admission, batch.next_cursor) };
       }
       // A failure after this point (including candidate persistence) must not
       // make the successful provider call eligible for automatic repetition.
@@ -601,8 +673,10 @@ export class AdmittedMeetingProcessingCycleV1 {
         claim_id: claim.claim_id,
         outcome: "succeeded",
       });
-      return extracted;
+      return { decisions: extracted };
     }, signal);
+    if ("held" in extraction) return extraction.held;
+    const { decisions } = extraction;
     return this.phase(
       "approval_staging",
       async () => {
@@ -705,6 +779,23 @@ export class AdmittedMeetingProcessingCycleV1 {
       expected_cursor: admission.source.cursor,
       next_cursor: nextCursor,
     });
+  }
+
+  private async finishHeld(
+    stage: ExtractionFailureStageV1,
+    admission: AdmittedMeetingProcessingAdmissionV1,
+    nextCursor: string | undefined,
+  ): Promise<AdmittedMeetingProcessingCycleResultV1> {
+    if (nextCursor === undefined || nextCursor === admission.source.cursor) {
+      return { kind: "held", stage, cursor_advanced: false };
+    }
+    // A cursor that changed during extraction (another import was queued)
+    // leaves the parked revision at the head; the next poll parks it again.
+    const advanced = await this.advanceCursor({
+      expected_cursor: admission.source.cursor,
+      next_cursor: nextCursor,
+    });
+    return { kind: "held", stage, cursor_advanced: advanced === "advanced" };
   }
 
   private async finishWithoutStage(

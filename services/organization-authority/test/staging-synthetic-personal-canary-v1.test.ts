@@ -52,7 +52,7 @@ async function syntheticWorld(options: { readonly signals?: boolean } = {}) {
     approval: { coordinates, signer: { inspect: async () => authority.descriptor, sign: authority.sign },
       record_append: new OrganizationRecordAppenderV4(record, coordinates, authorityRecordPolicyProjectorsV1()),
       next_envelope_id: () => `env_canary_${++envelopes}` },
-    extraction_attempts: { reserve: () => ({ status: 'reserved', attempt: 1, claim_id: 'claim' }), complete() {} },
+    extraction_attempts: { reserve: () => ({ status: 'reserved', attempt: 1, claim_id: 'claim' }), complete() {}, inspect: () => undefined },
   });
   return { db, organization_id, runtime, extracted: () => extracted };
 }

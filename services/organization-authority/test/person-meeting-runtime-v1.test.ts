@@ -19,6 +19,8 @@ import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVI
 import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
 import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_FOLDER_CURSOR_POLICY_V1 } from '@echo-brain/provider-granola/granola-folder-source-v1';
+import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
+import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
@@ -43,7 +45,9 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   addMembership(f.db, { ...readerA, membership_type: 'employee' }, 'Reader A', 'reader-a@example.test');
   addMembership(f.db, { ...readerB, membership_type: 'employee' }, 'Reader B', 'reader-b@example.test');
   const actors = { owner: person, other, 'reader-a': readerA, 'reader-b': readerB } as const;
-  let active = true, extracted = 0, duringPull: (() => void | Promise<void>) | undefined, duringExtract: (() => void | Promise<void>) | undefined, failExtraction = false;
+  let active = true, extracted = 0, duringPull: (() => void | Promise<void>) | undefined, duringExtract: (() => void | Promise<void>) | undefined, failExtraction = false, edition = '';
+  // One durable attempt ledger per Authority, shared by every runtime the test creates.
+  const ledger = new SqliteExtractionAttemptStoreV1(new Database(':memory:'), { authority_id: 'aut_runtime', organization_id: 'org_runtime', state_lineage_id: 'lineage-runtime' });
   // Meetings the watched folder delivers on its next scans after the baseline.
   const folderDeliveries: string[] = [];
   const current = () => { if (!active) throw new Error('Disconnected'); };
@@ -70,7 +74,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
           guard(); current(); const cursor = readGranolaCheckpointV1(input.cursor!);
           const transcript = { id: 'private-transcript', kind: 'transcript' as const, text: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' };
           // A real provider names the meeting by its source instance, so two tool accounts never share a meeting id.
-          const build = (external: string): MeetingDocument => ({ ...original, id: `${identity.instance_id}:${external}`, content: options.transcriptOnly ? [transcript] : [...original.content, transcript], title: 'Test meeting', provenance: { ...original.provenance, source: identity, external_id: external, canonical_revision: canonicalSha256('meeting version') },
+          const build = (external: string): MeetingDocument => ({ ...original, id: `${identity.instance_id}:${external}`, content: options.transcriptOnly ? [transcript] : [...original.content, transcript], title: `Test meeting${edition}`, provenance: { ...original.provenance, source: identity, external_id: external, canonical_revision: canonicalSha256(`meeting version${edition}`) },
             ...(options.started === undefined ? {} : { time: { actual_start_at: options.started } }) });
           if (!cursor.manual[0]) {
             if (cursor.folder !== null && cursor.baseline && folderDeliveries[0] !== undefined) {
@@ -107,7 +111,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
                   ...(toolIsSynthetic(meeting) ? { block_id: meeting.content[0]!.id } : {}) })) })) }; } };
       },
     },
-    extraction_attempts: { reserve: () => ({ status: 'reserved', attempt: 1, claim_id: 'claim' }), complete() {} },
+    extraction_attempts: ledger,
   });
   const call = async <K extends PersonMeetingOperationV2['operation']>(runtime: ReturnType<typeof create>, op: PersonMeetingOperationV2 & { operation: K }, token = 'owner', tool_id = 'granola') => {
     const meetings = runtime.applications.find(application => application.routes.some(route => route.route_id === 'personal-meetings'))!;
@@ -167,7 +171,9 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
     JOIN authority_live_source_candidates_v2 c ON c.candidate_id=o.candidate_id
     JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256 WHERE a.source_key=? ORDER BY c.created_at, o.approval_id`).all(sourceKey) as { approval_id: string; state: string; suggested_projects_json: string | null }[];
   return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, fakeProvider, sources, intake, processUntilIdle, pendingReview, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
-    duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: () => { failExtraction = true; } };
+    duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: () => { failExtraction = true; },
+    ledger, revise: (value: string) => { edition = value; },
+    held: () => f.db.prepare('SELECT * FROM authority_live_source_held_extractions_v1').all() as { external_id: string; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string }[] };
 }
 function toolIsSynthetic(meeting: MeetingDocument) { return meeting.provenance.source.adapter_id === 'staging-synthetic-meeting'; }
 describe('personal meeting intake uses the shared processing path', () => {
@@ -481,19 +487,78 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(await f.readers()).toEqual(['owner']);
   });
-  it('grants nothing when a cycle fails after admission and the import is then cancelled', async () => {
+  it('consumes an import whose extraction failed and records its project choice, as for a staged one', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     f.failNextExtraction();
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-    const [failed] = (await f.call(runtime, { operation: 'home' })).sources;
-    expect(failed).toMatchObject({ pending_imports: [id], error: expect.any(String) });
-    expect(await f.readers()).toEqual(['owner']);
-    await f.call(runtime, { operation: 'cancel_import', source_key: failed!.source_key, meeting_id: id });
-    await f.processUntilIdle(f.create());
-    expect(f.count('authority_person_meeting_suggestions_v1')).toBe(0);
+    const [held] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect(held).toMatchObject({ pending_imports: [], error: null });
+    expect(f.intake.suggestions(held!.source_key, id)).toEqual([project]);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
-    expect(await f.readers()).toEqual(['owner']);
+    expect(await f.readers()).toEqual(['owner', 'reader-a']);
+  });
+  it.each(['granola', 'synthetic'] as const)('parks a failed meeting and stages the next one in its %s source on the next poll', async (tool) => {
+    const f = await fixture(), storage = new Database(':memory:');
+    try {
+      const runtime = tool === 'granola' ? f.create() : f.create([createStagingSyntheticPersonalMeetingProviderV1({ custom_store: new StagingSyntheticMeetingStoreV1(storage) })]);
+      const [a, b] = tool === 'granola' ? [id, '00000000-0000-4000-8000-000000000004'] : ['synthetic-custom-held-a', 'synthetic-custom-next-b'];
+      for (const meeting_id of [a, b]) {
+        await f.call(runtime, tool === 'granola' ? { operation: 'import', meeting_id, project_id: null, retain: true }
+          : { operation: 'submit', meeting: { id: meeting_id, title: meeting_id, notes: 'Ship the cohort onboarding.', transcript: '' }, project_id: null, retain: true }, 'owner', tool);
+      }
+      const poll = async () => { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); return (await f.call(runtime, { operation: 'home' }, 'owner', tool)).sources[0]; };
+      f.failNextExtraction();
+      // No backoff: the held meeting's source stays eligible for the next queued meeting.
+      expect(await poll()).toMatchObject({ pending_imports: [b], error: null });
+      expect(f.held()).toEqual([expect.objectContaining({ external_id: a, failure_stage: 'unknown' })]);
+      expect(await poll()).toMatchObject({ pending_imports: [], error: null });
+      expect((await f.call(runtime, { operation: 'reviews' }, 'owner', tool)).reviews).toHaveLength(1);
+      expect(f.extracted()).toBe(2);
+    } finally { storage.close(); }
+  });
+  it('keeps a held meeting parked across a restart with no model call, and parks a legacy blocked head as not_recorded', async () => {
+    const f = await fixture();
+    const importAndPoll = async () => {
+      const runtime = f.create();
+      await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+      return (await f.call(runtime, { operation: 'home' })).sources[0];
+    };
+    f.failNextExtraction();
+    const source = await importAndPoll();
+    const [row] = f.held();
+    const key = { admission_sha256: row!.extraction_admission_sha256, review_lineage_id: row!.review_lineage_id, review_input_sha256: row!.review_input_sha256 };
+    // The parked revision is rebuilt from source custody, as an operator retry reads it.
+    const state = new SqliteAuthorityMeetingProcessingStateV1(f.db, GRANOLA_FOLDER_CURSOR_POLICY_V1, 'llm', undefined, source!.source_key);
+    const [listed] = await state.listHeldExtractions();
+    expect(listed).toMatchObject({ external_id: id, key, attempt: 1, failure_stage: 'unknown' });
+    expect((await state.readHeldMeeting(listed!)).provenance).toMatchObject({ external_id: id, canonical_revision: listed!.revision_id });
+    // A new runtime on the same Authority and ledger: importing the meeting again spends nothing.
+    expect(await importAndPoll()).toMatchObject({ pending_imports: [], error: null });
+    expect(f.held()).toEqual([expect.objectContaining({ external_id: id, failure_stage: 'unknown' })]);
+    expect(f.ledger.history(key)).toHaveLength(1);
+    expect(f.ledger.inspect(key)).toEqual({ attempt: 1, outcome: 'failed', failure_code: 'unknown', reserved_at: expect.any(String), retry_authorized: false });
+    // Before parking existed, a failed head had a ledger attempt and no held row.
+    f.db.prepare('DELETE FROM authority_live_source_held_extractions_v1').run();
+    expect(await importAndPoll()).toMatchObject({ pending_imports: [], error: null });
+    expect(f.held()).toEqual([expect.objectContaining({ external_id: id, failure_stage: 'not_recorded' })]);
+    expect(f.extracted()).toBe(1);
+  });
+  it('drops the held row when a newer revision of the meeting becomes a candidate', async () => {
+    const f = await fixture(), runtime = f.create();
+    const importAndPoll = async () => {
+      await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    };
+    f.failNextExtraction();
+    await importAndPoll();
+    expect(f.held()).toHaveLength(1);
+    f.revise(' (edited)');
+    await importAndPoll();
+    expect(f.held()).toEqual([]);
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
+    expect(f.extracted()).toBe(2);
   });
   it('records and freezes an in-flight re-import\'s project when the cursor advance drops the meeting', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');

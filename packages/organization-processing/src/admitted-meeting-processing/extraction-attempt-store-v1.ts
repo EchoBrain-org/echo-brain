@@ -26,6 +26,9 @@ export interface ExtractionAttemptSnapshotV1 {
 export type ExtractionAttemptLatestV1 = ExtractionAttemptKeyV1 & ExtractionAttemptSnapshotV1 & {
   readonly retry_authorized: boolean;
 };
+export type ExtractionAttemptInspectionV1 = Omit<ExtractionAttemptSnapshotV1, 'completed_at'> & {
+  readonly retry_authorized: boolean;
+};
 export type ExtractionAttemptReservationV1 =
   | { readonly status: 'reserved'; readonly attempt: number; readonly claim_id: string }
   | { readonly status: 'blocked'; readonly attempt: number; readonly outcome: ExtractionAttemptOutcomeV1; readonly failure_code: ExtractionAttemptFailureCodeV1 | null };
@@ -41,4 +44,6 @@ export interface ExtractionAttemptStoreV1 {
   /** The reservation commits durably before this method returns. */
   reserve(key: ExtractionAttemptKeyV1): ExtractionAttemptReservationV1;
   complete(input: ExtractionAttemptCompletionV1): void;
+  /** Read-only: the latest attempt for one exact key, or undefined before its first reservation. */
+  inspect(key: ExtractionAttemptKeyV1): ExtractionAttemptInspectionV1 | undefined;
 }

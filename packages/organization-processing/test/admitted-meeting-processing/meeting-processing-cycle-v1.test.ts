@@ -10,6 +10,7 @@ import {
   type ApprovalWorkflowStagerV1,
   type AuthorityMeetingProcessingStateV1,
   type FrozenMeetingProcessingCandidateSnapshotV1,
+  type HoldExtractionInputV1,
   type MeetingProcessingCandidateSnapshotInputV1,
   type MeetingProcessingCandidateV1,
 } from "../../src/admitted-meeting-processing/meeting-processing-cycle-v1.js";
@@ -130,6 +131,7 @@ class FakeState implements AuthorityMeetingProcessingStateV1 {
   readonly advances: Array<{ expected_cursor: string; next_cursor: string }> =
     [];
   readonly candidates: MeetingProcessingCandidateSnapshotInputV1[] = [];
+  readonly held = new Map<string, HoldExtractionInputV1>();
   private readonly sourceRevisions = new Map<
     string,
     FrozenMeetingProcessingCandidateSnapshotV1
@@ -235,6 +237,19 @@ class FakeState implements AuthorityMeetingProcessingStateV1 {
     this.advances.push(input);
     return this.advanceResult;
   }
+
+  /** Keeps the stored stage while the key and attempt are unchanged, as the Authority does. */
+  async holdExtraction(input: HoldExtractionInputV1): Promise<HoldExtractionInputV1["failure_stage"]> {
+    const stored = this.held.get(input.key.review_lineage_id);
+    const failure_stage = stored !== undefined && JSON.stringify([stored.key, stored.attempt]) === JSON.stringify([input.key, input.attempt])
+      ? stored.failure_stage : input.failure_stage;
+    this.held.set(input.key.review_lineage_id, { ...input, failure_stage });
+    return failure_stage;
+  }
+
+  async listHeldExtractions(): Promise<never[]> { return []; }
+
+  async readHeldMeeting(): Promise<never> { throw new Error("held meetings are read from the Authority"); }
 }
 
 class FailingFrozenReadState extends FakeState {
@@ -274,6 +289,8 @@ class RecordingExtractionAttempts implements ExtractionAttemptStoreV1 {
   complete(input: Parameters<ExtractionAttemptStoreV1["complete"]>[0]): void {
     this.completed.push(input);
   }
+
+  inspect(): undefined { return undefined; }
 }
 
 function source(batch: MeetingBatch): MeetingSourceAdapter {
@@ -429,13 +446,13 @@ describe("admitted meeting-processing cycle", () => {
     new AdapterError("rate_limited", "provider rate limited", true),
     new AdapterError("timeout", "provider timed out", true),
     new Error("provider outcome unknown"),
-  ])("holds a failed extraction instead of spending again on an unchanged review input: $message", async (failure) => {
+  ])("parks a failed extraction and moves past it without spending again on an unchanged review input: $message", async (failure) => {
     let calls = 0;
     let recoveredDeliveries = 0;
     const extraction_attempts = new RecordingExtractionAttempts();
     const state = new FakeState(admission());
     const options = {
-      source: source({ meetings: [meeting()] }),
+      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(() => {
         expect(extraction_attempts.keys).toHaveLength(1);
         calls += 1;
@@ -449,18 +466,15 @@ describe("admitted meeting-processing cycle", () => {
       extraction_attempts,
     };
 
-    await expect(liveCycle(options).runOnce()).rejects.toThrow(failure);
-    const recoveredBeforeHold = recoveredDeliveries;
-    await expect(liveCycle(options).runOnce()).rejects.toMatchObject({
-      code: "permanently_rejected", message: "extraction_on_hold", retryable: false,
-    });
+    const held = { kind: "held", stage: failure instanceof AdapterError ? failure.code : "unknown", cursor_advanced: true };
+    await expect(liveCycle(options).runOnce()).resolves.toEqual(held);
+    // Redelivered (as after a crash before the advance), it parks again from the ledger and keeps its stage.
+    await expect(liveCycle(options).runOnce()).resolves.toEqual(held);
     expect(calls).toBe(1);
-    expect(recoveredDeliveries).toBe(recoveredBeforeHold + 1);
-    expect(state.advances).toHaveLength(0);
+    expect(recoveredDeliveries).toBe(2);
+    expect(state.advances).toHaveLength(2);
     expect(state.candidates).toHaveLength(0);
-    expect(extraction_attempts.completed).toMatchObject([{
-      outcome: "failed", failure_code: failure instanceof AdapterError ? failure.code : "unknown",
-    }]);
+    expect(extraction_attempts.completed).toMatchObject([{ outcome: "failed", failure_code: held.stage }]);
   });
 
   it("does not regenerate a successful model response rejected by the real grounding validator", async () => {
@@ -487,8 +501,8 @@ describe("admitted meeting-processing cycle", () => {
       state: new FakeState({ ...admission(), processor: { ...admission().processor, version: extraction.identity.version } }),
       extraction_attempts: new RecordingExtractionAttempts(),
     };
-    await expect(liveCycle(options).runOnce()).rejects.toThrow("grounding at stage: evidence_quote");
-    await expect(liveCycle(options).runOnce()).rejects.toThrow("extraction_on_hold");
+    await expect(liveCycle(options).runOnce()).resolves.toMatchObject({ kind: "held", stage: "evidence_quote" });
+    await expect(liveCycle(options).runOnce()).resolves.toMatchObject({ kind: "held", stage: "evidence_quote" });
     expect(generations).toBe(1);
   });
 
@@ -501,21 +515,22 @@ describe("admitted meeting-processing cycle", () => {
       source: source({ meetings: [value] }), state, extraction_attempts,
       processor: processor(() => { calls += 1; throw new Error("generation failed"); }),
     }).runOnce();
-    await expect(run(meeting())).rejects.toThrow("generation failed");
+    const held = { kind: "held", stage: "unknown" };
+    await expect(run(meeting())).resolves.toMatchObject(held);
     const sameInput = {
       ...meeting(),
       provenance: { ...meeting().provenance, canonical_revision: "sha256:folder-change", observed_at: "2026-08-22T03:00:00.000Z" },
       extensions: { "fixture-source": { folder_membership: [] } },
     };
-    await expect(run(sameInput)).rejects.toThrow("extraction_on_hold");
+    await expect(run(sameInput)).resolves.toMatchObject(held);
     Object.assign(admitted.source, { cursor: fixtureCursor("2026-08-22T03:00:00.000Z") });
-    await expect(run(sameInput)).rejects.toThrow("extraction_on_hold");
+    await expect(run(sameInput)).resolves.toMatchObject(held);
     expect(calls).toBe(1);
     expect(extraction_attempts.keys[1]).toEqual(extraction_attempts.keys[0]);
     expect(extraction_attempts.keys[2]).toEqual(extraction_attempts.keys[0]);
 
-    await expect(run({ ...sameInput, content: [{ id: "block-1", kind: "note", text: "A changed decision input." }] })).rejects.toThrow("generation failed");
-    await expect(run({ ...sameInput, time: { actual_start_at: "2026-08-22T01:00:00.000Z" } })).rejects.toThrow("generation failed");
+    await expect(run({ ...sameInput, content: [{ id: "block-1", kind: "note", text: "A changed decision input." }] })).resolves.toMatchObject(held);
+    await expect(run({ ...sameInput, time: { actual_start_at: "2026-08-22T01:00:00.000Z" } })).resolves.toMatchObject(held);
     expect(calls).toBe(3);
     expect(extraction_attempts.keys[3]!.review_input_sha256).not.toBe(extraction_attempts.keys[0]!.review_input_sha256);
     expect(extraction_attempts.keys[4]!.review_input_sha256).not.toBe(extraction_attempts.keys[0]!.review_input_sha256);
@@ -531,7 +546,7 @@ describe("admitted meeting-processing cycle", () => {
       processor: processor((value) => { calls += 1; return decisions(value); }),
     };
     await expect(liveCycle(options).runOnce()).rejects.toThrow("candidate persistence unavailable");
-    await expect(liveCycle(options).runOnce()).rejects.toThrow("extraction_on_hold");
+    await expect(liveCycle(options).runOnce()).resolves.toEqual({ kind: "held", stage: "output_not_saved", cursor_advanced: false });
     expect(calls).toBe(1);
     expect(extraction_attempts.completed).toMatchObject([{ outcome: "succeeded" }]);
     expect(state.advances).toHaveLength(0);
@@ -553,7 +568,7 @@ describe("admitted meeting-processing cycle", () => {
     expect(extraction_attempts.keys).toHaveLength(1);
   });
 
-  it("keeps an unfinished reservation on hold when completion persistence fails", async () => {
+  it("keeps the parked stage when completion persistence fails, and parks an unrecorded pending attempt as interrupted", async () => {
     const extraction_attempts = new RecordingExtractionAttempts();
     extraction_attempts.complete = () => { throw new Error("attempt completion unavailable"); };
     let calls = 0;
@@ -562,9 +577,26 @@ describe("admitted meeting-processing cycle", () => {
       processor: processor(() => { calls += 1; throw new Error("provider outcome unknown"); }),
     };
     await expect(liveCycle(options).runOnce()).rejects.toThrow("attempt completion unavailable");
-    await expect(liveCycle(options).runOnce()).rejects.toThrow("extraction_on_hold");
+    await expect(liveCycle(options).runOnce()).resolves.toMatchObject({ kind: "held", stage: "unknown" });
+    // A crash between reservation and park leaves a pending attempt and no held row.
+    await expect(liveCycle({ ...options, state: new FakeState(admission()) }).runOnce()).resolves.toMatchObject({ kind: "held", stage: "interrupted" });
     expect(calls).toBe(1);
     expect(extraction_attempts.completed).toHaveLength(0);
+  });
+
+  it("does not park an aborted run; the next poll parks it as cancelled", async () => {
+    const controller = new AbortController();
+    const extraction_attempts = new RecordingExtractionAttempts();
+    const state = new FakeState(admission());
+    const options = {
+      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }), state, extraction_attempts,
+      processor: processor(() => { controller.abort(new Error("worker shutdown")); throw new Error("extraction interrupted"); }),
+    };
+    await expect(liveCycle(options).runOnce(controller.signal)).rejects.toThrow("extraction interrupted");
+    expect(state.held.size).toBe(0);
+    expect(state.advances).toHaveLength(0);
+    expect(extraction_attempts.completed).toMatchObject([{ outcome: "failed", failure_code: "cancelled" }]);
+    await expect(liveCycle(options).runOnce()).resolves.toEqual({ kind: "held", stage: "cancelled", cursor_advanced: true });
   });
 
   it("closes a failed extraction without opening another paid attempt", async () => {
@@ -581,8 +613,8 @@ describe("admitted meeting-processing cycle", () => {
       extraction_attempts: new RecordingExtractionAttempts(),
     });
 
-    await expect(cycle.runOnce()).rejects.toThrow("provider retry");
-    await expect(cycle.runOnce()).rejects.toThrow("extraction_on_hold");
+    await expect(cycle.runOnce()).resolves.toMatchObject({ kind: "held", stage: "unknown" });
+    await expect(cycle.runOnce()).resolves.toMatchObject({ kind: "held", stage: "unknown" });
     expect(calls).toBe(1);
   });
 
