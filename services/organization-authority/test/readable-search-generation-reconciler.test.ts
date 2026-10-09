@@ -135,6 +135,23 @@ describe("readable-search generation reconciliation", () => {
     expect(build).toHaveBeenCalledTimes(1);
   });
 
+  it("validates every build but skips an unchanged head whose generation is still warm", async () => {
+    const current = head(2);
+    let warm = true;
+    const prepare = vi.fn();
+    const isWarm = vi.fn(() => warm);
+    const value = reconciler(database(), current, { prepare_generation: prepare, is_generation_warm: isWarm });
+    await expect(value.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "published" });
+    expect(isWarm).not.toHaveBeenCalled();
+    expect(prepare).toHaveBeenCalledOnce();
+    await expect(value.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "current" });
+    expect(isWarm).toHaveBeenCalledWith(generation(current));
+    expect(prepare).toHaveBeenCalledOnce();
+    warm = false; // The handle was cleared.
+    await expect(value.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "current" });
+    expect(prepare).toHaveBeenCalledTimes(2);
+  });
+
   it("rebuilds when only the immutable retrieval contract changes at an unchanged head", async () => {
     const authority = database();
     const current = head(2);

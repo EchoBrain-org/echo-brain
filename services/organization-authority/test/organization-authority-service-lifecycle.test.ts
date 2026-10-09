@@ -303,6 +303,7 @@ describe("Organization Authority service lifecycle", () => {
     expect(runtime.address.port).toBe(14_000);
     expect(events).toEqual([
       "recover",
+      "handle-clear", // Startup fully validates even a warm generation.
       "reconcile",
       "api-start",
       "recover",
@@ -313,7 +314,7 @@ describe("Organization Authority service lifecycle", () => {
     ]);
 
     await runtime.close();
-    expect(events.slice(8)).toEqual(["api-close", "handle-clear"]);
+    expect(events.slice(9)).toEqual(["api-close", "handle-clear"]);
   });
 
   it("retries after an interrupted V4 append with recovery before another source poll, still waking search and presentation", async () => {
@@ -461,7 +462,7 @@ describe("Organization Authority service lifecycle", () => {
       }),
     ).rejects.toThrow("generation reconciliation interrupted");
     expect(startApi).not.toHaveBeenCalled();
-    expect(events).toEqual(["recover", "reconcile", "handle-clear"]);
+    expect(events).toEqual(["recover", "handle-clear", "reconcile", "handle-clear"]);
     expect(telemetry).toMatchObject([
       { event: "started", cycle_phase: "recovery" },
       { event: "succeeded", cycle_phase: "recovery" },

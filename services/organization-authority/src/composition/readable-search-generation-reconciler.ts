@@ -79,6 +79,10 @@ export interface ReadableSearchGenerationReconcilerV1Options<
   readonly prepare_generation?: (
     generation: BuiltReadableSearchGenerationV1,
   ) => void;
+  /** True when this process already holds the generation's validated rows. */
+  readonly is_generation_warm?: (
+    generation: BuiltReadableSearchGenerationV1,
+  ) => boolean;
   readonly invalidate_generation?: () => void;
   readonly now?: () => string;
 }
@@ -192,12 +196,16 @@ export class ReadableSearchGenerationReconcilerV1<
         this.options.retrieval_contract_sha256 &&
       sameHead(pointerHead(active), observedHead)
     ) {
-      observeCoreRuntimeSyncV1("search_validation", () => this.options.prepare_generation?.({
+      const generation = {
         generation_id: active.generation_id,
         manifest_sha256: active.manifest_sha256,
         retrieval_contract_sha256: active.retrieval_contract_sha256,
         record_head: pointerHead(active),
-      }));
+      };
+      // Searches never re-read a warm generation's files, so an unchanged head
+      // skips re-validation. Startup clears the handle; builds always validate.
+      if (this.options.is_generation_warm?.(generation) !== true)
+        observeCoreRuntimeSyncV1("search_validation", () => this.options.prepare_generation?.(generation));
       annotateCoreRuntimeV1({ result: "current", generation: active.generation_id });
       return Object.freeze({ status: "current", record_head: observedHead });
     }

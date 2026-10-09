@@ -197,7 +197,9 @@ export async function startOrganizationAuthorityServiceLifecycle(
     startup.signal.throwIfAborted();
     // A persisted pointer is not ready until its immutable generation has been
     // validated into the sole process-local handle. Never bind the API
-    // listener before that startup boundary succeeds.
+    // listener before that startup boundary succeeds. Clearing first makes
+    // startup fully validate even a generation an earlier run left warm.
+    clearHandle();
     await lifecycle.runPhase(
       "search_reconciliation",
       () => dependencies.processing.reconcileReadableSearchGeneration(startup.signal),

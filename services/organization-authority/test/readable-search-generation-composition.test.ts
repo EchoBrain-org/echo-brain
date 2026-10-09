@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -150,7 +151,14 @@ describe("readable-search generation composition", () => {
           reader: { principal_id: "restart", membership_id: "restart" },
           query: "restart",
         });
+      // A warm unchanged generation is not re-read; after a clear it is.
+      const generationDirectory = join(generationsDirectory, String(pointer.generation_id));
+      renameSync(generationDirectory, join(parent, "hidden"));
+      expect(await reconciler.reconcile(new AbortController().signal)).toMatchObject({ status: "current" });
+      expect(restartSearch().items).toEqual([]);
       clearReadableSearchActiveGenerationV1();
+      await expect(reconciler.reconcile(new AbortController().signal)).rejects.toThrow("generation is missing");
+      renameSync(join(parent, "hidden"), generationDirectory);
       expect(restartSearch).toThrow("active-generation handle is unavailable");
       expect(
         await reconciler.reconcile(new AbortController().signal),

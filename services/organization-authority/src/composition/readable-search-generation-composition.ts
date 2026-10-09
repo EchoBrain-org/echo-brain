@@ -35,7 +35,9 @@ import {
   READABLE_SEARCH_SCORE_SCALE,
   READABLE_SEARCH_SCORER_ID,
   readableSearchPlaneBaselineSha256,
+  isReadableSearchActiveGenerationWarmV1,
   warmReadableSearchActiveGenerationV1,
+  type ReadableSearchActiveGenerationV1,
   type ReadableSearchAtomV1,
   type ReadableSearchLineagePlaneV1,
   type ReadableSearchRelatedAtomPairV1,
@@ -45,6 +47,7 @@ import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organ
 import {
   ReadableSearchGenerationReconcilerV1,
   readReadableSearchRecordHeadV1,
+  type BuiltReadableSearchGenerationV1,
   type ReadableSearchRecordHeadV1,
 } from "./readable-search-generation-reconciler.js";
 import {
@@ -521,6 +524,20 @@ export function createReadableSearchGenerationReconcilerV1(input: {
   const relatedProjector = input.related_atom_projector === undefined
     ? undefined
     : Object.freeze({ ...input.related_atom_projector });
+  const activeGeneration = (
+    generation: BuiltReadableSearchGenerationV1,
+  ): ReadableSearchActiveGenerationV1 => ({
+    generation_id: generation.generation_id,
+    manifest_sha256: generation.manifest_sha256,
+    retrieval_contract_sha256: generation.retrieval_contract_sha256,
+    exact_head: {
+      authority_id: input.root.authority_id,
+      organization_id: input.root.organization_id,
+      state_lineage_id: input.root.state_lineage_id,
+      position: generation.record_head.position,
+      record_sha256: generation.record_head.record_sha256,
+    },
+  });
 
   return new ReadableSearchGenerationReconcilerV1({
     authority: input.authority,
@@ -652,21 +669,12 @@ export function createReadableSearchGenerationReconcilerV1(input: {
         }),
       });
     },
+    is_generation_warm: (generation) =>
+      isReadableSearchActiveGenerationWarmV1(activeGeneration(generation)),
     prepare_generation: (generation) =>
       warmReadableSearchActiveGenerationV1({
         state_directory: input.state_directory,
-        active_generation: {
-          generation_id: generation.generation_id,
-          manifest_sha256: generation.manifest_sha256,
-          retrieval_contract_sha256: generation.retrieval_contract_sha256,
-          exact_head: {
-            authority_id: input.root.authority_id,
-            organization_id: input.root.organization_id,
-            state_lineage_id: input.root.state_lineage_id,
-            position: generation.record_head.position,
-            record_sha256: generation.record_head.record_sha256,
-          },
-        },
+        active_generation: activeGeneration(generation),
       }),
     invalidate_generation: clearReadableSearchActiveGenerationV1,
     ...(input.now === undefined ? {} : { now: input.now }),
