@@ -69,7 +69,7 @@ export interface OpenItemsLiveFailureV1 {
   readonly reason: 'bind' | 'open' | 'fence' | 'first_line';
   readonly code: string;
 }
-export type PersonOpenItemsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'home' | 'items' | 'item' | 'send' | 'set_state' | 'assign'>;
+export type PersonOpenItemsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'home' | 'items' | 'item' | 'send' | 'set_state' | 'assign' | 'sweep'>;
 
 type Desk = Awaited<ReturnType<typeof bindPersonLiveEvidenceDeskV1>>;
 type DeskItem = Awaited<ReturnType<NonNullable<Desk['openCitation']>>>['items'][number];
@@ -217,6 +217,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     try { observe(Object.freeze({ kind: 'open_items_live_read' as const, reason, code })); } catch { /* observation only */ }
   };
   const approvedBy = (row: ImpactItemRowV1, viewer: Viewer) => row.approver.membership_id === viewer.membership && row.approver.principal_id === viewer.principal;
+  /** The run was made for the viewer: they approved its decision. */
+  const runFor = (run: TriggerRunRowV1, viewer: Viewer) => run.actor.membership_id === viewer.membership && run.actor.principal_id === viewer.principal;
   const requestContext = (viewer: Viewer): PersonLiveRequestContextV1 => ({
     authority_id: options.bind_options.authority_id, organization_id: viewer.organization, state_lineage_id: options.bind_options.state_lineage_id,
     principal_id: viewer.principal, membership_id: viewer.membership, session_family_id: viewer.authorization.session_family_id, request_id: `open_items_${randomUUID()}`,
@@ -417,6 +419,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         landed: theirs.filter(entry => entry.row.check?.verdict === 'landed').length,
         waiting: theirs.filter(entry => approvedBy(entry.row, viewer) && !entry.access.waits_on_viewer).length,
         last_checked_at: checks.at(-1) ?? null,
+        sweep_due: false, // Temporary until open items plan Task 11 serves sweeps and works out when one is due.
       });
     },
 
@@ -482,7 +485,9 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       for (const run of options.runs.impactRunsFor(stageRecords)) if (run.record_sha256 !== null) latestRun.set(run.record_sha256, run);
       const stages: PersonImpactStageV1[] = stageRecords.flatMap(record => {
         const run = latestRun.get(record);
-        return run === undefined ? [] : [{ record_sha256: record, run_id: run.run_id, state: run.state, error_code: run.state === 'failed' ? run.error_code ?? 'research_failed' : null }];
+        return run === undefined ? [] : [{
+          record_sha256: record, run_id: run.run_id, state: run.state, error_code: run.state === 'failed' ? run.error_code ?? 'research_failed' : null, mine: runFor(run, viewer),
+        }];
       }).slice(0, SCOPE_DECISIONS_MAX);
 
       // Counts only (the project and Impact lines): no item is listed, so none is opened and no desk is bound.
@@ -546,6 +551,11 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         owner = updated.owner_membership_id;
       }
       return checked('assign', { owner: personOf(options.people.people(viewer.organization, [owner]), owner) });
+    },
+
+    async sweep(input: Parameters<PersonOpenItemsApplicationV1['sweep']>[0]): Promise<PersonRunsResultsV1['sweep']> {
+      viewerOf(input.access_token, input.signal);
+      throw new AuthorityOperationError('unavailable', 'Sweep runs are not served yet'); // Temporary until open items plan Task 11 serves sweeps.
     },
   });
 }

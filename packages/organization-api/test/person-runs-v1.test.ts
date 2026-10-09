@@ -67,7 +67,7 @@ const decisionCount = { record_sha256: RECORD, unsent: 1, open: 1 };
 const summary = (overrides: Record<string, unknown> = {}) => ({
   unsent: 1, open: 1, done: 0, not_relevant: 0, landed: 0, changed: 1, unreadable: 0, decisions: 1, last_checked_at: LATER, by_decision: [decisionCount], ...overrides,
 });
-const stage = (overrides: Record<string, unknown> = {}) => ({ record_sha256: RECORD, run_id: RUN, state: 'done', error_code: null, ...overrides });
+const stage = (overrides: Record<string, unknown> = {}) => ({ record_sha256: RECORD, run_id: RUN, state: 'done', error_code: null, mine: true, ...overrides });
 
 describe('runs API path', () => {
   it('is the one runs route', () => {
@@ -150,7 +150,7 @@ describe('runs API list result', () => {
     ['runs that are not an array', { runs: run() }],
     ['an extra key on a run', { runs: [run({ result_json: '{}' })] }],
     ['a run missing a key', { runs: [{ ...run(), error_code: undefined }] }],
-    ['a trigger other than approved_record', { runs: [run({ trigger: 'sweep' })] }],
+    ['a trigger that is not a run trigger', { runs: [run({ trigger: 'check' })] }],
     ['a bad run id', { runs: [run({ run_id: 'rr_1234' })] }],
     ['an empty event ref', { runs: [run({ event_ref: '' })] }],
     ['an event ref over 128 characters', { runs: [run({ event_ref: 'a'.repeat(129) })] }],
@@ -246,7 +246,7 @@ describe('runs API open items', () => {
     expect(validatePersonRunsResultV1('item', { item: seen }).item.current?.says_now).toBe(CURRENT.says_now);
     expect(validatePersonRunsResultV1('item', { item: openItem({}) }).item).not.toHaveProperty('current');
     expect(() => validatePersonRunsResultV1('item', { item: { ...seen, pointer: {} } })).toThrow();      // no extra key ever
-    expect(() => validatePersonRunsResultV1('home', { send: [], items: Array.from({ length: 21 }, () => seen), landed: 0, waiting: 0, last_checked_at: null })).toThrow();
+    expect(() => validatePersonRunsResultV1('home', { send: [], items: Array.from({ length: 21 }, () => seen), landed: 0, waiting: 0, last_checked_at: null, sweep_due: false })).toThrow();
   });
   it('accepts summary_only only as true and never with a cursor, and requires reach', () => {
     // Counts and stages only: a line that shows how many items there are opens none of them.
@@ -349,7 +349,7 @@ describe('runs API open-item requests', () => {
 describe('runs API open-item results', () => {
   const seen = openItem({ decision: DECISION, current: CURRENT });
   const withItem = (fields: Record<string, unknown>) => ({ item: { ...seen, ...fields } });
-  const home = (fields: Record<string, unknown> = {}) => ({ send: [sendRow()], items: [seen], landed: 1, waiting: 0, last_checked_at: LATER, ...fields });
+  const home = (fields: Record<string, unknown> = {}) => ({ send: [sendRow()], items: [seen], landed: 1, waiting: 0, last_checked_at: LATER, sweep_due: false, ...fields });
   const page = (fields: Record<string, unknown> = {}) => ({ items: [seen], next_cursor: null, summary: summary(), stages: [stage()], ...fields });
 
   it('returns a fresh item, frozen with all its parts', () => {
@@ -373,7 +373,7 @@ describe('runs API open-item results', () => {
     expect(PERSON_OPEN_ITEMS_PAGE_V1).toBe(50);
     const fullHome = home({ send: Array.from({ length: 20 }, () => sendRow()), items: Array.from({ length: 20 }, () => seen) });
     expect(validatePersonRunsResultV1('home', fullHome)).toEqual(fullHome);
-    const empty = { send: [], items: [], landed: 0, waiting: 0, last_checked_at: null };
+    const empty = { send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: true };
     expect(validatePersonRunsResultV1('home', empty)).toEqual(empty);
     refused(() => validatePersonRunsResultV1('home', home({ send: Array.from({ length: 21 }, () => sendRow()) })), 'one send row too many');
     const fullPage = page({
@@ -467,6 +467,10 @@ describe('runs API open-item results', () => {
     ['a failed stage without its reason', 'items', page({ stages: [stage({ state: 'failed' })] })],
     ['a done stage with a reason', 'items', page({ stages: [stage({ error_code: 'unavailable' })] })],
     ['a stage with a bad run id', 'items', page({ stages: [stage({ run_id: ITEM })] })],
+    ['a stage that does not say whose run it is', 'items', page({ stages: [without(stage(), 'mine')] })],
+    ['a stage whose own-run flag is not a boolean', 'items', page({ stages: [stage({ mine: 'yes' })] })],
+    ['a home that does not say whether a sweep is due', 'home', without(home(), 'sweep_due')],
+    ['a home whose sweep_due is not a boolean', 'home', home({ sweep_due: 'true' })],
     ['a send result with an extra count', 'send', { sent: 1, not_relevant: 0, skipped: 0 }],
     ['a negative sent count', 'send', { sent: -1, not_relevant: 0 }],
     ['a set_state result of unsent', 'set_state', { state: 'unsent' }],
@@ -474,5 +478,50 @@ describe('runs API open-item results', () => {
     ['an assigned owner with a membership id that is not canonical', 'assign', { owner: { ...APPROVER, membership_id: 'mem_ari' } }],
   ])('refuses %s', (_label, operation, value) => {
     refused(() => validatePersonRunsResultV1(operation as keyof PersonRunsResultsV1, value), _label);
+  });
+});
+
+describe('runs API sweep', () => {
+  const sweep = (fields: Record<string, unknown>) => ({ schema_version: 1, operation: 'sweep', ...fields });
+
+  it('accepts a sweep of the caller\'s items, a decision or a project, with exactly its keys', () => {
+    for (const request of [sweep({ scope: 'mine' }), sweep({ scope: 'record', id: RECORD }), sweep({ scope: 'project', id: PROJECT })]) {
+      const validated = validatePersonRunsRequestV1(request);
+      expect(validated).toEqual(request);
+      expect(Object.isFrozen(validated)).toBe(true);
+    }
+  });
+
+  it.each([
+    ['mine with an id', sweep({ scope: 'mine', id: RECORD })],
+    ['a decision without its record', sweep({ scope: 'record' })],
+    ['a project without its id', sweep({ scope: 'project' })],
+    ['a run scope', sweep({ scope: 'run', id: RUN })],
+    ['an unknown scope', sweep({ scope: 'team' })],
+    ['no scope', sweep({})],
+    ['a record scope with a project id', sweep({ scope: 'record', id: PROJECT })],
+    ['a project scope with a project id that is not canonical', sweep({ scope: 'project', id: 'prj_pilot' })],
+    ['a cursor', sweep({ scope: 'mine', cursor: 'next-page_2' })],
+    ['summary_only', sweep({ scope: 'record', id: RECORD, summary_only: true })],
+    ['an extra key', sweep({ scope: 'mine', force: true })],
+  ])('refuses a sweep with %s', (_label, request) => {
+    refused(() => validatePersonRunsRequestV1(request), _label);
+  });
+
+  it('answers the sweep\'s run, or that nothing is open to check', () => {
+    expect(validatePersonRunsResultV1('sweep', { run_id: RUN })).toEqual({ run_id: RUN });
+    expect(validatePersonRunsResultV1('sweep', { state: 'nothing_to_check' })).toEqual({ state: 'nothing_to_check' });
+    expect(Object.isFrozen(validatePersonRunsResultV1('sweep', { run_id: RUN }))).toBe(true);
+    for (const [label, value] of [
+      ['nothing', {}], ['both', { run_id: RUN, state: 'nothing_to_check' }], ['a run state', { state: 'pending' }], ['a bad run id', { run_id: 'rr_0f6c1a2e' }],
+      ['a run id that is null', { run_id: null }], ['an extra key', { run_id: RUN, scope: 'mine' }], ['a state that is not a string', { state: true }],
+    ] as const) refused(() => validatePersonRunsResultV1('sweep', value), label);
+  });
+
+  it('lists sweep runs beside impact runs, and says whether a stage\'s run is the caller\'s own and whether a sweep is due', () => {
+    expect(validatePersonRunsResultV1('list', { runs: [run(), run({ run_id: 'run_swp1', trigger: 'sweep', event_ref: 'sweep_mine' })] }).runs.map(entry => entry.trigger)).toEqual(['approved_record', 'sweep']);
+    const page = { items: [], next_cursor: null, summary: summary(), stages: [stage(), stage({ mine: false, run_id: 'run_bbbb' })] };
+    expect(validatePersonRunsResultV1('items', page).stages.map(entry => entry.mine)).toEqual([true, false]);
+    for (const sweep_due of [true, false]) expect(validatePersonRunsResultV1('home', { send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due }).sweep_due).toBe(sweep_due);
   });
 });

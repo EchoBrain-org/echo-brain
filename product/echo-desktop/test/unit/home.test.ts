@@ -42,7 +42,7 @@ const item = (id: string, verdict: 'changed' | null = null): OpenItemView => ({
   reach: 'no_access',
 });
 const sendRow = (): HomeView['send'][number] => ({ run_id: impactRun('done').run_id, decision, items: 2, kinds: ['ticket'], owners: ['Mina Patel'], finished_at: '2026-10-08T10:05:00.000Z' });
-const emptyHome = (): HomeView => ({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null });
+const emptyHome = (): HomeView => ({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
 const flush = async () => { for (let i = 0; i < 20; i += 1) await Promise.resolve(); };
 const operations = () => rpc.mock.calls.filter(([method]) => method === 'runs').map(([, params]) => params.request.operation);
 

@@ -82,7 +82,7 @@ describe('the words Home and Tell the owners? use', () => {
   });
 
   it('says what a decision changed, and what a project has open', () => {
-    const run = { record_sha256: 'sha256:1', run_id: 'run_00000001' };
+    const run = { record_sha256: 'sha256:1', run_id: 'run_00000001', mine: true };
     expect(impactWords({ ...summary, open: 2, unsent: 1 }, { ...run, state: 'done', error_code: null })).toBe('2 open · 1 not sent');
     expect(impactWords({ ...summary, unsent: 2 }, { ...run, state: 'done', error_code: null })).toBe('2 not sent');
     expect(impactWords(summary, null)).toBe('Not checked yet');

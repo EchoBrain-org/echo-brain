@@ -742,6 +742,7 @@ export function createOrganizationAuthorityHttpServer(
           case 'send': return application.send({ ...common, request });
           case 'set_state': return application.set_state({ ...common, request });
           case 'assign': return application.assign({ ...common, request });
+          case 'sweep': return application.sweep({ ...common, request });
           // An operation the API knows that this Authority does not serve yet.
           default: throw new AuthorityOperationError('unavailable', 'This operation is not available yet');
         }

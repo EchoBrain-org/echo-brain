@@ -703,8 +703,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     // Impact checks: approving queues one run; a start runs it, and the second
     // list after that finds it done (in granola-run-failed, failed until Try
-    // again). A done check has found two open items. Every answer passes the
-    // contract's own result check, as the Authority's does.
+    // again). A done check has found two open items. No sweep is due, and a
+    // sweep finds nothing to check. Every answer passes the contract's own
+    // result check, as the Authority's does.
     if (method === 'POST' && path === '/v1/person/runs' && mode.startsWith('granola')) {
       const api = await contract();
       let request: RunsRequest;
@@ -776,7 +777,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           return result('home', {
             send, items: shown.filter(item => item.state === 'open' && mineAsOwner(item)).sort((a, b) => sentAt(a).localeCompare(sentAt(b))).map(itemView),
             landed: 0, waiting: shown.filter(item => item.state === 'open' && item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
-            last_checked_at: null,
+            last_checked_at: null, sweep_due: false,
           });
         }
         case 'items': {
@@ -786,14 +787,16 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
               : scope === 'record' ? item.readable && item.decision.record_sha256 === id : item.readable && item.decision.project_ids.includes(id!));
           const records = [...new Set(items.filter(item => item.readable).map(item => item.decision.record_sha256))];
           const count = (state: OpenItem['state'], of = items) => of.filter(item => item.state === state).length;
-          // Each decision's check: Ari's own (whatever its stage), and Mina's, done.
+          // Each decision's check: Ari's own (whatever its stage), and Mina's, done. Only Ari's is Ari's own.
           const pilotProjects = Array.isArray(granolaReview?.project_ids) ? granolaReview.project_ids as string[] : [];
           const pilot = run !== null && granolaApproved && (scope === 'mine' || (scope === 'run' && id === runId) || (scope === 'record' && id === PILOT_RECORD) ||
             (scope === 'project' && pilotProjects.includes(id!)));
           const stages = [
-            ...(pilot ? [{ record_sha256: PILOT_RECORD, run_id: runId, state: run.state, error_code: run.error_code }] : []),
-            ...records.filter(record => record !== PILOT_RECORD).map(record => ({
-              record_sha256: record, run_id: items.find(item => item.decision.record_sha256 === record)!.run_id, state: 'done', error_code: null })),
+            ...(pilot ? [{ record_sha256: PILOT_RECORD, run_id: runId, state: run.state, error_code: run.error_code, mine: true }] : []),
+            ...records.filter(record => record !== PILOT_RECORD).map(record => {
+              const found = items.find(item => item.decision.record_sha256 === record)!;
+              return { record_sha256: record, run_id: found.run_id, state: 'done', error_code: null, mine: found.approver.membership_id === ARI.membership_id };
+            }),
           ];
           // Counts only (a project's or a decision's line): the summary and stages, no item.
           return result('items', { items: request.summary_only === true ? [] : items.map(itemView), next_cursor: null, stages, summary: {
@@ -845,6 +848,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           item.owner = { membership_id: person.membership_id, name: person.display_name, match: 'reassigned' };
           return result('assign', { owner: { membership_id: person.membership_id, name: person.display_name, active: true } });
         }
+        case 'sweep':
+          return result('sweep', { state: 'nothing_to_check' });
       }
     }
     // Jira: the browser consent is never shown; the second status read finds it done,

@@ -10,9 +10,10 @@ const ITEM = 'itm_00000000-0000-4000-8000-000000000001';
 const RUN = 'run_00000000-0000-4000-8000-000000000001';
 const MEMBER = 'mem_00000000-0000-4000-8000-000000000002';
 const RECORD = `sha256:${'a'.repeat(64)}`;
+const PROJECT = 'prj_00000000-0000-4000-8000-000000000003';
 /** One valid request per open-items operation, and the result its method answers. */
 const OPEN_ITEMS = {
-  home: [{ schema_version: 1, operation: 'home' }, { send: [], items: [], landed: 0, waiting: 0, last_checked_at: null }],
+  home: [{ schema_version: 1, operation: 'home' }, { send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false }],
   items: [{ schema_version: 1, operation: 'items', scope: 'record', id: RECORD }, { items: [], next_cursor: null, stages: [], summary: { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] } }],
   item: [{ schema_version: 1, operation: 'item', item_id: ITEM }, { item: { item_id: ITEM } }],
   send: [{ schema_version: 1, operation: 'send', run_id: RUN, command_id: 'cmd-1', items: [{ item_id: ITEM, include: true, owner_membership_id: MEMBER }] }, { sent: 1, not_relevant: 0 }],
@@ -28,7 +29,7 @@ const post = (base: string, body: unknown, authorization: string | null = 'Beare
 
 describe('person runs HTTP transport', () => {
   it('reserves the route, requires a bearer, and dispatches a validated list', async () => {
-    const app = { list: vi.fn(async () => ({ runs: [] })), start: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
+    const app = { list: vi.fn(async () => ({ runs: [] })), start: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), sweep: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
     const base = await origin(app);
     expect((await post(base, { schema_version: 1, operation: 'list' }, null)).status).toBe(401);
     const response = await post(base, { schema_version: 1, operation: 'list' });
@@ -38,7 +39,7 @@ describe('person runs HTTP transport', () => {
   });
 
   it('surfaces a composed no-model application as unavailable', async () => {
-    const app = { list: unavailable, start: unavailable, retry: unavailable, view: unavailable, home: unavailable, items: unavailable, item: unavailable, send: unavailable, set_state: unavailable, assign: unavailable, close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
+    const app = { list: unavailable, start: unavailable, retry: unavailable, view: unavailable, home: unavailable, items: unavailable, item: unavailable, send: unavailable, set_state: unavailable, assign: unavailable, sweep: unavailable, close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
     expect((await post(await origin(app), { schema_version: 1, operation: 'list' })).status).toBe(503);
   });
 
@@ -65,12 +66,30 @@ describe('person runs HTTP transport', () => {
       return {} as never;
     });
     const base = await origin(unavailablePersonTriggerRunsV1({ authenticateAccess }));
-    for (const request of [{ schema_version: 1, operation: 'list' }, { schema_version: 1, operation: 'view', run_id: RUN }, ...Object.values(OPEN_ITEMS).map(([value]) => value)]) {
+    for (const request of [{ schema_version: 1, operation: 'list' }, { schema_version: 1, operation: 'view', run_id: RUN }, ...Object.values(OPEN_ITEMS).map(([value]) => value), { schema_version: 1, operation: 'sweep', scope: 'mine' }]) {
       expect((await post(base, request, 'Bearer stranger')).status).toBe(401);
       const response = await post(base, request);
       expect(response.status).toBe(503);
       expect(await response.json()).toMatchObject({ error: { code: 'unavailable' } });
     }
-    expect(authenticateAccess).toHaveBeenCalledTimes(16);
+    expect(authenticateAccess).toHaveBeenCalledTimes(18);
+  });
+
+  it('dispatches a valid sweep to its method, which refuses it for now, and refuses an invalid one before any method', async () => {
+    // Sweep runs are served from Task 11 of the open items plan; until then the composed method answers unavailable.
+    const sweep = vi.fn(async () => { throw new AuthorityOperationError('unavailable', 'Sweep runs are not served yet'); });
+    const app = { list: vi.fn(), start: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), sweep, close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
+    const base = await origin(app);
+    const valid = [{ scope: 'mine' }, { scope: 'record', id: RECORD }, { scope: 'project', id: PROJECT }].map(fields => ({ schema_version: 1, operation: 'sweep', ...fields }));
+    for (const request of valid) {
+      const response = await post(base, request);
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ error: { code: 'unavailable' } });
+      expect(sweep).toHaveBeenLastCalledWith({ access_token: 'fixture', request, signal: expect.any(AbortSignal) });
+    }
+    for (const fields of [{ scope: 'mine', id: RECORD }, { scope: 'record' }, { scope: 'mine', cursor: 'next-page_2' }]) {
+      expect((await post(base, { schema_version: 1, operation: 'sweep', ...fields })).status, JSON.stringify(fields)).toBe(400);
+    }
+    expect(sweep).toHaveBeenCalledTimes(valid.length);
   });
 });

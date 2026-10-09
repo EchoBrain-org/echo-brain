@@ -59,7 +59,7 @@ describe('open items: who sees what', () => {
     expect(first.next_cursor).toBeNull();
     expect(first.summary).toEqual({ unsent: 2, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 1, last_checked_at: null,
       by_decision: [{ record_sha256: f.record, unsent: 2, open: 0 }] });
-    expect(first.stages).toEqual([{ record_sha256: f.record, run_id: f.runId, state: 'done', error_code: null }]);
+    expect(first.stages).toEqual([{ record_sha256: f.record, run_id: f.runId, state: 'done', error_code: null, mine: true }]);
     // Page by page with a cursor: the same rows, in the same order.
     const ordered = [...first.items].map(entry => entry.item_id);
     const byCodePoint = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
@@ -100,6 +100,19 @@ describe('open items: who sees what', () => {
     const f = await openItemsFixture();
     expect(await scope(f, 'mina', 'record')).toMatchObject({ items: [], stages: [{ record_sha256: f.record, run_id: f.runId, state: 'pending', error_code: null }] });
     expect((await scope(f, 'okafor', 'record')).stages).toEqual([]);
+  });
+
+  it("says whose impact check a stage is: the approver's own, and no other reader's", async () => {
+    const f = await openItemsFixture();
+    const stages = async (access_token: FixturePerson, summary_only?: true) => (await f.app.items({ access_token, request: {
+      schema_version: 1, operation: 'items', scope: 'record', id: f.record, ...(summary_only === undefined ? {} : { summary_only }) } })).stages;
+    expect(await stages('ari')).toEqual([{ record_sha256: f.record, run_id: f.runId, state: 'pending', error_code: null, mine: true }]);
+    expect(await stages('mina')).toEqual([{ record_sha256: f.record, run_id: f.runId, state: 'pending', error_code: null, mine: false }]);
+    await f.finishImpactRun();
+    // The Impact line reads counts only: Ari may Send, Mina only sees the check.
+    expect((await stages('ari', true)).map(stage => [stage.state, stage.mine])).toEqual([['done', true]]);
+    expect((await stages('mina', true)).map(stage => [stage.state, stage.mine])).toEqual([['done', false]]);
+    expect((await stages('rafael')).map(stage => stage.mine)).toEqual([false]);
   });
 
   it('shows rows without live parts when the desk cannot vouch for a read', async () => {
@@ -373,7 +386,7 @@ describe('open items: Home', () => {
 
   it('makes no Send row, and binds no desk, when there is nothing to send', async () => {
     const f = await openItemsFixture();
-    expect(await f.app.home({ access_token: 'ari' })).toEqual({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null });
+    expect(await f.app.home({ access_token: 'ari' })).toEqual({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
     expect(f.bindDesk).not.toHaveBeenCalled();
   });
 
@@ -398,6 +411,20 @@ describe('open items: Home', () => {
     const mina = await f.app.home({ access_token: 'mina' });
     expect(mina.items.map(entry => entry.item_id)).toEqual([f.action.item_id, f.ticket.item_id]);
     expect(mina).toMatchObject({ landed: 1, waiting: 0 });
-    expect((await f.app.home({ access_token: 'okafor' }))).toEqual({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null });
+    expect((await f.app.home({ access_token: 'okafor' }))).toEqual({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
+  });
+});
+
+describe('open items: sweep, until sweep runs are served (open items plan, Task 11)', () => {
+  it('refuses a sweep as unavailable once it knows the caller, and Home calls no sweep due', async () => {
+    const f = await sentFixture({ owner: 'mina' });
+    // Ari's sent items have never been checked: once sweeps are served, they are due one.
+    for (const request of [{ scope: 'mine' as const }, { scope: 'record' as const, id: f.record }, { scope: 'project' as const, id: f.projectA }]) {
+      await expect(f.openItemsApp.sweep({ access_token: 'ari', request: { schema_version: 1, operation: 'sweep', ...request } }))
+        .rejects.toMatchObject({ name: 'AuthorityOperationError', code: 'unavailable', message: 'Sweep runs are not served yet' });
+    }
+    await expect(f.openItemsApp.sweep({ access_token: 'stranger', request: { schema_version: 1, operation: 'sweep', scope: 'mine' } })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect((await f.app.home({ access_token: 'ari' })).sweep_due).toBe(false);
+    expect(f.runs.list(f.person, 10).map(run => run.trigger)).toEqual(['approved_record']);
   });
 });
