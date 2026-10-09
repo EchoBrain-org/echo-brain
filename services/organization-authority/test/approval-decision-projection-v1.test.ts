@@ -123,9 +123,9 @@ describe('approval decision projection', () => {
     }
     expect(f.recordCount()).toBe(0);
   });
-  it('approver projector returns the final approver and nothing for another kind or coordinates', async () => {
+  it('approver projector returns the final approver and nothing for another kind or coordinates; policyBinding names the selected policy', async () => {
     const f = await approvalCoreFixture();
-    f.core.decide('desktop', f.approve(), () => f.session);
+    f.core.decide('desktop', f.approve({ project_ids: [f.projectA] }), () => f.session);
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
     const record = f.lastRecord();
     expect(projectApprovalDecisionApproverV1(record)).toEqual({ ...f.context.coordinates, approval_id: f.approvalId, principal_id: f.actor.principal_id, membership_id: f.actor.membership_id });
@@ -134,12 +134,6 @@ describe('approval decision projection', () => {
     const kind = clone(record); kind.body.human_act_resolution_ref.kind = 'echo-unknown-ref-v1';
     expect(projectApprovalDecisionApproverV1(kind)).toBeUndefined();
     expect(projectApprovalDecisionApproverV1({ body: 'nothing' })).toBeUndefined();
-  });
-  it('policyBinding names the selected policy', async () => {
-    const f = await approvalCoreFixture();
-    f.core.decide('desktop', f.approve({ project_ids: [f.projectA] }), () => f.session);
-    await f.core.processing.appendFinalizedApprovalsToV4(signal());
-    const record = f.lastRecord();
     expect(createApprovalDecisionPolicyProjectorV1().policyBinding(record)).toEqual({ policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, policy_contract_sha256: projectMembersReadablePersonPolicyContractSha256() });
     expect(authorityRecordPolicyProjectorsV1().policyBinding(record).policy_id).toBe(PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID);
     expect(createApprovalDecisionPolicyProjectorV1().matches({ ...record, body: { ...record.body, human_act_resolution_ref: { ...record.body.human_act_resolution_ref, schema_version: 2 } } })).toBe(false);

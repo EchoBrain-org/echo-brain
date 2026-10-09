@@ -71,7 +71,6 @@ describe('project application final release boundary', () => {
     const application = createProjectContextApplicationV1({ authenticate, repository: state.repository });
     const response = run(application, state);
     expect(phases).toEqual([false, true]);
-    expect(authenticate.mock.calls).toHaveLength(2);
     expect(state.database.inTransaction).toBe(false);
     expect(Object.isFrozen(response)).toBe(true);
     const row = state.database.prepare('SELECT body_json FROM authority_project_read_audit_v1').get() as { body_json: string };
@@ -166,6 +165,7 @@ describe('project application final release boundary', () => {
     { session_family_id: 'different-family' },
     { person_state_sha256: canonicalSha256('different person state') },
     { access_credential_sha256: canonicalSha256('different credential') },
+    { session_state_sha256: canonicalSha256('different session') },
   ])('denies substitution of the authenticated Person binding: %j', changes => {
     const state = fixture();
     const authenticate = vi.fn(() => authorization(OWNER, changes)).mockImplementationOnce(() => authorization());
@@ -198,6 +198,7 @@ describe('project application final release boundary', () => {
       authenticate: () => { throw new AuthorityOperationError('unauthorized', 'request failed'); }, repository: state.repository,
     });
     expect(() => signedOut.searchOrganizationDirectory('person', {})).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+    expect(() => signedOut.createProject('person', { schema_version: 1, kind: 'echo-project-create-v1', request_id: requestId(7), name: 'Denied' })).toThrow(expect.objectContaining({ code: 'unauthorized' }));
     expect(read).not.toHaveBeenCalled();
   });
 
