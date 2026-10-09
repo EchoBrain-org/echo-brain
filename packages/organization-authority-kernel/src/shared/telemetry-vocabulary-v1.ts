@@ -2,6 +2,8 @@
 export interface TelemetryVocabularyV1 {
   readonly providers: readonly string[];
   readonly models: readonly string[];
+  /** Registered trigger names supplied by composition, never learned from a request. */
+  readonly triggers?: readonly string[];
 }
 
 function labels(values: readonly string[], maximum: number): readonly string[] {
@@ -15,7 +17,7 @@ function labels(values: readonly string[], maximum: number): readonly string[] {
 }
 
 export function createTelemetryVocabularyV1(input: TelemetryVocabularyV1): TelemetryVocabularyV1 {
-  return Object.freeze({ providers: labels(input.providers, 8), models: labels(input.models, 16) });
+  return Object.freeze({ providers: labels(input.providers, 8), models: labels(input.models, 16), triggers: labels(input.triggers ?? [], 64) });
 }
 
 export const EMPTY_TELEMETRY_VOCABULARY_V1 = createTelemetryVocabularyV1({ providers: [], models: [] });

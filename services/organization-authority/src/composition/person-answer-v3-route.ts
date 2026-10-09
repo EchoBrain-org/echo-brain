@@ -8,8 +8,6 @@ import {
 } from "@echo-brain/organization-api";
 import { AgenticAskDeadlineErrorV1, createAgenticAskV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
-import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
-import { classifyAskJourneyFailureV1, type AskJourneyFailureV1, type AskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
 import type { StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 import type { AnswerCompositionGenerationProfileV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
 import type { EvidenceDeskResultV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
@@ -20,6 +18,8 @@ import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/pe
 import type { PersonAnswerV3HttpApplication } from "../presentation/person-answer-v3-http-application.js";
 import type { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
 import { randomUUID } from "node:crypto";
+import type { PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
+import { observePersonResearchV1 } from './person-research-observation-v1.js';
 
 export interface CreatePersonAnswerV3RouteOptions {
   readonly authority_id: string;
@@ -31,10 +31,9 @@ export interface CreatePersonAnswerV3RouteOptions {
   readonly model: StructuredGenerationPort;
   readonly generation: AnswerCompositionGenerationProfileV1;
   readonly audit: SqlitePersonAgenticAskAuditV1;
+  readonly diagnostics?: PersonDiagnosticsV1;
   /** Server-only experiment; V3 remains behaviorally unchanged unless enabled. */
   readonly small_scope_shortcut?: boolean;
-  /** Staging-only request-local Ask journey factory. */
-  readonly ask_journey_telemetry?: AskJourneyTelemetryFactoryV1;
   /**
    * The asker's own directory entry, so the loop reads "my" as a name. Only
    * the authenticated membership is looked up; its name reaches the model and
@@ -92,68 +91,34 @@ function deskResponse(desk: ReturnType<typeof deskFor>, result: EvidenceDeskResu
   });
 }
 
-/** The agentic deadline is a timeout; everything else keeps the shared Ask classification. */
-function askFailure(error: unknown): AskJourneyFailureV1 {
-  return error instanceof AgenticAskDeadlineErrorV1 ? { failure_class: "timeout", retryable: true } : classifyAskJourneyFailureV1(error);
-}
-
-/** The loop's stages in the order it reports them. */
-const V3_STAGES = Object.freeze(["ask_retrieval", "ask_planner", "ask_context", "ask_answer", "ask_revalidation", "ask_audit"] as const);
-
 /** Composition-only V3 entry point: every operation gets a new request-bound desk. */
 export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOptions): PersonAnswerV3HttpApplication {
   return Object.freeze({
     async ask(input: { readonly access_token: string; readonly request: PersonAnswerRequestV3; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4> {
-      // The Ask journey: validation and authorization here, research through
-      // audit from the loop's stage reports, and the V4 outcome at the end.
-      const journey = options.ask_journey_telemetry?.start();
-      if (journey?.journey_id) annotateCoreRuntimeV1({ linked_journey_ids: [journey.journey_id] });
-      const journeyStartedAt = journey?.startTimer() ?? 0;
-      // The HTTP layer validated the request shape before this route.
-      journey?.succeed("ask_validation", journeyStartedAt);
-      const authorizationStartedAt = journey?.startTimer() ?? 0;
-      let authorization: ReturnType<PersonIdentitySessionApplication["authenticateAccess"]>;
+      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+      const requestId = `ask_${randomUUID()}`;
+      const capture = input.request.capture_id === undefined ? undefined : options.diagnostics?.claim({
+        access_token: input.access_token, capture_id: input.request.capture_id, target: { kind: 'ask' },
+      });
+      if (input.request.capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
       try {
-        authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+        return await observePersonResearchV1({ trigger: 'ask', run_id: requestId, ...(capture === undefined ? {} : { capture }) }, async () => {
+          const desk = deskFor(options, input.access_token, input.request);
+          capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
+          const asker = askerOf(options, authorization);
+          return createAgenticAskV1({
+            ...(asker === undefined ? {} : { asker }),
+            desk, model: options.model, generation: options.generation,
+            audit: options.audit.forRequest({
+              authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
+              principal_id: authorization.principal_id, membership_id: authorization.membership_id,
+              session_family_id: authorization.session_family_id, request_id: requestId,
+            }),
+            ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+          }).answer({ question: input.request.question, ...(input.signal === undefined ? {} : { signal: input.signal }) });
+        });
       } catch (error) {
-        journey?.fail("ask_authorization", authorizationStartedAt, askFailure(error));
-        journey?.terminate(error, journeyStartedAt);
-        throw error;
-      }
-      journey?.succeed("ask_authorization", authorizationStartedAt);
-      const researchStartedAt = journey?.startTimer() ?? 0;
-      const desk = deskFor(options, input.access_token, input.request);
-      const asker = askerOf(options, authorization);
-      try {
-        const result = await createAgenticAskV1({
-          ...(asker === undefined ? {} : { asker }),
-          desk,
-          ...(journey === undefined ? {} : { on_stage: (event: Parameters<typeof journey.observeComposition>[0]) => journey.observeComposition(event) }),
-          model: options.model,
-          generation: options.generation,
-          audit: options.audit.forRequest({
-            authority_id: options.authority_id,
-            organization_id: options.organization_id,
-            state_lineage_id: options.state_lineage_id,
-            principal_id: authorization.principal_id,
-            membership_id: authorization.membership_id,
-            session_family_id: authorization.session_family_id,
-            request_id: `ask_${randomUUID()}`,
-          }),
-          ...(options.small_scope_shortcut === true
-            ? { small_scope_shortcut: true }
-            : {}),
-        })
-          .answer({ question: input.request.question, ...(input.signal === undefined ? {} : { signal: input.signal }) });
-        journey?.complete(result.outcome, journeyStartedAt);
-        return result;
-      } catch (error) {
-        // The loop reports stages as they succeed, in order, so the first one
-        // still open is where the request ended: research (desk, deadline or
-        // cancel), the answer call, the final fence or the audit.
-        journey?.failOpen(V3_STAGES, researchStartedAt, input.signal?.aborted === true ? { failure_class: "cancelled", retryable: false } : askFailure(error));
-        journey?.terminate(error, journeyStartedAt);
-        // The audit and journey retain timeout; the existing client code permits a manual retry.
+        // Observe the original timeout before translating it into the Person API error.
         if (error instanceof AgenticAskDeadlineErrorV1 && input.signal?.aborted !== true) {
           throw new AuthorityOperationError("unavailable", "Ask deadline exhausted");
         }

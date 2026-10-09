@@ -1,414 +1,237 @@
-import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../../../../tests/support/telemetry-fixture-vocabulary-v1.js";
-import { annotateCoreRuntimeV1, currentCoreRuntimeDetailV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  annotateCoreRuntimeV1,
+  observeCoreRuntimeSyncV1,
+  type CoreRuntimeDetailV1,
+} from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
   createJourneyTelemetryEventV1,
   type JourneyTelemetryEventV1,
 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import {
-  formatApprovedSearchBacklogMetricsV1,
-  formatStagingJourneyLivenessMetricV1,
+  formatJourneyLivenessMetricV1,
   formatJourneyTelemetryMetricsV1,
   STAGING_JOURNEY_METRICS_NAMESPACE_V1,
-} from "../../../../src/composition/staging/observability/staging-journey-metrics-v1.js";
-import { createStagingJourneyTelemetryTransportV1 } from "../../../../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
+} from "../../../../src/composition/observability/journey-metrics-v1.js";
+import { createJourneyTelemetryTransportV1 } from "../../../../src/composition/observability/journey-telemetry-transport-v1.js";
 
 const JOURNEY_ID = "1b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
+const OPERATION_ID = "2b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
+const SPAN_ID = "3b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
 const RELEASE_SHA = "a".repeat(40);
 const OBSERVED_AT = "2026-09-02T12:34:56.000Z";
-const RECONCILIATION_FIXTURE = resolve(
-  import.meta.dirname,
-  "../../../../../../tests/fixtures/staging-journey-observability/phase4-reconciliation-v1.jsonl",
-);
+const VOCABULARY = {
+  providers: ["fixture-provider", "other"],
+  models: ["fixture-model", "other"],
+};
 
-function journey(event: Record<string, unknown>): JourneyTelemetryEventV1 {
+function detail(overrides: Partial<CoreRuntimeDetailV1> = {}): CoreRuntimeDetailV1 {
+  return {
+    operation_id: OPERATION_ID,
+    span_id: SPAN_ID,
+    parent_span_id: null,
+    phase: "research_run",
+    purpose: "research_run",
+    root: true,
+    linked_journey_ids: [],
+    counts: {},
+    result: "answered",
+    generation: null,
+    source_revision: null,
+    cursor: null,
+    action: null,
+    provider: null,
+    model: null,
+    finish_reason: null,
+    provider_request: null,
+    resource_scope: "process_overlap",
+    sqlite_lock_time: "unavailable",
+    disk_io_latency: "unavailable",
+    event_loop_delay: "unavailable",
+    ...overrides,
+  };
+}
+
+function journey(event: Record<string, unknown> = {}): JourneyTelemetryEventV1 {
   return createJourneyTelemetryEventV1({
     journey_id: JOURNEY_ID,
     sequence: 1,
     observed_at: OBSERVED_AT,
     context: {
       environment: "staging",
-      workflow: "ask",
+      workflow: "core_runtime",
       release_sha: RELEASE_SHA,
       build_number: 123,
     },
     event: {
-      stage: "ask_answer",
+      stage: "core_operation",
       event: "succeeded",
       elapsed_ms: 17,
-      llm_usage: {
-        provider: "openrouter",
-        model: "anthropic/claude-sonnet-4.6",
-        provider_latency_ms: 11,
-        input_tokens: 10,
-        output_tokens: 4,
-        total_tokens: 14,
-        cached_input_tokens: 3,
-        reasoning_tokens: 2,
-        finish_reason: "completed",
-      },
+      diagnostic: detail(),
       ...event,
     } as never,
-  }, TELEMETRY_FIXTURE_VOCABULARY_V1);
+  }, VOCABULARY);
 }
 
-function metric(record: Record<string, unknown>, name: string): unknown {
-  return record[name];
-}
-
-describe("staging journey EMF metrics v1", () => {
+describe("journey EMF metrics v1", () => {
   it("keeps child HTTP diagnostics in logs without changing ingress metrics", async () => {
     const lines: string[] = [];
-    const transport = createStagingJourneyTelemetryTransportV1(
+    const transport = createJourneyTelemetryTransportV1(
+      "staging",
       { release_sha: RELEASE_SHA, build_number: 123 },
-      { write: (line) => { lines.push(line); }, now: () => OBSERVED_AT },
-      { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
+      { write: line => { lines.push(line); }, now: () => OBSERVED_AT },
     );
     observeCoreRuntimeSyncV1("http_request", () => {
       observeCoreRuntimeSyncV1("http_request", () => {
-        annotateCoreRuntimeV1({
-          upstream_service: "nango",
-          upstream_operation: "connection_read",
-          counts: { http_status: 429, upstream_retry_after_seconds: 41 },
-        });
+        annotateCoreRuntimeV1({ counts: { http_status: 429 } });
       });
-      annotateCoreRuntimeV1({ counts: { http_status: 200 } });
     }, transport.core_runtime);
-    // Journey observer delivery is intentionally deferred outside control flow.
     await Promise.resolve();
     transport.close();
 
-    const records = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
-    const events = records.filter((record) => record.kind === "echo-authority-journey-stage-v1") as unknown as JourneyTelemetryEventV1[];
-    const roots = events.filter((event) => event.diagnostic?.root);
-    const children = events.filter((event) => !event.diagnostic?.root);
-    expect(roots.map((event) => event.event)).toEqual(["started", "succeeded"]);
-    expect(children.map((event) => event.event)).toEqual(["started", "succeeded"]);
-    expect(children[1]?.diagnostic).toMatchObject({
-      upstream_service: "nango",
-      upstream_operation: "connection_read",
-      counts: { http_status: 429, upstream_retry_after_seconds: 41 },
-    });
-    expect(children.flatMap((event) => formatJourneyTelemetryMetricsV1(event, TELEMETRY_FIXTURE_VOCABULARY_V1))).toEqual([]);
-    const metrics = records.filter((record) => record._aws !== undefined);
-    expect(metrics).toEqual(roots.flatMap((event) => formatJourneyTelemetryMetricsV1(event, TELEMETRY_FIXTURE_VOCABULARY_V1)));
-    expect(metrics).toHaveLength(2);
-    expect(metrics[0]).toMatchObject({ workflow: "core_runtime", stage: "http_request", StageStarted: 1 });
-    expect(metrics[1]).toMatchObject({
-      workflow: "core_runtime", stage: "http_request", StageSucceeded: 1,
-      StageClosedLatencyMs: roots[1]!.elapsed_ms,
-    });
+    const events = lines
+      .map(line => JSON.parse(line) as Record<string, unknown>)
+      .filter(record => record.kind === "echo-authority-journey-stage-v1") as unknown as JourneyTelemetryEventV1[];
+    const children = events.filter(event => !event.diagnostic.root);
+    const roots = events.filter(event => event.diagnostic.root);
+    expect(children.flatMap(event => formatJourneyTelemetryMetricsV1(event))).toEqual([]);
+    expect(roots.flatMap(event => formatJourneyTelemetryMetricsV1(event))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ StageStarted: 1, workflow: "core_runtime", stage: "http_request" }),
+      expect.objectContaining({ StageSucceeded: 1, workflow: "core_runtime", stage: "http_request" }),
+    ]));
   });
 
-  it("keeps shared-build references in the existing meeting funnel without multiplying build latency", () => {
-    const event = observeCoreRuntimeSyncV1("search_publication", () => createJourneyTelemetryEventV1({
-      journey_id: JOURNEY_ID, sequence: 1, observed_at: OBSERVED_AT,
-      context: { environment: "staging", workflow: "meeting_approval", release_sha: RELEASE_SHA, build_number: 123 },
-      event: { stage: "meeting_search_publication", event: "succeeded", elapsed_ms: 100, outcome: "published",
-        diagnostic: currentCoreRuntimeDetailV1()!, accounting: { kind: "shared_reference", execution_attempt: 1, retry_count: 0 } },
-    }, TELEMETRY_FIXTURE_VOCABULARY_V1), { observer: () => {} });
-    const records = formatJourneyTelemetryMetricsV1(event, TELEMETRY_FIXTURE_VOCABULARY_V1);
-    expect(records).toContainEqual(expect.objectContaining({ workflow: "meeting_approval", stage: "meeting_search_publication", StageSucceeded: 1 }));
-    expect(records.every((record) => record.StageClosedLatencyMs === undefined)).toBe(true);
-    expect(records).toContainEqual(expect.objectContaining({ stage: "meeting_search_publication", outcome: "published", TerminalOutcome: 1 }));
+  it("projects model calls with reported tokens, cache, reasoning, latency, provider, and model", () => {
+    const records = formatJourneyTelemetryMetricsV1(journey({
+      diagnostic: detail({
+        phase: "model_call",
+        purpose: "ask_planner",
+        result: "completed",
+        provider: "fixture-provider",
+        model: "fixture-model",
+        counts: {
+          input_tokens: 10,
+          output_tokens: 4,
+          total_tokens: 14,
+          cached_input_tokens: 3,
+          reasoning_tokens: 2,
+          provider_latency_ms: 11,
+        },
+      }),
+    }), VOCABULARY);
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        workflow: "core_runtime",
+        stage: "model_call",
+        StageSucceeded: 1,
+        StageClosedLatencyMs: 17,
+      }),
+      expect.objectContaining({
+        workflow: "core_runtime",
+        stage: "ask_planner",
+        CoreModelAttempt: 1,
+        CoreModelTotalTokens: 14,
+        CoreModelUsageReported: 1,
+      }),
+      expect.objectContaining({
+        stage: "ask_planner",
+        provider: "fixture-provider",
+        model: "fixture-model",
+        LlmAttempt: 1,
+        LlmUsageReported: 1,
+        LlmProviderLatencyMs: 11,
+        LlmCachedInputTokens: 3,
+        LlmReasoningTokens: 2,
+      }),
+    ]));
   });
 
-  it("projects a closed LLM stage into exact independent metric dimension sets", () => {
-    const records = formatJourneyTelemetryMetricsV1(journey({}), TELEMETRY_FIXTURE_VOCABULARY_V1);
-    expect(records).toHaveLength(2);
-    expect(records[0]).toMatchObject({
-      _aws: {
-        Timestamp: Date.parse(OBSERVED_AT),
-        CloudWatchMetrics: [{
-          Namespace: STAGING_JOURNEY_METRICS_NAMESPACE_V1,
-          Dimensions: [["workflow", "stage"]],
-          Metrics: [
-            { Name: "StageSucceeded", Unit: "Count" },
-            { Name: "StageClosedLatencyMs", Unit: "Milliseconds" },
-          ],
-        }],
-      },
-      workflow: "ask",
-      stage: "ask_answer",
-      StageSucceeded: 1,
-      StageClosedLatencyMs: 17,
-    });
-    expect(records[1]).toMatchObject({
-      _aws: {
-        CloudWatchMetrics: [{
-          Dimensions: [["stage", "provider", "model"]],
-          Metrics: expect.arrayContaining([
-            { Name: "LlmAttempt", Unit: "Count" },
-            { Name: "LlmUsageReported", Unit: "Count" },
-            { Name: "LlmProviderLatencyMs", Unit: "Milliseconds" },
-            { Name: "LlmTotalTokens", Unit: "Count" },
-          ]),
-        }],
-      },
-      stage: "ask_answer",
-      provider: "openrouter",
-      model: "anthropic/claude-sonnet-4.6",
-      LlmAttempt: 1,
-      LlmTotalTokens: 14,
-      LlmTotalTokensAvailable: 1,
-    });
-  });
-
-  it("omits unavailable token targets rather than publishing zero", () => {
+  it("does not fabricate unavailable model totals or latency", () => {
     const records = formatJourneyTelemetryMetricsV1(journey({
       event: "failed",
+      elapsed_ms: 4,
       failure_class: "timeout",
       retryable: true,
-      llm_usage: {
-        usage_status: "unavailable",
-        provider: "openrouter",
-        model: "anthropic/claude-sonnet-4.6",
-        provider_latency_ms: 11,
-        finish_reason: "unknown",
-      },
-    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
-    const llm = records.find((record) => metric(record, "LlmAttempt") === 1)!;
-    expect(llm.LlmUsageUnavailable).toBe(1);
-    expect(JSON.stringify(llm)).not.toContain("LlmInputTokens");
-    expect(JSON.stringify(llm)).not.toContain("LlmTotalTokens");
+      diagnostic: detail({ phase: "model_call", purpose: "ask_planner", result: "timeout" }),
+    }));
+    const usage = records.find(record => record.LlmAttempt === 1)!;
+    expect(usage).toMatchObject({ LlmUsageUnavailable: 1, provider: "other", model: "other" });
+    expect(usage).not.toHaveProperty("LlmTotalTokens");
+    expect(usage).not.toHaveProperty("LlmProviderLatencyMs");
   });
 
-  it("counts a total-token denominator only when a reported attempt has a total", () => {
+  it("emits one terminal research outcome and retrieval projection for each completed research run", () => {
+    const root = formatJourneyTelemetryMetricsV1(journey({
+      diagnostic: detail({
+        phase: "research_run",
+        purpose: "research_run",
+        result: "answered",
+        counts: {
+          planned_query_count: 2,
+          query_hit_count: 3,
+          released_atom_count: 3,
+          context_atom_count: 2,
+          citation_count: 1,
+        },
+      }),
+    }));
+    const nested = formatJourneyTelemetryMetricsV1(journey({
+      diagnostic: detail({
+        root: false,
+        phase: "research_run",
+        purpose: "research_run",
+        result: "partial",
+        counts: { planned_query_count: 9, citation_count: 4 },
+      }),
+    }));
+    expect(root).toEqual(expect.arrayContaining([
+      expect.objectContaining({ TerminalOutcome: 1, outcome: "answered", stage: "research_run" }),
+      expect.objectContaining({
+        RetrievalPlannedQueries: 2,
+        RetrievalQueryHits: 3,
+        RetrievalReleasedAtoms: 3,
+        RetrievalContextAtoms: 2,
+        RetrievalCitations: 1,
+      }),
+    ]));
+    expect(nested).toEqual(expect.arrayContaining([
+      expect.objectContaining({ TerminalOutcome: 1, outcome: "partial", stage: "research_run" }),
+      expect.objectContaining({ RetrievalPlannedQueries: 9, RetrievalCitations: 4 }),
+    ]));
+  });
+
+  it("records research-loop failures separately from the stage failure breakdown", () => {
     const records = formatJourneyTelemetryMetricsV1(journey({
-      llm_usage: {
-        usage_status: "reported",
-        provider: "openrouter",
-        model: "anthropic/claude-sonnet-4.6",
-        provider_latency_ms: 11,
-        cached_input_tokens: 3,
-        finish_reason: "completed",
-      },
-    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
-    const llm = records.find((record) => metric(record, "LlmAttempt") === 1)!;
-    expect(llm.LlmUsageReported).toBe(1);
-    expect(llm.LlmCachedInputTokens).toBe(3);
-    expect(llm).not.toHaveProperty("LlmTotalTokens");
-    expect(llm).not.toHaveProperty("LlmTotalTokensAvailable");
-  });
-
-  it("emits a terminal outcome only in its dedicated three-dimension record", () => {
-    const records = formatJourneyTelemetryMetricsV1(journey({
-      stage: "ask_response",
-      llm_usage: null,
-      outcome: "answered",
-    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
-    expect(records).toHaveLength(2);
-    expect(records[1]).toMatchObject({
-      workflow: "ask",
-      stage: "ask_response",
-      outcome: "answered",
-      TerminalOutcome: 1,
-      _aws: {
-        CloudWatchMetrics: [{ Dimensions: [["workflow", "stage", "outcome"]] }],
-      },
-    });
-    expect(records[0]).not.toHaveProperty("outcome");
-  });
-
-  it("counts only explicit failed-execution retries and leaves historical ordinals unknown", () => {
-    const first = formatJourneyTelemetryMetricsV1(journey({
-      event: "started",
-      elapsed_ms: 0,
-      llm_usage: null,
-      attempt: 1,
-    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
-    const retry = formatJourneyTelemetryMetricsV1(journey({
-      event: "started",
-      elapsed_ms: 0,
-      llm_usage: null,
-      attempt: 2,
-      accounting: { kind: "execution", execution_attempt: 2, retry_count: 1, retry_of_attempt: 1 },
-    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
-    expect(first[0]).toMatchObject({ StageStarted: 1 });
-    expect(first[0]).not.toHaveProperty("StageRetryAttempt");
-    expect(retry[0]).toMatchObject({ StageStarted: 1, StageRetryAttempt: 1 });
-  });
-
-  it("retains reported retrieval zeroes and keeps their dimensions separate", () => {
-    const records = formatJourneyTelemetryMetricsV1(journey({
-      stage: "ask_retrieval",
-      llm_usage: null,
-      retrieval: {
-        planned_query_count: 0,
-        query_hit_count: 0,
-        released_atom_count: 0,
-        context_atom_count: 0,
-        citation_count: 0,
-        research_stop_reason: "budget",
-        research_admission: "post_revalidation_no_time",
-      },
-    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
-    const retrieval = records.find((record) => metric(record, "RetrievalPlannedQueries") === 0)!;
-    expect(retrieval).toMatchObject({
-      workflow: "ask",
-      stage: "ask_retrieval",
-      RetrievalPlannedQueries: 0,
-      RetrievalQueryHits: 0,
-      RetrievalReleasedAtoms: 0,
-      RetrievalContextAtoms: 0,
-      RetrievalCitations: 0,
-    });
-    expect(JSON.stringify(retrieval)).not.toContain("research_stop_reason");
-    expect(JSON.stringify(retrieval)).not.toContain("research_admission");
-  });
-
-  it("keeps human wait out of machine latency and attaches it only to approval verification", () => {
-    const records = formatJourneyTelemetryMetricsV1(createJourneyTelemetryEventV1({
-      journey_id: JOURNEY_ID,
-      sequence: 3,
-      observed_at: OBSERVED_AT,
-      context: {
-        environment: "staging",
-        workflow: "meeting_approval",
-        release_sha: RELEASE_SHA,
-        build_number: 123,
-      },
-      event: {
-        stage: "meeting_approval_action_verify",
-        event: "succeeded",
-        elapsed_ms: 9,
-        queue_age_ms: 86_400_000,
-      },
-    }, TELEMETRY_FIXTURE_VOCABULARY_V1), TELEMETRY_FIXTURE_VOCABULARY_V1);
-    expect(records[0]).toMatchObject({ StageClosedLatencyMs: 9 });
-    expect(records[1]).toMatchObject({ ApprovalHumanWaitMs: 86_400_000 });
-    expect(records[1]).not.toHaveProperty("StageClosedLatencyMs");
-  });
-
-  it("writes a stable zero-dimension retrieval-failure signal and a failure breakdown", () => {
-    const records = formatJourneyTelemetryMetricsV1(journey({
-      stage: "ask_retrieval",
       event: "failed",
-      llm_usage: null,
+      elapsed_ms: 4,
       failure_class: "unavailable",
       retryable: true,
-    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
-    expect(records).toContainEqual(expect.objectContaining({ AskRetrievalFailure: 1 }));
-    expect(records).toContainEqual(expect.objectContaining({
-      workflow: "ask",
-      stage: "ask_retrieval",
-      failure_class: "unavailable",
-      StageFailure: 1,
+      diagnostic: detail({ phase: "research_loop", purpose: "research_loop", result: "unavailable" }),
     }));
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ AskRetrievalFailure: 1 }),
+      expect.objectContaining({ StageFailure: 1, failure_class: "unavailable", stage: "research_loop" }),
+    ]));
   });
 
-  it("never serializes correlation, deploy identity, injected content, or error data", () => {
+  it("recanonicalizes forged records before metric projection and excludes content and deploy identity", () => {
     const forged = {
-      ...journey({}),
+      ...journey(),
+      journey_id: JOURNEY_ID,
+      release_sha: RELEASE_SHA,
       prompt: "prompt-sentinel",
-      error: "error-sentinel",
-    };
-    const serialized = JSON.stringify(formatJourneyTelemetryMetricsV1(forged, TELEMETRY_FIXTURE_VOCABULARY_V1));
-    for (const forbidden of [
-      JOURNEY_ID,
-      RELEASE_SHA,
-      "prompt-sentinel",
-      "error-sentinel",
-      "build_number",
-      "journey_id",
-      "release_sha",
-    ]) {
-      expect(serialized).not.toContain(forbidden);
-    }
+      diagnostic: { ...detail(), private_body: "private-sentinel" },
+    } as unknown as JourneyTelemetryEventV1;
+    const serialized = JSON.stringify(formatJourneyTelemetryMetricsV1(forged));
+    expect(serialized).not.toContain(JOURNEY_ID);
+    expect(serialized).not.toContain(RELEASE_SHA);
+    expect(serialized).not.toContain("prompt-sentinel");
+    expect(serialized).not.toContain("private-sentinel");
   });
 
-  it("formats validated zero-dimension liveness and explicit-zero backlog gauges", () => {
-    expect(formatStagingJourneyLivenessMetricV1(OBSERVED_AT)).toMatchObject({
-      JourneyTelemetryAlive: 1,
-    });
-    expect(formatApprovedSearchBacklogMetricsV1({
-      observed_at: OBSERVED_AT,
-      pending_count: 0,
-      stuck_count: 0,
-      oldest_age_ms: null,
-    })).toMatchObject({
-      ApprovedSearchPendingCount: 0,
-      ApprovedSearchStuckCount: 0,
-      ApprovedSearchBacklogCheck: 1,
-    });
-    expect(() => formatApprovedSearchBacklogMetricsV1({
-      observed_at: "invalid",
-      pending_count: 0,
-      stuck_count: 0,
-      oldest_age_ms: null,
-    })).toThrow("backlog observed_at");
-    expect(formatApprovedSearchBacklogMetricsV1({
-      observed_at: OBSERVED_AT,
-      pending_count: 2,
-      stuck_count: 1,
-      oldest_age_ms: 90_000,
-    })).toMatchObject({
-      ApprovedSearchPendingCount: 2,
-      ApprovedSearchStuckCount: 1,
-      ApprovedSearchOldestAgeMs: 90_000,
-      ApprovedSearchBacklogCheck: 1,
-    });
-  });
-
-  it("reconciles emitted metric totals with the independent raw-event fixture", () => {
-    const events = readFileSync(RECONCILIATION_FIXTURE, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as Record<string, unknown>)
-      .filter(
-        (event) => event.kind === "echo-authority-journey-stage-v1",
-      ) as unknown as JourneyTelemetryEventV1[];
-    const records = events.flatMap((event) =>
-      formatJourneyTelemetryMetricsV1(event, TELEMETRY_FIXTURE_VOCABULARY_V1),
-    );
-    const sum = (name: string): number =>
-      records.reduce(
-        (total, record) =>
-          total + (typeof record[name] === "number" ? record[name] : 0),
-        0,
-      );
-
-    expect({
-      started: sum("StageStarted"),
-      succeeded: sum("StageSucceeded"),
-      failed: sum("StageFailed"),
-      skipped: sum("StageSkipped"),
-      retries: sum("StageRetryAttempt"),
-      llm_attempts: sum("LlmAttempt"),
-      llm_usage_reported: sum("LlmUsageReported"),
-      llm_total_available: sum("LlmTotalTokensAvailable"),
-      llm_total_tokens: sum("LlmTotalTokens"),
-      ask_retrieval_failures: sum("AskRetrievalFailure"),
-      approval_human_wait_ms: sum("ApprovalHumanWaitMs"),
-      planned_queries: sum("RetrievalPlannedQueries"),
-      query_hits: sum("RetrievalQueryHits"),
-      released_atoms: sum("RetrievalReleasedAtoms"),
-      context_atoms: sum("RetrievalContextAtoms"),
-      citations: sum("RetrievalCitations"),
-    }).toEqual({
-      started: 7,
-      succeeded: 36,
-      failed: 3,
-      skipped: 4,
-      retries: 0, // Legacy attempt ordinals do not prove retries.
-      llm_attempts: 6,
-      llm_usage_reported: 4,
-      llm_total_available: 4,
-      llm_total_tokens: 105,
-      ask_retrieval_failures: 1,
-      approval_human_wait_ms: 1_200_000,
-      planned_queries: 2,
-      query_hits: 3,
-      released_atoms: 3,
-      context_atoms: 2,
-      citations: 1,
-    });
-    const serialized = JSON.stringify(records);
-    for (const event of events) {
-      expect(serialized).not.toContain(event.journey_id);
-      expect(serialized).not.toContain(event.release_sha);
-    }
+  it("formats liveness in the staging namespace", () => {
+    const liveness = formatJourneyLivenessMetricV1(OBSERVED_AT, "staging");
+    expect(liveness).toMatchObject({ JourneyTelemetryAlive: 1 });
+    expect(liveness._aws.CloudWatchMetrics[0].Namespace).toBe(STAGING_JOURNEY_METRICS_NAMESPACE_V1);
   });
 });

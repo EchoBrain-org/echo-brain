@@ -567,19 +567,7 @@ describe("admitted meeting-processing cycle", () => {
     let calls = 0;
     const cycle = liveCycle({
       source: source({ meetings: [meeting()] }),
-      processor: processor((value, context) => {
-        context?.on_generation?.({
-          outcome: calls === 0 ? "failed" : "succeeded",
-          provider: "openrouter",
-          model: "anthropic/claude-sonnet-4.6",
-          provider_latency_ms: 9,
-          input_tokens: null,
-          output_tokens: null,
-          total_tokens: null,
-          cached_input_tokens: null,
-          reasoning_tokens: null,
-          finish_reason: calls === 0 ? "error" : "stop",
-        });
+      processor: processor((value) => {
         calls += 1;
         if (calls === 1) throw new Error("provider retry");
         return decisions(value);

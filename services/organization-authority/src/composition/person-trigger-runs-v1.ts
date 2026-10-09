@@ -14,6 +14,9 @@ import { matchImpactOwnersV1, type ImpactOwnerPeopleV1 } from './impact-owner-ma
 import { PersonRecordSearchIndexLagV1, type PersonReadableDecisionsV1, type PersonRecordAnchorV1, type PersonRecordProjectsV1 } from './person-record-search-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1, type PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
+import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, currentCoreRuntimeDetailV1, withoutCoreRuntimeContentV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import type { PersonDiagnosticCaptureHandleV1 } from './person-diagnostics-v1.js';
+import { observePersonResearchV1 } from './person-research-observation-v1.js';
 
 type Desk = Awaited<ReturnType<typeof bindPersonLiveEvidenceDeskV1>>;
 type RunResearch = Pick<ReturnType<typeof import('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1').createAgenticResearchV1>, 'renderWithResearch'>;
@@ -136,16 +139,20 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     authority_id: options.bind_options.authority_id, organization_id: authorization.organization_id, state_lineage_id: options.bind_options.state_lineage_id,
     principal_id: authorization.principal_id, membership_id: authorization.membership_id, session_family_id: authorization.session_family_id, request_id: `trigger_run_${randomUUID()}`,
   });
-  const launch = (row: TriggerRunRowV1, token: string, authorization: PersonAccessAuthorization, lease_token: string) => {
+  const launch = (row: TriggerRunRowV1, token: string, authorization: PersonAccessAuthorization, lease_token: string, capture?: PersonDiagnosticCaptureHandleV1) => {
     const controller = new AbortController(); controllers.add(controller);
-    void (async () => {
+    const attemptId = randomUUID();
+    void observePersonResearchV1({ trigger: row.trigger, run_id: row.run_id, event_id: row.event_ref, attempt_id: attemptId,
+      detached: true, ...(capture === undefined ? {} : { capture }),
+    }, async () => {
       try {
         const record_sha256 = row.record_sha256;
         if (row.trigger !== 'approved_record' || record_sha256 === null) throw new Error('sweep runs are not served yet');
         const anchor = options.records.recordAnchor({ access_token: token, record_sha256 });
         const scope = scopeFor(options.records, token, record_sha256);
-        const requestContext = context(authorization);
+        const requestContext = { ...context(authorization), request_id: `${row.run_id}_${attemptId}` };
         const desk = await options.bindDesk(options.bind_options, compatible, { access_token: token, scope, signal: controller.signal }, requestContext);
+        capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
         const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
         const event = definition.parseEvent({ record: anchor });
         const output = await options.research({ desk, context: requestContext }).renderWithResearch({ trigger: definition.name, brief: definition.brief(event), renderer: definition.renderer!, trigger_input: event, signal: controller.signal });
@@ -166,19 +173,23 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
           item_key: candidate.item_key, pointer: candidate.pointer, relation: candidate.relation, expected: candidate.expected,
           owner_membership_id: owners[index]!.owner_membership_id, owner_match: owners[index]!.owner_match,
         }));
-        if (closing && controller.signal.aborted) return;
         // The items are written in the transaction that stores the card, so a run is never done without them.
-        options.runs.finish(row.run_id, lease_token, { json: canonicalJson(value), sha256: canonicalSha256(value) },
+        const digest = canonicalSha256(value);
+        const persisted = options.runs.finish(row.run_id, lease_token, { json: canonicalJson(value), sha256: digest },
           drafts.length === 0 ? undefined : transaction => options.items.insertForRun(transaction, row, drafts));
+        observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'persistence', event: persisted ? 'succeeded' : 'skipped', data: { run_id: row.run_id, output_sha256: digest } });
+        annotateCoreRuntimeV1({ result: persisted ? currentCoreRuntimeDetailV1()?.result ?? 'completed' : 'competing_action', output_id: coreRuntimeIdentityV1('research-output', digest) });
+        if (!persisted) throw new AuthorityOperationError('conflict', 'The research attempt no longer owns its run');
       } catch (error) {
-        if (closing && controller.signal.aborted) return;
+        if (closing && controller.signal.aborted) throw error;
         if (error instanceof PersonRecordSearchIndexLagV1) options.runs.release(row.run_id, lease_token, { counted: false });
         else if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'stale_access_state' || error.code === 'not_found')) options.runs.fail(row.run_id, lease_token, 'no_access');
         else if (controller.signal.aborted || error instanceof AgenticAskDeadlineErrorV1) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'timed_out' });
         else if (unavailable(error)) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'unavailable' });
         else options.runs.fail(row.run_id, lease_token, 'research_failed');
+        throw error;
       } finally { controllers.delete(controller); }
-    })();
+    }).catch(() => undefined); // The durable run and optional capture own the terminal result.
   };
   return Object.freeze({
     async list(input: Parameters<PersonTriggerRunsHttpApplicationV1['list']>[0]) {
@@ -191,7 +202,14 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
       const claim = options.runs.claim(actor, input.request.run_id, lease);
       if (claim.kind !== 'claimed') { if (claim.kind === 'not_found') throw new AuthorityOperationError('not_found', 'run is not available'); return Object.freeze({ state: claim.kind }); }
       const row = options.runs.read(actor, input.request.run_id); if (row === undefined) throw new AuthorityOperationError('not_found', 'run is not available');
-      launch(row, input.access_token, authorization, claim.lease_token); return Object.freeze({ state: 'running' as const });
+      let capture: PersonDiagnosticCaptureHandleV1 | undefined;
+      try {
+        capture = input.request.capture_id === undefined ? undefined : options.bind_options.diagnostics?.claim({
+          access_token: input.access_token, capture_id: input.request.capture_id, target: { kind: 'trigger_run', run_id: row.run_id },
+        });
+        if (input.request.capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
+      } catch (error) { options.runs.release(row.run_id, claim.lease_token, { counted: false }); throw error; }
+      launch(row, input.access_token, authorization, claim.lease_token, capture); return Object.freeze({ state: 'running' as const });
     },
     async retry(input: Parameters<PersonTriggerRunsHttpApplicationV1['retry']>[0]) {
       input.signal?.throwIfAborted(); const actor = actorOf(options.sessions.authenticateAccess({ access_token: input.access_token }));
@@ -207,13 +225,19 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
       if (!sameActor(row.actor, actor) && !options.records.readableDecisions({ access_token: input.access_token, record_sha256s: [record_sha256] }).has(record_sha256)) {
         throw new AuthorityOperationError('not_found', 'run is not available');
       }
-      const card = readStoredImpactCardV1(row.result_json); const scope = scopeFor(options.records, input.access_token, record_sha256); const requestContext = context(authorization);
-      const desk = await options.bindDesk(options.bind_options, compatible, { access_token: input.access_token, scope, ...(input.signal === undefined ? {} : { signal: input.signal }) }, requestContext);
-      const fresh = await Promise.all(card.citations.map(async citation => {
-        try { const opened = await desk.openCitation!({ citation, ...(input.signal === undefined ? {} : { signal: input.signal }) }); const item = opened.items[0]; return item === undefined ? null : { citation: { citation: item.citation, kind: item.kind, label: item.label, visibility: item.visibility }, text: item.text, label: item.label, ...(item.attributes === undefined ? {} : { attributes: item.attributes }) } as FreshImpactItemV1; } catch { return null; }
+      const resultJson = row.result_json;
+      return withoutCoreRuntimeContentV1(() => observeCoreRuntimeV1('research_output_view', async () => {
+        const card = readStoredImpactCardV1(resultJson);
+        annotateCoreRuntimeV1({ trigger: row.trigger, run_id: coreRuntimeIdentityV1('research-run', row.run_id), event_id: coreRuntimeIdentityV1('research-event', row.event_ref), output_id: coreRuntimeIdentityV1('research-output', canonicalSha256(JSON.parse(resultJson))) });
+        const scope = scopeFor(options.records, input.access_token, record_sha256); const requestContext = context(authorization);
+        const desk = await options.bindDesk(options.bind_options, compatible, { access_token: input.access_token, scope, ...(input.signal === undefined ? {} : { signal: input.signal }) }, requestContext);
+        const fresh = await Promise.all(card.citations.map(async citation => {
+          try { const opened = await desk.openCitation!({ citation, ...(input.signal === undefined ? {} : { signal: input.signal }) }); const item = opened.items[0]; return item === undefined ? null : { citation: { citation: item.citation, kind: item.kind, label: item.label, visibility: item.visibility }, text: item.text, label: item.label, ...(item.attributes === undefined ? {} : { attributes: item.attributes }) } as FreshImpactItemV1; } catch { return null; }
+        }));
+        const refreshed = refreshImpactCardV1(card, fresh); await desk.revalidate({ ...(input.signal === undefined ? {} : { signal: input.signal }) });
+        annotateCoreRuntimeV1({ result: 'returned', counts: { citation_count: refreshed.card.citations.length, excluded_count: refreshed.hidden } });
+        return Object.freeze({ card: refreshed.card, checked_at: row.updated_at, hidden: refreshed.hidden });
       }));
-      const refreshed = refreshImpactCardV1(card, fresh); await desk.revalidate({ ...(input.signal === undefined ? {} : { signal: input.signal }) });
-      return Object.freeze({ card: refreshed.card, checked_at: row.updated_at, hidden: refreshed.hidden });
     },
     close() { closing = true; for (const controller of controllers) controller.abort(); },
   });

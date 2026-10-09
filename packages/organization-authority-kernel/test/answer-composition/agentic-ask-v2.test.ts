@@ -209,10 +209,8 @@ describe('Agentic Ask V2 ticket release', () => {
     const f = fixture();
     const capture = vi.fn();
     await observeCoreRuntimeV1('ask_request', () => f.run(), { observer: () => undefined, content_observer: capture });
-    // The initial planner call contains only the user's question. All later
-    // calls contain live metadata or text and keep operational timings only.
-    expect(capture).toHaveBeenCalledTimes(1);
-    expect(capture.mock.calls[0]?.[0].content).not.toContain(metadata.label);
+    // Research content uses only the selected diagnostic sink, including the first question-only call.
+    expect(capture).not.toHaveBeenCalled();
   });
 
   it('refuses a later model call after inventory-only permission revocation', async () => {

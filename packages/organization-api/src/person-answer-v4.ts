@@ -1,3 +1,4 @@
+import { validatePersonDiagnosticCaptureIdV1, type PersonDiagnosticCaptureIdV1 } from './person-diagnostics-v1.js';
 import { validatePersonTicketCitationV1 } from './person-ticket-citation-v1.js';
 import { validatePersonPageCitationV1 } from './person-page-citation-v1.js';
 import type { PersonAnswerCitationV5, PersonAnswerResponseV5 } from './person-answer-v5.js';
@@ -59,6 +60,8 @@ export interface PersonAnswerRequestV3 {
   readonly project_id?: ProjectIdV1;
   /** Only what the asker added: their notes and uploads, and meetings they approved (ADR-0024). */
   readonly mine?: true;
+  /** A capture prepared by this actor for this ordinary Ask. */
+  readonly capture_id?: PersonDiagnosticCaptureIdV1;
 }
 
 export interface PersonAnswerStatementV4 {
@@ -343,10 +346,10 @@ function boundedRequest<T>(result: T, label: string): T {
 
 export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerRequestV3 {
   const input = object(value, 'Ask request');
-  assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'mine') ? ['mine'] : [])], 'Ask request');
+  assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'mine') ? ['mine'] : []), ...(Object.hasOwn(input, 'capture_id') ? ['capture_id'] : [])], 'Ask request');
   if (input.schema_version !== 3) fail('Ask request schema_version is unsupported');
   if (Object.hasOwn(input, 'mine') && (input.mine !== true || Object.hasOwn(input, 'project_id'))) fail('Ask request scope is invalid');
-  return boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'mine') ? { mine: true as const } : {}) }, 'Ask request');
+  return boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'mine') ? { mine: true as const } : {}), ...(Object.hasOwn(input, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(input.capture_id) } : {}) }, 'Ask request');
 }
 
 /** One V6 response citation, as the impact card (person-impact-card-v1.ts) cites items too. */

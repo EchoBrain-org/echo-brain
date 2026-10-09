@@ -67,6 +67,7 @@ import {
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_RUNS_PATH_V1,
+  PERSON_DIAGNOSTICS_PATH_V1,
   PERSON_RESEARCH_EVAL_READ_PATH_V1,
   PERSON_RESEARCH_EVAL_START_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
@@ -76,6 +77,7 @@ import {
   validatePersonCapabilitiesV1,
   validatePersonEvidenceOpenRequestV1,
   validatePersonRunsRequestV1,
+  validatePersonDiagnosticsRequestV1,
   validatePersonResearchEvalReadRequestV1,
   validatePersonResearchEvalStartRequestV1,
   validatePersonEvidenceSearchRequestV1,
@@ -88,6 +90,7 @@ import type { PersonAnswerV4HttpApplication } from "./person-answer-v4-http-appl
 import type { PersonAnswerV5HttpApplication } from "./person-answer-v5-http-application.js";
 import type { PersonResearchEvalHttpApplicationV1 } from "./person-research-eval-http-application.js";
 import type { PersonTriggerRunsHttpApplicationV1 } from './person-trigger-runs-http-application.js';
+import type { PersonDiagnosticsHttpApplicationV1 } from './person-diagnostics-http-application.js';
 import {
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
@@ -132,6 +135,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_LIST_PATH_V1}`,
   `POST ${PERSON_OPEN_PATH_V1}`,
   `POST ${PERSON_RUNS_PATH_V1}`,
+  `POST ${PERSON_DIAGNOSTICS_PATH_V1}`,
 ]);
 
 function routeKey(method: string, path: string): string {
@@ -173,6 +177,7 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Staging-only research evaluation; its routes do not exist unless composed. */
   readonly person_research_eval?: PersonResearchEvalHttpApplicationV1;
   readonly person_trigger_runs?: PersonTriggerRunsHttpApplicationV1;
+  readonly person_diagnostics?: PersonDiagnosticsHttpApplicationV1;
   /** Provider-owned account connection routes, selected by the composition root. */
   readonly person_tool_connections?: readonly ProviderHttpApplicationV1[];
   /** Opening a cited original; it needs no answer model. */
@@ -714,13 +719,21 @@ export function createOrganizationAuthorityHttpServer(
       [PERSON_RESEARCH_EVAL_START_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalStartRequestV1, (application, input) => application.start(input))],
       [PERSON_RESEARCH_EVAL_READ_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalReadRequestV1, (application, input) => application.read(input))],
     ] as const),
+    ...(options.person_diagnostics === undefined ? [] : [
+      [PERSON_DIAGNOSTICS_PATH_V1, personCancellablePost(options.person_diagnostics, validatePersonDiagnosticsRequestV1, (application, input) => {
+        const common = { access_token: input.access_token, ...(input.signal === undefined ? {} : { signal: input.signal }) };
+        return input.request.operation === 'prepare'
+          ? application.prepare({ ...common, request: input.request })
+          : application.read({ ...common, request: input.request });
+      })],
+    ] as const),
     ...(options.person_trigger_runs === undefined ? [] : [
       [PERSON_RUNS_PATH_V1, personCancellablePost(options.person_trigger_runs, validatePersonRunsRequestV1, (application, input) => {
         const common = { access_token: input.access_token, ...(input.signal === undefined ? {} : { signal: input.signal }) };
         const request = input.request;
         switch (request.operation) {
           case 'list': return application.list(common);
-          case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: request.run_id } });
+          case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: request.run_id, ...(request.capture_id === undefined ? {} : { capture_id: request.capture_id }) } });
           case 'retry': return application.retry({ ...common, request: { schema_version: 1, operation: 'retry', run_id: request.run_id } });
           case 'view': return application.view({ ...common, request: { schema_version: 1, operation: 'view', run_id: request.run_id } });
           case 'home': return application.home(common);

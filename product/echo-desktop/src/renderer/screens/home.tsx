@@ -152,7 +152,8 @@ function Footer({ state }: { state: State }) {
 export function Home({ state }: { state: State }) {
   const home = state.home;
   const rows = home?.rows ?? [];
-  const noProjects = !state.projects.loading && state.projects.items.length === 0 && !state.archivedProjects.loading && state.archivedProjects.items.length === 0;
+  const noProjects = !state.projects.loading && !state.projects.failure && state.projects.items.length === 0 &&
+    !state.archivedProjects.loading && !state.archivedProjects.failure && state.archivedProjects.items.length === 0;
   if (home?.failure && rows.length === 0) {
     return (
       <div class="column center" data-testid="home-error">

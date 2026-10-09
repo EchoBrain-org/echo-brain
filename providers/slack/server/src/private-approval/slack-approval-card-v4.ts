@@ -119,7 +119,9 @@ export function buildSlackApprovalCardV4(
         ),
         options: [
           { text: plain("Only me"), value: "only-me" },
-          { text: plain("Projects"), value: "projects" },
+          ...(projects.length === 0
+            ? []
+            : [{ text: plain("Projects"), value: "projects" }]),
         ],
         initial_option: {
           text: plain(suggested.length === 0 ? "Only me" : "Projects"),
@@ -127,22 +129,28 @@ export function buildSlackApprovalCardV4(
         },
       },
     },
-    {
-      type: "input",
-      block_id: id(input.approval_id, "projects"),
-      optional: true,
-      label: plain("Projects to share with"),
-      element: {
-        type: "multi_static_select",
-        action_id: slackApprovalActionIdV4(
-          input.approval_id,
-          "projects-select",
-        ),
-        options: projects,
-        max_selected_items: 20,
-        ...(suggested.length === 0 ? {} : { initial_options: suggested }),
-      },
-    },
+    ...(projects.length === 0
+      ? [{
+          type: "context",
+          block_id: id(input.approval_id, "projects-unavailable"),
+          elements: [plain("You have no active projects available to share with.")],
+        }]
+      : [{
+          type: "input",
+          block_id: id(input.approval_id, "projects"),
+          optional: true,
+          label: plain("Projects to share with"),
+          element: {
+            type: "multi_static_select",
+            action_id: slackApprovalActionIdV4(
+              input.approval_id,
+              "projects-select",
+            ),
+            options: projects,
+            max_selected_items: 20,
+            ...(suggested.length === 0 ? {} : { initial_options: suggested }),
+          },
+        }]),
     {
       type: "input",
       block_id: id(input.approval_id, "transcript"),

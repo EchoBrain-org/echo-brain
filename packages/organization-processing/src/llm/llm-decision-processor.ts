@@ -7,7 +7,6 @@ import {
   type AdapterHealth,
   type AdapterOperationContext,
   type DecisionExtractionContext,
-  type DecisionExtractionGenerationObservation,
   type DecisionProcessorAdapter,
   type DecisionSet,
   type EvidenceSpan,
@@ -21,8 +20,6 @@ import {
   MAX_LLM_REQUEST_TIMEOUT_MS,
   MAX_OUTPUT_TOKENS,
   type LlmProviderClient,
-  StructuredGenerationAttemptError,
-  type StructuredGenerationResult,
 } from "./llm-provider.js";
 
 export const LLM_DECISION_PROCESSOR_ADAPTER_ID = 'llm';
@@ -677,19 +674,6 @@ function isBeforeMeetingDateAnchor(
   return anchorDate !== null && dueDate !== null && dueDate < anchorDate;
 }
 
-function finishReason(
-  stopReason: string | undefined,
-): DecisionExtractionGenerationObservation['finish_reason'] {
-  return stopReason === 'stop' ||
-    stopReason === 'length' ||
-    stopReason === 'content_filter' ||
-    stopReason === 'error'
-    ? stopReason
-    : typeof stopReason === 'string'
-      ? 'other'
-      : null;
-}
-
 function configuredMaxOutputTokens(config: AdapterConfig): number {
   const value = config.settings['max_output_tokens'];
   return typeof value === 'number' ? value : DEFAULT_MAX_OUTPUT_TOKENS;
@@ -766,17 +750,6 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
       return Number.isFinite(value) ? value : null;
     } catch {
       return null;
-    }
-  }
-
-  private observeGeneration(
-    context: DecisionExtractionContext,
-    event: DecisionExtractionGenerationObservation,
-  ): void {
-    try {
-      context.on_generation?.(Object.freeze(event));
-    } catch {
-      // Telemetry is observational: never let an observer alter extraction.
     }
   }
 
@@ -900,12 +873,10 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
     captureCoreRuntimeContentV1("meeting_input", meeting);
     const renderedMeeting = renderMeeting(meeting);
     const startedAt = this.providerClockMs();
-    let response: StructuredGenerationResult;
-    try {
-      response = await observeCoreRuntimeV1("model_call", async () => {
-        observeCoreModelMetadataV1({ provider: this.client.provider, model: this.model });
-        annotateCoreRuntimeV1({ counts: { input_bytes: Buffer.byteLength(SYSTEM_PROMPT + renderedMeeting.prompt), input_tokens: null, output_tokens: null, total_tokens: null } });
-        const value = await this.client.generateStructured({
+    const response = await observeCoreRuntimeV1("model_call", async () => {
+      observeCoreModelMetadataV1({ provider: this.client.provider, model: this.model });
+      annotateCoreRuntimeV1({ counts: { input_bytes: Buffer.byteLength(SYSTEM_PROMPT + renderedMeeting.prompt), input_tokens: null, output_tokens: null, total_tokens: null } });
+      const value = await this.client.generateStructured({
         model: this.model,
         systemPrompt: SYSTEM_PROMPT,
         userPrompt: renderedMeeting.prompt,
@@ -914,41 +885,10 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         ...(operation?.signal === undefined
           ? {}
           : { signal: operation.signal }),
-        });
-        observeCoreModelMetadataV1({ provider: this.client.provider, model: this.model, ...(value.requestId === undefined ? {} : { request_id: value.requestId }), ...(value.stopReason === undefined ? {} : { finish_reason: value.stopReason }) });
-        annotateCoreRuntimeV1({ counts: { output_bytes: Buffer.byteLength(value.content), input_tokens: value.inputTokens ?? null, output_tokens: value.outputTokens ?? null, total_tokens: value.totalTokens ?? null, provider_latency_ms: this.providerElapsedMs(startedAt) } });
-        return value;
       });
-    } catch (error) {
-      const observation =
-        error instanceof StructuredGenerationAttemptError
-          ? error.observation
-          : undefined;
-      this.observeGeneration(context, {
-        outcome: 'failed',
-        provider: this.client.provider,
-        model: this.model,
-        provider_latency_ms: this.providerElapsedMs(startedAt),
-        input_tokens: observation?.inputTokens ?? null,
-        output_tokens: observation?.outputTokens ?? null,
-        total_tokens: observation?.totalTokens ?? null,
-        cached_input_tokens: observation?.cachedInputTokens ?? null,
-        reasoning_tokens: observation?.reasoningTokens ?? null,
-        finish_reason: finishReason(observation?.stopReason),
-      });
-      throw error;
-    }
-    this.observeGeneration(context, {
-      outcome: 'succeeded',
-      provider: this.client.provider,
-      model: this.model,
-      provider_latency_ms: this.providerElapsedMs(startedAt),
-      input_tokens: response.inputTokens ?? null,
-      output_tokens: response.outputTokens ?? null,
-      total_tokens: response.totalTokens ?? null,
-      cached_input_tokens: response.cachedInputTokens ?? null,
-      reasoning_tokens: response.reasoningTokens ?? null,
-      finish_reason: finishReason(response.stopReason),
+      observeCoreModelMetadataV1({ provider: this.client.provider, model: this.model, ...(value.requestId === undefined ? {} : { request_id: value.requestId }), ...(value.stopReason === undefined ? {} : { finish_reason: value.stopReason }) });
+      annotateCoreRuntimeV1({ counts: { output_bytes: Buffer.byteLength(value.content), input_tokens: value.inputTokens ?? null, output_tokens: value.outputTokens ?? null, total_tokens: value.totalTokens ?? null, provider_latency_ms: this.providerElapsedMs(startedAt) } });
+      return value;
     });
     assertNotCancelled(operation?.signal, 'extraction');
 

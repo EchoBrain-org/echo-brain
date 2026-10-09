@@ -1,4 +1,5 @@
 import { OPENROUTER_TELEMETRY_VOCABULARY_V1 } from "@echo-brain/provider-openrouter/openrouter-telemetry-vocabulary-v1";
+import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { readPrivateAuthorityCredential, readPrivateAuthorityOidcClientSecret } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { readOrganizationAuthoritySetupManifest } from "./organization-authority-setup-cli.js";
@@ -7,9 +8,7 @@ import { readPersonOidcConfiguration } from "./organization-authority-person-adm
 import { openStagingSyntheticPrivateDmCanaryControlV1 } from "@echo-brain/provider-slack-server/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 import { requestStagingSyntheticPrivateDmCanaryV1 } from "@echo-brain/provider-slack-server/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1";
-import { createStagingJourneyTelemetryTransportFromEnvironmentV1 } from "./staging/observability/staging-journey-telemetry-transport-v1.js";
-import { createAskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
-import { OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
+import { createJourneyTelemetryTransportFromEnvironmentV1 } from "./observability/journey-telemetry-transport-v1.js";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 } from './jira-person-live-runtime-v1.js';
 import { CONFLUENCE_PERSON_LIVE_RELEASE_APPROVED_V1 } from './confluence-person-live-runtime-v1.js';
@@ -141,8 +140,8 @@ export async function runOrganizationAuthorityServiceCli(
   argv: readonly string[],
   io: OrganizationAuthorityServiceCliIo = PROCESS_IO,
 ): Promise<number> {
-  let stagingJourneyTelemetry: ReturnType<
-    typeof createStagingJourneyTelemetryTransportFromEnvironmentV1
+  let journeyTelemetry: ReturnType<
+    typeof createJourneyTelemetryTransportFromEnvironmentV1
   > | undefined;
   try {
     if (argv[0] === "staging-private-dm-canary") {
@@ -248,30 +247,16 @@ export async function runOrganizationAuthorityServiceCli(
     // Other deployments select Confluence with both explicit profile-owned flags.
     const confluenceCloudId = parsed['--confluence-cloud-id'] ?? (stagingConfluenceAsk === 'true' ? connectorRehearsal?.profile.jira.cloud_id : undefined);
     const confluenceIntegration = parsed['--confluence-nango-integration'] ?? (stagingConfluenceAsk === 'true' ? 'confluence' : undefined);
-    stagingJourneyTelemetry =
-      manifest.authority_url ===
-      STAGING_AUTHORITY_ORIGIN_V1
-        ? createStagingJourneyTelemetryTransportFromEnvironmentV1(process.env, {
-            write: io.stderr,
-          }, OPENROUTER_TELEMETRY_VOCABULARY_V1)
-        : undefined;
-    const askJourneyTelemetry =
-      stagingJourneyTelemetry?.identity === null ||
-      stagingJourneyTelemetry?.identity === undefined
-        ? undefined
-        : createAskJourneyTelemetryFactoryV1({
-            vocabulary: OPENROUTER_TELEMETRY_VOCABULARY_V1,
-            observer: stagingJourneyTelemetry.observer,
-            release_sha: stagingJourneyTelemetry.identity.release_sha,
-            build_number: stagingJourneyTelemetry.identity.build_number,
-            planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
-            answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
-          });
+    const telemetryEnvironment = manifest.authority_url === STAGING_AUTHORITY_ORIGIN_V1 ? "staging" : "production";
+    const telemetryVocabulary = { ...OPENROUTER_TELEMETRY_VOCABULARY_V1, triggers: AGENTIC_TRIGGER_DEFINITIONS_V1.map(definition => definition.name) };
+    journeyTelemetry = createJourneyTelemetryTransportFromEnvironmentV1(telemetryEnvironment, process.env, {
+      write: io.stderr,
+    }, telemetryVocabulary);
     const openService: typeof openOrganizationAuthorityService = connectorRehearsal === undefined
       ? openOrganizationAuthorityService
       : (config, dependencies) => openStagingConnectorRehearsalService(config, connectorRehearsal, dependencies);
     const runtime = await openService({
-      ...(stagingJourneyTelemetry?.enabled ? { core_runtime_observation: stagingJourneyTelemetry.core_runtime } : {}),
+      ...(journeyTelemetry.enabled ? { core_runtime_observation: journeyTelemetry.core_runtime } : {}),
       state_directory: stateDirectory,
       host,
       port: positiveInteger(
@@ -322,9 +307,6 @@ export async function runOrganizationAuthorityServiceCli(
         // The lifecycle reporter constructs this closed, content-free schema.
         io.stderr(`${canonicalJson(event as never)}\n`);
       },
-      ...(askJourneyTelemetry === undefined
-        ? {}
-        : { ask_journey_telemetry: askJourneyTelemetry }),
       ...(parsed["--worker-interval-ms"] === undefined
         ? {}
         : {
@@ -358,19 +340,19 @@ export async function runOrganizationAuthorityServiceCli(
     // Liveness is deliberately activated only after openOrganizationAuthorityService
     // and the optional staging canary control have both completed successfully.
     // A failed or still-pending runtime open must not make staging look alive.
-    stagingJourneyTelemetry?.start();
+    journeyTelemetry.start();
     await new Promise<void>((resolve) => {
       let closing: Promise<void> | undefined;
       const close = (): void => {
         closing ??=
           stagingCanaryControl === undefined
-            ? runtime.close().finally(() => stagingJourneyTelemetry?.close())
+            ? runtime.close().finally(() => journeyTelemetry?.close())
             : Promise.all([
                 stagingCanaryControl.close().catch(() => undefined),
                 runtime.close(),
               ])
                 .then(() => undefined)
-                .finally(() => stagingJourneyTelemetry?.close());
+                .finally(() => journeyTelemetry?.close());
         void closing.finally(resolve);
       };
       process.once("SIGINT", close);
@@ -378,7 +360,7 @@ export async function runOrganizationAuthorityServiceCli(
     });
     return 0;
   } catch {
-    stagingJourneyTelemetry?.close();
+    journeyTelemetry?.close();
     io.stderr(`${LEGACY_CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1}\n`);
     return 1;
   }

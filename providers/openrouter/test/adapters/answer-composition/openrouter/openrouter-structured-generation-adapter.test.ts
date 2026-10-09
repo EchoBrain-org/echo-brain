@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { createOpenRouterStructuredGenerationAdapter, OpenRouterStructuredGenerationError, parseModelJson } from "../../../../src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 
 const structuredRequest = {
@@ -32,6 +33,21 @@ async function observed(
 }
 
 describe("OpenRouter structured generation", () => {
+  it("retains measured failure latency in canonical metadata without inventing token counts", async () => {
+    const events: CoreRuntimeObservationV1[] = [];
+    const now = vi.fn<() => number>().mockReturnValueOnce(100).mockReturnValueOnce(125);
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "fixture", credential_resolver: () => "SECRET",
+      now_ms: now, fetch_impl: async () => { throw new Error("PRIVATE PROVIDER BODY"); },
+    });
+    await observeCoreRuntimeV1("ask_planner", () => caught(adapter), { observer: event => { events.push(event); } });
+    const completedCalls = events.filter(event => event.phase === "model_call" && event.event !== "started");
+    expect(completedCalls).toHaveLength(1);
+    expect(completedCalls[0]).toMatchObject({ event: "failed", result: "unavailable", counts: { provider_latency_ms: 25, input_tokens: null, output_tokens: null, total_tokens: null, cached_input_tokens: null, reasoning_tokens: null } });
+    expect(JSON.stringify(events)).not.toContain("PRIVATE PROVIDER BODY");
+    expect(JSON.stringify(events)).not.toContain("SECRET");
+  });
+
   it("uses JSON-schema output with the configured bounds", async () => {
     const calls: Array<{
       readonly input: RequestInfo | URL;

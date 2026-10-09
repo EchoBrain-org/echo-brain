@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV1 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '../../src/answer-composition/structured-generation-v1.js';
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from '../../src/shared/evidence-desk-v1.js';
+import { withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -26,7 +27,7 @@ describe('agentic Ask concurrent reads', () => {
     const bothEntered = deferred<void>();
     const entered: string[] = [];
     let clock = 0;
-    const stages: { stage: string; elapsed_ms: number }[] = [];
+    const observations: CoreRuntimeDiagnosticObservationV1[] = [];
     const search = vi.fn((input: { query?: string }) => {
       entered.push(input.query!);
       if (entered.length === 2) bothEntered.resolve();
@@ -52,11 +53,11 @@ describe('agentic Ask concurrent reads', () => {
         return { parts: [{ question: 'Which?', needs: [{ need: 'both', status: 'found', evidence: ['E1', 'E2'] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
       }),
     };
-    const pending = createAgenticAskV1({
+    const pending = withCoreRuntimeDiagnosticsV1(event => { observations.push(event); }, () => createAgenticAskV1({
       desk, model, audit: { append: () => undefined },
       generation: { generation_adapter_id: 'fixture', planner_model: 'ignored', answer_model: 'fixture', timeout_ms: 30_000 },
-      now_ms: () => clock, on_stage: event => { stages.push(event); },
-    }).answer({ question: 'Which?' });
+      now_ms: () => clock,
+    }).answer({ question: 'Which?' }));
 
     await bothEntered.promise;
     expect(entered).toEqual(['alpha', 'beta']);
@@ -72,7 +73,7 @@ describe('agentic Ask concurrent reads', () => {
     expect(next.last_results[1]!.note).toContain('already searched');
     expect(next.last_results[0]!.results![0]!.id).toBe('E1');
     expect(next.last_results[2]!.results![0]!.id).toBe('E2');
-    expect(stages.find(event => event.stage === 'retrieval')!.elapsed_ms).toBe(50);
+    expect(observations).toContainEqual(expect.objectContaining({ kind: 'lifecycle', stage: 'research', event: 'succeeded', data: expect.objectContaining({ research: expect.objectContaining({ cost: expect.objectContaining({ desk_ms: 50 }) }) }) }));
   });
 
   it('cancels every in-flight independent read and writes the cancelled terminal audit', async () => {

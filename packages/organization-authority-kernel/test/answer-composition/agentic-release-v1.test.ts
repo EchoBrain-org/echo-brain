@@ -6,6 +6,7 @@ import type { AgenticModelGateStatsV1 } from "../../src/answer-composition/agent
 import { auditAgenticTerminalV1, releaseAgenticResultV1 } from "../../src/answer-composition/agentic-release-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import type { EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
+import { withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import { checked as deskCheck, need, part, replay, researchHarness, SCENARIOS, step } from "./fixtures/agentic-scenarios.js";
 
 /** The release step on its own: a scripted desk and audit port, one trace of both. */
@@ -30,7 +31,7 @@ function release(options: { readonly fence_after_audit: boolean; readonly on_app
     outcome: "answered", citation_count: 2, result: response, answer_sha256: canonicalSha256({ answer: "fixture" }),
     fence_after_audit: options.fence_after_audit, signal: controller.signal,
     assert_live: () => { if (controller.signal.aborted) throw new DOMException("Ask cancelled", "AbortError"); },
-    on_checked: at => { checked.push(at); }, on_audited: () => { audited += 1; }, now: () => 0,
+    on_checked: at => { checked.push(at); }, on_audited: () => { audited += 1; },
   });
   return { run, trace, entries, checked, controller, context, response, audited: () => audited };
 }
@@ -95,13 +96,17 @@ describe("release step", () => {
 
 describe("release step: request terminals", () => {
   it("writes a timed_out witness naming the trigger and its background budget when research outlives the deadline", async () => {
+    const events: CoreRuntimeDiagnosticObservationV1[] = [];
     let clock = 0;
     // The first step's reply lands after the five-minute background deadline.
     const h = researchHarness(() => { clock += 301_000; return step([part("Dashboard", [need("dashboard published", "open")])], [{ tool: "search", args: { query: "dashboard" } }]); }, {}, { now_ms: () => clock });
     const brief = { goal: { kind: "task" as const, task: "Recheck the dashboard." }, starting: [], budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false } };
-    await expect(h.research.research({ trigger: "sweep", brief })).rejects.toMatchObject({ name: "AgenticAskDeadlineErrorV1" });
+    await expect(withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => h.research.research({ trigger: "sweep", brief }))).rejects.toMatchObject({ name: "AgenticAskDeadlineErrorV1" });
     // The witness binds the access check before the late step call.
     expect(h.audit).toEqual([expect.objectContaining({ trigger: "sweep", budget: "background", outcome: "timed_out", model_calls: 1, checked_at: deskCheck.checked_at, prompt_sha256: null, answer_sha256: null, response_sha256: null })]);
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'lifecycle', stage: 'audit', event: 'started', data: { outcome: 'timed_out' } }));
+    expect(events.at(-1)).toMatchObject({ kind: 'lifecycle', stage: 'run', event: 'failed', error_kind: 'deadline' });
+    expect(events.filter(event => event.kind === 'lifecycle' && event.stage === 'release')).toEqual([]);
   });
 
   it("writes no second witness and checks access no more when Ask is cancelled during its audit write", async () => {

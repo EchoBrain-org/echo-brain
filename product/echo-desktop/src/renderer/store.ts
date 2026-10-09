@@ -3235,8 +3235,9 @@ export function resume(): void {
     // People & invites is read again for whoever is signed in now.
     if (state.route.page === 'organization' && !state.concealed) void loadEmployees();
     // Resume healthy or interrupted Home reads, including an open decision.
-    // A failed Home retains its explicit retry instead of retrying offline calls on every focus.
-    if (state.home && !state.home.failure && !state.concealed) void loadHome();
+    // A failed initial Home retains its explicit retry; an ongoing check or open
+    // decision resumes its interrupted retry when the window returns.
+    if (state.home && (!state.home.failure || homeNeedsPolling()) && !state.concealed) void loadHome();
   });
 }
 
@@ -3362,6 +3363,10 @@ function withRows(home: HomeState): HomeState {
     items: home.open.items.filter(item => !Object.hasOwn(home.closing, item.item_id)),
   } : home.open;
   return { ...home, rows: needRows(home.reviews, home.runs, open) };
+}
+
+function homeNeedsPolling(): boolean {
+  return resultOwed || state.route.page === 'decision' || (state.home?.rows.some(row => row.kind === 'checking') ?? false);
 }
 
 /**

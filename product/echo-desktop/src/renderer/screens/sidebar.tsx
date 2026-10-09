@@ -1,5 +1,6 @@
 import type { ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initial } from '../format.js';
+import { message } from '../messages.js';
 import { useState } from 'preact/hooks';
 import { goHome, loadArchivedProjects, loadProjects, needsCount, openCompose, openMine, openNewProject, openOrganization, openProject, openTools, showAccountMenu, type State } from '../store.js';
 import { useDropTarget } from './drop.js';
@@ -34,7 +35,7 @@ function SidebarProject({ project, current, state }: { project: ProjectSummary; 
  */
 export function Sidebar({ state }: { state: State }) {
   const account = state.status?.account ?? null;
-  const { items, next, loading } = state.projects;
+  const { items, next, loading, failure } = state.projects;
   const current = !state.concealed && state.route.page === 'project' ? state.route.project.project_id : null;
   const mine = !state.concealed && state.route.page === 'mine';
   const tools = !state.concealed && state.route.page === 'tools';
@@ -65,7 +66,7 @@ export function Sidebar({ state }: { state: State }) {
         </div>
       )}
       <nav class="sidebar-list" aria-label="Projects">
-        {account && items.length > 0 && (
+        {account && (items.length > 0 || failure) && (
           <>
             <div class="side-header">PROJECTS</div>
             {items.filter(project => project.status === 'active').map(project => <SidebarProject key={project.project_id} project={project} current={project.project_id === current} state={state} />)}
@@ -74,6 +75,8 @@ export function Sidebar({ state }: { state: State }) {
                 More
               </button>
             )}
+            {failure && <div class="error side-more" data-testid="sidebar-projects-error">{message(failure)} <button type="button" class="link-button"
+              disabled={loading} onClick={() => void loadProjects()}>Try again</button></div>}
           </>
         )}
         {account && (archived.items.length > 0 || archived.loading || archived.failure) && (
@@ -90,6 +93,8 @@ export function Sidebar({ state }: { state: State }) {
               <button type="button" class="link-button side-more" data-testid="more-archived-projects" disabled={archived.loading}
                 onClick={() => void loadArchivedProjects(true)}>More</button>
             )}
+            {archivedOpen && archived.failure && <div class="error side-more" data-testid="archived-projects-error">{message(archived.failure)} <button type="button" class="link-button"
+              disabled={archived.loading} onClick={() => void loadArchivedProjects()}>Try again</button></div>}
           </section>
         )}
       </nav>

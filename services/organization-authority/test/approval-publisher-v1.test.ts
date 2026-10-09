@@ -9,6 +9,7 @@ import {
 } from '../src/composition/approval-core-v1.js';
 import { buildApprovalDecisionRecordV1, projectApprovalDecisionApproverV1 } from '../src/composition/approval-decision-projection-v1.js';
 import { confirmedOwners } from '../src/composition/person-meeting-items-v1.js';
+import { coreRuntimeIdentityV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 
 const signal = () => new AbortController().signal;
 const publishedCount = (f: { db: import('better-sqlite3').Database }) => f.db.prepare('SELECT count(*) FROM authority_approval_decisions_v1 WHERE receipt_json IS NOT NULL').pluck().get() as number;
@@ -20,6 +21,51 @@ const restore: (() => void)[] = [];
 afterEach(() => { for (const undo of restore.splice(0)) undo(); });
 
 describe('approval publisher: the brief', () => {
+  it('links each committed publication to intake and its later research event outside the receipt transaction', async () => {
+    const observations: CoreRuntimeObservationV1[] = [];
+    const publicationStates: unknown[] = [];
+    const f = await approvalCoreFixture({ after_record: [(tx, event) => {
+      tx.prepare("INSERT INTO temp.hook_log VALUES (?, 'committed')").run(event.approval_id);
+    }] });
+    hookLog(f);
+    f.core.decide('desktop', f.approve(), () => f.session);
+    await observeCoreRuntimeV1('worker_execution', () => f.core.processing.appendFinalizedApprovalsToV4(signal()), {
+      observer(event) {
+        if (event.event_id !== undefined) {
+          publicationStates.push({ inTransaction: f.db.inTransaction, published: publishedCount(f), hooks: logged(f) });
+        }
+        observations.push(event);
+      },
+    });
+    const publication = observations.find(event => event.phase === 'record_append' && event.event === 'succeeded');
+    const provenance = f.context.state.readFrozenCandidateForApproval(f.approvalId)!.meeting.provenance;
+    const receipt = JSON.parse(f.receipt()!);
+    expect(publication).toMatchObject({ result: 'published',
+      event_id: coreRuntimeIdentityV1('research-event', f.approvalId),
+      output_id: coreRuntimeIdentityV1('research-output', receipt.record_sha256),
+      source_revision: coreRuntimeIdentityV1('source_revision', JSON.stringify([provenance.external_id, provenance.canonical_revision])),
+    });
+    expect(observations.filter(event => event.event_id !== undefined)).toEqual([publication]);
+    expect(publicationStates).toEqual([{ inTransaction: false, published: 1, hooks: ['committed'] }]);
+    expect(JSON.stringify(observations)).not.toContain(f.approvalId);
+  });
+  it('does not claim publication when a hook rolls back and observation failures cannot undo a later commit', async () => {
+    let fail = true;
+    const f = await approvalCoreFixture({ after_record: [() => { if (fail) throw new Error('hook failed'); }] });
+    f.core.decide('desktop', f.approve(), () => f.session);
+    const observations: CoreRuntimeObservationV1[] = [];
+    await expect(observeCoreRuntimeV1('worker_execution', () => f.core.processing.appendFinalizedApprovalsToV4(signal()), {
+      observer: event => { observations.push(event); },
+    })).rejects.toThrow('hook failed');
+    expect(f.receipt()).toBeNull();
+    expect(observations.every(event => event.event_id === undefined && event.output_id === undefined)).toBe(true);
+    fail = false;
+    await observeCoreRuntimeV1('worker_execution', () => f.core.processing.appendFinalizedApprovalsToV4(signal()), {
+      observer: () => { throw new Error('telemetry failed'); },
+    });
+    expect(publishedCount(f)).toBe(1);
+    expect(f.recordCount()).toBe(1);
+  });
   it.each([[[]], [['A']], [['A', 'B']]] as const)('publishes the exact audience and owners (projects %j)', async (names) => {
     const f = await approvalCoreFixture({ projects: 2, owners: { 'act-1': 'Rafael Moreno', 'act-2': 'Jules Ortega' } });
     const project_ids = names.map(n => f.project(n)).sort();

@@ -11,6 +11,7 @@ let review: PersonMeetingReviewV2;
 let run: PersonRunV1 | null;
 let home: HomeView;
 let failNextList = false;
+let failNextReviews = false;
 let failLists = false;
 let failNextHome = false;
 let failSetState = false;
@@ -52,6 +53,7 @@ beforeEach(() => {
   run = null;
   home = emptyHome();
   failNextList = false;
+  failNextReviews = false;
   failLists = false;
   failNextHome = false;
   failSetState = false;
@@ -70,7 +72,10 @@ beforeEach(() => {
       case 'app.setUnresolved': return ok(null);
       case 'account.tools': return ok({ tools: [{ tool_id: 'granola', status: 'linked' }] });
       case 'tools.meetings':
-        if (params.request?.operation === 'reviews') return ok({ reviews: [{ ...review }] });
+        if (params.request?.operation === 'reviews') {
+          if (failNextReviews) { failNextReviews = false; return unavailable; }
+          return ok({ reviews: [{ ...review }] });
+        }
         if (params.request?.operation === 'review_open') return ok({ review: { ...review }, content: 'Private proposal text', suggested_projects: [], owners: [], snapshot_sha256: 'snapshot' });
         break;
       case 'runs':
@@ -454,5 +459,70 @@ describe('Home decisions and impact checks', () => {
     await flush();
     expect(store.getState().send?.failure).not.toBe('These items changed meanwhile. Open them again from Home.');
     expect(statusReads()).toBe(before + 1);
+  });
+
+  it('keeps an initial runs-list failure silent and recovers when Home is read again', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('running');
+    failNextList = true;
+    const store = await start();
+    expect(store.getState().home).toMatchObject({ loading: false, failure: undefined });
+    const requests = rpc.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(rpc.mock.calls).toHaveLength(requests);
+    await store.loadHome();
+    expect(store.getState().home?.failure).toBeUndefined();
+    expect(store.getState().home?.rows).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
+  });
+
+  it.each([false, true])('resumes a failed Home while work is outstanding, result owed: %s', async owed => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('running');
+    const store = await start();
+    if (owed) {
+      run = impactRun('done');
+      home = { ...emptyHome(), send: [sendRow()] };
+      failNextHome = true;
+    }
+    failNextReviews = true;
+    await store.loadHome();
+    expect(store.getState().home?.failure).toMatchObject({ code: 'unavailable' });
+    if (owed) expect(store.getState().home?.rows).toHaveLength(0);
+    store.conceal();
+    await vi.advanceTimersByTimeAsync(60_000);
+    run = impactRun('done');
+    home = { ...emptyHome(), send: [sendRow()] };
+    store.resume();
+    await flush();
+    expect(store.getState().home?.failure).toBeUndefined();
+    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
+  });
+
+  it.each([false, true])('preserves and retries a failed resume with an open decision: %s', async (openCard) => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('running');
+    const store = await start();
+    if (openCard) await store.openDecision(approval, run);
+    store.conceal();
+    failNextList = true;
+    store.resume();
+    await flush();
+    expect(store.getState().home?.rows).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
+    expect(store.getState().home?.failure).toBeUndefined();
+    if (openCard) expect(store.getState().decision?.run?.state).toBe('running');
+    // A second focus change must not strand the retry after stopping its timer.
+    store.conceal();
+    failNextList = true;
+    store.resume();
+    await flush();
+    run = impactRun('done');
+    home = { ...emptyHome(), send: [sendRow()] };
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(store.getState().home?.failure).toBeUndefined();
+    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
+    if (openCard) {
+      expect(store.getState().decision?.run?.state).toBe('done');
+      expect(store.getState().decision?.impact).toMatchObject({ status: 'assessed' });
+    }
   });
 });

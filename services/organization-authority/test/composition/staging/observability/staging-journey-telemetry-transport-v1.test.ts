@@ -5,14 +5,14 @@ import {
   createJourneyTelemetryEventV1,
   type JourneyTelemetryEventV1,
 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
+import type { CoreRuntimeDetailV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
-  createStagingJourneyTelemetryTransportV1,
-  createStagingJourneyTelemetryTransportFromEnvironmentV1,
-  STAGING_APPROVED_SEARCH_BACKLOG_KIND_V1,
-  STAGING_JOURNEY_TELEMETRY_HEARTBEAT_INTERVAL_MS_V1,
-  STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1,
-} from "../../../../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
-import { STAGING_JOURNEY_METRICS_NAMESPACE_V1 } from "../../../../src/composition/staging/observability/staging-journey-metrics-v1.js";
+  JOURNEY_TELEMETRY_HEARTBEAT_INTERVAL_MS_V1,
+  JOURNEY_TELEMETRY_LIVENESS_KIND_V1,
+  createJourneyTelemetryTransportFromEnvironmentV1,
+  createJourneyTelemetryTransportV1,
+} from "../../../../src/composition/observability/journey-telemetry-transport-v1.js";
+import { STAGING_JOURNEY_METRICS_NAMESPACE_V1 } from "../../../../src/composition/observability/journey-metrics-v1.js";
 
 const RELEASE_SHA = "f7018e16232aa11d24f9ecc880943b0bbb8c6ea2";
 const STARTED_AT = "2026-09-02T12:34:56.000Z";
@@ -22,13 +22,66 @@ const JOURNEY_ID = "1b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
 function liveness(event: "startup" | "heartbeat", observedAt: string) {
   return {
     schema_version: 1,
-    kind: STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1,
+    kind: JOURNEY_TELEMETRY_LIVENESS_KIND_V1,
     observed_at: observedAt,
     environment: "staging",
     release_sha: RELEASE_SHA,
     build_number: 42,
     event,
   };
+}
+
+function coreDiagnostic(overrides: Partial<CoreRuntimeDetailV1> = {}): CoreRuntimeDetailV1 {
+  return {
+    operation_id: "2b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012",
+    span_id: "3b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012",
+    parent_span_id: null,
+    phase: "search_validation",
+    purpose: "search_validation",
+    root: true,
+    linked_journey_ids: [],
+    counts: {},
+    result: "completed",
+    generation: null,
+    source_revision: null,
+    cursor: null,
+    action: null,
+    provider: null,
+    model: null,
+    finish_reason: null,
+    provider_request: null,
+    resource_scope: "process_overlap",
+    sqlite_lock_time: "unavailable",
+    disk_io_latency: "unavailable",
+    event_loop_delay: "unavailable",
+    ...overrides,
+  };
+}
+
+function coreEvent(input: {
+  readonly sequence?: number;
+  readonly observed_at?: string;
+  readonly event?: "started" | "succeeded" | "failed";
+  readonly elapsed_ms?: number;
+  readonly diagnostic?: CoreRuntimeDetailV1;
+} = {}): JourneyTelemetryEventV1 {
+  return createJourneyTelemetryEventV1({
+    journey_id: JOURNEY_ID,
+    sequence: input.sequence ?? 1,
+    observed_at: input.observed_at ?? HEARTBEAT_AT,
+    context: {
+      environment: "staging",
+      workflow: "core_runtime",
+      release_sha: RELEASE_SHA,
+      build_number: 42,
+    },
+    event: {
+      stage: "core_operation",
+      event: input.event ?? "succeeded",
+      elapsed_ms: input.elapsed_ms ?? 1,
+      diagnostic: input.diagnostic ?? coreDiagnostic(),
+    },
+  }, TELEMETRY_FIXTURE_VOCABULARY_V1);
 }
 
 describe("staging journey telemetry transport v1", () => {
@@ -38,7 +91,7 @@ describe("staging journey telemetry transport v1", () => {
     let callback: (() => void) | undefined;
     const cleared: unknown[] = [];
     const intervalId = { timer: "liveness" };
-    const transport = createStagingJourneyTelemetryTransportV1(
+    const transport = createJourneyTelemetryTransportV1("staging",
       { release_sha: RELEASE_SHA, build_number: 42 },
       {
         write: (line) => {
@@ -49,7 +102,7 @@ describe("staging journey telemetry transport v1", () => {
           set_interval: (received, intervalMs) => {
             callback = received;
             expect(intervalMs).toBe(
-              STAGING_JOURNEY_TELEMETRY_HEARTBEAT_INTERVAL_MS_V1,
+              JOURNEY_TELEMETRY_HEARTBEAT_INTERVAL_MS_V1,
             );
             return intervalId;
           },
@@ -98,7 +151,7 @@ describe("staging journey telemetry transport v1", () => {
   it("makes close-before-start inert and prevents a later start from claiming liveness", () => {
     const lines: string[] = [];
     let scheduled = false;
-    const transport = createStagingJourneyTelemetryTransportV1(
+    const transport = createJourneyTelemetryTransportV1("staging",
       { release_sha: RELEASE_SHA, build_number: 42 },
       {
         write: (line) => {
@@ -125,7 +178,7 @@ describe("staging journey telemetry transport v1", () => {
 
   it("delivers journey events before start without emitting liveness", () => {
     const lines: string[] = [];
-    const transport = createStagingJourneyTelemetryTransportV1(
+    const transport = createJourneyTelemetryTransportV1("staging",
       { release_sha: RELEASE_SHA, build_number: 42 },
       {
         write: (line) => {
@@ -139,22 +192,7 @@ describe("staging journey telemetry transport v1", () => {
         },
       }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
-    const event = createJourneyTelemetryEventV1({
-      journey_id: JOURNEY_ID,
-      sequence: 1,
-      observed_at: HEARTBEAT_AT,
-      context: {
-        environment: "staging",
-        workflow: "ask",
-        release_sha: RELEASE_SHA,
-        build_number: 42,
-      },
-      event: {
-        stage: "ask_validation",
-        event: "succeeded",
-        elapsed_ms: 1,
-      },
-    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
+    const event = coreEvent();
 
     transport.observer(event);
 
@@ -162,18 +200,18 @@ describe("staging journey telemetry transport v1", () => {
     expect(JSON.parse(lines[1] ?? "{}")).toMatchObject({
       StageSucceeded: 1,
       StageClosedLatencyMs: 1,
-      workflow: "ask",
-      stage: "ask_validation",
+      workflow: "core_runtime",
+      stage: "search_validation",
     });
     expect(lines.join("\n")).not.toContain(
-      STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1,
+      JOURNEY_TELEMETRY_LIVENESS_KIND_V1,
     );
   });
 
   it("fails open without starting telemetry for an invalid deploy identity", () => {
     const lines: string[] = [];
     let scheduled = false;
-    const transport = createStagingJourneyTelemetryTransportV1(
+    const transport = createJourneyTelemetryTransportV1("staging",
       { release_sha: RELEASE_SHA.toUpperCase(), build_number: 0 },
       {
         write: (line) => {
@@ -194,14 +232,6 @@ describe("staging journey telemetry transport v1", () => {
     expect(() =>
       transport.observer({} as JourneyTelemetryEventV1),
     ).not.toThrow();
-    expect(() =>
-      transport.approved_search_backlog_observer({
-        observed_at: STARTED_AT,
-        pending_count: 0,
-        stuck_count: 0,
-        oldest_age_ms: null,
-      }),
-    ).not.toThrow();
     expect(() => transport.close()).not.toThrow();
     expect(lines).toEqual([]);
     expect(scheduled).toBe(false);
@@ -211,7 +241,7 @@ describe("staging journey telemetry transport v1", () => {
     const identity = { release_sha: RELEASE_SHA, build_number: 42 };
     const lines: string[] = [];
     let callback: (() => void) | undefined;
-    const transport = createStagingJourneyTelemetryTransportV1(identity, {
+    const transport = createJourneyTelemetryTransportV1("staging", identity, {
       write: (line) => {
         lines.push(line);
       },
@@ -238,7 +268,7 @@ describe("staging journey telemetry transport v1", () => {
       .map((line) => JSON.parse(line) as Record<string, unknown>)
       .find(
         (value) =>
-          value.kind === STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1 &&
+          value.kind === JOURNEY_TELEMETRY_LIVENESS_KIND_V1 &&
           value.event === "heartbeat",
       );
     expect(heartbeat).toMatchObject({
@@ -249,7 +279,7 @@ describe("staging journey telemetry transport v1", () => {
   });
 
   it("accepts only canonical immutable image environment identity", () => {
-    const valid = createStagingJourneyTelemetryTransportFromEnvironmentV1(
+    const valid = createJourneyTelemetryTransportFromEnvironmentV1("staging",
       {
         ECHO_STAGING_JOURNEY_TELEMETRY_V1: "true",
         ECHO_SOURCE_SHA: RELEASE_SHA,
@@ -284,7 +314,7 @@ describe("staging journey telemetry transport v1", () => {
       { ECHO_SOURCE_SHA: RELEASE_SHA.toUpperCase(), ECHO_BUILD_NUMBER: "42" },
     ]) {
       expect(
-        createStagingJourneyTelemetryTransportFromEnvironmentV1(environment, {
+        createJourneyTelemetryTransportFromEnvironmentV1("staging", environment, {
           write: () => {
             throw new Error("disabled transport must not write");
           },
@@ -294,23 +324,8 @@ describe("staging journey telemetry transport v1", () => {
   });
 
   it("isolates synchronous and asynchronous writer failures", async () => {
-    const validEvent = createJourneyTelemetryEventV1({
-      journey_id: JOURNEY_ID,
-      sequence: 1,
-      observed_at: HEARTBEAT_AT,
-      context: {
-        environment: "staging",
-        workflow: "ask",
-        release_sha: RELEASE_SHA,
-        build_number: 42,
-      },
-      event: {
-        stage: "ask_validation",
-        event: "succeeded",
-        elapsed_ms: 1,
-      },
-    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
-    const synchronous = createStagingJourneyTelemetryTransportV1(
+    const validEvent = coreEvent();
+    const synchronous = createJourneyTelemetryTransportV1("staging",
       { release_sha: RELEASE_SHA, build_number: 42 },
       {
         write: () => {
@@ -320,7 +335,7 @@ describe("staging journey telemetry transport v1", () => {
         scheduler: { set_interval: () => 1, clear_interval: () => undefined },
       }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
-    const asynchronous = createStagingJourneyTelemetryTransportV1(
+    const asynchronous = createJourneyTelemetryTransportV1("staging",
       { release_sha: RELEASE_SHA, build_number: 42 },
       {
         write: async () => {
@@ -339,7 +354,7 @@ describe("staging journey telemetry transport v1", () => {
   });
 
   it("keeps malformed observer input outside application control flow", () => {
-    const transport = createStagingJourneyTelemetryTransportV1(
+    const transport = createJourneyTelemetryTransportV1("staging",
       { release_sha: RELEASE_SHA, build_number: 42 },
       {
         write: () => undefined,
@@ -360,7 +375,7 @@ describe("staging journey telemetry transport v1", () => {
 
   it("reconstructs and canonically serializes exact journey events without injected fields", () => {
     const lines: string[] = [];
-    const transport = createStagingJourneyTelemetryTransportV1(
+    const transport = createJourneyTelemetryTransportV1("staging",
       { release_sha: RELEASE_SHA, build_number: 42 },
       {
         write: (line) => {
@@ -370,36 +385,13 @@ describe("staging journey telemetry transport v1", () => {
         scheduler: { set_interval: () => 1, clear_interval: () => undefined },
       }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
-    const event = createJourneyTelemetryEventV1({
-      journey_id: JOURNEY_ID,
-      sequence: 3,
-      observed_at: HEARTBEAT_AT,
-      context: {
-        environment: "staging",
-        workflow: "ask",
-        release_sha: RELEASE_SHA,
-        build_number: 42,
-      },
-      event: {
-        stage: "ask_answer",
-        event: "succeeded",
-        elapsed_ms: 8,
-        llm_usage: {
-          provider: "openrouter",
-          model: "anthropic/claude-sonnet-4.6",
-          provider_latency_ms: 7,
-          input_tokens: 3,
-          output_tokens: 2,
-          finish_reason: "completed",
-        },
-      },
-    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
+    const event = coreEvent({ sequence: 3, elapsed_ms: 8 });
     const injected = {
       ...event,
       request_content: "must-not-serialize",
-      llm_usage: {
-        ...event.llm_usage,
-        provider_response: "must-not-serialize",
+      diagnostic: {
+        ...event.diagnostic,
+        private_body: "must-not-serialize",
       },
     } as JourneyTelemetryEventV1;
 
@@ -423,81 +415,13 @@ describe("staging journey telemetry transport v1", () => {
     ]) {
       transport.observer(mismatched as JourneyTelemetryEventV1);
     }
-    expect(lines).toHaveLength(5);
+    expect(lines).toHaveLength(4);
   });
 
-  it("writes validated content-free approved-search backlog diagnostics and metrics", () => {
-    const lines: string[] = [];
-    const transport = createStagingJourneyTelemetryTransportV1(
-      { release_sha: RELEASE_SHA, build_number: 42 },
-      {
-        write: (line) => {
-          lines.push(line);
-        },
-        now: () => STARTED_AT,
-        scheduler: { set_interval: () => 1, clear_interval: () => undefined },
-      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
-    );
-    lines.length = 0;
-
-    transport.approved_search_backlog_observer({
-      observed_at: HEARTBEAT_AT,
-      pending_count: 2,
-      stuck_count: 1,
-      oldest_age_ms: 600_000,
-    });
-
-    expect(JSON.parse(lines[0] ?? "{}")).toEqual({
-      schema_version: 1,
-      kind: STAGING_APPROVED_SEARCH_BACKLOG_KIND_V1,
-      observed_at: HEARTBEAT_AT,
-      environment: "staging",
-      pending_count: 2,
-      stuck_count: 1,
-      oldest_age_ms: 600_000,
-    });
-    expect(JSON.parse(lines[1] ?? "{}")).toMatchObject({
-      _aws: {
-        Timestamp: Date.parse(HEARTBEAT_AT),
-        CloudWatchMetrics: [
-          {
-            Namespace: STAGING_JOURNEY_METRICS_NAMESPACE_V1,
-            Dimensions: [[]],
-          },
-        ],
-      },
-      ApprovedSearchPendingCount: 2,
-      ApprovedSearchStuckCount: 1,
-      ApprovedSearchOldestAgeMs: 600_000,
-      ApprovedSearchBacklogCheck: 1,
-    });
-    const serialized = lines.join("");
-    expect(serialized).not.toContain(JOURNEY_ID);
-    expect(serialized).not.toContain(RELEASE_SHA);
-
-    expect(() =>
-      transport.approved_search_backlog_observer({
-        observed_at: "invalid",
-        pending_count: 0,
-        stuck_count: 1,
-        oldest_age_ms: null,
-      }),
-    ).not.toThrow();
-    expect(lines).toHaveLength(2);
-
-    transport.close();
-    transport.approved_search_backlog_observer({
-      observed_at: HEARTBEAT_AT,
-      pending_count: 0,
-      stuck_count: 0,
-      oldest_age_ms: null,
-    });
-    expect(lines).toHaveLength(2);
-  });
 });
 
 const contentTransport = await import(
-  "../../../../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js"
+  "../../../../src/composition/observability/journey-telemetry-transport-v1.js"
 );
 
 describe("staging journey content telemetry switch", () => {
@@ -515,7 +439,7 @@ describe("staging journey content telemetry switch", () => {
 
   it("is off by default and writes nothing", () => {
     const lines: string[] = [];
-    const transport = contentTransport.createStagingJourneyTelemetryTransportV1(
+    const transport = contentTransport.createJourneyTelemetryTransportV1("staging",
       identity,
       { write: (line) => void lines.push(line) }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
@@ -526,7 +450,7 @@ describe("staging journey content telemetry switch", () => {
 
   it("writes canonical bounded content records only for the exact identity when enabled", () => {
     const lines: string[] = [];
-    const transport = contentTransport.createStagingJourneyTelemetryTransportV1(
+    const transport = contentTransport.createJourneyTelemetryTransportV1("staging",
       identity,
       { write: (line) => void lines.push(line) },
       { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, content_enabled: true },
@@ -562,14 +486,14 @@ describe("staging journey content telemetry switch", () => {
       ECHO_SOURCE_SHA: identity.release_sha,
       ECHO_BUILD_NUMBER: "42",
     };
-    const create = contentTransport.createStagingJourneyTelemetryTransportFromEnvironmentV1;
-    expect(create(base, { write }).content_enabled).toBe(false);
+    const create = (environment: Record<string, string>) => contentTransport.createJourneyTelemetryTransportFromEnvironmentV1("staging", environment, { write });
+    expect(create(base).content_enabled).toBe(false);
     expect(
-      create({ ...base, ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "true" }, { write })
+      create({ ...base, ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "true" })
         .content_enabled,
     ).toBe(true);
     expect(
-      create({ ...base, ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "TRUE" }, { write })
+      create({ ...base, ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "TRUE" })
         .content_enabled,
     ).toBe(false);
     // Content telemetry never exists without the content-free transport.
@@ -580,7 +504,6 @@ describe("staging journey content telemetry switch", () => {
           ECHO_SOURCE_SHA: identity.release_sha,
           ECHO_BUILD_NUMBER: "42",
         },
-        { write },
       ).content_enabled,
     ).toBe(false);
   });
@@ -590,19 +513,15 @@ describe("staging journey content telemetry switch", () => {
 describe("bounded rejection accounting", () => {
   it("rejects malformed metric/observer inputs and still delivers the next valid event", () => {
     const lines: string[] = [];
-    const transport = createStagingJourneyTelemetryTransportV1(
+    const transport = createJourneyTelemetryTransportV1("staging",
       { release_sha: RELEASE_SHA, build_number: 42 }, {
         write: (line) => { lines.push(line); }, now: () => STARTED_AT,
         scheduler: { set_interval: () => 1, clear_interval: () => {} },
       }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
-    const valid = createJourneyTelemetryEventV1({
-      journey_id: JOURNEY_ID, sequence: 1, observed_at: STARTED_AT,
-      context: { environment: "staging", workflow: "ask", release_sha: RELEASE_SHA, build_number: 42 },
-      event: { stage: "ask_validation", event: "succeeded", elapsed_ms: 1 },
-    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
+    const valid = coreEvent({ observed_at: STARTED_AT });
     for (const invalid of [null, new Proxy({}, { get() { throw new Error("private-getter"); } }),
-      { ...valid, llm_usage: { provider: "private-provider", model: "private-model", input_tokens: -1 } },
+      { ...valid, diagnostic: { ...valid.diagnostic, counts: { total_tokens: -1 } } },
     ]) expect(() => transport.observer(invalid as never)).not.toThrow();
     expect(lines).toEqual([]);
     transport.observer(valid);
@@ -623,7 +542,7 @@ describe("bounded rejection accounting", () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });
     let block = true;
-    const transport = createStagingJourneyTelemetryTransportV1(
+    const transport = createJourneyTelemetryTransportV1("staging",
       { release_sha: RELEASE_SHA, build_number: 42 }, {
         write: (line) => { lines.push(line); return block ? pending : undefined; }, now: () => STARTED_AT,
         scheduler: { set_interval: (fn) => { heartbeat = fn; return 1; }, clear_interval: () => {} },
@@ -644,10 +563,10 @@ describe("bounded rejection accounting", () => {
     });
   });
 
-  it.each([false, true])("attributes all four origins without logging inputs (content enabled: %s)", (content_enabled) => {
+  it.each([false, true])("attributes active rejection origins without logging inputs (content enabled: %s)", (content_enabled) => {
     const lines: string[] = [];
     let heartbeat = () => {};
-    const transport = createStagingJourneyTelemetryTransportV1(
+    const transport = createJourneyTelemetryTransportV1("staging",
       { release_sha: RELEASE_SHA, build_number: 42 },
       {
         write: (line) => { lines.push(line); }, now: () => STARTED_AT,
@@ -662,9 +581,6 @@ describe("bounded rejection accounting", () => {
       stage: "ask_answer", content_kind: "answer_output",
       content: new Proxy({}, { ownKeys() { throw new Error("private-format-error"); } }),
     })).not.toThrow();
-    expect(() => transport.observation_failure({ emitter: "meeting_approval_observer", reason: "observation_callback_failure" })).not.toThrow();
-    // Even forged callback arguments cannot create dimensions or recursively reject.
-    expect(() => transport.observation_failure(new Proxy({} as never, { get() { throw new Error("private-callback-error"); } }))).not.toThrow();
     expect(lines).toEqual([]);
     transport.start();
     heartbeat();
@@ -672,11 +588,11 @@ describe("bounded rejection accounting", () => {
     const expected = {
       journey_observer: { invalid_journey_event: 1 },
       content_capture: { invalid_content_record: content_enabled ? 1 : 0, content_format_error: content_enabled ? 1 : 0 },
-      meeting_approval_observer: { observation_callback_failure: 2 },
+      meeting_approval_observer: { observation_callback_failure: 0 },
     };
-    for (const event of lines.map((line) => JSON.parse(line)).filter((event) => event.kind === STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1)) {
+    for (const event of lines.map((line) => JSON.parse(line)).filter((event) => event.kind === JOURNEY_TELEMETRY_LIVENESS_KIND_V1)) {
       expect(event.rejection_counts).toEqual(expected);
-      expect(event.delivery).toMatchObject({ rejected_events: content_enabled ? 5 : 3, writes_failed: 0, writes_pending: 0, writes_dropped: 0 });
+      expect(event.delivery).toMatchObject({ rejected_events: content_enabled ? 3 : 1, writes_failed: 0, writes_pending: 0, writes_dropped: 0 });
       expect(Object.values(event.rejection_counts).flatMap((counts) => Object.values(counts as Record<string, number>)).reduce((a, b) => a + b, 0)).toBe(event.delivery.rejected_events);
     }
     expect(lines).toHaveLength(4); // Existing liveness + EMF only, no per-rejection writes.
@@ -691,7 +607,7 @@ describe("bounded rejection accounting", () => {
     const lines: string[] = [];
     let fail = true;
     let heartbeat = () => {};
-    const transport = createStagingJourneyTelemetryTransportV1(
+    const transport = createJourneyTelemetryTransportV1("staging",
       { release_sha: RELEASE_SHA, build_number: 42 }, {
         now: () => STARTED_AT,
         write: (line) => {

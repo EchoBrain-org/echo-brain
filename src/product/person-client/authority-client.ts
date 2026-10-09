@@ -1,3 +1,4 @@
+import { PERSON_DIAGNOSTICS_PATH_V1, PERSON_DIAGNOSTICS_MAX_RESPONSE_BYTES_V1, validatePersonDiagnosticsRequestV1, validatePersonDiagnosticsResultV1, type PersonDiagnosticCaptureIdV1, type PersonDiagnosticsRequestV1, type PersonDiagnosticsResultsV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, validatePersonDocumentAssociationReceiptV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { validatePersonUploadContextId } from '@echo-brain/organization-api';
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
@@ -1303,23 +1304,23 @@ export class PersonAuthorityClient {
   }
 
   /** Agentic Ask; global by default, a supplied project ID is a strict project-only scope, and mine is only what the asker added. */
-  askV3(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV4> {
-    return this.ask(PERSON_ANSWER_PATH_V3, validatePersonAnswerResponseV4, accessToken, question, scope, signal);
+  askV3(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV4> {
+    return this.ask(PERSON_ANSWER_PATH_V3, validatePersonAnswerResponseV4, accessToken, question, scope, signal, captureId);
   }
 
-  askV4(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV5> {
-    return this.ask(PERSON_ANSWER_PATH_V4, validatePersonAnswerResponseV5, accessToken, question, scope, signal);
+  askV4(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV5> {
+    return this.ask(PERSON_ANSWER_PATH_V4, validatePersonAnswerResponseV5, accessToken, question, scope, signal, captureId);
   }
 
-  askV5(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV6> {
-    return this.ask(PERSON_ANSWER_PATH_V5, validatePersonAnswerResponseV6, accessToken, question, scope, signal);
+  askV5(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV6> {
+    return this.ask(PERSON_ANSWER_PATH_V5, validatePersonAnswerResponseV6, accessToken, question, scope, signal, captureId);
   }
 
   /** Every Ask route takes the same V3 request and must echo the requested scope. */
   private async ask<T extends { readonly scope: unknown }>(path: string, validate_response: (value: unknown) => T, accessToken: string,
-    question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined): Promise<T> {
+    question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined, captureId: PersonDiagnosticCaptureIdV1 | undefined): Promise<T> {
     const request = validatePersonAnswerRequestV3({ schema_version: 3, question,
-      ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}) });
+      ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}), ...(captureId === undefined ? {} : { capture_id: captureId }) });
     const response = await this.json({ path, body: request,
       validate_request: validatePersonAnswerRequestV3, validate_response,
       access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
@@ -1328,6 +1329,16 @@ export class PersonAuthorityClient {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
     }
     return response;
+  }
+
+  /** Prepares or reads an explicitly requested private capture on the ordinary product route. */
+  async diagnostics<K extends PersonDiagnosticsRequestV1['operation']>(accessToken: string, value: Extract<PersonDiagnosticsRequestV1, { readonly operation: K }>, signal?: AbortSignal): Promise<PersonDiagnosticsResultsV1[K]> {
+    const request = validatePersonDiagnosticsRequestV1(value);
+    const response = await this.json({ path: PERSON_DIAGNOSTICS_PATH_V1, body: request,
+      validate_request: validatePersonDiagnosticsRequestV1, validate_response: value => validatePersonDiagnosticsResultV1(request.operation, value),
+      access_token: accessToken, maximum_response_bytes: PERSON_DIAGNOSTICS_MAX_RESPONSE_BYTES_V1, timeout_ms: ASK_TIMEOUT_MS, signal });
+    if (request.operation === 'read' && response.capture_id !== request.capture_id) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned a different diagnostic capture');
+    return response as PersonDiagnosticsResultsV1[K];
   }
 
   /** Staging-only research evaluation: starts one research run (research loop evaluation v1). */

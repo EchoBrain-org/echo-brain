@@ -1,7 +1,7 @@
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../support/telemetry-fixture-vocabulary-v1.js";
-import { CORE_RUNTIME_COUNT_KEYS_V1, CORE_RUNTIME_PHASES_V1, CORE_RUNTIME_RESULTS_V1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
-import { JOURNEY_TERMINAL_OUTCOMES_V1, JOURNEY_RESEARCH_STOP_REASONS_V1, JOURNEY_RESEARCH_ADMISSIONS_V1, createJourneyTelemetryEventV1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
-import { createStagingJourneyTelemetryTransportV1 } from "../../services/organization-authority/src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
+import { CORE_RUNTIME_COUNT_KEYS_V1, CORE_RUNTIME_PHASES_V1, CORE_RUNTIME_RESEARCH_ADMISSIONS_V1, CORE_RUNTIME_RESEARCH_STOP_REASONS_V1, CORE_RUNTIME_RESULTS_V1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
+import { createJourneyTelemetryTransportV1 } from "../../services/organization-authority/src/composition/observability/journey-telemetry-transport-v1.js";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -56,6 +56,15 @@ const endpoint =
   "arn:aws:lambda:us-west-2:012345678901:function:customWidget-echo-staging-journey-explorer-v1";
 const now = Date.parse("2026-09-02T12:00:00.000Z");
 const id = "11111111-1111-4111-8111-111111111111";
+const HISTORICAL_ASK_TERMINAL_OUTCOMES = [
+  "answered",
+  "insufficient_evidence",
+  "authorship_unsupported",
+  "completed",
+  "partial",
+  "not_found",
+  "off_scope",
+] as const;
 function row(
   values: Record<string, string | number | boolean | null | undefined>,
 ) {
@@ -184,7 +193,7 @@ describe("staging Journey Explorer custom widget", () => {
         widgetContext: widgetContext(now - 60_000, now),
       }),
     ).resolves.toMatchObject({
-      markdown: expect.stringContaining("Staging Journey Explorer"),
+      markdown: expect.stringContaining("Authority Journey Explorer"),
     });
     expect(client.sent).toEqual([]);
   });
@@ -1570,7 +1579,7 @@ describe("staging Journey Explorer custom widget", () => {
         logGroupName: group,
         endpointArn: "arn:aws:lambda:us-west-2:012345678901:function:other",
       }),
-    ).toThrow("exact staging explorer configuration");
+    ).toThrow("exact Authority explorer configuration");
     await expect(
       handler(new Client([]))({
         operation: "list",
@@ -1583,45 +1592,21 @@ describe("staging Journey Explorer custom widget", () => {
 
 describe("research admission Explorer round trip", () => {
   function researchRows(
-    researchStopReason: (typeof JOURNEY_RESEARCH_STOP_REASONS_V1)[number],
-    researchAdmission?: (typeof JOURNEY_RESEARCH_ADMISSIONS_V1)[number],
+    researchStopReason: (typeof CORE_RUNTIME_RESEARCH_STOP_REASONS_V1)[number],
+    researchAdmission?: (typeof CORE_RUNTIME_RESEARCH_ADMISSIONS_V1)[number],
   ) {
-    const emitted = createJourneyTelemetryEventV1({
-      journey_id: id,
-      sequence: 2,
-      observed_at: "2026-09-02T11:59:00.000Z",
-      context: {
-        environment: "staging",
-        release_sha: "a".repeat(40),
-        build_number: 42,
-        workflow: "ask",
-      },
-      event: {
-        stage: "ask_response",
-        event: "succeeded",
-        outcome: "answered",
-        elapsed_ms: 4,
-        retrieval: {
-          planned_query_count: 3,
-          research_stop_reason: researchStopReason,
-          ...(researchAdmission === undefined ? {} : { research_admission: researchAdmission }),
-        },
-      },
-    });
     return [
       event({ stage: "ask_validation", event: "started", outcome: null, elapsed_ms: 0, observed_at: "2026-09-02T11:58:00.000Z" }),
-      row({
-        ...emitted,
-        retrieval: undefined,
-        llm_usage: undefined,
-        diagnostic: undefined,
-        accounting: undefined,
-        ...Object.fromEntries(Object.entries(emitted.retrieval!).map(([key, value]) => [`retrieval_${key}`, value])),
+      event({
+        sequence: 2,
+        retrieval_planned_query_count: 3,
+        retrieval_research_stop_reason: researchStopReason,
+        ...(researchAdmission === undefined ? {} : { retrieval_research_admission: researchAdmission }),
       }),
     ];
   }
 
-  it.each(JOURNEY_RESEARCH_STOP_REASONS_V1)("projects the kernel's %s research stop reason", async (reason) => {
+  it.each(CORE_RUNTIME_RESEARCH_STOP_REASONS_V1)("projects the kernel's %s research stop reason", async (reason) => {
     const client = new Client([{ queryId: "q" }, { status: "Complete", results: researchRows(reason) }]);
     await expect(handler(client)({ operation: "detail", journey_id: id })).resolves.toMatchObject({
       status: "complete",
@@ -1636,7 +1621,7 @@ describe("research admission Explorer round trip", () => {
     expect(query.split(" | display ")[1]).toContain("retrieval_research_stop_reason, retrieval_research_admission");
   });
 
-  it.each(JOURNEY_RESEARCH_ADMISSIONS_V1)("projects and renders the kernel's %s research admission", async (admission) => {
+  it.each(CORE_RUNTIME_RESEARCH_ADMISSIONS_V1)("projects and renders the kernel's %s research admission", async (admission) => {
     const rows = researchRows("budget", admission);
     const client = new Client([{ queryId: "q" }, { status: "Complete", results: rows }]);
     await expect(handler(client)({ operation: "detail", journey_id: id })).resolves.toMatchObject({
@@ -1675,6 +1660,48 @@ describe("research admission Explorer round trip", () => {
 });
 
 describe("core observation Explorer round trip", () => {
+  it.each(AGENTIC_TRIGGER_DEFINITIONS_V1.map(definition => definition.name))("reads %s correlation from the registered trigger vocabulary in a production log group", async (trigger) => {
+    const correlation = { trigger, parent_operation_id: "33333333-3333-4333-8333-333333333333", run_id: "a".repeat(64), event_id: "b".repeat(64), output_id: "c".repeat(64), attempt_id: "d".repeat(64), attempt: 2, research_stop_reason: "budget", research_admission: "post_revalidation_no_time" };
+    const diagnostic = JSON.stringify({ operation_id: id, span_id: "22222222-2222-4222-8222-222222222222", parent_span_id: null, phase: "research_run", purpose: "research_run", root: true, linked_journey_ids: [], counts: {}, result: null, generation: null, ...correlation });
+    const stageEvent = event({ environment: "production", schema_version: 2, workflow: "core_runtime", stage: "core_operation", event: "started", outcome: null, elapsed_ms: 0, diagnostic_json: diagnostic });
+    const productionGroup = "/echo-brain/authority/authority.example.org";
+    const client = new Client([{ queryId: "q" }, { status: "Complete", results: [stageEvent] }]);
+    await expect(handler(client, { logGroupName: productionGroup })({ operation: "detail", journey_id: id })).resolves.toMatchObject({ history_complete: true, stages: [expect.objectContaining({ environment: "production", diagnostic: expect.objectContaining(correlation) })] });
+    expect((client.sent[0] as Start).input).toMatchObject({ logGroupName: productionGroup, queryString: expect.stringContaining('environment = "production"') });
+  });
+
+  it("uses production for both list queries and refuses a request-selected group or development content", async () => {
+    const client = new Client(listReplies([indexRow(id, now)], [event({ environment: "production" })]));
+    const production = handler(client, { logGroupName: "/echo-brain/authority/authority.example.org" });
+    await expect(production({ operation: "list" })).resolves.toMatchObject({ journeys: [expect.objectContaining({ journey_id: id })] });
+    for (const command of client.sent.filter(command => command instanceof Start) as Start[]) expect(command.input.queryString).toContain('environment = "production"');
+    const count = client.sent.length;
+    await expect(production({ operation: "content", journey_id: id })).resolves.toEqual({ captures: [] });
+    await expect(production({ operation: "list", logGroupName: group })).resolves.toEqual({ error: "invalid_request" });
+    expect(client.sent).toHaveLength(count);
+    for (const invalid of ["/other/authority.example.org", "/echo-brain/authority/*", "/echo-brain/authority/a:log-stream:*"]) expect(() => handler(new Client([]), { logGroupName: invalid })).toThrow("exact Authority explorer configuration");
+  });
+
+  it("rejects metadata rows from another environment", async () => {
+    const client = new Client([{ queryId: "q" }, { status: "Complete", results: [event({ environment: "production" })] }, {}]);
+    await expect(handler(client)({ operation: "detail", journey_id: id })).resolves.toEqual({ error: "journey_explorer_unavailable" });
+  });
+
+  it("renders core model usage once and the terminal research summary in existing columns", async () => {
+    const span = "22222222-2222-4222-8222-222222222222";
+    const base = { operation_id: id, span_id: span, parent_span_id: null, phase: "research_run", purpose: "research_run", root: true, linked_journey_ids: [], counts: {}, result: null, generation: null };
+    const core = { schema_version: 2, workflow: "core_runtime", stage: "core_operation", outcome: null };
+    const rows = [
+      event({ ...core, event: "started", elapsed_ms: 0, diagnostic_json: JSON.stringify(base), observed_at: "2026-09-02T11:58:59.000Z" }),
+      event({ ...core, sequence: 2, diagnostic_json: JSON.stringify({ ...base, span_id: "33333333-3333-4333-8333-333333333333", parent_span_id: span, root: false, phase: "model_call", counts: { input_tokens: 3, output_tokens: 4, total_tokens: 7, cached_input_tokens: 0, reasoning_tokens: 2 } }) }),
+      event({ ...core, sequence: 3, diagnostic_json: JSON.stringify({ ...base, counts: { total_tokens: 7, planned_query_count: 2, query_hit_count: 3, released_atom_count: 4, context_atom_count: 4, citation_count: 2 }, result: "answered", research_stop_reason: "finished" }) }),
+    ];
+    const result = await handler(new Client([{ queryId: "q" }, { status: "Complete", results: rows }]))({ operation: "detail", journey_id: id, render: true });
+    expect(result).toContain("7 total tokens across 1 observed LLM attempts with totals");
+    expect(result).toContain("cached input tokens: 0");
+    expect(result).toContain("planned queries: 2");
+    expect(result).toContain("research stop: finished");
+  });
   it.each([...CORE_RUNTIME_PHASES_V1, "slack_terminal_update"])("reads the %s core-runtime diagnostic phase", async (phase) => {
     const coreSpanId = "22222222-2222-4222-8222-222222222222";
     const diagnostic = JSON.stringify({
@@ -1755,7 +1782,7 @@ describe("core observation Explorer round trip", () => {
     (["evidence_connection", "evidence_list", "evidence_open"] as const).map(phase => ({ source, phase })),
   ))("preserves the $source source on real transported $phase observations", async ({ source, phase }) => {
     const lines: string[] = [];
-    const transport = createStagingJourneyTelemetryTransportV1({ release_sha: "a".repeat(40), build_number: 42 }, { write: line => { lines.push(line); } });
+    const transport = createJourneyTelemetryTransportV1("staging", { release_sha: "a".repeat(40), build_number: 42 }, { write: line => { lines.push(line); } });
     try {
       await observeCoreRuntimeV1(phase, async () => {
         annotateCoreRuntimeV1({ evidence_source: source, result: "empty", counts: { included_count: 0 } });
@@ -1778,7 +1805,7 @@ describe("core observation Explorer round trip", () => {
     } finally { transport.close(); }
   });
 
-  it.each(JOURNEY_TERMINAL_OUTCOMES_V1.ask_response)("lists an Ask journey that ends %s as complete", async (outcome) => {
+  it.each(HISTORICAL_ASK_TERMINAL_OUTCOMES)("lists an Ask journey that ends %s as complete", async (outcome) => {
     const list = new Client(listReplies([indexRow(id, now)], [event({ outcome })]));
     await expect(handler(list)({ operation: "list" })).resolves.toMatchObject({
       journeys: [expect.objectContaining({ journey_id: id, status: "complete", terminal_outcome: outcome })],
@@ -1794,7 +1821,7 @@ describe("core observation Explorer round trip", () => {
 
   it("reads real emitted V2 spans, preserves diagnostic fields, and renders escaped content", async () => {
     const lines: string[] = [];
-    const transport = createStagingJourneyTelemetryTransportV1({ release_sha: "a".repeat(40), build_number: 42 }, { write: (line) => { lines.push(line); } }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, content_enabled: true });
+    const transport = createJourneyTelemetryTransportV1("staging", { release_sha: "a".repeat(40), build_number: 42 }, { write: (line) => { lines.push(line); } }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, content_enabled: true });
     await observeCoreRuntimeV1("search_reconciliation", async () => {
       annotateCoreRuntimeV1({ linked_journey_ids: [id], counts: { captured_head: 4 } });
       observeCoreRuntimeSyncV1("search_build", () => { annotateCoreRuntimeV1({ counts: { atom_count: 12 } }); });
