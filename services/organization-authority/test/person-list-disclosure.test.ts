@@ -20,7 +20,7 @@ import {
   type OrganizationRecordDecisionBriefV1,
 } from "@echo-brain/organization-protocol";
 import { ApprovedMeetingTranscriptGrantReaderV1 } from "@echo-brain/organization-record/organization-record-api-v1";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { COORDINATES } from "../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
 import { SqlitePersonAgenticAskAuditV1 } from "../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
@@ -293,34 +293,6 @@ async function scopes(f: World, token: Token): Promise<Readonly<Record<string, u
 }
 
 describe("person list and open negative disclosure (ADR-0024)", () => {
-  it("N-1, N-8, N-9: another member's only-me items, rejected and pending meetings stay hidden, and every miss is one 404", async () => {
-    const f = await disclosureWorld();
-    const hidden: Readonly<Record<Token, readonly string[]>> = {
-      owner: [f.refs.empAOnlyNote, f.refs.empAOnlyDocument, f.meeting("emp_a_only"), f.meeting("r5")],
-      emp_a: [f.refs.ownerOnlyNote, f.refs.ownerOnlyDocument, f.meeting("r2"), f.meeting("r5")],
-      emp_b: [f.refs.ownerOnlyNote, f.refs.ownerOnlyDocument, f.refs.empAOnlyNote, f.refs.empAOnlyDocument, f.meeting("r2"), f.meeting("emp_a_only"), f.meeting("r5")],
-      emp_c: [], returned: [],
-    };
-    for (const token of ["owner", "emp_a", "emp_b"] as const) {
-      for (const scope of await scopes(f, token)) {
-        const listed = await f.refsOf(token, scope);
-        for (const ref of hidden[token]) expect({ token, scope, listed: listed.includes(ref) }).toEqual({ token, scope, listed: false });
-      }
-      // Own only-me items are listed to their author.
-      if (token !== "emp_b") expect(await f.refsOf(token, { mine: true })).toContain(token === "owner" ? f.refs.ownerOnlyNote : f.refs.empAOnlyNote);
-      for (const ref of [...hidden[token], ...Object.values(guessed)]) {
-        const response = await f.open(token, ref);
-        expect({ ref, status: response.status, text: response.text }).toEqual({ ref, status: 404, text: NOT_FOUND_BODY });
-      }
-    }
-    // N-8: a guess and an existing unreadable ref of each kind answer byte for byte alike.
-    const unreadable = { note: f.refs.ownerOnlyNote, document: f.refs.ownerOnlyDocument, meeting: f.meeting("r2"), transcript: `transcript:${f.w.digest("r4")}` };
-    for (const kind of ["note", "document", "meeting", "transcript"] as const) {
-      expect((await f.open("emp_b", unreadable[kind])).text).toBe((await f.open("emp_b", guessed[kind])).text);
-    }
-    expect(f.pageAudits().filter((audit) => audit.operation === "person_open")).toHaveLength(0);
-  });
-
   it("N-2: an item reachable only through a left project is gone in every scope, the reader's own included", async () => {
     const f = await disclosureWorld();
     const before = await f.listed("emp_a");
@@ -359,99 +331,144 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     expect((await f.listed("emp_a")).find((item) => item.ref === f.refs.ownerSharedNote)?.projects).toEqual([{ project_id: SHARED, name: PROJECT_NAMES[SHARED] }]);
   });
 
-  it("N-3, N-4, N-10, N-17: no unjoined project, record coordinate, identity, request id or evidence quote leaves", async () => {
-    const f = await disclosureWorld();
-    for (const token of ["owner", "emp_a", "emp_b"] as const) {
-      for (const scope of await scopes(f, token)) {
-        for (const page of await f.walk(token, scope)) {
-          if (page.next_cursor !== null) expect(JSON.stringify(decodePersonListCursorV1(page.next_cursor, { scope: page.scope, organization_id: COORDINATES.organization_id, membership_id: `mem_${token}` }))).not.toContain(UNJOINED);
+  describe("on one world that none of these tests changes", () => {
+    // They only read, so they share one world and run back to back: the warmed
+    // record index belongs to the world built last.
+    let f: World;
+    const sharedCleanups: (() => Promise<void> | void)[] = [];
+    beforeAll(async () => { f = await disclosureWorld(); sharedCleanups.push(...cleanups.splice(0)); });
+    afterAll(async () => { for (const cleanup of sharedCleanups.splice(0).reverse()) await cleanup(); });
+
+    it("N-1, N-8, N-9: another member's only-me items, rejected and pending meetings stay hidden, and every miss is one 404", async () => {
+      const hidden: Readonly<Record<Token, readonly string[]>> = {
+        owner: [f.refs.empAOnlyNote, f.refs.empAOnlyDocument, f.meeting("emp_a_only"), f.meeting("r5")],
+        emp_a: [f.refs.ownerOnlyNote, f.refs.ownerOnlyDocument, f.meeting("r2"), f.meeting("r5")],
+        emp_b: [f.refs.ownerOnlyNote, f.refs.ownerOnlyDocument, f.refs.empAOnlyNote, f.refs.empAOnlyDocument, f.meeting("r2"), f.meeting("emp_a_only"), f.meeting("r5")],
+        emp_c: [], returned: [],
+      };
+      for (const token of ["owner", "emp_a", "emp_b"] as const) {
+        for (const scope of await scopes(f, token)) {
+          const listed = await f.refsOf(token, scope);
+          for (const ref of hidden[token]) expect({ token, scope, listed: listed.includes(ref) }).toEqual({ token, scope, listed: false });
+        }
+        // Own only-me items are listed to their author.
+        if (token !== "emp_b") expect(await f.refsOf(token, { mine: true })).toContain(token === "owner" ? f.refs.ownerOnlyNote : f.refs.empAOnlyNote);
+        for (const ref of [...hidden[token], ...Object.values(guessed)]) {
+          const response = await f.open(token, ref);
+          expect({ ref, status: response.status, text: response.text }).toEqual({ ref, status: 404, text: NOT_FOUND_BODY });
         }
       }
-      for (const item of await f.listed(token)) {
-        const pages = await f.openAll(token, item.ref);
-        const first = pages[0] as PersonOpenMeetingV1;
-        if (first.transcript_ref !== undefined) await f.openAll(token, first.transcript_ref);
+      // N-8: a guess and an existing unreadable ref of each kind answer byte for byte alike.
+      const unreadable = { note: f.refs.ownerOnlyNote, document: f.refs.ownerOnlyDocument, meeting: f.meeting("r2"), transcript: `transcript:${f.w.digest("r4")}` };
+      for (const kind of ["note", "document", "meeting", "transcript"] as const) {
+        expect((await f.open("emp_b", unreadable[kind])).text).toBe((await f.open("emp_b", guessed[kind])).text);
       }
-    }
-    for (const token of ["owner", "emp_a"] as const) {
-      const multi = (await f.listed(token)).filter((item) => item.ref === f.refs.unjoinedNote || item.ref === f.refs.unjoinedDocument || item.ref === f.meeting("r3"));
-      expect(multi).toHaveLength(3);
-      for (const item of multi) expect(item).toMatchObject({ visibility: "project", projects: [{ project_id: SHARED, name: PROJECT_NAMES[SHARED] }] });
-    }
-    expect(f.bodies.length).toBeGreaterThan(50);
-    const hiddenValues = [
-      UNJOINED, PROJECT_NAMES[UNJOINED], PROJ_X, PROJECT_NAMES[PROJ_X], QUOTE, "mem_", "prn_", "apr_", "audit-apr", "source-apr", "revision-1",
-      SIGNED_APPROVAL_PRIVATE_MARKER, ...f.requestIds,
-    ];
-    for (const body of f.bodies) {
-      for (const value of hiddenValues) expect(body).not.toContain(value);
-      expect(keys(JSON.parse(body)).filter((key) => FORBIDDEN_KEYS.has(key) || key.startsWith("predecessor"))).toEqual([]);
-      // The only digests that leave are the record refs themselves.
-      expect(body.replace(/"(?:meeting|transcript):sha256:[0-9a-f]{64}"/g, "\"\"")).not.toContain("sha256:");
-    }
-  });
+      expect(f.pageAudits().filter((audit) => audit.operation === "person_open")).toHaveLength(0);
+    });
 
-  it("N-5, N-11: a cursor holds only emitted positions and is refused for another person, tenure, scope, ref or operation", async () => {
-    const f = await disclosureWorld();
-    const org = COORDINATES.organization_id;
-    for (const token of ["owner", "emp_a"] as const) {
-      const pages = await f.walk(token);
-      expect(pages.length).toBeGreaterThan(1);
-      const emitted = new Set<string>();
-      for (const page of pages) {
-        for (const item of page.items) emitted.add(item.ref);
-        if (page.next_cursor === null) continue;
-        const positions: PersonListPositionsV1 = decodePersonListCursorV1(page.next_cursor, { scope: page.scope, organization_id: org, membership_id: `mem_${token}` });
-        for (const kind of ["note", "document", "meeting"] as const) {
-          const position = positions[kind];
-          if (position.state === "after") expect(emitted.has(`${kind}:${position.id}`)).toBe(true);
+    it("N-3, N-4, N-10, N-17: no unjoined project, record coordinate, identity, request id or evidence quote leaves", async () => {
+      const start = f.bodies.length;
+      for (const token of ["owner", "emp_a", "emp_b"] as const) {
+        for (const scope of await scopes(f, token)) {
+          for (const page of await f.walk(token, scope)) {
+            if (page.next_cursor !== null) expect(JSON.stringify(decodePersonListCursorV1(page.next_cursor, { scope: page.scope, organization_id: COORDINATES.organization_id, membership_id: `mem_${token}` }))).not.toContain(UNJOINED);
+          }
+        }
+        for (const item of await f.listed(token)) {
+          const pages = await f.openAll(token, item.ref);
+          const first = pages[0] as PersonOpenMeetingV1;
+          if (first.transcript_ref !== undefined) await f.openAll(token, first.transcript_ref);
         }
       }
-    }
-    const ownerCursor = (await f.walk("owner"))[0]!.next_cursor!;
-    const empACursor = (await f.walk("emp_a"))[0]!.next_cursor!;
-    const refused = { status: 400, text: '{"error":{"code":"invalid_request","message":"request failed"}}' };
-    expect(await f.list("emp_b", { cursor: ownerCursor })).toEqual(refused);
-    expect(await f.list("returned", { cursor: empACursor })).toEqual(refused);
-    expect((await f.list("emp_a", { cursor: empACursor })).status).toBe(200);
-    // Minted cursors: a well-formed position under each scope, replayed under every other.
-    const minted = [{ kind: "global" }, { kind: "mine" }, { kind: "project", project_id: SHARED }, { kind: "project", project_id: OWNER_B }] as const;
-    const request = (scope: (typeof minted)[number]) => scope.kind === "global" ? {} : scope.kind === "mine" ? { mine: true } : { project_id: scope.project_id };
-    for (const scope of minted) {
-      const cursor = encodePersonListCursorV1({ scope, organization_id: org, membership_id: OWNER.membership_id }, { note: { state: "start" }, document: { state: "start" }, meeting: { state: "done" } });
-      expect((await f.list("owner", { ...request(scope), cursor })).status).toBe(200);
-      for (const other of minted.filter((candidate) => candidate !== scope)) expect(await f.list("owner", { ...request(other), cursor })).toEqual(refused);
-    }
-    const [documentPage] = await f.openAll("emp_b", f.refs.longDocument);
-    expect(documentPage!.next_cursor).not.toBeNull();
-    expect(await f.open("emp_b", f.refs.ownerOnlyDocument, documentPage!.next_cursor!)).toEqual(refused);
-    expect(await f.open("owner", f.refs.longDocument, documentPage!.next_cursor!)).toEqual(refused);
-    expect(await f.open("emp_b", f.refs.longDocument, ownerCursor)).toEqual(refused);
-    expect(await f.list("emp_b", { cursor: documentPage!.next_cursor! })).toEqual(refused);
-  });
-
-  it("N-6, N-7: mine and every project are subsets of global, and mine is what the reader added or approved", async () => {
-    const f = await disclosureWorld();
-    for (const token of ["owner", "emp_a", "emp_b"] as const) {
-      const global = await f.listed(token);
-      const byRef = new Map(global.map((item) => [item.ref, item]));
-      for (const scope of (await scopes(f, token)).slice(1)) {
-        for (const item of await f.listed(token, scope)) expect(byRef.get(item.ref)).toEqual(item);
+      for (const token of ["owner", "emp_a"] as const) {
+        const multi = (await f.listed(token)).filter((item) => item.ref === f.refs.unjoinedNote || item.ref === f.refs.unjoinedDocument || item.ref === f.meeting("r3"));
+        expect(multi).toHaveLength(3);
+        for (const item of multi) expect(item).toMatchObject({ visibility: "project", projects: [{ project_id: SHARED, name: PROJECT_NAMES[SHARED] }] });
       }
-    }
-    const mine = async (token: Token) => (await f.refsOf(token, { mine: true })).filter((ref) => ref.startsWith("meeting:"));
-    // r1 and quoted are generic team records with no approver: everyone reads them, nobody has them as mine.
-    expect(await mine("emp_b")).toEqual([f.meeting("b_only")]);
-    expect(await f.refsOf("emp_a")).toContain(f.meeting("r1"));
-    expect(await mine("emp_a")).toEqual([f.meeting("emp_a_only"), f.meeting("r4")]);
-    // r3 is SHARED and UNJOINED: EMP_A reads it, the owner approved it.
-    expect(await mine("owner")).toEqual([f.meeting("r3"), f.meeting("r2")]);
-    expect(await f.refsOf("emp_a")).toContain(f.meeting("r3"));
-    expect(await mine("emp_c")).toEqual([]);
-    const ownNotes = (await f.refsOf("emp_a", { mine: true })).filter((ref) => !ref.startsWith("meeting:"));
-    expect(new Set(ownNotes)).toEqual(new Set([f.refs.empAOnlyNote, f.refs.empASharedNote, f.refs.empATeamNote, f.refs.empAOnlyDocument, f.refs.empASharedDocument]));
-    // A new tenure of the same person starts with nothing of its own.
-    expect(await f.refsOf("returned", { mine: true })).toEqual([]);
+      const bodies = f.bodies.slice(start);
+      expect(bodies.length).toBeGreaterThan(50);
+      const hiddenValues = [
+        UNJOINED, PROJECT_NAMES[UNJOINED], PROJ_X, PROJECT_NAMES[PROJ_X], QUOTE, "mem_", "prn_", "apr_", "audit-apr", "source-apr", "revision-1",
+        SIGNED_APPROVAL_PRIVATE_MARKER, ...f.requestIds,
+      ];
+      for (const body of bodies) {
+        for (const value of hiddenValues) expect(body).not.toContain(value);
+        expect(keys(JSON.parse(body)).filter((key) => FORBIDDEN_KEYS.has(key) || key.startsWith("predecessor"))).toEqual([]);
+        // The only digests that leave are the record refs themselves.
+        expect(body.replace(/"(?:meeting|transcript):sha256:[0-9a-f]{64}"/g, "\"\"")).not.toContain("sha256:");
+      }
+    });
+
+    it("N-5, N-11: a cursor holds only emitted positions and is refused for another person, tenure, scope, ref or operation", async () => {
+      const org = COORDINATES.organization_id;
+      for (const token of ["owner", "emp_a"] as const) {
+        const pages = await f.walk(token);
+        expect(pages.length).toBeGreaterThan(1);
+        const emitted = new Set<string>();
+        for (const page of pages) {
+          for (const item of page.items) emitted.add(item.ref);
+          if (page.next_cursor === null) continue;
+          const positions: PersonListPositionsV1 = decodePersonListCursorV1(page.next_cursor, { scope: page.scope, organization_id: org, membership_id: `mem_${token}` });
+          for (const kind of ["note", "document", "meeting"] as const) {
+            const position = positions[kind];
+            if (position.state === "after") expect(emitted.has(`${kind}:${position.id}`)).toBe(true);
+          }
+        }
+      }
+      const ownerCursor = (await f.walk("owner"))[0]!.next_cursor!;
+      const empACursor = (await f.walk("emp_a"))[0]!.next_cursor!;
+      const refused = { status: 400, text: '{"error":{"code":"invalid_request","message":"request failed"}}' };
+      expect(await f.list("emp_b", { cursor: ownerCursor })).toEqual(refused);
+      expect(await f.list("returned", { cursor: empACursor })).toEqual(refused);
+      expect((await f.list("emp_a", { cursor: empACursor })).status).toBe(200);
+      // Minted cursors: a well-formed position under each scope, replayed under every other.
+      const minted = [{ kind: "global" }, { kind: "mine" }, { kind: "project", project_id: SHARED }, { kind: "project", project_id: OWNER_B }] as const;
+      const request = (scope: (typeof minted)[number]) => scope.kind === "global" ? {} : scope.kind === "mine" ? { mine: true } : { project_id: scope.project_id };
+      for (const scope of minted) {
+        const cursor = encodePersonListCursorV1({ scope, organization_id: org, membership_id: OWNER.membership_id }, { note: { state: "start" }, document: { state: "start" }, meeting: { state: "done" } });
+        expect((await f.list("owner", { ...request(scope), cursor })).status).toBe(200);
+        for (const other of minted.filter((candidate) => candidate !== scope)) expect(await f.list("owner", { ...request(other), cursor })).toEqual(refused);
+      }
+      const [documentPage] = await f.openAll("emp_b", f.refs.longDocument);
+      expect(documentPage!.next_cursor).not.toBeNull();
+      expect(await f.open("emp_b", f.refs.ownerOnlyDocument, documentPage!.next_cursor!)).toEqual(refused);
+      expect(await f.open("owner", f.refs.longDocument, documentPage!.next_cursor!)).toEqual(refused);
+      expect(await f.open("emp_b", f.refs.longDocument, ownerCursor)).toEqual(refused);
+      expect(await f.list("emp_b", { cursor: documentPage!.next_cursor! })).toEqual(refused);
+    });
+
+    it("N-6, N-7: mine and every project are subsets of global, and mine is what the reader added or approved", async () => {
+      for (const token of ["owner", "emp_a", "emp_b"] as const) {
+        const global = await f.listed(token);
+        const byRef = new Map(global.map((item) => [item.ref, item]));
+        for (const scope of (await scopes(f, token)).slice(1)) {
+          for (const item of await f.listed(token, scope)) expect(byRef.get(item.ref)).toEqual(item);
+        }
+      }
+      const mine = async (token: Token) => (await f.refsOf(token, { mine: true })).filter((ref) => ref.startsWith("meeting:"));
+      // r1 and quoted are generic team records with no approver: everyone reads them, nobody has them as mine.
+      expect(await mine("emp_b")).toEqual([f.meeting("b_only")]);
+      expect(await f.refsOf("emp_a")).toContain(f.meeting("r1"));
+      expect(await mine("emp_a")).toEqual([f.meeting("emp_a_only"), f.meeting("r4")]);
+      // r3 is SHARED and UNJOINED: EMP_A reads it, the owner approved it.
+      expect(await mine("owner")).toEqual([f.meeting("r3"), f.meeting("r2")]);
+      expect(await f.refsOf("emp_a")).toContain(f.meeting("r3"));
+      expect(await mine("emp_c")).toEqual([]);
+      const ownNotes = (await f.refsOf("emp_a", { mine: true })).filter((ref) => !ref.startsWith("meeting:"));
+      expect(new Set(ownNotes)).toEqual(new Set([f.refs.empAOnlyNote, f.refs.empASharedNote, f.refs.empATeamNote, f.refs.empAOnlyDocument, f.refs.empASharedDocument]));
+      // A new tenure of the same person starts with nothing of its own.
+      expect(await f.refsOf("returned", { mine: true })).toEqual([]);
+    });
+
+    it("N-19: a project the reader has not joined, or that does not exist, is one 401 before any store runs", async () => {
+      for (const token of ["owner", "emp_a"] as const) {
+        f.storeCalls.length = 0;
+        for (const project_id of [UNJOINED, NONEXISTENT, PROJ_X]) expect(await f.list(token, { project_id })).toEqual({ status: 401, text: UNAUTHORIZED_BODY });
+        expect(f.storeCalls).toEqual([]);
+      }
+      expect((await f.list("owner", { project_id: SHARED })).status).toBe(200);
+      expect(f.storeCalls).toEqual(expect.arrayContaining(["collect", "collectMeetings"]));
+    });
   });
 
   it("N-13: a transcript opens only by a shared, readable record; every other transcript ref is the same 404", async () => {
@@ -497,17 +514,6 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       expect(f.pageAudits().at(-1)).toMatchObject({ operation: "person_list", scope_kind: "global", released_count: page.items.length, response_sha256: canonicalSha256(page as never) });
       expect((f.pageAudits().at(-1)!.store_receipts as Sha256Digest[])).toHaveLength(2);
     }
-  });
-
-  it("N-19: a project the reader has not joined, or that does not exist, is one 401 before any store runs", async () => {
-    const f = await disclosureWorld();
-    for (const token of ["owner", "emp_a"] as const) {
-      f.storeCalls.length = 0;
-      for (const project_id of [UNJOINED, NONEXISTENT, PROJ_X]) expect(await f.list(token, { project_id })).toEqual({ status: 401, text: UNAUTHORIZED_BODY });
-      expect(f.storeCalls).toEqual([]);
-    }
-    expect((await f.list("owner", { project_id: SHARED })).status).toBe(200);
-    expect(f.storeCalls).toEqual(expect.arrayContaining(["collect", "collectMeetings"]));
   });
 
   it("N-16, N-17: Ask with mine cites only what the reader added or approved, every citation opens, and no Slack or transcript is read", async () => {

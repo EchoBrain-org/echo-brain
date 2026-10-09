@@ -1,6 +1,4 @@
-import { once } from 'node:events';
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -18,17 +16,13 @@ import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } f
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
 import { createJourneyTelemetryTransportV1 } from '../src/composition/observability/journey-telemetry-transport-v1.js';
 import { FIXTURE_JIRA_CLOUD_V1 as CLOUD, FIXTURE_JIRA_SITE_V1 as SITE, fakeJiraCloudFetchV1, fakeJiraNangoV1 } from './fixtures/fake-jira-v1.js';
+import { port } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
 
 const EMAIL = 'founder@example.test';
 const AUTHORITY = 'https://authority.example.test';
 const OIDC = { issuer: 'https://issuer.example.test', client_id: 'fixture-client', redirect_uri: `${AUTHORITY}/v2/session/oidc/callback`, tenant: { kind: 'issuer' as const }, id_token_algorithms: ['RS256'] };
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
-
-async function port(): Promise<number> {
-  const socket = createServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening');
-  const result = (socket.address() as { port: number }).port; const closed = once(socket, 'close'); socket.close(); await closed; return result;
-}
 
 /** Production selecting composition and real Person sessions; both providers and models are synthetic. */
 it('connects Jira for the authenticated Person, audits tickets before Ask, and retains modern Slack Nango setup wiring', async () => {
@@ -102,21 +96,21 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(response.status).toBe(200);
     return validateOrganizationPersonToolsV4(await response.json()).tools;
   };
-  try {
-    const login_grant = (JSON.parse(readFileSync(invitation, 'utf8')) as { login_grant: string }).login_grant;
+  const login = async (login_grant: string, code: string) => {
     const begun = await post('/v2/session/oidc/begin', { kind: 'identity_bootstrap', login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } });
     expect(begun.status).toBe(201);
-    const page = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(attempt!.state)}&code=synthetic`)).text();
-    owner = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
+    const page = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(attempt!.state)}&code=${code}`)).text();
+    return (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
+  };
+  try {
+    owner = await login((JSON.parse(readFileSync(invitation, 'utf8')) as { login_grant: string }).login_grant, 'synthetic');
     expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', display_name: 'Jira', availability: 'enabled', personal_status: 'unlinked', external_subject_id: null })]));
     expect((await post('/v1/person/tools/jira/connect', { schema_version: 1 }, 'wrong-person-token')).status).toBe(401);
     const connected = await post('/v1/person/tools/jira/connect', { schema_version: 1 }); expect(connected.status).toBe(201);
     expect(jira.tags()).toMatchObject({ organization_id: initialized.organization_id, echo_membership: initialized.owner_membership_id });
     const invited = await post('/v1/person/employees', { name: 'Fixture Employee', email: 'employee@example.test' }); expect(invited.status).toBe(201);
     loginEmail = 'employee@example.test';
-    const employeeBegin = await post('/v2/session/oidc/begin', { kind: 'identity_bootstrap', login_grant: invited.body.login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } }); expect(employeeBegin.status).toBe(201);
-    const employeePage = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(attempt!.state)}&code=employee`)).text();
-    const employee = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(employeePage)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
+    const employee = await login(invited.body.login_grant, 'employee');
     expect((await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connected.body.attempt }, employee)).status).toBe(401);
     jira.finish(); // Browser consent is reconciled only by the server-bound attempt.
     expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connected.body.attempt })).toMatchObject({ status: 200, body: { status: 'complete', failure_reason: null } });
@@ -152,7 +146,6 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     const created = await post('/v1/person/projects', { schema_version: 1, kind: 'echo-project-create-v1', request_id: randomUUID(), name: 'Project A' });
     expect(created.status).toBe(201);
     const project_id = created.body.project_id;
-    expect(typeof project_id).toBe('string');
     const mappingRead = { schema_version: 1, project_id };
     expect(await post('/v1/person/tools/jira/project/read', mappingRead)).toMatchObject({ status: 200, body: { mapping: null, revision: null } });
     expect((await post('/v1/person/tools/jira/project/read', mappingRead, employee)).status).toBe(404);

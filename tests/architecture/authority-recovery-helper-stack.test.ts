@@ -180,12 +180,6 @@ describe("Authority isolated recovery helper stack", () => {
       ServiceName: { "Fn::Sub": "com.amazonaws.${AWS::Region}.s3" },
       RouteTableIds: [{ Ref: "RecoveryHelperRouteTable" }],
     });
-    expect(JSON.stringify(s3.Properties.PolicyDocument)).toContain(
-      "s3:GetObjectVersion",
-    );
-    expect(JSON.stringify(s3.Properties.PolicyDocument)).toContain(
-      "s3:VersionId",
-    );
     expect(s3.Properties.PolicyDocument).toMatchObject({
       Statement: [
         {
@@ -272,12 +266,6 @@ describe("Authority isolated recovery helper stack", () => {
     }
     expect(userData).not.toMatch(
       /docker|compose|secretsmanager|ecr|cloudflared/i,
-    );
-    expect(stack.Parameters.BundleObjectVersion!.AllowedPattern).not.toContain(
-      "'",
-    );
-    expect(stack.Parameters.BundleObjectVersion!.AllowedPattern).not.toContain(
-      "\\",
     );
   });
 

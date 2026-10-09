@@ -29,7 +29,6 @@ import {
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
 } from "../src/person-content-policy-v2.js";
 import {
-  ORGANIZATION_RECORD_SIGNATURE_V4_KIND,
   buildOrganizationRecordSignatureInputV4,
   createOrganizationRecordEnvelopeV4,
   organizationRecordSignatureInputV4Bytes,
@@ -75,6 +74,31 @@ function receiptInput(
   };
 }
 
+function issue(
+  authority: TestAuthority,
+  envelope: OrganizationRecordEnvelopeV4,
+  recordPosition: number,
+  signer: AuthorityDetachedSigner = authority.sign,
+): Promise<OrganizationRecordReceiptV2> {
+  return createOrganizationRecordReceiptV2(
+    receiptInput(envelope, recordPosition),
+    authority.pinned,
+    STATE_LINEAGE_ID,
+    signer,
+  );
+}
+
+async function genesisReceipt(): Promise<{
+  authority: TestAuthority;
+  envelope: OrganizationRecordEnvelopeV4;
+  receipt: OrganizationRecordReceiptV2;
+}> {
+  const authority = testAuthority();
+  const envelope = await createEnvelope(authority);
+  const receipt = await issue(authority, envelope, 1);
+  return { authority, envelope, receipt };
+}
+
 async function signReceiptBody(
   body: OrganizationRecordReceiptBodyV2,
   authority: TestAuthority,
@@ -108,38 +132,14 @@ function replaceBody(
 
 describe("private D3-3 organization record receipt v2", () => {
   it("freezes exact body, wrapper, digest, and signature-input shapes", async () => {
-    const authority = testAuthority();
-    const envelope = await createEnvelope(authority);
-    const receipt = await createOrganizationRecordReceiptV2(
-      receiptInput(envelope, 1),
-      authority.pinned,
-      STATE_LINEAGE_ID,
-      authority.sign,
-    );
-    expect(Object.keys(receipt.body).sort()).toEqual([
-      "authority_id",
-      "envelope_id",
-      "event_kind",
-      "issued_at",
-      "kind",
-      "organization_id",
-      "policy_fact_outcome",
-      "predecessor_record_sha256",
-      "record_head_position",
-      "record_head_sha256",
-      "record_position",
-      "record_sha256",
-      "schema_version",
-      "semantic_idempotency_key",
-      "state_lineage_id",
-    ]);
+    const { envelope, receipt } = await genesisReceipt();
     expect(Object.keys(receipt).sort()).toEqual([
       "body",
       "receipt_sha256",
       "signature",
       "signing_key_descriptor",
     ]);
-    expect(receipt.body).toMatchObject({
+    expect(receipt.body).toStrictEqual({
       schema_version: 2,
       kind: ORGANIZATION_RECORD_RECEIPT_V2_KIND,
       authority_id: AUTHORITY_ID,
@@ -161,9 +161,6 @@ describe("private D3-3 organization record receipt v2", () => {
     });
     expect(receipt.receipt_sha256).toBe(
       organizationRecordReceiptBodyV2Sha256(receipt.body),
-    );
-    expect(receipt.receipt_sha256).toBe(
-      "sha256:022c53dc27233a3f2414aae163b7e63376ba74582794d5cd70a5cc138d0c5ad3",
     );
 
     const signatureInput = buildOrganizationRecordReceiptSignatureInputV2(
@@ -203,12 +200,7 @@ describe("private D3-3 organization record receipt v2", () => {
         policyId,
         predecessor,
       );
-      const receipt = await createOrganizationRecordReceiptV2(
-        receiptInput(envelope, 8),
-        authority.pinned,
-        STATE_LINEAGE_ID,
-        authority.sign,
-      );
+      const receipt = await issue(authority, envelope, 8);
       expect(
         verifyOrganizationRecordReceiptV2(
           receipt,
@@ -235,12 +227,7 @@ describe("private D3-3 organization record receipt v2", () => {
     const authority = testAuthority();
     const genesis = await createEnvelope(authority);
     await expect(
-      createOrganizationRecordReceiptV2(
-        receiptInput(genesis, 2),
-        authority.pinned,
-        STATE_LINEAGE_ID,
-        authority.sign,
-      ),
+      issue(authority, genesis, 2),
     ).rejects.toThrow("does not continue the envelope predecessor");
     const chained = await createEnvelope(
       authority,
@@ -249,21 +236,9 @@ describe("private D3-3 organization record receipt v2", () => {
       { position: 9, sha256: digest("9") },
     );
     await expect(
-      createOrganizationRecordReceiptV2(
-        receiptInput(chained, 9),
-        authority.pinned,
-        STATE_LINEAGE_ID,
-        authority.sign,
-      ),
+      issue(authority, chained, 9),
     ).rejects.toThrow("does not continue the envelope predecessor");
-    await expect(
-      createOrganizationRecordReceiptV2(
-        receiptInput(chained, 10),
-        authority.pinned,
-        STATE_LINEAGE_ID,
-        authority.sign,
-      ),
-    ).resolves.toBeDefined();
+    await expect(issue(authority, chained, 10)).resolves.toBeDefined();
 
     const exhausted = await createEnvelope(
       authority,
@@ -272,24 +247,12 @@ describe("private D3-3 organization record receipt v2", () => {
       { position: Number.MAX_SAFE_INTEGER, sha256: digest("8") },
     );
     await expect(
-      createOrganizationRecordReceiptV2(
-        receiptInput(exhausted, Number.MAX_SAFE_INTEGER),
-        authority.pinned,
-        STATE_LINEAGE_ID,
-        authority.sign,
-      ),
+      issue(authority, exhausted, Number.MAX_SAFE_INTEGER),
     ).rejects.toThrow("does not continue the envelope predecessor");
   });
 
   it("rejects mixed outcomes, head drift, chain drift, and body shape drift", async () => {
-    const authority = testAuthority();
-    const envelope = await createEnvelope(authority);
-    const receipt = await createOrganizationRecordReceiptV2(
-      receiptInput(envelope, 1),
-      authority.pinned,
-      STATE_LINEAGE_ID,
-      authority.sign,
-    );
+    const { authority, receipt } = await genesisReceipt();
     for (const [patch, message] of [
       [{ policy_fact_outcome: { kind: "none" } }, "must append policy facts"],
       [
@@ -320,12 +283,7 @@ describe("private D3-3 organization record receipt v2", () => {
     ).toThrow("unexpected shape");
 
     const rejectionEnvelope = await createEnvelope(authority, "reject");
-    const rejection = await createOrganizationRecordReceiptV2(
-      receiptInput(rejectionEnvelope, 1),
-      authority.pinned,
-      STATE_LINEAGE_ID,
-      authority.sign,
-    );
+    const rejection = await issue(authority, rejectionEnvelope, 1);
     expect(() =>
       validateOrganizationRecordReceiptBodyV2(
         replaceBody(rejection.body, {
@@ -344,14 +302,7 @@ describe("private D3-3 organization record receipt v2", () => {
   });
 
   it("denies every re-signed receipt-to-envelope binding mutation", async () => {
-    const authority = testAuthority();
-    const envelope = await createEnvelope(authority);
-    const receipt = await createOrganizationRecordReceiptV2(
-      receiptInput(envelope, 1),
-      authority.pinned,
-      STATE_LINEAGE_ID,
-      authority.sign,
-    );
+    const { authority, envelope, receipt } = await genesisReceipt();
     const mutations: readonly Record<string, unknown>[] = [
       { authority_id: "oau_00000000-0000-4000-8000-000000000003" },
       { organization_id: "org_00000000-0000-4000-8000-000000000004" },
@@ -402,12 +353,7 @@ describe("private D3-3 organization record receipt v2", () => {
       RESTRICTED_REVIEWER_PERSON_POLICY_ID,
       { position: 5, sha256: digest("5") },
     );
-    const chainedReceipt = await createOrganizationRecordReceiptV2(
-      receiptInput(chainedEnvelope, 6),
-      authority.pinned,
-      STATE_LINEAGE_ID,
-      authority.sign,
-    );
+    const chainedReceipt = await issue(authority, chainedEnvelope, 6);
     const wrongPositionBody = validateOrganizationRecordReceiptBodyV2(
       replaceBody(chainedReceipt.body, {
         record_position: 999,
@@ -470,14 +416,7 @@ describe("private D3-3 organization record receipt v2", () => {
   });
 
   it("pins the exact Authority key and explicit lineage", async () => {
-    const authority = testAuthority();
-    const envelope = await createEnvelope(authority);
-    const receipt = await createOrganizationRecordReceiptV2(
-      receiptInput(envelope, 1),
-      authority.pinned,
-      STATE_LINEAGE_ID,
-      authority.sign,
-    );
+    const { authority, envelope, receipt } = await genesisReceipt();
     expect(() =>
       verifyOrganizationRecordReceiptV2(
         receipt,
@@ -526,14 +465,7 @@ describe("private D3-3 organization record receipt v2", () => {
   });
 
   it("rejects v1 receipt and v4 record signature-domain substitution", async () => {
-    const authority = testAuthority();
-    const envelope = await createEnvelope(authority);
-    const receipt = await createOrganizationRecordReceiptV2(
-      receiptInput(envelope, 1),
-      authority.pinned,
-      STATE_LINEAGE_ID,
-      authority.sign,
-    );
+    const { authority, envelope, receipt } = await genesisReceipt();
     expect(() =>
       validateOrganizationRecordReceiptBodyV2({
         ...receipt.body,
@@ -570,7 +502,6 @@ describe("private D3-3 organization record receipt v2", () => {
       envelope.body,
       receipt.signing_key_descriptor.key_id,
     );
-    expect(v4Input.kind).toBe(ORGANIZATION_RECORD_SIGNATURE_V4_KIND);
     const v4DomainSignature = await authority.sign(
       organizationRecordSignatureInputV4Bytes(v4Input),
       receipt.signing_key_descriptor.key_id,
@@ -586,14 +517,7 @@ describe("private D3-3 organization record receipt v2", () => {
   });
 
   it("rejects malformed/high-S signatures and hostile in-memory objects", async () => {
-    const authority = testAuthority();
-    const envelope = await createEnvelope(authority);
-    const receipt = await createOrganizationRecordReceiptV2(
-      receiptInput(envelope, 1),
-      authority.pinned,
-      STATE_LINEAGE_ID,
-      authority.sign,
-    );
+    const { receipt } = await genesisReceipt();
     expect(() =>
       validateOrganizationRecordReceiptV2({
         ...receipt,
@@ -651,14 +575,7 @@ describe("private D3-3 organization record receipt v2", () => {
   });
 
   it("rejects wrapper/signature-input drift and non-Buffer signer output", async () => {
-    const authority = testAuthority();
-    const envelope = await createEnvelope(authority);
-    const receipt = await createOrganizationRecordReceiptV2(
-      receiptInput(envelope, 1),
-      authority.pinned,
-      STATE_LINEAGE_ID,
-      authority.sign,
-    );
+    const { authority, envelope, receipt } = await genesisReceipt();
     expect(() =>
       validateOrganizationRecordReceiptV2({ ...receipt, checkpoint_id: "x" }),
     ).toThrow("unexpected shape");
@@ -678,10 +595,10 @@ describe("private D3-3 organization record receipt v2", () => {
       }),
     ).toThrow("unexpected shape");
     await expect(
-      createOrganizationRecordReceiptV2(
-        receiptInput(envelope, 1),
-        authority.pinned,
-        STATE_LINEAGE_ID,
+      issue(
+        authority,
+        envelope,
+        1,
         (async () => "not-a-buffer") as unknown as AuthorityDetachedSigner,
       ),
     ).rejects.toThrow("signature bytes");

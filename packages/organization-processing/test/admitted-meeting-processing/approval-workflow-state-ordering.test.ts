@@ -5,14 +5,14 @@ import { expect, it } from "vitest";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { bindApprovalWorkflowStateV1 } from "../../src/admitted-meeting-processing/approval-workflow-state-v1.js";
 import { SqliteAuthorityMeetingProcessingStateV1 } from "../../src/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
-import { ADVANCED_AT, assertActionable, database, databases, decisions, FIXTURE_SOURCE_KEY, fixtureCursorPolicy, meeting, REVIEW_POLICY } from "./fixtures/sqlite-meeting-state.js";
+import { ADVANCED_AT, assertActionable, database, decisions, FIXTURE_SOURCE_KEY, fixtureCursorPolicy, meeting, REVIEW_POLICY } from "./fixtures/sqlite-meeting-state.js";
 
 it("serializes the two same-file authority handles and refuses cross-port calls inside either transaction", async () => {
   const root = mkdtempSync(join(tmpdir(), "echo-approval-order-"));
   const seed = database();
   const path = join(root, "authority.sqlite");
   await seed.backup(path);
-  seed.close(); databases.splice(databases.indexOf(seed), 1);
+  seed.close();
   const owner = openAuthorityDatabase(path, { fileMustExist: true });
   const provider = openAuthorityDatabase(path, { fileMustExist: true });
   // Do not spend five seconds reproducing the lock if a guard regresses.
@@ -37,7 +37,6 @@ it("serializes the two same-file authority handles and refuses cross-port calls 
         for (const operation of Object.values(state)) {
           expect(() => (operation as () => unknown)()).toThrow(`${label} transaction must be idle`);
         }
-        expect(() => state.freezeProposal(input)).toThrow(`${label} transaction must be idle`);
       } finally { connection.exec("ROLLBACK"); }
     }
     expect(state.readCandidateByApprovalId(candidate.approval_id)?.state).toBe("queued");

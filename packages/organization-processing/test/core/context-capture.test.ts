@@ -29,9 +29,13 @@ function content(label = 'Design brief'): ContextCaptureContentV1 {
   };
 }
 
-function envelope(changes: Partial<ContextCaptureContentV1> = {}): ContextCaptureEnvelopeV1 {
+function envelope(
+  changes: Partial<ContextCaptureContentV1> = {},
+  options: { readonly captured_at?: string; readonly identity?: SourceAdapterIdentityV1 } = {},
+): ContextCaptureEnvelopeV1 {
   return buildContextCaptureEnvelopeV1({
-    identity, external_id: 'design-1', captured_at: '2026-10-01T00:00:01.000Z', content: { ...content(), ...changes },
+    identity: options.identity ?? identity, external_id: 'design-1',
+    captured_at: options.captured_at ?? '2026-10-01T00:00:01.000Z', content: { ...content(), ...changes },
   });
 }
 
@@ -45,18 +49,11 @@ function withContent(source: ContextCaptureEnvelopeV1, value: unknown): unknown 
 
 describe('context capture contract', () => {
   it('replays the same immutable revision across poll and implementation-version changes, but changes it for capture state', () => {
-    const first = buildContextCaptureEnvelopeV1({
-      identity, external_id: 'design-1', captured_at: '2026-10-01T00:00:01.000Z', content: content(),
-    });
-    const replay = buildContextCaptureEnvelopeV1({
-      identity, external_id: 'design-1', captured_at: '2026-10-01T00:01:01.000Z', content: content(),
-    });
-    const changed = buildContextCaptureEnvelopeV1({
-      identity, external_id: 'design-1', captured_at: '2026-10-01T00:01:01.000Z', content: content('Revised design brief'),
-    });
-    const upgraded = buildContextCaptureEnvelopeV1({
-      identity: { ...identity, version: '2' }, external_id: 'design-1', captured_at: '2026-10-01T00:01:01.000Z', content: content(),
-    });
+    const later = '2026-10-01T00:01:01.000Z';
+    const first = envelope();
+    const replay = envelope({}, { captured_at: later });
+    const changed = envelope({ label: 'Revised design brief' }, { captured_at: later });
+    const upgraded = envelope({}, { identity: { ...identity, version: '2' }, captured_at: later });
 
     expect(replay.revision.revision_id).toBe(first.revision.revision_id);
     expect(replay.revision.captured_at).not.toBe(first.revision.captured_at);
@@ -66,10 +63,9 @@ describe('context capture contract', () => {
   });
 
   it('rejects an unsupported typed payload before a provider can emit an envelope', () => {
-    expect(() => buildContextCaptureEnvelopeV1({
-      identity, external_id: 'design-1', captured_at: '2026-10-01T00:00:01.000Z',
-      content: { ...content(), payload: { schema_version: 1, kind: 'task', status: 'open' } } as unknown as ContextCaptureContentV1,
-    })).toThrow('Context structured payload');
+    expect(() => envelope(
+      { payload: { schema_version: 1, kind: 'task', status: 'open' } } as unknown as Partial<ContextCaptureContentV1>,
+    )).toThrow('Context structured payload');
   });
 
   it('keeps document payload and original-artifact custody outside the V1 contract', () => {

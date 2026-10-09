@@ -65,6 +65,11 @@ function decisions(
   };
 }
 
+const inputHash = (value: MeetingDocument) =>
+  reviewInputSha256V1({ meeting: value, processor: PROCESSOR });
+const semanticHash = (value: MeetingDocument, signals: DecisionSet["signals"]) =>
+  reviewSemanticSha256V1({ meeting: value, decisions: decisions(value, signals), processor: PROCESSOR, review_policy: REVIEW_POLICY });
+
 const SHIP_DECISION = {
   id: "signal-ship",
   kind: "decision" as const,
@@ -107,13 +112,7 @@ describe("admitted review lineage semantics", () => {
       content: [{ ...first.content[0]!, id: "provider-reassigned-id" }],
     });
 
-    expect(reviewInputSha256V1({
-      meeting: blockIdOnlyRevision,
-      processor: PROCESSOR,
-    })).toBe(reviewInputSha256V1({
-      meeting: first,
-      processor: PROCESSOR,
-    }));
+    expect(inputHash(blockIdOnlyRevision)).toBe(inputHash(first));
   });
 
   it("changes the input hash when a cited speaker attribution changes", () => {
@@ -129,26 +128,14 @@ describe("admitted review lineage semantics", () => {
       content: [{ ...first.content[0]!, speaker_participant_id: "person-2" }],
     });
 
-    expect(reviewInputSha256V1({
-      meeting: changedSpeaker,
-      processor: PROCESSOR,
-    })).not.toBe(reviewInputSha256V1({
-      meeting: first,
-      processor: PROCESSOR,
-    }));
+    expect(inputHash(changedSpeaker)).not.toBe(inputHash(first));
   });
 
   it("treats reordered participants as the same review input", () => {
     const first = meeting();
     const reordered = meeting({ participants: [...first.participants].reverse() });
 
-    expect(reviewInputSha256V1({
-      meeting: reordered,
-      processor: PROCESSOR,
-    })).toBe(reviewInputSha256V1({
-      meeting: first,
-      processor: PROCESSOR,
-    }));
+    expect(inputHash(reordered)).toBe(inputHash(first));
   });
 
   it("changes the input hash when participant ID/name associations change", () => {
@@ -160,13 +147,7 @@ describe("admitted review lineage semantics", () => {
       ],
     });
 
-    expect(reviewInputSha256V1({
-      meeting: reassigned,
-      processor: PROCESSOR,
-    })).not.toBe(reviewInputSha256V1({
-      meeting: first,
-      processor: PROCESSOR,
-    }));
+    expect(inputHash(reassigned)).not.toBe(inputHash(first));
   });
 
   it("changes the input hash when rendered meeting time changes", () => {
@@ -186,16 +167,10 @@ describe("admitted review lineage semantics", () => {
       { ...first.time, scheduled_end_at: "2026-08-27T17:30:00.000Z" },
       { ...first.time, timezone: "America/New_York" },
     ];
-    const firstHash = reviewInputSha256V1({
-      meeting: first,
-      processor: PROCESSOR,
-    });
+    const firstHash = inputHash(first);
 
     for (const time of changedTimes) {
-      expect(reviewInputSha256V1({
-        meeting: meeting({ time }),
-        processor: PROCESSOR,
-      })).not.toBe(firstHash);
+      expect(inputHash(meeting({ time }))).not.toBe(firstHash);
     }
   });
 
@@ -203,106 +178,50 @@ describe("admitted review lineage semantics", () => {
     const blank = meeting({ title: "   " });
     const absent = meeting({ title: undefined });
 
-    expect(reviewInputSha256V1({
-      meeting: blank,
-      processor: PROCESSOR,
-    })).toBe(reviewInputSha256V1({
-      meeting: absent,
-      processor: PROCESSOR,
-    }));
+    expect(inputHash(blank)).toBe(inputHash(absent));
   });
 
   it("treats reordered signals as the same semantic review", () => {
     const value = meeting();
 
-    expect(reviewSemanticSha256V1({
-      meeting: value,
-      decisions: decisions(value, [INVITE_ACTION, SHIP_DECISION]),
-      processor: PROCESSOR,
-      review_policy: REVIEW_POLICY,
-    })).toBe(reviewSemanticSha256V1({
-      meeting: value,
-      decisions: decisions(value, [SHIP_DECISION, INVITE_ACTION]),
-      processor: PROCESSOR,
-      review_policy: REVIEW_POLICY,
-    }));
+    expect(semanticHash(value, [INVITE_ACTION, SHIP_DECISION])).toBe(semanticHash(value, [SHIP_DECISION, INVITE_ACTION]));
   });
 
   it("changes the semantic review hash for a meaningful signal change", () => {
     const value = meeting();
     const changed = { ...SHIP_DECISION, status: "unresolved" as const };
 
-    expect(reviewSemanticSha256V1({
-      meeting: value,
-      decisions: decisions(value, [changed]),
-      processor: PROCESSOR,
-      review_policy: REVIEW_POLICY,
-    })).not.toBe(reviewSemanticSha256V1({
-      meeting: value,
-      decisions: decisions(value, [SHIP_DECISION]),
-      processor: PROCESSOR,
-      review_policy: REVIEW_POLICY,
-    }));
+    expect(semanticHash(value, [changed])).not.toBe(semanticHash(value, [SHIP_DECISION]));
   });
 
   it("coalesces absent and whitespace-only titles", () => {
     const absent = meeting({ title: undefined });
     const blank = meeting({ title: "   " });
 
-    expect(reviewSemanticSha256V1({
-      meeting: absent,
-      decisions: decisions(absent, [SHIP_DECISION]),
-      processor: PROCESSOR,
-      review_policy: REVIEW_POLICY,
-    })).toBe(reviewSemanticSha256V1({
-      meeting: blank,
-      decisions: decisions(blank, [SHIP_DECISION]),
-      processor: PROCESSOR,
-      review_policy: REVIEW_POLICY,
-    }));
+    expect(semanticHash(absent, [SHIP_DECISION])).toBe(semanticHash(blank, [SHIP_DECISION]));
   });
 
   it("changes the semantic review hash when a rationale supports a different signal", () => {
     const value = meeting();
     const rationaleSignal = rationale("signal-rationale", [SHIP_DECISION.id]);
 
-    expect(reviewSemanticSha256V1({
-      meeting: value,
-      decisions: decisions(value, [SHIP_DECISION, INVITE_ACTION, rationaleSignal]),
-      processor: PROCESSOR,
-      review_policy: REVIEW_POLICY,
-    })).not.toBe(reviewSemanticSha256V1({
-      meeting: value,
-      decisions: decisions(value, [
-        SHIP_DECISION,
-        INVITE_ACTION,
-        { ...rationaleSignal, supports_signal_ids: [INVITE_ACTION.id] },
-      ]),
-      processor: PROCESSOR,
-      review_policy: REVIEW_POLICY,
-    }));
+    expect(semanticHash(value, [SHIP_DECISION, INVITE_ACTION, rationaleSignal])).not.toBe(semanticHash(value, [
+      SHIP_DECISION,
+      INVITE_ACTION,
+      { ...rationaleSignal, supports_signal_ids: [INVITE_ACTION.id] },
+    ]));
   });
 
   it("ignores identifier churn in rationale support links", () => {
     const value = meeting();
     const renamedDecision = { ...SHIP_DECISION, id: "renamed-decision" };
 
-    expect(reviewSemanticSha256V1({
-      meeting: value,
-      decisions: decisions(value, [
-        SHIP_DECISION,
-        rationale("signal-rationale", [SHIP_DECISION.id]),
-      ]),
-      processor: PROCESSOR,
-      review_policy: REVIEW_POLICY,
-    })).toBe(reviewSemanticSha256V1({
-      meeting: value,
-      decisions: decisions(value, [
-        renamedDecision,
-        rationale("renamed-rationale", [renamedDecision.id]),
-      ]),
-      processor: PROCESSOR,
-      review_policy: REVIEW_POLICY,
-    }));
+    expect(semanticHash(value, [
+      SHIP_DECISION,
+      rationale("signal-rationale", [SHIP_DECISION.id]),
+    ])).toBe(semanticHash(value, [
+      renamedDecision,
+      rationale("renamed-rationale", [renamedDecision.id]),
+    ]));
   });
 });

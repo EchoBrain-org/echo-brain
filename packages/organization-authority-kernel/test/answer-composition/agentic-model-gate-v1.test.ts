@@ -15,6 +15,7 @@ function harness(options: {
   readonly replies?: readonly (unknown | Error)[];
   readonly max_model_calls?: number;
   readonly desk_revalidate?: () => Promise<{ readonly checked_at: string }>;
+  readonly model?: Parameters<typeof createAgenticModelGateV1>[0]["model"];
 } = {}) {
   const trace: string[] = [];
   const inputs: StructuredGenerationInput[] = [];
@@ -22,7 +23,7 @@ function harness(options: {
   const checked: string[] = [];
   const gate = createAgenticModelGateV1({
     generation,
-    model: {
+    model: options.model ?? {
       async generate(input) {
         trace.push(`generate:${inputs.length}`); inputs.push(input);
         const reply = replies.shift();
@@ -109,15 +110,12 @@ describe("agentic model gate", () => {
     const replies = [{ partial: true }, { good: true }];
     const usage = { input_tokens: 10, output_tokens: 5, total_tokens: 15, cached_input_tokens: null, reasoning_tokens: null };
     let calls = 0;
-    const gate = createAgenticModelGateV1({
-      generation,
+    const { gate } = harness({
       model: {
         generate: async () => { throw new Error('value-only method must not be used'); },
         generate_with_observation: async () => ({ value: replies[calls++], usage, provider_latency_ms: 1, finish_reason: calls === 1 ? finish_reason : 'stop' }),
       },
-      desk_revalidate: async () => ({ checked_at: '2026-10-06T00:00:00.000Z' }), on_checked: () => undefined,
-      budget: { max_model_calls: 24 }, now: () => 0, deadline: 90_000,
-      signal: new AbortController().signal, is_deadline_expired: () => false,
+      desk_revalidate: async () => ({ checked_at: '2026-10-06T00:00:00.000Z' }),
     });
     const pending = withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => gate.withRepair(STEP, 'system', {}, schema, () => 20_000, value => value));
     if (finish_reason === 'length') await expect(pending).resolves.toEqual({ good: true });

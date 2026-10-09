@@ -3,6 +3,7 @@ import { buildContextCaptureEnvelopeV1, type ContextCaptureEnvelopeV1 } from '@e
 import { describe, expect, it, vi } from 'vitest';
 import {
   runContextCaptureRehearsalV1,
+  type ContextCaptureRehearsalInputV1,
   type ContextCaptureRehearsalPullPortV1,
 } from '../src/application/context-capture-rehearsal-v1.js';
 
@@ -13,9 +14,9 @@ const identity = {
   version: '1.0.0',
 };
 
-function capture(external_id: string): ContextCaptureEnvelopeV1 {
+function capture(external_id: string, id = identity): ContextCaptureEnvelopeV1 {
   return buildContextCaptureEnvelopeV1({
-    identity,
+    identity: id,
     external_id,
     captured_at: '2026-10-01T00:00:00.000Z',
     content: {
@@ -33,6 +34,10 @@ function intake(result: Awaited<ReturnType<ContextCaptureRehearsalPullPortV1['pu
   return { pull: vi.fn(async () => result) };
 }
 
+function run(overrides: Partial<ContextCaptureRehearsalInputV1> = {}) {
+  return runContextCaptureRehearsalV1({ intake: intake({ captures: [] }), expected_source_identity_sha256: canonicalSha256(identity), limit: 1, timeout_ms: 1_000, ...overrides });
+}
+
 describe('context capture rehearsal V1', () => {
   it('runs one small pull and emits only safe immutable capture commitments', async () => {
     const source = capture('private-provider-object-123');
@@ -44,13 +49,7 @@ describe('context capture rehearsal V1', () => {
       next_cursor: 'private-provider-cursor',
     });
 
-    const receipt = await runContextCaptureRehearsalV1({
-      intake: port,
-      expected_source_identity_sha256: canonicalSha256(identity),
-      limit: 2,
-      cursor: 'private-input-cursor',
-      timeout_ms: 1_000,
-    });
+    const receipt = await run({ intake: port, limit: 2, cursor: 'private-input-cursor' });
 
     expect(port.pull).toHaveBeenCalledWith({ limit: 2, cursor: 'private-input-cursor' }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(receipt).toEqual({
@@ -72,14 +71,14 @@ describe('context capture rehearsal V1', () => {
   it('rejects invalid bounds before provider work and never prints a partial receipt', async () => {
     const pull = vi.fn();
     const port: ContextCaptureRehearsalPullPortV1 = { pull };
-    await expect(runContextCaptureRehearsalV1({ intake: port, expected_source_identity_sha256: 'sha256:not-a-digest', limit: 1, timeout_ms: 1_000 })).rejects.toThrow('source identity digest is invalid');
-    await expect(runContextCaptureRehearsalV1({ intake: port, expected_source_identity_sha256: canonicalSha256(identity), limit: 0, timeout_ms: 1_000 })).rejects.toThrow('limit must be from 1 to 5');
-    await expect(runContextCaptureRehearsalV1({ intake: port, expected_source_identity_sha256: canonicalSha256(identity), limit: 1, cursor: 'x'.repeat(16 * 1024 + 1), timeout_ms: 1_000 })).rejects.toThrow('cursor exceeds its bound');
-    await expect(runContextCaptureRehearsalV1({ intake: port, expected_source_identity_sha256: canonicalSha256(identity), limit: 1, timeout_ms: 30_001 })).rejects.toThrow('deadline must be from 1 to 30000');
+    await expect(run({ intake: port, expected_source_identity_sha256: 'sha256:not-a-digest' })).rejects.toThrow('source identity digest is invalid');
+    await expect(run({ intake: port, limit: 0 })).rejects.toThrow('limit must be from 1 to 5');
+    await expect(run({ intake: port, cursor: 'x'.repeat(16 * 1024 + 1) })).rejects.toThrow('cursor exceeds its bound');
+    await expect(run({ intake: port, timeout_ms: 30_001 })).rejects.toThrow('deadline must be from 1 to 30000');
     expect(pull).not.toHaveBeenCalled();
 
     const rejected: ContextCaptureRehearsalPullPortV1 = { pull: vi.fn(async () => { throw new Error('provider body: private issue text'); }) };
-    const error = await runContextCaptureRehearsalV1({ intake: rejected, expected_source_identity_sha256: canonicalSha256(identity), limit: 1, timeout_ms: 1_000 }).catch(error => error);
+    const error = await run({ intake: rejected }).catch(error => error);
     expect(error).toMatchObject({ message: 'Context capture rehearsal failed' });
     expect(String(error)).not.toContain('private issue text');
   });
@@ -95,52 +94,29 @@ describe('context capture rehearsal V1', () => {
         throw new Error('unreachable');
       },
     };
-    const run = runContextCaptureRehearsalV1({ intake: port, expected_source_identity_sha256: canonicalSha256(identity), limit: 1, signal: abort.signal, timeout_ms: 1_000 });
+    const running = run({ intake: port, signal: abort.signal });
     await begun;
     abort.abort(new Error('private abort reason'));
-    const error = await run.catch(error => error);
+    const error = await running.catch(error => error);
     expect(error).toMatchObject({ name: 'AbortError', message: 'Context capture rehearsal was cancelled' });
     expect(String(error)).not.toContain('private abort reason');
   });
 
 
   it('uses the caller identity commitment for an empty receipt and suppresses arbitrary revision text', async () => {
-    const empty = await runContextCaptureRehearsalV1({
-      intake: intake({ captures: [] }),
-      expected_source_identity_sha256: canonicalSha256(identity),
-      limit: 1,
-      timeout_ms: 1_000,
-    });
+    const empty = await run();
     expect(empty).toMatchObject({ source_identity_sha256: canonicalSha256(identity), captures: [], counts: { captured: 0 } });
 
     const source = capture('private-provider-object-123');
     const maliciousRevision = { ...source, revision: { ...source.revision, revision_id: 'private-provider-revision-id' } };
-    const receipt = await runContextCaptureRehearsalV1({
-      intake: intake({ captures: [{ source: maliciousRevision, admission: 'admitted' }] }),
-      expected_source_identity_sha256: canonicalSha256(identity),
-      limit: 1,
-      timeout_ms: 1_000,
-    });
+    const receipt = await run({ intake: intake({ captures: [{ source: maliciousRevision, admission: 'admitted' }] }) });
     expect(receipt.captures[0]!.revision_id_sha256).toBe(canonicalSha256('private-provider-revision-id'));
     expect(JSON.stringify(receipt)).not.toContain('private-provider-revision-id');
   });
 
   it('fails with a fixed error if the source identity differs from the trusted caller commitment', async () => {
-    const otherIdentity = { ...identity, instance_id: 'other-private-instance' };
-    const source = buildContextCaptureEnvelopeV1({
-      identity: otherIdentity, external_id: 'private-object', captured_at: '2026-10-01T00:00:00.000Z',
-      content: {
-        schema_version: 1, kind: 'echo-context-capture-v1',
-        label: 'Private', provenance: { origin_ref: 'private:origin' },
-        payload: { schema_version: 1, kind: 'note', format: 'plain_text' },
-        representation: { kind: 'pointer', pointer: 'private:origin' },
-      },
-    });
-    const error = await runContextCaptureRehearsalV1({
-      intake: intake({ captures: [{ source, admission: 'request_only' }] }),
-      expected_source_identity_sha256: canonicalSha256(identity),
-      limit: 1, timeout_ms: 1_000,
-    }).catch(error => error);
+    const source = capture('private-object', { ...identity, instance_id: 'other-private-instance' });
+    const error = await run({ intake: intake({ captures: [{ source, admission: 'request_only' }] }) }).catch(error => error);
     expect(error).toMatchObject({ message: 'Context capture rehearsal failed' });
     expect(String(error)).not.toContain('other-private-instance');
   });
@@ -149,11 +125,6 @@ describe('context capture rehearsal V1', () => {
   // this receipt-only wrapper cannot roll back a malicious upstream port.
   it('fails closed when an intake returns more than the requested single page', async () => {
     const source = capture('private-provider-object-123');
-    await expect(runContextCaptureRehearsalV1({
-      intake: intake({ captures: [{ source, admission: 'admitted' }, { source, admission: 'duplicate' }] }),
-      expected_source_identity_sha256: canonicalSha256(identity),
-      limit: 1,
-      timeout_ms: 1_000,
-    })).rejects.toThrow('Context capture rehearsal failed');
+    await expect(run({ intake: intake({ captures: [{ source, admission: 'admitted' }, { source, admission: 'duplicate' }] }) })).rejects.toThrow('Context capture rehearsal failed');
   });
 });

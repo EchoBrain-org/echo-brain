@@ -42,6 +42,24 @@ const CONNECTION_FIXTURE = Object.freeze({
   }),
 });
 
+const SESSION_INPUT = Object.freeze({
+  tags: TAGS,
+  client_id: "client-id-value",
+  client_secret: CLIENT_SECRET,
+  scopes: SCOPES,
+});
+
+const SESSION_DEFAULTS = Object.freeze({
+  [INTEGRATION_KEY]: {
+    authorization_params: { client_id: "client-id-value" },
+    connection_config: {
+      oauth_client_id_override: "client-id-value",
+      oauth_client_secret_override: CLIENT_SECRET,
+      oauth_scopes_override: "chat:write,im:history,im:write,users:read",
+    },
+  },
+});
+
 function nangoResponse(status: number, value: unknown): Response {
   return new Response(JSON.stringify(value), {
     status,
@@ -58,45 +76,44 @@ function nangoFetch(...responses: ReadonlyArray<readonly [number, unknown]>) {
   });
 }
 
-/** A response with no body at all (e.g. a 204, or an empty-bodied error). */
-function emptyNangoFetch(status: number) {
-  return vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status }));
+function client(...responses: ReadonlyArray<readonly [number, unknown]>) {
+  const fetch = nangoFetch(...responses);
+  return { client: new HttpNangoConnectionClientV1(CONFIGURATION, { fetch }), fetch };
 }
 
-function fixtureWithRawPatch(patch: Record<string, unknown>): unknown {
+function fixtureWithRawPatch(
+  patch: Record<string, unknown>,
+  access_token: string = CONNECTION_FIXTURE.credentials.access_token,
+): Record<string, any> {
   const clone = JSON.parse(JSON.stringify(CONNECTION_FIXTURE)) as Record<string, any>;
   Object.assign(clone.credentials.raw, patch);
+  clone.credentials.access_token = access_token;
   return clone;
 }
 
-async function failureOf<T>(promise: Promise<T>): Promise<unknown> {
-  return promise.then(
+async function nangoFailure<T>(promise: Promise<T>, code: NangoClientErrorV1["code"]): Promise<NangoClientErrorV1> {
+  const failure = await promise.then(
     () => undefined,
     (error: unknown) => error,
   );
+  expect(failure).toBeInstanceOf(NangoClientErrorV1);
+  expect((failure as NangoClientErrorV1).code).toBe(code);
+  return failure as NangoClientErrorV1;
 }
 
 describe("HttpNangoConnectionClientV1 configuration", () => {
-  it("rejects a non-https base_url", () => {
-    expect(
-      () => new HttpNangoConnectionClientV1({ ...CONFIGURATION, base_url: "http://api.nango.dev" }),
-    ).toThrow();
-  });
-
-  it("rejects an invalid integration_key", () => {
-    expect(
-      () => new HttpNangoConnectionClientV1({ ...CONFIGURATION, integration_key: "Not Valid!" }),
-    ).toThrow();
-  });
-
-  it("rejects an empty secret_key", () => {
-    expect(() => new HttpNangoConnectionClientV1({ ...CONFIGURATION, secret_key: "" })).toThrow();
+  it.each([
+    ["a non-https base_url", { base_url: "http://api.nango.dev" }],
+    ["an invalid integration_key", { integration_key: "Not Valid!" }],
+    ["an empty secret_key", { secret_key: "" }],
+  ])("rejects %s", (_label, override) => {
+    expect(() => new HttpNangoConnectionClientV1({ ...CONFIGURATION, ...override })).toThrow();
   });
 });
 
 describe("HttpNangoConnectionClientV1.createConnectSession", () => {
   it("starts native browser OAuth with the selected app while keeping its secret in session defaults", async () => {
-    const fetch = nangoFetch([
+    const { client: nango, fetch } = client([
       200,
       {
         data: {
@@ -106,14 +123,8 @@ describe("HttpNangoConnectionClientV1.createConnectSession", () => {
         },
       },
     ]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
 
-    const session = await client.createConnectSession({
-      tags: TAGS,
-      client_id: "client-id-value",
-      client_secret: CLIENT_SECRET,
-      scopes: SCOPES,
-    });
+    const session = await nango.createConnectSession(SESSION_INPUT);
 
     expect(session).toEqual({
       connect_link: `https://api.nango.dev/oauth/connect/${INTEGRATION_KEY}?connect_session_token=${SESSION_TOKEN}`,
@@ -130,23 +141,14 @@ describe("HttpNangoConnectionClientV1.createConnectSession", () => {
     expect(JSON.parse(init.body as string)).toEqual({
       tags: TAGS,
       allowed_integrations: [INTEGRATION_KEY],
-      integrations_config_defaults: {
-        [INTEGRATION_KEY]: {
-          authorization_params: { client_id: "client-id-value" },
-          connection_config: {
-            oauth_client_id_override: "client-id-value",
-            oauth_client_secret_override: CLIENT_SECRET,
-            oauth_scopes_override: "chat:write,im:history,im:write,users:read",
-          },
-        },
-      },
+      integrations_config_defaults: SESSION_DEFAULTS,
     });
   });
 });
 
 describe("HttpNangoConnectionClientV1.createReconnectSession", () => {
   it("uses the same native browser OAuth and selected-app defaults when reconnecting", async () => {
-    const fetch = nangoFetch([
+    const { client: nango, fetch } = client([
       200,
       {
         data: {
@@ -156,15 +158,8 @@ describe("HttpNangoConnectionClientV1.createReconnectSession", () => {
         },
       },
     ]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
 
-    const session = await client.createReconnectSession({
-      connection_id: "conn_123",
-      tags: TAGS,
-      client_id: "client-id-value",
-      client_secret: CLIENT_SECRET,
-      scopes: SCOPES,
-    });
+    const session = await nango.createReconnectSession({ connection_id: "conn_123", ...SESSION_INPUT });
 
     expect(session).toEqual({
       connect_link: `https://api.nango.dev/oauth/connect/${INTEGRATION_KEY}?connect_session_token=${SESSION_TOKEN}`,
@@ -177,16 +172,7 @@ describe("HttpNangoConnectionClientV1.createReconnectSession", () => {
       connection_id: "conn_123",
       integration_id: INTEGRATION_KEY,
       tags: TAGS,
-      integrations_config_defaults: {
-        [INTEGRATION_KEY]: {
-          authorization_params: { client_id: "client-id-value" },
-          connection_config: {
-            oauth_client_id_override: "client-id-value",
-            oauth_client_secret_override: CLIENT_SECRET,
-            oauth_scopes_override: "chat:write,im:history,im:write,users:read",
-          },
-        },
-      },
+      integrations_config_defaults: SESSION_DEFAULTS,
     });
   });
 });
@@ -199,32 +185,21 @@ describe("HttpNangoConnectionClientV1 native OAuth session response", () => {
     [{ data: { token: "x".repeat(4096) } }],
     [{ data: { token: "/".repeat(1400) } }],
   ])("rejects a malformed session token without returning the Nango response body", async (body) => {
-    const fetch = nangoFetch([200, body]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
+    const failure = await nangoFailure(client([200, body]).client.createConnectSession(SESSION_INPUT), "invalid_response");
 
-    const failure = await failureOf(client.createConnectSession({
-      tags: TAGS,
-      client_id: "client-id-value",
-      client_secret: CLIENT_SECRET,
-      scopes: SCOPES,
-    }));
-
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    expect((failure as NangoClientErrorV1).code).toBe("invalid_response");
-    expect((failure as NangoClientErrorV1).message).not.toContain(CLIENT_SECRET);
-    expect((failure as NangoClientErrorV1).message).not.toContain(JSON.stringify(body));
+    expect(failure.message).not.toContain(CLIENT_SECRET);
+    expect(failure.message).not.toContain(JSON.stringify(body));
   });
 });
 
 describe("HttpNangoConnectionClientV1.findConnectionIdByTag", () => {
   it("builds tags[key]=value and returns the single matching id", async () => {
-    const fetch = nangoFetch([
+    const { client: nango, fetch } = client([
       200,
       { connections: [{ connection_id: "conn_123", tags: TAGS }] },
     ]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
 
-    const id = await client.findConnectionIdByTag({ key: "echo_attempt_id", value: "ssi_1" });
+    const id = await nango.findConnectionIdByTag({ key: "echo_attempt_id", value: "ssi_1" });
 
     expect(id).toBe("conn_123");
     const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
@@ -233,16 +208,13 @@ describe("HttpNangoConnectionClientV1.findConnectionIdByTag", () => {
   });
 
   it("returns undefined when zero connections match", async () => {
-    const fetch = nangoFetch([200, { connections: [] }]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
-
-    const id = await client.findConnectionIdByTag({ key: "echo_attempt_id", value: "ssi_missing" });
+    const id = await client([200, { connections: [] }]).client.findConnectionIdByTag({ key: "echo_attempt_id", value: "ssi_missing" });
 
     expect(id).toBeUndefined();
   });
 
   it("throws invalid_response when more than one connection matches", async () => {
-    const fetch = nangoFetch([
+    const { client: nango } = client([
       200,
       {
         connections: [
@@ -251,21 +223,16 @@ describe("HttpNangoConnectionClientV1.findConnectionIdByTag", () => {
         ],
       },
     ]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
 
-    const failure = await failureOf(client.findConnectionIdByTag({ key: "echo_attempt_id", value: "ssi_1" }));
-
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    expect((failure as NangoClientErrorV1).code).toBe("invalid_response");
+    await nangoFailure(nango.findConnectionIdByTag({ key: "echo_attempt_id", value: "ssi_1" }), "invalid_response");
   });
 });
 
 describe("HttpNangoConnectionClientV1.getSlackConnection", () => {
   it("builds the provider_config_key query and parses the connection fixture", async () => {
-    const fetch = nangoFetch([200, CONNECTION_FIXTURE]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
+    const { client: nango, fetch } = client([200, CONNECTION_FIXTURE]);
 
-    const connection = await client.getSlackConnection({ connection_id: "conn_123" });
+    const connection = await nango.getSlackConnection({ connection_id: "conn_123" });
 
     expect(connection).toEqual({
       connection_id: "conn_123",
@@ -282,39 +249,17 @@ describe("HttpNangoConnectionClientV1.getSlackConnection", () => {
     expect(init.method).toBe("GET");
   });
 
-  it("refuses a connection with a missing team id", async () => {
-    const fixture = fixtureWithRawPatch({ team: {} });
-    const fetch = nangoFetch([200, fixture]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
+  it.each([
+    ["a missing team id", fixtureWithRawPatch({ team: {} })],
+    ["a non-xoxb token", fixtureWithRawPatch({}, "xoxp-not-a-bot-token")],
+    ["an enterprise install", fixtureWithRawPatch({ is_enterprise_install: true })],
+  ])("refuses a connection with %s without leaking its token", async (_label, fixture) => {
+    const failure = await nangoFailure(
+      client([200, fixture]).client.getSlackConnection({ connection_id: "conn_123" }),
+      "invalid_response",
+    );
 
-    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
-
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    expect((failure as NangoClientErrorV1).code).toBe("invalid_response");
-  });
-
-  it("refuses a non-xoxb token without leaking it", async () => {
-    const clone = JSON.parse(JSON.stringify(CONNECTION_FIXTURE)) as any;
-    clone.credentials.access_token = "xoxp-not-a-bot-token";
-    const fetch = nangoFetch([200, clone]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
-
-    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
-
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    expect((failure as NangoClientErrorV1).code).toBe("invalid_response");
-    expect((failure as NangoClientErrorV1).message).not.toContain("xoxp-not-a-bot-token");
-  });
-
-  it("refuses an enterprise-install connection", async () => {
-    const fixture = fixtureWithRawPatch({ is_enterprise_install: true });
-    const fetch = nangoFetch([200, fixture]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
-
-    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
-
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    expect((failure as NangoClientErrorV1).code).toBe("invalid_response");
+    expect(failure.message).not.toContain(fixture.credentials.access_token);
   });
 });
 
@@ -333,23 +278,17 @@ describe("HttpNangoConnectionClientV1 error mapping", () => {
       const fetch = vi.fn<typeof globalThis.fetch>(
         async () => new Response(body, { status, headers: contentType === undefined ? {} : { "content-type": contentType } }),
       );
-      const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
+      const nango = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
 
-      const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
-
-      expect(failure).toBeInstanceOf(NangoClientErrorV1);
-      expect((failure as NangoClientErrorV1).code).toBe(code);
+      await nangoFailure(nango.getSlackConnection({ connection_id: "conn_123" }), code);
     }
   });
 
   it("maps an empty 200 body on getSlackConnection to invalid_response (a body is required)", async () => {
-    const fetch = emptyNangoFetch(200);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 200 }));
+    const nango = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
 
-    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
-
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    expect((failure as NangoClientErrorV1).code).toBe("invalid_response");
+    await nangoFailure(nango.getSlackConnection({ connection_id: "conn_123" }), "invalid_response");
   });
 
   it.each([
@@ -362,18 +301,15 @@ describe("HttpNangoConnectionClientV1 error mapping", () => {
         headers: { "content-type": "application/json", "content-length": "99999999" },
       })],
   ])("maps %s to unavailable without leaking the secret key", async (_label, respond) => {
-    const fetch = vi.fn<typeof globalThis.fetch>(respond);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
+    const nango = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch: vi.fn<typeof globalThis.fetch>(respond) });
 
-    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
+    const failure = await nangoFailure(nango.getSlackConnection({ connection_id: "conn_123" }), "unavailable");
 
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    expect((failure as NangoClientErrorV1).code).toBe("unavailable");
-    expect((failure as NangoClientErrorV1).message).not.toContain(SECRET_KEY);
+    expect(failure.message).not.toContain(SECRET_KEY);
   });
 
   it("never echoes the secret key or client secret even when a 500 body contains them", async () => {
-    const fetch = nangoFetch([
+    const { client: nango } = client([
       500,
       {
         error: {
@@ -381,37 +317,15 @@ describe("HttpNangoConnectionClientV1 error mapping", () => {
         },
       },
     ]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
 
-    const failure = await failureOf(
-      client.createConnectSession({
-        tags: TAGS,
-        client_id: "client-id-value",
-        client_secret: CLIENT_SECRET,
-        scopes: SCOPES,
-      }),
-    );
+    const error = await nangoFailure(nango.createConnectSession(SESSION_INPUT), "unavailable");
 
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    const error = failure as NangoClientErrorV1;
     expect(error.message).not.toContain(SECRET_KEY);
     expect(error.message).not.toContain(CLIENT_SECRET);
   });
 });
 
 describe("parseNangoSlackConnectionV1", () => {
-  it("parses the connection fixture directly, sorting granted_scopes", () => {
-    expect(parseNangoSlackConnectionV1(CONNECTION_FIXTURE)).toEqual({
-      connection_id: "conn_123",
-      tags: TAGS,
-      team_id: "T0123456",
-      app_id: "A0123456",
-      bot_user_id: "U0123456",
-      granted_scopes: ["chat:write", "im:history", "im:write", "users:read"],
-      bot_token: "xoxb-111-222-abcdef",
-    });
-  });
-
   it("accepts a non-null enterprise object (Grid single-workspace install) when is_enterprise_install is false", () => {
     const fixture = fixtureWithRawPatch({ enterprise: { id: "E0123456", name: "Acme Enterprise" } });
     expect(parseNangoSlackConnectionV1(fixture).team_id).toBe("T0123456");

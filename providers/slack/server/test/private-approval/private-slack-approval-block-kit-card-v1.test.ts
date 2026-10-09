@@ -36,15 +36,36 @@ const INPUT = Object.freeze({
   ],
 });
 
-function blockById(
-  card: ReturnType<typeof buildPrivateSlackApprovalBlockKitCardV1>,
-  suffix: string,
-) {
-  return card.blocks.find((block) =>
+type Card = ReturnType<typeof buildPrivateSlackApprovalBlockKitCardV1>;
+type TextBlocks = readonly { readonly text: { readonly text: string } }[];
+
+function blockIndex(card: Card, suffix: string) {
+  return card.blocks.findIndex((block) =>
     (block as { readonly block_id?: string }).block_id?.endsWith(
       `-${suffix}-v1`,
     ),
   );
+}
+
+function blockById(card: Card, suffix: string) {
+  return card.blocks[blockIndex(card, suffix)];
+}
+
+function decisionBlock(card: Card) {
+  return card.blocks.find(
+    (block) => (block as { readonly type: string }).type === "container",
+  ) as {
+    readonly title: { readonly text: string };
+    readonly subtitle: { readonly text: string };
+    readonly child_blocks: TextBlocks;
+  };
+}
+
+function otherItems(card: Card) {
+  return blockById(card, "other-meeting-items") as {
+    readonly title: { readonly text: string };
+    readonly child_blocks: TextBlocks;
+  };
 }
 
 describe("private approval Block Kit card v1", () => {
@@ -66,15 +87,7 @@ describe("private approval Block Kit card v1", () => {
 
   it("renders numbered collapsible decisions from exact decision text", () => {
     const card = buildPrivateSlackApprovalBlockKitCardV1(INPUT);
-    const decision = card.blocks.find(
-      (block) => (block as { readonly type: string }).type === "container",
-    ) as {
-      readonly title: { readonly text: string };
-      readonly subtitle: { readonly text: string };
-      readonly child_blocks: readonly {
-        readonly text: { readonly text: string };
-      }[];
-    };
+    const decision = decisionBlock(card);
 
     expect(decision.title.text).toBe("1 · Ship the private beta.");
     expect(decision.subtitle.text).toBe("1 why");
@@ -94,12 +107,7 @@ describe("private approval Block Kit card v1", () => {
 
   it("labels owner-neutral next steps and unlinked context truthfully", () => {
     const card = buildPrivateSlackApprovalBlockKitCardV1(INPUT);
-    const other = blockById(card, "other-meeting-items") as {
-      readonly title: { readonly text: string };
-      readonly child_blocks: readonly {
-        readonly text: { readonly text: string };
-      }[];
-    };
+    const other = otherItems(card);
     const rendered = other.child_blocks
       .map((block) => block.text.text)
       .join("\n");
@@ -124,12 +132,7 @@ describe("private approval Block Kit card v1", () => {
       ...INPUT,
       ungrouped_rationales: undefined,
     });
-    const nextStepsBlock = blockById(nextSteps, "other-meeting-items") as {
-      readonly title: { readonly text: string };
-      readonly child_blocks: readonly {
-        readonly text: { readonly text: string };
-      }[];
-    };
+    const nextStepsBlock = otherItems(nextSteps);
     expect(nextStepsBlock.title.text).toBe("Next steps from this meeting");
     expect(JSON.stringify(nextStepsBlock)).not.toContain("Due:");
     expect(nextSteps.text).not.toContain("Due:");
@@ -138,12 +141,7 @@ describe("private approval Block Kit card v1", () => {
       ...INPUT,
       ungrouped_actions: undefined,
     });
-    const contextBlock = blockById(context, "other-meeting-items") as {
-      readonly title: { readonly text: string };
-      readonly child_blocks: readonly {
-        readonly text: { readonly text: string };
-      }[];
-    };
+    const contextBlock = otherItems(context);
     expect(contextBlock.title.text).toBe("Additional meeting context");
     expect(contextBlock.child_blocks[0].text.text).toContain(
       "*Additional context*",
@@ -152,16 +150,8 @@ describe("private approval Block Kit card v1", () => {
 
   it("renders the divider, final controls, and footer in the review contract", () => {
     const card = buildPrivateSlackApprovalBlockKitCardV1(INPUT);
-    const dividerIndex = card.blocks.findIndex((block) =>
-      (block as { readonly block_id?: string }).block_id?.endsWith(
-        "-divider-v1",
-      ),
-    );
-    const policyIndex = card.blocks.findIndex((block) =>
-      (block as { readonly block_id?: string }).block_id?.endsWith(
-        "-policy-v1",
-      ),
-    );
+    const dividerIndex = blockIndex(card, "divider");
+    const policyIndex = blockIndex(card, "policy");
     const footer = blockById(card, "footer") as {
       readonly elements: readonly { readonly text: string }[];
     };
@@ -269,15 +259,7 @@ describe("private approval Block Kit card v1", () => {
     };
     const first = buildPrivateSlackApprovalBlockKitCardV1(raw);
     const replay = buildPrivateSlackApprovalBlockKitCardV1({ ...raw });
-    const section = (
-      first.blocks.find(
-        (block) => (block as { readonly type: string }).type === "container",
-      ) as {
-        readonly child_blocks: readonly {
-          readonly text: { readonly text: string };
-        }[];
-      }
-    ).child_blocks[0].text.text;
+    const section = decisionBlock(first).child_blocks[0].text.text;
 
     expect(section).toContain("Ship &lt;beta&gt; &amp; review &gt; now");
     expect(first.text).toContain("block<03>&");
@@ -306,12 +288,7 @@ describe("private approval Block Kit card v1", () => {
         },
       ],
     });
-    const decision = card.blocks.find(
-      (block) => (block as { readonly type: string }).type === "container",
-    ) as {
-      readonly title: { readonly text: string };
-      readonly child_blocks: readonly { readonly text: { readonly text: string } }[];
-    };
+    const decision = decisionBlock(card);
 
     expect(decision.title.text).toBe(`1 · ${"A".repeat(145)}…`);
     expect(decision.child_blocks[0].text.text).toContain(decisionText);

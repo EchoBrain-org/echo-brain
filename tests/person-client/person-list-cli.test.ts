@@ -1,8 +1,8 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { canonicalJson } from '@echo-brain/federation-protocol';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 
@@ -15,14 +15,18 @@ const DOCUMENT = `document:doc_${'b'.repeat(64)}`;
 const MEETING = `meeting:sha256:${record}`;
 const TRANSCRIPT = `transcript:sha256:${record}`;
 const CURSOR = 'AnR3-page_2';
-const homes: string[] = [];
 
-afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
+/** One signed-in home shared by every run: list, open and ask keep no local state. */
+let shared: { home: string; session: string } | undefined;
+afterAll(() => { if (shared !== undefined) rmSync(shared.home, { recursive: true, force: true }); });
+// A run that signed out or rotated the shared session would let later before-network checks pass without one.
+afterEach(() => { if (shared !== undefined) expect(readFileSync(new PersonSessionStore(shared.home).paths.live, 'utf8')).toBe(shared.session); });
 
 function setup(): string {
+  if (shared !== undefined) return shared.home;
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-person-list-cli-')));
-  homes.push(home);
-  new PersonSessionStore(home).install('https://authority.example', 'oau_00000000-0000-4000-8000-000000000001', {
+  const store = new PersonSessionStore(home);
+  store.install('https://authority.example', 'oau_00000000-0000-4000-8000-000000000001', {
     organization_id: 'org_00000000-0000-4000-8000-000000000001',
     principal_id: 'prn_00000000-0000-4000-8000-000000000001',
     membership_id: 'mem_00000000-0000-4000-8000-000000000001',
@@ -33,6 +37,7 @@ function setup(): string {
     access_expires_at: '2026-09-29T20:11:00.000Z',
     refresh_expires_at: '2026-10-06T20:00:00.000Z', hard_reauthentication_at: '2026-10-06T20:00:00.000Z',
   });
+  shared = { home, session: readFileSync(store.paths.live, 'utf8') };
   return home;
 }
 

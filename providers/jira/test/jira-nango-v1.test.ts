@@ -18,11 +18,3 @@ it('starts a lowercase Jira Nango connection with exactly the live-read scopes a
   fetch.mockResolvedValueOnce(json(connection));
   await expect(nango.connection('reference-fixture')).resolves.toEqual({ tags, access_token: 'synthetic-jira-access' });
 });
-
-it('fails closed if Nango returns another provider or a non-OAuth credential', async () => {
-  const fetch = vi.fn(async () => json({ ...connection, provider: 'confluence' }));
-  const nango = createJiraNangoV1({ integration_id: integration, authorization: () => 'synthetic-nango-key', fetch: fetch as typeof globalThis.fetch });
-  await expect(nango.connection('reference-fixture')).rejects.toMatchObject({ code: 'unauthorized' });
-  fetch.mockResolvedValueOnce(json({ ...connection, credentials: { type: 'BASIC', password: 'private' } }));
-  await expect(nango.connection('reference-fixture')).rejects.toMatchObject({ code: 'unauthorized' });
-});

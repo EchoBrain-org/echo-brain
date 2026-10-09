@@ -122,7 +122,6 @@ describe('signed cross-platform client updates', () => {
     expect(result.status).toBe('updated');
     expect(result.installed_release).toBe(f.manifest.release_id);
     expect(f.install).toHaveBeenCalledOnce();
-    expect(f.install.mock.calls[0]).toBeDefined();
     expect(readFileSync(session, 'utf8')).toBe('synthetic untouched session');
     expect((await runClientUpdate('automatic', f.dependencies)).status).toBe('not_due');
     expect(f.fetcher).toHaveBeenCalledTimes(2);

@@ -11,6 +11,13 @@ import { canonicalJsonForTest as canonical } from '../support/test-canonical-jso
 
 const REPO = resolve(import.meta.dirname, '../..');
 const roots: string[] = [];
+// HEAD and its committed bytes cannot change during the run, so read them once.
+const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).trim();
+const committedSources = new Map<string, Buffer>();
+function committedSource(path: string): Buffer {
+  if (!committedSources.has(path)) committedSources.set(path, execFileSync('git', ['show', `${sourceSha}:${path}`], { cwd: REPO }));
+  return committedSources.get(path)!;
+}
 function save(path: string, value: unknown) { writeFileSync(path, `${canonical(value)}\n`, { mode: 0o600 }); }
 function temporary() {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'echo-update-sign-test-'));
@@ -22,7 +29,6 @@ function fixture() {
   const root = temporary();
   const signer = join(root, 'signer');
   const metadata = initializeClientUpdateSigner({ directory: signer });
-  const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).trim();
   mkdirSync(join(root, 'package/dist'), { recursive: true, mode: 0o700 });
   save(join(root, 'package/dist/build-identity.v1.json'), { schema_version: 1, kind: 'echo-packaged-build-identity', product_version: '0.1.1', source_sha: sourceSha, source_kind: 'materialized-commit' });
   writeFileSync(join(root, 'package/dist/client-update-cli.js'), '/* synthetic updater */');
@@ -44,7 +50,7 @@ function fixture() {
     const kit = join(directory, 'echo-person-onboarding-kit');
     mkdirSync(kit, { recursive: true, mode: 0o700 });
     for (const [file, source] of [['Start-ECHO.sh', target.startSource], ['clean-v1-release.mjs', 'tools/clean-v1-release.mjs'], ['verify-person-onboarding-kit.mjs', 'deploy/release/verify-person-onboarding-kit.mjs']]) {
-      writeFileSync(join(kit, file), execFileSync('git', ['show', `${sourceSha}:${source}`], { cwd: REPO }), { mode: 0o600 });
+      writeFileSync(join(kit, file), committedSource(source), { mode: 0o600 });
     }
     writeFileSync(join(kit, 'release.json'), readFileSync(releasePath), { mode: 0o600 });
     writeFileSync(join(kit, 'person-client.tgz'), readFileSync(client), { mode: 0o600 });

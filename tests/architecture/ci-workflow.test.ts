@@ -3,15 +3,16 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const REPO = resolve(import.meta.dirname, "../..");
-const WORKFLOW = resolve(REPO, ".github/workflows/ci.yml");
 const DOCKERFILE = resolve(REPO, "deploy/organization-authority/Dockerfile");
 const RECOVERY_VALIDATOR = resolve(
   REPO,
   "tools/validate-authority-recovery-templates.mjs",
 );
 
-function workflow() {
-  return readFileSync(WORKFLOW, "utf8");
+const source = readFileSync(resolve(REPO, ".github/workflows/ci.yml"), "utf8");
+
+function between(from: string, to: string) {
+  return source.slice(source.indexOf(from), source.indexOf(to));
 }
 
 function dependencyInputs(dockerfile: string) {
@@ -28,11 +29,7 @@ function dependencyInputs(dockerfile: string) {
 
 describe("CI workflow", () => {
   it("only cancels superseded pull-request runs", () => {
-    const source = workflow();
-    const concurrency = source.slice(
-      source.indexOf("concurrency:"),
-      source.indexOf("permissions:"),
-    );
+    const concurrency = between("concurrency:", "permissions:");
 
     expect(concurrency).toContain("github.event_name == 'pull_request'");
     expect(concurrency).toContain("github.run_id");
@@ -45,12 +42,9 @@ describe("CI workflow", () => {
   });
 
   it("keeps pull-request BuildKit cache entries separate from canonical runs", () => {
-    const source = workflow();
-    const build = source.slice(
-      source.indexOf("- name: Build the clean V1 authority image"),
-      source.indexOf(
-        "- name: Assert the authority image build left the checkout clean",
-      ),
+    const build = between(
+      "- name: Build the clean V1 authority image",
+      "- name: Assert the authority image build left the checkout clean",
     );
     const prScope = "format('pr-{0}', github.event.pull_request.number)";
     const refScope = "format('ref-{0}', github.ref_name)";
@@ -67,8 +61,6 @@ describe("CI workflow", () => {
   });
 
   it("exposes one stable aggregate required-check name", () => {
-    const source = workflow();
-
     expect(source).toMatch(/required-checks:\s*\n\s+name: CI required checks/);
     expect(source).toMatch(
       /needs: \[check, person-client-package, desktop-app, authority-container, authority-recovery-infrastructure\]/,
@@ -83,12 +75,8 @@ describe("CI workflow", () => {
   });
 
   it("executes exact recovery-template validation as an independent proof", () => {
-    const source = workflow();
     const validator = readFileSync(RECOVERY_VALIDATOR, "utf8");
-    const job = source.slice(
-      source.indexOf("  authority-recovery-infrastructure:"),
-      source.indexOf("  required-checks:"),
-    );
+    const job = between("  authority-recovery-infrastructure:", "  required-checks:");
 
     expect(job).toContain("name: Authority recovery infrastructure");
     expect(job).toContain(
@@ -137,11 +125,7 @@ describe("CI workflow", () => {
   });
 
   it("reuses the local harness after retaining the exact Authority-image proof", () => {
-    const source = workflow();
-    const authorityJob = source.slice(
-      source.indexOf("  authority-container:"),
-      source.indexOf("  required-checks:"),
-    );
+    const authorityJob = between("  authority-container:", "  required-checks:");
 
     expect(authorityJob).toContain("cache: npm");
     expect(authorityJob).toContain("- run: npm ci");
@@ -173,11 +157,7 @@ describe("CI workflow", () => {
   });
 
   it("runs the macOS-only CLI-kit and update-dispatch proofs in the macOS Person-client job", () => {
-    const source = workflow();
-    const personClientJob = source.slice(
-      source.indexOf("  person-client-package:"),
-      source.indexOf("  authority-container:"),
-    );
+    const personClientJob = between("  person-client-package:", "  authority-container:");
 
     expect(personClientJob).toContain(
       "tests/architecture/mac-person-cli-kit.test.ts",
@@ -189,11 +169,7 @@ describe("CI workflow", () => {
   });
 
   it("builds, verifies, and installs only the macOS command-line kit in the macOS Person-client job", () => {
-    const source = workflow();
-    const personClientJob = source.slice(
-      source.indexOf("  person-client-package:"),
-      source.indexOf("  authority-container:"),
-    );
+    const personClientJob = between("  person-client-package:", "  authority-container:");
     const build = personClientJob.indexOf("npm run kit:person-onboarding --");
     const verify = personClientJob.indexOf(
       '"$kit_root/node" "$kit_root/verify-person-onboarding-kit.mjs" "$kit_root"',
@@ -214,11 +190,7 @@ describe("CI workflow", () => {
   });
 
   it("requires native macOS and Linux desktop tests and package proofs", () => {
-    const source = workflow();
-    const desktopJob = source.slice(
-      source.indexOf("  desktop-app:"),
-      source.indexOf("  authority-container:"),
-    );
+    const desktopJob = between("  desktop-app:", "  authority-container:");
     const steps = [
       "- name: Install repository dependencies",
       "run: node tools/build.mjs --person-client",

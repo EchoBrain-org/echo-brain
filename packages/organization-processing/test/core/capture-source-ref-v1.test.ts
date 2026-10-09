@@ -28,7 +28,6 @@ describe('provider-neutral capture source references', () => {
     expect(parseCaptureSourceRefV1(ref)).toMatchObject({ tool: 'example', tenant: 'tenant-1', kind: 'local-actor' });
     const id = parseCaptureSourceRefV1(ref).id;
     expect(id).toMatch(/^[a-f0-9]{64}\.[a-f0-9]{64}$/);
-    expect(id.length).toBe(129);
     expect(`source:${id.split('.')[0]}`).toBe(localActor.source_id);
     for (const change of [{ source_id: `source:${'b'.repeat(64)}` }, { local_id: 'speaker-2' }, { tenant: 'tenant-2' }]) {
       expect(captureLocalActorRefV1({ ...localActor, ...change })).not.toBe(ref);

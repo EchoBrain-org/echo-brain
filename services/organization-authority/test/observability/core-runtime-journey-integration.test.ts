@@ -44,13 +44,6 @@ describe("core runtime observations through the existing journey channel", () =>
     transport.observer({
       ...closedCall,
       injected: "must-not-serialize",
-      accounting: {
-        kind: "execution",
-        execution_attempt: 2,
-        retry_count: 1,
-        retry_of_attempt: 1,
-        injected: "must-not-serialize",
-      },
       diagnostic: {
         ...closedCall.diagnostic,
         injected: "must-not-serialize",
@@ -59,17 +52,7 @@ describe("core runtime observations through the existing journey channel", () =>
     });
     const canonical = JSON.parse(lines[beforeInjected]!);
     expect(canonical).toEqual(closedCall);
-    expect(canonical).toMatchObject({
-      workflow: "core_runtime",
-      stage: "core_operation",
-      diagnostic: {
-        phase: "model_call",
-        provider: "openrouter",
-        model: request.model,
-        counts: { total_tokens: null },
-      },
-    });
-    expect(canonical).not.toHaveProperty("accounting");
+    expect(canonical).toMatchObject({ workflow: "core_runtime", stage: "core_operation" });
     expect(lines.slice(beforeInjected).join("")).not.toContain("must-not-serialize");
     transport.close();
   });

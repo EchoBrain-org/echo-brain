@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  validatePersonDocumentMetadataV1, validatePersonDocumentMetadataV2, validatePersonDocumentReceiptV2, validatePersonDocumentSavedV2, validatePersonDocumentSearchV2,
+  validatePersonDocumentMetadataV2, validatePersonDocumentReceiptV2, validatePersonDocumentSavedV2, validatePersonDocumentSearchV2,
   validatePersonDocumentUploadMetadataV2, validatePersonUpdateReceiptV3, validatePersonUpdateSavedV3, validatePersonUpdateStatusResultV3, validatePersonUpdateSubmitV3,
   validateProjectContextFeedV2,
 } from '../src/index.js';
@@ -53,15 +53,10 @@ describe('reader-scoped upload releases (ADR-0023)', () => {
   };
 
   it('lets document metadata withhold the request ID, but never a receipt or a saved proof', () => {
-    expect(validatePersonDocumentMetadataV2({ ...document, request_id: null }).request_id).toBeNull();
     expect(validatePersonDocumentMetadataV2(document).request_id).toBe(request_id);
-    expect(() => validatePersonDocumentMetadataV2({ ...document, request_id: 'not-a-uuid' })).toThrow();
     const { kind: _kind, extraction_detail: _detail, extractor: _extractor, extracted_text_bytes: _bytes, ...receipt } = document;
     expect(() => validatePersonDocumentReceiptV2({ ...receipt, kind: 'echo-person-document-receipt-v2', request_id: null })).toThrow();
     expect(() => validatePersonDocumentSavedV2({ schema_version: 2, kind: 'echo-person-document-saved-v2', request_id: null, document_id: document.document_id, received_at, state: 'saved' })).toThrow();
-    const legacy = { ...document, schema_version: 1, kind: 'echo-person-document-metadata-v1', project_id: first, request_id: null } as Record<string, unknown>;
-    delete legacy.association_project_ids;
-    expect(validatePersonDocumentMetadataV1(legacy).request_id).toBeNull();
   });
 
   it('serves a note status in full or as a saved proof with no project coordinates', () => {

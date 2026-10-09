@@ -246,7 +246,7 @@ describe('shared audited live evidence source V1', () => {
     });
 
     const reads = Array.from({ length: 11 }, (_, index) => source.search({ query: `batch-${index}`, limit: 50 }));
-    await vi.waitFor(() => expect(f.reader.search).toHaveBeenCalledTimes(11));
+    await vi.waitFor(() => expect(f.reader.search).toHaveBeenCalledTimes(11), { interval: 1 });
     releaseAudit();
     const outcomes = await Promise.allSettled(reads);
 
@@ -278,7 +278,7 @@ describe('shared audited live evidence source V1', () => {
 
     const first = source.search({ query: 'shared' });
     const second = source.search({ query: 'shared' });
-    await vi.waitFor(() => expect(f.audit.record).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(f.audit.record).toHaveBeenCalledTimes(2), { interval: 1 });
     failFirstAudit();
     await expect(first).rejects.toMatchObject({ code: 'unavailable' });
 

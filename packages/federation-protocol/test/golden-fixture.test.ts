@@ -341,10 +341,6 @@ describe("federation protocol golden fixture", () => {
       nested = [nested];
     }
     expect(() => canonicalJson(nested)).toThrow(CanonicalJsonError);
-    try {
-      canonicalJson(nested);
-    } catch (error) {
-      expect(isFederationProtocolValidationError(error)).toBe(true);
-    }
+    expect(() => canonicalJson(nested)).toThrow(FederationProtocolValidationError);
   });
 });

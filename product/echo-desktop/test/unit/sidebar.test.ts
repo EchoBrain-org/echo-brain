@@ -1,5 +1,5 @@
 import type { VNode } from 'preact';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { State } from '../../src/renderer/store.js';
 
 const { loadProjects, loadArchivedProjects } = vi.hoisted(() => ({ loadProjects: vi.fn(), loadArchivedProjects: vi.fn() }));
@@ -13,8 +13,7 @@ vi.mock('../../src/renderer/store.js', async original => ({
   ...await original<typeof import('../../src/renderer/store.js')>(), loadProjects, loadArchivedProjects,
 }));
 
-beforeEach(() => { vi.clearAllMocks(); vi.stubGlobal('navigator', { userAgent: 'test' }); });
-afterEach(() => { vi.unstubAllGlobals(); });
+beforeEach(() => { vi.clearAllMocks(); });
 
 function descendants(value: unknown): VNode<Record<string, unknown>>[] {
   if (Array.isArray(value)) return value.flatMap(descendants);

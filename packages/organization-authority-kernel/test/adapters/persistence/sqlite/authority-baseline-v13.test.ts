@@ -56,19 +56,15 @@ function seededWithSources(): Database.Database {
     (organization_id, principal_id, membership_id, membership_type, request_id, request_version, context_id, payload_sha256, title, text, audience_kind, submitted_association_project_ids_json, audience_project_ids_json, received_at)
     VALUES (?, ?, ?, 'owner', 'text-v3', 3, ?, ?, 'Design note', 'Original text', 'projects', ?, ?, ?)`)
     .run(ORG, PRINCIPAL, MEMBERSHIP, CONTEXT, SHA, JSON.stringify([PROJECT, PROJECT_B]), JSON.stringify([PROJECT, PROJECT_B]), NOW);
-  database.prepare("INSERT INTO authority_project_context_associations_v1 VALUES (?, ?, ?, ?, ?, 'owner', ?)").run(CONTEXT, PROJECT, ORG, PRINCIPAL, MEMBERSHIP, NOW);
-  database.prepare("INSERT INTO authority_project_context_associations_v1 VALUES (?, ?, ?, ?, ?, 'owner', ?)").run(CONTEXT, PROJECT_B, ORG, PRINCIPAL, MEMBERSHIP, NOW);
-  database.prepare("INSERT INTO authority_person_update_audience_projects_v1 VALUES (?, ?, ?)").run(CONTEXT, PROJECT, ORG);
-  database.prepare("INSERT INTO authority_person_update_audience_projects_v1 VALUES (?, ?, ?)").run(CONTEXT, PROJECT_B, ORG);
+  for (const project of [PROJECT, PROJECT_B]) database.prepare("INSERT INTO authority_project_context_associations_v1 VALUES (?, ?, ?, ?, ?, 'owner', ?)").run(CONTEXT, project, ORG, PRINCIPAL, MEMBERSHIP, NOW);
+  for (const project of [PROJECT, PROJECT_B]) database.prepare("INSERT INTO authority_person_update_audience_projects_v1 VALUES (?, ?, ?)").run(CONTEXT, project, ORG);
   database.prepare(`INSERT INTO authority_person_documents_v1
     (document_id, organization_id, principal_id, membership_id, membership_type, request_id, request_version, filename, title, detected_media_type, original_size, original_sha256, payload_sha256, audience_kind, submitted_association_project_ids_json, audience_project_ids_json, received_at)
     VALUES (?, ?, ?, ?, 'owner', 'document-v2', 2, 'brief.txt', 'Brief', 'text/plain', 5, ?, ?, 'projects', ?, ?, ?)`)
     .run(DOCUMENT, ORG, PRINCIPAL, MEMBERSHIP, SHA, SHA, JSON.stringify([PROJECT, PROJECT_B]), JSON.stringify([PROJECT, PROJECT_B]), NOW);
   database.prepare("INSERT INTO authority_person_document_originals_v1 VALUES (?, ?)").run(DOCUMENT, Buffer.from("hello"));
-  database.prepare("INSERT INTO authority_person_document_associations_v1 VALUES (?, ?, ?, ?)").run(DOCUMENT, PROJECT, ORG, NOW);
-  database.prepare("INSERT INTO authority_person_document_associations_v1 VALUES (?, ?, ?, ?)").run(DOCUMENT, PROJECT_B, ORG, NOW);
-  database.prepare("INSERT INTO authority_person_document_audience_projects_v1 VALUES (?, ?, ?)").run(DOCUMENT, PROJECT, ORG);
-  database.prepare("INSERT INTO authority_person_document_audience_projects_v1 VALUES (?, ?, ?)").run(DOCUMENT, PROJECT_B, ORG);
+  for (const project of [PROJECT, PROJECT_B]) database.prepare("INSERT INTO authority_person_document_associations_v1 VALUES (?, ?, ?, ?)").run(DOCUMENT, project, ORG, NOW);
+  for (const project of [PROJECT, PROJECT_B]) database.prepare("INSERT INTO authority_person_document_audience_projects_v1 VALUES (?, ?, ?)").run(DOCUMENT, project, ORG);
   return database;
 }
 

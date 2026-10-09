@@ -68,13 +68,6 @@ afterEach(() => {
 describe("organization control state baseline V4", () => {
   const RETIRED_IDENTITY = /enrollment|installation|(?<!re)lease/i;
 
-  it('has no private approval tables in baseline V4', () => {
-    const db = new Database(':memory:');
-    applyOrganizationControlBaselineV4(db);
-    const names = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'organization_private_approval_%'").pluck().all();
-    expect(names).toEqual([]);
-  });
-
   it("freezes a migration-ledger-free ECOP schema without retired identity objects", () => {
     const sql = organizationControlBaselineSqlV4();
     expect(RETIRED_IDENTITY.test(sql)).toBe(false);
@@ -89,6 +82,8 @@ describe("organization control state baseline V4", () => {
       const names = schemaObjects(database).map(({ name }) => name);
       expect(names).not.toContain("organization_schema_migrations");
       expect(names).not.toContain("organization_provider_human_action_evidence");
+      // No private approval tables (SQL LIKE 'organization_private_approval_%').
+      expect(names.filter((name) => /^organization.private.approval./i.test(name))).toEqual([]);
       expect(names).toContain("organization_person_slack_link_challenges");
       expect(digest(JSON.stringify(schemaObjects(database)))).toBe(
         "sha256:9d9cdf0d4d72082b2763cfa09b30a841db425e9998c8c826bc60b7e60aabe34e",
@@ -138,46 +133,26 @@ describe("organization control state baseline V4", () => {
     const database = openOrganizationControlDatabase(databasePath());
     try {
       applyOrganizationControlBaselineV4(database);
-      for (const [id, membership] of [
-        ["clm_one", "mem_one"],
-        ["clm_two", "mem_two"],
-      ] as const) {
-        const contract = digest(`link:${id}`);
-        database
-          .prepare(
-            `INSERT INTO organization_external_human_link_contracts (
-               external_identity_link_id, contract_sha256, contract_json, created_at
-             ) VALUES (?, ?, '{}', '2026-08-21T12:00:00.000Z')`,
-          )
-          .run(id, contract);
-        if (id === "clm_one") {
-          database
-            .prepare(
-              `INSERT INTO organization_external_human_link_current (
-                 external_identity_link_id, contract_sha256, provider_issuer,
-                 provider_tenant_kind, provider_tenant_id, provider_enterprise_id,
-                 provider_subject_id, principal_id, membership_id, current_status,
-                 updated_at
-               ) VALUES (?, ?, 'https://slack.com', 'workspace', 'T_ONE', NULL,
-                 'U_ONE', 'prn_one', ?, 'active', '2026-08-21T12:00:00.000Z')`,
-            )
-            .run(id, contract, membership);
-        } else {
-          expect(() =>
-            database
-              .prepare(
-                `INSERT INTO organization_external_human_link_current (
-                   external_identity_link_id, contract_sha256, provider_issuer,
-                   provider_tenant_kind, provider_tenant_id, provider_enterprise_id,
-                   provider_subject_id, principal_id, membership_id, current_status,
-                   updated_at
-                 ) VALUES (?, ?, 'https://slack.com', 'workspace', 'T_ONE', NULL,
-                   'U_ONE', 'prn_two', ?, 'active', '2026-08-21T12:00:00.000Z')`,
-              )
-              .run(id, contract, membership),
-          ).toThrow(/UNIQUE constraint failed/);
-        }
-      }
+      const contract = database.prepare(
+        `INSERT INTO organization_external_human_link_contracts (
+           external_identity_link_id, contract_sha256, contract_json, created_at
+         ) VALUES (?, ?, '{}', '2026-08-21T12:00:00.000Z')`,
+      );
+      const current = database.prepare(
+        `INSERT INTO organization_external_human_link_current (
+           external_identity_link_id, contract_sha256, provider_issuer,
+           provider_tenant_kind, provider_tenant_id, provider_enterprise_id,
+           provider_subject_id, principal_id, membership_id, current_status,
+           updated_at
+         ) VALUES (?, ?, 'https://slack.com', 'workspace', 'T_ONE', NULL,
+           'U_ONE', ?, ?, 'active', '2026-08-21T12:00:00.000Z')`,
+      );
+      contract.run("clm_one", digest("link:clm_one"));
+      current.run("clm_one", digest("link:clm_one"), "prn_one", "mem_one");
+      contract.run("clm_two", digest("link:clm_two"));
+      expect(() =>
+        current.run("clm_two", digest("link:clm_two"), "prn_two", "mem_two"),
+      ).toThrow(/UNIQUE constraint failed/);
     } finally {
       database.close();
     }
@@ -189,37 +164,19 @@ describe("organization control state baseline V4", () => {
       applyOrganizationControlBaselineV4(database);
       const first = seedConnection(database, "con_one");
       const second = seedConnection(database, "con_two");
-      expect(() =>
-        database
-          .prepare(
-            `INSERT INTO organization_tool_connection_current_state (
-               connection_id, connection_contract_sha256, state_json,
-               state_sha256, current_status, updated_at
-             ) VALUES ('con_one', ?, '{}', ?, 'active',
-               '2026-08-21T12:00:00.000Z')`,
-          )
-          .run(second, digest("state:wrong")),
-      ).toThrow(/does not match its contract/);
-      database
-        .prepare(
-          `INSERT INTO organization_tool_connection_current_state (
-             connection_id, connection_contract_sha256, state_json,
-             state_sha256, current_status, updated_at
-           ) VALUES ('con_one', ?, '{}', ?, 'active',
-             '2026-08-21T12:00:00.000Z')`,
-        )
-        .run(first, digest("state:one"));
-      expect(() =>
-        database
-          .prepare(
-            `INSERT INTO organization_tool_connection_current_state (
-               connection_id, connection_contract_sha256, state_json,
-               state_sha256, current_status, updated_at
-             ) VALUES ('con_two', ?, '{}', ?, 'active',
-               '2026-08-21T12:00:00.000Z')`,
-          )
-          .run(second, digest("state:two")),
-      ).toThrow(/UNIQUE constraint failed/);
+      const fence = database.prepare(
+        `INSERT INTO organization_tool_connection_current_state (
+           connection_id, connection_contract_sha256, state_json,
+           state_sha256, current_status, updated_at
+         ) VALUES (?, ?, '{}', ?, 'active', '2026-08-21T12:00:00.000Z')`,
+      );
+      expect(() => fence.run("con_one", second, digest("state:wrong"))).toThrow(
+        /does not match its contract/,
+      );
+      fence.run("con_one", first, digest("state:one"));
+      expect(() => fence.run("con_two", second, digest("state:two"))).toThrow(
+        /UNIQUE constraint failed/,
+      );
     } finally {
       database.close();
     }

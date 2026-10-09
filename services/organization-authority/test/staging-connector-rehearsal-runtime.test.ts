@@ -7,9 +7,7 @@ const state = vi.hoisted(() => ({
   apps: [] as readonly { readonly routes: readonly { readonly route_id: string; readonly path: string }[]; accept(input: unknown): Promise<unknown> }[],
   config: undefined as unknown,
   api: undefined as unknown,
-  captures: 0,
   jira: 0,
-  demoteDuringCapture: false,
   reads: [] as string[],
   readMode: 'normal' as 'normal' | 'revoke' | 'demote' | 'stall' | 'empty',
   grantRevoked: false,
@@ -77,7 +75,7 @@ vi.mock('../src/composition/organization-authority-composition-root.js', () => (
     state.api = dependencies.api;
     state.apps = dependencies.api.person_http_runtime_factory({
       authenticateAccess({ access_token }: { access_token: string }) {
-        return access_token === 'owner' && !state.ownerRevoked && !(state.demoteDuringCapture && state.captures > 0)
+        return access_token === 'owner' && !state.ownerRevoked
           ? { organization_id: 'org_fixture', principal_id: 'prn_fixture', membership_id: 'mem_fixture', membership_type: 'owner', access_credential_sha256: 'access', person_state_sha256: 'person', session_state_sha256: 'session' }
           : { organization_id: 'org_fixture', principal_id: 'prn_other', membership_id: 'mem_other', membership_type: 'member', access_credential_sha256: 'access', person_state_sha256: 'person', session_state_sha256: 'session' };
       },
@@ -89,9 +87,10 @@ vi.mock('../src/composition/organization-authority-composition-root.js', () => (
 import { openStagingConnectorRehearsalService } from '../src/composition/staging-connector-rehearsal-runtime.js';
 import { JIRA_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
 import { STAGING_CONNECTOR_REHEARSAL_PATH_V1, STAGING_CONNECTOR_REHEARSAL_POLICY_V3 } from '../src/composition/staging-connector-rehearsal-protocol.js';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
 
 const roots: string[] = [];
-afterEach(() => { vi.restoreAllMocks(); state.apps = []; state.config = undefined; state.api = undefined; state.captures = 0; state.jira = 0; state.demoteDuringCapture = false;
+afterEach(() => { vi.restoreAllMocks(); state.apps = []; state.config = undefined; state.api = undefined; state.jira = 0;
   state.reads = []; state.readMode = 'normal'; state.grantRevoked = false; state.ownerRevoked = false;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -113,14 +112,19 @@ function request(route_id: string, token: string, body: unknown) {
   return { route_id, method: 'POST' as const, path: route_id === 'staging-connector-rehearsal' ? STAGING_CONNECTOR_REHEARSAL_PATH_V1 : '/v1/person/tools/jira/connect', headers: { authorization: `Bearer ${token}` }, content_type: 'application/json', raw_body: new TextEncoder().encode(JSON.stringify(body)) };
 }
 
+function stateRoot() {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
+  const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
+  return { root, stateDirectory };
+}
+
 async function readFixture() {
-  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-read-')); roots.push(root);
-  const directory = join(root, 'state'); mkdirSync(directory);
-  const selected = selection(); const opened = await openStagingConnectorRehearsalService(config(directory), selected);
+  const { root, stateDirectory } = stateRoot();
+  const selected = selection(); const opened = await openStagingConnectorRehearsalService(config(stateDirectory), selected);
   const application = state.apps.find(app => app.routes.some(route => route.path === STAGING_CONNECTOR_REHEARSAL_PATH_V1))!;
-  const profile_sha256 = (await import('@echo-brain/federation-protocol')).canonicalSha256(selected.profile);
+  const profile_sha256 = canonicalSha256(selected.profile);
   const input = request('staging-connector-rehearsal', 'owner', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'jira' });
-  return { opened, application, input };
+  return { root, selected, profile_sha256, opened, application, input };
 }
 
 it.each(['revoke', 'demote'] as const)('withholds read success when %s happens during the final provider fence', async mode => {
@@ -129,7 +133,6 @@ it.each(['revoke', 'demote'] as const)('withholds read success when %s happens d
     const result = await fixture.application.accept(fixture.input);
     expect(result).toMatchObject({ status: 200, body: { qualified: false, result: { status: 'refused', phase: 'final_fence' } } });
     expect(state.reads).toEqual(['list', 'open', 'revalidate']);
-    expect(state.captures).toBe(0);
     expect(JSON.stringify(result)).not.toContain('Request-only synthetic ticket text');
     expect(JSON.stringify(result)).not.toContain('private grant details');
   } finally { await fixture.opened.close(); }
@@ -153,10 +156,10 @@ it('bounds an uncooperative provider by the combined deadline and honors caller 
     const fixture = await readFixture(); state.readMode = 'stall'; state.reads = [];
     try {
       const pending = fixture.application.accept({ ...fixture.input, signal: caller.signal });
-      await vi.waitFor(() => expect(state.reads).toEqual(['list']));
+      await vi.waitFor(() => expect(state.reads).toEqual(['list']), { interval: 5 });
       (reason === 'deadline_exceeded' ? deadline : caller).abort();
       await expect(pending).resolves.toMatchObject({ status: 200, body: { result: { status: 'refused', phase: 'inventory', reason } } });
-      expect(state.reads).toEqual(['list']); expect(state.captures).toBe(0);
+      expect(state.reads).toEqual(['list']);
     } finally { await fixture.opened.close(); timeout.mockRestore(); }
   }
 });
@@ -167,13 +170,12 @@ it('returns a finite refusal for an already-aborted read without starting provid
     await expect(fixture.application.accept({ ...fixture.input, signal: AbortSignal.abort() }))
       .resolves.toMatchObject({ status: 200, body: { result: { status: 'refused', phase: 'local_authorization', reason: 'cancelled' } } });
     await new Promise<void>(resolve => setImmediate(resolve));
-    expect(state.reads).toEqual([]); expect(state.captures).toBe(0);
+    expect(state.reads).toEqual([]);
   } finally { await fixture.opened.close(); }
 });
 
 it.each(['live_connectors', 'person_http_runtime_factory'] as const)('refuses %s under the staging diagnostic profile before opening state', async key => {
-  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
-  const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
+  const { root, stateDirectory } = stateRoot();
   const factory = vi.fn(() => ({ application: { async source() { return undefined; } },
     connection_http: { routes: [], async accept() { return { status: 200 as const, body: {} }; } }, close() {},
   }));
@@ -188,8 +190,7 @@ it.each(['live_connectors', 'person_http_runtime_factory'] as const)('refuses %s
 });
 
 it('registers profile-bound Jira Ask and forwards Confluence alongside the fixed Jira rehearsal', async () => {
-  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
-  const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
+  const { stateDirectory } = stateRoot();
   const confluence = { enabled: true as const, cloud_id: '11111111-1111-4111-8111-111111111111', integration_id: 'confluence', nango_authorization: () => 'not-a-live-secret' };
   const base = config(stateDirectory) as Parameters<typeof openStagingConnectorRehearsalService>[0];
   const jira = { enabled: true as const, cloud_id: selection().profile.jira.cloud_id, integration_id: 'jira', nango_authorization: () => 'not-a-live-secret' };
@@ -205,8 +206,7 @@ it.each([
   { cloud_id: '00000000-0000-4000-8000-000000000002' },
   { integration_id: 'other-jira' },
 ])('refuses Jira Ask configuration outside the fixed staging profile (%j)', async mismatch => {
-  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
-  const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
+  const { root, stateDirectory } = stateRoot();
   const base = config(stateDirectory) as Parameters<typeof openStagingConnectorRehearsalService>[0];
   await expect(openStagingConnectorRehearsalService({ ...base, jira_person_live: {
     enabled: true, cloud_id: selection().profile.jira.cloud_id, integration_id: 'jira',
@@ -217,17 +217,11 @@ it.each([
 });
 
 it('binds a staging-only owner surface to a lineage/profile sidecar and returns content-free receipts', async () => {
-  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
-  const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
-  const selected = selection();
-  const opened = await openStagingConnectorRehearsalService(config(stateDirectory), selected);
-  const capture = state.apps.find(app => app.routes.some(route => route.path === STAGING_CONNECTOR_REHEARSAL_PATH_V1))!;
-  const profile_sha256 = (await import('@echo-brain/federation-protocol')).canonicalSha256(selected.profile);
+  const { root, selected, profile_sha256, opened, application: capture } = await readFixture();
   await expect(capture.accept(request('staging-connector-rehearsal', 'other', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'status' }))).rejects.toThrow('unavailable');
   const status = await capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'status' })) as { body: { qualified: boolean } };
   expect(status.body).toMatchObject({ qualified: false, processing: 'active' });
   await expect(capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'granola', limit: 1 }))).rejects.toThrow('invalid');
-  expect(state.captures).toBe(0);
   const marker = JSON.parse(readFileSync(join(root, 'staging-connector-rehearsal-v1', 'binding.json'), 'utf8')) as Record<string, unknown>;
   expect(marker).toMatchObject({ state_lineage_id: 'lineage-fixture', principal_id: 'prn_fixture', membership_id: 'mem_fixture', profile_sha256 });
   expect(marker).not.toHaveProperty('release_id');
@@ -235,8 +229,7 @@ it('binds a staging-only owner surface to a lineage/profile sidecar and returns 
 });
 
 it('does not expose Jira connection commands to a non-owner', async () => {
-  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
-  const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
+  const { stateDirectory } = stateRoot();
   const opened = await openStagingConnectorRehearsalService(config(stateDirectory), selection());
   const jira = state.apps.find(app => app.routes.some(route => route.path === '/v1/person/tools/jira/connect'))!;
   expect(() => jira.accept(request('jira-connect', 'other', { schema_version: 1 }))).toThrow('unavailable');

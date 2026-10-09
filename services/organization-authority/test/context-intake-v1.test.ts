@@ -42,6 +42,11 @@ function authority(options: {
   };
 }
 
+function intake(sources: readonly unknown[], store: SourceAdmissionStoreV1, gate: ContextIntakeAuthorityV1 = authority(), context?: { readonly signal: AbortSignal }) {
+  return intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources, authority: gate, store, context });
+}
+
+const EMPTY_COUNTS = { sources: 0, revisions: 0, contents: 0, representations: 0 };
 function counts(value: Database.Database): Record<string, number> {
   return {
     sources: (value.prepare('SELECT count(*) AS n FROM authority_sources_v1').get() as { n: number }).n,
@@ -66,15 +71,13 @@ describe('context intake V1 shared gate', () => {
     for (const [index, drift] of drifts.entries()) {
       for (const existing of [false, true]) {
         const value = database();
-        if (existing) await intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [contextCaptureV1()], authority: authority(), store: new SqliteContextCaptureStoreV1(value, authority(), CONTEXT_CAPTURE_IDENTITY_V1) });
+        if (existing) await intake([contextCaptureV1()], new SqliteContextCaptureStoreV1(value, authority(), CONTEXT_CAPTURE_IDENTITY_V1));
         let current = policy(); let preAdmissionChecks = 0; let selectedInTransaction = false;
         const queued: ContextIntakeAuthorityV1 = {
           select: () => { if (value.inTransaction) selectedInTransaction = true; return current; },
           requireCurrent: () => { if (!value.inTransaction && ++preAdmissionChecks === 2) current = drift(policy()); },
         };
-        await expect(intakeContextBatchV1({
-          identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [contextCaptureV1()], authority: queued, store: new SqliteContextCaptureStoreV1(value, queued, CONTEXT_CAPTURE_IDENTITY_V1),
-        }), `drift ${index}`).rejects.toThrow();
+        await expect(intake([contextCaptureV1()], new SqliteContextCaptureStoreV1(value, queued, CONTEXT_CAPTURE_IDENTITY_V1), queued), `drift ${index}`).rejects.toThrow();
         expect(selectedInTransaction, `drift ${index}`).toBe(true);
         expect(counts(value).contents, `drift ${index}`).toBe(existing ? 1 : 0);
       }
@@ -83,8 +86,8 @@ describe('context intake V1 shared gate', () => {
     const value = database(); let requireCurrentInTransaction = false;
     const fenced = authority({ requireCurrent: () => { if (value.inTransaction) requireCurrentInTransaction = true; } });
     const store = new SqliteContextCaptureStoreV1(value, fenced, CONTEXT_CAPTURE_IDENTITY_V1);
-    await intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [contextCaptureV1()], authority: fenced, store });
-    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [contextCaptureV1()], authority: fenced, store }))
+    await intake([contextCaptureV1()], store, fenced);
+    await expect(intake([contextCaptureV1()], store, fenced))
       .resolves.toMatchObject([{ admission: 'duplicate' }]);
     expect(requireCurrentInTransaction).toBe(true);
   });
@@ -96,10 +99,8 @@ describe('context intake V1 shared gate', () => {
       asyncInTransaction = true;
       return Promise.reject(new Error('late async authorization rejected'));
     }) as unknown as ContextIntakeAuthorityV1['requireCurrent'] });
-    await expect(intakeContextBatchV1({
-      identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [contextCaptureV1()], authority: asyncAuthority,
-      store: new SqliteContextCaptureStoreV1(asyncDatabase, asyncAuthority, CONTEXT_CAPTURE_IDENTITY_V1),
-    })).rejects.toThrow('synchronously');
+    await expect(intake([contextCaptureV1()], new SqliteContextCaptureStoreV1(asyncDatabase, asyncAuthority, CONTEXT_CAPTURE_IDENTITY_V1), asyncAuthority))
+      .rejects.toThrow('synchronously');
     expect(asyncInTransaction).toBe(true);
     expect(counts(asyncDatabase).contents).toBe(0);
 
@@ -109,10 +110,8 @@ describe('context intake V1 shared gate', () => {
       cancelledInTransaction = true;
       controller.abort(new Error('cancelled in custody fence'));
     } });
-    await expect(intakeContextBatchV1({
-      identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [contextCaptureV1()], authority: cancelledAuthority,
-      store: new SqliteContextCaptureStoreV1(cancelledDatabase, cancelledAuthority, CONTEXT_CAPTURE_IDENTITY_V1), context: { signal: controller.signal },
-    })).rejects.toThrow('cancelled in custody fence');
+    await expect(intake([contextCaptureV1()], new SqliteContextCaptureStoreV1(cancelledDatabase, cancelledAuthority, CONTEXT_CAPTURE_IDENTITY_V1), cancelledAuthority, { signal: controller.signal }))
+      .rejects.toThrow('cancelled in custody fence');
     expect(cancelledInTransaction).toBe(true);
     expect(counts(cancelledDatabase).contents).toBe(0);
   });
@@ -154,7 +153,7 @@ describe('context intake V1 shared gate', () => {
       contextCaptureV1({ external_id: 'snapshot', representation: snapshotRepresentationV1('The release is Friday.') }),
     ];
 
-    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: captures, authority: authority(), store: new SqliteSourceAdmissionStoreV1(value) }))
+    await expect(intake(captures, new SqliteSourceAdmissionStoreV1(value)))
       .resolves.toMatchObject([{ admission: 'admitted' }, { admission: 'admitted' }, { admission: 'admitted' }]);
 
     const retained = retainedContextCapturesV1(value, CONTEXT_CAPTURE_SCOPE_V1.organization_id);
@@ -175,7 +174,7 @@ describe('context intake V1 shared gate', () => {
     const excerpt = contextCaptureV1({ external_id: 'restart-excerpt', representation: excerptRepresentationV1('A retained exact excerpt.') });
     const snapshot = contextCaptureV1({ external_id: 'restart-snapshot', representation: snapshotRepresentationV1('A retained full snapshot.') });
     const captures = [pointer, excerpt, snapshot];
-    await intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: captures, authority: authority(), store: new SqliteSourceAdmissionStoreV1(initial) });
+    await intake(captures, new SqliteSourceAdmissionStoreV1(initial));
     initial.close();
 
     const reopened = new Database(path);
@@ -187,7 +186,7 @@ describe('context intake V1 shared gate', () => {
     expect(retained.map(entry => entry.scope)).toEqual([CONTEXT_CAPTURE_SCOPE_V1, CONTEXT_CAPTURE_SCOPE_V1, CONTEXT_CAPTURE_SCOPE_V1]);
 
     const replay = captures.map(source => ({ ...source, revision: { ...source.revision, captured_at: '2026-10-01T00:02:00.000Z' } }));
-    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: replay, authority: authority(), store: new SqliteSourceAdmissionStoreV1(reopened) }))
+    await expect(intake(replay, new SqliteSourceAdmissionStoreV1(reopened)))
       .resolves.toMatchObject([{ admission: 'duplicate' }, { admission: 'duplicate' }, { admission: 'duplicate' }]);
     expect(retainedContextCapturesV1(reopened, CONTEXT_CAPTURE_SCOPE_V1.organization_id).map(entry => entry.source)).toEqual(ordered);
   });
@@ -198,7 +197,7 @@ describe('context intake V1 shared gate', () => {
     const base = contextCaptureV1();
     const malformed = withContent(base, { ...base.content, extra: 'provider-cannot-widen-contract' });
     for (const disposition of ['retained', 'request_only'] as const) {
-      await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [malformed], authority: authority({ disposition }), store })).rejects.toThrow('unknown field');
+      await expect(intake([malformed], store, authority({ disposition }))).rejects.toThrow('unknown field');
     }
     const policyAccessor = { ...policy() } as { disposition: ContextIntakePolicyV1['disposition']; scope: ContextIntakePolicyV1['scope']; permitted_representations: readonly string[] };
     Object.defineProperty(policyAccessor, 'scope', { enumerable: true, get: () => CONTEXT_CAPTURE_SCOPE_V1 });
@@ -207,22 +206,20 @@ describe('context intake V1 shared gate', () => {
       [{ ...policy(), scope: { ...CONTEXT_CAPTURE_SCOPE_V1, analysis_policy: 'automatic' } }, 'not authorized'],
       [policyAccessor, 'non-data fields'],
     ] as const) {
-      await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [base], store, authority: authority({ selected }) })).rejects.toThrow(message);
+      await expect(intake([base], store, authority({ selected }))).rejects.toThrow(message);
     }
-    expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
+    expect(counts(value)).toEqual(EMPTY_COUNTS);
   });
 
   it('does not treat a read grant as retention permission and keeps request-only captures out of durable custody', async () => {
     const value = database();
     const capture = contextCaptureV1({ representation: excerptRepresentationV1('A live reader may see this.') });
     let currentReadGrantWasChecked = false;
-    const result = await intakeContextBatchV1({
-      identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [capture], store: new SqliteSourceAdmissionStoreV1(value),
-      authority: authority({ disposition: 'request_only', requireCurrent: () => { currentReadGrantWasChecked = true; } }),
-    });
+    const result = await intake([capture], new SqliteSourceAdmissionStoreV1(value),
+      authority({ disposition: 'request_only', requireCurrent: () => { currentReadGrantWasChecked = true; } }));
     expect(currentReadGrantWasChecked).toBe(true);
     expect(result).toMatchObject([{ admission: 'request_only', source: capture }]);
-    expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
+    expect(counts(value)).toEqual(EMPTY_COUNTS);
   });
 
   it('rejects contradictory excerpts at the SQLite capture boundary without the batch coordinator', async () => {
@@ -234,7 +231,7 @@ describe('context intake V1 shared gate', () => {
     const store = new SqliteContextCaptureStoreV1(value, authority(), CONTEXT_CAPTURE_IDENTITY_V1);
     await expect(store.admitSourceRevision({ source, scope: CONTEXT_CAPTURE_SCOPE_V1 }))
       .rejects.toThrow('Context excerpts conflict at the same source anchor');
-    expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
+    expect(counts(value)).toEqual(EMPTY_COUNTS);
   });
 
   it('retains every structured source type exactly', async () => {
@@ -242,7 +239,7 @@ describe('context intake V1 shared gate', () => {
     const captures = (['note', 'message', 'ticket', 'meeting'] as const).map(source_type => contextCaptureV1({
       external_id: `${source_type}-metadata`, source_type, representation: excerptRepresentationV1(`${source_type} evidence.`),
     }));
-    await intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: captures, authority: authority(), store: new SqliteSourceAdmissionStoreV1(value) });
+    await intake(captures, new SqliteSourceAdmissionStoreV1(value));
     const retained = retainedContextCapturesV1(value, CONTEXT_CAPTURE_SCOPE_V1.organization_id);
     expect(retained.map(entry => entry.source)).toEqual([...captures].sort((left, right) => left.item.source_id.localeCompare(right.item.source_id)));
     expect(retained.map(entry => entry.scope)).toEqual(new Array(4).fill(CONTEXT_CAPTURE_SCOPE_V1));
@@ -260,12 +257,12 @@ describe('context intake V1 shared gate', () => {
     ];
     const next = contextCaptureV1({ revision_id: 'revision-2', previous_revision_id: 'revision-1', representation: snapshotRepresentationV1('The revised release is Monday.') });
 
-    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [first], authority: authority(), store })).resolves.toMatchObject([{ admission: 'admitted' }]);
-    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [replay], authority: authority(), store })).resolves.toMatchObject([{ admission: 'duplicate' }]);
+    await expect(intake([first], store)).resolves.toMatchObject([{ admission: 'admitted' }]);
+    await expect(intake([replay], store)).resolves.toMatchObject([{ admission: 'duplicate' }]);
     for (const changed of conflicts) {
-      await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [changed], authority: authority(), store })).rejects.toThrow('conflicts');
+      await expect(intake([changed], store)).rejects.toThrow('conflicts');
     }
-    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [next], authority: authority(), store })).resolves.toMatchObject([{ admission: 'admitted' }]);
+    await expect(intake([next], store)).resolves.toMatchObject([{ admission: 'admitted' }]);
     expect(retainedContextCapturesV1(value, CONTEXT_CAPTURE_SCOPE_V1.organization_id).map(entry => entry.source.revision.revision_id))
       .toEqual(['revision-1', 'revision-2']);
   });
@@ -276,8 +273,8 @@ describe('context intake V1 shared gate', () => {
     const badBase = contextCaptureV1({ external_id: 'bad' });
     const invalidContent = { ...badBase.content, truth_status: 'approved_fact' };
     const invalid = { ...badBase, content: invalidContent, revision: { ...badBase.revision, content_sha256: sourceContentSha256V1(invalidContent) } };
-    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [valid, invalid], authority: authority(), store: new SqliteSourceAdmissionStoreV1(value) })).rejects.toThrow('unknown field');
-    expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
+    await expect(intake([valid, invalid], new SqliteSourceAdmissionStoreV1(value))).rejects.toThrow('unknown field');
+    expect(counts(value)).toEqual(EMPTY_COUNTS);
   });
 
   it('rejects conflicting Authority custody bindings for one stable source before any batch write', async () => {
@@ -290,10 +287,8 @@ describe('context intake V1 shared gate', () => {
         : { ...policy(), scope: { ...CONTEXT_CAPTURE_SCOPE_V1, custody_ref: 'project:conflicting-fixture' } },
       requireCurrent: () => undefined,
     };
-    await expect(intakeContextBatchV1({
-      identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [first, second], authority: changingAuthority, store: new SqliteSourceAdmissionStoreV1(value),
-    })).rejects.toThrow('custody conflicts');
-    expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
+    await expect(intake([first, second], new SqliteSourceAdmissionStoreV1(value), changingAuthority)).rejects.toThrow('custody conflicts');
+    expect(counts(value)).toEqual(EMPTY_COUNTS);
   });
 
   it('snapshots input before policy checks, rechecks Authority, and lets cancellation stop a held admission', async () => {
@@ -305,9 +300,9 @@ describe('context intake V1 shared gate', () => {
       if (checks === 1) (original as unknown as { content: { label: string } }).content.label = 'mutated after input snapshot';
       if (checks === 2) throw new Error('policy changed');
     } });
-    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [original], authority: rejected, store: new SqliteSourceAdmissionStoreV1(value) })).rejects.toThrow('policy changed');
+    await expect(intake([original], new SqliteSourceAdmissionStoreV1(value), rejected)).rejects.toThrow('policy changed');
     expect(checks).toBe(2);
-    expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
+    expect(counts(value)).toEqual(EMPTY_COUNTS);
 
     let enter!: () => void;
     const entered = new Promise<void>(resolve => { enter = resolve; });
@@ -318,12 +313,12 @@ describe('context intake V1 shared gate', () => {
       enter(); await held; return real.admitSourceRevision(input, context);
     } };
     const controller = new AbortController();
-    const pending = intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [contextCaptureV1()], authority: authority(), store: blockingStore, context: { signal: controller.signal } });
+    const pending = intake([contextCaptureV1()], blockingStore, authority(), { signal: controller.signal });
     await entered;
     controller.abort(new Error('fixture cancelled'));
     release();
     await expect(pending).rejects.toThrow('fixture cancelled');
-    expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
+    expect(counts(value)).toEqual(EMPTY_COUNTS);
   });
 
   it('permits a bounded replay after a transient admission failure', async () => {
@@ -336,8 +331,8 @@ describe('context intake V1 shared gate', () => {
       if (attempts === 1) throw new Error('temporary fixture failure');
       return real.admitSourceRevision(input, context);
     } };
-    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [source], authority: authority(), store: transient })).rejects.toThrow('temporary fixture failure');
-    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [source], authority: authority(), store: transient })).resolves.toMatchObject([{ admission: 'admitted' }]);
+    await expect(intake([source], transient)).rejects.toThrow('temporary fixture failure');
+    await expect(intake([source], transient)).resolves.toMatchObject([{ admission: 'admitted' }]);
     expect(attempts).toBe(2);
     expect(counts(value)).toEqual({ sources: 1, revisions: 1, contents: 1, representations: 0 });
   });
@@ -349,10 +344,10 @@ describe('context intake V1 shared gate', () => {
     value.exec(`CREATE TRIGGER context_capture_later_failure BEFORE INSERT ON authority_source_contents_v1
       WHEN NEW.source_id = '${second.item.source_id}' BEGIN SELECT RAISE(ABORT,'later fixture failure'); END;`);
     const store = new SqliteSourceAdmissionStoreV1(value);
-    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [first, second], authority: authority(), store })).rejects.toThrow('later fixture failure');
+    await expect(intake([first, second], store)).rejects.toThrow('later fixture failure');
     expect(counts(value)).toEqual({ sources: 1, revisions: 1, contents: 1, representations: 0 });
     value.exec('DROP TRIGGER context_capture_later_failure');
-    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [first, second], authority: authority(), store }))
+    await expect(intake([first, second], store))
       .resolves.toMatchObject([{ admission: 'duplicate' }, { admission: 'admitted' }]);
     expect(counts(value)).toEqual({ sources: 2, revisions: 2, contents: 2, representations: 0 });
   });

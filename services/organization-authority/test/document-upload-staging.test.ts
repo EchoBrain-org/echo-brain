@@ -26,7 +26,7 @@ describe('private document upload staging', () => {
       expect((await stat(join(directory, 'original'))).mode & 0o777).toBe(0o600);
       yield bytes.subarray(10);
     }
-    expect(await f.stager.stage(observedStream(), metadata(bytes))).toEqual(bytes);
+    expect(Buffer.from(await f.stager.stage(observedStream(), metadata(bytes))).equals(bytes)).toBe(true);
     expect(await readdir(f.root)).toEqual([]);
   });
   it('admits the exact original-size boundary and refuses boundary plus one before reading', async () => {
@@ -54,6 +54,6 @@ describe('private document upload staging', () => {
   it('keeps concurrent temporary originals independent', async () => {
     const f = await fixture(); const first = Buffer.from('first'.repeat(4096)); const second = Buffer.from('second'.repeat(4096));
     const result = await Promise.all([f.stager.stage(stream(first), metadata(first)), f.stager.stage(stream(second), metadata(second))]);
-    expect(result).toEqual([first, second]); expect(await readdir(f.root)).toEqual([]);
+    expect(result).toHaveLength(2); expect(Buffer.from(result[0]!).equals(first)).toBe(true); expect(Buffer.from(result[1]!).equals(second)).toBe(true); expect(await readdir(f.root)).toEqual([]);
   });
 });

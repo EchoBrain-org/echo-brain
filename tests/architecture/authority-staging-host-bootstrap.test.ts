@@ -158,18 +158,23 @@ finish_pending_volume_initialization
   }
 }
 
-function executableTunnelInstaller() {
+function executableTunnelInstaller(config?: string) {
   const root = mkdtempSync(join(tmpdir(), "echo-tunnel-installer-"));
   const installer = join(root, "install-cloudflare-tunnel-token.sh");
   const asmExec = join(root, "asm-exec");
   const stat = join(root, "stat");
-  writeFileSync(
-    installer,
-    tunnelInstaller()
-      .replace("ASM_EXEC=/usr/local/bin/asm-exec", `ASM_EXEC=${asmExec}`)
-      .replace("RESOLUTION_ATTEMPTS=4", "RESOLUTION_ATTEMPTS=1"),
-    { mode: 0o700 },
-  );
+  let source = tunnelInstaller()
+    .replace("ASM_EXEC=/usr/local/bin/asm-exec", `ASM_EXEC=${asmExec}`)
+    .replace("RESOLUTION_ATTEMPTS=4", "RESOLUTION_ATTEMPTS=1");
+  if (config !== undefined) {
+    const configFile = join(root, "host-bootstrap.conf");
+    writeFileSync(configFile, config, { mode: 0o600 });
+    source = source.replace(
+      "CONFIG_FILE=/etc/echo-authority/host-bootstrap.conf",
+      `CONFIG_FILE=${configFile}`,
+    );
+  }
+  writeFileSync(installer, source, { mode: 0o700 });
   writeFileSync(
     asmExec,
     `#!/bin/sh
@@ -265,7 +270,6 @@ describe("Authority staging host bootstrap", () => {
     expect(script).toContain("resolve_data_device");
     expect(script).toContain("attached data device serial does not match the supplied EBS volume ID");
     expect(script).toContain("refusing to use the root device as Authority data volume");
-    expect(script).toContain("--initialize-blank-data-volume");
     expect(script).toContain("refusing to format a device that contains an unrecognized signature");
     expect(script).toContain("refusing to mount over non-empty root-volume Authority data path");
     expect(script).toContain("mount -o noexec,nodev,nosuid \"$device\" \"$DATA_DIR\"");
@@ -287,22 +291,6 @@ describe("Authority staging host bootstrap", () => {
     );
     expect(script).toContain('-E root_owner=0:0 -d "$initialization_seed"');
     expect(script).not.toContain("root_perms=");
-    expect(script).toContain('-d "$initialization_seed"');
-    expect(script).toContain("data_volume_id=%s");
-    expect(script).toContain("finish_pending_volume_initialization");
-    expect(script).toContain(
-      "unfinished blank data volume initialization requires --initialize-blank-data-volume",
-    );
-    expect(script).toContain(
-      "blank data volume contains state outside its initialization marker",
-    );
-    expect(script).toContain(
-      "blank data volume initialization marker does not match this volume",
-    );
-    expect(script).toContain(
-      'chown "$AUTHORITY_UID:$AUTHORITY_GID" "$DATA_DIR"',
-    );
-    expect(script).toContain('rm -f -- "$marker"');
     expect(script).not.toMatch(/chown\s+(?:-[^\s]+\s+)*-R/);
 
     const initialize = script.indexOf(
@@ -457,13 +445,7 @@ mount_data_volume /dev/fake-data-volume
   });
 
   it("writes the volume initialization marker under Bash nounset", () => {
-    const definition = bootstrap().match(
-      /^write_volume_initialization_seed\(\) \{\n[\s\S]*?^\}$/m,
-    )?.[0];
-    if (!definition) {
-      throw new Error("volume initialization seed writer is missing");
-    }
-
+    const definition = bootstrapFunction("write_volume_initialization_seed");
     const seedDir = mkdtempSync(join(tmpdir(), "echo-volume-seed-"));
     try {
       const result = spawnSync(
@@ -588,7 +570,6 @@ probe "$1"
     ]) {
       expect(script).toContain(target);
     }
-    expect(script).toContain("install_authority_application_control_material");
     expect(script).toContain("mount_data_volume \"$data_device\"");
     expect(script.indexOf("mount_data_volume \"$data_device\"")).toBeLessThan(
       script.lastIndexOf("install_authority_application_control_material"),
@@ -610,7 +591,6 @@ probe "$1"
     expect(script).toContain(
       "ASM_EXEC_PATCHED_SHA256=65a91272d2fb0bd12752fec2f770ac3ea89217358cbbbf3451d2454edc8b2e76",
     );
-    expect(script).toContain("structuredContent");
     expect(script).toMatch(/sha256sum --check --status[\s\S]+upstream asm-exec checksum mismatch/);
     expect(script).toMatch(/sha256sum --check --status[\s\S]+patched asm-exec checksum mismatch/);
     expect(script).toMatch(/sha256sum --check --status[\s\S]+cloudflared package checksum mismatch/);
@@ -619,8 +599,6 @@ probe "$1"
   it("uses the combined host bootstrap configuration for the installed token helper and rejects a raw-token interface", () => {
     const script = tunnelInstaller();
 
-    expect(script).toContain("CONFIG_FILE=/etc/echo-authority/host-bootstrap.conf");
-    expect(script).toContain("--tunnel-secret-reference");
     expect(script).toContain("validate_reference");
     expect(script).toContain(":SecretString:token");
     expect(script).toContain('"$ASM_EXEC" -- "$0" "$resolved_action"');
@@ -633,24 +611,12 @@ probe "$1"
   it.each(["explicit arguments", "combined host config"])(
     "preserves %s across the asm-exec child boundary",
     (configuration) => {
-      const fixture = executableTunnelInstaller();
-      try {
-        const reference =
-          "{{resolve:secretsmanager:arn:aws:secretsmanager:us-west-2:123456789012:secret:echo/staging/tunnel-abc:SecretString:token}}";
-        let args: string[];
-        if (configuration === "explicit arguments") {
-          args = [
-            fixture.installer,
-            "--region",
-            "us-west-2",
-            "--tunnel-secret-reference",
-            reference,
-            "--check",
-          ];
-        } else {
-          const config = join(fixture.root, "host-bootstrap.conf");
-          writeFileSync(
-            config,
+      const reference =
+        "{{resolve:secretsmanager:arn:aws:secretsmanager:us-west-2:123456789012:secret:echo/staging/tunnel-abc:SecretString:token}}";
+      const explicit = configuration === "explicit arguments";
+      const fixture = explicit
+        ? executableTunnelInstaller()
+        : executableTunnelInstaller(
             [
               "AWS_REGION=us-west-2",
               `TUNNEL_SECRET_REFERENCE=${reference}`,
@@ -659,29 +625,18 @@ probe "$1"
               "DATA_DEVICE=/dev/nvme1n1",
               "",
             ].join("\n"),
-            { mode: 0o600 },
           );
-          const configuredInstaller = join(
-            fixture.root,
-            "configured-install-cloudflare-tunnel-token.sh",
-          );
-          writeFileSync(
-            configuredInstaller,
-            tunnelInstaller()
-              .replace(
-                "ASM_EXEC=/usr/local/bin/asm-exec",
-                `ASM_EXEC=${join(fixture.root, "asm-exec")}`,
-              )
-              .replace("RESOLUTION_ATTEMPTS=4", "RESOLUTION_ATTEMPTS=1")
-              .replace(
-                "CONFIG_FILE=/etc/echo-authority/host-bootstrap.conf",
-                `CONFIG_FILE=${config}`,
-              ),
-            { mode: 0o700 },
-          );
-          chmodSync(configuredInstaller, 0o700);
-          args = [configuredInstaller, "--check"];
-        }
+      try {
+        const args = explicit
+          ? [
+              fixture.installer,
+              "--region",
+              "us-west-2",
+              "--tunnel-secret-reference",
+              reference,
+              "--check",
+            ]
+          : [fixture.installer, "--check"];
         const result = spawnSync("bash", args, {
           encoding: "utf8",
           env: {

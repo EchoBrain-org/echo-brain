@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
+import { quitPrompts } from './native.js';
 
 let run: Launched;
 const folders: string[] = [];
@@ -38,6 +39,17 @@ async function chooseFile(name: string): Promise<void> {
   const file = join(folder, name);
   writeFileSync(file, 'Annual pricing.');
   await run.app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }); }, file);
+}
+
+/** Sends a new file from Home; under document-reply-lost its reply is lost. */
+async function unconfirmedUpload(): Promise<void> {
+  const { page } = run;
+  await chooseFile('Pricing.txt');
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-attach').click();
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
 }
 
 test('capture after switching away from a project starts as Only me', async () => {
@@ -86,20 +98,13 @@ test('if the host dies mid-save the note is unconfirmed, and check status finds 
 
 test('quitting while a note is sending asks first', async () => {
   run = await launch('write-hangs');
-  const { page, app } = run;
+  const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Offsite dates');
   await page.getByTestId('compose-send').click();
   await expect.poll(() => posts().length).toBe(1);
-  const prompts = await app.evaluate(async ({ app: electronApp, dialog }) => {
-    let asked = 0;
-    dialog.showMessageBoxSync = () => { asked += 1; return 1; }; // Cancel
-    electronApp.quit();
-    await new Promise(resolveWait => setTimeout(resolveWait, 300));
-    return asked;
-  });
-  expect(prompts).toBe(1);
+  expect(await quitPrompts(run)).toHaveLength(1);
   await expect(page.getByTestId('compose')).toBeVisible();
 });
 
@@ -161,12 +166,7 @@ test('a file attached in a project is sent to that project under its own name', 
 test('an upload whose reply was lost is retried from the kept copy and stored once', async () => {
   run = await launch('document-reply-lost');
   const { page } = run;
-  await chooseFile('Pricing.txt');
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-attach').click();
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
+  await unconfirmedUpload();
   await page.getByTestId('compose-retry').click();
   await expect(page.getByTestId('toast')).toHaveText('Saved for you · Extracting text');
   const [first, second] = uploads();
@@ -176,35 +176,12 @@ test('an upload whose reply was lost is retried from the kept copy and stored on
   expect(readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).toMatch(/documents\.retry ok /);
 });
 
-test('quitting with an unconfirmed file says a file may not have been sent', async () => {
-  run = await launch('document-reply-lost');
-  const { page, app } = run;
-  await chooseFile('Pricing.txt');
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-attach').click();
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
-  const asked = await app.evaluate(async ({ app: electronApp, dialog }) => {
-    const prompts: string[] = [];
-    dialog.showMessageBoxSync = ((options: Electron.MessageBoxSyncOptions) => { prompts.push(options.message); return 1; }) as never; // Cancel
-    electronApp.quit();
-    await new Promise(resolveWait => setTimeout(resolveWait, 300));
-    return prompts;
-  });
-  expect(asked).toEqual(['A file may not have been sent.']);
-  await expect(page.getByTestId('compose-file')).toBeVisible();
-});
-
-test('check status settles an upload whose reply was lost', async () => {
+test('quitting with an unconfirmed file says a file may not have been sent, and check status settles the upload', async () => {
   run = await launch('document-reply-lost');
   const { page } = run;
-  await chooseFile('Pricing.txt');
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-attach').click();
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
+  await unconfirmedUpload();
+  expect(await quitPrompts(run)).toEqual(['A file may not have been sent.']);
+  await expect(page.getByTestId('compose-file')).toBeVisible();
   await page.getByTestId('compose-check').click();
   await expect(page.getByTestId('toast')).toHaveText('Saved for you · Extracting text');
   expect(uploads()).toHaveLength(1);
@@ -214,12 +191,7 @@ test('check status settles an upload whose reply was lost', async () => {
 test('starting over on an unconfirmed upload removes the copy kept to resend it', async () => {
   run = await launch('document-reply-lost');
   const { page } = run;
-  await chooseFile('Pricing.txt');
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-attach').click();
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
+  await unconfirmedUpload();
   expect(keptCopies()).toEqual([uploads()[0]!.body?.request_id]);
   await page.getByTestId('compose-new').click();
   await page.getByTestId('compose-start-over').click();

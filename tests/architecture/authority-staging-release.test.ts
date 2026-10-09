@@ -59,6 +59,19 @@ function fixture() {
 
 afterEach(() => { for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
+// Planning compresses the request through python lzma. The receipt binds no
+// paths, so tests that only need a planned receipt reuse the first real plan.
+const plannedReceipts = new Map<string, Buffer>();
+function planned(f: ReturnType<typeof fixture>, action: 'status' | 'install' | 'inspect-install' = 'status') {
+  const cached = plannedReceipts.get(action);
+  if (cached === undefined) {
+    planStagingRelease({ ...f.options, action }, f.dependencies);
+    plannedReceipts.set(action, readFileSync(f.options.output));
+  } else {
+    writeFileSync(f.options.output, cached, { mode: 0o600 });
+  }
+}
+
 describe('bounded staging release operator', () => {
   it('plans stage with installed-tool hash witnesses and no remote mutation', () => {
     const f = fixture();
@@ -126,7 +139,7 @@ describe('bounded staging release operator', () => {
 
   it('rebuilds the same bounded compression wire across repeated local renders', () => {
     const f = fixture();
-    planStagingRelease(f.options, f.dependencies);
+    planned(f);
     const request = f.request();
     const rendered = Array.from(
       { length: 20 },
@@ -156,21 +169,21 @@ describe('bounded staging release operator', () => {
   });
 
   it('re-resolves the live target immediately before sending', () => {
-    const f = fixture(); planStagingRelease(f.options, f.dependencies);
+    const f = fixture(); planned(f);
     f.state.targetChanged = true;
     expect(() => executeStagingRelease(f.options.output, f.dependencies)).toThrow();
     expect(f.state.submissions).toBe(0);
   });
 
   it('requires the exact reviewed runtime and unexpired plan', () => {
-    const f = fixture(); planStagingRelease(f.options, f.dependencies);
+    const f = fixture(); planned(f);
     expect(() => executeStagingRelease(f.options.output, { ...f.dependencies, runtime: () => OLD })).toThrow('exact_reviewed_runtime_required');
     expect(() => executeStagingRelease(f.options.output, { ...f.dependencies, now: () => 1788642000000 })).toThrow('plan_expired');
     expect(f.state.submissions).toBe(0);
   });
 
   it('refuses modified tooling even when its supplied hash is recomputed', () => {
-    const f = fixture(); planStagingRelease(f.options, f.dependencies);
+    const f = fixture(); planned(f);
     const request = f.request();
     request.files['update-clean-v1.sh'] = { base64: Buffer.from('arbitrary shell').toString('base64'), sha256: digest('arbitrary shell') };
     expect(() => validateReleaseRequest(request, f.dependencies.readSource)).toThrow('tooling_source_mismatch');
@@ -184,7 +197,7 @@ describe('bounded staging release operator', () => {
   });
 
   it('does not permit symlink or permissive receipt files', () => {
-    const f = fixture(); planStagingRelease(f.options, f.dependencies);
+    const f = fixture(); planned(f);
     chmodSync(f.options.output, 0o644);
     expect(() => executeStagingRelease(f.options.output, f.dependencies)).toThrow('private_file_required');
     const link = join(f.directory, 'link.json'); symlinkSync(f.options.output, link);
@@ -192,21 +205,21 @@ describe('bounded staging release operator', () => {
   });
 
   it('submits once and returns the same verified outcome on repeated execute', () => {
-    const f = fixture(); planStagingRelease(f.options, f.dependencies);
+    const f = fixture(); planned(f);
     expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
     expect(executeStagingRelease(f.options.output, f.dependencies).outcome?.code).toBe('verified');
     expect(f.state.submissions).toBe(1);
   });
 
   it('reconciles a lost SendCommand response without ever sending twice', () => {
-    const f = fixture(); planStagingRelease(f.options, f.dependencies); f.state.sendLost = true;
+    const f = fixture(); planned(f); f.state.sendLost = true;
     expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('submitting');
     expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
     expect(f.state.submissions).toBe(1);
   });
 
   it('treats eventual-consistency misses and timeouts as unconfirmed, not permission to retry', () => {
-    const f = fixture(); planStagingRelease(f.options, f.dependencies); f.state.invocationPending = true;
+    const f = fixture(); planned(f); f.state.invocationPending = true;
     expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('submitted');
     f.state.invocationPending = false; f.state.failure = true;
     expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('unconfirmed');
@@ -215,7 +228,7 @@ describe('bounded staging release operator', () => {
   });
 
   it.each(['extra-key', 'wrong-hash', 'unexpected-diagnostic', 'free-text-error'])('rejects remote output with %s', kind => {
-    const f = fixture(); planStagingRelease(f.options, f.dependencies);
+    const f = fixture(); planned(f);
     const result: any = f.outcome();
     if (kind === 'extra-key') result.secret = 'must-not-leak';
     if (kind === 'wrong-hash') result.request_sha256 = 'f'.repeat(64);
@@ -227,7 +240,7 @@ describe('bounded staging release operator', () => {
   });
 
   it.each(['arbitrary-category', 'inconsistent-success', 'unknown-tool', 'non-string-tool'])('rejects arbitrary or inconsistent install diagnostics: %s', kind => {
-    const f = fixture(); planStagingRelease({ ...f.options, action: 'inspect-install' }, f.dependencies);
+    const f = fixture(); planned(f, 'inspect-install');
     const result: any = f.outcome();
     if (kind === 'arbitrary-category') result.diagnostic.category = 'must-not-leak';
     if (kind === 'inconsistent-success') { result.ok = false; result.code = 'inspection_refused'; }
@@ -240,7 +253,7 @@ describe('bounded staging release operator', () => {
   });
 
   it('accepts every host inspection category with exact success and tool bindings', () => {
-    const f = fixture(); planStagingRelease({ ...f.options, action: 'inspect-install' }, f.dependencies);
+    const f = fixture(); planned(f, 'inspect-install');
     const receipt = JSON.parse(readFileSync(f.options.output, 'utf8'));
     const host = readFileSync(join(REPO, 'tools/authority-staging-release-host.py'), 'utf8');
     const categories = [...host.match(/^INSPECTION_CATEGORIES = \((.*)\)$/m)![1].matchAll(/'([^']+)'/g)].map(match => match[1]);
@@ -262,7 +275,7 @@ describe('bounded staging release operator', () => {
   });
 
   it('persists installation-phase failures without retrying or accepting them for inspection', () => {
-    const f = fixture(); planStagingRelease({ ...f.options, action: 'install' }, f.dependencies);
+    const f = fixture(); planned(f, 'install');
     const receipt = JSON.parse(readFileSync(f.options.output, 'utf8'));
     const result = { ...f.outcome(), ok: false, code: 'installation_failed' };
     f.state.outputOverride = JSON.stringify(result);
@@ -273,7 +286,7 @@ describe('bounded staging release operator', () => {
   });
 
   it.each(['ready', 'unknown', 'early-refusal'])('persists complete versioned inventory without resubmission: %s', kind => {
-    const f = fixture(); planStagingRelease({ ...f.options, action: 'inspect-install' }, f.dependencies);
+    const f = fixture(); planned(f, 'inspect-install');
     const result: any = f.outcome();
     const names = Object.keys(result.diagnostic.inventory);
     if (kind !== 'early-refusal') result.diagnostic.inventory[names[1]] = { state: 'new', sha256: f.request().files[names[1]].sha256 };
@@ -295,7 +308,7 @@ describe('bounded staging release operator', () => {
   });
 
   it.each(['missing-entry', 'extra-entry', 'extra-field', 'bad-digest', 'array-digest', 'upper-digest', 'trailing-newline', 'unknown-state', 'wrong-old', 'wrong-new', 'known-as-unknown', 'missing-with-digest', 'null-ready', 'unknown-ready', 'wrong-tool', 'earlier-refusal', 'inventory-before-guards'])('rejects malformed or contradictory inventory: %s', kind => {
-    const f = fixture(); planStagingRelease({ ...f.options, action: 'inspect-install' }, f.dependencies);
+    const f = fixture(); planned(f, 'inspect-install');
     const result: any = f.outcome();
     const inventory = result.diagnostic.inventory;
     const tool = 'update-clean-v1.sh';
@@ -345,7 +358,7 @@ describe('bounded staging release operator', () => {
     // Every inline updater publication must preserve the pinned relative cwd;
     // tempfile.mkstemp internally applies abspath even when given a relative dir.
     expect(readFileSync(join(REPO, 'deploy/organization-authority/update-clean-v1.sh'), 'utf8')).not.toMatch(/tempfile\.mkstemp\(/);
-    const f = fixture(); planStagingRelease({ ...f.options, action: 'install' }, f.dependencies);
+    const f = fixture(); planned(f, 'install');
     const result = spawnSync('python3', ['-B', join(REPO, 'tests/fixtures/staging-release-host-test.py'), join(REPO, 'tools/authority-staging-release-host.py'), f.options.output, f.options.acceptedRelease], { encoding: 'utf8', timeout: 30000 });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stderr).toContain('OK');
@@ -364,7 +377,7 @@ describe('bounded staging release operator', () => {
   });
 
   it('revalidates a saved result before printing it on a later invocation', () => {
-    const f = fixture(); planStagingRelease(f.options, f.dependencies);
+    const f = fixture(); planned(f);
     executeStagingRelease(f.options.output, f.dependencies);
     const receipt = JSON.parse(readFileSync(f.options.output, 'utf8'));
     receipt.outcome.secret = 'must-not-print'; write(f.options.output, receipt);
@@ -373,7 +386,7 @@ describe('bounded staging release operator', () => {
   });
 
   it('round-trips the compressed reviewed runner and request without calling AWS', () => {
-    const f = fixture(); planStagingRelease(f.options, f.dependencies);
+    const f = fixture(); planned(f);
     const request = f.request();
     const source = `def main(payload, expected):\n import base64,gzip,hashlib,json\n body=gzip.decompress(base64.b64decode(payload))\n assert hashlib.sha256(body).hexdigest()==expected\n value=json.loads(body)\n assert value['schema_version']==4\n assert len(value['files'])==8\n print('verified-offline-wire')\n`;
     const readSource = (commit: string, path: string) => path === 'tools/authority-staging-release-host.py' ? Buffer.from(source) : f.dependencies.readSource(commit, path);

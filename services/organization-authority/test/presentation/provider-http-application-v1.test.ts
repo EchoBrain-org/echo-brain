@@ -24,12 +24,10 @@ function serverOptions(input: {
   };
 }
 
-async function start(
-  application?: ProviderHttpApplicationV1,
+async function listen(
+  options: Parameters<typeof createOrganizationAuthorityHttpServer>[0],
 ) {
-  const server = createOrganizationAuthorityHttpServer(
-    serverOptions({ approval: application }),
-  );
+  const server = createOrganizationAuthorityHttpServer(options);
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -47,22 +45,21 @@ async function start(
   };
 }
 
+const start = (application?: ProviderHttpApplicationV1) =>
+  listen(serverOptions({ approval: application }));
+
 describe("provider identity and approval HTTP transport V1", () => {
   it("serves a fixed identity callback page with no-store and restrictive browser headers", async () => {
     const path = "/v2/integrations/example/identity/callback";
     const page = "<!doctype html><title>ECHO</title><p>Return to ECHO to finish connecting.</p>";
-    const server = createOrganizationAuthorityHttpServer(serverOptions({
+    const server = await listen(serverOptions({
       external_identity: {
         routes: [{ route_id: "callback", method: "POST", path }],
         accept: async () => ({ status: 200, body: page, content_type: "text/html" }),
       },
     }));
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (address === null || typeof address === "string") throw new Error("missing test address");
     try {
-      const response = await fetch(`http://127.0.0.1:${String(address.port)}${path}`, {
+      const response = await fetch(`${server.url}${path}`, {
         method: "POST", body: "code=must-not-appear&state=must-not-appear",
         headers: { "content-type": "application/x-www-form-urlencoded" },
       });
@@ -73,9 +70,7 @@ describe("provider identity and approval HTTP transport V1", () => {
       expect(response.headers.get("content-security-policy")).toBe("default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
       expect(await response.text()).toBe(page);
     } finally {
-      const closed = once(server, "close");
-      server.close();
-      await closed;
+      await server.close();
     }
   });
 
@@ -94,23 +89,15 @@ describe("provider identity and approval HTTP transport V1", () => {
       created_at: "2026-08-18T00:00:00.000Z",
       expires_at: "2026-08-18T00:10:00.000Z",
     }));
-    const server = createOrganizationAuthorityHttpServer({
+    const server = await listen({
       ...serverOptions(),
       sessions: { beginOidcLogin } as never,
       oidc_provider: {
         buildAuthorizationUrl: () => "https://issuer.example/authorize",
       },
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (address === null || typeof address === "string") {
-      server.close();
-      throw new Error("test HTTP server did not bind TCP");
-    }
-    const origin = `http://127.0.0.1:${String(address.port)}`;
     const begin = (client: string) =>
-      fetch(`${origin}${PERSON_SESSION_OIDC_BEGIN_PATH}`, {
+      fetch(`${server.url}${PERSON_SESSION_OIDC_BEGIN_PATH}`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -130,9 +117,7 @@ describe("provider identity and approval HTTP transport V1", () => {
       expect((await begin("198.51.100.8")).status).toBe(201);
       expect(beginOidcLogin).toHaveBeenCalledTimes(11);
     } finally {
-      const closed = once(server, "close");
-      server.close();
-      await closed;
+      await server.close();
     }
   });
 
@@ -370,13 +355,7 @@ describe("provider identity and approval HTTP transport V1", () => {
   });
 
   it("rejects an oversized provider body before calling the application", async () => {
-    const accept = vi.fn(
-      async (
-        _request: Parameters<
-          PrivateSlackApprovalInteractionHttpPortV1["accept"]
-        >[0],
-      ) => ({ kind: "acknowledged" as const }),
-    );
+    const accept = vi.fn(async () => ({ kind: "acknowledged" as const }));
     const server = await start(
       createPrivateSlackApprovalHttpAdapterV1({ accept }),
     );

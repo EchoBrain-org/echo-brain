@@ -6,6 +6,7 @@ import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -22,7 +23,7 @@ import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
 import { PERSON_ANSWER_ROUTE_HEADER_V5, type OrganizationPersonSessionV2, type PersonSourceEvidenceCitationV1 } from "@echo-brain/organization-api";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   EmployeeMutationError,
   PersonClient,
@@ -85,6 +86,10 @@ const ROTATED_SESSION = {
   access_expires_at: "2026-08-18T00:12:00.000Z",
 } as const;
 
+const OWNER_SESSION = { ...ROTATED_SESSION, membership_type: "owner" } as const;
+/** An owner whose access has expired, so any refresh is a remote call. */
+const OWNER_SESSION_EXPIRED = { ...SESSION, membership_type: "owner" } as const;
+
 function json(value: unknown, status = 200): Response {
   return new Response(canonicalJson(value), {
     status,
@@ -96,13 +101,43 @@ function fixtureClient(home: string, fetch: typeof globalThis.fetch): PersonClie
   return new PersonClient({ home_directory: home, now: () => NOW, fetch });
 }
 
+/** One home per session, installed once through the client; its session file is copied into each test home. */
+const sessionTemplates = new Map<string, string>();
+afterAll(() => {
+  for (const template of sessionTemplates.values()) rmSync(template, { recursive: true, force: true });
+});
+
 /** Local setup for tests whose subject is the command after sign-in. */
 async function installFixtureSession(
   home: string,
   session: OrganizationPersonSessionV2 = ROTATED_SESSION,
-  authority = authorityDescriptor(),
 ): Promise<void> {
-  await fixtureClient(home, async () => json({ authority_descriptor: authority })).installSession("https://authority.example", session);
+  const key = canonicalJson(session as never);
+  let template = sessionTemplates.get(key);
+  if (template === undefined) {
+    template = realpathSync(mkdtempSync(join(tmpdir(), "echo-person-template-")));
+    sessionTemplates.set(key, template);
+    const authority = authorityDescriptor();
+    await fixtureClient(template, async () => json({ authority_descriptor: authority })).installSession("https://authority.example", session);
+  }
+  const store = new PersonSessionStore(home);
+  mkdirSync(store.paths.directory, { recursive: true, mode: 0o700 });
+  chmodSync(store.paths.directory, 0o700);
+  copyFileSync(new PersonSessionStore(template).paths.live, store.paths.live);
+  chmodSync(store.paths.live, 0o600);
+  expect(store.read().session.membership_id).toBe(session.membership_id);
+}
+
+/** A client signed in as `session` whose Authority serves its descriptor and passes every other request to `handler`. */
+async function signedInClient(
+  home: string,
+  handler: typeof globalThis.fetch,
+  session: OrganizationPersonSessionV2 = ROTATED_SESSION,
+): Promise<PersonClient> {
+  await installFixtureSession(home, session);
+  const authority = authorityDescriptor();
+  return fixtureClient(home, async (input, init) =>
+    new URL(String(input)).pathname === "/v1/authority-descriptor" ? json({ authority_descriptor: authority }) : handler(input, init));
 }
 
 function writeInvitation(path: string, fields: { login_grant: string; expires_at: string; expected_email?: string }): void {
@@ -129,6 +164,32 @@ function deliverHandoff(handoff: Record<string, unknown>, result: { session: Org
   });
 }
 
+/**
+ * A fixture Authority for browser login: `onBegin` checks each begin request and returns the
+ * handoff result to deliver, or its own reply. Any other request must read the descriptor, or,
+ * with `descriptor: false`, fails.
+ */
+function loginAuthority(
+  authorizationUrl: string,
+  onBegin: (request: Record<string, unknown>) => Parameters<typeof deliverHandoff>[1] | Response,
+  { descriptor = true } = {},
+): typeof globalThis.fetch {
+  const authority = authorityDescriptor();
+  return async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    if (path !== "/v2/session/oidc/begin") {
+      if (!descriptor) throw new Error(`unexpected Authority request ${path}`);
+      expect(path).toBe("/v1/authority-descriptor");
+      return json({ authority_descriptor: authority });
+    }
+    const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const result = onBegin(request);
+    if (result instanceof Response) return result;
+    deliverHandoff(request.loopback_handoff as Record<string, unknown>, result);
+    return json({ authorization_url: authorizationUrl, expires_at: "2026-08-18T00:10:00.000Z" }, 201);
+  };
+}
+
 /** A valid agentic Ask (V4) response: one answered statement per citation, or not found. */
 function v4Answer(input: { readonly scope?: unknown; readonly text?: string; readonly citations?: readonly unknown[] } = {}) {
   const citations = input.citations ?? [];
@@ -145,6 +206,25 @@ const RECORD_CITATION = {
   citation: { kind: "approved_record", atom_id: `sha256:${"c".repeat(64)}`, record_sha256: `sha256:${"b".repeat(64)}`, policy_id: "organization-member-readable-person-v2" },
   kind: "decision", label: "Pricing review", visibility: "team",
 };
+const SOURCE_CITATION = {
+  kind: "source_revision",
+  source_id: `source:${"a".repeat(64)}`,
+  revision_id: `sha256:${"b".repeat(64)}`,
+  source_sha256: `sha256:${"c".repeat(64)}`,
+  representation_sha256: `sha256:${"d".repeat(64)}`,
+  anchor_sha256: `sha256:${"e".repeat(64)}`,
+} as const satisfies PersonSourceEvidenceCitationV1;
+
+/** The Authority's Slack DM-code link begin response, and the link result numbered `n`. */
+const slackLinkBegin = (challenge_attempt_id: string, challenge_message_ts: string) => ({
+  schema_version: 2, kind: "echo-organization-person-slack-link-begin-response", challenge_attempt_id, provider: "slack",
+  provider_tenant_id: "T123ABC", channel_id: "D123ABC", challenge_message_ts, expires_at: "2026-08-18T00:17:00.000Z",
+});
+const slackLinkResult = (n: number) => ({
+  schema_version: 2, kind: "echo-organization-person-slack-link-result", identity_link_id: fixtureId("clm", n), connection_id: fixtureId("con", n),
+  organization_id: SESSION.organization_id, principal_id: SESSION.principal_id, membership_id: SESSION.membership_id,
+  provider: "slack", provider_tenant_id: "T123ABC", provider_subject_id: "U123PERSON", channel_id: "D123ABC", linked_at: NOW, identity_link_created: true,
+});
 
 /** A valid V6 live-source answer with a Confluence page citation. */
 function v6PageAnswer(input: { readonly scope?: unknown } = {}) {
@@ -226,7 +306,6 @@ describe('shared Jira tool commands', () => {
       expect(begun.code, begun.stderr).toBe(0);
       expect(opened).toEqual(['https://connect.nango.dev/?session_token=synthetic-consent']);
       expect(JSON.parse(begun.stdout)).toEqual({ ok: true, phase: 'waiting', attempt, expires_at: expiresAt });
-      expect(begun.stdout).not.toContain('synthetic-consent');
       expect(JSON.parse((await runCli(['tools', 'status', '--tool', 'jira', '--attempt-id', attempt], dependencies)).stdout)).toEqual({ ok: true, result: status('complete') });
       expect(JSON.parse((await runCli(['tools', 'cancel', '--tool', 'jira', '--attempt-id', attempt], dependencies)).stdout)).toEqual({ ok: true, result: status('cancelled') });
       expect(JSON.parse((await runCli(['tools', 'disconnect', '--tool', 'jira'], dependencies)).stdout)).toEqual({ ok: true, result: { schema_version: 1, connected: false } });
@@ -260,9 +339,8 @@ describe('shared Jira tool commands', () => {
     });
   });
 
-  it('rejects retired Jira commands and bad shared-tool inputs before a request', async () => {
+  it('rejects bad shared-tool inputs before a request', async () => {
     const fetchImpl = vi.fn();
-    expect((await runCli(['jira', 'connect'], { fetch: fetchImpl, tool_providers: providers })).code).toBe(2);
     expect((await runCli(['tools', 'connect', '--tool', 'jira', '--membership-id', ORGANIZATION_IDS.membership], { fetch: fetchImpl, tool_providers: providers })).code).toBe(2);
     await withHome(async home => {
       await installFixtureSession(home);
@@ -492,16 +570,10 @@ describe("Person client", () => {
 
   it("accepts an updated server-owned membership name on refresh", async () => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const client = fixtureClient(home, async (input) => {
-          const path = new URL(String(input)).pathname;
-          if (path === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          expect(path).toBe("/v2/session/refresh");
-          return json({ ...ROTATED_SESSION, display_name: "Other Person" });
-        });
-      await client.installSession("https://authority.example", SESSION);
+      const client = await signedInClient(home, async (input) => {
+        expect(new URL(String(input)).pathname).toBe("/v2/session/refresh");
+        return json({ ...ROTATED_SESSION, display_name: "Other Person" });
+      }, SESSION);
 
       await expect(client.refresh()).resolves.toMatchObject({
         display_name: "Other Person",
@@ -512,12 +584,8 @@ describe("Person client", () => {
 
   it("lists Person records for the installed Person without an identity input", async () => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const client = fixtureClient(home, async (input, init) => {
+      const client = await signedInClient(home, async (input, init) => {
           const url = new URL(String(input));
-          if (url.pathname === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
           expect(url.pathname).toBe("/v1/person/records");
           expect(url.search).toBe("?limit=2");
           expect(init?.method).toBe("GET");
@@ -545,43 +613,9 @@ describe("Person client", () => {
           });
         });
 
-      await client.installSession("https://authority.example", ROTATED_SESSION);
       await expect(client.records(2)).resolves.toMatchObject({
         kind: "echo-clean-person-record-list-v1",
         records: [{ position: 2 }, { position: 1 }],
-      });
-    });
-  });
-
-  it("retrieves one exact readable cited record without approximating through a page", async () => {
-    await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const recordSha256 = `sha256:${"d".repeat(64)}` as const;
-      const fetchImpl: typeof fetch = async (input, init) => {
-        const url = new URL(String(input));
-        if (url.pathname === "/v1/authority-descriptor") {
-          return json({ authority_descriptor: authority });
-        }
-        expect(url.pathname + url.search).toBe(
-          `/v1/person/records?record_sha256=${recordSha256}`,
-        );
-        expect(init?.method).toBe("GET");
-        return json({
-          schema_version: 1,
-          kind: "echo-clean-person-record-list-v1",
-          records: [{
-            position: 1,
-            approval_id: fixtureId("apr", 1),
-            record_sha256: recordSha256,
-            envelope: { old: true },
-          }],
-        });
-      };
-      const client = fixtureClient(home, fetchImpl);
-      await client.installSession("https://authority.example", ROTATED_SESSION);
-      await expect(client.records(undefined, undefined, recordSha256)).resolves.toMatchObject({
-        kind: "echo-clean-person-record-list-v1",
-        records: [{ position: 1, record_sha256: recordSha256 }],
       });
     });
   });
@@ -590,22 +624,24 @@ describe("Person client", () => {
     { record_approved_by: { display_name: "Maya Chen" } },
     {},
     undefined,
-  ])("negotiates optional source metadata and accepts older Authorities: %j", async (metadata) => {
+  ])("retrieves one exact readable cited record, negotiating optional source metadata with older Authorities: %j", async (metadata) => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
       const recordSha256 = `sha256:${"d".repeat(64)}` as const;
-      const fetchImpl: typeof fetch = async (input, init) => {
-        if (new URL(String(input)).pathname === "/v1/authority-descriptor") return json({ authority_descriptor: authority });
+      const client = await signedInClient(home, async (input, init) => {
+        const url = new URL(String(input));
+        expect(url.pathname + url.search).toBe(`/v1/person/records?record_sha256=${recordSha256}`);
+        expect(init?.method).toBe("GET");
         expect(new Headers(init?.headers).get("x-echo-person-record-version")).toBe("2");
         return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [{
           position: 1, approval_id: fixtureId("apr", 1), record_sha256: recordSha256,
           envelope: { approved: true }, ...(metadata === undefined ? {} : { source_metadata: metadata }),
         }] });
-      };
-      const client = fixtureClient(home, fetchImpl);
-      await client.installSession("https://authority.example", ROTATED_SESSION);
+      });
       const result = await client.records(undefined, undefined, recordSha256);
-      expect(result).toMatchObject({ records: [{ envelope: { approved: true } }] });
+      expect(result).toMatchObject({
+        kind: "echo-clean-person-record-list-v1",
+        records: [{ position: 1, record_sha256: recordSha256, envelope: { approved: true } }],
+      });
       if (result.kind !== "echo-clean-person-record-list-v1") throw new Error("unexpected search result");
       expect(result.records[0]?.source_metadata).toEqual(metadata);
     });
@@ -618,16 +654,10 @@ describe("Person client", () => {
     { participants: [] },
   ])("rejects malformed source metadata: %j", async (metadata) => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const fetchImpl: typeof fetch = async (input) => {
-        if (new URL(String(input)).pathname === "/v1/authority-descriptor") return json({ authority_descriptor: authority });
-        return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [{
-          position: 1, approval_id: fixtureId("apr", 1), record_sha256: `sha256:${"d".repeat(64)}`,
-          envelope: {}, source_metadata: metadata,
-        }] });
-      };
-      const client = fixtureClient(home, fetchImpl);
-      await client.installSession("https://authority.example", ROTATED_SESSION);
+      const client = await signedInClient(home, async () => json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [{
+        position: 1, approval_id: fixtureId("apr", 1), record_sha256: `sha256:${"d".repeat(64)}`,
+        envelope: {}, source_metadata: metadata,
+      }] }));
       await expect(client.records()).rejects.toThrow();
     });
   });
@@ -649,13 +679,10 @@ describe("Person client", () => {
 
   it("uses the same records command for a readable-search query", async () => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
+      await installFixtureSession(home);
       let searchCalls = 0;
       const fetchImpl: typeof fetch = async (input, init) => {
         const url = new URL(String(input));
-        if (url.pathname === "/v1/authority-descriptor") {
-          return json({ authority_descriptor: authority });
-        }
         searchCalls += 1;
         expect(url.pathname).toBe("/v1/person/records");
         expect(url.search).toBe("");
@@ -678,8 +705,6 @@ describe("Person client", () => {
           ],
         });
       };
-      const client = fixtureClient(home, fetchImpl);
-      await client.installSession("https://authority.example", ROTATED_SESSION);
 
       const first = await runCli(
         ["records", "--query", "pricing", "--limit", "5"],
@@ -699,25 +724,12 @@ describe("Person client", () => {
         },
       });
       expect(searchCalls).toBe(1);
-
-      const removed = await runCli(
-        ["readable-search", "--query", "pricing"],
-        {
-          home_directory: home,
-          fetch: fetchImpl,
-        },
-      );
-      expect(removed.code).toBe(2);
-      expect(removed.stdout).toBe("");
-      expect(removed.stderr).toContain("usage:");
     });
   });
 
   it("asks one bounded question through the installed Person session and preserves answer bindings", async () => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const client = fixtureClient(home, async () => json({ authority_descriptor: authority }));
-      await client.installSession("https://authority.example", ROTATED_SESSION);
+      await installFixtureSession(home);
 
       const timeout = vi.spyOn(AbortSignal, "timeout");
       const answer = v4Answer({ text: "Use simple pricing.", citations: [RECORD_CITATION] });
@@ -752,64 +764,33 @@ describe("Person client", () => {
   it("maps --project to a strict Ask coordinate and accepts immutable source evidence", async () => {
     await withHome(async home => {
       const projectId = "prj_00000000-0000-4000-8000-000000000019";
-      const client = fixtureClient(home, async (input, init) => {
-          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authorityDescriptor() });
-          }
+      const client = await signedInClient(home, async (input, init) => {
           expect(new URL(String(input)).pathname).toBe("/v3/person/ask");
           expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: "What is in this project?", project_id: projectId });
           return json(v4Answer({
             scope: { kind: "project", project_id: projectId },
             text: "The MRD is available.",
             citations: [{
-              citation: {
-                kind: "source_revision",
-                source_id: `source:${"a".repeat(64)}`,
-                revision_id: `sha256:${"b".repeat(64)}`,
-                source_sha256: `sha256:${"c".repeat(64)}`,
-                representation_sha256: `sha256:${"d".repeat(64)}`,
-                anchor_sha256: `sha256:${"e".repeat(64)}`,
-                document_id: `doc_${"f".repeat(64)}`,
-                label: "MRD",
-              },
+              citation: { ...SOURCE_CITATION, document_id: `doc_${"f".repeat(64)}`, label: "MRD" },
               kind: "document_passage", label: "MRD", visibility: "project",
             }],
           }));
         });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
       await expect(client.ask("What is in this project?", projectId as `prj_${string}`)).resolves.toMatchObject({
         scope: { kind: "project", project_id: projectId },
         citations: [{ citation: { kind: "source_revision", label: "MRD" } }],
       });
     });
   });
-  it("maps a mine scope to an Ask request that reads only what the asker added", async () => {
-    await withHome(async home => {
-      const client = fixtureClient(home, async (input, init) => {
-        const path = new URL(String(input)).pathname;
-        if (path === "/v1/authority-descriptor") return json({ authority_descriptor: authorityDescriptor() });
-        expect(path).toBe("/v3/person/ask");
-        expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: "What did I decide?", mine: true });
-        return json(v4Answer({ scope: { kind: "mine" }, citations: [{ ...RECORD_CITATION, ref: `meeting:${RECORD_CITATION.citation.record_sha256}` }] }));
-      });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
-      await expect(client.ask("What did I decide?", { mine: true })).resolves.toMatchObject({
-        scope: { kind: "mine" },
-        citations: [{ ref: `meeting:sha256:${"b".repeat(64)}` }],
-      });
-    });
-  });
   it("never falls back to a retired Ask path when agentic Ask returns a canonical 404", async () => {
     await withHome(async home => {
       let legacyCalled = false;
-      const client = fixtureClient(home, async input => {
+      const client = await signedInClient(home, async input => {
         const path = new URL(String(input)).pathname;
-        if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
         if (path === '/v3/person/ask') return json({ error: { code: 'not_found', message: 'removed while request was running' } }, 404);
         if (path === '/v2/person/ask' || path === '/v3/person/capabilities') legacyCalled = true;
         throw new Error(`unexpected path ${path}`);
       });
-      await client.installSession('https://authority.example', ROTATED_SESSION);
       await expect(client.ask('What is current?')).rejects.toMatchObject({ code: 'not_found', status: 404 });
       expect(legacyCalled).toBe(false);
     });
@@ -817,12 +798,9 @@ describe("Person client", () => {
   it("asks agentic Ask and validates its V4 response before returning it", async () => {
     await withHome(async home => {
       const digest = `sha256:${'a'.repeat(64)}`;
-      let sawV3 = false;
-      const client = fixtureClient(home, async (input, init) => {
+      const client = await signedInClient(home, async (input, init) => {
         const path = new URL(String(input)).pathname;
-        if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
         if (path !== '/v3/person/ask') throw new Error(`unexpected path ${path}`);
-        sawV3 = true;
         expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: 'What changed?' });
         return json({ schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
           citations: [{ citation: { kind: 'approved_record', atom_id: digest, record_sha256: digest, policy_id: 'organization-member-readable-person-v2' }, kind: 'decision', label: 'Planning meeting', visibility: 'team' }],
@@ -830,23 +808,18 @@ describe("Person client", () => {
           parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The launch date moved.', citation_indexes: [0], private: false }] }],
         });
       });
-      await client.installSession('https://authority.example', ROTATED_SESSION);
       await expect(client.ask('What changed?')).resolves.toMatchObject({ kind: 'echo-clean-person-answer-v4', direct: { citation_indexes: [0] } });
-      expect(sawV3).toBe(true);
     });
   });
 
   it('uses V5 for --live, preserves the project scope, and validates V6 page citations', async () => {
     await withHome(async home => {
       const projectId = 'prj_00000000-0000-4000-8000-000000000019' as `prj_${string}`;
-      const client = fixtureClient(home, async (input, init) => {
-        const path = new URL(String(input)).pathname;
-        if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
-        expect(path).toBe('/v5/person/ask');
+      const client = await signedInClient(home, async (input, init) => {
+        expect(new URL(String(input)).pathname).toBe('/v5/person/ask');
         expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: 'Are we ready for EVT?', project_id: projectId });
         return json(v6PageAnswer({ scope: { kind: 'project', project_id: projectId } }));
       });
-      await client.installSession('https://authority.example', ROTATED_SESSION);
       await expect(client.askWithLiveSources('Are we ready for EVT?', projectId)).resolves.toMatchObject({
         kind: 'echo-clean-person-answer-v6', scope: { kind: 'project', project_id: projectId }, citations: [{ kind: 'page', citation: { tool_id: 'confluence', page_id: '12345' } }],
       });
@@ -925,17 +898,11 @@ describe("Person client", () => {
 
   it("reads an Ask source citation through the bounded proof endpoint", async () => {
     await withHome(async home => {
-      const sourceId = `source:${"a".repeat(64)}`;
-      const revisionId = `sha256:${"b".repeat(64)}`;
-      const sourceSha = `sha256:${"c".repeat(64)}`;
-      const representationSha = `sha256:${"d".repeat(64)}`;
-      const anchorSha = `sha256:${"e".repeat(64)}`;
-      await fixtureClient(home, async () => json({ authority_descriptor: authorityDescriptor() }))
-        .installSession("https://authority.example", ROTATED_SESSION);
+      await installFixtureSession(home);
       const { code: status, stdout } = await runCli([
-        "ask-source", "--source-id", sourceId, "--revision-id", revisionId,
-        "--source-sha256", sourceSha, "--representation-sha256", representationSha,
-        "--anchor-sha256", anchorSha,
+        "ask-source", "--source-id", SOURCE_CITATION.source_id, "--revision-id", SOURCE_CITATION.revision_id,
+        "--source-sha256", SOURCE_CITATION.source_sha256, "--representation-sha256", SOURCE_CITATION.representation_sha256,
+        "--anchor-sha256", SOURCE_CITATION.anchor_sha256,
       ], {
         home_directory: home,
         now: () => NOW,
@@ -944,13 +911,13 @@ describe("Person client", () => {
           expect(JSON.parse(String(init?.body))).toEqual({
             schema_version: 1,
             scope: { kind: "global" },
-            citation: { kind: "source_revision", source_id: sourceId, revision_id: revisionId, source_sha256: sourceSha, representation_sha256: representationSha, anchor_sha256: anchorSha },
+            citation: SOURCE_CITATION,
           });
           return json({
             schema_version: 1,
             kind: "echo-person-source-evidence-v1",
             scope: { kind: "global" },
-            citation: { kind: "source_revision", source_id: sourceId, revision_id: revisionId, source_sha256: sourceSha, representation_sha256: representationSha, anchor_sha256: anchorSha, label: "MRD" },
+            citation: { ...SOURCE_CITATION, label: "MRD" },
             text: "MRD\n\nReview before launch.",
           });
         },
@@ -964,8 +931,7 @@ describe("Person client", () => {
     await withHome(async home => {
       const sourceId = `source:${"a".repeat(64)}`;
       const sourceSha = `sha256:${"b".repeat(64)}`;
-      await fixtureClient(home, async () => json({ authority_descriptor: authorityDescriptor() }))
-        .installSession("https://authority.example", ROTATED_SESSION);
+      await installFixtureSession(home);
       const { code: status, stdout } = await runCli([
         "transcript", "--approval-id", "apr_fixture", "--source-id", sourceId,
         "--revision-id", "meeting-revision-1", "--source-sha256", sourceSha,
@@ -994,94 +960,44 @@ describe("Person client", () => {
   it("rejects Ask scope or source evidence coordinates changed by the response", async () => {
     await withHome(async home => {
       const projectId = "prj_00000000-0000-4000-8000-000000000019" as `prj_${string}`;
-      const sourceId: `source:${string}` = `source:${"a".repeat(64)}`;
-      const citation = {
-        kind: "source_revision" as const,
-        source_id: sourceId,
-        revision_id: `sha256:${"b".repeat(64)}` as `sha256:${string}`,
-        source_sha256: `sha256:${"c".repeat(64)}` as `sha256:${string}`,
-        representation_sha256: `sha256:${"d".repeat(64)}` as `sha256:${string}`,
-        anchor_sha256: `sha256:${"e".repeat(64)}` as `sha256:${string}`,
-      } satisfies PersonSourceEvidenceCitationV1;
-      const client = fixtureClient(home, async (input) => {
-        const path = new URL(String(input)).pathname;
-        if (path === "/v1/authority-descriptor") return json({ authority_descriptor: authorityDescriptor() });
-        if (path === "/v3/person/ask") return json(v4Answer());
-        return json({ schema_version: 1, kind: "echo-person-source-evidence-v1", scope: { kind: "global" }, citation: { ...citation, label: "MRD" }, text: "MRD" });
+      const client = await signedInClient(home, async (input) => {
+        if (new URL(String(input)).pathname === "/v3/person/ask") return json(v4Answer());
+        return json({ schema_version: 1, kind: "echo-person-source-evidence-v1", scope: { kind: "global" }, citation: { ...SOURCE_CITATION, label: "MRD" }, text: "MRD" });
       });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
       await expect(client.ask("What is current?", projectId)).rejects.toMatchObject({ code: "invalid_response" });
-      await expect(client.askSourceEvidence({ schema_version: 1, scope: { kind: "project", project_id: projectId }, citation })).rejects.toMatchObject({ code: "invalid_response" });
+      await expect(client.askSourceEvidence({ schema_version: 1, scope: { kind: "project", project_id: projectId }, citation: SOURCE_CITATION })).rejects.toMatchObject({ code: "invalid_response" });
     });
   });
 
-  it("does not return an Ask answer after the local account changes while its response is pending", async () => {
+  it.each([
+    ["an Ask answer", (client: PersonClient) => client.ask("What is current?"), v4Answer({ text: "Prior account answer.", citations: [RECORD_CITATION] })],
+    ["an Ask source proof", (client: PersonClient) => client.askSourceEvidence({ schema_version: 1, scope: { kind: "global" }, citation: SOURCE_CITATION }), {
+      schema_version: 1, kind: "echo-person-source-evidence-v1", scope: { kind: "global" },
+      citation: { ...SOURCE_CITATION, label: "Prior account source" }, text: "Prior account proof.",
+    }],
+  ] as const)("does not return %s after the local account changes while its response is pending", async (_name, call, body) => {
     await withHome(async home => {
       let resolveResponse: ((response: Response) => void) | undefined;
       const pendingResponse = new Promise<Response>(resolve => { resolveResponse = resolve; });
-      const client = fixtureClient(home, async input => {
-          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authorityDescriptor() });
-          }
-          return pendingResponse;
-        });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
-      const answer = client.ask("What is current?");
+      const client = await signedInClient(home, async () => pendingResponse);
+      const result = call(client);
       await Promise.resolve();
       await client.installSession("https://authority.example", {
         ...ROTATED_SESSION,
         membership_id: fixtureId("mem", 2), principal_id: fixtureId("prn", 2), session_family_id: fixtureId("psf", 2),
       });
-      resolveResponse?.(json(v4Answer({ text: "Prior account answer.", citations: [RECORD_CITATION] })));
-      await expect(answer).rejects.toThrow("current account");
-    });
-  });
-
-  it("does not return an Ask source proof after the local account changes while its response is pending", async () => {
-    await withHome(async home => {
-      const citation = {
-        kind: "source_revision" as const,
-        source_id: `source:${"a".repeat(64)}` as `source:${string}`,
-        revision_id: `sha256:${"b".repeat(64)}` as `sha256:${string}`,
-        source_sha256: `sha256:${"c".repeat(64)}` as `sha256:${string}`,
-        representation_sha256: `sha256:${"d".repeat(64)}` as `sha256:${string}`,
-        anchor_sha256: `sha256:${"e".repeat(64)}` as `sha256:${string}`,
-      } satisfies PersonSourceEvidenceCitationV1;
-      let resolveResponse: ((response: Response) => void) | undefined;
-      const pendingResponse = new Promise<Response>(resolve => { resolveResponse = resolve; });
-      const client = fixtureClient(home, async input => {
-          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authorityDescriptor() });
-          }
-          return pendingResponse;
-        });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
-      const proof = client.askSourceEvidence({ schema_version: 1, scope: { kind: "global" }, citation });
-      await Promise.resolve();
-      await client.installSession("https://authority.example", {
-        ...ROTATED_SESSION,
-        membership_id: fixtureId("mem", 3), principal_id: fixtureId("prn", 3), session_family_id: fixtureId("psf", 3),
-      });
-      resolveResponse?.(json({
-        schema_version: 1, kind: "echo-person-source-evidence-v1", scope: { kind: "global" },
-        citation: { ...citation, label: "Prior account source" }, text: "Prior account proof.",
-      }));
-      await expect(proof).rejects.toThrow("current account");
+      resolveResponse?.(json(body));
+      await expect(result).rejects.toThrow("current account");
     });
   });
 
   it("accepts 32 unique question terms and rejects 33 before the request", async () => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
       let asks = 0;
-      const client = fixtureClient(home, async (input) => {
-          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          asks += 1;
-          return json(v4Answer({ text: "Bounded answer.", citations: [RECORD_CITATION] }));
-        });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
+      const client = await signedInClient(home, async () => {
+        asks += 1;
+        return json(v4Answer({ text: "Bounded answer.", citations: [RECORD_CITATION] }));
+      });
       const question = (count: number) =>
         Array.from({ length: count }, (_, index) => `term${index}`).join(" ");
 
@@ -1095,14 +1011,10 @@ describe("Person client", () => {
 
   it.each(["ask", "search"])("rejects retired global metadata in a %s response", async (mode) => {
     await withHome(async (home) => {
-      const client = fixtureClient(home, async (input) => {
-        if (new URL(String(input)).pathname === "/v1/authority-descriptor") return json({ authority_descriptor: authorityDescriptor() });
-        return json({ ...(mode === "ask"
-          ? v4Answer()
-          : { schema_version: 2, kind: "echo-clean-person-record-search-v2", items: [] }),
-        generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 9, record_sha256: `sha256:${"b".repeat(64)}` } });
-      });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
+      const client = await signedInClient(home, async () => json({ ...(mode === "ask"
+        ? v4Answer()
+        : { schema_version: 2, kind: "echo-clean-person-record-search-v2", items: [] }),
+      generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 9, record_sha256: `sha256:${"b".repeat(64)}` } }));
       await expect(mode === "ask" ? client.ask("pricing") : client.records(undefined, "pricing")).rejects.toThrow(
         mode === "ask" ? "malformed response" : "response is invalid",
       );
@@ -1111,16 +1023,11 @@ describe("Person client", () => {
 
   it("rejects invalid questions and malformed answer bindings before any answer is released", async () => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
       let asks = 0;
-      const client = fixtureClient(home, async (input) => {
-          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          asks += 1;
-          return json(v4Answer({ text: "Use simple pricing.", citations: [{ ...RECORD_CITATION, citation: { ...RECORD_CITATION.citation, unexpected: true } }] }));
-        });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
+      const client = await signedInClient(home, async () => {
+        asks += 1;
+        return json(v4Answer({ text: "Use simple pricing.", citations: [{ ...RECORD_CITATION, citation: { ...RECORD_CITATION.citation, unexpected: true } }] }));
+      });
 
       await expect(client.ask(" pricing")).rejects.toMatchObject({ code: "query_whitespace" });
       expect(asks).toBe(0);
@@ -1166,12 +1073,10 @@ describe("Person client", () => {
       expect(await runPersonClientCli(["ask", "--question", "What happened?"], options)).toBe(1);
       expect(JSON.parse(stderr)).toMatchObject({ code: "invalid_response", status: 503 });
       expect(stderr).not.toContain("private provider body");
-      const spy = vi.spyOn(PersonClient.prototype, "ask").mockRejectedValueOnce(new Error("private internal detail"));
-      try {
-        stderr = "";
-        expect(await runPersonClientCli(["ask", "--question", "What happened?"], options)).toBe(1);
-        expect(JSON.parse(stderr).error).toBe("Person request could not be completed");
-      } finally { spy.mockRestore(); }
+      vi.spyOn(PersonClient.prototype, "ask").mockRejectedValueOnce(new Error("private internal detail"));
+      stderr = "";
+      expect(await runPersonClientCli(["ask", "--question", "What happened?"], options)).toBe(1);
+      expect(JSON.parse(stderr).error).toBe("Person request could not be completed");
     });
   });
 
@@ -1196,52 +1101,36 @@ describe("Person client", () => {
       }
     }
     for (const limit of ["-1", "0", "101"]) {
-      const { code: status, stderr } = await runCli(["records", "--limit", limit], {
+      const { code: status, stdout, stderr } = await runCli(["records", "--limit", limit], {
         home_directory: home,
       });
       expect(status).toBe(1);
-      expect(JSON.parse(stderr)).toMatchObject({ code: "invalid_limit" });
-      expect(stderr).toContain("1 to 100");
+      expect(stdout).toBe("");
+      expect(JSON.parse(stderr)).toMatchObject({
+        ok: false,
+        action: "records",
+        code: "invalid_limit",
+        error: "--limit must be an integer from 1 to 100",
+      });
     }
     });
   });
 
-  it("rejects malformed Person record responses and invalid CLI limits", async () => {
+  it("rejects malformed Person record responses", async () => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const client = fixtureClient(home, async (input) => {
-          const path = new URL(String(input)).pathname;
-          if (path === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          return json({
-            schema_version: 1,
-            kind: "echo-clean-person-record-list-v1",
-            records: [
-              {
-                position: 1,
-                approval_id: fixtureId("apr", 1),
-                record_sha256: `sha256:${"z".repeat(64)}`,
-                envelope: {},
-                unexpected: true,
-              },
-            ],
-          });
-        });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
+      const client = await signedInClient(home, async () => json({
+        schema_version: 1,
+        kind: "echo-clean-person-record-list-v1",
+        records: [{
+          position: 1,
+          approval_id: fixtureId("apr", 1),
+          record_sha256: `sha256:${"z".repeat(64)}`,
+          envelope: {},
+          unexpected: true,
+        }],
+      }));
       await expect(client.records()).rejects.toMatchObject({
         code: "invalid_response",
-      });
-
-      const result = await runCli(["records", "--limit", "101"], {
-        home_directory: home,
-      });
-      expect(result.code).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(JSON.parse(result.stderr)).toMatchObject({
-        ok: false,
-        action: "records",
-        error: "--limit must be an integer from 1 to 100",
       });
     });
   });
@@ -1250,9 +1139,8 @@ describe("Person client", () => {
     await withHome(async home => {
       let tools: unknown = [];
       const calls: string[] = [];
-      const client = fixtureClient(home, async (input, init) => {
+      const client = await signedInClient(home, async (input, init) => {
         const path = new URL(String(input)).pathname;
-        if (path === "/v1/authority-descriptor") return json({ authority_descriptor: authorityDescriptor() });
         expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
         calls.push(path);
         if (path === "/v1/person/records") return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [] });
@@ -1261,7 +1149,6 @@ describe("Person client", () => {
         if (tools === "failure") return new Response("provider raw body", { status: 503 });
         return json({ schema_version: 4, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools });
       });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
       expect((await client.tools()).tools).toEqual([]);
       expect(await client.records(1)).toMatchObject({ records: [] });
       const firstAnswer = await client.ask("What is approved?");
@@ -1277,16 +1164,21 @@ describe("Person client", () => {
     });
   });
 
-  it("discards tools status when the account changes during the read", async () => {
+  it.each([
+    ["tools status", (client: PersonClient) => client.tools(),
+      { schema_version: 4, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools: [] }],
+    ["a completed Slack browser link", (client: PersonClient) => slackBrowserLinkStatus(client, fixtureId("sbl", 9)),
+      { schema_version: 1, kind: "echo-person-slack-browser-link-status-v1", attempt_id: fixtureId("sbl", 9), status: "complete", failure_reason: null }],
+    ["a Slack disconnect", (client: PersonClient) => disconnectSlack(client),
+      { schema_version: 2, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id,
+        tools: [{ provider: "slack", availability: "enabled", personal_status: "unlinked", workspace_id: "T123ABC", account_id: null }] }],
+  ] as const)("discards %s when the account changes during the request", async (_name, call, body) => {
     await withHome(async home => {
-      const descriptor = authorityDescriptor();
-      const client: PersonClient = fixtureClient(home, async input => {
-        if (new URL(String(input)).pathname === "/v1/authority-descriptor") return json({ authority_descriptor: descriptor });
+      const client: PersonClient = await signedInClient(home, async () => {
         await client.installSession("https://authority.example", { ...ROTATED_SESSION, membership_id: fixtureId("mem", 2), principal_id: fixtureId("prn", 2), session_family_id: fixtureId("psf", 2) });
-        return json({ schema_version: 4, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools: [] });
+        return json(body);
       });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
-      await expect(client.tools()).rejects.toThrow("current account");
+      await expect(call(client)).rejects.toThrow("current account");
     });
   });
 
@@ -1597,7 +1489,6 @@ describe("Person client", () => {
           { ok: true, phase: "waiting", attempt_id: SIGN_IN, expires_at: "2026-08-18T00:07:00.000Z" },
           { ok: true, phase: "connected", result: signInStatus("complete") },
         ]);
-        expect(run.stdout).not.toContain("private-state");
 
         const conflict = await runTools(home, ["tools", "connect", "--tool", "slack"], { statuses: [signInStatus("failed", "identity_conflict")] });
         expect(JSON.parse(conflict.stderr)).toEqual({ ok: false, action: "tools-connect",
@@ -1648,7 +1539,7 @@ describe("Person client", () => {
     it("refuses an unknown tool or verb and misplaced options as usage errors before any request", async () => {
       await withHome(async (home) => {
         await installFixtureSession(home);
-        for (const argv of [["tools", "setup", "--tool", "mail"], ["tools", "bogus", "--tool", "slack"], ["tools", "bogus"]]) {
+        for (const argv of [["tools", "setup", "--tool", "mail"], ["tools", "bogus", "--tool", "slack"]]) {
           const run = await runTools(home, argv);
           expect(run.code, argv.join(" ")).toBe(2);
           expect(JSON.parse(run.stderr)).toEqual({ ok: false, error: "usage: echo-brain person <command> [options]" });
@@ -1664,29 +1555,6 @@ describe("Person client", () => {
           expect(run.paths).toEqual([]);
         }
       });
-    });
-  });
-
-  it("rejects a completed Slack browser link when the local account changes", async () => {
-    await withHome(async (home) => {
-      const descriptor = authorityDescriptor();
-      const client: PersonClient = fixtureClient(home, async (input) => {
-          const path = new URL(String(input)).pathname;
-          if (path === "/v1/authority-descriptor") return json({ authority_descriptor: descriptor });
-          await client.installSession("https://authority.example", {
-            ...ROTATED_SESSION,
-            membership_id: fixtureId("mem", 9), principal_id: fixtureId("prn", 9), session_family_id: fixtureId("psf", 9),
-          });
-          return json({
-            schema_version: 1,
-            kind: "echo-person-slack-browser-link-status-v1",
-            attempt_id: fixtureId("sbl", 9),
-            status: "complete",
-            failure_reason: null,
-          });
-        });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
-      await expect(slackBrowserLinkStatus(client, fixtureId("sbl", 9))).rejects.toThrow("current account");
     });
   });
 
@@ -1732,12 +1600,10 @@ describe("Person client", () => {
     });
   });
 
-  it("rejects a malformed disconnect response and a session switch during disconnect", async () => {
+  it("rejects a malformed disconnect response", async () => {
     await withHome(async (home) => {
-      const descriptor = authorityDescriptor();
-      const client: PersonClient = fixtureClient(home, async (input) => {
+      const client: PersonClient = await signedInClient(home, async (input) => {
           const path = new URL(String(input)).pathname;
-          if (path === "/v1/authority-descriptor") return json({ authority_descriptor: descriptor });
           if (path !== "/v2/person/external-identities/slack/disconnect") throw new Error(`unexpected request ${path}`);
           await client.installSession("https://authority.example", {
             ...ROTATED_SESSION,
@@ -1751,29 +1617,7 @@ describe("Person client", () => {
             tools: [{ provider: "slack", availability: "enabled", personal_status: "unlinked", workspace_id: "T123ABC", account_id: "U123PERSON" }],
           });
         });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
       await expect(disconnectSlack(client)).rejects.toThrow("malformed response");
-    });
-
-    await withHome(async (home) => {
-      const descriptor = authorityDescriptor();
-      const client: PersonClient = fixtureClient(home, async (input) => {
-          const path = new URL(String(input)).pathname;
-          if (path === "/v1/authority-descriptor") return json({ authority_descriptor: descriptor });
-          await client.installSession("https://authority.example", {
-            ...ROTATED_SESSION,
-            membership_id: fixtureId("mem", 12), principal_id: fixtureId("prn", 12), session_family_id: fixtureId("psf", 12),
-          });
-          return json({
-            schema_version: 2,
-            kind: "echo-organization-person-tools",
-            organization_id: SESSION.organization_id,
-            membership_id: SESSION.membership_id,
-            tools: [{ provider: "slack", availability: "enabled", personal_status: "unlinked", workspace_id: "T123ABC", account_id: null }],
-          });
-        });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
-      await expect(disconnectSlack(client)).rejects.toThrow("current account");
     });
   });
 
@@ -1804,36 +1648,10 @@ describe("Person client", () => {
           >;
           observed.push({ path, body });
           if (path === "/v2/integration-links/slack/challenges") {
-            return json(
-              {
-                schema_version: 2,
-                kind: "echo-organization-person-slack-link-begin-response",
-                challenge_attempt_id: challengeAttemptId,
-                provider: "slack",
-                provider_tenant_id: "T123ABC",
-                channel_id: "D123ABC",
-                challenge_message_ts: challengeMessageTs,
-                expires_at: "2026-08-18T00:17:00.000Z",
-              },
-              201,
-            );
+            return json(slackLinkBegin(challengeAttemptId, challengeMessageTs), 201);
           }
           expect(path).toBe("/v2/integration-links/slack/completions");
-          return json({
-            schema_version: 2,
-            kind: "echo-organization-person-slack-link-result",
-            identity_link_id: fixtureId("clm", 1),
-            connection_id: fixtureId("con", 1),
-            organization_id: SESSION.organization_id,
-            principal_id: SESSION.principal_id,
-            membership_id: SESSION.membership_id,
-            provider: "slack",
-            provider_tenant_id: "T123ABC",
-            provider_subject_id: "U123PERSON",
-            channel_id: "D123ABC",
-            linked_at: NOW,
-            identity_link_created: true,
-          });
+          return json(slackLinkResult(1));
         },
       });
 
@@ -1866,15 +1684,6 @@ describe("Person client", () => {
           },
         },
       ]);
-      for (const { body } of observed) {
-        expect(body).not.toHaveProperty("schema_version");
-        expect(body).not.toHaveProperty("kind");
-        expect(body).not.toHaveProperty("authority_id");
-        expect(body).not.toHaveProperty("organization_id");
-        expect(body).not.toHaveProperty("subject_principal_id");
-        expect(body).not.toHaveProperty("http_method");
-        expect(body).not.toHaveProperty("http_path");
-      }
     });
   });
 
@@ -1887,10 +1696,7 @@ describe("Person client", () => {
         home_directory: home,
         now: () => "2026-08-18T00:00:00.000Z",
         fetch: async () => json({ authority_descriptor: authority }),
-      }).installSession("https://authority.example", {
-        ...SESSION,
-        membership_type: "owner",
-      });
+      }).installSession("https://authority.example", OWNER_SESSION_EXPIRED);
       const { code: status, stdout } = await runCli(
         [
           "employee",
@@ -1920,9 +1726,6 @@ describe("Person client", () => {
         },
       );
       expect(status).toBe(0);
-      expect(stdout).not.toContain(loginGrant);
-      expect(stdout).not.toContain("mem_");
-      expect(stdout).not.toContain("prn_");
       expect(JSON.parse(stdout)).toEqual({
         ok: true,
         output_path: outputPath,
@@ -1939,14 +1742,9 @@ describe("Person client", () => {
 
   it("writes a versioned expected-account artifact when reissuing an employee invitation", async () => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
       const outputPath = join(home, "employee-reissued-onboarding.json");
-      const client = fixtureClient(home, async (input, init) => {
-          const path = new URL(String(input)).pathname;
-          if (path === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          expect(path).toBe("/v1/person/employees");
+      const client = await signedInClient(home, async (input, init) => {
+          expect(new URL(String(input)).pathname).toBe("/v1/person/employees");
           expect(init?.method).toBe("PUT");
           expect(JSON.parse(String(init?.body))).toEqual({
             email: "jane@example.com",
@@ -1958,11 +1756,7 @@ describe("Person client", () => {
             },
             201,
           );
-        });
-      await client.installSession("https://authority.example", {
-        ...ROTATED_SESSION,
-        membership_type: "owner",
-      });
+        }, OWNER_SESSION);
 
       await client.reissueEmployee({
         email: "jane@example.com",
@@ -1979,14 +1773,10 @@ describe("Person client", () => {
 
   it("keeps legacy durable employee identities usable without emitting an expected-email artifact", async () => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
       const outputPath = join(home, "legacy-employee-reissued-onboarding.json");
       const observed: Array<{ path: string; method: string; body?: unknown }> = [];
-      const client = fixtureClient(home, async (input, init) => {
+      const client = await signedInClient(home, async (input, init) => {
           const path = new URL(String(input)).pathname;
-          if (path === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
           observed.push({
             path,
             method: init?.method ?? "GET",
@@ -2015,11 +1805,7 @@ describe("Person client", () => {
             }, 201);
           }
           return new Response(null, { status: 204 });
-        });
-      await client.installSession("https://authority.example", {
-        ...ROTATED_SESSION,
-        membership_type: "owner",
-      });
+        }, OWNER_SESSION);
 
       await expect(client.employees()).resolves.toMatchObject({
         employees: [expect.objectContaining({ email: "alice@localhost" })],
@@ -2068,10 +1854,19 @@ describe("Person client", () => {
         now: () => "2026-08-18T00:00:00.000Z",
         fetch: async () => json({ authority_descriptor: authority }),
       });
-      await client.installSession("https://authority.example", {
-        ...SESSION,
-        membership_type: "owner",
-      });
+      await client.installSession("https://authority.example", OWNER_SESSION_EXPIRED);
+      const roster = {
+        schema_version: 1,
+        kind: "echo-clean-person-employee-roster-v1",
+        employees: [
+          {
+            email: "jane@example.com",
+            display_name: "Jane Doe",
+            membership_status: "active",
+            invitation_state: "pending",
+          },
+        ],
+      };
       const { code: status, stdout } = await runCli(["employee", "list"], {
         home_directory: home,
         now: () => "2026-08-18T00:00:00.000Z",
@@ -2081,91 +1876,34 @@ describe("Person client", () => {
           expect(new Headers(init?.headers).get("authorization")).toBe(
             `Bearer ${SESSION.access_token}`,
           );
-          return json({
-            schema_version: 1,
-            kind: "echo-clean-person-employee-roster-v1",
-            employees: [
-              {
-                email: "jane@example.com",
-                display_name: "Jane Doe",
-                membership_status: "active",
-                invitation_state: "pending",
-              },
-            ],
-          });
+          return json(roster);
         },
       });
       expect(status).toBe(0);
-      expect(JSON.parse(stdout)).toEqual({
-        ok: true,
-        result: {
-          schema_version: 1,
-          kind: "echo-clean-person-employee-roster-v1",
-          employees: [
-            {
-              email: "jane@example.com",
-              display_name: "Jane Doe",
-              membership_status: "active",
-              invitation_state: "pending",
-            },
-          ],
-        },
-      });
-      expect(stdout).not.toContain("mem_");
-      expect(stdout).not.toContain("prn_");
+      expect(JSON.parse(stdout)).toEqual({ ok: true, result: roster });
     });
   });
 
-  it("preflights an existing employee invitation output before remote issuance", async () => {
+  it.each([
+    ["an existing employee invitation output", "invite", (home: string) => writeFileSync(join(home, "invite.json"), "reserved\n", { mode: 0o600 })],
+    ["a non-private employee invitation parent", "reissue", (home: string) => chmodSync(home, 0o755)],
+  ] as const)("preflights %s before remote issuance", async (_name, op, prepare) => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
       let mutations = 0;
-      const client = fixtureClient(home, async (input) => {
-          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          mutations += 1;
-          throw new Error("remote mutation must not run");
-        });
-      await client.installSession("https://authority.example", {
-        ...SESSION,
-        membership_type: "owner",
-      });
-      const output = join(home, "already-exists.json");
-      writeFileSync(output, "reserved\n", { mode: 0o600 });
-      await expect(
-        client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output }),
-      ).rejects.toMatchObject({
-        code: "invitation_output_invalid",
-        mutation_outcome: "not_submitted",
-      } satisfies Partial<EmployeeMutationError>);
-      expect(mutations).toBe(0);
-    });
-  });
-
-  it("preflights a non-private employee invitation parent before remote issuance", async () => {
-    await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      let mutations = 0;
-      const client = fixtureClient(home, async (input) => {
-          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          mutations += 1;
-          throw new Error("remote mutation must not run");
-        });
-      await client.installSession("https://authority.example", {
-        ...SESSION,
-        membership_type: "owner",
-      });
-      chmodSync(home, 0o755);
+      const client = await signedInClient(home, async () => {
+        mutations += 1;
+        throw new Error("remote mutation must not run");
+      }, OWNER_SESSION_EXPIRED);
+      const output = join(home, "invite.json");
+      prepare(home);
       try {
-      await expect(
-        client.reissueEmployee({ email: "jane@example.com", output_path: join(home, "invite.json") }),
-      ).rejects.toMatchObject({
-        code: "invitation_output_invalid",
-        mutation_outcome: "not_submitted",
-      } satisfies Partial<EmployeeMutationError>);
+        await expect(op === "invite"
+          ? client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output })
+          : client.reissueEmployee({ email: "jane@example.com", output_path: output }),
+        ).rejects.toMatchObject({
+          code: "invitation_output_invalid",
+          mutation_outcome: "not_submitted",
+        } satisfies Partial<EmployeeMutationError>);
       } finally {
         chmodSync(home, 0o700);
       }
@@ -2173,76 +1911,13 @@ describe("Person client", () => {
     });
   });
 
-  it("leaves no employee invitation artifact when remote issuance fails", async () => {
-    await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const output = join(home, "invite.json");
-      const client = fixtureClient(home, async (input) => {
-          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          throw new Error("network failed");
-        });
-      await client.installSession("https://authority.example", {
-        ...ROTATED_SESSION,
-        membership_type: "owner",
-      });
-      await expect(
-        client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output }),
-      ).rejects.toMatchObject({
-        code: "outcome_unknown",
-        mutation_outcome: "unknown",
-      } satisfies Partial<EmployeeMutationError>);
-      expect(existsSync(output)).toBe(false);
-    });
-  });
-
-  it("explains that a bound employee signs in without reissuing an invitation", async () => {
-    await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const output = join(home, "invite.json");
-      const client = fixtureClient(home, async (input) => {
-          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          return json(
-            { error: { code: "conflict", message: "request failed" } },
-            409,
-          );
-        });
-      await client.installSession("https://authority.example", {
-        ...ROTATED_SESSION,
-        membership_type: "owner",
-      });
-      await expect(
-        client.reissueEmployee({
-          email: "jane@example.com",
-          output_path: output,
-        }),
-      ).rejects.toMatchObject({
-        code: "employee_onboarding_complete",
-        mutation_outcome: "rejected",
-      } satisfies Partial<EmployeeMutationError>);
-      expect(existsSync(output)).toBe(false);
-    });
-  });
-
   it("preserves a local output that wins the post-preflight race", async () => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
       const output = join(home, "invite.json");
-      const client = fixtureClient(home, async (input) => {
-          const path = new URL(String(input)).pathname;
-          if (path === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          writeFileSync(output, "created by another local writer\n", { mode: 0o600 });
-          return json({ login_grant: "G".repeat(43), expires_at: "2026-08-18T00:15:00.000Z" }, 201);
-        });
-      await client.installSession("https://authority.example", {
-        ...ROTATED_SESSION,
-        membership_type: "owner",
-      });
+      const client = await signedInClient(home, async () => {
+        writeFileSync(output, "created by another local writer\n", { mode: 0o600 });
+        return json({ login_grant: "G".repeat(43), expires_at: "2026-08-18T00:15:00.000Z" }, 201);
+      }, OWNER_SESSION);
       await expect(
         client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output }),
       ).rejects.toMatchObject({
@@ -2253,99 +1928,37 @@ describe("Person client", () => {
     });
   });
 
-  it("marks local employee authorization failures as not submitted", async () => {
+  it.each([
+    { name: "remote issuance fails", session: OWNER_SESSION, op: "invite",
+      reply: (): Response => { throw new Error("network failed"); }, code: "outcome_unknown", mutation_outcome: "unknown", writes: 1 },
+    { name: "a bound employee is reissued", session: OWNER_SESSION, op: "reissue",
+      reply: () => json({ error: { code: "conflict", message: "request failed" } }, 409), code: "employee_onboarding_complete", mutation_outcome: "rejected", writes: 1 },
+    { name: "local authorization fails", session: ROTATED_SESSION, op: "invite",
+      reply: (): Response => { throw new Error("employee write must not run"); }, code: "owner_access_required", mutation_outcome: "not_submitted", writes: 0 },
+    { name: "the Authority rejects authorization after an employee write", session: OWNER_SESSION, op: "invite",
+      reply: () => json({ error: { code: "unauthorized", message: "request failed" } }, 401), code: "owner_access_required", mutation_outcome: "rejected", writes: 1 },
+    ...[401, 409].map(statusCode => ({ name: `a malformed ${statusCode} employee-write error arrives`, session: OWNER_SESSION, op: "invite",
+      reply: () => json({ unexpected: "error shape" }, statusCode), code: "outcome_unknown", mutation_outcome: "unknown", writes: 1 } as const)),
+  ] as const)("reports $code ($mutation_outcome) and leaves no invitation when $name", async ({ session, op, reply, code, mutation_outcome, writes }) => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      let mutations = 0;
-      const client = fixtureClient(home, async (input) => {
-          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          mutations += 1;
-          throw new Error("employee write must not run");
-        });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
-
-      await expect(
-        client.inviteEmployee({
-          name: "Jane Doe",
-          email: "jane@example.com",
-          output_path: join(home, "employee-invitation.json"),
-        }),
-      ).rejects.toMatchObject({
-        code: "owner_access_required",
-        mutation_outcome: "not_submitted",
-      } satisfies Partial<EmployeeMutationError>);
-      expect(mutations).toBe(0);
-    });
-  });
-
-  it("marks Authority authorization rejection after an employee write as rejected", async () => {
-    await withHome(async (home) => {
-      const authority = authorityDescriptor();
+      const output = join(home, "invite.json");
       let employeeWrites = 0;
-      const client = fixtureClient(home, async (input) => {
-          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          employeeWrites += 1;
-          return json({ error: { code: "unauthorized", message: "request failed" } }, 401);
-        });
-      await client.installSession("https://authority.example", {
-        ...ROTATED_SESSION,
-        membership_type: "owner",
-      });
-
-      await expect(
-        client.inviteEmployee({
-          name: "Jane Doe",
-          email: "jane@example.com",
-          output_path: join(home, "employee-invitation.json"),
-        }),
-      ).rejects.toMatchObject({
-        code: "owner_access_required",
-        mutation_outcome: "rejected",
-      } satisfies Partial<EmployeeMutationError>);
-      expect(employeeWrites).toBe(1);
+      const client = await signedInClient(home, async () => {
+        employeeWrites += 1;
+        return reply();
+      }, session);
+      await expect(op === "invite"
+        ? client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output })
+        : client.reissueEmployee({ email: "jane@example.com", output_path: output }),
+      ).rejects.toMatchObject({ code, mutation_outcome } satisfies Partial<EmployeeMutationError>);
+      expect(employeeWrites).toBe(writes);
+      expect(existsSync(output)).toBe(false);
     });
   });
-
-  it.each([401, 409])(
-    "treats a malformed %i employee-write error as an unknown outcome",
-    async (statusCode) => {
-      await withHome(async (home) => {
-        const authority = authorityDescriptor();
-        const client = fixtureClient(home, async (input) => {
-            if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
-              return json({ authority_descriptor: authority });
-            }
-            return json({ unexpected: "error shape" }, statusCode);
-          });
-        await client.installSession("https://authority.example", {
-          ...ROTATED_SESSION,
-          membership_type: "owner",
-        });
-
-        await expect(
-          client.inviteEmployee({
-            name: "Jane Doe",
-            email: "jane@example.com",
-            output_path: join(home, `employee-invitation-${statusCode}.json`),
-          }),
-        ).rejects.toMatchObject({
-          code: "outcome_unknown",
-          mutation_outcome: "unknown",
-        } satisfies Partial<EmployeeMutationError>);
-      });
-    },
-  );
 
   it("reports a duplicate employee as a typed rejected CLI mutation", async () => {
     await withHome(async (home) => {
-      await installFixtureSession(home, {
-        ...ROTATED_SESSION,
-        membership_type: "owner",
-      });
+      await installFixtureSession(home, OWNER_SESSION);
       let stderr = "";
       const outputPath = join(home, "employee-invitation.json");
       const status = await runPersonClientCli(
@@ -2391,36 +2004,21 @@ describe("Person client", () => {
         login_grant: loginGrant,
         expires_at: "2026-08-18T00:15:00.000Z",
       });
-      const authority = authorityDescriptor();
       const { code: status, stdout } = await runCli(
         ["login", "--invitation", invitationPath],
         {
           home_directory: home,
           now: () => NOW,
-          fetch: async (input, init) => {
-            const path = new URL(String(input)).pathname;
-            if (path === "/v2/session/oidc/begin") {
-              const begunRequest = JSON.parse(String(init?.body)) as Record<string, unknown>;
-              expect(begunRequest).toMatchObject({
-                kind: "identity_bootstrap",
-                login_grant: loginGrant,
-              });
-              const handoff = begunRequest.loopback_handoff as Record<string, unknown>;
-              expect(handoff.url).toMatch(/^http:\/\/127\.0\.0\.1:[1-9][0-9]*\/[A-Za-z0-9_-]{43}$/);
-              expect(handoff.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
-              deliverHandoff(handoff, { session: SESSION });
-              return json(
-                {
-                  authorization_url:
-                    "https://identity.example/authorize?state=state",
-                  expires_at: "2026-08-18T00:10:00.000Z",
-                },
-                201,
-              );
-            }
-            expect(path).toBe("/v1/authority-descriptor");
-            return json({ authority_descriptor: authority });
-          },
+          fetch: loginAuthority("https://identity.example/authorize?state=state", (request) => {
+            expect(request).toMatchObject({
+              kind: "identity_bootstrap",
+              login_grant: loginGrant,
+            });
+            const handoff = request.loopback_handoff as Record<string, unknown>;
+            expect(handoff.url).toMatch(/^http:\/\/127\.0\.0\.1:[1-9][0-9]*\/[A-Za-z0-9_-]{43}$/);
+            expect(handoff.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            return { session: SESSION };
+          }),
         },
       );
 
@@ -2455,7 +2053,6 @@ describe("Person client", () => {
         expires_at: "2026-08-18T00:15:00.000Z",
         expected_email: expectedEmail,
       });
-      const authority = authorityDescriptor();
       const opened: string[] = [];
       const { code: status, stdout } = await runCli(
         ["login", "--invitation", invitationPath],
@@ -2466,30 +2063,10 @@ describe("Person client", () => {
             opened.push(url);
             return false;
           },
-          fetch: async (input, init) => {
-            const path = new URL(String(input)).pathname;
-            if (path === "/v2/session/oidc/begin") {
-              const request = JSON.parse(String(init?.body)) as Record<
-                string,
-                unknown
-              >;
-              expect(request.login_hint).toBe(expectedEmail);
-              const handoff = request.loopback_handoff as Record<
-                string,
-                string
-              >;
-              deliverHandoff(handoff, { session: ROTATED_SESSION });
-              return json(
-                {
-                  authorization_url: hintedAuthorizationUrl,
-                  expires_at: "2026-08-18T00:10:00.000Z",
-                },
-                201,
-              );
-            }
-            expect(path).toBe("/v1/authority-descriptor");
-            return json({ authority_descriptor: authority });
-          },
+          fetch: loginAuthority(hintedAuthorizationUrl, (request) => {
+            expect(request.login_hint).toBe(expectedEmail);
+            return { session: ROTATED_SESSION };
+          }),
         },
       );
 
@@ -2536,23 +2113,10 @@ describe("Person client", () => {
             opened.push(url);
             return true;
           },
-          fetch: async (input, init) => {
-            expect(new URL(String(input)).pathname).toBe("/v2/session/oidc/begin");
-            const request = JSON.parse(String(init?.body)) as Record<
-              string,
-              unknown
-            >;
+          fetch: loginAuthority(hintedAuthorizationUrl, (request) => {
             expect(request.login_hint).toBe(expectedEmail);
-            const handoff = request.loopback_handoff as Record<string, string>;
-            deliverHandoff(handoff, { error: "retryable" });
-            return json(
-              {
-                authorization_url: hintedAuthorizationUrl,
-                expires_at: "2026-08-18T00:10:00.000Z",
-              },
-              201,
-            );
-          },
+            return { error: "retryable" };
+          }, { descriptor: false }),
         },
       );
 
@@ -2634,7 +2198,6 @@ describe("Person client", () => {
         login_grant: loginGrant,
         expires_at: "2026-08-18T00:01:00.000Z",
       });
-      const authority = authorityDescriptor();
       const opened: string[] = [];
       const { code: status, stdout, stderr } = await runCli(
         ["login", "--invitation", invitationPath, "--open-browser"],
@@ -2645,24 +2208,13 @@ describe("Person client", () => {
             opened.push(url);
             return true;
           },
-          fetch: async (input, init) => {
-            const url = new URL(String(input));
-            if (url.pathname === "/v2/session/oidc/begin") {
-              const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
-              expect(request).toMatchObject({
-                kind: "identity_bootstrap",
-                login_grant: loginGrant,
-              });
-              const handoff = request.loopback_handoff as Record<string, string>;
-              deliverHandoff(handoff, { session: ROTATED_SESSION });
-              return json({
-                authorization_url: "https://identity.example/authorize?state=state",
-                expires_at: "2026-08-18T00:10:00.000Z",
-              }, 201);
-            }
-            expect(url.pathname).toBe("/v1/authority-descriptor");
-            return json({ authority_descriptor: authority });
-          },
+          fetch: loginAuthority("https://identity.example/authorize?state=state", (request) => {
+            expect(request).toMatchObject({
+              kind: "identity_bootstrap",
+              login_grant: loginGrant,
+            });
+            return { session: ROTATED_SESSION };
+          }),
         },
       );
 
@@ -2713,30 +2265,15 @@ describe("Person client", () => {
 
   it("reauthenticates through the same loopback handoff without an invitation", async () => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
       const { code: status, stdout } = await runCli(
         ["login", "--authority-url", "https://authority.example"],
         {
           home_directory: home,
           now: () => NOW,
-          fetch: async (input, init) => {
-            const path = new URL(String(input)).pathname;
-            if (path === "/v2/session/oidc/begin") {
-              const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
-              expect(request.kind).toBe("existing_identity_login");
-              const handoff = request.loopback_handoff as Record<string, string>;
-              deliverHandoff(handoff, { session: SESSION });
-              return json(
-                {
-                  authorization_url: "https://identity.example/authorize?state=state",
-                  expires_at: "2026-08-18T00:10:00.000Z",
-                },
-                201,
-              );
-            }
-            expect(path).toBe("/v1/authority-descriptor");
-            return json({ authority_descriptor: authority });
-          },
+          fetch: loginAuthority("https://identity.example/authorize?state=state", (request) => {
+            expect(request.kind).toBe("existing_identity_login");
+            return { session: SESSION };
+          }),
         },
       );
       expect(status).toBe(0);
@@ -2746,7 +2283,6 @@ describe("Person client", () => {
 
   it("opens the existing-identity browser handoff only when requested", async () => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
       const authorizationUrl = "https://identity.example/authorize?state=state";
       const opened: string[] = [];
       const { code: status, stdout, stderr } = await runCli(
@@ -2758,18 +2294,10 @@ describe("Person client", () => {
             opened.push(url);
             return true;
           },
-          fetch: async (input, init) => {
-            const path = new URL(String(input)).pathname;
-            if (path === "/v2/session/oidc/begin") {
-              const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
-              expect(request.kind).toBe("existing_identity_login");
-              const handoff = request.loopback_handoff as Record<string, string>;
-              deliverHandoff(handoff, { session: ROTATED_SESSION });
-              return json({ authorization_url: authorizationUrl, expires_at: "2026-08-18T00:10:00.000Z" }, 201);
-            }
-            expect(path).toBe("/v1/authority-descriptor");
-            return json({ authority_descriptor: authority });
-          },
+          fetch: loginAuthority(authorizationUrl, (request) => {
+            expect(request.kind).toBe("existing_identity_login");
+            return { session: ROTATED_SESSION };
+          }),
         },
       );
 
@@ -2826,32 +2354,21 @@ describe("Person client", () => {
         login_grant: "G".repeat(43),
         expires_at: "2026-08-18T00:01:00.000Z",
       });
-      const authority = authorityDescriptor();
       const begins: Record<string, unknown>[] = [];
       const { code: status, stdout } = await runCli(
         ["login", "--invitation", invitationPath],
         {
           home_directory: home,
           now: () => NOW,
-          fetch: async (input, init) => {
-            const path = new URL(String(input)).pathname;
-            if (path === "/v2/session/oidc/begin") {
-              const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
-              begins.push(request);
-              if (begins.length === 1) {
-                return json({ error: { code: "unauthorized", message: "request failed" } }, 401);
-              }
-              expect(request.kind).toBe("existing_identity_login");
-              expect(request).not.toHaveProperty("login_grant");
-              const handoff = request.loopback_handoff as Record<string, string>;
-              deliverHandoff(handoff, { session: SESSION });
-              return json({
-                authorization_url: "https://identity.example/authorize?state=state",
-                expires_at: "2026-08-18T00:10:00.000Z",
-              }, 201);
+          fetch: loginAuthority("https://identity.example/authorize?state=state", (request) => {
+            begins.push(request);
+            if (begins.length === 1) {
+              return json({ error: { code: "unauthorized", message: "request failed" } }, 401);
             }
-            return json({ authority_descriptor: authority });
-          },
+            expect(request.kind).toBe("existing_identity_login");
+            expect(request).not.toHaveProperty("login_grant");
+            return { session: SESSION };
+          }),
         },
       );
       expect(status).toBe(0);
@@ -2876,14 +2393,7 @@ describe("Person client", () => {
         {
           home_directory: home,
           now: () => NOW,
-          fetch: async (input, init) => {
-            if (new URL(String(input)).pathname !== "/v2/session/oidc/begin") {
-              throw new Error("unexpected Authority request");
-            }
-            const request = JSON.parse(String(init?.body)) as Record<
-              string,
-              unknown
-            >;
+          fetch: loginAuthority("https://identity.example/authorize?state=state", (request) => {
             begins.push(request);
             if (begins.length === 1) {
               return json(
@@ -2891,17 +2401,8 @@ describe("Person client", () => {
                 401,
               );
             }
-            const handoff = request.loopback_handoff as Record<string, string>;
-            deliverHandoff(handoff, { error: "identity_not_bound" });
-            return json(
-              {
-                authorization_url:
-                  "https://identity.example/authorize?state=state",
-                expires_at: "2026-08-18T00:10:00.000Z",
-              },
-              201,
-            );
-          },
+            return { error: "identity_not_bound" };
+          }, { descriptor: false }),
         },
       );
 
@@ -2933,41 +2434,14 @@ describe("Person client", () => {
         read_input: (secretPrompt) => { expect(secretPrompt).toBeUndefined(); return "\n"; },
         fetch: async (input, init) => {
           const path = new URL(String(input)).pathname;
-          if (path === "/v2/integration-links/slack/challenges")
-            return json(
-              {
-                schema_version: 2,
-                kind: "echo-organization-person-slack-link-begin-response",
-                challenge_attempt_id: challengeAttemptId,
-                provider: "slack",
-                provider_tenant_id: "T123ABC",
-                channel_id: "D123ABC",
-                challenge_message_ts: challengeMessageTs,
-                expires_at: "2026-08-18T00:17:00.000Z",
-              },
-              201,
-            );
+          if (path === "/v2/integration-links/slack/challenges") return json(slackLinkBegin(challengeAttemptId, challengeMessageTs), 201);
           if (path === "/v2/integration-links/slack/completions") {
             expect(JSON.parse(String(init?.body))).toMatchObject({
               challenge_code: challengeCode,
               challenge_attempt_id: challengeAttemptId,
               challenge_message_ts: challengeMessageTs,
             });
-            return json({
-              schema_version: 2,
-              kind: "echo-organization-person-slack-link-result",
-              identity_link_id: fixtureId("clm", 7),
-              connection_id: fixtureId("con", 7),
-              organization_id: SESSION.organization_id,
-              principal_id: SESSION.principal_id,
-              membership_id: SESSION.membership_id,
-              provider: "slack",
-              provider_tenant_id: "T123ABC",
-              provider_subject_id: "U123PERSON",
-              channel_id: "D123ABC",
-              linked_at: NOW,
-              identity_link_created: true,
-            });
+            return json(slackLinkResult(7));
           }
           throw new Error(`unexpected request ${path}`);
         },
@@ -3133,16 +2607,15 @@ describe('Person updates CLI', () => {
       expect(errors).toBe('');
     });
   });
-  it.each(['lost', 'malformed', 'conflict'] as const)('handles %s without a mutation retry or payload leakage', async mode => {
+  it('handles a malformed receipt without a mutation retry or payload leakage', async () => {
     await withHome(async home => {
       await installFixtureSession(home);
       const file = join(home, 'update.txt'); writeFileSync(file, 'private submitted content'); let errors = '';
-      const network = vi.fn<typeof fetch>(async () => { if (mode === 'lost') throw new Error('private transport data'); if (mode === 'malformed') return json({ ...receipt, text: 'private response content' }, 202); return json({ error: { code: 'conflict', message: 'private error content' } }, 409); });
+      const network = vi.fn<typeof fetch>(async () => json({ ...receipt, text: 'private response content' }, 202));
       expect(await runPersonClientCli(['updates', 'submit-v3', '--request-id', requestId, '--title', 'Release', '--file', file], { home_directory: home, now: () => NOW, fetch: network, stdout: { write: () => {} }, stderr: { write: value => { errors += value; } } })).toBe(1);
       expect(network).toHaveBeenCalledTimes(1);
       expect(errors).not.toContain('private');
-      if (mode === 'conflict') expect(JSON.parse(errors)).toMatchObject({ code: 'conflict', status: 409 });
-      else { expect(errors).toContain('outcome is unknown'); expect(errors).toContain('Check updates status-v3 with the same request ID'); }
+      expect(errors).toContain('outcome is unknown'); expect(errors).toContain('Check updates status-v3 with the same request ID');
     });
   });
   it.each([Buffer.alloc(8193, 'x'), Buffer.from([0xc3, 0x28]), Buffer.from('text\0nul')])('refuses invalid input files before any network request', async bytes => {

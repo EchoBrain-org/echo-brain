@@ -69,41 +69,28 @@ function input(
     created_at: CREATED_AT,
     creating_artifact_revision: ARTIFACT,
     schemas,
-    top_level_appliers: {
-      authority: {
-        apply: (database) => {
-          database.exec(
-            "CREATE TABLE authority_v1 (singleton INTEGER PRIMARY KEY) STRICT",
-          );
-          database.pragma(
-            `application_id = ${STATE_LINEAGE_ROLE_APPLICATION_IDS_V1.authority}`,
-          );
-          database.pragma("user_version = 1");
+    top_level_appliers: Object.fromEntries(
+      (
+        [
+          ["authority", "authority_v1"],
+          ["control-plane", "control_plane_v1"],
+          ["record-log", "record_log_v1"],
+        ] as const
+      ).map(([role, table]) => [
+        role,
+        {
+          apply: (database: Database.Database) => {
+            database.exec(
+              `CREATE TABLE ${table} (singleton INTEGER PRIMARY KEY) STRICT`,
+            );
+            database.pragma(
+              `application_id = ${STATE_LINEAGE_ROLE_APPLICATION_IDS_V1[role]}`,
+            );
+            database.pragma("user_version = 1");
+          },
         },
-      },
-      "control-plane": {
-        apply: (database) => {
-          database.exec(
-            "CREATE TABLE control_plane_v1 (singleton INTEGER PRIMARY KEY) STRICT",
-          );
-          database.pragma(
-            `application_id = ${STATE_LINEAGE_ROLE_APPLICATION_IDS_V1["control-plane"]}`,
-          );
-          database.pragma("user_version = 1");
-        },
-      },
-      "record-log": {
-        apply: (database) => {
-          database.exec(
-            "CREATE TABLE record_log_v1 (singleton INTEGER PRIMARY KEY) STRICT",
-          );
-          database.pragma(
-            `application_id = ${STATE_LINEAGE_ROLE_APPLICATION_IDS_V1["record-log"]}`,
-          );
-          database.pragma("user_version = 1");
-        },
-      },
-    },
+      ]),
+    ) as InitializeAuthorityStateLineageV2Input["top_level_appliers"],
     open_writable_database: (path) => new Database(path),
     ...overrides,
   };
@@ -219,44 +206,45 @@ describe("Authority state-lineage initializer", () => {
     }
   });
 
-  it("never publishes a partially initialized directory when an applier fails", () => {
-    const parent = fixtureRoot();
-    const stateDirectory = join(parent, "state");
-    const base = input(stateDirectory);
-    const failing = input(stateDirectory, {
-      top_level_appliers: {
-        ...base.top_level_appliers,
-        "record-log": {
-          apply: () => {
-            throw new Error("record-log baseline failed");
+  it.each([
+    {
+      name: "never publishes a partially initialized directory when an applier fails",
+      overrides: (
+        base: InitializeAuthorityStateLineageV2Input,
+      ): Partial<InitializeAuthorityStateLineageV2Input> => ({
+        top_level_appliers: {
+          ...base.top_level_appliers,
+          "record-log": {
+            apply: () => {
+              throw new Error("record-log baseline failed");
+            },
           },
         },
-      },
-    });
-
-    expect(() => initializeAuthorityStateLineageV2(failing)).toThrow(
-      "record-log baseline failed",
-    );
-    expect(existsSync(stateDirectory)).toBe(false);
-    expect(
-      readdirSync(parent).filter((entry) => entry.startsWith(".installing-")),
-    ).toEqual([]);
-  });
-
-  it("rejects a missing role schema before creating staging state", () => {
+      }),
+      message: "record-log baseline failed",
+    },
+    {
+      name: "rejects a missing role schema before creating staging state",
+      overrides: (
+        base: InitializeAuthorityStateLineageV2Input,
+      ): Partial<InitializeAuthorityStateLineageV2Input> => ({
+        schemas: {
+          ...base.schemas,
+          "record-log": undefined,
+        } as unknown as InitializeAuthorityStateLineageV2Input["schemas"],
+      }),
+      message: "Authority state schemas must give the record-log role a schema",
+    },
+  ])("$name", ({ overrides, message }) => {
     const parent = fixtureRoot();
     const stateDirectory = join(parent, "state");
     const base = input(stateDirectory);
-    const missing = input(stateDirectory, {
-      schemas: {
-        ...base.schemas,
-        "record-log": undefined,
-      } as unknown as InitializeAuthorityStateLineageV2Input["schemas"],
-    });
 
-    expect(() => initializeAuthorityStateLineageV2(missing)).toThrow(
-      "Authority state schemas must give the record-log role a schema",
-    );
+    expect(() =>
+      initializeAuthorityStateLineageV2(
+        input(stateDirectory, overrides(base)),
+      ),
+    ).toThrow(message);
     expect(existsSync(stateDirectory)).toBe(false);
     expect(
       readdirSync(parent).filter((entry) => entry.startsWith(".installing-")),

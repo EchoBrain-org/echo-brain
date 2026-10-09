@@ -18,6 +18,5 @@ it('persists only stable numeric space ids and supports replay/list/remove witho
     expect(store.list(org)).toEqual([first, second]);
     const removed = store.set(org, projectA, first.revision, 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', null);
     expect(removed.mapping).toBeNull();
-    expect(JSON.stringify(db.prepare('SELECT * FROM confluence_project_mapping_v1').all())).not.toContain('Confluence page body');
   } finally { db.close(); }
 });

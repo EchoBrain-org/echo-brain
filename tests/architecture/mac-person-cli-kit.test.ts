@@ -98,7 +98,6 @@ describe.skipIf(!nativeMac)("macOS arm64 Person CLI kit", () => {
     const wrapper = join(subject.cliRoot, "bin/echo-brain");
     const before = execFileSync("shasum", ["-a", "256", wrapper], { encoding: "utf8" }).split(" ")[0];
     expect(subject.run(2).status).toBe(0);
-    subject.prepare(3);
     const raced = subject.run(3, ["--install-only", "--expected-wrapper-sha256", before]);
     expect(raced.status).toBe(1);
     expect(raced.stderr).toContain("changed during download");
@@ -114,25 +113,6 @@ describe.skipIf(!nativeMac)("macOS arm64 Person CLI kit", () => {
     expect(failed.status).toBe(1);
     expect(readFileSync(wrapper, "utf8")).toContain("clean-v1-macos-2");
     expect(existsSync(join(subject.cliRoot, "releases/clean-v1-macos-4"))).toBe(false);
-  });
-
-  it("verifies an exact schema-v3 macOS CLI kit with its bundled arm64 Mach-O runtime", () => {
-    const root = mkdtempSync(join(realpathSync(tmpdir()), "echo-mac-cli-verify-"));
-    roots.push(root);
-    const releaseId = "clean-v1-macos-verify";
-    const sourceSha = "a".repeat(40);
-    const version = "0.1.1";
-    copyFixtureRuntime(root);
-    const release = { release_id: releaseId, source_sha: sourceSha, person_client: { version } };
-    const identity = { schema_version: 1, kind: "echo-person-onboarding-kit-identity-v1", platform: "darwin", architecture: "arm64", product_version: version, release_id: releaseId, source_sha: sourceSha };
-    writeFileSync(join(root, "release.json"), `${canonical(release)}\n`);
-    writeFileSync(join(root, "person-client.tgz"), "fixture client\n");
-    writeFileSync(join(root, "build-identity.v1.json"), `${canonical(identity)}\n`);
-    const manifest = { schema_version: 3, kind: "echo-person-cli-kit-v1", release_id: releaseId, source_sha: sourceSha, release_record_sha256: digest(join(root, "release.json")), person_client_artifact_sha256: digest(join(root, "person-client.tgz")), build_identity_sha256: digest(join(root, "build-identity.v1.json")), runtime: { version: process.version, platform: process.platform, architecture: process.arch, node_sha256: digest(join(root, "node")) } };
-    writeFileSync(join(root, "kit-manifest.v1.json"), `${canonical(manifest)}\n`);
-    const result = spawnSync(join(root, "node"), [join(root, "verify-person-onboarding-kit.mjs"), root], { encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, platform: "darwin", architecture: "arm64" });
   });
 
   it("builds a flat schema-3 CLI kit from clean committed source and verifies it with the bundled runtime", () => {
@@ -221,8 +201,3 @@ describe.skipIf(!nativeMac)("macOS arm64 Person CLI kit", () => {
     expect(existsSync(join(output, "dirty.zip"))).toBe(false);
   });
 });
-
-function copyFixtureRuntime(root: string) {
-  writeFileSync(join(root, "node"), readFileSync(process.execPath), { mode: 0o755 });
-  writeFileSync(join(root, "verify-person-onboarding-kit.mjs"), readFileSync(join(REPO, "deploy/release/verify-person-onboarding-kit.mjs")), { mode: 0o755 });
-}

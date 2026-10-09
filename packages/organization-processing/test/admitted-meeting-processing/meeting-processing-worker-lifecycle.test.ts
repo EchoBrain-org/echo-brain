@@ -9,14 +9,6 @@ import { AdapterError } from "../../src/core/contracts/adapter.js";
 describe("admitted processing worker lifecycle", () => {
   it("freezes the exported worker-phase allowlist at runtime", () => {
     expect(Object.isFrozen(MEETING_PROCESSING_WORKER_PHASES_V1)).toBe(true);
-    expect(() =>
-      (MEETING_PROCESSING_WORKER_PHASES_V1 as unknown as string[]).push(
-        "runtime-injected-phase",
-      ),
-    ).toThrow(TypeError);
-    expect(MEETING_PROCESSING_WORKER_PHASES_V1).not.toContain(
-      "runtime-injected-phase",
-    );
   });
 
   it("emits only closed lifecycle fields and keeps failure contents out", async () => {

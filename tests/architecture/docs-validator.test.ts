@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,12 +10,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const TOOL = join(REPO, "tools", "check-docs.mjs");
 const PLACEHOLDER = "__SHA__";
 const roots: string[] = [];
+let template: { root: string; sha: string };
 
 function run(command: string, args: string[], cwd: string) {
   const result = spawnSync(command, args, { cwd, encoding: "utf8" });
@@ -75,9 +77,15 @@ function qualification(root: string) {
     ].join("\n"),
   );
 }
+// Every test gets its own copy of one committed repository, built once.
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "echo-docs-validator-"));
   roots.push(root);
+  cpSync(template.root, root, { recursive: true });
+  return { root, sha: template.sha };
+}
+function buildTemplate() {
+  const root = mkdtempSync(join(tmpdir(), "echo-docs-validator-template-"));
   write(
     join(root, "tools/workspace-source-boundaries.v1.json"),
     '{"manifests":[]}\n',
@@ -207,13 +215,15 @@ function failurePattern(root: string, sha: string, extra = "") {
     ].join("\n"),
   );
 }
+beforeAll(() => {
+  template = buildTemplate();
+});
 afterEach(() => {
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
 });
+afterAll(() => rmSync(template.root, { recursive: true, force: true }));
 
 describe("documentation validator", () => {
-  it("accepts the lean proof-grade baseline", () =>
-    expect(validate(fixture().root)).toContain("checks passed"));
   it("runs when invoked through a symlink", () => {
     const { root } = fixture();
     const link = join(root, "check-docs.mjs");
@@ -267,63 +277,98 @@ describe("documentation validator", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
   });
-  it("rejects a reviewed ref retained only by an unpushed local branch", () => {
-    const { root, sha } = fixture();
-    run("git", ["add", "."], root);
-    run("git", ["commit", "--quiet", "-m", "materialize fixture"], root);
-    run("git", ["switch", "--quiet", "--detach"], root);
-    run(
-      "git",
-      ["commit", "--quiet", "--allow-empty", "-m", "unreachable review"],
-      root,
-    );
-    const unreachable = run("git", ["rev-parse", "HEAD"], root);
-    run("git", ["branch", "local-review-only"], root);
-    run("git", ["switch", "--quiet", "-"], root);
-    edit(root, "docs/operations/PB-TEST-001.md", (source) =>
-      source.replace(`reviewed_ref: ${sha}`, `reviewed_ref: ${unreachable}`),
-    );
-    expect(validate(root)).toContain(
+  it.each([
+    [
+      "rejects a reviewed ref retained only by an unpushed local branch",
+      ["branch", "local-review-only"],
       "reviewed_ref does not name a reachable commit",
-    );
-  });
-  it("accepts a reviewed ref retained by an immutable tag", () => {
+    ],
+    [
+      "accepts a reviewed ref retained by an immutable tag",
+      ["tag", "review-baseline"],
+      "checks passed",
+    ],
+  ])("%s", (_label, retain, expected) => {
     const { root, sha } = fixture();
     run("git", ["add", "."], root);
     run("git", ["commit", "--quiet", "-m", "materialize fixture"], root);
     run("git", ["switch", "--quiet", "--detach"], root);
-    run(
-      "git",
-      ["commit", "--quiet", "--allow-empty", "-m", "tagged review"],
-      root,
-    );
-    const tagged = run("git", ["rev-parse", "HEAD"], root);
-    run("git", ["tag", "review-baseline"], root);
+    run("git", ["commit", "--quiet", "--allow-empty", "-m", "review"], root);
+    const reviewed = run("git", ["rev-parse", "HEAD"], root);
+    run("git", retain, root);
     run("git", ["switch", "--quiet", "-"], root);
     edit(root, "docs/operations/PB-TEST-001.md", (source) =>
-      source.replace(`reviewed_ref: ${sha}`, `reviewed_ref: ${tagged}`),
+      source.replace(`reviewed_ref: ${sha}`, `reviewed_ref: ${reviewed}`),
     );
-    expect(validate(root)).toContain("checks passed");
-  });
-  it("rejects retired workspace paths in the component catalog", () => {
-    const { root } = fixture();
-    write(
-      join(root, "tools/workspace-source-boundaries.v1.json"),
-      JSON.stringify({
-        retired_workspace_roots: ["services/retired-library"],
-        manifests: [],
-      }),
-    );
-    edit(
-      root,
-      "docs/components/README.md",
-      (source) => `${source}\nPrimary source: services/retired-library\n`,
-    );
-    expect(validate(root)).toContain(
-      "component catalog mentions retired workspace services/retired-library",
-    );
+    expect(validate(root)).toContain(expected);
   });
   it.each([
+    [
+      "retired workspace paths in the component catalog",
+      (root: string) => {
+        write(
+          join(root, "tools/workspace-source-boundaries.v1.json"),
+          JSON.stringify({
+            retired_workspace_roots: ["services/retired-library"],
+            manifests: [],
+          }),
+        );
+        edit(
+          root,
+          "docs/components/README.md",
+          (source) => `${source}\nPrimary source: services/retired-library\n`,
+        );
+      },
+      "component catalog mentions retired workspace services/retired-library",
+    ],
+    [
+      "a missing qualification backlink",
+      (root: string) =>
+        edit(root, "docs/components/test.md", (source) =>
+          source.replace("  - QUAL-20260813-120000-001\n", ""),
+        ),
+      "CMP-TEST is missing qualification_ids backlink QUAL-20260813-120000-001",
+    ],
+    [
+      "a stale qualification backlink",
+      (root: string) =>
+        edit(root, "docs/qualification/QUAL-20260813-120000-001.md", (source) =>
+          source.replace("component_ids:\n  - CMP-TEST", "component_ids: []"),
+        ),
+      "qualification_ids has stale backlink QUAL-20260813-120000-001; QUAL-20260813-120000-001 does not reference CMP-TEST",
+    ],
+    [
+      "a missing playbook backlink",
+      (root: string) =>
+        edit(root, "docs/components/test.md", (source) =>
+          source.replace("playbook_ids:\n  - PB-TEST-001\n", ""),
+        ),
+      "CMP-TEST is missing playbook_ids backlink PB-TEST-001",
+    ],
+    [
+      "a stale playbook backlink",
+      (root: string) =>
+        edit(root, "docs/operations/PB-TEST-001.md", (source) =>
+          source.replace("component_ids:\n  - CMP-TEST", "component_ids: []"),
+        ),
+      "playbook_ids has stale backlink PB-TEST-001; PB-TEST-001 does not reference CMP-TEST",
+    ],
+    [
+      "malformed relation component_ids: null without crashing",
+      (root: string) =>
+        edit(root, "docs/components/test.md", (source) =>
+          source.replace("component_ids:\n  - CMP-TEST", "component_ids: null"),
+        ),
+      "component_ids must be an array",
+    ],
+    [
+      "malformed relation invariant_ids: 1 without crashing",
+      (root: string) =>
+        edit(root, "docs/components/test.md", (source) =>
+          source.replace("reviewed_at: 2026-08-13", "invariant_ids: 1\nreviewed_at: 2026-08-13"),
+        ),
+      "invariant_ids must be an array",
+    ],
     [
       "qualification assertion set",
       (root: string) =>
@@ -464,44 +509,6 @@ describe("documentation validator", () => {
       "contains forbidden branch-relative status wording",
     );
   });
-  it("requires component reverse backlinks for related records", () => {
-    const { root } = fixture();
-    edit(root, "docs/components/test.md", (source) =>
-      source.replace("  - QUAL-20260813-120000-001\n", ""),
-    );
-    expect(validate(root)).toContain(
-      "CMP-TEST is missing qualification_ids backlink QUAL-20260813-120000-001",
-    );
-  });
-  it("rejects stale component backlinks", () => {
-    const { root } = fixture();
-    edit(
-      root,
-      "docs/qualification/QUAL-20260813-120000-001.md",
-      (source) => source.replace("component_ids:\n  - CMP-TEST", "component_ids: []"),
-    );
-    expect(validate(root)).toContain(
-      "qualification_ids has stale backlink QUAL-20260813-120000-001; QUAL-20260813-120000-001 does not reference CMP-TEST",
-    );
-  });
-  it("requires component reverse backlinks for playbooks", () => {
-    const { root } = fixture();
-    edit(root, "docs/components/test.md", (source) =>
-      source.replace("playbook_ids:\n  - PB-TEST-001\n", ""),
-    );
-    expect(validate(root)).toContain(
-      "CMP-TEST is missing playbook_ids backlink PB-TEST-001",
-    );
-  });
-  it("rejects stale component playbook backlinks", () => {
-    const { root } = fixture();
-    edit(root, "docs/operations/PB-TEST-001.md", (source) =>
-      source.replace("component_ids:\n  - CMP-TEST", "component_ids: []"),
-    );
-    expect(validate(root)).toContain(
-      "playbook_ids has stale backlink PB-TEST-001; PB-TEST-001 does not reference CMP-TEST",
-    );
-  });
   it("requires superseded decision status when superseded_by is nonempty", () => {
     const { root, sha } = fixture();
     edit(root, "docs/components/test.md", (source) =>
@@ -555,18 +562,6 @@ describe("documentation validator", () => {
     expect(output).toContain("contains forbidden /Users path");
     expect(output).toContain("contains forbidden Slack token");
     expect(output).toContain("malformed percent-encoded local link %ZZ");
-  });
-  it.each([
-    ["component_ids: null", "component_ids must be an array"],
-    ["invariant_ids: 1", "invariant_ids must be an array"],
-  ])("rejects malformed relation %s without crashing", (field, expected) => {
-    const { root } = fixture();
-    edit(root, "docs/components/test.md", (source) =>
-      field.startsWith("component_ids")
-        ? source.replace("component_ids:\n  - CMP-TEST", field)
-        : source.replace("reviewed_at: 2026-08-13", `invariant_ids: 1\nreviewed_at: 2026-08-13`),
-    );
-    expect(validate(root)).toContain(expected);
   });
 });
 function edit(root: string, file: string, mutate: (source: string) => string) {

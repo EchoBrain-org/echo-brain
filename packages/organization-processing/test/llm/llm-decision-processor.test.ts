@@ -122,6 +122,11 @@ function extractionContext(instance: LlmDecisionProcessor) {
   };
 }
 
+function extractWith(output: string, value: MeetingDocument = meeting) {
+  const instance = processor(new FakeLlmClient(output));
+  return instance.extract(value, extractionContext(instance));
+}
+
 function testProcessingVersion(config: AdapterConfig): string {
   return config.settings['provider'] === 'fixture-remote'
     ? processingVersion(config, 'fixture-remote', null)
@@ -146,6 +151,8 @@ function modelOutput(signals: readonly Record<string, unknown>[]) {
   return JSON.stringify({ signals });
 }
 
+const CONTRACT_EVIDENCE = [{ evidence_id: 'e1', quote: 'Zhen will send the contract by Friday' }];
+
 const validModelOutput = modelOutput([
   modelSignal({
     kind: 'decision',
@@ -168,12 +175,7 @@ const validModelOutput = modelOutput([
     text: 'Send the contract',
     due_at: '2026-07-24T00:00:00.000Z',
     confidence: 0.8,
-    evidence: [
-      {
-        evidence_id: 'e1',
-        quote: 'Zhen will send the contract by Friday',
-      },
-    ],
+    evidence: CONTRACT_EVIDENCE,
   }),
   modelSignal({
     kind: 'rationale',
@@ -263,6 +265,7 @@ describe('llm decision processor extraction', () => {
       generated_at: '2026-07-17T18:00:00.000Z',
     });
     expect(first.signals).toHaveLength(3);
+    expect(first.signals[0]).not.toHaveProperty('decision_maker_participant_id');
 
     const [decision, action, rationale] = first.signals;
     expect(decision).toMatchObject({
@@ -332,23 +335,16 @@ describe('llm decision processor extraction', () => {
     expect(rendered).toContain('"evidence_id":"e2"');
     expect(rendered).toContain('preserving its material terms');
     expect(rendered).toContain('date_reference_local_date');
-    expect(JSON.stringify(client.requests[0]!.schema)).not.toContain(
-      'exhaustive_review_complete',
-    );
-    expect(JSON.stringify(client.requests[0]!.schema)).not.toContain(
-      'owner_participant_id',
-    );
+    const schemaJson = JSON.stringify(client.requests[0]!.schema);
+    for (const absent of ['exhaustive_review_complete', 'owner_participant_id', 'minItems', 'minimum', 'maximum']) {
+      expect(schemaJson).not.toContain(absent);
+    }
     expect(client.requests[0]!.systemPrompt).toContain(
       'owner-neutral task',
     );
     expect(client.requests[0]!.systemPrompt).toContain(
       'Never infer an owner from who spoke',
     );
-    expect(JSON.stringify(client.requests[0]!.schema)).not.toContain(
-      'minItems',
-    );
-    expect(JSON.stringify(client.requests[0]!.schema)).not.toContain('minimum');
-    expect(JSON.stringify(client.requests[0]!.schema)).not.toContain('maximum');
     expect(rendered).not.toContain('summary-1');
     expect(rendered).not.toContain('transcript-1');
     expect(client.requests[0]!.systemPrompt).toContain(
@@ -376,15 +372,10 @@ describe('llm decision processor extraction', () => {
     );
 
     expect(result.signals[0]).toMatchObject({ kind: 'decision' });
-    expect(result.signals[0]).not.toHaveProperty(
-      'decision_maker_participant_id',
-    );
-    expect(result.signals[1]).not.toHaveProperty(
-      'decision_maker_participant_id',
-    );
-    expect(result.signals[2]).not.toHaveProperty(
-      'decision_maker_participant_id',
-    );
+    expect(result.signals).toHaveLength(3);
+    for (const signal of result.signals) {
+      expect(signal).not.toHaveProperty('decision_maker_participant_id');
+    }
     expect(client.requests[0]!.userPrompt).toContain(
       '"speaker_participant_id":"participant-zhen"',
     );
@@ -393,130 +384,65 @@ describe('llm decision processor extraction', () => {
     );
   });
 
-  it('omits decision-maker attribution for an unattributed block', async () => {
-    const instance = processor(new FakeLlmClient(validModelOutput));
-    const result = await instance.extract(meeting, extractionContext(instance));
-
-    expect(result.signals[0]).not.toHaveProperty(
-      'decision_maker_participant_id',
-    );
-  });
-
-  it('rejects a model attempt to supply the decision-maker field', async () => {
-    const inventedAttribution = modelOutput([
-      {
-        ...modelSignal({
-          text: 'Use vendor X for hosting',
-          status: 'decided',
-          confidence: 0.9,
-        }),
-        decision_maker_participant_id: 'attacker-supplied-id',
-      },
-    ]);
-    const instance = processor(new FakeLlmClient(inventedAttribution));
-
-    await expect(
-      instance.extract(meeting, extractionContext(instance)),
-    ).rejects.toMatchObject({
-      name: 'AdapterError',
-      code: 'temporarily_unavailable',
-      retryable: true,
-    });
-  });
-
-  it('retries when a declared signal has invalid grounding', async () => {
-    const hallucinated = modelOutput([
+  const GROUNDING = 'LLM output contained invalid or unsupported signal grounding at stage: ';
+  const questionMeeting: MeetingDocument = {
+    ...meeting,
+    content: [{ ...meeting.content[0]!, text: 'Should we use vendor X for hosting?' }],
+  };
+  const rationaleSupports = (supports: readonly number[]) => {
+    const parsed = JSON.parse(validModelOutput) as { signals: Record<string, unknown>[] };
+    parsed.signals[2]!['supports_decision_indexes'] = [...supports];
+    return JSON.stringify(parsed);
+  };
+  it.each<[string, string, Record<string, unknown>, MeetingDocument?]>([
+    ['a declared signal with invalid grounding', modelOutput([
       modelSignal({
-        kind: 'decision',
-        text: 'Adopt vendor Y',
-        status: 'decided',
-        confidence: 0.9,
+        kind: 'decision', text: 'Adopt vendor Y', status: 'decided', confidence: 0.9,
         evidence: [{ evidence_id: 'e999', quote: 'Adopt vendor Y' }],
       }),
-    ]);
-    const instance = processor(new FakeLlmClient(hallucinated));
-    await expect(
-      instance.extract(meeting, extractionContext(instance)),
-    ).rejects.toMatchObject({
-      name: 'AdapterError',
-      code: 'temporarily_unavailable',
-      retryable: true,
-      message:
-        'LLM output contained invalid or unsupported signal grounding at stage: evidence_id',
-    });
-  });
-
-  it('retries the whole response when one alias is invalid', async () => {
-    const mixed = modelOutput([
+    ]), { name: 'AdapterError', code: 'temporarily_unavailable', retryable: true, message: `${GROUNDING}evidence_id` }],
+    ['the whole response when one alias is invalid', modelOutput([
       modelSignal({
-        kind: 'decision',
-        text: 'Use vendor X',
-        status: 'decided',
-        evidence: [
-          { evidence_id: 'e1', quote: 'The team agreed to use vendor X' },
-        ],
+        kind: 'decision', text: 'Use vendor X', status: 'decided',
+        evidence: [{ evidence_id: 'e1', quote: 'The team agreed to use vendor X' }],
       }),
       modelSignal({
-        kind: 'decision',
-        text: 'Adopt vendor Y',
-        status: 'decided',
+        kind: 'decision', text: 'Adopt vendor Y', status: 'decided',
         evidence: [{ evidence_id: 'e999', quote: 'Adopt vendor Y' }],
       }),
-    ]);
-    const instance = processor(new FakeLlmClient(mixed));
-    await expect(
-      instance.extract(meeting, extractionContext(instance)),
-    ).rejects.toMatchObject({
-      code: 'temporarily_unavailable',
-      message:
-        'LLM output contained invalid or unsupported signal grounding at stage: evidence_id',
-    });
-  });
-
-  it('rejects a signal when any cited quote or alias is invalid or duplicated', async () => {
-    const invalidQuote = modelOutput([
+    ]), { code: 'temporarily_unavailable', message: `${GROUNDING}evidence_id` }],
+    ['a signal when any cited quote is invalid', modelOutput([
       modelSignal({
-        text: 'Use vendor X',
-        status: 'decided',
+        text: 'Use vendor X', status: 'decided',
         evidence: [
           { evidence_id: 'e1', quote: 'The team agreed to use vendor X' },
           { evidence_id: 'e2', quote: 'Invented supporting sentence' },
         ],
       }),
-    ]);
-    const invalidQuoteProcessor = processor(new FakeLlmClient(invalidQuote));
-    await expect(
-      invalidQuoteProcessor.extract(
-        meeting,
-        extractionContext(invalidQuoteProcessor),
-      ),
-    ).rejects.toMatchObject({
-      code: 'temporarily_unavailable',
-      message:
-        'LLM output contained invalid or unsupported signal grounding at stage: evidence_quote',
-    });
-
-    const duplicateAlias = modelOutput([
+    ]), { code: 'temporarily_unavailable', message: `${GROUNDING}evidence_quote` }],
+    ['a signal when any cited alias is duplicated', modelOutput([
       modelSignal({
-        text: 'Use vendor X',
-        status: 'decided',
+        text: 'Use vendor X', status: 'decided',
         evidence: [
           { evidence_id: 'e1', quote: 'The team agreed to use vendor X' },
           { evidence_id: 'e1', quote: 'Zhen will send the contract by Friday' },
         ],
       }),
-    ]);
-    const duplicateProcessor = processor(new FakeLlmClient(duplicateAlias));
-    await expect(
-      duplicateProcessor.extract(
-        meeting,
-        extractionContext(duplicateProcessor),
-      ),
-    ).rejects.toMatchObject({
-      code: 'temporarily_unavailable',
-      message:
-        'LLM output contained invalid or unsupported signal grounding at stage: evidence_duplicate',
-    });
+    ]), { code: 'temporarily_unavailable', message: `${GROUNDING}evidence_duplicate` }],
+    ['a decided signal supported only by questions', modelOutput([
+      modelSignal({
+        text: 'Use vendor X for hosting', status: 'decided',
+        evidence: [{ evidence_id: 'e1', quote: 'Should we use vendor X for hosting?' }],
+      }),
+    ]), { code: 'temporarily_unavailable', message: `${GROUNDING}decided_question_only` }, questionMeeting],
+    ...[[], [1], [99], [0, 0]].map((supports): [string, string, Record<string, unknown>] => [
+      `a rationale supporting decision indexes [${supports.join(', ')}]`,
+      rationaleSupports(supports),
+      { code: 'temporarily_unavailable', message: `${GROUNDING}rationale_supports` },
+    ]),
+    ['malformed model output', 'not json at all', { name: 'AdapterError', code: 'temporarily_unavailable', retryable: true }],
+  ])('rejects %s with a retryable taxonomy error', async (_label, output, match, value = meeting) => {
+    await expect(extractWith(output, value)).rejects.toMatchObject(match);
   });
 
   describe('meeting e5 quote regression', () => {
@@ -577,7 +503,7 @@ describe('llm decision processor extraction', () => {
 
     it.each([
       ['ASCII ellipsis', elidedQuote.replace('…', '...')],
-      ['stitched spans without an ellipsis', elidedQuote.replace('…', '../../../../services/organization-authority/test/processing/adapters')],
+      ['stitched spans without an ellipsis', elidedQuote.replace('…', '.')],
     ])('rejects %s on every attempt', async (_label, quote) => {
       const client = new FakeLlmClient(output(quote));
       const instance = processor(client);
@@ -623,12 +549,7 @@ describe('llm decision processor extraction', () => {
       modelSignal({
         kind: 'action',
         text: 'Send the contract',
-        evidence: [
-          {
-            evidence_id: 'e1',
-            quote: 'Zhen will send the contract by Friday',
-          },
-        ],
+        evidence: CONTRACT_EVIDENCE,
       }),
     ]);
     const instance = processor(new FakeLlmClient(output));
@@ -678,7 +599,7 @@ describe('llm decision processor extraction', () => {
   });
 
   it('rejects an owner that is not text or null', async () => {
-    const output = modelOutput([modelSignal({ kind: 'action', text: 'Send the contract', owner: 7, evidence: [{ evidence_id: 'e1', quote: 'Zhen will send the contract by Friday' }] })]);
+    const output = modelOutput([modelSignal({ kind: 'action', text: 'Send the contract', owner: 7, evidence: CONTRACT_EVIDENCE })]);
     const instance = processor(new FakeLlmClient(output));
     await expect(instance.extract(meeting, extractionContext(instance))).rejects.toMatchObject({
       message: 'LLM output did not match the extraction schema at stage: owner',
@@ -691,53 +612,18 @@ describe('llm decision processor extraction', () => {
         kind: 'action',
         text: 'Send the contract',
         owner_participant_id: 'participant-zhen',
-        evidence: [
-          {
-            evidence_id: 'e1',
-            quote: 'Zhen will send the contract by Friday',
-          },
-        ],
+        evidence: CONTRACT_EVIDENCE,
       }),
     ]);
     const instance = processor(new FakeLlmClient(output));
     await expect(
       instance.extract(meeting, extractionContext(instance)),
     ).rejects.toMatchObject({
+      name: 'AdapterError',
       code: 'temporarily_unavailable',
+      retryable: true,
       message:
         'LLM output did not match the extraction schema at stage: irrelevant_fields',
-    });
-  });
-
-  it('rejects a decided signal supported only by questions', async () => {
-    const questionMeeting: MeetingDocument = {
-      ...meeting,
-      content: [
-        {
-          ...meeting.content[0]!,
-          text: 'Should we use vendor X for hosting?',
-        },
-      ],
-    };
-    const output = modelOutput([
-      modelSignal({
-        text: 'Use vendor X for hosting',
-        status: 'decided',
-        evidence: [
-          {
-            evidence_id: 'e1',
-            quote: 'Should we use vendor X for hosting?',
-          },
-        ],
-      }),
-    ]);
-    const instance = processor(new FakeLlmClient(output));
-    await expect(
-      instance.extract(questionMeeting, extractionContext(instance)),
-    ).rejects.toMatchObject({
-      code: 'temporarily_unavailable',
-      message:
-        'LLM output contained invalid or unsupported signal grounding at stage: decided_question_only',
     });
   });
 
@@ -747,12 +633,7 @@ describe('llm decision processor extraction', () => {
         kind: 'action',
         text: 'Send the contract',
         due_at: '2026-07-24T00:00:00-07:00',
-        evidence: [
-          {
-            evidence_id: 'e1',
-            quote: 'Zhen will send the contract by Friday',
-          },
-        ],
+        evidence: CONTRACT_EVIDENCE,
       }),
     ]);
     const instance = processor(new FakeLlmClient(dueDates));
@@ -764,20 +645,6 @@ describe('llm decision processor extraction', () => {
     expect(() =>
       assertCanonicalDecisionSet(result, meeting, instance.identity),
     ).not.toThrow();
-
-    const malformed = modelOutput([
-      modelSignal({
-        kind: 'action',
-        text: 'Confirm the hosting choice',
-        due_at: 'not-a-date',
-      }),
-    ]);
-    await expect(
-      processor(new FakeLlmClient(malformed)).extract(
-        meeting,
-        extractionContext(instance),
-      ),
-    ).rejects.toMatchObject({ code: 'temporarily_unavailable' });
 
     const dateOnly = modelOutput([
       modelSignal({
@@ -796,33 +663,17 @@ describe('llm decision processor extraction', () => {
       assertCanonicalDecisionSet(dateOnlyResult, meeting, instance.identity),
     ).not.toThrow();
 
-    const invalidCalendarDate = modelOutput([
-      modelSignal({
-        kind: 'action',
-        text: 'Confirm the hosting choice',
-        due_at: '2026-02-30',
-      }),
-    ]);
-    await expect(
-      processor(new FakeLlmClient(invalidCalendarDate)).extract(
-        meeting,
-        extractionContext(instance),
-      ),
-    ).rejects.toMatchObject({ code: 'temporarily_unavailable' });
-
-    const beforeMeeting = modelOutput([
-      modelSignal({
-        kind: 'action',
-        text: 'Confirm the hosting choice',
-        due_at: '2024-07-24T00:00:00-07:00',
-      }),
-    ]);
-    await expect(
-      processor(new FakeLlmClient(beforeMeeting)).extract(
-        meeting,
-        extractionContext(instance),
-      ),
-    ).rejects.toMatchObject({ code: 'temporarily_unavailable' });
+    for (const due_at of ['not-a-date', '2026-02-30', '2024-07-24T00:00:00-07:00']) {
+      const malformed = modelOutput([
+        modelSignal({ kind: 'action', text: 'Confirm the hosting choice', due_at }),
+      ]);
+      await expect(
+        processor(new FakeLlmClient(malformed)).extract(
+          meeting,
+          extractionContext(instance),
+        ),
+      ).rejects.toMatchObject({ code: 'temporarily_unavailable' });
+    }
   });
 
   it('normalizes date-only deadlines at local noon across daylight-saving boundaries', async () => {
@@ -844,12 +695,7 @@ describe('llm decision processor extraction', () => {
           kind: 'action',
           text: 'Send the contract',
           due_at: localDate,
-          evidence: [
-            {
-              evidence_id: 'e1',
-              quote: 'Zhen will send the contract by Friday',
-            },
-          ],
+          evidence: CONTRACT_EVIDENCE,
         }),
       ]);
       const instance = processor(new FakeLlmClient(output));
@@ -929,93 +775,25 @@ describe('llm decision processor extraction', () => {
     });
   });
 
-  it('rejects rationales that do not uniquely reference extracted decisions', async () => {
-    const invalidSupports = [[], [1], [99], [0, 0]] as const;
-
-    for (const supports of invalidSupports) {
-      const parsed = JSON.parse(validModelOutput) as {
-        signals: Record<string, unknown>[];
-      };
-      parsed.signals[2]!['supports_decision_indexes'] = [...supports];
-      const instance = processor(
-        new FakeLlmClient(JSON.stringify(parsed)),
-      );
-
-      await expect(
-        instance.extract(meeting, extractionContext(instance)),
-      ).rejects.toMatchObject({
-        code: 'temporarily_unavailable',
-        message:
-          'LLM output contained invalid or unsupported signal grounding at stage: rationale_supports',
-      });
-    }
-  });
-
-  it('compares due dates to the local meeting date across a near-midnight boundary', async () => {
-    const nearMidnightMeeting: MeetingDocument = {
-      ...meeting,
-      time: {
-        actual_start_at: '2026-07-17T07:30:00.000Z',
-        timezone: 'America/Los_Angeles',
-      },
-    };
-    const output = modelOutput([
-      modelSignal({
-        kind: 'action',
-        text: 'Send the contract',
-        due_at: '2026-07-16T23:45:00-07:00',
-        evidence: [
-          {
-            evidence_id: 'e1',
-            quote: 'Zhen will send the contract by Friday',
-          },
-        ],
-      }),
-    ]);
-    const client = new FakeLlmClient(output);
-    const instance = processor(client);
-
-    await expect(
-      instance.extract(nearMidnightMeeting, extractionContext(instance)),
-    ).rejects.toMatchObject({
+  it.each<[string, string, string, string, Record<string, unknown>]>([
+    ['a near-midnight boundary', '2026-07-17T07:30:00.000Z', '2026-07-16T23:45:00-07:00', '2026-07-17', {
       code: 'temporarily_unavailable',
       message:
         'LLM output contained invalid or unsupported signal grounding at stage: due_before_meeting',
-    });
-    expect(client.requests[0]!.userPrompt).toContain(
-      '"date_reference_local_date":"2026-07-17"',
-    );
-  });
-
-  it('compares due dates using the meeting timezone across daylight-saving time', async () => {
-    const dstMeeting: MeetingDocument = {
-      ...meeting,
-      time: {
-        actual_start_at: '2026-03-08T10:30:00.000Z',
-        timezone: 'America/Los_Angeles',
-      },
-    };
+    }],
+    ['daylight-saving time', '2026-03-08T10:30:00.000Z', '2026-03-07T23:30:00-08:00', '2026-03-08', { code: 'temporarily_unavailable' }],
+  ])('compares due dates to the local meeting date across %s', async (_label, actual_start_at, due_at, localDate, match) => {
     const output = modelOutput([
-      modelSignal({
-        kind: 'action',
-        text: 'Send the contract',
-        due_at: '2026-03-07T23:30:00-08:00',
-        evidence: [
-          {
-            evidence_id: 'e1',
-            quote: 'Zhen will send the contract by Friday',
-          },
-        ],
-      }),
+      modelSignal({ kind: 'action', text: 'Send the contract', due_at, evidence: CONTRACT_EVIDENCE }),
     ]);
     const client = new FakeLlmClient(output);
     const instance = processor(client);
 
     await expect(
-      instance.extract(dstMeeting, extractionContext(instance)),
-    ).rejects.toMatchObject({ code: 'temporarily_unavailable' });
+      instance.extract({ ...meeting, time: { actual_start_at, timezone: 'America/Los_Angeles' } }, extractionContext(instance)),
+    ).rejects.toMatchObject(match);
     expect(client.requests[0]!.userPrompt).toContain(
-      '"date_reference_local_date":"2026-03-08"',
+      `"date_reference_local_date":"${localDate}"`,
     );
   });
 
@@ -1055,17 +833,6 @@ describe('llm decision processor extraction', () => {
         'fill only the provided schema',
       );
     }
-  });
-
-  it('rejects malformed model output with a retryable taxonomy error', async () => {
-    const instance = processor(new FakeLlmClient('not json at all'));
-    await expect(
-      instance.extract(meeting, extractionContext(instance)),
-    ).rejects.toMatchObject({
-      name: 'AdapterError',
-      code: 'temporarily_unavailable',
-      retryable: true,
-    });
   });
 
   it('rejects a partially malformed signal instead of silently dropping it', async () => {
@@ -1116,7 +883,6 @@ describe('llm decision processor extraction', () => {
           retryable: true,
         });
         expect(extractionSchemaFailureStage(error)).toBe(stage);
-        expect(error).toBeInstanceOf(Error);
         expect((error as Error).message).not.toContain(modelValue);
       }
     }
@@ -1134,14 +900,6 @@ describe('llm decision processor extraction', () => {
 
   it('reports only allowlisted grounding stages without rejected values', () => {
     const rejectedValue = 'model-value-that-must-not-appear';
-    const error = new AdapterError(
-      'temporarily_unavailable',
-      'LLM output contained invalid or unsupported signal grounding at stage: evidence_quote',
-      true,
-    );
-
-    expect(extractionGroundingFailureStage(error)).toBe('evidence_quote');
-    expect(error.message).not.toContain(rejectedValue);
     expect(
       extractionGroundingFailureStage(
         new AdapterError(

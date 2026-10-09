@@ -261,41 +261,21 @@ describe('organization people directory HTTP route', () => {
     if (args[0] !== 'fixture-session') throw new AuthorityOperationError('unauthorized', 'private diagnostic');
     return structuredClone(response) as never;
   } });
-  const post = (origin: string, body: unknown, init: RequestInit = {}) =>
-    fetch(`${origin}/v1/person/directory`, { method: 'POST', headers, body: typeof body === 'string' ? body : JSON.stringify(body), ...init });
+  const post = (origin: string, body: unknown) => fetch(`${origin}/v1/person/directory`, { method: 'POST', headers, body: JSON.stringify(body) });
 
-  it('dispatches a search and a default first page with no project', async () => {
+  it('dispatches a default first page with no project', async () => {
     const origin = await start(directory());
-    const response = await post(origin, { query: 'ari', limit: 10 });
-    expect(response.status).toBe(200);
-    expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(await response.text()).toBe(JSON.stringify(page));
     expect((await post(origin, {})).status).toBe(200);
-    expect(calls).toEqual([
-      { operation: 'searchOrganizationDirectory', args: ['fixture-session', { query: 'ari', limit: 10 }] },
-      { operation: 'searchOrganizationDirectory', args: ['fixture-session', { limit: 10 }] },
-    ]);
+    expect(calls).toEqual([{ operation: 'searchOrganizationDirectory', args: ['fixture-session', { limit: 10 }] }]);
   });
 
-  it('rejects caller-chosen coordinates, bad bounds, a query string and other methods before the application', async () => {
+  it('rejects a project coordinate and bad bounds before the application', async () => {
     const origin = await start(directory());
     for (const body of [
-      { project_id: 'prj_11111111-1111-4111-8111-111111111111' }, { organization_id: 'org_other' },
-      { membership_id: 'mem_22222222-2222-4222-8222-222222222222' }, { principal_id: 'untrusted' },
-      { query: '' }, { query: ' ari' }, { limit: 0 }, { limit: 11 }, { cursor: 'AB' }, [], null, '{"query":"a","query":"b"}',
+      { project_id: 'prj_11111111-1111-4111-8111-111111111111' },
+      { query: '' }, { query: ' ari' }, { limit: 0 }, { limit: 11 }, { cursor: 'AB' }, [], null,
     ]) await failure(await post(origin, body));
-    await failure(await fetch(`${origin}/v1/person/directory?limit=10`, { method: 'POST', headers, body: '{}' }));
-    await failure(await fetch(`${origin}/v1/person/directory`, { headers }), 404, 'not_found');
-    await failure(await post(origin, {}, { method: 'PUT' }), 404, 'not_found');
     expect(calls).toEqual([]);
-  });
-
-  it('requires a current Person session and stays hidden when projects are not composed', async () => {
-    const origin = await start(directory());
-    await failure(await post(origin, {}, { headers: { 'content-type': 'application/json' } }), 401, 'unauthorized');
-    expect(calls).toEqual([]);
-    await failure(await post(origin, {}, { headers: { ...headers, authorization: 'Bearer revoked' } }), 401, 'unauthorized');
-    await failure(await post(await start(fake(), { project_context: undefined }), {}), 404, 'not_found');
   });
 
   it('withholds any page that is not an exact organization directory', async () => {

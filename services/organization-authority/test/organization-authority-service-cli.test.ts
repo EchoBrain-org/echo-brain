@@ -10,27 +10,28 @@ import { MeetingProcessingWorkerLifecycleV1 } from "@echo-brain/organization-pro
 type WorkerErrorObserver = (error: Error) => void;
 type WorkerTelemetryObserver = (event: object) => void;
 
-const runtimeState = vi.hoisted(() => ({
-  worker_error: undefined as WorkerErrorObserver | undefined,
-  worker_telemetry: undefined as WorkerTelemetryObserver | undefined,
-  startup_error: undefined as Error | undefined,
-  open_gate: undefined as Promise<void> | undefined,
-  slack_nango: undefined as object | undefined,
-  jira_person_live: undefined as object | undefined,
-  confluence_person_live: undefined as object | undefined,
-  openrouter_credential_file: undefined as string | undefined,
-  staging_synthetic_meetings_directory: undefined as string | undefined,
-  core_runtime_observation: undefined as CoreRuntimeObservationScopeV1 | undefined,
-  /** Every config key the CLI passed, so removed organization-lane options stay absent. */
-  config_keys: [] as string[],
-  agentic_ask_v1_enabled: undefined as true | undefined,
-  agentic_ask_v1_small_scope_shortcut: undefined as true | undefined,
-  staging_research_eval_v1: undefined as true | undefined,
-  authority_url: "https://authority.example",
-  processing: "active" as "active" | "idle_until_finalize",
-  shutdown_events: [] as string[],
-  runtime_close_gate: undefined as Promise<void> | undefined,
-}));
+const { runtimeState, initialRuntimeState } = vi.hoisted(() => {
+  const initialRuntimeState = () => ({
+    worker_error: undefined as WorkerErrorObserver | undefined,
+    worker_telemetry: undefined as WorkerTelemetryObserver | undefined,
+    startup_error: undefined as Error | undefined,
+    open_gate: undefined as Promise<void> | undefined,
+    slack_nango: undefined as object | undefined,
+    jira_person_live: undefined as object | undefined,
+    confluence_person_live: undefined as object | undefined,
+    openrouter_credential_file: undefined as string | undefined,
+    staging_synthetic_meetings_directory: undefined as string | undefined,
+    core_runtime_observation: undefined as CoreRuntimeObservationScopeV1 | undefined,
+    config_keys: [] as string[],
+    agentic_ask_v1_small_scope_shortcut: undefined as true | undefined,
+    staging_research_eval_v1: undefined as true | undefined,
+    authority_url: "https://authority.example",
+    processing: "active" as "active" | "idle_until_finalize",
+    shutdown_events: [] as string[],
+    runtime_close_gate: undefined as Promise<void> | undefined,
+  });
+  return { runtimeState: initialRuntimeState(), initialRuntimeState };
+});
 
 vi.mock("../src/composition/organization-authority-setup-cli.js", () => ({
   readOrganizationAuthoritySetupManifest: () => ({
@@ -57,7 +58,6 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly on_worker_error?: WorkerErrorObserver;
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
     readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
-    readonly agentic_ask_v1_enabled?: true;
     readonly agentic_ask_v1_small_scope_shortcut?: true;
     readonly staging_research_eval_v1?: true;
     readonly slack_nango: object;
@@ -72,7 +72,6 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.worker_telemetry = config.on_worker_telemetry;
     runtimeState.config_keys = Object.keys(config);
     runtimeState.core_runtime_observation = config.core_runtime_observation;
-    runtimeState.agentic_ask_v1_enabled = config.agentic_ask_v1_enabled;
     runtimeState.agentic_ask_v1_small_scope_shortcut =
       config.agentic_ask_v1_small_scope_shortcut;
     runtimeState.staging_research_eval_v1 = config.staging_research_eval_v1;
@@ -144,36 +143,22 @@ const { runOrganizationAuthorityServiceCli } =
   await import("../src/composition/organization-authority-service-cli.js");
 
 afterEach(() => {
-  delete process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1;
-  delete process.env.ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1;
-  delete process.env.ECHO_STAGING_SYNTHETIC_MEETINGS_DIR;
-  delete process.env.ECHO_AGENTIC_ASK_V1;
-  delete process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT;
-  delete process.env.ECHO_BUILD_NUMBER;
-  delete process.env.ECHO_SOURCE_SHA;
-  delete process.env.ECHO_STAGING_JIRA_ASK_V1;
-  delete process.env.ECHO_STAGING_CONFLUENCE_ASK_V1;
-  delete process.env.ECHO_STAGING_RESEARCH_EVAL_V1;
-  runtimeState.staging_research_eval_v1 = undefined;
-  delete process.env.ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE;
-  delete process.env.ECHO_CLEAN_RELEASE_ID;
-  delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
-  runtimeState.worker_error = undefined;
-  runtimeState.worker_telemetry = undefined;
-  runtimeState.startup_error = undefined;
-  runtimeState.open_gate = undefined;
-  runtimeState.slack_nango = undefined;
-  runtimeState.jira_person_live = undefined;
-  runtimeState.confluence_person_live = undefined;
-  runtimeState.openrouter_credential_file = undefined;
-  runtimeState.staging_synthetic_meetings_directory = undefined;
-  runtimeState.config_keys = [];
-  runtimeState.agentic_ask_v1_enabled = undefined;
-  runtimeState.agentic_ask_v1_small_scope_shortcut = undefined;
-  runtimeState.authority_url = "https://authority.example";
-  runtimeState.processing = "active";
-  runtimeState.shutdown_events = [];
-  runtimeState.runtime_close_gate = undefined;
+  for (const name of [
+    "ECHO_STAGING_JOURNEY_TELEMETRY_V1",
+    "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1",
+    "ECHO_STAGING_SYNTHETIC_MEETINGS_DIR",
+    "ECHO_AGENTIC_ASK_V1",
+    "ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT",
+    "ECHO_BUILD_NUMBER",
+    "ECHO_SOURCE_SHA",
+    "ECHO_STAGING_JIRA_ASK_V1",
+    "ECHO_STAGING_CONFLUENCE_ASK_V1",
+    "ECHO_STAGING_RESEARCH_EVAL_V1",
+    "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE",
+    "ECHO_CLEAN_RELEASE_ID",
+    "ECHO_CLEAN_AUTHORITY_HOST",
+  ]) delete process.env[name];
+  Object.assign(runtimeState, initialRuntimeState());
   for (const root of temporaryRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -229,109 +214,71 @@ function stagingProfileDirectory(): string {
 }
 
 describe("admitted runtime CLI events", () => {
-  it.each([undefined, "", "false", "true"])("selects profile-bound Jira Ask only with the staging switch enabled (%s)", async flag => {
+  it.each([
+    [undefined, undefined] as const,
+    ...(["", "false", "true"] as const).flatMap(flag => [
+      ["ECHO_STAGING_JIRA_ASK_V1", flag],
+      ["ECHO_STAGING_CONFLUENCE_ASK_V1", flag],
+      ["ECHO_STAGING_RESEARCH_EVAL_V1", flag],
+    ] as const),
+  ])("composes each staging-profile Jira, Confluence or research capability only with its own switch (%s=%s)", async (env, flag) => {
     const directory = stagingProfileDirectory();
-    if (flag !== undefined) process.env.ECHO_STAGING_JIRA_ASK_V1 = flag;
+    if (env !== undefined) process.env[env] = flag;
+    const enabled = flag === "true" ? env : undefined;
     const errors: string[] = [];
     const running = start({ stderr: value => errors.push(value) }, directory);
     try {
-      await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
-      if (flag === "true") expect(runtimeState.jira_person_live).toMatchObject({
+      await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined(), { interval: 1 });
+      if (enabled === "ECHO_STAGING_JIRA_ASK_V1") expect(runtimeState.jira_person_live).toMatchObject({
         enabled: true, cloud_id: "11111111-1111-4111-8111-111111111111", integration_id: "jira",
       });
       else expect(runtimeState.jira_person_live).toBeUndefined();
-    } finally { process.emit("SIGTERM"); await running; }
-    expect(await running, errors.join("")).toBe(0);
-  });
-
-  it.each(["true", "invalid"])("refuses a staging Jira switch without its fixed profile (%s)", async flag => {
-    process.env.ECHO_STAGING_JIRA_ASK_V1 = flag;
-    expect(await start({ stderr: () => undefined })).toBe(1);
-    expect(runtimeState.worker_error).toBeUndefined();
-  });
-
-  it.each(["--jira-cloud-id", "--jira-nango-integration"])("refuses an incomplete explicit Jira selection (%s)", async flag => {
-    expect(await start({ stderr: () => undefined }, "/private/state", [
-      "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack", flag, "fixture",
-    ])).toBe(1);
-    expect(runtimeState.worker_error).toBeUndefined();
-  });
-
-  it("selects the approved person-bound Jira reader only with complete explicit flags", async () => {
-    const errors: string[] = [];
-    const running = start({ stderr: value => errors.push(value) }, "/private/state", [
-      "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack",
-      "--jira-cloud-id", "11111111-1111-4111-8111-111111111111", "--jira-nango-integration", "jira",
-    ]);
-    try {
-      await vi.waitFor(() => expect(runtimeState.jira_person_live).toMatchObject({
-        enabled: true, cloud_id: "11111111-1111-4111-8111-111111111111", integration_id: "jira",
-      }));
-    } finally { process.emit("SIGTERM"); await running; }
-    expect(await running, errors.join("")).toBe(0);
-  });
-
-  it.each(["--confluence-cloud-id", "--confluence-nango-integration"])("refuses an incomplete explicit Confluence selection (%s)", async flag => {
-    expect(await start({ stderr: () => undefined }, "/private/state", [
-      "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack", flag, "fixture",
-    ])).toBe(1);
-    expect(runtimeState.worker_error).toBeUndefined();
-  });
-
-  it("selects Confluence with a complete explicit Cloud profile selection", async () => {
-    const errors: string[] = [];
-    const running = start({ stderr: value => errors.push(value) }, "/private/state", [
-      "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack",
-      "--confluence-cloud-id", "11111111-1111-4111-8111-111111111111", "--confluence-nango-integration", "confluence",
-    ]);
-    try {
-      await vi.waitFor(() => expect(runtimeState.confluence_person_live).toMatchObject({
-        enabled: true, cloud_id: "11111111-1111-4111-8111-111111111111", integration_id: "confluence",
-      }));
-      expect(runtimeState.jira_person_live).toBeUndefined();
-    } finally { process.emit("SIGTERM"); await running; }
-    expect(await running, errors.join("")).toBe(0);
-  });
-
-  it.each([undefined, "", "false", "true"])("selects the independent Confluence grant on the staging Atlassian site only with its switch (%s)", async flag => {
-    const directory = stagingProfileDirectory();
-    if (flag !== undefined) process.env.ECHO_STAGING_CONFLUENCE_ASK_V1 = flag;
-    const errors: string[] = [];
-    const running = start({ stderr: value => errors.push(value) }, directory);
-    try {
-      await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
-      if (flag === "true") expect(runtimeState.confluence_person_live).toMatchObject({
+      if (enabled === "ECHO_STAGING_CONFLUENCE_ASK_V1") expect(runtimeState.confluence_person_live).toMatchObject({
         enabled: true, cloud_id: "11111111-1111-4111-8111-111111111111", integration_id: "confluence",
       });
       else expect(runtimeState.confluence_person_live).toBeUndefined();
-      expect(runtimeState.jira_person_live).toBeUndefined();
+      expect(runtimeState.staging_research_eval_v1).toBe(enabled === "ECHO_STAGING_RESEARCH_EVAL_V1" ? true : undefined);
     } finally { process.emit("SIGTERM"); await running; }
     expect(await running, errors.join("")).toBe(0);
   });
 
-  it.each([undefined, "", "false", "true"])("composes the research evaluation endpoint on the staging Authority only with its switch (%s)", async flag => {
-    const directory = stagingProfileDirectory();
-    if (flag !== undefined) process.env.ECHO_STAGING_RESEARCH_EVAL_V1 = flag;
-    const errors: string[] = [];
-    const running = start({ stderr: value => errors.push(value) }, directory);
-    try {
-      await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
-      expect(runtimeState.staging_research_eval_v1).toBe(flag === "true" ? true : undefined);
-    } finally { process.emit("SIGTERM"); await running; }
-    expect(await running, errors.join("")).toBe(0);
-  });
-
-  it.each(["true", "yes"])("refuses the research evaluation switch outside the staging Authority or with an invalid value (%s)", async flag => {
-    process.env.ECHO_STAGING_RESEARCH_EVAL_V1 = flag;
+  it.each([
+    ["ECHO_STAGING_JIRA_ASK_V1", "true"],
+    ["ECHO_STAGING_JIRA_ASK_V1", "invalid"],
+    ["ECHO_STAGING_CONFLUENCE_ASK_V1", "true"],
+    ["ECHO_STAGING_CONFLUENCE_ASK_V1", "invalid"],
+    ["ECHO_STAGING_RESEARCH_EVAL_V1", "true"],
+    ["ECHO_STAGING_RESEARCH_EVAL_V1", "yes"],
+  ])("refuses a staging switch without its fixed profile or staging Authority, or with an invalid value (%s=%s)", async (env, flag) => {
+    process.env[env] = flag;
     expect(await start({ stderr: () => undefined })).toBe(1);
     expect(runtimeState.worker_error).toBeUndefined();
     expect(runtimeState.staging_research_eval_v1).toBeUndefined();
   });
 
-  it.each(["true", "invalid"])("refuses a staging Confluence switch without its fixed profile (%s)", async flag => {
-    process.env.ECHO_STAGING_CONFLUENCE_ASK_V1 = flag;
-    expect(await start({ stderr: () => undefined })).toBe(1);
+  it.each(["--jira-cloud-id", "--jira-nango-integration", "--confluence-cloud-id", "--confluence-nango-integration"])("refuses an incomplete explicit Jira or Confluence selection (%s)", async flag => {
+    expect(await start({ stderr: () => undefined }, "/private/state", [
+      "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack", flag, "fixture",
+    ])).toBe(1);
     expect(runtimeState.worker_error).toBeUndefined();
+  });
+
+  it.each([
+    ["jira", "jira_person_live", "confluence_person_live"],
+    ["confluence", "confluence_person_live", "jira_person_live"],
+  ] as const)("selects the approved person-bound %s reader only with complete explicit flags", async (integration, selected, other) => {
+    const errors: string[] = [];
+    const running = start({ stderr: value => errors.push(value) }, "/private/state", [
+      "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack",
+      `--${integration}-cloud-id`, "11111111-1111-4111-8111-111111111111", `--${integration}-nango-integration`, integration,
+    ]);
+    try {
+      await vi.waitFor(() => expect(runtimeState[selected]).toMatchObject({
+        enabled: true, cloud_id: "11111111-1111-4111-8111-111111111111", integration_id: integration,
+      }));
+      expect(runtimeState[other]).toBeUndefined();
+    } finally { process.emit("SIGTERM"); await running; }
+    expect(await running, errors.join("")).toBe(0);
   });
 
   it.each([
@@ -366,7 +313,6 @@ describe("admitted runtime CLI events", () => {
       const running = start({ stderr: () => undefined });
       await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
       // ECHO_AGENTIC_ASK_V1 is retired (ADR-0022): older profiles still set it, to no effect.
-      expect(runtimeState.agentic_ask_v1_enabled).toBeUndefined();
       expect(runtimeState.agentic_ask_v1_small_scope_shortcut).toBe(
         input.shortcut === "true" ? true : undefined,
       );
@@ -435,10 +381,6 @@ describe("admitted runtime CLI events", () => {
     expect(new Date(String(liveness?.observed_at)).toISOString()).toBe(
       liveness?.observed_at,
     );
-    expect(runtimeState.config_keys).not.toContain("ask_journey_telemetry");
-    // The meeting-approval journey sidecar observed only the removed organization source lane.
-    expect(runtimeState.config_keys).not.toContain("meeting_approval_journey_telemetry");
-    expect(runtimeState.config_keys).not.toContain("staging_meeting_approval_journey_telemetry_enabled");
 
     runtimeState.worker_error = undefined;
     runtimeState.authority_url = "https://authority.example";
@@ -459,7 +401,6 @@ describe("admitted runtime CLI events", () => {
     }, runtimeState.core_runtime_observation);
     process.emit("SIGTERM");
     await expect(nonStaging).resolves.toBe(0);
-    expect(runtimeState.config_keys).not.toContain("ask_journey_telemetry");
     const productionEvents = nonStagingStderr.map(line => JSON.parse(line) as Record<string, unknown>);
     expect(productionEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "echo-authority-journey-telemetry-liveness-v1", environment: "production", release_sha: releaseSha, build_number: 33_689_731_778 }),
@@ -533,7 +474,6 @@ describe("admitted runtime CLI events", () => {
     process.emit("SIGTERM");
 
     await expect(running).resolves.toBe(0);
-    expect(runtimeState.config_keys).not.toContain("ask_journey_telemetry");
     expect(stderr.join("")).not.toContain(
       "echo-authority-journey-telemetry-liveness-v1",
     );
@@ -559,9 +499,6 @@ describe("admitted runtime CLI events", () => {
     runtimeState.startup_error = new Error("runtime open failed");
     releaseOpen?.();
     await expect(pending).resolves.toBe(1);
-    expect(pendingStderr.join("")).not.toContain(
-      "echo-authority-journey-telemetry-liveness-v1",
-    );
     expect(pendingStderr).toEqual([
       `${canonicalJson({
         schema_version: 1,
@@ -603,12 +540,6 @@ describe("admitted runtime CLI events", () => {
     }
     expect(runtimeState.slack_nango).toBeUndefined();
 
-    runtimeState.startup_error = new Error(`Nango refused ${NANGO_KEY}`);
-    const failed: string[] = [];
-    await expect(start({ stderr: (value) => failed.push(value) })).resolves.toBe(1);
-    expect(failed).toEqual([failure]);
-    runtimeState.startup_error = undefined;
-
     const stderr: string[] = [];
     const running = start({ stderr: (value) => stderr.push(value) }, "/private/state", [
       "--nango-secret-key-file", key, "--nango-integration", "slack", "--nango-base-url", "https://nango.example",
@@ -637,8 +568,6 @@ describe("admitted runtime CLI events", () => {
         "/echo-clean/meetings",
       ),
     );
-    // The fixtures feed the owner's synthetic personal source; no organization source owner is named.
-    expect(runtimeState.config_keys).not.toContain("staging_synthetic_owner_email");
     process.emit("SIGTERM");
     await expect(running).resolves.toBe(0);
   });
@@ -735,8 +664,6 @@ describe("admitted runtime CLI events", () => {
       start({ stderr: (value) => stderr.push(value) }),
     ).resolves.toBe(1);
 
-    expect(stderr.join("")).not.toContain("credential-sentinel");
-    expect(stderr.join("")).not.toContain("bearer-sentinel");
     expect(stderr).toEqual([
       `${canonicalJson({
         schema_version: 1,
@@ -760,16 +687,6 @@ describe("admitted runtime CLI events", () => {
     process.emit("SIGTERM");
     await expect(running).resolves.toBe(0);
 
-    const output = stderr.join("");
-    for (const sentinel of [
-      "credential-sentinel",
-      "note-sentinel",
-      "prompt-sentinel",
-      "answer-sentinel",
-      "bearer-sentinel",
-    ]) {
-      expect(output).not.toContain(sentinel);
-    }
     expect(stderr).toEqual([
       `${canonicalJson({
         schema_version: 1,
@@ -781,8 +698,5 @@ describe("admitted runtime CLI events", () => {
         kind: "echo-clean-live-worker-failed-v1",
       } as never)}\n`,
     ]);
-    expect(output).not.toContain("127.0.0.1");
-    expect(output).not.toContain("43179");
-    expect(output).not.toContain("/private/");
   });
 });

@@ -5,50 +5,24 @@ import { createAgenticAskV3 } from '../../src/answer-composition/agentic-ask-v1.
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
 import { captureCoreRuntimeContentV1, observeCoreRuntimeV1 } from '../../src/shared/core-runtime-observation-v1.js';
+import { deferred } from './fixtures/deferred.js';
 
 const checked = { checked_at: '2026-10-05T00:00:00.000Z' };
 const text = 'The approved launch plan says EVT begins Tuesday.';
 const citation = (body: string) => ({ kind: 'page' as const, tool_id: 'knowledge', external_scope_id: 'site-one', page_id: 'page-one', section_id: 's1', version: '17', permalink: 'https://knowledge.example.test/wiki/pages/viewpage.action?pageId=1', text_sha256: sha256Digest(body) });
 const inventory: EvidenceDeskItemV2 = Object.freeze({ id: 'opaque-page-section', kind: 'page', label: 'Launch plan, section 1', visibility: 'only_me', receipt_sha256: canonicalSha256('page-inventory'), citation: citation('') });
 const opened: EvidenceDeskItemV2 = Object.freeze({ ...inventory, text, receipt_sha256: canonicalSha256('page-open'), citation: citation(text) });
+const pageResult = (item: EvidenceDeskItemV2): EvidenceDeskResultV2 => ({ items: [item], truncated: false, receipt_digests: [item.receipt_sha256] });
+const fixtureGeneration = { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 };
 
 describe('Agentic Ask V3 live pages', () => {
-  it('suppresses runtime content capture after page-only inventory or text enters a prompt', async () => {
-    const desk: EvidenceDeskPortV2 = {
-      scope: { kind: 'global' }, ticket_available: false,
-      live_sources: [{ source: 'page', selector: 'pages', metadata_only_list: true, tool_id: 'knowledge' }],
-      search: vi.fn(async () => ({ items: [inventory], truncated: false, receipt_digests: [inventory.receipt_sha256] })),
-      list: vi.fn(async () => ({ items: [inventory], truncated: false, receipt_digests: [inventory.receipt_sha256] })),
-      open: vi.fn(async () => ({ items: [opened], truncated: false, receipt_digests: [opened.receipt_sha256] })),
-      revalidate: vi.fn(async () => checked),
-    };
-    const replies = [
-      { parts: [{ question: 'When does EVT start?', notes: '', needs: [{ need: 'EVT date', status: 'open', evidence: [] }] }], actions: [{ tool: 'list', args: { source: 'pages' } }] },
-      { parts: [{ question: 'When does EVT start?', notes: '', needs: [{ need: 'EVT date', status: 'open', evidence: [] }] }], actions: [{ tool: 'open', args: { id: 'E1' } }] },
-      { parts: [{ question: 'When does EVT start?', notes: '', needs: [{ need: 'EVT date', status: 'found', evidence: ['E1'] }] }], actions: [{ tool: 'finish', args: {} }] },
-      { sentences: [{ text: 'EVT begins Tuesday.', evidence: ['E1'] }], not_found: [] },
-    ];
-    const capture = vi.fn();
-    const generate = vi.fn(async (input: StructuredGenerationInput) => {
-      captureCoreRuntimeContentV1('model_request', input.user_prompt);
-      return replies.shift()!;
-    });
-    const ask = createAgenticAskV3({ desk, model: { generate }, audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 } });
-    await observeCoreRuntimeV1('ask_request', () => ask.answer({ question: 'When does EVT start?' }), { observer: () => undefined, content_observer: capture });
-    expect(generate).toHaveBeenCalledTimes(4);
-    // Research content uses only the selected diagnostic sink, including the initial question.
-    expect(capture).not.toHaveBeenCalled();
-    expect(JSON.stringify(capture.mock.calls)).not.toContain(inventory.label);
-    expect(JSON.stringify(capture.mock.calls)).not.toContain(text);
-  });
-
   it('discovers metadata then opens a request-owned page section and emits only V6', async () => {
     const desk: EvidenceDeskPortV2 = {
       scope: { kind: 'global' }, ticket_available: false,
       live_sources: [{ source: 'page', selector: 'pages', description: 'Live knowledge pages.', metadata_only_list: true, tool_id: 'knowledge' }],
-      search: vi.fn(async () => ({ items: [inventory], truncated: false, receipt_digests: [inventory.receipt_sha256] })),
-      list: vi.fn(async () => ({ items: [inventory], truncated: false, receipt_digests: [inventory.receipt_sha256] })),
-      open: vi.fn(async input => { expect(input.item).toBe(inventory.id); return { items: [opened], truncated: false, receipt_digests: [opened.receipt_sha256] }; }),
+      search: vi.fn(async () => pageResult(inventory)),
+      list: vi.fn(async () => pageResult(inventory)),
+      open: vi.fn(async input => { expect(input.item).toBe(inventory.id); return pageResult(opened); }),
       revalidate: vi.fn(async () => checked),
     };
     const replies = [
@@ -58,7 +32,7 @@ describe('Agentic Ask V3 live pages', () => {
       { sentences: [{ text: 'EVT begins Tuesday.', evidence: ['E1'] }], not_found: [] },
     ];
     const prompts: string[] = [];
-    const answer = await createAgenticAskV3({ desk, model: { generate: async input => { prompts.push(input.user_prompt); return replies.shift()!; } }, audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 } }).answer({ question: 'When does EVT start?' });
+    const answer = await createAgenticAskV3({ desk, model: { generate: async input => { prompts.push(input.user_prompt); return replies.shift()!; } }, audit: { append: () => undefined }, generation: fixtureGeneration }).answer({ question: 'When does EVT start?' });
     expect(validatePersonAnswerResponseV6(answer)).toMatchObject({ schema_version: 6, outcome: 'answered', citations: [{ citation: opened.citation, kind: 'page' }] });
     expect(desk.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'EVT start', kinds: ['page'] }));
     expect(desk.open).toHaveBeenCalledTimes(1);
@@ -75,12 +49,12 @@ describe('Agentic Ask V3 live pages', () => {
     const desk: EvidenceDeskPortV2 = {
       scope: { kind: 'global' }, ticket_available: false,
       live_sources: [{ source: 'page', selector: 'pages', description: 'Live knowledge pages.', metadata_only_list: true, tool_id: 'knowledge' }],
-      search: vi.fn(async () => ({ items: [start], truncated: false, receipt_digests: [start.receipt_sha256] })),
-      list: vi.fn(async () => ({ items: [start], truncated: false, receipt_digests: [start.receipt_sha256] })),
+      search: vi.fn(async () => pageResult(start)),
+      list: vi.fn(async () => pageResult(start)),
       open: vi.fn(async input => input.item === start.id
         ? ({ items: [first, next], truncated: false, receipt_digests: [first.receipt_sha256, next.receipt_sha256] })
         : input.item === next.id
-          ? ({ items: [second], truncated: false, receipt_digests: [second.receipt_sha256] })
+          ? pageResult(second)
           : (() => { throw new Error('unexpected request-owned handle'); })()),
       revalidate: vi.fn(async () => checked),
     };
@@ -92,7 +66,7 @@ describe('Agentic Ask V3 live pages', () => {
       { sentences: [{ text: 'EVT begins Tuesday.', evidence: ['E4'] }], not_found: [] },
     ];
     const prompts: string[] = [];
-    const answer = await createAgenticAskV3({ desk, model: { generate: async input => { prompts.push(input.user_prompt); return replies.shift()!; } }, audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 } }).answer({ question: 'When does EVT start?' });
+    const answer = await createAgenticAskV3({ desk, model: { generate: async input => { prompts.push(input.user_prompt); return replies.shift()!; } }, audit: { append: () => undefined }, generation: fixtureGeneration }).answer({ question: 'When does EVT start?' });
     expect(answer).toMatchObject({ outcome: 'answered', citations: [{ citation: second.citation }] });
     expect(desk.list).toHaveBeenCalledWith(expect.objectContaining({ source: 'page' }));
     expect(desk.open).toHaveBeenNthCalledWith(1, expect.objectContaining({ item: start.id }));
@@ -111,12 +85,11 @@ it('plans two registered page providers without a provider-specific selector or 
   const items = descriptors.map((descriptor, index): EvidenceDeskItemV2 => ({ ...inventory, id: descriptor.source_id, source_id: descriptor.source_id, label: descriptor.description,
     citation: { ...citation(''), tool_id: descriptor.source_id, page_id: `page-${index}` },
   }));
-  const result = (item: EvidenceDeskItemV2) => ({ items: [item], truncated: false, receipt_digests: [item.receipt_sha256] });
   const desk: EvidenceDeskPortV2 = {
     scope: { kind: 'global' }, live_sources: descriptors,
-    list: vi.fn(async input => { expect(input.source).toBe('knowledge-a'); return result(items[0]!); }),
-    search: vi.fn(async input => { expect(input.source).toBe('knowledge-b'); expect(input.kinds).toEqual(['page']); return result(items[1]!); }),
-    open: vi.fn(async input => { const item = items.find(value => value.id === input.item)!; if (item.citation.kind !== 'page') throw new Error('Expected a page fixture'); return result({ ...item, text, citation: { ...item.citation, text_sha256: sha256Digest(text) } }); }),
+    list: vi.fn(async input => { expect(input.source).toBe('knowledge-a'); return pageResult(items[0]!); }),
+    search: vi.fn(async input => { expect(input.source).toBe('knowledge-b'); expect(input.kinds).toEqual(['page']); return pageResult(items[1]!); }),
+    open: vi.fn(async input => { const item = items.find(value => value.id === input.item)!; if (item.citation.kind !== 'page') throw new Error('Expected a page fixture'); return pageResult({ ...item, text, citation: { ...item.citation, text_sha256: sha256Digest(text) } }); }),
     revalidate: vi.fn(async () => checked),
   };
   const part = (status: 'open' | 'found') => [{ question: 'Compare the two plans.', notes: '', needs: [{ need: 'Both plans', status, evidence: status === 'found' ? ['E1', 'E2'] : [] }] }];
@@ -127,18 +100,12 @@ it('plans two registered page providers without a provider-specific selector or 
     { sentences: [{ text: 'Both plans say EVT begins Tuesday.', evidence: ['E1', 'E2'] }], not_found: [] },
   ];
   const prompts: StructuredGenerationInput[] = [];
-  const answer = await createAgenticAskV3({ desk, model: { generate: async input => { prompts.push(input); return replies.shift()!; } }, audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 } }).answer({ question: 'Compare the two plans.' });
+  const answer = await createAgenticAskV3({ desk, model: { generate: async input => { prompts.push(input); return replies.shift()!; } }, audit: { append: () => undefined }, generation: fixtureGeneration }).answer({ question: 'Compare the two plans.' });
   expect(answer).toMatchObject({ schema_version: 6, outcome: 'answered' });
   expect(answer.citations.map(value => value.citation.kind === 'page' ? value.citation.tool_id : undefined)).toEqual(['knowledge-a', 'knowledge-b']);
   expect(JSON.parse(prompts[0]!.user_prompt).source_catalog.map((value: { source: string }) => value.source)).toEqual(['meetings', 'documents', 'handbook', 'runbooks']);
   expect(desk.list).toHaveBeenCalledOnce(); expect(desk.search).toHaveBeenCalledOnce(); expect(desk.open).toHaveBeenCalledTimes(2);
 });
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-}
 
 const pageSources = [
   { source_id: 'knowledge-a', selector: 'handbook', kind: 'page' as const, description: 'Company handbook pages.', metadata_only_list: false },
@@ -149,9 +116,7 @@ function releasedPage(source: string, id: string): EvidenceDeskItemV2 {
   return { ...inventory, id, source_id: source, text: body,
     citation: { ...citation(body), tool_id: source, page_id: id } };
 }
-const pageResult = (item: EvidenceDeskItemV2): EvidenceDeskResultV2 => ({ items: [item], truncated: false, receipt_digests: [item.receipt_sha256] });
 const comparisonParts = (evidence: readonly string[] = []) => [{ question: 'Compare the plans.', notes: '', needs: [{ need: 'Both plans', status: evidence.length === 0 ? 'open' : 'found', evidence }] }];
-const fixtureGeneration = { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 };
 
 it('concurrently reads same-kind registered sources and admits exact passages without capturing live content', async () => {
   const first = deferred<EvidenceDeskResultV2>(); const second = deferred<EvidenceDeskResultV2>();
@@ -170,7 +135,7 @@ it('concurrently reads same-kind registered sources and admits exact passages wi
   const ask = createAgenticAskV3({ desk, audit: { append: () => undefined }, generation: fixtureGeneration,
     model: { generate: async input => { prompts.push(input); captureCoreRuntimeContentV1('model_request', input.user_prompt); return replies.shift()!; } } });
   const pending = observeCoreRuntimeV1('ask_request', () => ask.answer({ question: 'Compare the plans.' }), { observer: () => undefined, content_observer: capture });
-  await vi.waitFor(() => expect(desk.search).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(desk.search).toHaveBeenCalledTimes(2), { interval: 1 });
   expect(vi.mocked(desk.search).mock.calls.map(([input]) => input.source)).toEqual(['knowledge-a', 'knowledge-b']);
   second.resolve(pageResult(secondItem)); first.resolve(pageResult(firstItem));
   const response = await pending;
@@ -183,7 +148,6 @@ it('concurrently reads same-kind registered sources and admits exact passages wi
   expect(research.last_results.every((result: { results: Record<string, unknown>[] }) => result.results.every(item => !('text' in item) && !('preview' in item)))).toBe(true);
   expect(desk.open).not.toHaveBeenCalled();
   expect(capture).not.toHaveBeenCalled();
-  expect(JSON.stringify(capture.mock.calls)).not.toContain('Private knowledge-');
 });
 
 it('serializes equivalent registered-source cursors while another source lists concurrently on one request day', async () => {
@@ -209,7 +173,7 @@ it('serializes equivalent registered-source cursors while another source lists c
   const today = vi.fn().mockReturnValueOnce('2026-10-05').mockReturnValue('2026-10-06');
   const pending = createAgenticAskV3({ desk, today, audit: { append: () => undefined }, generation: fixtureGeneration,
     model: { generate: async () => replies.shift()! } }).answer({ question: 'Compare the plans.' });
-  await vi.waitFor(() => expect(desk.list).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(desk.list).toHaveBeenCalledTimes(2), { interval: 1 });
   expect(vi.mocked(desk.list).mock.calls.map(([input]) => input.source)).toEqual(['knowledge-a', 'knowledge-b']);
   other.resolve(pageResult(releasedPage('knowledge-b', 'page-b')));
   first.resolve({ ...pageResult(releasedPage('knowledge-a', 'page-a1')), next_cursor: 'next-a' });

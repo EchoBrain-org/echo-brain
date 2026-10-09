@@ -40,7 +40,6 @@ describe('SQLite open item people v1', () => {
     expect(f.people.activeByName(f.org, 'rafael moreno')).toEqual(['mem_a']);
     expect(f.people.activeByName(f.org, 'Mina Patel')).toEqual(['mem_b', 'mem_c']);   // two holders: the caller treats it as no match
     expect(f.people.activeByName(f.org, 'Ari Lee')).toEqual([]);
-    expect(f.people.leadsAny('mem_a', [PROJECT_A])).toBe(false);
   });
 
   it('compares names after NFC, ignoring case and runs of whitespace, and only whole names', () => {

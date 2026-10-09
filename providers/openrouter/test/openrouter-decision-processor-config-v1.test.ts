@@ -9,6 +9,17 @@ import {
 
 describe("fixed OpenRouter processor runtime commitments", () => {
   const reference = "file:/private/openrouter-token";
+  const runtime = (
+    overrides: Partial<Parameters<typeof assertOpenRouterDecisionProcessorRuntimeCommitmentsV1>[0]> = {},
+  ) => ({
+    adapter_id: "llm",
+    version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
+    configuration_sha256: openRouterDecisionProcessorConfigurationSha256V1(),
+    credential_reference_sha256:
+      openRouterDecisionProcessorCredentialReferenceSha256V1(reference),
+    credential_reference: reference,
+    ...overrides,
+  });
 
   it("commits the exported LLM adapter, prompt, and schema versions", () => {
     expect(OPENROUTER_DECISION_PROCESSOR_PROMPT_VERSION_V1).toBe(
@@ -51,38 +62,20 @@ describe("fixed OpenRouter processor runtime commitments", () => {
 
   it("accepts the admission's exact fixed configuration and reference", () => {
     expect(() =>
-      assertOpenRouterDecisionProcessorRuntimeCommitmentsV1({
-        adapter_id: "llm",
-        version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
-        configuration_sha256: openRouterDecisionProcessorConfigurationSha256V1(),
-        credential_reference_sha256:
-          openRouterDecisionProcessorCredentialReferenceSha256V1(reference),
-        credential_reference: reference,
-      }),
+      assertOpenRouterDecisionProcessorRuntimeCommitmentsV1(runtime()),
     ).not.toThrow();
   });
 
   it("rejects a changed credential reference or fixed processor configuration without resolving credentials", () => {
-    const configuration = openRouterDecisionProcessorConfigurationSha256V1();
-    const credential =
-      openRouterDecisionProcessorCredentialReferenceSha256V1(reference);
     expect(() =>
-      assertOpenRouterDecisionProcessorRuntimeCommitmentsV1({
-        adapter_id: "llm",
-        version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
-        configuration_sha256: configuration,
-        credential_reference_sha256: credential,
-        credential_reference: "file:/private/replaced-openrouter-token",
-      }),
+      assertOpenRouterDecisionProcessorRuntimeCommitmentsV1(
+        runtime({ credential_reference: "file:/private/replaced-openrouter-token" }),
+      ),
     ).toThrow(/differs from the admitted processor commitment/);
     expect(() =>
-      assertOpenRouterDecisionProcessorRuntimeCommitmentsV1({
-        adapter_id: "llm",
-        version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
-        configuration_sha256: canonicalSha256({ changed: "configuration" }),
-        credential_reference_sha256: credential,
-        credential_reference: reference,
-      }),
+      assertOpenRouterDecisionProcessorRuntimeCommitmentsV1(
+        runtime({ configuration_sha256: canonicalSha256({ changed: "configuration" }) }),
+      ),
     ).toThrow(/differs from the admitted processor commitment/);
   });
 });

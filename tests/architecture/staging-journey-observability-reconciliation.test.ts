@@ -118,6 +118,24 @@ function byJourney(events: readonly JourneyEvent[]): Map<string, JourneyEvent[]>
   return result;
 }
 
+function percentilesByWorkflow(
+  durations: ReadonlyMap<string, number>,
+  grouped: ReadonlyMap<string, readonly JourneyEvent[]>,
+) {
+  const byWorkflow = new Map<JourneyEvent["workflow"], number[]>();
+  for (const [journeyId, duration] of durations) {
+    const workflow = grouped.get(journeyId)![0]!.workflow;
+    byWorkflow.set(workflow, [...(byWorkflow.get(workflow) ?? []), duration]);
+  }
+  return Object.fromEntries(
+    [...byWorkflow].map(([workflow, values]) => [workflow, {
+      p50: percentile(values, 50),
+      p95: percentile(values, 95),
+      p99: percentile(values, 99),
+    }]),
+  );
+}
+
 describe("staging journey observability Phase 4 reconciliation fixture", () => {
   it("is canonical, content-free raw telemetry that spans every agreed journey outcome", () => {
     const { records } = fixture();
@@ -136,12 +154,12 @@ describe("staging journey observability Phase 4 reconciliation fixture", () => {
     expect(new Set(events.map((event) => event.workflow))).toEqual(
       new Set(["ask", "meeting_approval"]),
     );
-    expect(events.some((event) => event.outcome === "approved")).toBe(true);
-    expect(events.some((event) => event.outcome === "rejected")).toBe(true);
-    expect(events.some((event) => event.outcome === "denied")).toBe(true);
-    expect(events.some((event) => event.outcome === "published")).toBe(true);
-    expect(events.some((event) => event.llm_usage?.usage_status === "reported")).toBe(true);
-    expect(events.some((event) => event.llm_usage?.usage_status === "unavailable")).toBe(true);
+    expect(events.map((event) => event.outcome)).toEqual(
+      expect.arrayContaining(["approved", "rejected", "denied", "published"]),
+    );
+    expect(events.map((event) => event.llm_usage?.usage_status)).toEqual(
+      expect.arrayContaining(["reported", "unavailable"]),
+    );
   });
 
   it("reconciles stage closed counts, rates, and source-intake percentiles from raw events", () => {
@@ -171,7 +189,6 @@ describe("staging journey observability Phase 4 reconciliation fixture", () => {
     });
 
     const nonSkipped = events.filter((event) => event.event !== "skipped");
-    expect(nonSkipped.filter((event) => event.event === "failed")).toHaveLength(3);
     expect(nonSkipped.filter((event) => event.event === "failed").length / nonSkipped.length).toBeCloseTo(3 / 39);
     expect(counts.get("ask_planner")!.failed / (counts.get("ask_planner")!.failed + counts.get("ask_planner")!.succeeded)).toBe(1);
     expect(counts.get("ask_retrieval")!.failed / (counts.get("ask_retrieval")!.failed + counts.get("ask_retrieval")!.succeeded)).toBe(0.5);
@@ -210,7 +227,6 @@ describe("staging journey observability Phase 4 reconciliation fixture", () => {
       "55555555-5555-4555-8555-555555555555": 120_024,
       "66666666-6666-4666-8666-666666666666": 180_025,
     });
-    expect(endToEnd.has("44444444-4444-4444-8444-444444444444")).toBe(false);
     expect(Object.fromEntries(serviceEndToEnd)).toEqual({
       "11111111-1111-4111-8111-111111111111": 55,
       "22222222-2222-4222-8222-222222222222": 9,
@@ -235,47 +251,12 @@ describe("staging journey observability Phase 4 reconciliation fixture", () => {
       180_000,
     ]);
     expect(verifiedActions.reduce((total, event) => total + event.elapsed_ms, 0)).toBe(10);
-    expect(verifiedActions.reduce((total, event) => total + (event.queue_age_ms ?? 0), 0)).toBe(1_200_000);
 
-    const endToEndByWorkflow = new Map<JourneyEvent["workflow"], number[]>();
-    for (const [journeyId, duration] of endToEnd) {
-      const workflow = grouped.get(journeyId)![0]!.workflow;
-      const values = endToEndByWorkflow.get(workflow) ?? [];
-      values.push(duration);
-      endToEndByWorkflow.set(workflow, values);
-    }
-    expect(
-      Object.fromEntries(
-        [...endToEndByWorkflow].map(([workflow, values]) => [workflow, {
-          p50: percentile(values, 50),
-          p95: percentile(values, 95),
-          p99: percentile(values, 99),
-        }]),
-      ),
-    ).toEqual({
+    expect(percentilesByWorkflow(endToEnd, grouped)).toEqual({
       ask: { p50: 9, p95: 55, p99: 55 },
       meeting_approval: { p50: 180_025, p95: 600_050, p99: 600_050 },
     });
-
-    const serviceByWorkflow = new Map<JourneyEvent["workflow"], number[]>();
-    for (const [journeyId, duration] of serviceEndToEnd) {
-      const workflow = grouped.get(journeyId)![0]!.workflow;
-      const values = serviceByWorkflow.get(workflow) ?? [];
-      values.push(duration);
-      serviceByWorkflow.set(workflow, values);
-    }
-    expect(
-      Object.fromEntries(
-        [...serviceByWorkflow].map(([workflow, values]) => [
-          workflow,
-          {
-            p50: percentile(values, 50),
-            p95: percentile(values, 95),
-            p99: percentile(values, 99),
-          },
-        ]),
-      ),
-    ).toEqual({
+    expect(percentilesByWorkflow(serviceEndToEnd, grouped)).toEqual({
       ask: { p50: 9, p95: 55, p99: 55 },
       meeting_approval: { p50: 25, p95: 50, p99: 50 },
     });
@@ -382,7 +363,6 @@ describe("staging journey observability Phase 4 reconciliation fixture", () => {
     const sourceRetryAttempts = sourceClosedAttempts.filter(
       (event) => event.attempt > 1,
     );
-    expect(sourceRetryAttempts).toHaveLength(1);
     expect(100 * sourceRetryAttempts.length / sourceClosedAttempts.length).toBe(50);
 
     const succeeded = closed(events).filter((event) => event.event === "succeeded");
@@ -424,7 +404,6 @@ describe("staging journey observability Phase 4 reconciliation fixture", () => {
       pendingApproved[0]!.find((event) => event.stage === "meeting_terminal_persist")!.observed_at,
     );
     expect(asOf - approvedAt).toBe(1_200_000);
-    expect(asOf - approvedAt >= STUCK_AFTER_MS).toBe(true);
 
     const backlog = records.find(
       (record) => record.kind === APPROVED_SEARCH_BACKLOG_KIND,

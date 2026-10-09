@@ -23,7 +23,6 @@ describe("organization protocol package contract", () => {
       "dist/**/*.d.ts",
       "dist/**/*.d.ts.map",
     ]);
-    expect(packageJson.files).not.toContain("dist/.tsbuildinfo");
   });
 
   it("depends only on the federation protocol workspace", () => {

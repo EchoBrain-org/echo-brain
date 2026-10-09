@@ -58,28 +58,26 @@ test('the page can never name a file path', async () => {
   expect(log).not.toMatch(/script|drop\.accept|etc/);
 });
 
-test('a note that starts with a dash is sent as text, not read as an option', async () => {
+test('a note that starts with a dash is sent as text, not read as an option; a long title is cut to what the API takes, and a long question is capped', async () => {
   run = await launch();
   const { page } = run;
+  const saved = () => run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('--audience=team\nstill only for me');
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('toast')).toHaveText('Saved for you');
-  const saved = run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
-  expect(saved[0]!.body?.title).toBe('--audience=team');
-  expect(saved[0]!.body?.audience).toEqual({ kind: 'only_me' });
-});
+  expect(saved()[0]!.body?.title).toBe('--audience=team');
+  expect(saved()[0]!.body?.audience).toEqual({ kind: 'only_me' });
 
-test('a long title is cut to what the API takes, and a long question is capped', async () => {
-  run = await launch();
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  // The next capture clears the toast, so the one after its send is its own.
   await page.getByTestId('write-button').click();
+  await expect(page.getByTestId('toast')).toHaveCount(0);
   await page.getByTestId('compose-body').fill(`${'é'.repeat(150)}\tend`);
   await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('toast')).toBeVisible();
-  const title = String(run.calls().find(call => call.path === '/v3/person/updates')!.body?.title);
+  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
+  expect(saved()).toHaveLength(2);
+  const title = String(saved()[1]!.body?.title);
   expect(Buffer.byteLength(title)).toBe(200);
 
   await page.getByTestId('ask-field').fill('q'.repeat(400));
