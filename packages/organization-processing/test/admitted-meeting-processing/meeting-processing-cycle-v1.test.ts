@@ -250,6 +250,7 @@ class FakeState implements AuthorityMeetingProcessingStateV1 {
   async listHeldExtractions(): Promise<never[]> { return []; }
 
   async readHeldMeeting(): Promise<never> { throw new Error("held meetings are read from the Authority"); }
+  async releaseHeldExtraction(): Promise<void> {}
 }
 
 class FailingFrozenReadState extends FakeState {

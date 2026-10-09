@@ -83,6 +83,8 @@ export interface AuthorityMeetingProcessingStateV1 {
   listHeldExtractions(): Promise<readonly HeldExtractionV1[]>;
   /** Rebuilds a parked revision from retained source custody, digests verified. */
   readHeldMeeting(held: HeldExtractionV1): Promise<MeetingDocument>;
+  /** Drops a parked revision whose exact revision already has a frozen candidate. */
+  releaseHeldExtraction(held: HeldExtractionV1): Promise<void>;
 }
 
 export interface HoldExtractionInputV1 {
@@ -535,6 +537,8 @@ export class AdmittedMeetingProcessingCycleV1 {
       external_id: meeting.provenance.external_id,
       canonical_revision: meeting.provenance.canonical_revision,
     });
+    // Already processed: the revision is no longer held, and its grant is never spent.
+    if (frozen !== undefined) await this.options.state.releaseHeldExtraction(held);
     // No next cursor: a retry from custody never advances intake.
     return this.processMeeting(admission, meeting, frozen, undefined, signal, true);
   }

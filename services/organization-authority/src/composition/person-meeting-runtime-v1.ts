@@ -125,6 +125,8 @@ export function createPersonMeetingRuntimeV1(options: {
       grant = now;
     };
     const source = provider.source(setting, current);
+    // A pull pins the grant before any spend; a retry from custody pins it here.
+    if (fromCustody) current();
     const providerIntake = ownerOf(setting.source_adapter_id).intake;
     // The advance that drops a processed import from the queue records its project choices in the same transaction.
     // A retry from custody never pulls, so it is fenced by membership and settings, not by a provider observation.
@@ -142,10 +144,12 @@ export function createPersonMeetingRuntimeV1(options: {
       .map(row => ({ source_key: row.source_key, external_id: row.external_id, attempt: row.attempt, failure_stage: row.failure_stage,
         authorized: options.extraction_attempts.inspect({ admission_sha256: row.extraction_admission_sha256, review_lineage_id: row.review_lineage_id, review_input_sha256: row.review_input_sha256 })?.retry_authorized === true }));
   }
-  const retryReady = () => new Set(held().filter(row => row.authorized).map(row => row.source_key));
-  /** The owner's status for a source: its oldest held meeting, then any connection or access error. */
+  // After a retry poll, a source's next retry waits a minute, so a retry that cannot reserve never blocks its intake.
+  const retryAfter = new Map<string, number>();
+  const retryReady = () => new Set(held().filter(row => row.authorized && (retryAfter.get(row.source_key) ?? 0) <= Date.now()).map(row => row.source_key));
+  /** The owner's status for a source: its oldest authorized held meeting, else its oldest held one, then any connection or access error. */
   function sourceError(sourceKey: string): string | null {
-    const [first] = held(sourceKey);
+    const rows = held(sourceKey), first = rows.find(row => row.authorized) ?? rows[0];
     const parts = [first && `Meeting ${first.external_id} is held after extraction attempt ${first.attempt} failed at ${first.failure_stage}. Later meetings continue. ${
       first.authorized ? 'A retry is authorized and runs on the next check.' : 'An operator can authorize one more attempt.'}`, observed.get(sourceKey)?.error];
     const text = parts.filter(part => part !== undefined && part !== null).join(' ');
@@ -169,10 +173,11 @@ export function createPersonMeetingRuntimeV1(options: {
       const setting = eligible.find(s => s.source_key > after) ?? eligible[0];
       if (!setting) return;
       after = setting.source_key;
+      // An authorized retry re-runs one parked meeting from custody, before this source's next intake.
+      const retry = ready.has(setting.source_key);
+      if (retry) retryAfter.set(setting.source_key, Date.now() + 60_000);
       try {
         intake.requireCurrent(setting);
-        // An authorized retry re-runs one parked meeting from custody, before this source's next intake.
-        const retry = ready.has(setting.source_key);
         if (!retry && setting.folder_id === null && ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key).manual.length === 0) {
           // Only a failed freeze is left: retry it from the stored extraction, without the provider.
           await (await approvals()).stagerForSource(setting.source_key).reconcilePendingDeliveries({ signal });
@@ -201,11 +206,12 @@ export function createPersonMeetingRuntimeV1(options: {
       } catch (error) {
         signal.throwIfAborted();
         const remaining = ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key);
-        // Nothing left to retry: the import queue is empty, every proposal of this source is frozen, and no parked meeting has a grant.
+        // Nothing left to retry: the import queue is empty, every proposal of this source is frozen, and no granted retry is due.
         if (remaining.folder === null && remaining.manual.length === 0 && !workflowState.listPendingApprovalSourceKeys().includes(setting.source_key)
           && !retryReady().has(setting.source_key)) { observed.delete(setting.source_key); return; }
-        // Fixed, content-free status; one broken grant cannot starve another person's work.
-        observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: 'Meeting intake needs attention. Check the connection, folder access, and project access.', next: Date.now() + 60_000 });
+        // Fixed, content-free status; one broken grant cannot starve another person's work. A failed retry is already
+        // deferred, so the source's intake goes next.
+        observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: 'Meeting intake needs attention. Check the connection, folder access, and project access.', next: Date.now() + (retry ? 0 : 60_000) });
         if (!(error instanceof AuthorityOperationError) && !(error instanceof Error)) throw error;
       }
     },

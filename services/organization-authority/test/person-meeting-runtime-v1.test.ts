@@ -591,8 +591,27 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
     expect(await error()).toBe(heldError(b));
     // The grant is spent.
+    expect(f.ledger.inspect(key)).toMatchObject({ attempt: 2, outcome: 'succeeded', retry_authorized: false });
     await poll();
     expect(f.extracted()).toBe(3);
+  });
+  it('lets a queued import stage when an authorized retry cannot reserve', async () => {
+    const f = await fixture(), runtime = f.create(), b = '00000000-0000-4000-8000-000000000004';
+    const poll = () => runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    f.failNextExtraction(); await poll();
+    // A granted held key that no longer matches custody: the retry refuses before reserving.
+    const [row] = f.held(), key = { admission_sha256: row!.extraction_admission_sha256, review_lineage_id: row!.review_lineage_id, review_input_sha256: `sha256:${'f'.repeat(64)}` };
+    f.db.prepare('UPDATE authority_live_source_held_extractions_v1 SET review_input_sha256 = ?').run(key.review_input_sha256);
+    const claim = f.ledger.reserve(key);
+    if (claim.status !== 'reserved') throw new Error('test reservation failed');
+    f.ledger.complete({ key, ...claim, outcome: 'failed', failure_code: 'unknown' });
+    f.ledger.authorizeRetry({ key, expected_attempt: 1, expected_outcome: 'failed' });
+    await f.call(runtime, { operation: 'import', meeting_id: b, project_id: null, retain: true });
+    await poll(); await poll();
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
+    expect(f.extracted()).toBe(2);
+    expect(f.held()).toEqual([expect.objectContaining({ external_id: id })]);
   });
   it('forgets a held meeting the person cancels', async () => {
     const f = await fixture(), runtime = f.create();

@@ -678,6 +678,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     })();
   }
 
+  async releaseHeldExtraction(held: HeldExtractionV1): Promise<void> {
+    this.database.prepare("DELETE FROM authority_live_source_held_extractions_v1 WHERE source_key = ? AND review_lineage_id = ? AND revision_id = ?")
+      .run(this.sourceKey, held.key.review_lineage_id, held.revision_id);
+  }
+
   readCandidateByApprovalId(
     approvalId: string,
   ): ApprovalWorkflowOutboxV1 | undefined {
