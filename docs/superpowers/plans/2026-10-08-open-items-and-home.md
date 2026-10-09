@@ -1619,12 +1619,14 @@ A follow-up the plan does not have (R20, R22, R23; `a087346`). Its interfaces ar
 
 #### Task 12: desktop Check rows, Did it land?, Check now, auto-sweep
 
-- A Check row is one button that opens a Check card (spec ruling 3); Part 1's inline Open and Done are gone. The card shows the live details → `expected`, "Not what was decided · Checked 2 h ago by Mina Patel", Done and Not relevant (with `can.set_state`) and "Open in …" (only when opened). `markDone` became `closeItem(item, 'done' | 'not_relevant')`.
-- The footer reads "2 landed since yesterday · 1 with others · checked 2 h ago", with "Mark done" when anything landed, also under "Nothing needs you".
-- Did it land? (`src/renderer/screens/did-it-land.tsx`) is a layer over the page it opened from, grouped as R36 says. Task 12 read every item in scope and kept the open ones; since Task 12c it reads `items` with `open_only: true` and keeps that check as a guard.
+Task 12d replaced the Check row, the Check card, the footer's words and Did it land? with the founder's rulings of 2026-10-09 (R63–R70); the first three items below record what Task 12 built.
+
+- A Check row was one button that opened a Check card (spec ruling 3); Part 1's inline Open and Done went. The card showed the live details → `expected`, "Not what was decided · Checked 2 h ago by Mina Patel", Done and Not relevant (with `can.set_state`) and "Open in …" (only when opened). `markDone` became `closeItem(item, 'done' | 'not_relevant')`, which Task 12d kept.
+- The footer read "2 landed since yesterday · 1 with others · checked 2 h ago", with "Mark done" when anything landed, also under "Nothing needs you".
+- Did it land? (`src/renderer/screens/did-it-land.tsx`, now `item-status.tsx`) was a layer over the page it opened from, grouped as R36 says. Task 12 read every item in scope and kept the open ones; since Task 12c it reads `items` with `open_only: true` and keeps that check as a guard.
 - Check now sits on the reader's Impact line (once the decision has items) and on the project line:
   - `nothing_to_check` shows "Nothing open to check".
-  - Otherwise the line shows "Checking…" until the sweep ends. Then it reads the line's counts again, and opens Did it land? for that scope if the line is still in sight.
+  - Otherwise the line shows "Checking…" until the sweep ends. Then it reads the line's counts again, and opens Did it land? (since Task 12d, Your open items) for that scope if the line is still in sight.
   - A failure shows "Check failed · Try again".
   - Its sweep is started at once. While a start answers `busy`, each runs list says what starts next (`runToStart`), so queued impact runs go first. The list is read at `runPollDelay`'s pace.
 - Auto-sweep:
@@ -1633,7 +1635,7 @@ A follow-up the plan does not have (R20, R22, R23; `a087346`). Its interfaces ar
   - A sweep that already exists and is pending is started like a pending impact run, after them, under `runPollDelay`'s backoff (R50).
   - `busy` is never shown. Like a start that fails, it only lengthens the next wait, for impact starts too.
   - A sweep never makes a Home row. When the sweep Home asked for ends, Home reads what waits on you again.
-- The Impact line adds up as R35 says. It learns Send and Try again from the stage's `mine`, no longer from runs `list`. The project line adds "checked …". After Task 12c, a feed row and the project line count open items as `unsent + open − landed − unreadable`, and the project line sums its decisions' counts (`by_decision`); "from M decisions" counts those above zero.
+- The Impact line adds up as R35 says. It learns Send and Try again from the stage's `mine`, no longer from runs `list`. The project line adds "checked …". After Task 12c, a feed row and the project line count open items as `unsent + open − landed − unreadable`. Task 12c's project line summed its decisions' counts (`by_decision`); since Task 12d it takes its total from the project's summary, and keeps "from M decisions" counting the listed decisions above zero.
 - Names stay distinct (R37) on rows, buttons and the Send card's checkboxes (R49). A decision's title is added only where it tells alike items apart, so alike items of one decision get a position: "(1)", "(2)" (R59). The remove button names its item: "Remove Rafael from Thermostat PRD · Pilot scope".
 - Relative times read "just now", "N min ago", "N h ago" under 6 hours, then "today", "yesterday", "Oct 6" (R49).
 - Fixture modes `granola-checked`, `granola-sweep`, `granola-sweep-requeued` (the sweep's first attempt goes back to the queue, R50) and `granola-alike` (look-alike unsent items, for R37's names on the Send checkboxes). The fixture's `sweep` now queues a real sweep run; it used to answer `nothing_to_check`.
@@ -1648,6 +1650,21 @@ A follow-up the plan does not have (R51), as its brief specifies:
 - R62 (it supersedes R56) rides along, in the same files:
   - the kernel's sweep trigger refuses Slack message citations again;
   - the service leaves Slack-message items out of sweeps and `sweep_due` again, with a comment saying why: no desk can read a Slack citation yet.
+
+#### Task 12d: the founder's UI rulings (R63–R70) and Task 12c's review fixes
+
+A follow-up the plan does not have. The founder reviewed Part 2's screens on 2026-10-09 (`founder-ui-review-2026-10-09.md`); desktop only, no API change:
+
+- `NeedKind` `'check'` became `'review'`. `needRows` takes the viewer (`status.account.membership_id`): an item whose last check is `changed` and whose owner is not the viewer is a Review row; every other item is an Update row, the owner's changed item flagged `changed: true` (R64). Changed rows sort first.
+- Items not changed act in place on Update rows ("Open in <tool>", "Mark updated", named "Mark updated: <item>"); changed rows, Update or Review, open the item card (R65).
+- Item rows have three lines (R66): "<item> doesn't match the decision yet" (or "may need updating"), 'Says "…" → decision needs: …', and muted kind · "<title> meeting, approved Oct 6" (or "sent by <first name>") · why it is back. Every decision with open items is an approved meeting: approved-record runs come only from the approval publisher's after-record hook, which publishes frozen meeting candidates.
+- `CheckCard` became `ItemCard` (R67): whose it is to update, "The decision", "Now" and "The decision needs", a check line naming no one, "Mark updated" (`done`) and "No change needed" (`not_relevant`).
+- `did-it-land.tsx` became `item-status.tsx` (`ItemStatus`, state `itemStatus`), a status view (R68): "Your open items", "Open items" or "Open items · <project>", "<N> open · ECHO checked …", one list with a status per item, Close on matches, "Close all N that match" when two or more can close, grouping per decision for your own items, "No open items". Closing keeps the view open.
+- The footer reads "1 matches its decision now · 2 waiting on others · ECHO checked 2 h ago", with "View" whenever either count is above zero (R69). "landed", "Did it land?", `footerWords`, `landedNote` and `markable` are gone from the UI and its helpers (R70); the Impact line and project line copy stay.
+- From Task 12c's review: the project line's total comes from the project's summary, exact past the 100 decisions a summary lists; the line stays while any item is unsent or open and, when its count is zero, counts unsent + open instead (R72); the items-page loader takes an options object; nobody but an item's owner is told it is theirs.
+- Fixture mode `granola-review`: Ari sees Mina's changed ECHO-12 as a Review row beside Ari's own changed page.
+- The founder accepted four cases as built: an item whose owner left still reads "<owner>'s to update" (and changed, is a Review row); an item that fell back to a project lead reads "changed since it was sent"; an untitled meeting read "Approved meeting meeting" (R76 then dropped the second "meeting"); Close and "Close all" keep the view open.
+- The final fix round: a failed read no longer skips `driveRuns`' start or the load's sweep request, and the request is spent only when made; Your open items shows no count before a read of its items succeeded; R76.
 
 #### Task 13: sweep in the research-loop evaluation
 
@@ -1700,7 +1717,7 @@ Each line gives the ruling, then the reason. The ledger numbered two rulings eac
 - R33: A sweep finding names the decision only when the caller may see it — an owner sent an item without reading its decision must not get the decision in their run.
 - R34: A sweep claim answers `busy` while the caller has a pending or running impact run — "impact runs start before sweeps" must not depend on the client.
 - R35: The Impact line partitions sent items: open less landed and unreadable, handled (done, not relevant, landed), couldn't read — the canvas 9.6 example reads 1, 1 and 1.
-- R36: Did it land? groups by last check (Landed; Still open with changed and unchecked items; Couldn't read), and Mark N done closes the ticked landed items the viewer may set — the spec lists only three sections.
+- R36: Did it land? groups by last check (Landed; Still open with changed and unchecked items; Couldn't read), and Mark N done closes the ticked landed items the viewer may set — the spec lists only three sections. Its card form is superseded by R68.
 - R37: Names that still collide after `expected` add the decision title when readable, else a position; "Remove <person>" names its item — it closes a Part 1 minor.
 - R38: The sweep's work lives in a new composition file called from `launch`, with one observation and error structure — the runs file is already long.
 - R39: Sweep line screens apply per line after the one repair; a line that still fails becomes "ECHO withheld this line." and keeps its verdict — refusing the whole reply let one line void every verdict, every hour.
@@ -1727,6 +1744,20 @@ Each line gives the ruling, then the reason. The ledger numbered two rulings eac
 - R60: Runs `list` and the stages of `items` report a `running` run whose lease has lapsed as `pending` (the stored state is unchanged) — otherwise a run whose worker died shows "Checking…" forever and Home polls every 5 s; the gap dates from Part 1 and was found by the Task 12 re-review.
 - R61: A sweep asks again who sees each item synchronously right before `finish`, with no await between, not inside its transaction — the record check behind it opens a project-context transaction, which never nests, so nesting would break every production sweep; nothing in the Authority process can run in between, and a membership another process revokes in that instant is not seen.
 - R62: Supersede R56 in Task 12c: the kernel's sweep trigger refuses Slack message citations again, and the service leaves Slack-message items out of sweeps and `sweep_due`, saying why in a comment and in the spec's "Not in this round" — no desk in this repository can open a Slack citation (it carries no `tool_id`, and no live Slack connector is registered), so a swept Slack item is only ever recorded `unreadable`, at the cost of a background research run; Slack items stay "not checked yet" until a Slack reader exists.
+- R63 (founder): "Check" is no longer a Home row verb; it means only ECHO's re-read ("ECHO checked 2 h ago", "Check now", "Checking…").
+- R64 (founder): Update is for the item's owner, Review for an approver looking at someone else's item: a `changed` item whose owner is not the viewer is a Review row, every other item row is Update, and the owner's changed item is a flag, not a verb.
+- R65 (founder): Click behavior is unchanged: items not changed act in place on Update rows (ruling 20); changed items, Update or Review, open the item card first (ruling 3).
+- R66 (founder): Home item rows have three lines: "<item> doesn't match the decision yet" (or "may need updating"); "Says … → decision needs: <expected>"; muted kind · "<title> meeting, approved <date>" (or "sent by <first name>") · why it is back; every reach fallback stays.
+- R67 (founder): The item card replaces the Check card: whose it is, the decision, "Now" and "The decision needs", a check line naming no one, "Mark updated" and "No change needed", which also name the Update row's button.
+- R68 (founder): "Did it land?" becomes "Your open items", a status view with one list, a status per item, Close on matches, "Close all N that match" when two or more can close and "No open items"; it replaces canvas 9.4's copy and R36's card form.
+- R69 (founder): Home's footer reads "N match their decision now · N waiting on others · ECHO checked 2 h ago", with View whenever either count is above zero.
+- R70 (founder): "landed" and "Did it land?" leave all UI copy; the Impact line and project line copy stay until the founder reviews screens 5–8, and "Check now" and "Checking…" stay.
+- R71: The desktop has no reassign control this round; the API and the CLI support `assign` — designing a new control without the founder's review contradicts "keep it simple".
+- R72: The project line stays while unsent + open > 0, and falls back to Part 1's count of unsent + open when the R35 count is 0 — otherwise Check now and the way to the project's items disappear while items are still open.
+- R73: Finish with Task 12d, the founder's look at the screenshots, one whole-branch review (docs accuracy included), one fix round, the final check, one push and a draft PR — no separate docs pass or task review for 12d.
+- R74: The whole-branch review is two reviewers (backend and privacy; desktop and docs) with one skeptic per critical or important finding, and the controller synthesizes — the founder asked to keep the workflow lean.
+- R75: A sweep reads in one project only when every item it checks comes from a decision in exactly that project, as the impact run does; otherwise everywhere the caller may read, fenced by the caller's access — a narrower read stores a false shared `unreadable`.
+- R76: A title that already ends with "meeting" gets no second "meeting" (Home rows, the item card, Your open items, the Approve row).
 
 Unnumbered rulings:
 
@@ -1750,12 +1781,13 @@ Unnumbered rulings:
 1. The founder gave the go once PR #301 was open. `feat/open-items-part-2` started from `5a008d0`.
 2. Wave 1: Task 10 with the runs API additions (`b1593e5`, `bc2e9a3`), then four fix rounds (`25aacdf`, `1cacc13`, `41ceec0`, `c16add0`, `650f844`).
 3. Wave 2, in separate worktrees: Task 12 (desktop, against the fixture Authority) and Task 13 (evaluation) from `bc2e9a3` (R41); Task 11 (service) from `41ceec0` (R46). Task 13 (`0ba71df`, fix `fef1c79`) merged as `ce76f0b`. Main, with PR #301, merged at `c4c2310`. Tasks 11 and 12 merged after their reviews: Task 12 (`43bbe12`, fix `cc5fb08`) as `dbf29fa`, then Task 11 (`05f75d3`, `b5b82a6`, fixes `7024358` and `34c5a87`) as `c31a46f`. Task 11 merged once its review approved it, ahead of the scoped re-review of its two fix rounds; that re-review found nothing critical or important.
-4. Task 12c on the merged branch (R51): `<to be filled at the final check>`.
-5. Task 14: docs written in their own worktree in parallel with Wave 2 (R53; draft `0ab233a`), checked again against the code once Tasks 11 and 12 had merged, then the final whole-branch review with one fix round, the final check, one push and a draft PR against main (R52): `<to be filled at the final check>`.
+4. Task 12c on the merged branch (R51): `5e3cab0`, `01001ce`; its review fixes rode in Task 12d.
+5. Task 12d, the founder's UI rulings (R63–R70): `2244c69`, merged as `a2e3f46` after the founder viewed its screenshots; its part of the final fix round: `7aa2f54` and the docs commit.
+6. Task 14: docs written in their own worktree in parallel with Wave 2 (R53; draft `0ab233a`), checked again against the code once Tasks 11 and 12 had merged, then the final whole-branch review with one fix round, the final check, one push and a draft PR against main (R52): `<to be filled at the final check>`.
 
 #### Models
 
-- Implementers: Claude Opus 5.5 for Tasks 2–14, 9b and 12c. Task 1 ran on Claude Sonnet 5.5.
+- Implementers: Claude Opus 5.5 for Tasks 2–14, 9b, 12c and 12d. Task 1 ran on Claude Sonnet 5.5.
 - Reviewers: Claude Opus 5.5 for the task reviews and re-reviews, and for the final whole-branch review.
 - Codex ran the Part 1 stop (the main merge, an independent review, validation, screenshots and PR #300) and PR #301.
 
@@ -1778,9 +1810,10 @@ Unnumbered rulings:
 - When the owner has left and the approver is active but can no longer read the decision, an open item waits on the approver, who has no row for it. It is on nobody's Home, though readers still see it on record and project pages.
 - A partial landing, where some of a finding's items moved as expected, has no verdict of its own. The prompt's `still_open` rule leads the model to answer `still_open` (Task 10).
 - R39's corner: when no repair call can follow the first reply (under 3 seconds left, or no call left), a reply whose only problem is a screened line is still refused whole, and every readable finding is not assessed (Task 10).
-- A sweeper who cannot open an item records `unreadable`, and as the newest shared check it replaces a reader's `landed`; Home's landed count and Check rows read the shared check (Task 11 review, founder call).
+- A sweeper who cannot open an item records `unreadable`, and as the newest shared check it replaces a reader's `landed`; Home's footer count ("match their decision now") and Review rows read the shared check (Task 11 review, founder call).
 - No desk in this repository opens a Slack citation, so Slack-message items stay "not checked yet" (R62). The same gap means a Slack item on an open-items row reads as one the viewer cannot open (`no_access`), and a viewed impact card hides the rows that cite a Slack message (counted in `hidden`).
 - R61's gap: a membership that another process revokes between a sweep's visibility re-check and its finish is not seen.
+- Desktop reassign is not in this round (R71): reassigning an item after Send needs the CLI (`assign`).
 - R58 counts the hour from a sweep's creation, not from its last attempt (Task 11 re-review). A sweep that waited over an hour and is then released after an outage is restarted on each Home load until its three attempts are spent. One released for index lag is re-claimed on every Home load.
 - An R54 asymmetry (Task 11 re-review): an owner who cannot read the decision may set a reopened item, which Send left unticked, to `not_relevant`. It then leaves their sight at once, and they cannot undo it.
 - Service minors (Task 11):

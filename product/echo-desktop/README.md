@@ -17,36 +17,48 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
   opens the decision with the reason and **Try again**.
 - **Send**: your impact check found items the decision changes.
   **Tell the owners?** sends each to its owner (or **Pick a person**).
-- **Update**: an item that waits on you: sent to you, or left to you because
-  the people ahead of you have left. **Open in Jira** (or the item's tool)
-  when you can open it, and **Done** when you may close it, act on the row
-  itself.
-- **Check**: an open item ECHO's last check saw change, but not as decided.
-  The row opens the item first: what the decision expected, its live details,
-  the verdict and who checked it when, then **Done** and **Not relevant** when
-  you may close it. Nothing on the row itself closes the item.
+- **Update**: an item that waits on you as its owner: sent to you, or left to
+  you because the people ahead of you have left. Each item row has three
+  lines: "ECHO-12 · Pilot launch doesn't match the decision yet", what it says
+  now and what the decision needs ("Due Oct 30 → decision needs: launch next
+  week"), and, muted, what it is and where it came from ("Jira ticket · Pilot
+  planning meeting, approved Oct 6"). **Open in Jira** (or the item's tool)
+  when you can open it, and **Mark updated** when you may close it, act on the
+  row itself.
+- **Update**, once ECHO's last check saw the item change and it still doesn't
+  match ("· changed since you got it, still doesn't match"), and **Review**
+  for an item someone else owns that changed since you sent it ("Mina's to
+  update · changed since you sent it"): the row opens the item's card first:
+  whose it is to update, the decision, what the item says **Now** beside what
+  **The decision needs**, what ECHO saw when it last checked, then **Mark
+  updated** and **No change needed** when you may close it. Nothing on the row
+  itself closes the item.
 
 Under the rows, and on an empty Home, a footer says how many of your items
-landed, how many items you sent wait on others, and when ECHO last checked
-("2 landed since yesterday · 1 with others · checked 2 h ago"). When anything
-landed, **Mark done** opens **Did it land?** for your items: those that
-landed (ticked), those still open and those ECHO couldn't read, each with its
-owner and, when you can open it, its live details. **Mark N done** closes the
-ticked ones.
+match their decision now, how many items you sent wait on others, and when
+ECHO last checked ("1 matches its decision now · 2 waiting on others · ECHO
+checked 2 h ago"). **View** opens **Your open items**: a status view of your
+open items, each with what the decision needs, its status (Matches now, Not
+updated yet, Changed, still doesn't match, ECHO couldn't read it, Not checked
+yet) and its owner. A match you may close has **Close**, and **Close all N
+that match** appears when two or more can be closed.
 
 An approved decision shows its Impact line ("Impact · 1 open · 1 handled ·
 1 couldn't read · checked just now"), and a project the items still open
-across its decisions ("4 open items · from 2 decisions · checked today"). An
-item that landed, or that ECHO couldn't read, is not counted as open. Both
-lines offer **Check now** when they have items: it re-checks that decision's
-or project's open items, shows "Checking…" until the check ends, then opens
-Did it land? for them ("Nothing open to check" when none is left; "Check
-failed · Try again" when it fails). Home also re-checks your own open items
-by itself: when the Authority says they are due, Home asks for a sweep and
-starts it after any waiting impact check. A sweep makes no Home row and
-changes no item's state; it only records each item's latest verdict. Items on
-a Slack message are not re-checked: ECHO cannot read a Slack message yet, so
-they stay "not checked yet". Projects and archived projects live in the
+across its decisions ("4 open items · from 2 decisions · checked today",
+counted from the project's whole summary). An item that matched its decision,
+or that ECHO couldn't read, is not counted as open; the project line stays
+while any item is unsent or open. Both lines offer **Check now** when they
+have items: it re-checks that decision's or project's open items, shows
+"Checking…" until the check ends, then opens their open items as **Open
+items** ("Nothing open to check" when none is left; "Check failed · Try
+again" when it fails). Home also re-checks your own open items by itself:
+when the Authority says they are due, Home asks for a sweep and starts it
+after any waiting impact check. A sweep makes no Home row and changes no
+item's state; it only records each item's latest verdict. Items on a Slack
+message are not re-checked: ECHO cannot read a Slack message yet, so they
+stay "not checked yet". Reassigning an item after Send is not on the desktop
+yet (the CLI's `assign` does it). Projects and archived projects live in the
 sidebar.
 
 Tools → Granola manages folder watching and individual meeting imports. Home and
