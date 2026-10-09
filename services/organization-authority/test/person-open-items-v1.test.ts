@@ -58,8 +58,8 @@ describe('open items: who sees what', () => {
     expect(first.items).toHaveLength(2);
     expect(first.next_cursor).toBeNull();
     expect(first.summary).toEqual({ unsent: 2, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 1, last_checked_at: null,
-      by_decision: [{ record_sha256: f.record, unsent: 2, open: 0 }] });
-    expect(first.stages).toEqual([{ record_sha256: f.record, run_id: f.runId, state: 'done', error_code: null }]);
+      by_decision: [{ record_sha256: f.record, unsent: 2, open: 0, landed: 0, unreadable: 0 }] });
+    expect(first.stages).toEqual([{ record_sha256: f.record, run_id: f.runId, state: 'done', error_code: null, mine: true }]);
     // Page by page with a cursor: the same rows, in the same order.
     const ordered = [...first.items].map(entry => entry.item_id);
     const byCodePoint = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
@@ -93,13 +93,29 @@ describe('open items: who sees what', () => {
     expect(second.next_cursor).toBeNull();
     expect([...first.items, ...second.items].map(entry => entry.item_id)).toEqual(f.items.forRun(f.runId).map(row => row.item_id));
     expect(second.summary).toEqual(first.summary);
-    expect(first.summary).toMatchObject({ unsent: 55, decisions: 1, by_decision: [{ record_sha256: f.record, unsent: 55, open: 0 }] });
+    expect(first.summary).toMatchObject({ unsent: 55, decisions: 1, by_decision: [{ record_sha256: f.record, unsent: 55, open: 0, landed: 0, unreadable: 0 }] });
   });
 
   it('shows a decision reader the impact stage before the check finishes', async () => {
     const f = await openItemsFixture();
     expect(await scope(f, 'mina', 'record')).toMatchObject({ items: [], stages: [{ record_sha256: f.record, run_id: f.runId, state: 'pending', error_code: null }] });
     expect((await scope(f, 'okafor', 'record')).stages).toEqual([]);
+    // A project's page shows the stage of every decision the reader reads there, items or none.
+    expect(await scope(f, 'mina', 'project')).toMatchObject({ items: [], stages: [{ record_sha256: f.record, run_id: f.runId, state: 'pending', error_code: null }] });
+    expect((await scope(f, 'okafor', 'project')).stages).toEqual([]);
+  });
+
+  it("says whose impact check a stage is: the approver's own, and no other reader's", async () => {
+    const f = await openItemsFixture();
+    const stages = async (access_token: FixturePerson, summary_only?: true) => (await f.app.items({ access_token, request: {
+      schema_version: 1, operation: 'items', scope: 'record', id: f.record, ...(summary_only === undefined ? {} : { summary_only }) } })).stages;
+    expect(await stages('ari')).toEqual([{ record_sha256: f.record, run_id: f.runId, state: 'pending', error_code: null, mine: true }]);
+    expect(await stages('mina')).toEqual([{ record_sha256: f.record, run_id: f.runId, state: 'pending', error_code: null, mine: false }]);
+    await f.finishImpactRun();
+    // The Impact line reads counts only: Ari may Send, Mina only sees the check.
+    expect((await stages('ari', true)).map(stage => [stage.state, stage.mine])).toEqual([['done', true]]);
+    expect((await stages('mina', true)).map(stage => [stage.state, stage.mine])).toEqual([['done', false]]);
+    expect((await stages('rafael')).map(stage => stage.mine)).toEqual([false]);
   });
 
   it('shows rows without live parts when the desk cannot vouch for a read', async () => {
@@ -184,6 +200,60 @@ describe('open items: counts and live reads', () => {
     expect(f.bindDesk.mock.calls.length - binds).toBe(1);
   });
 
+  it('pages open items only past older closed ones, opens only those, and still counts the whole scope (R51)', async () => {
+    const f = await openItemsFixture(); await f.finishImpactRun();
+    const run = f.runs.read(f.person, f.runId)!;
+    const ticketAt = (name: string, index: number) => ({
+      item_key: canonicalSha256(`${name} ${index}`), relation: 'conflicts' as const, expected: 'launch next week', owner_membership_id: f.membership('ari'), owner_match: 'approver' as const,
+      pointer: { kind: 'ticket', tool_id: 'jira', external_scope_id: CLOUD, ticket_id: String(30_000 + index), permalink: `https://echo-fixture.atlassian.net/browse/ECHO-${300 + index}`, text_sha256: canonicalSha256(`${name} text ${index}`) },
+    });
+    // Sixty closed items, older than every open one: the check's two and 58 more, half done and half not relevant.
+    f.advance(1_000);
+    f.db.transaction(() => f.items.insertForRun(f.db, run, Array.from({ length: 58 }, (_, index) => ticketAt('closed', index))))();
+    const closed = f.items.forRun(f.runId);
+    expect(closed).toHaveLength(60);
+    expect(f.items.send({ run_id: f.runId, by: f.membership('ari'), command_id: 'close', choices: closed.map((row, index) => ({ item_id: row.item_id, include: index % 2 === 0 })) }))
+      .toMatchObject({ kind: 'sent', sent: 30, not_relevant: 30 });
+    for (const [index, row] of closed.entries()) if (index % 2 === 0) expect(f.items.setState(row.item_id, 'done', f.membership('ari'))?.state).toBe('done');
+    // A closed item's last check counts nowhere.
+    f.check(closed[0]!.item_id, 'landed');
+    // Then three open ones: one landed, one ECHO could not read, one still open.
+    f.advance(1_000);
+    f.db.transaction(() => f.items.insertForRun(f.db, run, Array.from({ length: 3 }, (_, index) => ticketAt('open', index))))();
+    const open = f.items.forRun(f.runId).filter(row => row.state === 'unsent');
+    f.items.send({ run_id: f.runId, by: f.membership('ari'), command_id: 'open', choices: open.map(row => ({ item_id: row.item_id, include: true })) });
+    f.check(open[0]!.item_id, 'landed');
+    f.check(open[1]!.item_id, 'unreadable');
+    f.check(open[2]!.item_id, 'still_open');
+    const ids = (page: { readonly items: readonly PersonOpenItemV1[] }) => page.items.map(entry => entry.item_id);
+
+    const opens = f.opened.length;
+    const binds = f.bindDesk.mock.calls.length;
+    const request = { schema_version: 1, operation: 'items', scope: 'project', id: f.projectA, open_only: true } as const;
+    const first = await f.app.items({ access_token: 'ari', request });
+    expect(ids(first)).toEqual(open.map(row => row.item_id));
+    expect(first.next_cursor).toBeNull();
+    // Only those three were opened live, on one desk.
+    expect(f.opened.length - opens).toBe(3);
+    expect(f.bindDesk.mock.calls.length - binds).toBe(1);
+    // The summary still counts the closed items, and each decision says how many of its open items landed or went unread.
+    expect(first.summary).toEqual({ unsent: 0, open: 3, done: 30, not_relevant: 30, landed: 1, changed: 0, unreadable: 1, decisions: 1, last_checked_at: f.clock().toISOString(),
+      by_decision: [{ record_sha256: f.record, unsent: 0, open: 3, landed: 1, unreadable: 1 }] });
+    // As a read of every state does, whose first page holds no open item at all.
+    const all = await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'project', id: f.projectA } });
+    expect(all.items).toHaveLength(50);
+    expect(all.items.some(entry => entry.state === 'open')).toBe(false);
+    expect(first.summary).toEqual(all.summary);
+    expect(first.stages).toEqual(all.stages);
+    // A cursor pages the same open items.
+    const after = Buffer.from(`${first.items[0]!.created_at}|${first.items[0]!.item_id}`, 'utf8').toString('base64url');
+    expect(ids(await f.app.items({ access_token: 'ari', request: { ...request, cursor: after } }))).toEqual(open.slice(1).map(row => row.item_id));
+    // Every scope keeps its open items only.
+    for (const scope of [{ scope: 'mine' }, { scope: 'run', id: f.runId }, { scope: 'record', id: f.record }] as const) {
+      expect(ids(await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', ...scope, open_only: true } }))).toEqual(open.map(row => row.item_id));
+    }
+  });
+
   it('tells an outage from lost access, and reports the outage without content', async () => {
     const failures: unknown[] = [];
     const f = await openItemsFixture({ on_live_failure: event => failures.push(event), openFails: { ticket: new AuthorityOperationError('rate_limited', 'slow down') } });
@@ -196,6 +266,23 @@ describe('open items: counts and live reads', () => {
     const rafael = (await f.app.items({ access_token: 'rafael', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record } })).items;
     expect(rafael.find(item => item.kind === 'ticket')).toMatchObject({ reach: 'no_access' });
     expect(failures).toHaveLength(1);                                       // a refusal is not an outage
+  });
+
+  // A refusal by the viewer's own access is no_access; anything else says nothing about access, and is reported without content.
+  it.each([
+    { name: 'unauthorized', error: new AuthorityOperationError('unauthorized', 'refused'), reach: 'no_access', code: null },
+    { name: 'not_found', error: new AuthorityOperationError('not_found', 'refused'), reach: 'no_access', code: null },
+    { name: 'stale_access_state', error: new AuthorityOperationError('stale_access_state', 'refused'), reach: 'no_access', code: null },
+    { name: 'rate_limited', error: new AuthorityOperationError('rate_limited', 'slow down'), reach: 'unavailable', code: 'rate_limited' },
+    { name: 'unavailable', error: new AuthorityOperationError('unavailable', 'down'), reach: 'unavailable', code: 'unavailable' },
+    { name: 'a timeout', error: new DOMException('The operation was aborted due to timeout', 'TimeoutError'), reach: 'unavailable', code: 'error' },
+    { name: 'a plain Error', error: new Error('ECHO-12 Kestrel cooling fan drift 0xC0FFEE failed'), reach: 'unavailable', code: 'error' },
+  ] as const)('reads $name from the desk as $reach', async ({ error, reach, code }) => {
+    const f = await openItemsFixture({ openFails: { ticket: error } }); await f.finishImpactRun();
+    const ticket = (await scope(f, 'mina', 'run')).items.find(entry => entry.kind === 'ticket')!;
+    expect(ticket.reach).toBe(reach);
+    expect(ticket).not.toHaveProperty('current');
+    expect(f.liveFailures).toEqual(code === null ? [] : [{ kind: 'open_items_live_read', reason: 'open', code }]);
   });
 
   it('logs a failed live read by default as one line of JSON, without an id, a title or the tool\'s words', async () => {
@@ -334,7 +421,7 @@ describe('open items: send, update, reassign', () => {
     expect(f.items.read(ticket!.item_id)).toMatchObject({ state: 'unsent', owner_match: 'jira_account' });
   });
 
-  it('hides an unticked item from an owner who cannot read the decision, and keeps one sent then closed (R13)', async () => {
+  it('hides an unticked item from an owner who cannot read the decision until it is reopened, and keeps one sent then closed (R13, R54)', async () => {
     const unticked = await openItemsFixture({ ticketOwner: 'okafor' }); await unticked.finishImpactRun();
     const unsent = (await scope(unticked, 'ari', 'run')).items;
     await expect(sendAll(unticked, unsent, 'c1', entry => ({ include: entry.kind !== 'ticket' }))).resolves.toEqual({ sent: 1, not_relevant: 1 });
@@ -346,6 +433,11 @@ describe('open items: send, update, reassign', () => {
     unticked.advance(5_000);
     await expect(setState(unticked, 'ari', hidden, 'not_relevant')).resolves.toEqual({ state: 'not_relevant' });
     expect((await scope(unticked, 'okafor', 'mine')).items).toEqual([]);
+    // The approver reopens it: it now waits on its owner, who sees it, though Send left it out (R54).
+    await expect(setState(unticked, 'ari', hidden, 'open')).resolves.toEqual({ state: 'open' });
+    expect((await unticked.app.home({ access_token: 'okafor' })).items).toMatchObject([{ item_id: hidden, state: 'open', waits_on: 'owner' }]);
+    expect((await scope(unticked, 'okafor', 'mine')).items.map(entry => entry.item_id)).toEqual([hidden]);
+    expect((await item(unticked, 'okafor', hidden)).item).not.toHaveProperty('decision');
 
     const closed = await sentFixture({ ticketOwner: 'okafor' });
     expect((await scope(closed, 'okafor', 'mine')).items.map(entry => entry.item_id)).toEqual([closed.ticket.item_id]);
@@ -373,7 +465,7 @@ describe('open items: Home', () => {
 
   it('makes no Send row, and binds no desk, when there is nothing to send', async () => {
     const f = await openItemsFixture();
-    expect(await f.app.home({ access_token: 'ari' })).toEqual({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null });
+    expect(await f.app.home({ access_token: 'ari' })).toEqual({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
     expect(f.bindDesk).not.toHaveBeenCalled();
   });
 
@@ -398,6 +490,14 @@ describe('open items: Home', () => {
     const mina = await f.app.home({ access_token: 'mina' });
     expect(mina.items.map(entry => entry.item_id)).toEqual([f.action.item_id, f.ticket.item_id]);
     expect(mina).toMatchObject({ landed: 1, waiting: 0 });
-    expect((await f.app.home({ access_token: 'okafor' }))).toEqual({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null });
+    expect((await f.app.home({ access_token: 'okafor' }))).toEqual({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
+  });
+});
+
+describe('open items: sweep requests', () => {
+  it('asks the caller who they are before anything else', async () => {
+    const f = await sentFixture({ owner: 'mina' });
+    await expect(f.openItemsApp.sweep({ access_token: 'stranger', request: { schema_version: 1, operation: 'sweep', scope: 'mine' } })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.runs.list(f.person, 10).map(run => run.trigger)).toEqual(['approved_record']);
   });
 });

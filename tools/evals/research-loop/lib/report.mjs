@@ -25,6 +25,9 @@ export function runScores(graded) {
   // The impact card: relations and owners are judged on the key items it lists.
   const card = checks.card ?? null;
   const cardCorrect = card === null || (card.listed === card.expected && card.relations_correct === card.listed && card.owners_correct === card.listed);
+  // The sweep result: every finding's verdict against the key.
+  const sweep = checks.sweep ?? null;
+  const sweepCorrect = sweep === null || sweep.right === sweep.total;
   const judged = judge ?? null;
   const established = judged === null ? null : judged.parts.filter(part => part.established_by_research).length;
   const answerCorrect = judged === null || !ask ? null : judged.parts.filter(part => part.answer_correct === "yes").length;
@@ -36,7 +39,7 @@ export function runScores(graded) {
   const complete = checks.leaks.length > 0 || (checks.answer_citation_violations?.length ?? 0) > 0 || (card?.invented.length ?? 0) > 0 ? false : judged === null ? null
     : established === parts && violations === 0 &&
       (!ask || (answerCorrect === parts && judged.unsupported_claims === 0 && !judged.false_abstention)) &&
-      cardCorrect && gapsReported &&
+      cardCorrect && sweepCorrect && gapsReported &&
       (verdictsCorrect === null || verdictsCorrect === 1);
   return {
     status: "completed",
@@ -81,7 +84,14 @@ const JUDGE_METRICS = [
   "writer_parts_correct", "writer_unsupported_claims", "writer_false_abstention", "gaps_reported", "card_gaps_reported", "must_not_violations",
 ];
 
-/** Per-case means of each metric (unknown runs excluded), then means across cases. */
+/** Sums one count over entries that have it; null when none does (no sweep was graded). */
+const tally = (entries, key) => (entries.length === 0 ? null : entries.reduce((sum, entry) => sum + entry[key], 0));
+
+/**
+ * Per-case means of each metric (unknown runs excluded), then means across
+ * cases. Sweep verdicts are counted instead: right and findings over every
+ * run of a case (a failed run's findings all wrong), then over all sweep cases.
+ */
 export function aggregate(gradedRuns) {
   const byCase = new Map();
   for (const graded of gradedRuns) {
@@ -99,6 +109,7 @@ export function aggregate(gradedRuns) {
       return [metric, mean(values)];
     }));
     const verdicts = runs.map(run => run.scores.complete_and_supported);
+    const sweeps = runs.map(run => run.graded.checks.sweep).filter(sweep => sweep !== undefined);
     return {
       case_id: checks.case_id, split: checks.split, trigger: checks.trigger, budget: checks.budget, runs: runs.length,
       failed_runs: runs.length - completed.length,
@@ -107,10 +118,12 @@ export function aggregate(gradedRuns) {
       false_abstention_runs: completed.filter(run => run.scores.writer_false_abstention === true).length,
       complete_in_every_run: verdicts.includes(false) ? false : verdicts.includes(null) ? null : true,
       stop_reasons: completed.reduce((counts, run) => ({ ...counts, [run.scores.stop_reason]: (counts[run.scores.stop_reason] ?? 0) + 1 }), {}),
+      sweep_verdicts_right: tally(sweeps, "right"), sweep_findings: tally(sweeps, "total"), sweep_not_assessed: tally(sweeps, "not_assessed"),
       ...metrics,
     };
   });
   const summary = Object.fromEntries(METRICS.map(metric => [metric, mean(cases.map(entry => entry[metric]).filter(value => typeof value === "number"))]));
+  const swept = cases.filter(entry => entry.sweep_findings !== null);
   const known = cases.filter(entry => entry.complete_in_every_run !== null);
   return {
     cases,
@@ -125,6 +138,7 @@ export function aggregate(gradedRuns) {
       runs_with_leaks: gradedRuns.filter(graded => graded.checks.leaks?.length > 0).length,
       cards: gradedRuns.filter(graded => graded.checks.card).length,
       cards_not_assessed: gradedRuns.filter(graded => graded.checks.card?.status === "not_assessed").length,
+      sweep_verdicts_right: tally(swept, "sweep_verdicts_right"), sweep_findings: tally(swept, "sweep_findings"), sweep_not_assessed: tally(swept, "sweep_not_assessed"),
       median_elapsed_ms: median(gradedRuns.filter(graded => graded.checks.cost).map(graded => graded.checks.cost.elapsed_ms)),
     },
   };
@@ -138,12 +152,14 @@ export function withholdJudgeMetrics(report) {
 
 const percent = value => (value === null ? "—" : `${Math.round(value * 100)}%`);
 const number = value => (value === null ? "—" : Number.isInteger(value) ? String(value) : value.toFixed(1));
+const outOf = (right, findings) => (findings === null ? "—" : `${right} / ${findings}`);
 
 /** A plain report a person can read; identity lines bind it to the run. Research-loop and renderer numbers are kept apart. */
 export function markdownReport(identity, report) {
   const s = report.summary;
   const calibration = identity.judge_calibration;
   const rendered = report.cases.filter(entry => entry.trigger === "ask" || entry.trigger === "approved_record");
+  const swept = report.cases.filter(entry => entry.trigger === "sweep");
   const lines = [
     `# Research loop evaluation — ${identity.split} at ${identity.state}`,
     "",
@@ -199,10 +215,18 @@ export function markdownReport(identity, report) {
     `| Impact card | invented items or people per run | ${number(s.card_invented)} |`,
     `| Impact card | gaps reported | ${percent(s.card_gaps_reported)} |`,
     `| Impact card | cards not assessed (no-model fallback) | ${s.cards_not_assessed} of ${s.cards} |`,
+    `| Sweep result | verdicts right / findings | ${outOf(s.sweep_verdicts_right, s.sweep_findings)} |`,
+    `| Sweep result | findings not assessed | ${number(s.sweep_not_assessed)} |`,
     "",
     "| Case | Trigger | Budget | Answer | Listed | Relations | Owners | Invented |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ...rendered.map(entry => `| ${entry.case_id} | ${entry.trigger} | ${entry.budget} | ${percent(entry.writer_parts_correct)} | ${percent(entry.card_items_listed)} | ${percent(entry.card_relations_correct)} | ${percent(entry.card_owners_correct)} | ${number(entry.card_invented)} |`),
+    "",
+    "The sweep result's own verdicts, checked by code against the key: landed is landed, still open or changed is not landed, unreadable is no evidence. A verdict not assessed (null) is wrong, and so is every finding of a failed run. \"Sweep verdicts correct\" under Research loop is a different measure: the judge's reading of the items research read.",
+    "",
+    "| Case | Budget | Runs | Verdicts right / findings | Not assessed |",
+    "| --- | --- | --- | --- | --- |",
+    ...swept.map(entry => `| ${entry.case_id} | ${entry.budget} | ${entry.runs} | ${outOf(entry.sweep_verdicts_right, entry.sweep_findings)} | ${number(entry.sweep_not_assessed)} |`),
     "",
   ];
   return lines.join("\n");

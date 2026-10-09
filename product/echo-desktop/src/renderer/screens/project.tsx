@@ -2,15 +2,17 @@ import type { ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initials } from '../format.js';
 import { message } from '../messages.js';
 import { openCount, projectWords } from '../needs.js';
-import { moreList, openCompose, openListItem, openOpenItems, openPeople, openProject, retryList, type State } from '../store.js';
+import { checkNow, moreList, openCompose, openListItem, openOpenItems, openPeople, openProject, retryList, type State } from '../store.js';
 import { People, Plus } from './icons.js';
 import { ItemRow, useKeptPlace } from './items.js';
+import { CheckNow } from './open-items.js';
 
 /**
  * A project's one list: its notes, documents and approved meetings, newest
  * first, one line each, and one More for older ones. Choosing a row reads it
  * in place. Above it, what the project's decisions have open (canvas 9.7):
- * the line opens those items, and each decision's row says how many.
+ * the line opens those items and checks them now, and each decision's row
+ * says how many.
  */
 export function Project({ state, project }: { state: State; project: ProjectSummary }) {
   const list = state.list?.scope.kind === 'project' && state.list.scope.project_id === project.project_id ? state.list : null;
@@ -43,10 +45,13 @@ export function Project({ state, project }: { state: State; project: ProjectSumm
   }
   return (
     <div class="column" data-testid="feed" aria-busy={list?.loading ?? true} ref={column}>
-      {words && (
-        <button type="button" class="items-line project-line" data-testid="project-line" onClick={() => void openOpenItems('project', project.project_id, project.name)}>
-          <b>{words.count}</b>{words.from && <span class="faint"> · {words.from}</span>}
-        </button>
+      {words && line && (
+        <div class="items-line project-line" data-testid="project-line">
+          <button type="button" class="items-line-open" onClick={() => void openOpenItems('project', project.project_id, project.name)}>
+            <b>{words.count}</b>{words.from && <span class="faint"> · {words.from}</span>}{words.checked && <span class="faint"> · {words.checked}</span>}
+          </button>
+          <CheckNow line={line} onCheck={() => void checkNow('projectLine', project.name)} />
+        </div>
       )}
       {items.map(item => (
         <ItemRow key={`${item.ref.kind}:${item.ref.id}`} item={item} testid="feed-row" projects={false} onOpen={() => void openListItem(item)}

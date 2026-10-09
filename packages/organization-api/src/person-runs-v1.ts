@@ -24,7 +24,22 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * now only to a viewer who opened it in its tool in this request. Each row
  * says how that live read went (`reach`), so an outage is never shown as lost
  * access. `items` with `summary_only` answers the counts and stages alone and
- * opens nothing.
+ * opens nothing; with `open_only` it pages over the open items only, so
+ * closed ones are never opened to be thrown away. Each decision's counts say
+ * how many of its open items last landed or could not be read, and its stage
+ * says whether its impact run is the caller's own (`mine`).
+ *
+ * Sweep (open items and Home v1, sections 6 and 7) rechecks open items
+ * against what was decided and keeps only a verdict per item. `sweep` asks for
+ * a sweep of the caller's items (`mine`: those they sent or own), of a
+ * decision (`record`) or of a project (`project`), over the items the caller
+ * can see; it answers the run, or `nothing_to_check`. `home` reports
+ * `sweep_due` when an open item the caller sent or owns was last checked, by
+ * anyone, more than 24 hours ago or never, none of their sweeps was asked for
+ * in the last hour, and none is running (at most hourly, so a sweep that
+ * keeps failing is not asked for on every load; a sweep still waiting after
+ * the hour is asked for again, and `sweep` hands back that run to start; an
+ * explicit `sweep` request is never limited).
  */
 export const PERSON_RUNS_PATH_V1 = '/v1/person/runs';
 
@@ -40,15 +55,18 @@ export type PersonRunsRequestV1 =
   | { readonly schema_version: 1; readonly operation: 'view'; readonly run_id: string }
   | { readonly schema_version: 1; readonly operation: 'items'; readonly scope: 'mine' | 'run' | 'record' | 'project'; readonly id?: string; readonly cursor?: string;
       /** Counts and stages only: no items, no live reads. */
-      readonly summary_only?: true }
+      readonly summary_only?: true;
+      /** Items in state `open` only; the summary and stages still cover the whole scope. A cursor pages the same list. */
+      readonly open_only?: true }
   | { readonly schema_version: 1; readonly operation: 'item'; readonly item_id: string }
   | { readonly schema_version: 1; readonly operation: 'send'; readonly run_id: string; readonly command_id: string;
       readonly items: readonly { readonly item_id: string; readonly include: boolean; readonly owner_membership_id?: string }[] }
   | { readonly schema_version: 1; readonly operation: 'set_state'; readonly item_id: string; readonly state: 'open' | 'done' | 'not_relevant' }
-  | { readonly schema_version: 1; readonly operation: 'assign'; readonly item_id: string; readonly owner_membership_id: string };
+  | { readonly schema_version: 1; readonly operation: 'assign'; readonly item_id: string; readonly owner_membership_id: string }
+  | { readonly schema_version: 1; readonly operation: 'sweep'; readonly scope: 'mine' | 'record' | 'project'; readonly id?: string };
 
 export interface PersonRunV1 {
-  readonly run_id: string; readonly trigger: 'approved_record'; readonly event_ref: string;
+  readonly run_id: string; readonly trigger: 'approved_record' | 'sweep'; readonly event_ref: string;
   readonly state: PersonRunStateV1; readonly error_code: PersonRunErrorCodeV1 | null;
   readonly created_at: string; readonly updated_at: string;
 }
@@ -107,11 +125,19 @@ export interface PersonOpenItemsSummaryV1 {
   readonly unsent: number; readonly open: number; readonly done: number; readonly not_relevant: number;
   readonly landed: number; readonly changed: number; readonly unreadable: number;
   readonly decisions: number; readonly last_checked_at: string | null;
-  readonly by_decision: readonly { readonly record_sha256: string; readonly unsent: number; readonly open: number }[];
+  readonly by_decision: readonly PersonOpenItemsDecisionCountV1[];
+}
+/** One decision's items in a summary. */
+export interface PersonOpenItemsDecisionCountV1 {
+  readonly record_sha256: string; readonly unsent: number; readonly open: number;
+  /** Of `open`: items whose last check is `landed`, and `unreadable` (so `landed + unreadable <= open`). */
+  readonly landed: number; readonly unreadable: number;
 }
 export interface PersonImpactStageV1 {
   readonly record_sha256: string; readonly run_id: string;
   readonly state: PersonRunStateV1; readonly error_code: PersonRunErrorCodeV1 | null;
+  /** The stage's run is the caller's own: they approved the decision, so they may Send or Try again. */
+  readonly mine: boolean;
 }
 
 export interface PersonRunsResultsV1 {
@@ -120,13 +146,16 @@ export interface PersonRunsResultsV1 {
   retry: { readonly state: 'pending' };
   view: { readonly card: PersonImpactCardV1; readonly checked_at: string; readonly hidden: number };
   home: { readonly send: readonly PersonHomeSendV1[]; readonly items: readonly PersonOpenItemV1[];
-          readonly landed: number; readonly waiting: number; readonly last_checked_at: string | null };
+          readonly landed: number; readonly waiting: number; readonly last_checked_at: string | null;
+          /** The caller's open items are due a sweep (section 6): the desktop asks for a `mine` sweep. At most hourly: not within an hour of their last sweep, nor while one of theirs runs. */
+          readonly sweep_due: boolean };
   items: { readonly items: readonly PersonOpenItemV1[]; readonly next_cursor: string | null;
            readonly summary: PersonOpenItemsSummaryV1; readonly stages: readonly PersonImpactStageV1[] };
   item: { readonly item: PersonOpenItemV1 };
   send: { readonly sent: number; readonly not_relevant: number };
   set_state: { readonly state: 'open' | 'done' | 'not_relevant' };
   assign: { readonly owner: PersonOpenItemPersonV1 };
+  sweep: { readonly run_id: string } | { readonly state: 'nothing_to_check' };
 }
 
 /** A card, or a page of open items with their citations, is far below 1 MiB. */
@@ -143,18 +172,22 @@ const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 const COMMAND_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const CURSOR = /^[A-Za-z0-9_-]{1,256}$/;
 const STATES: readonly string[] = ['pending', 'running', 'done', 'failed'];
+const TRIGGERS: readonly string[] = ['approved_record', 'sweep'];
 const ERROR_CODES: readonly string[] = ['no_access', 'unavailable', 'timed_out', 'research_failed'];
 const REQUEST_KEYS: Readonly<Record<PersonRunsRequestV1['operation'], readonly string[]>> = Object.freeze({
   list: [], home: [], start: ['run_id'], retry: ['run_id'], view: ['run_id'], items: ['scope'], item: ['item_id'],
-  send: ['run_id', 'command_id', 'items'], set_state: ['item_id', 'state'], assign: ['item_id', 'owner_membership_id'],
+  send: ['run_id', 'command_id', 'items'], set_state: ['item_id', 'state'], assign: ['item_id', 'owner_membership_id'], sweep: ['scope'],
 });
-const RESULT_KEYS: Readonly<Record<keyof PersonRunsResultsV1, readonly string[]>> = Object.freeze({
+/** Each result's keys; null for a result with more than one shape, whose own case checks them. */
+const RESULT_KEYS: Readonly<Record<keyof PersonRunsResultsV1, readonly string[] | null>> = Object.freeze({
   list: ['runs'], start: ['state'], retry: ['state'], view: ['card', 'checked_at', 'hidden'],
-  home: ['send', 'items', 'landed', 'waiting', 'last_checked_at'], items: ['items', 'next_cursor', 'summary', 'stages'],
-  item: ['item'], send: ['sent', 'not_relevant'], set_state: ['state'], assign: ['owner'],
+  home: ['send', 'items', 'landed', 'waiting', 'last_checked_at', 'sweep_due'], items: ['items', 'next_cursor', 'summary', 'stages'],
+  item: ['item'], send: ['sent', 'not_relevant'], set_state: ['state'], assign: ['owner'], sweep: null,
 });
 const START_STATES: readonly string[] = ['pending', 'running', 'busy', 'done', 'failed'];
 const SCOPES = ['mine', 'run', 'record', 'project'] as const;
+/** A sweep checks the caller's items, a decision's or a project's; a run's items are its decision's. */
+const SWEEP_SCOPES = ['mine', 'record', 'project'] as const;
 const SET_STATES = ['open', 'done', 'not_relevant'] as const;
 const ITEM_STATES = ['unsent', ...SET_STATES] as const;
 const VERDICTS = ['landed', 'still_open', 'changed', 'unreadable'] as const;
@@ -259,8 +292,8 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
   const operation = request.operation;
   if (typeof operation !== 'string' || !Object.hasOwn(REQUEST_KEYS, operation)) fail('Runs request operation is invalid');
   const kind = operation as PersonRunsRequestV1['operation'];
-  // `items` may leave out its scope id and its cursor, and may ask for its counts only.
-  const optional = (kind === 'items' ? ['id', 'cursor', 'summary_only'] : kind === 'start' ? ['capture_id'] : [])
+  // `items` may leave out its scope id and its cursor, and may ask for its counts only or its open items only; a sweep of `mine` names no id.
+  const optional = (kind === 'items' ? ['id', 'cursor', 'summary_only', 'open_only'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : [])
     .filter(key => Object.hasOwn(request, key));
   assertExactKeys(request, ['schema_version', 'operation', ...REQUEST_KEYS[kind], ...optional], 'Runs request');
   if (request.schema_version !== 1) fail('Runs request version is invalid');
@@ -282,11 +315,16 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       if (counts && request.summary_only !== true) fail('Runs request summary_only is invalid');
       // Counts cover the whole scope at once: there is no next page to ask for.
       if (counts && Object.hasOwn(request, 'cursor')) fail('Runs request summary_only takes no cursor');
+      const openOnly = Object.hasOwn(request, 'open_only');
+      if (openOnly && request.open_only !== true) fail('Runs request open_only is invalid');
+      // A counts-only answer lists no items to keep the open ones of.
+      if (openOnly && counts) fail('Runs request open_only takes no summary_only');
       return Object.freeze({
         schema_version: 1 as const, operation: kind, scope,
         ...(scope === 'mine' ? {} : { id: scopeId(scope, request.id) }),
         ...(Object.hasOwn(request, 'cursor') ? { cursor: matching(request.cursor, CURSOR, 'Runs request cursor') } : {}),
         ...(counts ? { summary_only: true as const } : {}),
+        ...(openOnly ? { open_only: true as const } : {}),
       });
     }
     case 'item':
@@ -298,6 +336,12 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       });
     case 'set_state':
       return Object.freeze({ schema_version: 1 as const, operation: kind, item_id: itemId(request.item_id, 'Runs request item id'), state: oneOf(request.state, SET_STATES, 'Runs request state') });
+    case 'sweep': {
+      const scope = oneOf(request.scope, SWEEP_SCOPES, 'Runs request scope');
+      // As for `items`: `mine` names no id; a record or project scope names its record or project.
+      if ((scope === 'mine') === Object.hasOwn(request, 'id')) fail('Runs request scope id is invalid');
+      return Object.freeze({ schema_version: 1 as const, operation: kind, scope, ...(scope === 'mine' ? {} : { id: scopeId(scope, request.id) }) });
+    }
     default:
       // assign
       return Object.freeze({
@@ -318,13 +362,13 @@ function run(value: unknown): PersonRunV1 {
   const entry = asEnumerableRecord(value, 'Run');
   assertExactKeys(entry, ['run_id', 'trigger', 'event_ref', 'state', 'error_code', 'created_at', 'updated_at'], 'Run');
   runId(entry.run_id, 'Run id');
-  if (entry.trigger !== 'approved_record') fail('Run trigger is invalid');
+  if (typeof entry.trigger !== 'string' || !TRIGGERS.includes(entry.trigger)) fail('Run trigger is invalid');
   assertString(entry.event_ref, 'Run event ref', 128);
   runState(entry, 'Run');
   assertTimestamp(entry.created_at, 'Run created_at');
   assertTimestamp(entry.updated_at, 'Run updated_at');
   return Object.freeze({
-    run_id: entry.run_id as string, trigger: 'approved_record', event_ref: entry.event_ref as string, state: entry.state as PersonRunStateV1,
+    run_id: entry.run_id as string, trigger: entry.trigger as PersonRunV1['trigger'], event_ref: entry.event_ref as string, state: entry.state as PersonRunStateV1,
     error_code: entry.error_code as PersonRunErrorCodeV1 | null, created_at: entry.created_at as string, updated_at: entry.updated_at as string,
   });
 }
@@ -434,22 +478,27 @@ function summary(value: unknown): PersonOpenItemsSummaryV1 {
     decisions: total('decisions'), last_checked_at: timestampOrNull(entry.last_checked_at, 'Open items summary last_checked_at'),
     by_decision: Object.freeze(list(entry.by_decision, 'Open items summary decision list', SCOPE_DECISIONS_MAX).map(raw => {
       const row = asEnumerableRecord(raw, 'Open items decision count');
-      assertExactKeys(row, ['record_sha256', 'unsent', 'open'], 'Open items decision count');
-      return Object.freeze({
+      assertExactKeys(row, ['record_sha256', 'unsent', 'open', 'landed', 'unreadable'], 'Open items decision count');
+      const decided: PersonOpenItemsDecisionCountV1 = {
         record_sha256: recordId(row.record_sha256, 'Open items decision count record'),
         unsent: count(row.unsent, 'Open items decision unsent count'), open: count(row.open, 'Open items decision open count'),
-      });
+        landed: count(row.landed, 'Open items decision landed count'), unreadable: count(row.unreadable, 'Open items decision unreadable count'),
+      };
+      // Both are last checks of open items: together never more than the open ones.
+      if (decided.landed + decided.unreadable > decided.open) fail('Open items decision count is inconsistent');
+      return Object.freeze(decided);
     })),
   });
 }
 
 function stage(value: unknown): PersonImpactStageV1 {
   const entry = asEnumerableRecord(value, 'Impact stage');
-  assertExactKeys(entry, ['record_sha256', 'run_id', 'state', 'error_code'], 'Impact stage');
+  assertExactKeys(entry, ['record_sha256', 'run_id', 'state', 'error_code', 'mine'], 'Impact stage');
   runState(entry, 'Impact stage');
+  if (typeof entry.mine !== 'boolean') fail('Impact stage mine flag is invalid');
   return Object.freeze({
     record_sha256: recordId(entry.record_sha256, 'Impact stage record'), run_id: runId(entry.run_id, 'Impact stage run id'),
-    state: entry.state as PersonRunStateV1, error_code: entry.error_code as PersonRunErrorCodeV1 | null,
+    state: entry.state as PersonRunStateV1, error_code: entry.error_code as PersonRunErrorCodeV1 | null, mine: entry.mine,
   });
 }
 
@@ -457,7 +506,8 @@ function stage(value: unknown): PersonImpactStageV1 {
 export function validatePersonRunsResultV1<K extends keyof PersonRunsResultsV1>(operation: K, value: unknown): PersonRunsResultsV1[K] {
   if (typeof operation !== 'string' || !Object.hasOwn(RESULT_KEYS, operation)) fail('Runs response operation is invalid');
   const result = asEnumerableRecord(value, 'Runs response');
-  assertExactKeys(result, RESULT_KEYS[operation], 'Runs response');
+  const keys = RESULT_KEYS[operation];
+  if (keys !== null) assertExactKeys(result, keys, 'Runs response');
   const checked = (response: PersonRunsResultsV1[keyof PersonRunsResultsV1]): PersonRunsResultsV1[K] => {
     if (utf8ByteLength(JSON.stringify(response)) > PERSON_RUNS_MAX_RESPONSE_BYTES_V1) fail('Runs response exceeds its bound');
     return Object.freeze(response) as PersonRunsResultsV1[K];
@@ -479,11 +529,12 @@ export function validatePersonRunsResultV1<K extends keyof PersonRunsResultsV1>(
       return checked({ card, checked_at: result.checked_at, hidden: result.hidden });
     }
     case 'home':
+      if (typeof result.sweep_due !== 'boolean') fail('Home sweep_due is invalid');
       return checked({
         send: Object.freeze(list(result.send, 'Home send row list', PERSON_HOME_ROWS_V1).map(sendRow)),
         items: Object.freeze(list(result.items, 'Home item list', PERSON_HOME_ROWS_V1).map(openItem)),
         landed: count(result.landed, 'Home landed count'), waiting: count(result.waiting, 'Home waiting count'),
-        last_checked_at: timestampOrNull(result.last_checked_at, 'Home last_checked_at'),
+        last_checked_at: timestampOrNull(result.last_checked_at, 'Home last_checked_at'), sweep_due: result.sweep_due,
       });
     case 'items':
       return checked({
@@ -497,6 +548,15 @@ export function validatePersonRunsResultV1<K extends keyof PersonRunsResultsV1>(
       return checked({ sent: count(result.sent, 'Send sent count'), not_relevant: count(result.not_relevant, 'Send not-relevant count') });
     case 'set_state':
       return checked({ state: oneOf(result.state, SET_STATES, 'Set state result') });
+    case 'sweep':
+      // A sweep answers its run, or that nothing is open to check.
+      if (Object.hasOwn(result, 'run_id')) {
+        assertExactKeys(result, ['run_id'], 'Runs response');
+        return checked({ run_id: runId(result.run_id, 'Sweep run id') });
+      }
+      assertExactKeys(result, ['state'], 'Runs response');
+      if (result.state !== 'nothing_to_check') fail('Sweep state is invalid');
+      return checked({ state: 'nothing_to_check' });
     default:
       // assign
       return checked({ owner: person(result.owner, 'Assigned owner') });

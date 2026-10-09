@@ -98,4 +98,27 @@ describe('research evaluation receipts and results', () => {
       { ...base, status: 'completed', research: task, rendered: { ...card, affected: [{ citation_index: 0, says_now: 'Change THERM-46 in Jira.', relation: 'conflicts' }] } },
     ]) expect(() => validatePersonResearchEvalReadResponseV1(value), JSON.stringify(value).slice(0, 120)).toThrow();
   });
+
+  it("carries a sweep's result beside the research of a sweep, and an impact card beside any other task's", () => {
+    const base = { schema_version: 1, kind: 'echo-person-research-eval-result-v1', run_id: runId, status: 'completed' };
+    const sweep = { schema_version: 1, kind: 'echo-agentic-research-result-v1', trigger: 'sweep', goal: { kind: 'task', task: 'Recheck the earlier findings below.' }, items: [], rounds: [], plan: [] };
+    const approvedRecord = { ...sweep, trigger: 'approved_record', goal: { kind: 'task', task: 'A PM just approved record E1.' } };
+    const ticketCitation = { citation: ticket, kind: 'ticket', label: 'THERM-46: Display precision', visibility: 'only_me' };
+    const result = {
+      findings: [
+        { finding_index: 0, verdict: 'landed', line: 'THERM-46 now formats two decimals.', citation_indexes: [0] },
+        { finding_index: 1, verdict: 'unreadable', line: 'ECHO could not read this item.', citation_indexes: [] },
+      ],
+      status: 'assessed', citations: [ticketCitation],
+    };
+    const card = { decided: [], affected: [{ citation_index: 0, says_now: 'THERM-46 formats one decimal.' }], unconfirmed: [], people: [], status: 'not_assessed', citations: [ticketCitation] };
+    expect(validatePersonResearchEvalReadResponseV1({ ...base, research: sweep, rendered: result })).toEqual({ ...base, research: sweep, rendered: result });
+    // The API cannot see the Authority's definitions: the research's trigger names which contract the rendered result keeps.
+    for (const value of [
+      { ...base, research: sweep, rendered: card },
+      { ...base, research: approvedRecord, rendered: result },
+      { ...base, research: sweep, rendered: { ...result, status: 'not_assessed' } },
+      { ...base, research: { ...sweep, goal: { kind: 'question', question: 'Did it land?' } }, rendered: result },
+    ]) expect(() => validatePersonResearchEvalReadResponseV1(value), JSON.stringify(value).slice(0, 160)).toThrow();
+  });
 });

@@ -81,7 +81,7 @@ export function unavailablePersonTriggerRunsV1(sessions: { authenticateAccess(in
   };
   return Object.freeze({
     list: unavailable, start: unavailable, retry: unavailable, view: unavailable,
-    home: unavailable, items: unavailable, item: unavailable, send: unavailable, set_state: unavailable, assign: unavailable,
+    home: unavailable, items: unavailable, item: unavailable, send: unavailable, set_state: unavailable, assign: unavailable, sweep: unavailable,
     close() {},
   });
 }

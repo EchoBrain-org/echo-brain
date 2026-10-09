@@ -24,6 +24,8 @@ export interface ImpactItemRowV1 {
   readonly owner_membership_id: string; readonly owner_match: ImpactOwnerMatchV1;
   readonly state: ImpactItemStateV1; readonly state_set_by: string | null; readonly state_set_at: string | null;
   readonly sent_at: string | null; readonly send_command_id: string | null;
+  /** Whether Send included the item: null before Send, then frozen. Only an included item went to its owner. */
+  readonly send_included: boolean | null;
   readonly check: { readonly verdict: ImpactItemVerdictV1; readonly by: string; readonly at: string; readonly run_id: string } | null;
   readonly created_at: string; readonly updated_at: string;
 }
@@ -34,13 +36,13 @@ interface StoredItemV1 {
   readonly record_sha256: Sha256Digest; readonly organization_id: string; readonly approver_principal_id: string; readonly approver_membership_id: string;
   readonly relation: ImpactItemRowV1['relation']; readonly expected: string | null; readonly owner_membership_id: string; readonly owner_match: ImpactOwnerMatchV1;
   readonly state: ImpactItemStateV1; readonly state_set_by: string | null; readonly state_set_at: string | null;
-  readonly sent_at: string | null; readonly send_command_id: string | null;
+  readonly sent_at: string | null; readonly send_command_id: string | null; readonly send_included: 0 | 1 | null;
   readonly checked_verdict: ImpactItemVerdictV1 | null; readonly checked_by: string | null; readonly checked_at: string | null; readonly checked_run_id: string | null;
   readonly created_at: string; readonly updated_at: string;
 }
 const selectItems = `SELECT item.item_id, item.run_id, item.item_key, item.pointer_json, item.record_sha256, item.organization_id,
   item.approver_principal_id, item.approver_membership_id, item.relation, item.expected, item.owner_membership_id, item.owner_match,
-  item.state, item.state_set_by, item.state_set_at, item.sent_at, item.send_command_id,
+  item.state, item.state_set_by, item.state_set_at, item.sent_at, item.send_command_id, item.send_included,
   item.checked_verdict, item.checked_by, item.checked_at, item.checked_run_id, item.created_at, item.updated_at
   FROM authority_impact_items_v1 AS item`;
 const ORDER = 'ORDER BY item.created_at, item.item_id';
@@ -56,6 +58,7 @@ function publicItem(value: StoredItemV1): ImpactItemRowV1 {
     approver: Object.freeze({ principal_id: value.approver_principal_id, membership_id: value.approver_membership_id }),
     relation: value.relation, expected: value.expected, owner_membership_id: value.owner_membership_id, owner_match: value.owner_match,
     state: value.state, state_set_by: value.state_set_by, state_set_at: value.state_set_at, sent_at: value.sent_at, send_command_id: value.send_command_id,
+    send_included: value.send_included === null ? null : value.send_included === 1,
     check: value.checked_verdict === null ? null
       : Object.freeze({ verdict: value.checked_verdict, by: value.checked_by!, at: value.checked_at!, run_id: value.checked_run_id! }),
     created_at: value.created_at, updated_at: value.updated_at,

@@ -16,9 +16,9 @@ describe('shared research diagnostics lifecycle', () => {
     const body = record('display', 'Approved: show two decimals.');
     const h = researchHarness([
       finish(),
-      trigger === 'approved_record'
-        ? { decided: [{ id: 'E1', text: 'Show two decimals.' }], affected: [] }
-        : { sentences: [{ text: 'Show two decimals.', evidence: ['E1'] }], not_found: [] },
+      trigger === 'approved_record' ? { decided: [{ id: 'E1', text: 'Show two decimals.' }], affected: [] }
+        : trigger === 'sweep' ? { findings: [{ index: 0, verdict: 'landed', line: 'The decision shows two decimals.', cites: ['E1'] }] }
+          : { sentences: [{ text: 'Show two decimals.', evidence: ['E1'] }], not_found: [] },
     ], {
       search: async () => result([listed('display')]), open: async () => result([body]), openCitation: async () => result([body]),
     }, { small_scope_shortcut: true });
@@ -37,7 +37,7 @@ describe('shared research diagnostics lifecycle', () => {
       expect(stages.filter(event => event.stage === stage).map(event => event.event)).toEqual(['started', 'succeeded']);
     }
     expect(stages.filter(event => event.stage === 'revalidation' && event.event === 'started').map(event => event.data?.purpose))
-      .toEqual(trigger === 'sweep' ? ['model', 'before_audit', 'after_audit'] : ['model', 'model', 'before_audit', 'after_audit']);
+      .toEqual(['model', 'model', 'before_audit', 'after_audit']);
     expect(stages.at(-1)).toMatchObject({ stage: 'run', event: 'succeeded', data: { result: output } });
     expect(stages.find(event => event.stage === 'release' && event.event === 'succeeded')).toMatchObject({ data: { result: output } });
     expect(new Set(events.map(event => event.operation_id)).size).toBe(1);
@@ -53,7 +53,7 @@ describe('shared research diagnostics lifecycle', () => {
     ]);
     expect(metadata.filter(event => event.phase === 'research_run' && event.event === 'succeeded')).toEqual([
       expect.objectContaining({ research_stop_reason: 'finished', result: 'answered', counts: expect.objectContaining({
-        planned_query_count: 0, query_hit_count: 0, released_atom_count: 1, context_atom_count: trigger === 'sweep' ? 0 : 1, citation_count: 1,
+        planned_query_count: 0, query_hit_count: 0, released_atom_count: 1, context_atom_count: 1, citation_count: 1,
       }) }),
     ]);
     if (trigger === 'ask') {
@@ -64,7 +64,7 @@ describe('shared research diagnostics lifecycle', () => {
       expect(stages.find(event => event.stage === 'starting_read' && event.event === 'succeeded'))
         .toMatchObject({ data: { released_items: [expect.objectContaining({ text: body.text, citation: body.citation })] } });
     }
-    expect(stages.filter(event => event.stage === 'renderer').map(event => event.event)).toEqual(trigger === 'sweep' ? ['skipped'] : ['started', 'succeeded']);
+    expect(stages.filter(event => event.stage === 'renderer').map(event => event.event)).toEqual(['started', 'succeeded']);
     const serialized = JSON.stringify(events);
     expect(serialized).not.toContain(body.id);
     expect(serialized).not.toContain('receipt_sha256');

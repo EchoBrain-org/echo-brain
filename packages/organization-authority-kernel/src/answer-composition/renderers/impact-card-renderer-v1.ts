@@ -38,15 +38,16 @@ const RELATIONS: readonly PersonImpactRelationV1[] = ["conflicts", "needs_updati
 /**
  * A suggested edit: an instruction, a change made in a tool, or a change something
  * should, must or needs to get. The card describes; people decide what to change.
- * A false match costs one repair, then the honest fallback.
+ * A false match costs one repair, then the honest fallback. The sweep's lines
+ * pass the same screen.
  */
-const SUGGESTED_EDIT: readonly RegExp[] = [
+export const SUGGESTED_EDIT: readonly RegExp[] = [
   /^(?:please\s+)?(?:change|update|edit|rewrite|replace|amend|modify|set)\b/iu,
   /\b(?:chang|updat|edit|rewrit|amend|modif)\w*\b.{0,80}?\b(?:in|on)\s+(?:jira|confluence)\b/iu,
   /\b(?:should|must|needs?\s+to|ha(?:s|ve)\s+to|ought\s+to)\s+(?:be\s+)?(?:chang|updat|edit|set|rewrit|amend|modif)\w*/iu,
 ];
-/** A claim about who owns or is assigned something: owners come only from item details. */
-const OWNERSHIP_CLAIM = /\b(?:owners?|owns|owned|owning|(?:re)?assign\w*|responsible)\b/iu;
+/** A claim about who owns or is assigned something: owners come only from item details. The sweep's lines pass the same screen. */
+export const OWNERSHIP_CLAIM = /\b(?:owners?|owns|owned|owning|(?:re)?assign\w*|responsible)\b/iu;
 const STOPPED_NOTE = "Research stopped before it finished, so other items may be affected too.";
 
 export const IMPACT_CARD_PROMPT = [

@@ -131,7 +131,7 @@ async function run(args, { client: given, poll_ms: pollMs = 2_000 } = {}) {
         const saved = unstartable === undefined ? await runOne(client, testCase, request, budget, trial, model, pollMs)
           : { ...runBase(testCase, budget, trial, model, Date.now()), outcome: "error", error: { code: "case_not_startable", message: errorText(unstartable) }, elapsed_ms: 0 };
         writePrivateJson(out, `runs/${testCase.id}/${budget}-${trial}.json`, { ...saved, source_sha: sourceIdentity() });
-        process.stdout.write(`${testCase.id} ${budget} #${trial}: ${saved.outcome}${saved.result?.research?.stop ? ` (${saved.result.research.stop.reason})` : ""}${saved.result?.rendered ? `, card ${saved.result.rendered.status}` : ""}\n`);
+        process.stdout.write(`${testCase.id} ${budget} #${trial}: ${saved.outcome}${saved.result?.research?.stop ? ` (${saved.result.research.stop.reason})` : ""}${saved.result?.rendered ? `, ${testCase.trigger === "sweep" ? "sweep result" : "card"} ${saved.result.rendered.status}` : ""}\n`);
       }
     }
   }

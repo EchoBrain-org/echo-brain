@@ -55,6 +55,16 @@ function publicRow(value: StoredRowV1): TriggerRunRowV1 {
 }
 
 /**
+ * A run's state as a reader is told it at `at`: a running run whose lease has
+ * lapsed (its attempt stopped without finishing, as when the Authority
+ * restarted mid-run) reads `pending`, because `claim` takes it again. The
+ * stored state is unchanged.
+ */
+export function triggerRunStateAtV1(row: Pick<TriggerRunRowV1, 'state' | 'lease_expires_at'>, at: string): TriggerRunStateV1 {
+  return row.state === 'running' && row.lease_expires_at !== null && row.lease_expires_at <= at ? 'pending' : row.state;
+}
+
+/**
  * Durable runs: an approved record's impact check, and sweeps that re-check open
  * items. Actor-fenced, except the reads named unfenced, whose callers apply the
  * open-items access policy before returning anything from them.
@@ -96,19 +106,29 @@ export class SqliteTriggerRunsV1 {
     });
   }
 
-  /** The actor's pending or running sweep of any scope. */
-  liveSweep(actor: ApprovalActorV1): TriggerRunRowV1 | undefined {
+  /** The actor's sweep of any scope that is running now: its attempt's lease still holds. */
+  runningSweep(actor: ApprovalActorV1): TriggerRunRowV1 | undefined {
     const found = this.database.prepare(`${selectRows} WHERE organization_id=? AND principal_id=? AND membership_id=?
-      AND trigger='sweep' AND state IN ('pending', 'running') ORDER BY created_at, run_id LIMIT 1`).get(
+      AND trigger='sweep' AND state='running' AND lease_expires_at>? ORDER BY created_at, run_id LIMIT 1`).get(
+      actor.organization_id, actor.principal_id, actor.membership_id, this.timestamp()) as StoredRowV1 | undefined;
+    return found === undefined ? undefined : publicRow(found);
+  }
+
+  /** The actor's most recently created sweep of any scope, whatever its state. */
+  newestSweep(actor: ApprovalActorV1): TriggerRunRowV1 | undefined {
+    const found = this.database.prepare(`${selectRows} WHERE organization_id=? AND principal_id=? AND membership_id=?
+      AND trigger='sweep' ORDER BY created_at DESC, run_id DESC LIMIT 1`).get(
       actor.organization_id, actor.principal_id, actor.membership_id) as StoredRowV1 | undefined;
     return found === undefined ? undefined : publicRow(found);
   }
 
-  list(actor: ApprovalActorV1, limit: number): readonly TriggerRunRowV1[] {
+  /** The actor's newest runs, of one trigger when `trigger` names it, newest first. */
+  list(actor: ApprovalActorV1, limit: number, trigger?: TriggerRunRowV1['trigger']): readonly TriggerRunRowV1[] {
     if (!Number.isFinite(limit)) throw new TypeError('Trigger run limit must be finite');
     const capped = Math.max(0, Math.min(100, Math.floor(limit)));
-    return (this.database.prepare(`${selectRows} WHERE organization_id=? AND principal_id=? AND membership_id=? ORDER BY created_at DESC, run_id DESC LIMIT ?`)
-      .all(actor.organization_id, actor.principal_id, actor.membership_id, capped) as StoredRowV1[]).map(publicRow);
+    return (this.database.prepare(`${selectRows} WHERE organization_id=? AND principal_id=? AND membership_id=? AND (? IS NULL OR trigger=?)
+      ORDER BY created_at DESC, run_id DESC LIMIT ?`)
+      .all(actor.organization_id, actor.principal_id, actor.membership_id, trigger ?? null, trigger ?? null, capped) as StoredRowV1[]).map(publicRow);
   }
 
   read(actor: ApprovalActorV1, runId: string): TriggerRunRowV1 | undefined {
@@ -130,6 +150,10 @@ export class SqliteTriggerRunsV1 {
       ORDER BY created_at, run_id`).all(JSON.stringify([...new Set(recordSha256s)])) as StoredRowV1[]).map(publicRow);
   }
 
+  /**
+   * One live run per person. Impact checks start before sweeps: a sweep is
+   * `busy` while one of the actor's impact checks is pending or running.
+   */
   claim(actor: ApprovalActorV1, runId: string, leaseMs: number): { readonly kind: 'claimed'; readonly lease_token: string } | { readonly kind: 'running' | 'busy' | 'done' | 'failed' | 'not_found' } {
     if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0) throw new TypeError('Trigger run lease must be a positive integer');
     return this.immediate(() => {
@@ -139,6 +163,10 @@ export class SqliteTriggerRunsV1 {
       const currentTime = this.currentTime();
       const timestamp = currentTime.toISOString();
       if (current.state === 'running' && current.lease_expires_at! > timestamp) return { kind: 'running' } as const;
+      const impactFirst = current.trigger === 'sweep' && this.database.prepare(`SELECT 1 FROM authority_trigger_runs_v1
+        WHERE organization_id=? AND principal_id=? AND membership_id=? AND trigger='approved_record' AND state IN ('pending', 'running') LIMIT 1`).get(
+        actor.organization_id, actor.principal_id, actor.membership_id) !== undefined;
+      if (impactFirst) return { kind: 'busy' } as const;
       const anotherLiveRun = this.database.prepare(`SELECT 1 FROM authority_trigger_runs_v1
         WHERE organization_id=? AND principal_id=? AND membership_id=? AND run_id!=? AND state='running' AND lease_expires_at>? LIMIT 1`).get(
         actor.organization_id, actor.principal_id, actor.membership_id, runId, timestamp);

@@ -1,5 +1,5 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { validatePersonResearchEvalReadResponseV1 } from '@echo-brain/organization-api';
+import { validatePersonResearchEvalReadResponseV1, validatePersonSweepResultV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
@@ -202,10 +202,28 @@ describe('staging research evaluation runs', () => {
     const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'sweep', input: { findings: [{ finding: 'Two decimals shipped', expected: 'Record updated', citations: [record] }] } } });
     const result = await h.settled('token-a', run.run_id);
     expect(result).toMatchObject({ status: 'completed', research: { trigger: 'sweep', unreadable_starting: [record], budget: { deadline_ms: 300_000 } } });
-    // Sweep has no renderer: research only.
-    expect(result).not.toHaveProperty('rendered');
+    // The finding whose item it could not read is reported, and no model is asked about it.
+    expect(result.rendered).toEqual({ findings: [{ finding_index: 0, verdict: 'unreadable', line: 'ECHO could not read this item.', citation_indexes: [] }], status: 'assessed', citations: [] });
     expect(h.generate).toHaveBeenCalled();
-    expect(h.audits).toEqual([expect.objectContaining({ trigger: 'sweep', budget: 'background' })]);
+    expect(h.generate.mock.calls.filter(([input]) => input.system_prompt.startsWith('You recheck open items'))).toEqual([]);
+    expect(h.audits).toEqual([expect.objectContaining({ trigger: 'sweep', budget: 'background', outcome: 'partial' })]);
+  });
+
+  it("returns a Sweep's verdicts, in the sweep result's contract, with the trimmed bundle they were judged from", async () => {
+    const verdicts = { findings: [{ index: 0, verdict: 'landed', line: 'The decision now shows two decimals.', cites: ['E1'] }] };
+    const step = { parts: [{ question: 'Q', needs: [{ need: 'fact', status: 'found', evidence: ['E1'] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
+    const h = harness({ openRecord: openedRecord, generate: async input => input.system_prompt.startsWith('You recheck open items') ? verdicts : step });
+    const findings = [{ finding: 'The firmware shows one decimal', expected: 'two decimals', citations: [record] }];
+    const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'sweep', input: { findings } } });
+    const result = await h.settled('token-a', run.run_id);
+    expect(result).toMatchObject({ status: 'completed', research: { kind: 'echo-agentic-research-result-v1', trigger: 'sweep' } });
+    expect(result.rendered).toEqual({
+      findings: [{ finding_index: 0, verdict: 'landed', line: 'The decision now shows two decimals.', citation_indexes: [0] }], status: 'assessed',
+      citations: [expect.objectContaining({ citation: expect.objectContaining({ kind: 'approved_record', atom_id: record.atom_id }), label: 'Pricing review' })],
+    });
+    expect(validatePersonSweepResultV1(result.rendered, findings.length)).toEqual(result.rendered);
+    expect(result).not.toHaveProperty('ask');
+    expect(h.audits).toEqual([expect.objectContaining({ trigger: 'sweep', outcome: 'answered' })]);
   });
 
   it("refuses an unknown trigger, input its definition rejects, the mine scope beyond Ask, a scope for a record's run, and a question brief Ask's writer would not run as given, before any run starts", async () => {
