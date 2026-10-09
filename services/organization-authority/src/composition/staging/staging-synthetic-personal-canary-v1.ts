@@ -63,7 +63,11 @@ export async function runStagingSyntheticPersonalCanaryV1(input: {
      WHERE admission.source_key = ? AND json_extract(candidate.meeting_json, '$.id') = ?
        AND json_extract(candidate.meeting_json, '$.provenance.canonical_revision') = ?`).get(setting.source_key, STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, revision) as
     { readonly disposition: string; readonly approval_id: string | null; readonly state: string | null } | undefined;
-  if (proposal === undefined) throw new Error('The staging synthetic canary meeting was not processed');
+  if (proposal === undefined) {
+    const held = database.prepare('SELECT failure_stage FROM authority_live_source_held_extractions_v1 WHERE source_key = ? AND external_id = ? AND revision_id = ?')
+      .pluck().get(setting.source_key, STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, revision) as string | undefined;
+    throw new Error(`The staging synthetic canary meeting was not processed${held === undefined ? '' : `; it is held at ${held}`}`);
+  }
   if (proposal.disposition !== 'actionable') return { kind: 'not_actionable', approval_id: null };
   return { kind: proposal.state === 'staged' ? 'staged' : 'not_staged', approval_id: proposal.approval_id };
 }

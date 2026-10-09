@@ -45,7 +45,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   addMembership(f.db, { ...readerA, membership_type: 'employee' }, 'Reader A', 'reader-a@example.test');
   addMembership(f.db, { ...readerB, membership_type: 'employee' }, 'Reader B', 'reader-b@example.test');
   const actors = { owner: person, other, 'reader-a': readerA, 'reader-b': readerB } as const;
-  let active = true, extracted = 0, duringPull: (() => void | Promise<void>) | undefined, duringExtract: (() => void | Promise<void>) | undefined, failExtraction = false, edition = '';
+  let active = true, extracted = 0, duringPull: (() => void | Promise<void>) | undefined, duringExtract: (() => void | Promise<void>) | undefined, failExtraction = false, edition = '', pulls = 0;
   // One durable attempt ledger per Authority, shared by every runtime the test creates.
   const ledger = new SqliteExtractionAttemptStoreV1(new Database(':memory:'), { authority_id: 'aut_runtime', organization_id: 'org_runtime', state_lineage_id: 'lineage-runtime' });
   // Meetings the watched folder delivers on its next scans after the baseline.
@@ -71,7 +71,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
       return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
         requireCurrent() { guard(); current(); },
         async pull(input) {
-          guard(); current(); const cursor = readGranolaCheckpointV1(input.cursor!);
+          pulls++; guard(); current(); const cursor = readGranolaCheckpointV1(input.cursor!);
           const transcript = { id: 'private-transcript', kind: 'transcript' as const, text: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' };
           // A real provider names the meeting by its source instance, so two tool accounts never share a meeting id.
           const build = (external: string): MeetingDocument => ({ ...original, id: `${identity.instance_id}:${external}`, content: options.transcriptOnly ? [transcript] : [...original.content, transcript], title: `Test meeting${edition}`, provenance: { ...original.provenance, source: identity, external_id: external, canonical_revision: canonicalSha256(`meeting version${edition}`) },
@@ -172,10 +172,13 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
     JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256 WHERE a.source_key=? ORDER BY c.created_at, o.approval_id`).all(sourceKey) as { approval_id: string; state: string; suggested_projects_json: string | null }[];
   return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, fakeProvider, sources, intake, processUntilIdle, pendingReview, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
     duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: () => { failExtraction = true; },
-    ledger, revise: (value: string) => { edition = value; },
+    ledger, pulls: () => pulls, revise: (value: string) => { edition = value; },
     held: () => f.db.prepare('SELECT * FROM authority_live_source_held_extractions_v1').all() as { external_id: string; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string }[] };
 }
 function toolIsSynthetic(meeting: MeetingDocument) { return meeting.provenance.source.adapter_id === 'staging-synthetic-meeting'; }
+/** The owner's held status: IDs and the allowlisted stage only. */
+const heldError = (external: string, stage = 'unknown', next = 'An operator can authorize one more attempt.') =>
+  `Meeting ${external} is held after extraction attempt 1 failed at ${stage}. Later meetings continue. ${next}`;
 describe('personal meeting intake uses the shared processing path', () => {
   it('submits a custom synthetic meeting through extraction, one human review and one after-record trigger, surviving retries', async () => {
     const f = await fixture(), storage = new Database(':memory:');
@@ -493,7 +496,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     f.failNextExtraction();
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     const [held] = (await f.call(runtime, { operation: 'home' })).sources;
-    expect(held).toMatchObject({ pending_imports: [], error: null });
+    expect(held).toMatchObject({ pending_imports: [], error: heldError(id) });
     expect(f.intake.suggestions(held!.source_key, id)).toEqual([project]);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(await f.readers()).toEqual(['owner', 'reader-a']);
@@ -510,9 +513,9 @@ describe('personal meeting intake uses the shared processing path', () => {
       const poll = async () => { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); return (await f.call(runtime, { operation: 'home' }, 'owner', tool)).sources[0]; };
       f.failNextExtraction();
       // No backoff: the held meeting's source stays eligible for the next queued meeting.
-      expect(await poll()).toMatchObject({ pending_imports: [b], error: null });
+      expect(await poll()).toMatchObject({ pending_imports: [b], error: heldError(a) });
       expect(f.held()).toEqual([expect.objectContaining({ external_id: a, failure_stage: 'unknown' })]);
-      expect(await poll()).toMatchObject({ pending_imports: [], error: null });
+      expect(await poll()).toMatchObject({ pending_imports: [], error: heldError(a) });
       expect((await f.call(runtime, { operation: 'reviews' }, 'owner', tool)).reviews).toHaveLength(1);
       expect(f.extracted()).toBe(2);
     } finally { storage.close(); }
@@ -535,13 +538,13 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(listed).toMatchObject({ external_id: id, key, attempt: 1, failure_stage: 'unknown' });
     expect((await state.readHeldMeeting(listed!)).provenance).toMatchObject({ external_id: id, canonical_revision: listed!.revision_id });
     // A new runtime on the same Authority and ledger: importing the meeting again spends nothing.
-    expect(await importAndPoll()).toMatchObject({ pending_imports: [], error: null });
+    expect(await importAndPoll()).toMatchObject({ pending_imports: [], error: heldError(id) });
     expect(f.held()).toEqual([expect.objectContaining({ external_id: id, failure_stage: 'unknown' })]);
     expect(f.ledger.history(key)).toHaveLength(1);
     expect(f.ledger.inspect(key)).toEqual({ attempt: 1, outcome: 'failed', failure_code: 'unknown', reserved_at: expect.any(String), retry_authorized: false });
     // Before parking existed, a failed head had a ledger attempt and no held row.
     f.db.prepare('DELETE FROM authority_live_source_held_extractions_v1').run();
-    expect(await importAndPoll()).toMatchObject({ pending_imports: [], error: null });
+    expect(await importAndPoll()).toMatchObject({ pending_imports: [], error: heldError(id, 'not_recorded') });
     expect(f.held()).toEqual([expect.objectContaining({ external_id: id, failure_stage: 'not_recorded' })]);
     expect(f.extracted()).toBe(1);
   });
@@ -559,6 +562,47 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.held()).toEqual([]);
     expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
     expect(f.extracted()).toBe(2);
+  });
+  it('re-runs from custody only the held meeting whose exact key an operator authorized, once', async () => {
+    const f = await fixture(), runtime = f.create(), b = '00000000-0000-4000-8000-000000000004';
+    const poll = () => runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    // A fresh runtime reads the status from durable rows alone.
+    const error = async () => (await f.call(f.create(), { operation: 'home' })).sources[0]!.error;
+    for (const meeting_id of [id, b]) await f.call(runtime, { operation: 'import', meeting_id, project_id: null, retain: true });
+    f.failNextExtraction(); await poll();
+    f.failNextExtraction(); await poll();
+    const row = (external: string) => f.held().find(held => held.external_id === external)!;
+    const key = { admission_sha256: row(id).extraction_admission_sha256, review_lineage_id: row(id).review_lineage_id, review_input_sha256: row(id).review_input_sha256 };
+    const heldB = row(b);
+    expect(await error()).toBe(heldError(id));
+    // A grant for another key of A's lineage does not trigger A.
+    const other = { ...key, review_input_sha256: `sha256:${'f'.repeat(64)}` }, claim = f.ledger.reserve(other);
+    if (claim.status !== 'reserved') throw new Error('test reservation failed');
+    f.ledger.complete({ key: other, ...claim, outcome: 'failed', failure_code: 'unknown' });
+    expect(f.ledger.authorizeRetry({ key: other, expected_attempt: 1, expected_outcome: 'failed' })).toBe('authorized');
+    await poll();
+    expect(f.extracted()).toBe(2);
+    expect(f.ledger.authorizeRetry({ key, expected_attempt: 1, expected_outcome: 'failed' })).toBe('authorized');
+    expect(await error()).toBe(heldError(id, 'unknown', 'A retry is authorized and runs on the next check.'));
+    const pulls = f.pulls();
+    await poll();
+    expect(f.pulls()).toBe(pulls); expect(f.extracted()).toBe(3);
+    expect(f.held()).toEqual([heldB]);
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
+    expect(await error()).toBe(heldError(b));
+    // The grant is spent.
+    await poll();
+    expect(f.extracted()).toBe(3);
+  });
+  it('forgets a held meeting the person cancels', async () => {
+    const f = await fixture(), runtime = f.create();
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    f.failNextExtraction();
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
+    await f.call(runtime, { operation: 'cancel_import', source_key: source!.source_key, meeting_id: id });
+    expect(f.held()).toEqual([]);
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]!.error).toBeNull();
   });
   it('records and freezes an in-flight re-import\'s project when the cursor advance drops the meeting', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');

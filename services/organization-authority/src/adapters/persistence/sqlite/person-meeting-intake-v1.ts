@@ -115,13 +115,14 @@ export class SqlitePersonMeetingIntakeV1 {
       current();
     }).immediate();
   }
-  /** Cancelling a queued import also forgets the projects it was saved to. */
+  /** Cancelling an import also forgets the projects it was saved to and any parked extraction of it, which is then never retried. */
   cancelImport(setting: MeetingIntakeSettingV1, meetingId: string, current: () => void): void {
     this.db.transaction(() => {
       current(); this.currentPerson(setting);
       const checkpoint = this.checkpoint(setting.source_key);
       this.write(setting.source_key, { ...checkpoint, manual: checkpoint.manual.filter(id => id !== meetingId) });
       this.db.prepare('DELETE FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=?').run(setting.source_key, meetingId);
+      this.db.prepare('DELETE FROM authority_live_source_held_extractions_v1 WHERE source_key=? AND external_id=?').run(setting.source_key, meetingId);
       current();
     }).immediate();
   }

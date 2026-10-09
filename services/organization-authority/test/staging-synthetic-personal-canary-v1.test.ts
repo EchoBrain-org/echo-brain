@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
@@ -11,6 +12,7 @@ import { runStagingSyntheticPersonalCanaryV1 } from '../src/composition/staging/
 
 const NOW = '2026-10-07T00:00:00.000Z';
 const OWNER = { principal_id: 'prn_00000000-0000-4000-8000-000000000003', membership_id: 'mem_00000000-0000-4000-8000-000000000004' };
+const DEMO_MEETINGS = fileURLToPath(new URL('../../../demo/meetings', import.meta.url));
 const opened: Database.Database[] = [];
 afterEach(() => { for (const db of opened.splice(0)) db.close(); });
 
@@ -33,7 +35,7 @@ async function syntheticWorld(options: { readonly signals?: boolean } = {}) {
   let extracted = 0, envelopes = 0;
   const runtime = createPersonMeetingRuntimeV1({
     database: db, sessions: { authenticateAccess() { throw new Error('The canary runs without a person session'); } },
-    providers: [createStagingSyntheticPersonalMeetingProviderV1({})],
+    providers: [createStagingSyntheticPersonalMeetingProviderV1({ fixtures_directory: DEMO_MEETINGS })],
     processor: {
       processor_adapter_id: 'llm',
       current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('reference') }),
@@ -100,6 +102,16 @@ describe('staging synthetic personal canary', () => {
     expect(world.db.prepare("SELECT DISTINCT json_extract(meeting_json, '$.provenance.external_id') FROM authority_live_source_candidates_v2").pluck().all()).toEqual(['synthetic-release-canary']);
     // A rerun of the earlier release reports its stale proposal, not the current one.
     await expect(run(world)).resolves.toEqual({ kind: 'not_staged', approval_id: first.approval_id });
+    expect(world.extracted()).toBe(2);
+  });
+
+  it('stages a canary queued behind a held fixture within its passes', async () => {
+    const world = await syntheticWorld();
+    // The extractor's canary evidence does not resolve in a demo fixture, so the fixture is held.
+    await world.runtime.queue({ person: { organization_id: world.organization_id, ...OWNER }, tool_id: 'synthetic', meeting_ids: ['synthetic-demo-northstar-revenue-signal-calibration-2026-08-24'] });
+    await expect(run(world)).resolves.toMatchObject({ kind: 'staged' });
+    expect(world.db.prepare('SELECT external_id, failure_stage FROM authority_live_source_held_extractions_v1').all())
+      .toEqual([{ external_id: 'demo-northstar-rollout-01', failure_stage: 'output_contract' }]);
     expect(world.extracted()).toBe(2);
   });
 

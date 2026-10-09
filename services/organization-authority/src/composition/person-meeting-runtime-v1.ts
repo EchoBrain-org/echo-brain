@@ -113,22 +113,43 @@ export function createPersonMeetingRuntimeV1(options: {
     projects: (actor, ids) => { for (const id of ids) intake.currentPerson(actor, id); },
   }).catch((error: unknown) => { core = undefined; throw error; });
   function settings(person: MeetingIntakePersonV1) { return canonicalSha256(intake.list(person).map(({ source_key, folder_id, folder_project_id, settings_revision }) => ({ source_key, folder_id, folder_project_id, settings_revision }))); }
-  async function lane(setting: MeetingIntakeSettingV1) {
+  async function lane(setting: MeetingIntakeSettingV1, fromCustody = false) {
     const { provider } = ownerOf(setting.source_adapter_id);
     // Pin the person's exact active membership; a source belongs to the person, not to a project.
     // Approval recovery itself can proceed without an active provider grant.
     let grant: string | undefined;
-    const source = provider.source(setting, () => {
+    const current = () => {
       intake.requireCurrent(setting);
       const now = intake.currentPerson(meetingIntakePersonV1(setting)).grant_sha256;
       if (grant !== undefined && now !== grant) throw new AuthorityOperationError('stale_access_state', 'Meeting access changed');
       grant = now;
-    });
+    };
+    const source = provider.source(setting, current);
     const providerIntake = ownerOf(setting.source_adapter_id).intake;
     // The advance that drops a processed import from the queue records its project choices in the same transaction.
-    const state = new SqliteAuthorityMeetingProcessingStateV1(db, provider.cursor.policy, processor.processor_adapter_id, undefined, setting.source_key, () => source.requireCurrent(),
+    // A retry from custody never pulls, so it is fenced by membership and settings, not by a provider observation.
+    const state = new SqliteAuthorityMeetingProcessingStateV1(db, provider.cursor.policy, processor.processor_adapter_id, undefined, setting.source_key,
+      fromCustody ? current : () => source.requireCurrent(),
       ({ expected_cursor, next_cursor }) => providerIntake.promoteConsumedImports(setting, expected_cursor, next_cursor));
     return { source, state };
+  }
+  /** Parked meetings (of one source, or all), oldest first, with whether an operator authorized one more attempt. IDs and allowlisted stages only. */
+  function held(sourceKey?: string) {
+    return (db.prepare(`SELECT source_key, external_id, attempt, failure_stage, extraction_admission_sha256, review_lineage_id, review_input_sha256
+      FROM authority_live_source_held_extractions_v1 ${sourceKey === undefined ? '' : 'WHERE source_key = ?'} ORDER BY held_at, review_lineage_id`)
+      .all(...(sourceKey === undefined ? [] : [sourceKey])) as {
+      source_key: string; external_id: string; attempt: number; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string }[])
+      .map(row => ({ source_key: row.source_key, external_id: row.external_id, attempt: row.attempt, failure_stage: row.failure_stage,
+        authorized: options.extraction_attempts.inspect({ admission_sha256: row.extraction_admission_sha256, review_lineage_id: row.review_lineage_id, review_input_sha256: row.review_input_sha256 })?.retry_authorized === true }));
+  }
+  const retryReady = () => new Set(held().filter(row => row.authorized).map(row => row.source_key));
+  /** The owner's status for a source: its oldest held meeting, then any connection or access error. */
+  function sourceError(sourceKey: string): string | null {
+    const [first] = held(sourceKey);
+    const parts = [first && `Meeting ${first.external_id} is held after extraction attempt ${first.attempt} failed at ${first.failure_stage}. Later meetings continue. ${
+      first.authorized ? 'A retry is authorized and runs on the next check.' : 'An operator can authorize one more attempt.'}`, observed.get(sourceKey)?.error];
+    const text = parts.filter(part => part !== undefined && part !== null).join(' ');
+    return text === '' ? null : text.slice(0, 512);
   }
   // Decisions survive disconnect/restart and need no provider access. A source whose provider is not selected in
   // this runtime keeps its decisions until it is (the core's state does not route to it).
@@ -141,14 +162,18 @@ export function createPersonMeetingRuntimeV1(options: {
     async reconcileApprovalPresentations(signal) { return (await approvals()).processing.reconcileApprovalPresentations?.(signal); },
     async pollAndStageAdmittedMeetings(signal) {
       // A source with an unfrozen proposal stays eligible until its freeze succeeds, even with nothing left to import.
-      const unfrozen = new Set(workflowState.listPendingApprovalSourceKeys());
-      const eligible = intake.list().filter(s => owners.has(s.source_adapter_id) && (s.folder_id !== null || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0 || unfrozen.has(s.source_key)) && (observed.get(s.source_key)?.next ?? 0) <= Date.now());
+      // So does a source with a parked meeting whose retry an operator authorized.
+      const unfrozen = new Set(workflowState.listPendingApprovalSourceKeys()), ready = retryReady();
+      const eligible = intake.list().filter(s => owners.has(s.source_adapter_id) && (s.folder_id !== null || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0
+        || unfrozen.has(s.source_key) || ready.has(s.source_key)) && (observed.get(s.source_key)?.next ?? 0) <= Date.now());
       const setting = eligible.find(s => s.source_key > after) ?? eligible[0];
       if (!setting) return;
       after = setting.source_key;
       try {
         intake.requireCurrent(setting);
-        if (setting.folder_id === null && ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key).manual.length === 0) {
+        // An authorized retry re-runs one parked meeting from custody, before this source's next intake.
+        const retry = ready.has(setting.source_key);
+        if (!retry && setting.folder_id === null && ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key).manual.length === 0) {
           // Only a failed freeze is left: retry it from the stored extraction, without the provider.
           await (await approvals()).stagerForSource(setting.source_key).reconcilePendingDeliveries({ signal });
           // More than one reconcile page left keeps the source eligible at once; a frozen source drops out.
@@ -156,11 +181,11 @@ export function createPersonMeetingRuntimeV1(options: {
           return;
         }
         processor.assert_admission_commitments(readAdmittedMeetingProcessingCommitmentsV1(db, setting.source_key));
-        const { source, state } = await lane(setting);
+        const { source, state } = await lane(setting, retry);
         const stager = (await approvals()).stagerForSource(setting.source_key);
         const admission = await state.readAdmission();
         const { provider, intake: sourceIntake } = ownerOf(setting.source_adapter_id);
-        const outcome = await new AdmittedMeetingProcessingCycleV1({ source, state, processor: processor.create_processor(admission), extraction_attempts: options.extraction_attempts,
+        const cycle = new AdmittedMeetingProcessingCycleV1({ source, state, processor: processor.create_processor(admission), extraction_attempts: options.extraction_attempts,
           source_cursor_policy: provider.cursor.policy, stager,
           source_ingestion: { store: new SqliteSourceAdmissionStoreV1(db, delivered => {
             source.requireCurrent(); state.assertCurrentSourceAdmission(source.identity);
@@ -169,14 +194,16 @@ export function createPersonMeetingRuntimeV1(options: {
             sourceIntake.recordAdmission(setting, delivered.item.external_id);
           }),
             scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
-        }).runOnce(signal);
-        const queued = sourceIntake.checkpoint(setting.source_key).manual.length > 0 || (outcome.cursor_advanced && !outcome.kind.startsWith('empty'));
+        });
+        const outcome = await (retry ? cycle.retryHeldOnce(signal) : cycle.runOnce(signal));
+        const queued = retry || sourceIntake.checkpoint(setting.source_key).manual.length > 0 || (outcome.cursor_advanced && !outcome.kind.startsWith('empty'));
         observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() + (queued ? 0 : 300_000) });
       } catch (error) {
         signal.throwIfAborted();
         const remaining = ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key);
-        // Nothing left to retry: the import queue is empty and every proposal of this source is frozen.
-        if (remaining.folder === null && remaining.manual.length === 0 && !workflowState.listPendingApprovalSourceKeys().includes(setting.source_key)) { observed.delete(setting.source_key); return; }
+        // Nothing left to retry: the import queue is empty, every proposal of this source is frozen, and no parked meeting has a grant.
+        if (remaining.folder === null && remaining.manual.length === 0 && !workflowState.listPendingApprovalSourceKeys().includes(setting.source_key)
+          && !retryReady().has(setting.source_key)) { observed.delete(setting.source_key); return; }
         // Fixed, content-free status; one broken grant cannot starve another person's work.
         observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: 'Meeting intake needs attention. Check the connection, folder access, and project access.', next: Date.now() + 60_000 });
         if (!(error instanceof AuthorityOperationError) && !(error instanceof Error)) throw error;
@@ -254,7 +281,7 @@ export function createPersonMeetingRuntimeV1(options: {
           return { connected: session !== null, email: session?.email ?? null, workspace: session?.workspace ?? null, folders, settings_sha256: settings(person),
             sources: intake.list(person).filter(s => s.source_adapter_id === provider.cursor.policy.source_adapter_id).map(s => ({ source_key: s.source_key, folder_id: s.folder_id, folder_project_id: s.folder_project_id,
               baseline: ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).baseline, pending_imports: ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual,
-              checked_at: observed.get(s.source_key)?.checked_at ?? null, error: observed.get(s.source_key)?.error ?? null })) };
+              checked_at: observed.get(s.source_key)?.checked_at ?? null, error: sourceError(s.source_key) })) };
         }
         if (!session) throw new AuthorityOperationError('unauthorized', 'Connect your meeting account first');
         if (input.operation === 'browse') return session.browse(input.folder_id);
