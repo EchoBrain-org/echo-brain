@@ -328,7 +328,7 @@ describe('what a sweep checks and how', () => {
     expect(unchecked()).toEqual([]);
   });
 
-  it('sweeps an item on a Slack message, which counts toward a due sweep', async () => {
+  it('never sweeps an item on a Slack message, which never makes a sweep due: no desk reads one yet (R62)', async () => {
     const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'still_open', approved_record: 'still_open', slack_message: 'landed' } });
     // A Slack message the impact check found, sent to Mina.
     const slack = { kind: 'slack_message', team_id: 'T0FIXTURE', channel_id: 'C0FIXTURE', message_ts: '1700000000.000100',
@@ -338,20 +338,28 @@ describe('what a sweep checks and how', () => {
     const slackItem = f.items.forRun(f.runId).find(row => row.pointer.kind === 'slack_message')!;
     expect(f.items.send({ run_id: f.runId, by: f.membership('ari'), command_id: 'send-2', choices: [{ item_id: slackItem.item_id, include: true, owner_membership_id: f.membership('mina') }] }))
       .toMatchObject({ kind: 'sent', sent: 1 });
-    // The ticket and the action were checked just now; only the Slack message never was, and it makes a sweep due.
+    // The ticket and the action were checked just now; only the Slack message never was, and it makes no sweep due.
     f.check(f.ticket.item_id, 'still_open', 'mina');
     f.advance(1_000);
     f.check(f.action.item_id, 'still_open', 'mina');
-    expect(await f.sweepDue('ari')).toBe(true);
+    expect(await f.sweepDue('ari')).toBe(false);
+    // A sweep asked for anyway checks the ticket and the action, never the Slack message.
     const { run_id } = await f.queueAndStart('ari');
     await f.settled(run_id);
-    expect(f.findings.at(-1)!.map(finding => (finding.citations[0] as { readonly kind: string }).kind)).toEqual(['slack_message', 'ticket', 'approved_record']);
-    expect(f.findings.at(-1)![0]).toMatchObject({ finding: 'Outdated Slack message from Pilot planning', citations: [slack, f.decisionCitation] });
-    expect(f.items.read(slackItem.item_id)!.check).toMatchObject({ verdict: 'landed', by: f.membership('ari'), run_id });
-    expect(await f.sweepDue('ari')).toBe(false);
-    // With only the Slack message open, a sweep still has it to check.
+    expect(f.findings.at(-1)!.map(finding => (finding.citations[0] as { readonly kind: string }).kind).sort()).toEqual(['approved_record', 'ticket']);
+    expect(f.findings.flat().some(finding => finding.citations.some(citation => (citation as { readonly kind: string }).kind === 'slack_message'))).toBe(false);
+    expect(f.items.read(slackItem.item_id)!.check).toBeNull();
+    // A day on, the ticket and the action make a sweep due; with only the Slack message open, none is, for its sender or its owner,
+    // and nothing is open to check.
+    f.advance(25 * HOUR);
+    expect(await f.sweepDue('ari')).toBe(true);
     for (const item of [f.ticket, f.action]) await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: item.item_id, state: 'done' } });
-    expect(runOf(await f.sweep('ari', MINE))).toMatch(/^run_/);
+    expect(await f.sweepDue('ari')).toBe(false);
+    expect(await f.sweepDue('mina')).toBe(false);
+    for (const scope of [MINE, { scope: 'record', id: f.record }, { scope: 'project', id: f.projectA }] as const) {
+      expect(await f.sweep('ari', scope)).toEqual(NOTHING);
+      expect(await f.sweep('mina', scope)).toEqual(NOTHING);
+    }
   });
 });
 

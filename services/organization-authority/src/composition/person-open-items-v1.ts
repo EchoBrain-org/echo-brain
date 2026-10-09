@@ -19,6 +19,7 @@ import {
   type PersonOpenItemV1,
   type PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
+import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { currentImpactLineV1, impactCardLineV1, impactItemKeyV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError, type AuthorityErrorCode } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -127,6 +128,7 @@ const ACCESS_REFUSED: readonly AuthorityErrorCode[] = ['unauthorized', 'not_foun
 /** A last check older than a day makes a sweep due; a person's sweep is asked for at most hourly (R32). */
 const DAY_MS = 24 * 3_600_000;
 const HOUR_MS = 3_600_000;
+const SWEEP_TRIGGER = AGENTIC_TRIGGER_DEFINITIONS_V1.find(definition => definition.name === 'sweep')!;
 
 const notFound = () => new AuthorityOperationError('not_found', 'item is not available');
 /** An error's Authority code, or `error`. */
@@ -298,10 +300,26 @@ export function openItemDecisionPartsV1(sources: Pick<OpenItemSourcesV1, 'runs' 
 }
 
 /**
+ * A sweep re-reads an item through its pointer, as a finding's citation the
+ * sweep trigger takes: a ticket, a page, an ECHO record or document, and no
+ * Slack message today. An item on any other pointer is never swept, so it
+ * never makes a sweep due either.
+ */
+function sweepTakesItem(row: Pick<ImpactItemRowV1, 'pointer'>): boolean {
+  // No Slack message: no desk can read a Slack citation yet, so a swept one would always be recorded unreadable (R62).
+  try {
+    SWEEP_TRIGGER.parseEvent({ findings: [{ finding: 'An open item', expected: 'the approved decision', citations: [row.pointer] }] });
+    return true;
+  } catch (error) {
+    if (error instanceof AuthorityOperationError && error.code === 'invalid_request') return false;
+    throw error;
+  }
+}
+/**
  * The open items a sweep of `scope` rechecks for this viewer (section 6):
- * open, and shown to the viewer by the policy. `mine` is what they sent or
- * own; a decision's or a project's are its items the viewer sees, as `items`
- * shows them. `assessed` holds those items only.
+ * open, shown to the viewer by the policy, and on a pointer a sweep re-reads.
+ * `mine` is what they sent or own; a decision's or a project's are its items
+ * the viewer sees, as `items` shows them. `assessed` holds those items only.
  */
 export function sweepScopeOpenItemsV1(sources: OpenItemSourcesV1, viewer: Viewer, scope: TriggerRunScopeV1): Context {
   let rows: readonly ImpactItemRowV1[];
@@ -316,7 +334,7 @@ export function sweepScopeOpenItemsV1(sources: OpenItemSourcesV1, viewer: Viewer
     default:
       rows = sources.items.forRecords(sources.records.projectRecords({ access_token: viewer.token, project_id: scope.project_id, limit: PROJECT_RECORDS_MAX }), { states: ['open'], limit: SCOPE_ROWS_MAX });
   }
-  const context = assessOpenItemsV1(sources, viewer, rows);
+  const context = assessOpenItemsV1(sources, viewer, rows.filter(sweepTakesItem));
   return { ...context, assessed: context.assessed.filter(entry => entry.access.see_row) };
 }
 
@@ -480,13 +498,13 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const theirs = visible.filter(entry => approvedBy(entry.row, viewer) || entry.row.owner_membership_id === viewer.membership);
       const checks = theirs.flatMap(entry => (entry.row.check === null ? [] : [entry.row.check.at])).sort();
 
-      // A sweep is due (section 6) for one of those items that nobody checked in the last day, unless the caller asked for a sweep in
-      // the last hour (R32: one that keeps failing, or leaves items unassessed, is not asked for on every load) or one of theirs is
-      // running. A sweep still waiting after the hour lets the desktop ask again, which hands back that run to start (R58). Check now
-      // is the caller's own request, and never limited.
+      // A sweep is due (section 6) for one of those items that a sweep would check and nobody checked in the last day, unless the
+      // caller asked for a sweep in the last hour (R32: one that keeps failing, or leaves items unassessed, is not asked for on every
+      // load) or one of theirs is running. A sweep still waiting after the hour lets the desktop ask again, which hands back that run
+      // to start (R58). Check now is the caller's own request, and never limited.
       const time = now().getTime();
       const dayAgo = new Date(time - DAY_MS).toISOString();
-      const stale = theirs.some(entry => entry.row.check === null || entry.row.check.at < dayAgo);
+      const stale = theirs.some(entry => (entry.row.check === null || entry.row.check.at < dayAgo) && sweepTakesItem(entry.row));
       const newest = stale ? options.runs.newestSweep(actor) : undefined;
       const sweep_due = stale && (newest === undefined || newest.created_at <= new Date(time - HOUR_MS).toISOString()) && options.runs.runningSweep(actor) === undefined;
       return checked('home', {
