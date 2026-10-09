@@ -400,7 +400,29 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # A Docker Hub outage must not fail this proof. Docker and BuildKit try
+      # Google's Docker Hub mirror first and fall back to Docker Hub. Every
+      # image is pinned by digest, so either source yields the same bytes.
+      - name: Pull Docker Hub images through a mirror first
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo python3 - <<'PYTHON'
+          import json, pathlib
+          path = pathlib.Path("/etc/docker/daemon.json")
+          config = json.loads(path.read_text()) if path.exists() else {}
+          config["registry-mirrors"] = ["https://mirror.gcr.io"]
+          path.write_text(json.dumps(config, indent=2) + "\n")
+          PYTHON
+          sudo systemctl restart docker
+          docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -F https://mirror.gcr.io
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        with:
+          # buildx-stable-1 as of 2026-09-30.
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.PRODUCT_NODE_VERSION }}

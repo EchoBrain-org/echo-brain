@@ -355,6 +355,37 @@ describe("CI workflow", () => {
     ).toBeGreaterThan(source.indexOf("RUN npm ci"));
   });
 
+  it("pulls every Docker Hub image by digest, from a mirror first with Docker Hub as fallback", () => {
+    const authorityJob = job("authority-container");
+    const mirror = authorityJob.indexOf("- name: Pull Docker Hub images through a mirror first");
+    const buildx = authorityJob.indexOf("- uses: docker/setup-buildx-action@");
+    expect(mirror).toBeGreaterThan(0);
+    expect(buildx).toBeGreaterThan(mirror);
+    // Docker pulls the BuildKit and Caddy images; BuildKit pulls the base image.
+    expect(authorityJob).toContain('config["registry-mirrors"] = ["https://mirror.gcr.io"]');
+    expect(authorityJob).toContain("sudo systemctl restart docker\n");
+    expect(authorityJob).toContain(
+      "          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea\n" +
+      "          buildkitd-config-inline: |\n" +
+      '            [registry."docker.io"]\n' +
+      '              mirrors = ["mirror.gcr.io"]\n',
+    );
+    expect(source.match(/docker\/setup-buildx-action@/g)).toHaveLength(1);
+    // Digest pins make the mirror unable to change what is pulled.
+    const compose = readFileSync(resolve(REPO, "deploy/organization-authority/compose.clean-v1.yaml"), "utf8");
+    const pulled = compose.match(/^ +image: [^"].*$/gm)!.map((line) => line.trim().slice("image: ".length));
+    expect(pulled).toHaveLength(1);
+    const caddy = pulled[0]!;
+    expect(authorityJob.match(/caddy:\S+/g)).toEqual([caddy, caddy]);
+    for (const image of [
+      authorityJob.match(/driver-opts: image=(\S+)$/m)![1]!,
+      caddy,
+      ...[...readFileSync(DOCKERFILE, "utf8").matchAll(/^FROM (\S+)/gm)].map((match) => match[1]!),
+    ]) {
+      expect(image).toMatch(/^[a-z0-9./-]+:[\w.-]+@sha256:[0-9a-f]{64}$/);
+    }
+  });
+
   it("reuses the local harness after retaining the exact Authority-image proof", () => {
     const authorityJob = job("authority-container");
 
