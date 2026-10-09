@@ -9,6 +9,19 @@ const meetingsDirectory = fileURLToPath(
   new URL("../../../../demo/meetings", import.meta.url),
 );
 
+async function withCopiedMeetings(
+  run: (copiedMeetings: string, temporaryRoot: string) => Promise<void>,
+): Promise<void> {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "echo-synthetic-demo-"));
+  try {
+    const copiedMeetings = join(temporaryRoot, "meetings");
+    await cp(meetingsDirectory, copiedMeetings, { recursive: true });
+    await run(copiedMeetings, temporaryRoot);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
 describe("synthetic demo meeting source", () => {
   it("loads the four demo meetings once in filename order with a stable digest", async () => {
     const first = await loadSyntheticDemoMeetingCorpusV1(meetingsDirectory);
@@ -23,12 +36,8 @@ describe("synthetic demo meeting source", () => {
     expect(first.corpus_digest).toEqual(second.corpus_digest);
   });
 
-  it("rejects a meeting with another source identity", async () => {
-    const temporaryRoot = await mkdtemp(join(tmpdir(), "echo-synthetic-demo-"));
-    const copiedMeetings = join(temporaryRoot, "meetings");
-
-    try {
-      await cp(meetingsDirectory, copiedMeetings, { recursive: true });
+  it("rejects a meeting with another source identity", () =>
+    withCopiedMeetings(async (copiedMeetings) => {
       const target = join(copiedMeetings, "01-revenue-signal-calibration.json");
       const meeting = JSON.parse(await readFile(target, "utf8")) as {
         provenance: { source: { adapter_id: string } };
@@ -39,16 +48,10 @@ describe("synthetic demo meeting source", () => {
       await expect(loadSyntheticDemoMeetingCorpusV1(copiedMeetings)).rejects.toThrow(
         /source|identity/i,
       );
-    } finally {
-      await rm(temporaryRoot, { recursive: true, force: true });
-    }
-  });
+    }));
 
-  it("rejects extra entries and symlinked corpus files", async () => {
-    const temporaryRoot = await mkdtemp(join(tmpdir(), "echo-synthetic-demo-"));
-    const copiedMeetings = join(temporaryRoot, "meetings");
-    try {
-      await cp(meetingsDirectory, copiedMeetings, { recursive: true });
+  it("rejects extra entries and symlinked corpus files", () =>
+    withCopiedMeetings(async (copiedMeetings, temporaryRoot) => {
       await writeFile(join(copiedMeetings, "unexpected.json"), "{}\n");
       await expect(loadSyntheticDemoMeetingCorpusV1(copiedMeetings)).rejects.toThrow(
         "only the four declared",
@@ -62,16 +65,10 @@ describe("synthetic demo meeting source", () => {
       await expect(loadSyntheticDemoMeetingCorpusV1(copiedMeetings)).rejects.toThrow(
         "bounded regular files",
       );
-    } finally {
-      await rm(temporaryRoot, { recursive: true, force: true });
-    }
-  });
+    }));
 
-  it("binds each declared filename to its distinct fixture revision", async () => {
-    const temporaryRoot = await mkdtemp(join(tmpdir(), "echo-synthetic-demo-"));
-    const copiedMeetings = join(temporaryRoot, "meetings");
-    try {
-      await cp(meetingsDirectory, copiedMeetings, { recursive: true });
+  it("binds each declared filename to its distinct fixture revision", () =>
+    withCopiedMeetings(async (copiedMeetings) => {
       await cp(
         join(copiedMeetings, "01-revenue-signal-calibration.json"),
         join(copiedMeetings, "02-data-handling-review.json"),
@@ -79,10 +76,7 @@ describe("synthetic demo meeting source", () => {
       await expect(loadSyntheticDemoMeetingCorpusV1(copiedMeetings)).rejects.toThrow(
         "unexpected fixture meeting",
       );
-    } finally {
-      await rm(temporaryRoot, { recursive: true, force: true });
-    }
-  });
+    }));
 
   it("advances four one-item polls to an empty terminal cursor without replay", async () => {
     const corpus = await loadSyntheticDemoMeetingCorpusV1(meetingsDirectory);

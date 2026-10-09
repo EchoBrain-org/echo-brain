@@ -14,10 +14,12 @@ const source_sha256 = `sha256:${'d'.repeat(64)}`;
 const document_id = `doc_${'e'.repeat(64)}`;
 const representation_sha256 = `sha256:${'f'.repeat(64)}`;
 const anchor_sha256 = `sha256:${'0'.repeat(64)}`;
+const sourceCitation = { kind: 'source_revision' as const, source_id, revision_id: 'r1', source_sha256, representation_sha256, anchor_sha256 };
+const transcriptCitation = { kind: 'approved_meeting_transcript' as const, approval_id: 'apr_approval_fixture', source_id, revision_id: 'r1', source_sha256 };
 
 describe('cited original and transcript public contracts', () => {
   it('reads a bounded immutable source packet only with complete source coordinates', () => {
-    const citation = { kind: 'source_revision' as const, source_id, revision_id: 'r1', source_sha256, representation_sha256, anchor_sha256, document_id };
+    const citation = { ...sourceCitation, document_id };
     expect(PERSON_SOURCE_EVIDENCE_PATH_V1).toBe('/v2/person/ask/source');
     expect(validatePersonSourceEvidenceReadRequestV1({ schema_version: 1, scope: { kind: 'project', project_id }, citation }))
       .toEqual({ schema_version: 1, scope: { kind: 'project', project_id }, citation });
@@ -31,13 +33,7 @@ describe('cited original and transcript public contracts', () => {
   });
 
   it('validates the explicit, page-bounded approved-meeting transcript contract', () => {
-    const citation = {
-      kind: 'approved_meeting_transcript' as const,
-      approval_id: 'apr_approval_fixture',
-      source_id,
-      revision_id: 'r1',
-      source_sha256,
-    };
+    const citation = transcriptCitation;
     expect(PERSON_MEETING_TRANSCRIPT_PATH_V1).toBe('/v1/person/meeting-transcripts/read');
     expect(validatePersonMeetingTranscriptReadRequestV1({ schema_version: 1, scope: { kind: 'project', project_id }, citation, offset: 4 }))
       .toEqual({ schema_version: 1, scope: { kind: 'project', project_id }, citation, offset: 4 });
@@ -54,8 +50,6 @@ describe('cited original and transcript public contracts', () => {
   });
 
   it('never reads a cited original or a transcript page under the mine scope', () => {
-    const sourceCitation = { kind: 'source_revision' as const, source_id, revision_id: 'r1', source_sha256, representation_sha256, anchor_sha256 };
-    const transcriptCitation = { kind: 'approved_meeting_transcript' as const, approval_id: 'apr_approval_fixture', source_id, revision_id: 'r1', source_sha256 };
     expect(() => validatePersonSourceEvidenceReadRequestV1({ schema_version: 1, scope: { kind: 'mine' }, citation: sourceCitation })).toThrow('Ask response scope is invalid');
     expect(() => validatePersonSourceEvidenceV1({
       schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: { kind: 'mine' }, citation: { ...sourceCitation, label: 'MRD' }, text: 'MRD',
@@ -67,8 +61,7 @@ describe('cited original and transcript public contracts', () => {
   });
 
   it('rejects a caller-controlled label or a malformed project in a source read', () => {
-    const citation = { kind: 'source_revision' as const, source_id, revision_id: 'r1', source_sha256, representation_sha256, anchor_sha256 };
-    expect(() => validatePersonSourceEvidenceReadRequestV1({ schema_version: 1, scope: { kind: 'global' }, citation: { ...citation, label: 'caller-controlled' } })).toThrow();
-    expect(() => validatePersonSourceEvidenceReadRequestV1({ schema_version: 1, scope: { kind: 'project', project_id: 'not-a-project' }, citation })).toThrow();
+    expect(() => validatePersonSourceEvidenceReadRequestV1({ schema_version: 1, scope: { kind: 'global' }, citation: { ...sourceCitation, label: 'caller-controlled' } })).toThrow();
+    expect(() => validatePersonSourceEvidenceReadRequestV1({ schema_version: 1, scope: { kind: 'project', project_id: 'not-a-project' }, citation: sourceCitation })).toThrow();
   });
 });

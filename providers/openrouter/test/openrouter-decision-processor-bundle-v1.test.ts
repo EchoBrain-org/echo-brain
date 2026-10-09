@@ -41,37 +41,40 @@ function admission(): AdmittedMeetingProcessingAdmissionV1 {
   };
 }
 
+function commitment(credentialReference: string) {
+  return {
+    source: {
+      adapter_id: "synthetic-source",
+      instance_id: "synthetic-source",
+      version: "1.0.0",
+      custodian_sha256: `sha256:${"a".repeat(64)}`,
+      credential_reference_sha256: `sha256:${"b".repeat(64)}`,
+    },
+    processor: {
+      adapter_id: "llm",
+      instance_id: "fixed-processor",
+      version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
+      configuration_sha256: openRouterDecisionProcessorConfigurationSha256V1(),
+      credential_reference_sha256:
+        openRouterDecisionProcessorCredentialReferenceSha256V1(credentialReference),
+    },
+  } as const;
+}
+
 describe("OpenRouter decision processor bundle", () => {
   it("validates the immutable commitment before reading its credential and constructs the admitted processor", () => {
     const credential_file = credentialFile();
     const bundle = createOpenRouterDecisionProcessorBundleV1({
       credential_file,
     });
-    const commitment = {
-      source: {
-        adapter_id: "synthetic-source",
-        instance_id: "synthetic-source",
-        version: "1.0.0",
-        custodian_sha256: `sha256:${"a".repeat(64)}`,
-        credential_reference_sha256: `sha256:${"b".repeat(64)}`,
-      },
-      processor: {
-        adapter_id: "llm",
-        instance_id: "fixed-processor",
-        version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
-        configuration_sha256: openRouterDecisionProcessorConfigurationSha256V1(),
-        credential_reference_sha256:
-          openRouterDecisionProcessorCredentialReferenceSha256V1(
-            `file:${credential_file}`,
-          ),
-      },
-    } as const;
 
     expect(bundle.processor_adapter_id).toBe("llm");
     expect(() => bundle.create_processor(admission())).toThrow(
       "admission commitments were not checked",
     );
-    expect(() => bundle.assert_admission_commitments(commitment)).not.toThrow();
+    expect(() =>
+      bundle.assert_admission_commitments(commitment(`file:${credential_file}`)),
+    ).not.toThrow();
     expect(bundle.create_processor(admission()).identity).toMatchObject({
       kind: "decision-processor",
       adapter_id: "llm",
@@ -87,25 +90,9 @@ describe("OpenRouter decision processor bundle", () => {
     });
 
     expect(() =>
-      bundle.assert_admission_commitments({
-        source: {
-          adapter_id: "synthetic-source",
-          instance_id: "synthetic-source",
-          version: "1.0.0",
-          custodian_sha256: `sha256:${"a".repeat(64)}`,
-          credential_reference_sha256: `sha256:${"b".repeat(64)}`,
-        },
-        processor: {
-          adapter_id: "llm",
-          instance_id: "fixed-processor",
-          version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
-          configuration_sha256: openRouterDecisionProcessorConfigurationSha256V1(),
-          credential_reference_sha256:
-            openRouterDecisionProcessorCredentialReferenceSha256V1(
-              "file:/private/replaced-credential",
-            ),
-        },
-      }),
+      bundle.assert_admission_commitments(
+        commitment("file:/private/replaced-credential"),
+      ),
     ).toThrow("differs from the admitted processor commitment");
   });
 });

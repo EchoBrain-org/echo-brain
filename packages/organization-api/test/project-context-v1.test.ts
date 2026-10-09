@@ -3,7 +3,6 @@ import {
   PERSON_DIRECTORY_PATH_V1,
   validateOrganizationDirectorySearchV1,
   validateOrganizationDirectoryV1,
-  validatePersonUpdateSubmitV1,
   validatePersonUpdateSubmitV2,
   validatePersonUpdateReceiptV2,
   validatePersonUpdateStatusV2,
@@ -65,15 +64,11 @@ describe('project context V1 public codecs', () => {
     expect(validateProjectLeaveV1({ schema_version: 1, kind: 'echo-project-leave-v1', request_id, project_id })).toMatchObject({ project_id });
     expect(validateProjectSettingsReceiptV1({ schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id, project_id, operation: 'archive', received_at, state: 'applied' }))
       .toMatchObject({ operation: 'archive', project_id });
-    for (const invalid of [
-      { schema_version: 1, kind: 'echo-project-rename-v1', request_id, project_id, name: 'Renamed', archived: false },
-      { schema_version: 1, kind: 'echo-project-archive-v1', request_id, project_id, archived: 'true' },
-      { schema_version: 1, kind: 'echo-project-leave-v1', request_id, project_id, name: 'surprise' },
-    ]) expect(() => {
-      if (invalid.kind === 'echo-project-rename-v1') return validateProjectRenameV1(invalid);
-      if (invalid.kind === 'echo-project-archive-v1') return validateProjectArchiveV1(invalid);
-      return validateProjectLeaveV1(invalid);
-    }).toThrow();
+    for (const [validate, invalid] of [
+      [validateProjectRenameV1, { schema_version: 1, kind: 'echo-project-rename-v1', request_id, project_id, name: 'Renamed', archived: false }],
+      [validateProjectArchiveV1, { schema_version: 1, kind: 'echo-project-archive-v1', request_id, project_id, archived: 'true' }],
+      [validateProjectLeaveV1, { schema_version: 1, kind: 'echo-project-leave-v1', request_id, project_id, name: 'surprise' }],
+    ] as const) expect(() => validate(invalid)).toThrow();
     const summary = { schema_version: 2 as const, kind: 'echo-project-summary-v2' as const, project_id, name: 'Renamed', created_at: received_at, role: 'lead' as const, status: 'archived' as const };
     expect(validateProjectSummaryV2(summary)).toEqual(summary);
     expect(validateProjectListV2({ schema_version: 2, kind: 'echo-project-list-v2', items: [summary], next_cursor: null }).items).toEqual([summary]);
@@ -138,10 +133,7 @@ describe('project context V1 public codecs', () => {
     ]) expect(() => validateOrganizationDirectoryV1(invalid), JSON.stringify(invalid)).toThrow();
   });
 
-  it('keeps V1 closed while V2 carries a nullable association and a separate audience', () => {
-    const v1 = { schema_version: 1, kind: 'echo-person-update-submit-v1', request_id, title: 'Original', text: 'Body' };
-    expect(validatePersonUpdateSubmitV1(v1)).toEqual({ ...v1, visibility: 'only_me' });
-    expect(() => validatePersonUpdateSubmitV1({ ...v1, project_id })).toThrow();
+  it('V2 carries a nullable association and a separate audience', () => {
     const v2 = validatePersonUpdateSubmitV2({ schema_version: 2, kind: 'echo-person-update-submit-v2', request_id, title: 'Original', text: 'Body', project_id: null, audience: { kind: 'project', project_id } });
     expect(v2).toMatchObject({ project_id: null, audience: { kind: 'project', project_id } });
   });
@@ -196,11 +188,7 @@ describe('project context V1 public codecs', () => {
     const nonEnumerable = { ...base }; Object.defineProperty(nonEnumerable, 'hidden', { value: 'x' });
     const cyclic: Record<string, unknown> = { ...base }; cyclic.self = cyclic;
     const inherited = Object.create({ audience: { kind: 'team' } }); Object.assign(inherited, base); delete inherited.audience;
-    expect(() => validatePersonUpdateSubmitV2(accessor)).toThrow();
-    expect(() => validatePersonUpdateSubmitV2(symbol)).toThrow();
-    expect(() => validatePersonUpdateSubmitV2(nonEnumerable)).toThrow();
-    expect(() => validatePersonUpdateSubmitV2(cyclic)).toThrow();
-    expect(() => validatePersonUpdateSubmitV2(inherited)).toThrow();
+    for (const [label, hostile] of Object.entries({ accessor, symbol, nonEnumerable, cyclic, inherited })) expect(() => validatePersonUpdateSubmitV2(hostile), label).toThrow();
   });
 
   it('fails closed for all page/result families on duplicate, oversized, hidden, or malformed nested data', () => {
@@ -208,17 +196,21 @@ describe('project context V1 public codecs', () => {
     const member = (id = membership_id) => ({ membership_id: id, display_name: 'Ada', role: 'member' as const });
     const directory = (id = membership_id) => ({ membership_id: id, display_name: 'Ada' });
     const context = (id = context_id) => ({ context_id: id, received_at, title: 'Original', excerpt: 'Exact source excerpt.', audience: { kind: 'project' as const, project_id: project_id_2 } });
-    const cases: readonly [string, (value: unknown) => unknown, unknown, unknown, unknown][] = [
-      ['project list', validateProjectListV1, { schema_version: 1, kind: 'echo-project-list-v1', items: [summary()], next_cursor: null }, { schema_version: 1, kind: 'echo-project-list-v1', items: [summary(), summary()], next_cursor: null }, { schema_version: 1, kind: 'echo-project-list-v1', items: Array.from({ length: 11 }, (_, index) => summary(`prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`)), next_cursor: null }],
-      ['project members', validateProjectMembersV1, { schema_version: 1, kind: 'echo-project-members-v1', project_id, items: [member()], next_cursor: null }, { schema_version: 1, kind: 'echo-project-members-v1', project_id, items: [member(), member()], next_cursor: null }, { schema_version: 1, kind: 'echo-project-members-v1', project_id, items: Array.from({ length: 11 }, (_, index) => member(`mem_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`)), next_cursor: null }],
-      ['project directory', validateProjectDirectoryV1, { schema_version: 1, kind: 'echo-project-directory-v1', project_id, items: [directory()], next_cursor: null }, { schema_version: 1, kind: 'echo-project-directory-v1', project_id, items: [directory(), directory()], next_cursor: null }, { schema_version: 1, kind: 'echo-project-directory-v1', project_id, items: Array.from({ length: 11 }, (_, index) => directory(`mem_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`)), next_cursor: null }],
-      ['project feed', validateProjectContextFeedV1, { schema_version: 1, kind: 'echo-project-context-feed-v1', project_id, items: [context()], next_cursor: null }, { schema_version: 1, kind: 'echo-project-context-feed-v1', project_id, items: [context(), context()], next_cursor: null }, { schema_version: 1, kind: 'echo-project-context-feed-v1', project_id, items: Array.from({ length: 11 }, (_, index) => context(`ctx_${String(index).padStart(64, '0')}`)), next_cursor: null }],
-      ['project search', validateProjectContextSearchResultV1, { schema_version: 1, kind: 'echo-project-context-search-result-v1', project_id, items: [context()], next_cursor: null }, { schema_version: 1, kind: 'echo-project-context-search-result-v1', project_id, items: [context(), context()], next_cursor: null }, { schema_version: 1, kind: 'echo-project-context-search-result-v1', project_id, items: Array.from({ length: 11 }, (_, index) => context(`ctx_${String(index).padStart(64, '0')}`)), next_cursor: null }],
+    const page = (kind: string, items: unknown[], scope: object = { project_id }) => ({ schema_version: 1, kind, ...scope, items, next_cursor: null });
+    const eleven = (make: (id: string) => unknown, id: (index: number) => string) => Array.from({ length: 11 }, (_, index) => make(id(index)));
+    const uuid = (prefix: string) => (index: number) => `${prefix}_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+    const contextId = (index: number) => `ctx_${String(index).padStart(64, '0')}`;
+    const cases: readonly [string, (value: unknown) => unknown, string, (id?: string) => unknown, (index: number) => string, object?][] = [
+      ['project list', validateProjectListV1, 'echo-project-list-v1', summary, uuid('prj'), {}],
+      ['project members', validateProjectMembersV1, 'echo-project-members-v1', member, uuid('mem')],
+      ['project directory', validateProjectDirectoryV1, 'echo-project-directory-v1', directory, uuid('mem')],
+      ['project feed', validateProjectContextFeedV1, 'echo-project-context-feed-v1', context, contextId],
+      ['project search', validateProjectContextSearchResultV1, 'echo-project-context-search-result-v1', context, contextId],
     ];
-    for (const [label, validate, valid, duplicate, oversized] of cases) {
-      expect(validate(valid), label).toBeTruthy();
-      expect(() => validate(duplicate), `${label} duplicate`).toThrow();
-      expect(() => validate(oversized), `${label} oversized`).toThrow();
+    for (const [label, validate, kind, make, id, scope] of cases) {
+      expect(validate(page(kind, [make()], scope)), label).toBeTruthy();
+      expect(() => validate(page(kind, [make(), make()], scope)), `${label} duplicate`).toThrow();
+      expect(() => validate(page(kind, eleven(make, id), scope)), `${label} oversized`).toThrow();
     }
     expect(() => validateProjectContextFeedV1({ schema_version: 1, kind: 'echo-project-context-feed-v1', project_id, items: [{ ...context(), audience: { kind: 'project', project_id: project_id_2, global_auth: true } }], next_cursor: null })).toThrow();
     expect(() => validateProjectMembersV1({ schema_version: 1, kind: 'echo-project-members-v1', project_id, items: [{ ...member(), global_auth: true }], next_cursor: null })).toThrow();
