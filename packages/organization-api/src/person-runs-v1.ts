@@ -165,12 +165,11 @@ const REQUEST_KEYS: Readonly<Record<PersonRunsRequestV1['operation'], readonly s
   list: [], home: [], start: ['run_id'], retry: ['run_id'], view: ['run_id'], items: ['scope'], item: ['item_id'],
   send: ['run_id', 'command_id', 'items'], set_state: ['item_id', 'state'], assign: ['item_id', 'owner_membership_id'], sweep: ['scope'],
 });
-const RESULT_KEYS: Readonly<Record<keyof PersonRunsResultsV1, readonly string[]>> = Object.freeze({
+/** Each result's keys; null for a result with more than one shape, whose own case checks them. */
+const RESULT_KEYS: Readonly<Record<keyof PersonRunsResultsV1, readonly string[] | null>> = Object.freeze({
   list: ['runs'], start: ['state'], retry: ['state'], view: ['card', 'checked_at', 'hidden'],
   home: ['send', 'items', 'landed', 'waiting', 'last_checked_at', 'sweep_due'], items: ['items', 'next_cursor', 'summary', 'stages'],
-  item: ['item'], send: ['sent', 'not_relevant'], set_state: ['state'], assign: ['owner'],
-  // A sweep answers its run, or `state` alone when nothing is open to check.
-  sweep: ['run_id'],
+  item: ['item'], send: ['sent', 'not_relevant'], set_state: ['state'], assign: ['owner'], sweep: null,
 });
 const START_STATES: readonly string[] = ['pending', 'running', 'busy', 'done', 'failed'];
 const SCOPES = ['mine', 'run', 'record', 'project'] as const;
@@ -485,7 +484,8 @@ function stage(value: unknown): PersonImpactStageV1 {
 export function validatePersonRunsResultV1<K extends keyof PersonRunsResultsV1>(operation: K, value: unknown): PersonRunsResultsV1[K] {
   if (typeof operation !== 'string' || !Object.hasOwn(RESULT_KEYS, operation)) fail('Runs response operation is invalid');
   const result = asEnumerableRecord(value, 'Runs response');
-  assertExactKeys(result, operation === 'sweep' && Object.hasOwn(result, 'state') ? ['state'] : RESULT_KEYS[operation], 'Runs response');
+  const keys = RESULT_KEYS[operation];
+  if (keys !== null) assertExactKeys(result, keys, 'Runs response');
   const checked = (response: PersonRunsResultsV1[keyof PersonRunsResultsV1]): PersonRunsResultsV1[K] => {
     if (utf8ByteLength(JSON.stringify(response)) > PERSON_RUNS_MAX_RESPONSE_BYTES_V1) fail('Runs response exceeds its bound');
     return Object.freeze(response) as PersonRunsResultsV1[K];
@@ -527,7 +527,12 @@ export function validatePersonRunsResultV1<K extends keyof PersonRunsResultsV1>(
     case 'set_state':
       return checked({ state: oneOf(result.state, SET_STATES, 'Set state result') });
     case 'sweep':
-      if (Object.hasOwn(result, 'run_id')) return checked({ run_id: runId(result.run_id, 'Sweep run id') });
+      // A sweep answers its run, or that nothing is open to check.
+      if (Object.hasOwn(result, 'run_id')) {
+        assertExactKeys(result, ['run_id'], 'Runs response');
+        return checked({ run_id: runId(result.run_id, 'Sweep run id') });
+      }
+      assertExactKeys(result, ['state'], 'Runs response');
       if (result.state !== 'nothing_to_check') fail('Sweep state is invalid');
       return checked({ state: 'nothing_to_check' });
     default:
