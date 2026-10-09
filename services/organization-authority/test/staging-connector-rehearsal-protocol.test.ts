@@ -27,12 +27,10 @@ describe('closed staging connector protocol', () => {
   });
 
   it('accepts only fixed-scope Jira read verification without caller-selected content or budgets', () => {
-    for (const tool of ['jira'] as const) {
-      const request = { ...binding, action: 'verify-read', tool };
-      expect(validateStagingConnectorRehearsalRequestV3(request)).toEqual(request);
-      for (const extra of [{ limit: 2 }, { channel_id: 'COTHER' }, { project: 'PRIVATE' }, { query: 'private text' }]) {
-        expect(() => validateStagingConnectorRehearsalRequestV3({ ...request, ...extra })).toThrow('value is invalid');
-      }
+    const request = { ...binding, action: 'verify-read', tool: 'jira' };
+    expect(validateStagingConnectorRehearsalRequestV3(request)).toEqual(request);
+    for (const extra of [{ limit: 2 }, { channel_id: 'COTHER' }, { project: 'PRIVATE' }, { query: 'private text' }]) {
+      expect(() => validateStagingConnectorRehearsalRequestV3({ ...request, ...extra })).toThrow('value is invalid');
     }
     for (const tool of ['granola', 'slack']) expect(() => validateStagingConnectorRehearsalRequestV3({ ...binding, action: 'verify-read', tool })).toThrow('value is invalid');
   });

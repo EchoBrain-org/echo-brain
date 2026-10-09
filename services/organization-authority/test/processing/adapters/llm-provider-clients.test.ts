@@ -18,41 +18,55 @@ const generationRequest: StructuredGenerationRequest = {
   maxOutputTokens: 4096,
 };
 
+const USAGE = {
+  prompt_tokens: 40,
+  completion_tokens: 5,
+  total_tokens: 45,
+  prompt_tokens_details: { cached_tokens: 3 },
+  completion_tokens_details: { reasoning_tokens: 2 },
+};
+const OBSERVED = {
+  inputTokens: 40,
+  outputTokens: 5,
+  totalTokens: 45,
+  cachedInputTokens: 3,
+  reasoningTokens: 2,
+};
+
 function headers(init: RequestInit): Headers {
   return new Headers(init.headers);
+}
+
+function client(
+  body: unknown,
+  onRequest?: (url: string, init: RequestInit) => void,
+): OpenRouterClient {
+  return new OpenRouterClient({
+    credentialRef: 'env:OPENROUTER_API_KEY',
+    credentialResolver: () => 'openrouter-secret',
+    fetchImpl: async (url, init) => {
+      onRequest?.(String(url), init ?? {});
+      return new Response(JSON.stringify(body), { status: 200 });
+    },
+  });
 }
 
 describe('OpenRouter provider client', () => {
   it('uses stable Chat Completions with strict required-parameter routing', async () => {
     const calls: { url: string; init: RequestInit }[] = [];
-    const client = new OpenRouterClient({
-      credentialRef: 'env:OPENROUTER_API_KEY',
-      credentialResolver: () => 'openrouter-secret',
-      fetchImpl: async (url, init) => {
-        calls.push({ url: String(url), init: init ?? {} });
-        return new Response(
-          JSON.stringify({
-            id: 'gen_123',
-            choices: [
-              {
-                message: { content: '{"signals":[]}' },
-                finish_reason: 'stop',
-              },
-            ],
-            usage: {
-              prompt_tokens: 40,
-              completion_tokens: 5,
-              total_tokens: 45,
-              prompt_tokens_details: { cached_tokens: 3 },
-              completion_tokens_details: { reasoning_tokens: 2 },
-            },
-          }),
-          { status: 200 },
-        );
+    const result = await client(
+      {
+        id: 'gen_123',
+        choices: [
+          {
+            message: { content: '{"signals":[]}' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: USAGE,
       },
-    });
-
-    const result = await client.generateStructured({
+      (url, init) => calls.push({ url, init }),
+    ).generateStructured({
       ...generationRequest,
       model: 'anthropic/claude-sonnet-test',
     });
@@ -77,109 +91,78 @@ describe('OpenRouter provider client', () => {
     expect(result).toEqual({
       content: '{"signals":[]}',
       requestId: 'gen_123',
-      inputTokens: 40,
-      outputTokens: 5,
-      totalTokens: 45,
-      cachedInputTokens: 3,
-      reasoningTokens: 2,
+      ...OBSERVED,
       stopReason: 'stop',
     });
   });
 
   it('checks model identity and structured-output support', async () => {
-    const client = new OpenRouterClient({
-      credentialRef: 'env:OPENROUTER_API_KEY',
-      credentialResolver: () => 'openrouter-secret',
-      fetchImpl: async (url) => {
-        expect(String(url)).toBe(
-          'https://openrouter.ai/api/v1/model/openai/gpt-test',
-        );
-        return new Response(
-          JSON.stringify({
-            data: {
-              id: 'openai/gpt-test',
-              supported_parameters: ['response_format', 'structured_outputs'],
-            },
-          }),
-          { status: 200 },
-        );
+    const modelClient = client(
+      {
+        data: {
+          id: 'openai/gpt-test',
+          supported_parameters: ['response_format', 'structured_outputs'],
+        },
       },
-    });
+      (url) => {
+        expect(url).toBe('https://openrouter.ai/api/v1/model/openai/gpt-test');
+      },
+    );
 
     await expect(
-      client.verifyModel('openai/gpt-test'),
+      modelClient.verifyModel('openai/gpt-test'),
     ).resolves.toBeUndefined();
   });
 
   it.each([
     {
       finishReason: 'length',
+      reply: 'content',
       code: 'temporarily_unavailable',
       retryable: true,
     },
     {
       finishReason: 'content_filter',
+      reply: 'content',
       code: 'permanently_rejected',
       retryable: false,
     },
     {
       finishReason: 'error',
+      reply: 'content',
       code: 'temporarily_unavailable',
       retryable: true,
     },
+    {
+      finishReason: 'stop',
+      reply: 'refusal',
+      code: 'permanently_rejected',
+      retryable: false,
+    },
   ])(
-    'retains only bounded usage when the provider finishes with $finishReason',
-    async ({ finishReason, code, retryable }) => {
-      const client = new OpenRouterClient({
-        credentialRef: 'env:OPENROUTER_API_KEY',
-        credentialResolver: () => 'openrouter-secret',
-        fetchImpl: async () =>
-          new Response(
-            JSON.stringify({
-              id: 'generation-id-must-not-escape',
-              choices: [
-                {
-                  message: { content: 'response-content-must-not-escape' },
-                  finish_reason: finishReason,
-                },
-              ],
-              usage: {
-                prompt_tokens: 40,
-                completion_tokens: 5,
-                total_tokens: 45,
-                prompt_tokens_details: { cached_tokens: 3 },
-                completion_tokens_details: { reasoning_tokens: 2 },
-              },
-            }),
-            { status: 200 },
-          ),
-      });
-
-      let failure: unknown;
-      try {
-        await client.generateStructured({
-          ...generationRequest,
-          model: 'openai/gpt-test',
-        });
-      } catch (error) {
-        failure = error;
-      }
+    'retains only bounded usage when the provider finishes with $finishReason and a $reply reply',
+    async ({ finishReason, reply, code, retryable }) => {
+      const failure = await client({
+        id: 'generation-id-must-not-escape',
+        choices: [
+          {
+            message: { [reply]: 'model-reply-must-not-escape' },
+            finish_reason: finishReason,
+          },
+        ],
+        usage: USAGE,
+      })
+        .generateStructured({ ...generationRequest, model: 'openai/gpt-test' })
+        .catch((error: unknown) => error);
 
       expect(failure).toBeInstanceOf(StructuredGenerationAttemptError);
       expect(failure).toMatchObject({
         code,
         retryable,
-        observation: {
-          inputTokens: 40,
-          outputTokens: 5,
-          totalTokens: 45,
-          cachedInputTokens: 3,
-          reasoningTokens: 2,
-          stopReason: finishReason,
-        },
+        observation: { ...OBSERVED, stopReason: finishReason },
       });
       expect(JSON.stringify(failure)).not.toContain(
-        'response-content-must-not-escape',
+        'model-reply-must-not-escape',
       );
       expect(JSON.stringify(failure)).not.toContain(
         'generation-id-must-not-escape',
@@ -187,76 +170,15 @@ describe('OpenRouter provider client', () => {
     },
   );
 
-  it('retains bounded token usage when the model refuses a completed generation', async () => {
-    const client = new OpenRouterClient({
-      credentialRef: 'env:OPENROUTER_API_KEY',
-      credentialResolver: () => 'openrouter-secret',
-      fetchImpl: async () =>
-        new Response(
-          JSON.stringify({
-            choices: [
-              {
-                message: { refusal: 'private refusal text' },
-                finish_reason: 'stop',
-              },
-            ],
-            usage: {
-              prompt_tokens: 40,
-              completion_tokens: 5,
-              total_tokens: 45,
-              prompt_tokens_details: { cached_tokens: 3 },
-              completion_tokens_details: { reasoning_tokens: 2 },
-            },
-          }),
-          { status: 200 },
-        ),
-    });
-
-    let failure: unknown;
-    try {
-      await client.generateStructured({
-        ...generationRequest,
-        model: 'openai/gpt-test',
-      });
-    } catch (error) {
-      failure = error;
-    }
-
-    expect(failure).toBeInstanceOf(StructuredGenerationAttemptError);
-    expect(failure).toMatchObject({
-      code: 'permanently_rejected',
-      retryable: false,
-      observation: {
-        inputTokens: 40,
-        outputTokens: 5,
-        totalTokens: 45,
-        cachedInputTokens: 3,
-        reasoningTokens: 2,
-        stopReason: 'stop',
-      },
-    });
-    expect(JSON.stringify(failure)).not.toContain('private refusal text');
-  });
-
   it('treats HTTP 200 provider errors as failures', async () => {
-    const client = new OpenRouterClient({
-      credentialRef: 'env:OPENROUTER_API_KEY',
-      credentialResolver: () => 'openrouter-secret',
-      fetchImpl: async () =>
-        new Response(
-          JSON.stringify({
-            error: {
-              code: 502,
-              message: 'upstream failed',
-              metadata: { error_type: 'provider_unavailable' },
-            },
-          }),
-          { status: 200 },
-        ),
-    });
-
     await expect(
-      client.generateStructured({
+      client({
+        error: {
+          code: 502,
+          message: 'upstream failed',
+          metadata: { error_type: 'provider_unavailable' },
+        },
+      }).generateStructured({
         ...generationRequest,
         model: 'openai/gpt-test',
       }),

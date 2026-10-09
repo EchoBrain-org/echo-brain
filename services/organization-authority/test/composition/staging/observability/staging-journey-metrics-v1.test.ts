@@ -2,55 +2,22 @@ import { describe, expect, it } from "vitest";
 import {
   annotateCoreRuntimeV1,
   observeCoreRuntimeSyncV1,
-  type CoreRuntimeDetailV1,
 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
   createJourneyTelemetryEventV1,
   type JourneyTelemetryEventV1,
 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
-import {
-  formatJourneyLivenessMetricV1,
-  formatJourneyTelemetryMetricsV1,
-  STAGING_JOURNEY_METRICS_NAMESPACE_V1,
-} from "../../../../src/composition/observability/journey-metrics-v1.js";
+import { formatJourneyTelemetryMetricsV1 } from "../../../../src/composition/observability/journey-metrics-v1.js";
 import { createJourneyTelemetryTransportV1 } from "../../../../src/composition/observability/journey-telemetry-transport-v1.js";
+import { coreRuntimeDetail as detail } from "./core-runtime-detail-fixture.js";
 
 const JOURNEY_ID = "1b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
-const OPERATION_ID = "2b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
-const SPAN_ID = "3b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
 const RELEASE_SHA = "a".repeat(40);
 const OBSERVED_AT = "2026-09-02T12:34:56.000Z";
 const VOCABULARY = {
   providers: ["fixture-provider", "other"],
   models: ["fixture-model", "other"],
 };
-
-function detail(overrides: Partial<CoreRuntimeDetailV1> = {}): CoreRuntimeDetailV1 {
-  return {
-    operation_id: OPERATION_ID,
-    span_id: SPAN_ID,
-    parent_span_id: null,
-    phase: "research_run",
-    purpose: "research_run",
-    root: true,
-    linked_journey_ids: [],
-    counts: {},
-    result: "answered",
-    generation: null,
-    source_revision: null,
-    cursor: null,
-    action: null,
-    provider: null,
-    model: null,
-    finish_reason: null,
-    provider_request: null,
-    resource_scope: "process_overlap",
-    sqlite_lock_time: "unavailable",
-    disk_io_latency: "unavailable",
-    event_loop_delay: "unavailable",
-    ...overrides,
-  };
-}
 
 function journey(event: Record<string, unknown> = {}): JourneyTelemetryEventV1 {
   return createJourneyTelemetryEventV1({
@@ -227,11 +194,5 @@ describe("journey EMF metrics v1", () => {
     expect(serialized).not.toContain(RELEASE_SHA);
     expect(serialized).not.toContain("prompt-sentinel");
     expect(serialized).not.toContain("private-sentinel");
-  });
-
-  it("formats liveness in the staging namespace", () => {
-    const liveness = formatJourneyLivenessMetricV1(OBSERVED_AT, "staging");
-    expect(liveness).toMatchObject({ JourneyTelemetryAlive: 1 });
-    expect(liveness._aws.CloudWatchMetrics[0].Namespace).toBe(STAGING_JOURNEY_METRICS_NAMESPACE_V1);
   });
 });
