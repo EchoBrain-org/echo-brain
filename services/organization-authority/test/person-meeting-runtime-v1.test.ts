@@ -3,6 +3,8 @@ import { SqlitePersonOriginalItemsV1 } from '../src/adapters/persistence/sqlite/
 import { createPersonListRouteV1 } from '../src/composition/person-list-v1-route.js';
 import { SqlitePersonListDirectoryV1 } from '../src/adapters/persistence/sqlite/person-list-directory-v1.js';
 import { describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { createStagingSyntheticPersonalMeetingProviderV1, StagingSyntheticMeetingStoreV1 } from '@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1';
 const refusal = vi.hoisted(() => ({ next: 0 }));
 vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (importOriginal) => {
   const original = await importOriginal<typeof import('@echo-brain/organization-protocol/record-codec-support-v4')>();
@@ -101,7 +103,8 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
             signals: [...decisions.signals, ...(options.ownedAction ? [{ id: 'act-1', kind: 'action' as const, text: 'Send the pilot plan.', subject: null, confidence: 1, owner: 'Rafael Moreno', due_at: null,
               evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }] : []),
               ...Array.from({ length: options.actions ?? 0 }, (_, i) => ({ id: `act-${i + 2}`, kind: 'action' as const, text: `Follow up on item ${i + 2}.`, subject: null, confidence: 1, owner: null, due_at: null,
-                evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }))].map(signal => ({ ...signal, evidence: signal.evidence.map(evidence => ({ ...evidence, meeting_id: meeting.id })) })) }; } };
+                evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }))].map(signal => ({ ...signal, evidence: signal.evidence.map(evidence => ({ ...evidence, meeting_id: meeting.id,
+                  ...(toolIsSynthetic(meeting) ? { block_id: meeting.content[0]!.id } : {}) })) })) }; } };
       },
     },
     extraction_attempts: { reserve: () => ({ status: 'reserved', attempt: 1, claim_id: 'claim' }), complete() {} },
@@ -166,7 +169,60 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, fakeProvider, sources, intake, processUntilIdle, pendingReview, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
     duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: () => { failExtraction = true; } };
 }
+function toolIsSynthetic(meeting: MeetingDocument) { return meeting.provenance.source.adapter_id === 'staging-synthetic-meeting'; }
 describe('personal meeting intake uses the shared processing path', () => {
+  it('submits a custom synthetic meeting through extraction, one human review and one after-record trigger, surviving retries', async () => {
+    const f = await fixture(), storage = new Database(':memory:');
+    try {
+      f.grantProject();
+      const provider = createStagingSyntheticPersonalMeetingProviderV1({ custom_store: new StagingSyntheticMeetingStoreV1(storage) });
+      const calls: AfterApprovedRecordEventV1[] = [];
+      const create = () => f.create([provider], { approval_core: { after_record: [(_db, event) => { calls.push(event); }] } });
+      let runtime = create();
+      const meeting = { id: 'synthetic-custom-cohort-review', title: 'Cohort rehearsal', notes: 'Ship the cohort onboarding.', transcript: 'Synthetic speaker: ship the cohort onboarding.' };
+      const submit = { operation: 'submit', meeting, project_id: project, retain: true } as const;
+      await expect(f.call(runtime, submit, 'owner', 'synthetic')).resolves.toEqual({ status: 'queued', meeting_id: meeting.id });
+      await f.call(runtime, submit, 'owner', 'synthetic');
+      expect(calls).toEqual([]);
+      const intake = new SqlitePersonMeetingIntakeV1(f.db, provider.cursor);
+      expect(intake.checkpoint(intake.list()[0]!.source_key).manual).toEqual([meeting.id]);
+      // Restart the shared runtime before processing the durable queue.
+      runtime = create();
+      for (let i = 0; i < 3; i++) await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+      const [pending] = (await f.call(runtime, { operation: 'reviews' }, 'owner', 'synthetic')).reviews;
+      expect(pending).toMatchObject({ title: 'SYNTHETIC STAGING - Cohort rehearsal', status: 'pending', project_ids: [project] });
+      expect(f.extracted()).toBe(1); expect(calls).toEqual([]);
+      expect((await f.call(runtime, { operation: 'reviews' }, 'other', 'synthetic')).reviews).toEqual([]);
+      const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id }, 'owner', 'synthetic');
+      const approve = { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256,
+        command_id: 'synthetic-review-1', action: 'approve', project_ids: [project], share_transcript: true, owners: [] } as const;
+      await f.call(runtime, approve, 'owner', 'synthetic');
+      await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
+      expect(calls).toHaveLength(1);
+      await f.call(runtime, submit, 'owner', 'synthetic');
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+      await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
+      expect(f.extracted()).toBe(1); expect(calls).toHaveLength(1);
+      expect((await f.call(runtime, { operation: 'reviews' }, 'owner', 'synthetic')).reviews).toHaveLength(1);
+      expect(f.db.prepare("SELECT source_custodian_assurance FROM authority_live_source_admission_v2 WHERE source_adapter_id='staging-synthetic-meeting'").pluck().get()).toBe('staging_synthetic');
+    } finally { storage.close(); }
+  });
+
+  it('refuses custom submissions by employees, outside a joined project, or without the staging capability', async () => {
+    const f = await fixture(), storage = new Database(':memory:');
+    try {
+      const provider = createStagingSyntheticPersonalMeetingProviderV1({ custom_store: new StagingSyntheticMeetingStoreV1(storage) });
+      const runtime = f.create([provider]);
+      const submit = { operation: 'submit', meeting: { id: 'synthetic-custom-one', title: 'Test', notes: 'Ship the cohort onboarding.', transcript: '' }, project_id: null, retain: true } as const;
+      await expect(f.call(runtime, submit, 'other', 'synthetic')).rejects.toMatchObject({ code: 'unauthorized' });
+      f.grantProject(foreignProject, 'other');
+      await expect(f.call(runtime, { ...submit, project_id: foreignProject }, 'owner', 'synthetic')).rejects.toMatchObject({ code: 'unauthorized' });
+      await expect(f.call(f.create(), submit, 'owner', 'synthetic')).rejects.toMatchObject({ code: 'not_found' });
+      await expect(f.call(f.create([createStagingSyntheticPersonalMeetingProviderV1({})]), submit, 'owner', 'synthetic')).rejects.toMatchObject({ code: 'not_found' });
+      expect(storage.prepare('SELECT count(*) FROM staging_custom_meetings_v1').pluck().get()).toBe(0);
+      expect(f.intake.list()).toHaveLength(0);
+    } finally { storage.close(); }
+  });
   it('refuses an import suggestion for a project the person is not in', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(foreignProject, 'other');
     await expect(f.call(runtime, { operation: 'import', meeting_id: id, project_id: foreignProject, retain: true })).rejects.toMatchObject({ code: 'unauthorized' });

@@ -4924,6 +4924,7 @@
       "license": "MIT",
       "dependencies": {
         "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-api": "0.0.0-dev.0",
         "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
         "@echo-brain/organization-processing": "0.0.0-dev.0",
         "better-sqlite3": "12.10.0"

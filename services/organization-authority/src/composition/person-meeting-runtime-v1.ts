@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { PERSON_MEETINGS_PATH_V2, validatePersonMeetingRequestV2, validatePersonMeetingResultV2,
-  type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2 } from '@echo-brain/organization-api';
+  type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonSyntheticMeetingV1 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
@@ -35,6 +35,8 @@ export interface PersonMeetingProviderV1 {
     folders(): Promise<PersonMeetingResultsV2['home']['folders']>;
     browse(folder: string): Promise<PersonMeetingResultsV2['browse']>;
     preview(meeting: string): Promise<PersonMeetingResultsV2['open']>;
+    /** Optional staging capability. Persists an immutable payload before its normal import is queued. */
+    submit?(meeting: PersonSyntheticMeetingV1): void;
   }>;
   source(setting: MeetingIntakeSettingV1, current: () => void): MeetingSourceAdapter & { requireCurrent(): void };
 }
@@ -261,11 +263,19 @@ export function createPersonMeetingRuntimeV1(options: {
         const currentProject = () => {
           session.current(); current();
           if (intake.currentPerson(person, project).grant_sha256 !== grant) throw new AuthorityOperationError('stale_access_state', 'Meeting project access changed');
+          if (input.operation === 'submit' && options.sessions.authenticateAccess({ access_token: token }).membership_type !== 'owner') {
+            throw new AuthorityOperationError('unauthorized', 'Only the staging owner can submit synthetic meetings');
+          }
         };
+        if (input.operation === 'submit') {
+          currentProject();
+          if (!session.submit) throw new AuthorityOperationError('not_found', 'Custom meeting submission unavailable');
+          session.submit(input.meeting);
+        }
         // Validate folder access here; the existing worker builds its content
         // baseline from the durable pending cursor without holding this request.
         if (input.operation === 'watch') await session.browse(input.folder_id!);
-        else await session.preview(input.meeting_id);
+        else await session.preview(input.operation === 'submit' ? input.meeting.id : input.meeting_id);
         return db.transaction(() => {
           currentProject();
           if (input.operation === 'watch' && settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
@@ -273,8 +283,9 @@ export function createPersonMeetingRuntimeV1(options: {
           const setting = ensurePersonMeetingSourceV1(providerIntake, { provider, person, session, commitments: id => processor.current_commitments?.(id), current: currentProject });
           // "Save to" records the watched folder's project or the import's suggestion; neither changes the source.
           if (input.operation === 'watch') providerIntake.watch(setting, input.folder_id, project, currentProject);
-          else providerIntake.enqueue(setting, input.meeting_id, project, currentProject);
+          else providerIntake.enqueue(setting, input.operation === 'submit' ? input.meeting.id : input.meeting_id, project, currentProject);
           observed.delete(setting.source_key);
+          if (input.operation === 'submit') return { status: 'queued', meeting_id: input.meeting.id };
           return { status: input.operation === 'watch' ? 'saved' : 'queued' };
         }).immediate();
       };

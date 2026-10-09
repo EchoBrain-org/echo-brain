@@ -1,5 +1,8 @@
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { PersonSyntheticMeetingV1 } from "@echo-brain/organization-api";
+import type { StagingSyntheticMeetingStoreV1 } from "./staging-synthetic-meeting-store-v1.js";
+export { StagingSyntheticMeetingStoreV1 } from "./staging-synthetic-meeting-store-v1.js";
 import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { ProviderHttpApplicationV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -145,7 +148,7 @@ export async function readStagingSyntheticMeetingFixturesV1(directory: string): 
     }
     const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
     assertCanonicalMeetingDocument(parsed);
-    if (!MEETING_ID.test(parsed.id) || parsed.id === STAGING_SYNTHETIC_CANARY_MEETING_ID_V1 || meetings.some(meeting => meeting.id === parsed.id)) {
+    if (!MEETING_ID.test(parsed.id) || parsed.id.startsWith("synthetic-custom-") || parsed.id === STAGING_SYNTHETIC_CANARY_MEETING_ID_V1 || meetings.some(meeting => meeting.id === parsed.id)) {
       throw new Error("staging synthetic fixture meeting ids must be distinct lowercase ids");
     }
     meetings.push(parsed);
@@ -165,12 +168,14 @@ function notes(meeting: MeetingDocument): string {
  */
 export function createStagingSyntheticPersonalMeetingProviderV1(options: {
   readonly fixtures_directory?: string;
+  readonly custom_store?: StagingSyntheticMeetingStoreV1;
 }) {
   let fixtures: Promise<readonly MeetingDocument[]> | undefined;
   const loadFixtures = () => options.fixtures_directory === undefined ? Promise.resolve([]) :
     (fixtures ??= readStagingSyntheticMeetingFixturesV1(options.fixtures_directory).catch((error: unknown) => { fixtures = undefined; throw error; }));
   // A queued entry is a canary entry naming its release or a fixture id; the bare canary id is neither.
-  const meeting = async (entry: string): Promise<MeetingDocument | undefined> => {
+  const meeting = async (entry: string, sourceInstance: string): Promise<MeetingDocument | undefined> => {
+    if (entry.startsWith("synthetic-custom-")) return options.custom_store?.get(sourceInstance, entry);
     const releaseId = stagingSyntheticCanaryReleaseV1(entry);
     return releaseId !== undefined ? stagingSyntheticCanaryMeetingV1(releaseId) : (await loadFixtures()).find(fixture => fixture.id === entry);
   };
@@ -195,12 +200,13 @@ export function createStagingSyntheticPersonalMeetingProviderV1(options: {
       return {
         identity, custodian: { kind: "echo-staging-synthetic-custodian-v1", person: identity.instance_id },
         email: "staging-synthetic@example.test", workspace: "Synthetic staging meetings", current,
+        ...(options.custom_store === undefined ? {} : { submit(input: PersonSyntheticMeetingV1) { current(); options.custom_store!.save(identity, input); current(); } }),
         async folders(): Promise<readonly { readonly id: string; readonly title: string; readonly count: number }[]> { return []; },
         async browse(_folder: string): Promise<{ readonly meetings: readonly { readonly id: string; readonly title: string; readonly date: string }[] }> {
           throw new AuthorityOperationError("not_found", "Synthetic meetings have no folders");
         },
         async preview(id: string) {
-          const found = await meeting(id);
+          const found = await meeting(id, identity.instance_id);
           current();
           if (found === undefined) throw new AuthorityOperationError("not_found", "Synthetic meeting unavailable");
           const text = notes(found);
@@ -223,7 +229,7 @@ export function createStagingSyntheticPersonalMeetingProviderV1(options: {
           const checkpoint = readStagingSyntheticCheckpointV1(request.cursor ?? writeStagingSyntheticCheckpointV1({ folder: null, baseline: false, revisions: {}, manual: [] }));
           const id = checkpoint.manual[0];
           if (id === undefined) return { meetings: [] };
-          const found = await meeting(id);
+          const found = await meeting(id, identity.instance_id);
           if (found === undefined) throw new AdapterError("permanently_rejected", "staging synthetic meeting is not available to this runtime", false);
           current();
           return { meetings: [{ ...found, provenance: { ...found.provenance, source: identity } }],
