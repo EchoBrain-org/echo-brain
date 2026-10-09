@@ -33,10 +33,11 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * decision (`record`) or of a project (`project`), over the items the caller
  * can see; it answers the run, or `nothing_to_check`. `home` reports
  * `sweep_due` when an open item the caller sent or owns was last checked, by
- * anyone, more than 24 hours ago or never, no sweep of theirs is pending or
- * running, and none was asked for in the last hour (at most hourly, so a
- * sweep that keeps failing is not asked for on every load; an explicit
- * `sweep` request is never limited).
+ * anyone, more than 24 hours ago or never, none of their sweeps was asked for
+ * in the last hour, and none is running (at most hourly, so a sweep that
+ * keeps failing is not asked for on every load; a sweep still waiting after
+ * the hour is asked for again, and `sweep` hands back that run to start; an
+ * explicit `sweep` request is never limited).
  */
 export const PERSON_RUNS_PATH_V1 = '/v1/person/runs';
 
@@ -136,7 +137,7 @@ export interface PersonRunsResultsV1 {
   view: { readonly card: PersonImpactCardV1; readonly checked_at: string; readonly hidden: number };
   home: { readonly send: readonly PersonHomeSendV1[]; readonly items: readonly PersonOpenItemV1[];
           readonly landed: number; readonly waiting: number; readonly last_checked_at: string | null;
-          /** The caller's open items are due a sweep (section 6): the desktop asks for a `mine` sweep. At most hourly: never while a sweep of theirs waits or runs, nor within an hour of their last one. */
+          /** The caller's open items are due a sweep (section 6): the desktop asks for a `mine` sweep. At most hourly: not within an hour of their last sweep, nor while one of theirs runs. */
           readonly sweep_due: boolean };
   items: { readonly items: readonly PersonOpenItemV1[]; readonly next_cursor: string | null;
            readonly summary: PersonOpenItemsSummaryV1; readonly stages: readonly PersonImpactStageV1[] };

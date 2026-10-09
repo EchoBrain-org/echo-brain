@@ -24,7 +24,7 @@ import type { PersonAccessAuthorization } from '@echo-brain/organization-authori
 import { AuthorityOperationError, type AuthorityErrorCode } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { ImpactItemRowV1, ImpactItemStateV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
-import type { SqliteTriggerRunsV1, TriggerRunRowV1, TriggerRunScopeV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
+import { triggerRunStateAtV1, type SqliteTriggerRunsV1, type TriggerRunRowV1, type TriggerRunScopeV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
 import { openItemAccessV1, openItemDecisionAccessV1, openItemSendAccessV1, type OpenItemAccessV1, type OpenItemFactsV1 } from './open-items-policy-v1.js';
 import type { bindPersonLiveEvidenceDeskV1, CreatePersonLiveAnswerRouteOptionsV1, PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
@@ -58,7 +58,7 @@ export interface CreatePersonOpenItemsV1Options extends OpenItemSourcesV1 {
   readonly bindDesk: typeof bindPersonLiveEvidenceDeskV1;
   readonly bind_options: CreatePersonLiveAnswerRouteOptionsV1;
   readonly live_sources?: CreatePersonLiveAnswerRouteOptionsV1['live_sources'];
-  /** The clock Home tells a stale check and a recent sweep by. */
+  /** The clock Home tells a stale check and a recent sweep by, and a stage a lapsed lease. */
   readonly now?: () => Date;
 }
 /** Where open items, the facts the policy weighs for them, and each decision's first line are read. */
@@ -480,14 +480,15 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const theirs = visible.filter(entry => approvedBy(entry.row, viewer) || entry.row.owner_membership_id === viewer.membership);
       const checks = theirs.flatMap(entry => (entry.row.check === null ? [] : [entry.row.check.at])).sort();
 
-      // A sweep is due (section 6) for one of those items that nobody checked in the last day, unless one of
-      // the caller's sweeps is waiting or running, or one was asked for in the last hour (R32): a sweep that keeps failing, or that
-      // leaves items unassessed, is not asked for again on every load. Check now is the caller's own request, and never limited.
+      // A sweep is due (section 6) for one of those items that nobody checked in the last day, unless the caller asked for a sweep in
+      // the last hour (R32: one that keeps failing, or leaves items unassessed, is not asked for on every load) or one of theirs is
+      // running. A sweep still waiting after the hour lets the desktop ask again, which hands back that run to start (R58). Check now
+      // is the caller's own request, and never limited.
       const time = now().getTime();
       const dayAgo = new Date(time - DAY_MS).toISOString();
       const stale = theirs.some(entry => entry.row.check === null || entry.row.check.at < dayAgo);
       const newest = stale ? options.runs.newestSweep(actor) : undefined;
-      const sweep_due = stale && options.runs.liveSweep(actor) === undefined && (newest === undefined || newest.created_at <= new Date(time - HOUR_MS).toISOString());
+      const sweep_due = stale && (newest === undefined || newest.created_at <= new Date(time - HOUR_MS).toISOString()) && options.runs.runningSweep(actor) === undefined;
       return checked('home', {
         send: send.slice(0, PERSON_HOME_ROWS_V1), items: await present(viewer, context, shown, input.signal),
         landed: theirs.filter(entry => entry.row.check?.verdict === 'landed').length,
@@ -559,10 +560,12 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         .filter(record => openItemDecisionAccessV1({ reads_decision: listed.has(record) || context.decisions.has(record) }).see_decision);
       const latestRun = new Map<Sha256Digest, TriggerRunRowV1>();
       for (const run of options.runs.impactRunsFor(stageRecords)) if (run.record_sha256 !== null) latestRun.set(run.record_sha256, run);
+      // A check whose attempt stopped without finishing reads as pending, as its run is listed (R60).
+      const at = now().toISOString();
       const stages: PersonImpactStageV1[] = stageRecords.flatMap(record => {
         const run = latestRun.get(record);
         return run === undefined ? [] : [{
-          record_sha256: record, run_id: run.run_id, state: run.state, error_code: run.state === 'failed' ? run.error_code ?? 'research_failed' : null, mine: runFor(run, viewer),
+          record_sha256: record, run_id: run.run_id, state: triggerRunStateAtV1(run, at), error_code: run.state === 'failed' ? run.error_code ?? 'research_failed' : null, mine: runFor(run, viewer),
         }];
       }).slice(0, SCOPE_DECISIONS_MAX);
 

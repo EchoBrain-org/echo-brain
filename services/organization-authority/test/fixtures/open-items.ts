@@ -142,6 +142,10 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
   };
   const decisionCitation = { kind: 'approved_record' as const, atom_id: canonicalSha256('pilot planning atom'), record_sha256: recordSha256, policy_id: 'project-members-readable-person-v1' as const };
   const readable = vi.fn((input: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[] }) => {
+    // As the Authority's record search does: its project grants are read in a transaction of their own, which never nests, and
+    // the session is authenticated first.
+    if (db.inTransaction) throw new Error('project context transaction is not reentrant');
+    sessions.authenticateAccess({ access_token: input.access_token });
     const name = token(input.access_token);
     return new Map(input.record_sha256s.filter(sha => sha === recordSha256 && reads(name)).map(sha => [sha, Object.freeze({
       approval_id: f.approvalId, record_sha256: sha, title: 'Pilot planning', approved_at: '2026-10-07T09:00:00.000Z', project_ids: Object.freeze([f.projectA]) as never,

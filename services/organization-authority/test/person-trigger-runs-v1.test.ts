@@ -237,6 +237,26 @@ describe('open items written when an impact check finishes', () => {
     expect(f.jira_owners.assignees).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'ari', ticket_ids: ['10012'] }));
   });
 
+  it('reports a run whose attempt stopped without finishing as pending, without changing it, and starts it again (R60)', async () => {
+    const f = await openItemsFixture();
+    const mina = { organization_id: f.person.organization_id, principal_id: f.people.mina.principal_id, membership_id: f.membership('mina') };
+    // The Authority stops while Ari's impact check and Mina's sweep run.
+    if (f.runs.claim(f.person, f.runId, 60_000).kind !== 'claimed') throw new Error('expected lease');
+    const sweep = f.runs.enqueueSweep(mina, { kind: 'mine' });
+    if (f.runs.claim(mina, sweep.run_id, 60_000).kind !== 'claimed') throw new Error('expected lease');
+    const stage = async () => (await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record, summary_only: true } })).stages;
+    expect((await f.app.list({ access_token: 'ari' })).runs.map(run => run.state)).toEqual(['running']);
+    expect(await stage()).toMatchObject([{ run_id: f.runId, state: 'running' }]);
+    f.advance(60_001);
+    expect((await f.app.list({ access_token: 'ari' })).runs).toMatchObject([{ run_id: f.runId, trigger: 'approved_record', state: 'pending', error_code: null }]);
+    expect((await f.app.list({ access_token: 'mina' })).runs).toMatchObject([{ run_id: sweep.run_id, trigger: 'sweep', state: 'pending', error_code: null }]);
+    expect(await stage()).toMatchObject([{ run_id: f.runId, state: 'pending', error_code: null }]);
+    expect([f.runs.readUnfenced(f.runId)!.state, f.runs.readUnfenced(sweep.run_id)!.state]).toEqual(['running', 'running']);
+    // The desktop starts it again: claim takes over the lapsed attempt.
+    await expect(f.app.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id: f.runId } })).resolves.toEqual({ state: 'running' });
+    await vi.waitFor(() => expect(f.runs.read(f.person, f.runId)!.state).toBe('done'));
+  });
+
   it('matches an ECHO action owner by a name exactly one active member holds', async () => {
     const f = await openItemsFixture({ actionOwner: 'rafael  MORENO' });
     await f.finishImpactRun();

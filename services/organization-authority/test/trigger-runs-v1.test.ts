@@ -202,14 +202,14 @@ describe('SQLite trigger runs v1', () => {
     expect(f.runs.enqueueSweep(f.owner, scope)).toMatchObject({ created: true });
   });
 
-  it('finds the live sweep of any scope, the impact runs of records, and any run by id', async () => {
+  it('finds the newest and the running sweep of any scope, the impact runs of records, and any run by id', async () => {
     const f = await approvedRunFixture({ runs: 2 });
     const impact = f.runs.list(f.owner, 10);
-    expect(f.runs.liveSweep(f.owner)).toBeUndefined();
+    expect(f.runs.newestSweep(f.owner)).toBeUndefined();
     f.advance(1_000);
     const sweep = f.runs.enqueueSweep(f.owner, { kind: 'record', record_sha256: f.recordSha256 });
-    expect(f.runs.liveSweep(f.owner)).toMatchObject({ run_id: sweep.run_id, trigger: 'sweep', record_sha256: null, scope: { kind: 'record', record_sha256: f.recordSha256 } });
-    expect(f.runs.liveSweep(f.stranger)).toBeUndefined();
+    expect(f.runs.newestSweep(f.owner)).toMatchObject({ run_id: sweep.run_id, trigger: 'sweep', record_sha256: null, scope: { kind: 'record', record_sha256: f.recordSha256 } });
+    expect(f.runs.newestSweep(f.stranger)).toBeUndefined();
     expect(f.runs.list(f.owner, 10).map(row => row.trigger)).toEqual(['sweep', 'approved_record', 'approved_record']);
     expect(f.runs.read(f.stranger, sweep.run_id)).toBeUndefined();
     expect(f.runs.readUnfenced(sweep.run_id)).toMatchObject({ run_id: sweep.run_id, actor: f.owner, scope: { kind: 'record' } });
@@ -220,9 +220,9 @@ describe('SQLite trigger runs v1', () => {
     finishImpactRuns(f);
     const lease = f.runs.claim(f.owner, sweep.run_id, 600_000);
     if (lease.kind !== 'claimed') throw new Error('expected lease');
-    expect(f.runs.liveSweep(f.owner)).toMatchObject({ run_id: sweep.run_id, state: 'running' });
+    expect(f.runs.runningSweep(f.owner)).toMatchObject({ run_id: sweep.run_id, state: 'running' });
     expect(f.runs.finish(sweep.run_id, lease.lease_token, card())).toBe(true);
-    expect(f.runs.liveSweep(f.owner)).toBeUndefined();
+    expect(f.runs.runningSweep(f.owner)).toBeUndefined();
   });
 
   it('starts a sweep only once none of the person\'s impact checks is pending or running', async () => {
@@ -244,6 +244,18 @@ describe('SQLite trigger runs v1', () => {
     const other = await approvedRunFixture();
     const strangers = other.runs.enqueueSweep(other.stranger, { kind: 'mine' });
     expect(other.runs.claim(other.stranger, strangers.run_id, 600_000).kind).toBe('claimed');
+  });
+
+  it('reads a person\'s running sweep only while its lease holds', async () => {
+    const f = await approvedRunFixture();
+    finishImpactRuns(f);
+    const sweep = f.runs.enqueueSweep(f.owner, { kind: 'mine' });
+    expect(f.runs.runningSweep(f.owner)).toBeUndefined();                           // pending
+    expect(f.runs.claim(f.owner, sweep.run_id, 600_000).kind).toBe('claimed');
+    expect(f.runs.runningSweep(f.owner)).toMatchObject({ run_id: sweep.run_id, state: 'running' });
+    expect(f.runs.runningSweep(f.stranger)).toBeUndefined();
+    f.advance(600_001);
+    expect(f.runs.runningSweep(f.owner)).toBeUndefined();                           // its attempt stopped without finishing
   });
 
   it('reads a person\'s newest sweep, whatever its scope or state', async () => {

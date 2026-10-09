@@ -90,8 +90,10 @@ function stillSeen(sources: PersonSweepSourcesV1, viewer: OpenItemViewerV1, chec
 
 /**
  * One attempt of a sweep run: research the items it rechecks, as the caller,
- * and answer what the run stores and the checks its finishing transaction
- * writes with it (`write`). With no item left to check, it reads nothing.
+ * and answer what the run stores and, through `writes`, the checks its
+ * finishing transaction writes. With no item left to check, it reads nothing
+ * and binds no desk: `fenceSession` lets a diagnostic capture check the
+ * session alone.
  */
 export async function sweepOpenItemsV1(input: {
   readonly sources: PersonSweepSourcesV1;
@@ -99,16 +101,21 @@ export async function sweepOpenItemsV1(input: {
   readonly run: TriggerRunRowV1;
   /** Research on a desk bound to the caller in `scope`. */
   readonly research: (scope: DeskScope) => Promise<Research>;
+  /** Makes the caller's session the run's access fence, for an attempt that binds no desk. */
+  readonly fenceSession: () => void;
   readonly signal: AbortSignal;
   /** When this attempt read the items: the time its checks carry, so a check made meanwhile stays newer. */
   readonly checked_at: string;
-}): Promise<{ readonly result: SweepCountsV1; readonly write?: (transaction: Database.Database) => void }> {
+}): Promise<{ readonly result: SweepCountsV1; readonly writes?: () => (transaction: Database.Database) => void }> {
   const { sources, viewer, run } = input;
   if (run.scope === null) throw new Error('A sweep run has a scope');
   const context = sweepScopeOpenItemsV1(sources, viewer, run.scope);
   const checked = [...context.assessed].sort(longestUncheckedFirst).slice(0, PERSON_SWEEP_RESULT_LIMITS_V1.findings);
   // Every item closed, or went out of the caller's sight, since the sweep was asked for.
-  if (checked.length === 0) return { result: countsOf([]) };
+  if (checked.length === 0) {
+    input.fenceSession();
+    return { result: countsOf([]) };
+  }
 
   const decisionPart = openItemDecisionPartsV1(sources, context);
   const anchors = new Map<Sha256Digest, unknown>();
@@ -135,16 +142,20 @@ export async function sweepOpenItemsV1(input: {
   const output = await research.renderWithResearch({ trigger: SWEEP.name, brief: SWEEP.brief(event), renderer: SWEEP_RENDERER_V1, trigger_input: event, signal: input.signal });
   const result = validatePersonSweepResultV1(output.rendered, findings.length);
 
-  const seen = stillSeen(sources, viewer, checked);
   return {
     result: countsOf(result.findings),
-    write: transaction => {
-      for (const finding of result.findings) {
-        const { row } = checked[finding.finding_index]!;
-        // Not assessed leaves the last check as it is; an item the caller no longer sees keeps it too.
-        if (finding.verdict === null || !seen.has(row.item_id)) continue;
-        sources.items.recordCheck(transaction, { item_id: row.item_id, verdict: finding.verdict, by: viewer.membership, at: input.checked_at, run_id: run.run_id });
-      }
+    // Who sees what is asked again as the run finishes, in the same synchronous step as its transaction. It cannot run inside
+    // it: the record check behind it reads the person's project grants in a transaction of its own, which never nests.
+    writes: () => {
+      const seen = stillSeen(sources, viewer, checked);
+      return transaction => {
+        for (const finding of result.findings) {
+          const { row } = checked[finding.finding_index]!;
+          // Not assessed leaves the last check as it is; an item the caller no longer sees keeps it too.
+          if (finding.verdict === null || !seen.has(row.item_id)) continue;
+          sources.items.recordCheck(transaction, { item_id: row.item_id, verdict: finding.verdict, by: viewer.membership, at: input.checked_at, run_id: run.run_id });
+        }
+      };
     },
   };
 }

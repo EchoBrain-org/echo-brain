@@ -55,6 +55,16 @@ function publicRow(value: StoredRowV1): TriggerRunRowV1 {
 }
 
 /**
+ * A run's state as a reader is told it at `at`: a running run whose lease has
+ * lapsed (its attempt stopped without finishing, as when the Authority
+ * restarted mid-run) reads `pending`, because `claim` takes it again. The
+ * stored state is unchanged.
+ */
+export function triggerRunStateAtV1(row: Pick<TriggerRunRowV1, 'state' | 'lease_expires_at'>, at: string): TriggerRunStateV1 {
+  return row.state === 'running' && row.lease_expires_at !== null && row.lease_expires_at <= at ? 'pending' : row.state;
+}
+
+/**
  * Durable runs: an approved record's impact check, and sweeps that re-check open
  * items. Actor-fenced, except the reads named unfenced, whose callers apply the
  * open-items access policy before returning anything from them.
@@ -96,11 +106,11 @@ export class SqliteTriggerRunsV1 {
     });
   }
 
-  /** The actor's pending or running sweep of any scope. */
-  liveSweep(actor: ApprovalActorV1): TriggerRunRowV1 | undefined {
+  /** The actor's sweep of any scope that is running now: its attempt's lease still holds. */
+  runningSweep(actor: ApprovalActorV1): TriggerRunRowV1 | undefined {
     const found = this.database.prepare(`${selectRows} WHERE organization_id=? AND principal_id=? AND membership_id=?
-      AND trigger='sweep' AND state IN ('pending', 'running') ORDER BY created_at, run_id LIMIT 1`).get(
-      actor.organization_id, actor.principal_id, actor.membership_id) as StoredRowV1 | undefined;
+      AND trigger='sweep' AND state='running' AND lease_expires_at>? ORDER BY created_at, run_id LIMIT 1`).get(
+      actor.organization_id, actor.principal_id, actor.membership_id, this.timestamp()) as StoredRowV1 | undefined;
     return found === undefined ? undefined : publicRow(found);
   }
 

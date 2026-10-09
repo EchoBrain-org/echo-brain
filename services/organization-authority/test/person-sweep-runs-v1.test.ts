@@ -150,16 +150,18 @@ describe('sweep runs record a shared last check', () => {
     expect(runOf(await f.sweep('ari', MINE))).not.toBe(mine);
   });
 
-  it('says a sweep is due for stale items it would check, at most hourly, while Check now still queues one', async () => {
+  it('says a sweep is due for stale items, at most hourly and never while one runs, while Check now still queues one', async () => {
     const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'still_open', approved_record: 'still_open' } });
     expect(await f.sweepDue('ari')).toBe(true);                  // he sent both; neither was ever checked
     expect(await f.sweepDue('mina')).toBe(true);                 // she owns both
     expect(await f.sweepDue('rafael')).toBe(false);              // he reads the decision, but sent and owns nothing
     expect(await f.sweepDue('okafor')).toBe(false);
     const run_id = runOf(await f.sweep('ari', MINE));
-    expect(await f.sweepDue('ari')).toBe(false);                 // queued
+    expect(await f.sweepDue('ari')).toBe(false);                 // asked for within the hour
     f.advance(2 * HOUR);
-    expect(await f.sweepDue('ari')).toBe(false);                 // still waiting to start, though asked for over an hour ago
+    // Still waiting two hours on (the desktop closed before starting it): due again, and asking hands back that run to start (R58).
+    expect(await f.sweepDue('ari')).toBe(true);
+    expect(await f.sweep('ari', MINE)).toEqual({ run_id });
     await f.start('ari', run_id);
     expect(await f.sweepDue('ari')).toBe(false);                 // running
     await f.settled(run_id);
@@ -401,6 +403,36 @@ describe('sweeps on the runs API', () => {
     ]));
   });
 
+  it('records nothing when the sweeper loses their membership mid-run, and ends without access', async () => {
+    const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'landed', approved_record: 'landed' } });
+    const { run_id } = await f.queueAndStart('mina');
+    f.revoke('mina');
+    await f.settled(run_id);
+    expect(f.runs.readUnfenced(run_id)).toMatchObject({ state: 'failed', error_code: 'no_access', result_json: null });
+    expect(f.verdicts()).toEqual([null, null]);
+  });
+
+  it('lets a capture read a sweep that found nothing to check, once the session still holds', async () => {
+    const f = await sweepFixture({ owner: 'mina' });
+    const diagnostics = createPersonDiagnosticsV1({ sessions: f.openItemsOptions.sessions });
+    captures.push(diagnostics);
+    const runsApp = createPersonTriggerRunsV1({ runs: f.runs, sessions: f.openItemsOptions.sessions, records: f.records, items: f.items, people: f.directory, bindDesk: f.bindDesk as never,
+      audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: f.research as never, lease_ms: 60_000, now: f.clock });
+    const run_id = runOf(await f.sweep('ari', MINE));
+    for (const item of [f.ticket, f.action]) await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: item.item_id, state: 'done' } });
+    const capture = await diagnostics.prepare({ access_token: 'ari', request: { schema_version: 1, operation: 'prepare', target: { kind: 'trigger_run', run_id } } });
+    const binds = f.bindDesk.mock.calls.length;
+    expect(await runsApp.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id, capture_id: capture.capture_id } })).toEqual({ state: 'running' });
+    await f.settled(run_id);
+    expect(f.bindDesk.mock.calls.length).toBe(binds);
+    const read = () => diagnostics.read({ access_token: 'ari', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } });
+    expect(await read()).toMatchObject({ status: 'completed', trace: { complete: true, events: [
+      { kind: 'lifecycle', stage: 'trigger', data: { trigger: 'sweep', run_id } },
+      { kind: 'lifecycle', stage: 'persistence', event: 'succeeded' },
+      { kind: 'lifecycle', stage: 'application', event: 'succeeded' },
+    ] } });
+  });
+
   it('maps a sweep\'s failures as an impact check\'s', async () => {
     const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'landed', approved_record: 'landed' } });
     const attempt = async (failure: () => void) => {
@@ -414,7 +446,7 @@ describe('sweeps on the runs API', () => {
     expect(await attempt(() => undefined)).toMatchObject({ state: 'pending', attempts: 0 });
     lag.mockRestore();
     // An outage counts an attempt; a result the contract refuses fails the sweep.
-    const pending = f.runs.liveSweep(f.person)!.run_id;
+    const pending = f.runs.newestSweep(f.person)!.run_id;
     f.renderSweepsWith(async () => { throw new AuthorityOperationError('unavailable', 'Jira is unavailable'); });
     await f.start('ari', pending); await f.settled(pending);
     expect(f.runs.readUnfenced(pending)).toMatchObject({ state: 'pending', attempts: 1 });

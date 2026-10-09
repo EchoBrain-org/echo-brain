@@ -7,7 +7,7 @@ import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authori
 import { impactItemKeyV1, refreshImpactCardV1, storableImpactCardV1, type FreshImpactItemV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
-import { SqliteTriggerRunsV1, type ApprovalActorV1, type TriggerRunRowV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
+import { SqliteTriggerRunsV1, triggerRunStateAtV1, type ApprovalActorV1, type TriggerRunRowV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import type { ImpactItemDraftV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
 import type { SqlitePersonAgenticAskAuditV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
@@ -27,8 +27,11 @@ type Desk = Awaited<ReturnType<typeof bindPersonLiveEvidenceDeskV1>>;
 type RunResearch = Pick<ReturnType<typeof import('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1').createAgenticResearchV1>, 'renderWithResearch'>;
 type BoundOptions = CreatePersonLiveAnswerRouteOptionsV1;
 type DeskScope = Parameters<typeof bindPersonLiveEvidenceDeskV1>[2]['scope'];
-/** What a finished run stores, and what its finishing transaction writes with it. */
-type RunOutput = { readonly result: object; readonly write?: (transaction: Database.Database) => void };
+/**
+ * What a finished run stores, and what its finishing transaction writes with it: `writes` is asked right before the run
+ * finishes, with no await in between, and answers the callback the transaction runs.
+ */
+type RunOutput = { readonly result: object; readonly writes?: () => (transaction: Database.Database) => void };
 
 export interface CreatePersonTriggerRunsV1Options {
   readonly runs: SqliteTriggerRunsV1;
@@ -47,7 +50,7 @@ export interface CreatePersonTriggerRunsV1Options {
   readonly live_sources?: BoundOptions['live_sources'];
   readonly research: (input: { readonly desk: Desk; readonly context: PersonLiveRequestContextV1 }) => RunResearch;
   readonly lease_ms?: number;
-  /** The clock a sweep's checks are stamped with. */
+  /** The clock a sweep's checks are stamped with, and a lapsed lease is told by. */
   readonly now?: () => Date;
 }
 
@@ -132,7 +135,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
       owner_membership_id: owners[index]!.owner_membership_id, owner_match: owners[index]!.owner_match,
     }));
     // The items are written in the transaction that stores the card, so a run is never done without them.
-    return { result: value, ...(drafts.length === 0 ? {} : { write: (transaction: Database.Database) => options.items.insertForRun(transaction, row, drafts) }) };
+    return { result: value, ...(drafts.length === 0 ? {} : { writes: () => (transaction: Database.Database) => options.items.insertForRun(transaction, row, drafts) }) };
   };
   const launch = (row: TriggerRunRowV1, token: string, authorization: PersonAccessAuthorization, lease_token: string, capture?: PersonDiagnosticCaptureHandleV1) => {
     const controller = new AbortController(); controllers.add(controller);
@@ -148,12 +151,15 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
           capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
           return options.research({ desk, context: requestContext });
         };
+        // A sweep with nothing left to read binds no desk: a capture then checks the person's session alone.
+        const fenceSession = () => capture?.bindFence(async () => { options.sessions.authenticateAccess({ access_token: token }); });
         const output = row.trigger === 'sweep'
-          ? await sweepOpenItemsV1({ sources: options, viewer: openItemViewerV1(token, authorization), run: row, research, signal: controller.signal, checked_at: now().toISOString() })
+          ? await sweepOpenItemsV1({ sources: options, viewer: openItemViewerV1(token, authorization), run: row, research, fenceSession, signal: controller.signal, checked_at: now().toISOString() })
           : await checkImpact(row, token, research, controller.signal);
         // What the run stores, and what is written with it, in the one transaction that finishes it.
         const digest = canonicalSha256(output.result);
-        const persisted = options.runs.finish(row.run_id, lease_token, { json: canonicalJson(output.result), sha256: digest }, output.write);
+        const write = output.writes?.();
+        const persisted = options.runs.finish(row.run_id, lease_token, { json: canonicalJson(output.result), sha256: digest }, write);
         observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'persistence', event: persisted ? 'succeeded' : 'skipped', data: { run_id: row.run_id, output_sha256: digest } });
         annotateCoreRuntimeV1({ result: persisted ? currentCoreRuntimeDetailV1()?.result ?? 'completed' : 'competing_action', output_id: coreRuntimeIdentityV1('research-output', digest) });
         if (!persisted) throw new AuthorityOperationError('conflict', 'The research attempt no longer owns its run');
@@ -174,7 +180,9 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
       // The caller's 20 newest sweeps, and as many of their newest impact runs as fill the rest, newest first.
       const sweeps = options.runs.list(actor, SWEEPS_LISTED, 'sweep');
       const rows = [...sweeps, ...options.runs.list(actor, PERSON_RUNS_LIST_LIMIT_V1 - sweeps.length, 'approved_record')].sort(newestFirst);
-      return Object.freeze({ runs: Object.freeze(rows.map(row => Object.freeze({ run_id: row.run_id, trigger: row.trigger, event_ref: row.event_ref, state: row.state, error_code: row.error_code, created_at: row.created_at, updated_at: row.updated_at }))) });
+      // A run whose attempt stopped without finishing is listed as pending, so the desktop starts it again (R60).
+      const at = now().toISOString();
+      return Object.freeze({ runs: Object.freeze(rows.map(row => Object.freeze({ run_id: row.run_id, trigger: row.trigger, event_ref: row.event_ref, state: triggerRunStateAtV1(row, at), error_code: row.error_code, created_at: row.created_at, updated_at: row.updated_at }))) });
     },
     async start(input: Parameters<PersonTriggerRunsHttpApplicationV1['start']>[0]) {
       input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token }); const actor = actorOf(authorization);
