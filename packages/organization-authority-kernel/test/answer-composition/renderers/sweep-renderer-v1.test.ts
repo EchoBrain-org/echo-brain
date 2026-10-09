@@ -181,6 +181,37 @@ describe("sweep renderer", () => {
     expect((run.prompt(0).findings as { about: string[] }[])[0]!.about).toEqual(["E3", "E4"]);
   });
 
+  // A finding's own items are its first citation and every further outside item it cites; a further ECHO record, such as the decision, is context (R45).
+  it("takes every outside item a finding cites as its own, and sends the finding only when all of them fit", async () => {
+    const three = { finding: "BUG-412 stays open until its fix and the display tests land.", expected: "BUG-412 closed with passing display tests",
+      citations: [TICKET_46, ticketCitation("THERM-52", "THERM-52: release notes, draft."), ticketCitation("THERM-60", "THERM-60: display tests, planned.")] };
+    const asked = { index: 0, finding: three.finding, expected: three.expected, about: ["E1", "E5", "E6"] };
+    const run = alone({ findings: [three], bundle: bundle({ unreadable: [] }),
+      replies: [{ findings: [{ index: 0, verdict: "still_open", line: "THERM-46 is done; the display tests are still to do.", cites: ["E1", "E6"] }] }] });
+    const rendered = await run.render();
+    expect(run.prompt(0).findings).toEqual([asked]);
+    expect(rendered.result.findings).toEqual([{ finding_index: 0, verdict: "still_open", line: "THERM-46 is done; the display tests are still to do.", citation_indexes: [0, 1] }]);
+    // Room for the finding and THERM-46 alone: the other two tickets do not fit, so it is not sent and not judged.
+    const one = alone({ findings: [three], bundle: bundle({ unreadable: [] }), replies: [], prompt_budget: EMPTY_PROMPT + cost(asked) + cost(view(bundle().items[0]!)) });
+    const unjudged = await one.render();
+    expect(one.trace).toEqual(["context:"]);
+    expect(unjudged.result).toEqual({ findings: [notAssessed(0)], status: "not_assessed", citations: [] });
+  });
+
+  it("judges a finding whose decision could not be read from its own item, and reports it unreadable only when one of its own items could not be read", async () => {
+    // The decision is context: research could not read it, so it is not shown, and THERM-46 is still judged.
+    const withoutDecision = bundle({ unreadable: [DECISION], items: [ITEMS[0]!] });
+    const run = alone({ findings: [FINDINGS[0]!], bundle: withoutDecision, replies: [{ findings: [REPLY.findings[0]] }] });
+    const rendered = await run.render();
+    expect(run.prompt(0).findings).toEqual([{ index: 0, finding: FINDINGS[0]!.finding, expected: FINDINGS[0]!.expected, about: ["E1"] }]);
+    expect(rendered.result).toEqual({ findings: [{ finding_index: 0, verdict: "landed", line: "THERM-46 now formats two decimals.", citation_indexes: [0] }], status: "assessed", citations: [citation("E1")] });
+    // A second ticket is the finding's own item: when it could not be read, the finding is unreadable, and no model is asked.
+    const pair = alone({ findings: [{ ...FINDINGS[0]!, citations: [TICKET_46, TICKET_47] }], replies: [] });
+    const unreadable = await pair.render();
+    expect(pair.trace).toEqual(["context:"]);
+    expect(unreadable.result).toEqual({ findings: [{ ...UNREADABLE, finding_index: 0 }], status: "assessed", citations: [] });
+  });
+
   it("lays the result out in code: one finding per input finding, in input order, citing what each verdict cites", async () => {
     const rendered = await alone({ replies: [REPLY] }).render();
     expect(rendered.result).toEqual({

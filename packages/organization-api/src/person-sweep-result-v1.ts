@@ -18,7 +18,10 @@ export type PersonSweepVerdictV1 = 'landed' | 'still_open' | 'changed' | 'unread
 export interface PersonSweepFindingResultV1 {
   /** The finding's position in the sweep's input. */
   readonly finding_index: number;
-  /** null: not assessed (the model gave no usable reply); the item's last check stays as it is. */
+  /**
+   * null: not assessed: the model gave no usable reply, or the finding was not
+   * shown because its own items did not fit. The item's last check stays as it is.
+   */
   readonly verdict: PersonSweepVerdictV1 | null;
   /** ECHO's one line: what the current item shows against what was expected. For evaluation and the staging endpoint; never stored. */
   readonly line: string;

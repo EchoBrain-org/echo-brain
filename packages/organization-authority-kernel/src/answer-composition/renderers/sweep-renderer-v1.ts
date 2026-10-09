@@ -18,8 +18,8 @@ import { impactItemKeyV1 } from "./impact-card-storage-v1.js";
 /**
  * The sweep's verdicts (open items and Home v1, section 6): for each open item
  * a sweep rechecks, whether the change its decision expected has landed. A
- * finding whose cited item could not be read is reported as unreadable, and
- * no model hears of it. A verdict becomes the item's shared last check, so no
+ * finding whose own item could not be read is reported as unreadable, and no
+ * model hears of it. A verdict becomes the item's shared last check, so no
  * finding is judged blind: one goes to the model only with all of its own
  * items, and one that does not fit stays not assessed. One model call through
  * the request's gate judges the others from the items research read now and
@@ -31,8 +31,10 @@ import { impactItemKeyV1 } from "./impact-card-storage-v1.js";
 type Entry = AgenticEvidenceBundleItemV1;
 /**
  * The sweep event: earlier findings, each with what was expected and the
- * items it cited then. A finding's first citation is the item it is about;
- * the rest, such as the decision, are context.
+ * items it cited then. A finding's own items are its first citation and every
+ * further citation of an item in an outside tool (a ticket, a page, a Slack
+ * message); a further ECHO record or document, such as the decision, is
+ * context (R45).
  */
 export interface SweepTriggerInputV1 {
   readonly findings: readonly { readonly finding: string; readonly expected: string; readonly citations: readonly unknown[] }[];
@@ -47,6 +49,8 @@ type Asked = { readonly index: number; readonly finding: string; readonly expect
 const RENDER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "research_render" });
 const JUDGMENTS: readonly Judgment[] = ["landed", "still_open", "changed"];
 const UNREADABLE_LINE = "ECHO could not read this item.";
+/** Items in an outside tool: a finding's further citation of one is its own item; a further ECHO record or document is context. */
+const OUTSIDE_KINDS: readonly unknown[] = ["ticket", "page", "slack_message"];
 const NOT_ASSESSED_LINE = "Not assessed.";
 /** A line that still fails a screen after its one repair; its verdict stands (ruling R39). */
 const WITHHELD_LINE = "ECHO withheld this line.";
@@ -137,23 +141,30 @@ export const SWEEP_RENDERER_V1: AgenticRendererV1<SweepTriggerInputV1, PersonSwe
   async render(input: AgenticRenderInputV1<SweepTriggerInputV1>) {
     const { bundle } = input;
     const findings = input.trigger_input.findings;
-    // A finding that cited an item research could not read is reported as it is; no model judges it.
+    /** A finding's own citations: its first, and every further one of an item in an outside tool (R45). */
+    const ownCitations = (index: number) => findings[index]!.citations.filter((citation, position) => position === 0 || OUTSIDE_KINDS.includes(object(citation)?.kind));
+    // A finding one of whose own items research could not read is reported as it is; no model judges it.
+    // A context citation it could not read, such as the decision, is simply not shown.
     const unreadable = new Set(bundle.unreadable_starting.map(citation => canonicalJson(citation)));
-    const readable = findings.flatMap((finding, index) => (finding.citations.some(citation => unreadable.has(canonicalJson(citation))) ? [] : [index]));
+    const readable = findings.flatMap((_, index) => (ownCitations(index).some(citation => unreadable.has(canonicalJson(citation))) ? [] : [index]));
 
-    // ---- each finding's own items: the item it is about, by identity (R42) ----
+    // ---- each finding's own items, by identity (R42) ----
     // An edit changes a citation's text digest, and a page's version and link, and edited items are what a sweep checks:
     // an item is matched by its item key, and a page also by the section it cited. Only when that section is gone do the
     // page's other sections stand in.
     const itemKey = new Map(bundle.items.map(entry => [entry, impactItemKeyV1(entry.item.citation)]));
-    const pointerOf = (index: number) => findings[index]!.citations[0];
-    const ownItems = (index: number): readonly Entry[] => {
-      const key = impactItemKeyV1(pointerOf(index));
+    const itemsOf = (citation: unknown): readonly Entry[] => {
+      const key = impactItemKeyV1(citation);
       const sameItem = key === undefined ? [] : bundle.items.filter(entry => itemKey.get(entry) === key);
-      const section = sectionOf(pointerOf(index));
+      const section = sectionOf(citation);
       if (section === undefined) return sameItem;
       const cited = sameItem.filter(entry => sectionOf(entry.item.citation) === section);
       return cited.length > 0 ? cited : sameItem;
+    };
+    /** Every own item of a finding, in citation order; null when research holds one of its own citations in no form. */
+    const ownItems = (index: number): readonly Entry[] | null => {
+      const matched = ownCitations(index).map(itemsOf);
+      return matched.some(entries => entries.length === 0) ? null : [...new Set(matched.flat())];
     };
 
     // ---- what the model is shown: in finding order, each finding with all of its own items or not at all; then what is left ----
@@ -163,8 +174,8 @@ export const SWEEP_RENDERER_V1: AgenticRendererV1<SweepTriggerInputV1, PersonSwe
     const asked: Asked[] = [];
     for (const index of readable) {
       const own = ownItems(index);
-      // A finding whose item research holds in no form, or whose items do not all fit, is never judged blind.
-      if (own.length === 0) continue;
+      // A finding one of whose items research holds in no form, or whose items do not all fit, is never judged blind.
+      if (own === null) continue;
       const ask: Asked = { index, finding: findings[index]!.finding, expected: findings[index]!.expected, about: own.map(entry => entry.short) };
       const added = own.filter(entry => !shown.has(entry));
       const needed = cost(ask) + added.reduce((total, entry) => total + cost(view(entry)), 0);
@@ -176,7 +187,7 @@ export const SWEEP_RENDERER_V1: AgenticRendererV1<SweepTriggerInputV1, PersonSwe
     if (asked.length > 0) {
       // Other sections of the same pages first, then cited, read, previewed and listed items, as the impact card fills its card.
       const recent = (entries: readonly Entry[]) => [...entries].sort((left, right) => right.touched - left.touched);
-      const pointers = new Set(asked.map(({ index }) => impactItemKeyV1(pointerOf(index))));
+      const pointers = new Set(asked.flatMap(({ index }) => ownCitations(index).map(impactItemKeyV1)));
       for (const entry of new Set([
         ...bundle.items.filter(candidate => itemKey.get(candidate) !== undefined && pointers.has(itemKey.get(candidate))),
         ...bundle.items.filter(candidate => candidate.cited_by_plan), ...recent(bundle.items.filter(candidate => candidate.full)),
