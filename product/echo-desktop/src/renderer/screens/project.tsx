@@ -1,20 +1,25 @@
 import type { ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initials } from '../format.js';
 import { message } from '../messages.js';
-import { moreList, openCompose, openListItem, openPeople, openProject, retryList, type State } from '../store.js';
+import { openCount, projectWords } from '../needs.js';
+import { moreList, openCompose, openListItem, openOpenItems, openPeople, openProject, retryList, type State } from '../store.js';
 import { People, Plus } from './icons.js';
 import { ItemRow, useKeptPlace } from './items.js';
 
 /**
  * A project's one list: its notes, documents and approved meetings, newest
  * first, one line each, and one More for older ones. Choosing a row reads it
- * in place.
+ * in place. Above it, what the project's decisions have open (canvas 9.7):
+ * the line opens those items, and each decision's row says how many.
  */
 export function Project({ state, project }: { state: State; project: ProjectSummary }) {
   const list = state.list?.scope.kind === 'project' && state.list.scope.project_id === project.project_id ? state.list : null;
   const column = useKeptPlace(list?.opened);
   const items = list?.items ?? [];
   const more = Boolean(list?.next);
+  const line = state.projectLine?.scope === 'project' && state.projectLine.id === project.project_id ? state.projectLine : null;
+  const words = line?.summary ? projectWords(line.summary) : null;
+  const open = new Map(line?.summary?.by_decision.map(decision => [decision.record_sha256, openCount(decision)]) ?? []);
   if (list?.failure && items.length === 0 && !more) {
     return (
       <div class="column center" data-testid="feed-error">
@@ -38,8 +43,14 @@ export function Project({ state, project }: { state: State; project: ProjectSumm
   }
   return (
     <div class="column" data-testid="feed" aria-busy={list?.loading ?? true} ref={column}>
+      {words && (
+        <button type="button" class="items-line project-line" data-testid="project-line" onClick={() => void openOpenItems('project', project.project_id, project.name)}>
+          <b>{words.count}</b>{words.from && <span class="faint"> · {words.from}</span>}
+        </button>
+      )}
       {items.map(item => (
-        <ItemRow key={`${item.ref.kind}:${item.ref.id}`} item={item} testid="feed-row" projects={false} onOpen={() => void openListItem(item)} />
+        <ItemRow key={`${item.ref.kind}:${item.ref.id}`} item={item} testid="feed-row" projects={false} onOpen={() => void openListItem(item)}
+          open={item.ref.kind === 'meeting' ? open.get(item.ref.id) : undefined} />
       ))}
       {more && (
         <button type="button" class="link-button more" data-testid="feed-more" disabled={list?.loading} onClick={() => void moreList()}>More</button>

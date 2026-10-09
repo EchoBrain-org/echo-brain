@@ -100,7 +100,7 @@ button.account-row:hover { background: rgba(240, 236, 230, 0.04); }
 
 .link-button { border: 0; background: transparent; color: var(--accent-text); padding: 4px 8px; border-radius: 6px; }
 .link-button:hover { color: var(--text); }
-.notice { color: var(--faint); }
+.notice, .faint { color: var(--faint); }
 .error { color: var(--danger); }
 
 /* Bottom bar: Capture at the left, Ask on the right. */
@@ -494,27 +494,39 @@ button.toast:hover { background: #211f1f; }
 .impact-person { flex-direction: row; flex-wrap: wrap; gap: 4px; }
 .impact-foot { padding-top: 2px; }
 
-/* Home: only what needs you. One row per decision, the verb on the left, the project on the right. */
+/* Home: only what needs you. One row per decision or item, the verb on the left, the project on the right. */
 .column.needs { height: 100%; max-height: 520px; overflow-y: auto; gap: 2px; padding: 4px 0; }
+.column.needs.empty { overflow: hidden; }
 .needs-head { padding: 0 12px 8px; }
 .need-row { display: flex; align-items: flex-start; gap: 12px; width: 100%; flex-shrink: 0; padding: 11px 12px; border: 0; border-radius: 10px; text-align: left; background: transparent; }
 .need-row:hover:not(:disabled) { background: var(--hover); }
 .need-row:disabled { cursor: default; }
 .need-kind { flex-shrink: 0; width: 64px; padding-top: 3px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; }
 .need-row.approve .need-kind { color: var(--accent-text); }
-.need-row.impact .need-kind { color: #8fb8e8; }
+.need-row.send .need-kind { color: #8fb8e8; }
+.need-row.update .need-kind { color: #9ed3a2; }
+.need-row.check .need-kind, .need-row.failed .need-kind { color: var(--danger); }
 .need-row.checking .need-kind { color: var(--faint); }
 .need-text { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .need-title { font-size: 14.5px; font-weight: 500; line-height: 1.35; }
 .need-detail { font-size: 12px; color: var(--faint); }
+.need-detail b { font-weight: 500; color: rgba(240, 236, 230, 0.72); }
+.need-error { font-size: 12px; }
+.need-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
+.need-open { padding: 2px 8px; border: 0; border-radius: 6px; font-size: 12.5px; color: rgba(240, 236, 230, 0.5); background: transparent; }
+.need-open:hover { color: var(--text); background: var(--hover); }
+.need-act { height: 28px; padding: 0 12px; border: 0; border-radius: 14px; font-size: 12.5px; font-weight: 600; color: var(--on-accent); background: var(--accent); }
+.need-act:disabled { opacity: 0.5; cursor: default; }
 .need-side { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; padding-top: 2px; }
 .need-when { font-size: 12px; color: rgba(240, 236, 230, 0.45); }
 .need-project { display: flex; align-items: center; gap: 6px; max-width: 180px; font-size: 12.5px; color: var(--faint); }
 .need-project span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .need-dot { width: 18px; height: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 9px; font-size: 9px; font-weight: 600; color: var(--text); }
 .need-side .asking { gap: 4px; }
-.home-clear { gap: 8px; font-size: 14px; }
+.home-clear { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 14px; color: var(--faint); }
 .home-clear svg { opacity: 0.6; }
+/* Under the rows, and under "Nothing needs you": what you sent that waits on others. */
+.needs-foot { flex-shrink: 0; margin-top: auto; padding: 10px 12px 4px; font-size: 12.5px; color: rgba(240, 236, 230, 0.45); }
 .side-row .badge { min-width: 18px; height: 18px; padding: 0 6px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--on-accent); background: var(--accent); }
 .sidebar-list .archived-projects { margin-top: 8px; }
 .sidebar-list .archived-heading { padding: 8px 10px 4px; }
@@ -525,6 +537,8 @@ button.toast:hover { background: #211f1f; }
 .decision-ask { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.3; }
 .decision-from { margin-top: -6px; font-size: 12.5px; color: var(--faint); }
 .decision-from b { font-weight: 500; color: var(--muted); }
+/* The decided line, large: the proposal's first decision, or what Tell the owners? is about. */
+.decision-line { font-size: 20px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; user-select: text; }
 .decision-body { max-height: 220px; overflow-y: auto; font-size: 14px; }
 .decision-section { display: flex; flex-direction: column; gap: 8px; }
 .decision-action { display: flex; align-items: center; gap: 10px; font-size: 14px; }
@@ -535,3 +549,54 @@ button.toast:hover { background: #211f1f; }
 .decision-foot { display: flex; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
 .decision-foot .asking { font-size: 13px; }
 .decision-card .impact { margin-top: 0; }
+
+/* Tell the owners?: one ticked line per item, its owner on the right; Pick a person opens under it. */
+.send-item { display: flex; flex-direction: column; gap: 8px; }
+.send-line { display: flex; align-items: center; gap: 10px; }
+.send-tick { flex: 1 1 0; min-width: 0; font-size: 14px; }
+.send-tick b { font-weight: 500; }
+.send-tick .faint { overflow-wrap: anywhere; }
+.owner-slot { flex-shrink: 0; display: flex; align-items: center; gap: 2px; }
+.owner-chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; max-width: 180px; padding: 0 10px 0 4px; border-radius: 12px; font-size: 12.5px; background: rgba(240, 236, 230, 0.08); }
+.owner-chip .face { width: 18px; height: 18px; border-radius: 9px; font-size: 8px; }
+.owner-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owner-slot .icon-button { width: 22px; height: 22px; border-radius: 11px; }
+.pick-button { flex-shrink: 0; height: 24px; padding: 0 10px; border: 1px dashed rgba(240, 236, 230, 0.3); border-radius: 12px; font-size: 12.5px; color: var(--accent-text); background: transparent; }
+.pick-button:hover:not(:disabled) { border-color: var(--accent); }
+.pick-button:disabled { opacity: 0.5; cursor: default; }
+.picker { display: flex; flex-direction: column; gap: 6px; margin-left: 25px; padding: 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: #171616; }
+.picker-list { max-height: 168px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.picker-option { display: flex; align-items: center; gap: 10px; height: 36px; flex-shrink: 0; padding: 0 8px; border: 0; border-radius: 7px; font-size: 13.5px; text-align: left; background: transparent; }
+.picker-option:hover, .picker-option:focus-visible { background: rgba(240, 236, 230, 0.07); }
+.picker-option .name { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker .notice { padding: 4px 8px; font-size: 13px; }
+.picker-foot { display: flex; justify-content: flex-end; }
+.send-note { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.send-note .notice { flex-grow: 1; }
+
+/* What a decision, or a project, has open: the Impact line under a decision's title, the line above a project's feed. */
+.items-line { flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding: 8px 12px; border: 0; border-radius: 10px; font-size: 13px; text-align: left; color: inherit; background: rgba(240, 236, 230, 0.05); }
+.items-line b { font-weight: 600; }
+.items-line-open { flex-grow: 1; min-width: 0; padding: 2px 0; border: 0; font-size: 13px; text-align: left; color: inherit; background: transparent; }
+button.items-line-open:hover, button.items-line:hover { color: var(--text); }
+button.items-line:hover { background: rgba(240, 236, 230, 0.08); }
+.items-line .link-button { flex-shrink: 0; padding: 2px 6px; }
+.project-line { margin-bottom: 6px; }
+.item-row .open-count { flex-shrink: 0; font-size: 12px; color: var(--faint); white-space: nowrap; }
+
+/* A decision's or a project's open items: grouped by owner, oldest first, each with its stage and age. */
+.column.open-items { height: 100%; max-height: 520px; gap: 14px; padding: 4px 0; }
+.open-items-head { flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; }
+.open-items-head h1 { margin: 0; font-size: 18px; }
+.open-items-group { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; }
+.open-items-owner { display: flex; align-items: center; gap: 8px; }
+.open-items-owner .face { width: 20px; height: 20px; border-radius: 10px; font-size: 9px; }
+.open-item { display: flex; align-items: flex-start; gap: 12px; padding: 9px 10px; border-radius: 8px; font-size: 13px; line-height: 1.45; background: rgba(240, 236, 230, 0.05); }
+.open-item-text { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.open-item-title { font-weight: 500; }
+.open-item-change { font-size: 12.5px; color: var(--faint); }
+.open-item-side { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12px; }
+.open-item-stage { color: var(--muted); }
+.open-item-stage.unsent { color: #8fb8e8; }
+.open-item-stage.done, .open-item-stage.not_relevant { color: var(--faint); }
+.open-item-when { color: rgba(240, 236, 230, 0.45); }

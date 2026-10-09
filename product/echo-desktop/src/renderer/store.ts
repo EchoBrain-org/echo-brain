@@ -1,11 +1,13 @@
-import type { PersonMeetingOperationV2, PersonMeetingResultsV2, PersonMeetingReviewV2, PersonRunV1, PersonRunsRequestV1 } from '@echo-brain/organization-api';
+import type {
+  PersonImpactStageV1, PersonMeetingOperationV2, PersonMeetingResultsV2, PersonMeetingReviewV2, PersonRunV1, PersonRunsRequestV1,
+} from '@echo-brain/organization-api';
 // All renderer state and the actions that change it. Every request carries the
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
   AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
-  Extraction, Failure, FileHandle, ImpactView, ItemRef, ListItem, ListScope, Match, Member, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef,
-  RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt, ExternalAnswerSource,
+  Extraction, Failure, FileHandle, HomeView, ImpactView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace,
+  ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt, ExternalAnswerSource,
 } from '../shared/protocol.js';
 import { MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
@@ -14,8 +16,9 @@ import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
 import { message } from './messages.js';
 
-/** Mine: only what you added, to see and to ask about. */
-type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision'; approval_id: string };
+/** Mine: only what you added, to see and to ask about. Send: Tell the owners?, for one check's run. */
+type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision'; approval_id: string }
+  | { page: 'send'; run_id: string };
 
 /** A question, in the scope it was asked in. */
 export interface AskQuestion {
@@ -431,6 +434,14 @@ export interface State {
   home: HomeState | null;
   /** The decision open from Home, while it is the page. */
   decision: DecisionState | null;
+  /** Tell the owners?, while it is the page, and while its Details are. */
+  send: SendState | null;
+  /** A decision's or a project's open items, over the page they were opened from. */
+  openItems: OpenItemsState | null;
+  /** The Impact line of the approved meeting the reader shows. */
+  impactLine: ItemsLine | null;
+  /** The open-items line above the feed of the project on screen. */
+  projectLine: ItemsLine | null;
 }
 
 const SIDEBAR_OPEN = 'echo.sidebarOpen';
@@ -444,7 +455,7 @@ let state: State = {
   archivedProjects: { items: [], next: null, loading: false }, list: null, roster: null, reader: null, change: null, projectSettings: null,
   barScope: { kind: 'global' }, barText: '', matches: null, ask: null, sources: null, compose: null, toast: null, concealed: false,
   signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null, employeeWrite: null,
-  home: null, decision: null,
+  home: null, decision: null, send: null, openItems: null, impactLine: null, projectLine: null,
 };
 const listeners = new Set<() => void>();
 let seq = 0;
@@ -540,11 +551,15 @@ function applyStatus(status: AppStatus): void {
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
 function forgetAccount(): void {
   stopRunPolling();
+  runFailures = 0;
+  openUnread = false;
+  resultOwed = false;
   lastAccount = null;
   emptyBar();
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
     barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false }, archivedProjects: { items: [], next: null, loading: false },
-    projectSettings: null, organization: null, tools: null, employeeWrite: null, home: null, decision: null });
+    projectSettings: null, organization: null, tools: null, employeeWrite: null, home: null, decision: null, send: null, openItems: null, impactLine: null,
+    projectLine: null });
   setCompose(null);
   setChange(null);
 }
@@ -731,23 +746,33 @@ export function cancelConnect(): void {
   }
 }
 
+/** A host call that failed: the page's words for it as its message, and the failure itself. */
+class CommandFailed extends Error {
+  constructor(readonly failure: Failure) { super(message(failure)); }
+}
+
+/** The failure a command threw; a plain one when the account or the screen changed under it. */
+function failureOf(error: unknown): Failure {
+  return error instanceof CommandFailed ? error.failure : { code: 'failed', retryable: true };
+}
+
 /** Account-fenced command for the personal meeting sheet. No provider token enters the renderer. */
 export async function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }): Promise<PersonMeetingResultsV2[K]> {
   const account = expect();
   if (!account || state.concealed) throw new Error('Sign in to use meetings.');
   const result = await rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id: 'granola' } });
   if (JSON.stringify(expect()) !== JSON.stringify(account) || state.concealed) throw new Error('Account or screen changed.');
-  if (!result.ok) { accountLost(result.failure); throw new Error(message(result.failure)); }
+  if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure); }
   return result.value as PersonMeetingResultsV2[K];
 }
 
-/** Account-fenced impact-check request for the personal meeting sheet: only your own approvals' runs. */
+/** Account-fenced runs request: your own approvals' checks, and the open items you can see. */
 export async function runsCommand<K extends PersonRunsRequestV1['operation']>(request: PersonRunsRequestV1 & { readonly operation: K }): Promise<RunsResults[K]> {
   const account = expect();
   if (!account || state.concealed) throw new Error('Sign in to use meetings.');
   const result = await rpc('runs', { expect: account, request });
   if (JSON.stringify(expect()) !== JSON.stringify(account) || state.concealed) throw new Error('Account or screen changed.');
-  if (!result.ok) { accountLost(result.failure); throw new Error(message(result.failure)); }
+  if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure); }
   return result.value as RunsResults[K];
 }
 
@@ -876,7 +901,7 @@ function rolesChanged(fresh: readonly ProjectSummary[]): boolean {
 export function goHome(): void {
   readSeq += 1;
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' }, toast: null,
-    organization: null, decision: null });
+    organization: null, decision: null, send: null });
   syncSearch();
   void loadHome();
 }
@@ -912,6 +937,7 @@ export async function openProject(project: ProjectSummary): Promise<void> {
   });
   syncSearch();
   void loadRoster(project.project_id);
+  void loadLine('projectLine', 'project', project.project_id);
   await loadList('first');
 }
 
@@ -1057,6 +1083,8 @@ async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string): Prom
   if (!account) return;
   const mine = ++readSeq;
   const shown = sameRef(state.reader?.ref, ref) ? state.reader : null;
+  // An approved meeting's first page says what it changes: its Impact line.
+  if (ref.kind === 'meeting' && cursor === undefined) void loadLine('impactLine', 'record', ref.id);
   const kept = {
     ...(shown?.content ? { content: shown.content, importedNext: shown.importedNext } : {}),
     ...(shown?.document ? { document: shown.document } : {}),
@@ -2784,11 +2812,13 @@ export function matchesShown(current: State = state): boolean {
 
 /**
  * Another app is in front and the page is covered: a project, Mine, People &
- * invites, Tools, Home, a decision, an answer or an original. The bar's text is covered with it.
+ * invites, Tools, Home, a decision, Tell the owners?, open items, an answer or
+ * an original. The bar's text is covered with it.
  */
 export function pageCovered(current: State = state): boolean {
   const { route } = current;
-  return current.concealed && (current.ask !== null || route.page === 'home' || route.page === 'decision' || route.page === 'project' || route.page === 'mine' || current.reader !== null ||
+  return current.concealed && (current.ask !== null || route.page === 'home' || route.page === 'decision' || route.page === 'send' || route.page === 'project' ||
+    route.page === 'mine' || current.reader !== null || openItemsShown(current) !== null ||
     (route.page === 'organization' && current.organization !== null) || (route.page === 'tools' && current.tools !== null));
 }
 
@@ -3221,23 +3251,44 @@ export async function windowShown(): Promise<void> {
 // ---- Home: what needs you ---------------------------------------------------------
 
 /**
- * One row on Home. `approve`: a meeting's decisions wait for you. `impact`:
- * you approved, and ECHO found what it changes (or could not). `checking`:
- * the check is on its way.
+ * One row on Home (open items and Home v1, section 8). `approve`: a meeting's
+ * decisions wait for you. `send`: a check of a decision you approved found
+ * what it changes, and the owners have not been told. `update`: an item waits
+ * on you. `check`: ECHO saw an item change, not as decided. `failed`: the
+ * check did not finish. `checking`: it is on its way.
  */
-export type NeedKind = 'approve' | 'impact' | 'checking';
-export interface NeedRow {
-  kind: NeedKind;
-  review: PersonMeetingReviewV2;
-  run?: PersonRunV1;
-}
+export type NeedKind = 'approve' | 'send' | 'update' | 'check' | 'checking' | 'failed';
+export type NeedRow =
+  | { kind: 'approve'; review: PersonMeetingReviewV2 }
+  | { kind: 'checking'; review: PersonMeetingReviewV2; run?: PersonRunV1 }
+  | { kind: 'failed'; review: PersonMeetingReviewV2; run: PersonRunV1 }
+  | { kind: 'send'; send: HomeView['send'][number] }
+  | { kind: 'update' | 'check'; item: OpenItemView };
 export interface HomeState {
   seq: number;
   loading: boolean;
   failure?: Failure;
-  rows: NeedRow[];
   /** Meetings are turned on for the organization: decisions can reach Home at all. */
   meetings: boolean;
+  /** Each part keeps its last good value when a later read of it fails. */
+  reviews: readonly PersonMeetingReviewV2[];
+  runs: readonly PersonRunV1[];
+  open: HomeView | null;
+  rows: NeedRow[];
+  /**
+   * Items whose Done was clicked: their rows leave at once. Null while Done is
+   * on its way; then how many Home reads had begun when it was answered, so a
+   * read begun after that (which has it closed) no longer needs it hidden.
+   */
+  closing: Readonly<Record<string, number | null>>;
+  /** Items whose Done failed: their rows came back with this line. */
+  closeFailures: Readonly<Record<string, string>>;
+  /**
+   * Checks whose items were sent from Tell the owners?, by run: their Send
+   * rows stay off Home until a read of it begun after the send was answered
+   * (the value: how many Home reads had begun by then).
+   */
+  sent: Readonly<Record<string, number>>;
 }
 
 type ReviewOpen = PersonMeetingResultsV2['review_open'];
@@ -3259,54 +3310,41 @@ export interface DecisionState {
   /** The impact check of an approved decision, and its card once read. */
   run: PersonRunV1 | null;
   impact: ImpactView | null | undefined;
+  /** Opened as Details from Tell the owners? for this run: Back returns to it. */
+  back?: string;
 }
 
-/** How often Home looks again while an impact check is going. */
-const RUN_POLL_MS = 5_000;
-const SEEN_IMPACT = 'echo.seenImpact';
-
-/** Impact cards this computer has shown and you said Got it to, by account. */
-function seenImpact(): Set<string> {
-  const account = expect();
-  if (!account) return new Set();
-  try {
-    const all = JSON.parse(localStorage.getItem(SEEN_IMPACT) ?? '{}') as Record<string, string[]>;
-    return new Set(all[account.membership_id] ?? []);
-  } catch { return new Set(); }
-}
-function markImpactSeen(runId: string): void {
-  const account = expect();
-  if (!account) return;
-  try {
-    const all = JSON.parse(localStorage.getItem(SEEN_IMPACT) ?? '{}') as Record<string, string[]>;
-    const mine = new Set(all[account.membership_id] ?? []);
-    mine.add(runId);
-    localStorage.setItem(SEEN_IMPACT, JSON.stringify({ ...all, [account.membership_id]: [...mine].slice(-200) }));
-  } catch { /* a convenience only */ }
-}
-
-function needsRows(reviews: readonly PersonMeetingReviewV2[], runs: readonly PersonRunV1[]): NeedRow[] {
-  const seen = seenImpact();
+/** Rows that wait on you first; what is on its way last. Check rows sort before Update rows. */
+export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readonly PersonRunV1[], open: HomeView | null): NeedRow[] {
   const byApproval = new Map(runs.map(run => [run.event_ref, run]));
-  const rows: NeedRow[] = [];
+  const approve: NeedRow[] = [];
+  const failed: NeedRow[] = [];
+  const checking: NeedRow[] = [];
   for (const review of reviews) {
-    if (review.status === 'pending') { rows.push({ kind: 'approve', review }); continue; }
+    if (review.status === 'pending') { approve.push({ kind: 'approve', review }); continue; }
     if (review.status !== 'approved' && review.status !== 'publishing') continue;
     const run = byApproval.get(review.approval_id);
     if (!run) {
       // The publisher queues the run only after the approved record is written.
-      if (review.status === 'publishing') rows.push({ kind: 'checking', review });
+      if (review.status === 'publishing') checking.push({ kind: 'checking', review });
       continue;
     }
-    if (seen.has(run.run_id)) continue;
-    rows.push({ kind: run.state === 'done' || run.state === 'failed' ? 'impact' : 'checking', review, run });
+    // A finished check makes no row of its own: what it found comes from `home`.
+    if (run.state === 'failed') failed.push({ kind: 'failed', review, run });
+    else if (run.state !== 'done') checking.push({ kind: 'checking', review, run });
   }
-  // What needs a click first; then what is still on its way.
-  const order: Record<NeedKind, number> = { approve: 0, impact: 1, checking: 2 };
-  return rows.sort((a, b) => order[a.kind] - order[b.kind]);
+  const items = open?.items ?? [];
+  const changed = (item: OpenItemView) => item.check?.verdict === 'changed';
+  return [
+    ...approve,
+    ...(open?.send ?? []).map(send => ({ kind: 'send' as const, send })),
+    ...items.filter(changed).map(item => ({ kind: 'check' as const, item })),
+    ...items.filter(item => !changed(item)).map(item => ({ kind: 'update' as const, item })),
+    ...failed, ...checking,
+  ];
 }
 
-/** Rows that wait for a click: Home's badge. */
+/** Rows that wait on you: Home's head and the sidebar's badge. What is on its way is not counted. */
 export function needsCount(current: State = state): number {
   return current.home?.rows.filter(row => row.kind !== 'checking').length ?? 0;
 }
@@ -3316,40 +3354,107 @@ function homeShown(mine?: number): HomeState | null {
   return home && !state.concealed && state.status?.signed_in && (state.route.page === 'home' || state.route.page === 'decision') && (mine === undefined || home.seq === mine) ? home : null;
 }
 
+/** Home's rows from its parts, less the items whose Done was clicked and the checks already sent. */
+function withRows(home: HomeState): HomeState {
+  const open = home.open && (Object.keys(home.closing).length > 0 || Object.keys(home.sent).length > 0) ? {
+    ...home.open,
+    send: home.open.send.filter(row => !Object.hasOwn(home.sent, row.run_id)),
+    items: home.open.items.filter(item => !Object.hasOwn(home.closing, item.item_id)),
+  } : home.open;
+  return { ...home, rows: needRows(home.reviews, home.runs, open) };
+}
+
 /**
- * Home: the decisions waiting for you and the impact of ones you approved.
- * Read when Home opens, when the window comes forward, and after a decision.
+ * Home: what waits on you. Read when Home opens, when the window comes
+ * forward, and after a decision or a Send; read again while a check is going.
  */
 export async function loadHome(): Promise<void> {
   const account = expect();
   if (!account || state.concealed || (state.route.page !== 'home' && state.route.page !== 'decision')) return;
   stopRunPolling();
   const mine = ++seq;
-  set({ home: { seq: mine, loading: true, rows: state.home?.rows ?? [], meetings: state.home?.meetings ?? false, failure: undefined } });
+  const previous: Omit<HomeState, 'seq' | 'loading'> = state.home ?? { meetings: false, reviews: [], runs: [], open: null, rows: [], closing: {}, closeFailures: {}, sent: {} };
+  set({ home: { ...previous, seq: mine, loading: true, failure: undefined } });
   const tools = await rpc('account.tools', { expect: account });
   if (!homeShown(mine)) return;
   if (!tools.ok) { set({ home: { ...state.home!, loading: false, failure: tools.failure } }); accountLost(tools.failure); return; }
   const granola = tools.value.tools.find(tool => tool.tool_id === 'granola');
-  const meetings = granola !== undefined && granola.status !== 'unavailable';
-  if (!meetings) { set({ home: { ...state.home!, loading: false, rows: [], meetings: false } }); return; }
-  try {
-    const [reviews, runs] = await Promise.all([
-      meetingCommand({ operation: 'reviews' }),
-      runsCommand({ schema_version: 1, operation: 'list' }).catch(() => ({ runs: [] as readonly PersonRunV1[] })),
-    ]);
-    if (!homeShown(mine)) return;
-    set({ home: { ...state.home!, loading: false, meetings: true, rows: needsRows(reviews.reviews, runs.runs) } });
-    updateDecisionRun(runs.runs);
-    void driveRuns(runs.runs, reviews.reviews.some(review => review.status === 'publishing'));
-  } catch (error) {
-    if (!homeShown(mine)) return;
-    void error;
-    set({ home: { ...state.home!, loading: false, meetings: true, failure: { code: 'unavailable', retryable: true } } });
+  // Meetings are off for the organization: no decision can reach Home.
+  if (granola === undefined || granola.status === 'unavailable') {
+    set({ home: { ...state.home!, loading: false, meetings: false, reviews: [], runs: [], open: null, rows: [] } });
+    return;
   }
+  await readHome(mine, false);
+}
+
+/** Home reads begun, counted: a Done answered before a read began is closed in that read's answer. */
+let homeReads = 0;
+/** The last read of what waits on you failed: the next poll reads it again. */
+let openUnread = false;
+/** A check ended and what it found has not been read since: Home keeps looking until it has. */
+let resultOwed = false;
+
+const going = (run: PersonRunV1) => run.state === 'pending' || run.state === 'running';
+
+/** A check that was going before and is not now: what it found may wait on Home. */
+function checkEnded(before: readonly PersonRunV1[], after: readonly PersonRunV1[]): boolean {
+  return before.some(run => going(run) && !after.some(next => next.run_id === run.run_id && going(next)));
+}
+
+/**
+ * The reviews, your runs and what waits on you, read side by side. Each part
+ * keeps its last good value when its read fails; the runs and home parts fail
+ * silently, and only a failed reviews read says so (never on a poll). What
+ * waits on you is read with every item opened live in its tool, so a poll
+ * (`quiet`) reads it only once a check has ended, or after that read failed.
+ */
+async function readHome(mine: number, quiet: boolean): Promise<void> {
+  const begun = ++homeReads;
+  const before = state.home?.runs ?? [];
+  const readOpen = () => runsCommand({ schema_version: 1, operation: 'home' });
+  const [reviews, runs, eager] = await Promise.allSettled([
+    meetingCommand({ operation: 'reviews' }),
+    runsCommand({ schema_version: 1, operation: 'list' }),
+    quiet ? Promise.resolve(null) : readOpen(),
+  ]);
+  const ended = runs.status === 'fulfilled' && checkEnded(before, runs.value.runs);
+  let open = eager;
+  if (quiet && homeShown(mine) && (openUnread || resultOwed || ended)) {
+    [open] = await Promise.allSettled([readOpen()]);
+  }
+  if (open.status === 'rejected' || open.value !== null) openUnread = open.status === 'rejected';
+  // A check that ended owes a read of what it found; only a read that succeeds pays it.
+  if (ended) resultOwed = true;
+  if (open.status === 'fulfilled' && open.value !== null) resultOwed = false;
+  const previous = homeShown(mine);
+  if (!previous) return;
+  const next = {
+    reviews: reviews.status === 'fulfilled' ? reviews.value.reviews : previous.reviews,
+    runs: runs.status === 'fulfilled' ? runs.value.runs : previous.runs,
+    open: open.status === 'fulfilled' && open.value !== null ? open.value : previous.open,
+  };
+  // A Done or a Send answered before this read began is in its answer: its row needs hiding no longer.
+  // A read that did not bring what waits on you keeps every row hidden.
+  const fresh = open.status === 'fulfilled' && open.value !== null;
+  const closing = fresh ? Object.fromEntries(Object.entries(previous.closing).filter(([, answered]) => answered === null || begun <= answered)) : previous.closing;
+  const sent = fresh ? Object.fromEntries(Object.entries(previous.sent).filter(([, answered]) => begun <= answered)) : previous.sent;
+  const shown = new Set(next.open?.items.map(item => item.item_id) ?? []);
+  const closeFailures = Object.fromEntries(Object.entries(previous.closeFailures).filter(([item]) => shown.has(item)));
+  const failure: Failure | undefined = reviews.status === 'fulfilled' ? undefined : quiet ? previous.failure : { code: 'unavailable', retryable: true };
+  set({ home: withRows({ ...previous, ...next, closing, closeFailures, sent, loading: false, meetings: true, failure }) });
+  updateDecisionRun(next.runs);
+  // The next poll waits longer after a failed runs read, or a failed read of what a check found.
+  const failed = runs.status === 'rejected' ? failureOf(runs.reason) : resultOwed && open.status === 'rejected' ? failureOf(open.reason) : undefined;
+  void driveRuns(next.runs, next.reviews.some(review => review.status === 'publishing'), failed);
 }
 
 let runPoll: ReturnType<typeof setTimeout> | null = null;
 let runSeq = 0;
+/** Polls in a row whose runs read (or start) failed: each waits longer than the one before. */
+let runFailures = 0;
+/** How often Home looks again while a check is going, and the longest it waits after failed reads. */
+const RUN_POLL_MS = 5_000;
+const RUN_POLL_MAX_MS = 60_000;
 
 function stopRunPolling(): void {
   runSeq += 1;
@@ -3357,34 +3462,55 @@ function stopRunPolling(): void {
   runPoll = null;
 }
 
-function pollRuns(mine: number): void {
+function pollRuns(mine: number, delay: number): void {
   runPoll = setTimeout(() => {
     runPoll = null;
-    if (mine === runSeq && homeShown()) void refreshRuns(mine);
-  }, RUN_POLL_MS);
+    const home = homeShown();
+    if (mine === runSeq && home) void readHome(home.seq, true);
+  }, delay);
+}
+
+/**
+ * Milliseconds until the next runs read, or null for none. `failures` counts
+ * consecutive failed reads. Home looks again only while a check is pending or
+ * running, a review is publishing, or what a finished check found is still
+ * unread (`owed`); after failed reads it waits twice as long each time (10 s,
+ * 20 s, at most 60 s). A read that failed as unavailable with nothing in
+ * flight is not tried again: an Authority with no model answers so for good,
+ * and no check ever ends there.
+ */
+export function runPollDelay(input: {
+  readonly runs: readonly PersonRunV1[]; readonly publishing: boolean; readonly failures: number; readonly lastFailure?: Failure; readonly owed?: boolean;
+}): number | null {
+  const inFlight = input.publishing || input.owed === true || input.runs.some(run => run.state === 'pending' || run.state === 'running');
+  if (input.failures === 0) return inFlight ? RUN_POLL_MS : null;
+  if (!inFlight && input.lastFailure?.code === 'unavailable') return null;
+  return Math.min(RUN_POLL_MAX_MS, RUN_POLL_MS * 2 ** input.failures);
 }
 
 /**
  * Impact checks run only from your signed-in desktop: start the oldest queued
- * one when none is going, and look again while publishing or checking.
+ * one when none is going, then look again when `runPollDelay` says. `failure`
+ * is the runs read's, when it failed: the list is the last good one.
  */
-async function driveRuns(listed: readonly PersonRunV1[], publishing = false): Promise<void> {
+async function driveRuns(listed: readonly PersonRunV1[], publishing = false, failure?: Failure): Promise<void> {
   stopRunPolling();
   const mine = runSeq;
   const current = () => mine === runSeq && homeShown() !== null;
-  try {
-    const running = listed.some(run => run.state === 'running');
-    let again = running || publishing;
-    const queued = [...listed].reverse().find(run => run.state === 'pending');
-    if (!running && queued) {
+  let failed = failure;
+  const running = listed.some(run => run.state === 'running');
+  const queued = [...listed].reverse().find(run => run.state === 'pending');
+  if (!running && queued) {
+    try {
       await runsCommand({ schema_version: 1, operation: 'start', run_id: queued.run_id });
-      if (!current()) return;
-      again = true;
+    } catch (error) {
+      failed ??= failureOf(error);
     }
-    if (again && current()) pollRuns(mine);
-  } catch {
-    if (current()) pollRuns(mine);
+    if (!current()) return;
   }
+  runFailures = failed ? runFailures + 1 : 0;
+  const delay = runPollDelay({ runs: listed, publishing, failures: runFailures, lastFailure: failed, owed: resultOwed });
+  if (delay !== null && current()) pollRuns(mine, delay);
 }
 
 /** A fresh list updates the open card too, even if its check finished while hidden. */
@@ -3398,19 +3524,32 @@ function updateDecisionRun(runs: readonly PersonRunV1[]): void {
   }
 }
 
-/** The runs read again while one is going: Home's rows and the open decision follow. */
-async function refreshRuns(mine: number): Promise<void> {
-  const home = homeShown();
-  if (!home || mine !== runSeq) return;
+/**
+ * Done, on an Update row: the item is closed for everyone. Its row leaves at
+ * once, and comes back with a line saying why if Done fails.
+ */
+export async function markDone(item: OpenItemView): Promise<void> {
+  const home = state.home;
+  if (!home || !expect() || state.concealed || Object.hasOwn(home.closing, item.item_id)) return;
+  const { [item.item_id]: _failed, ...closeFailures } = home.closeFailures;
+  set({ home: withRows({ ...home, closing: { ...home.closing, [item.item_id]: null }, closeFailures }) });
+  let failure: string | null = null;
   try {
-    const [reviews, runs] = await Promise.all([meetingCommand({ operation: 'reviews' }), runsCommand({ schema_version: 1, operation: 'list' })]);
-    if (!homeShown(home.seq) || mine !== runSeq) return;
-    set({ home: { ...state.home!, rows: needsRows(reviews.reviews, runs.runs) } });
-    updateDecisionRun(runs.runs);
-    void driveRuns(runs.runs, reviews.reviews.some(review => review.status === 'publishing'));
-  } catch {
-    if (homeShown(home.seq) && mine === runSeq) pollRuns(mine);
+    await runsCommand({ schema_version: 1, operation: 'set_state', item_id: item.item_id, state: 'done' });
+  } catch (error) {
+    failure = error instanceof Error ? error.message : 'That was not sent. Try again.';
   }
+  const current = state.home;
+  if (!current || !Object.hasOwn(current.closing, item.item_id)) return;
+  if (failure === null) { set({ home: withRows({ ...current, closing: { ...current.closing, [item.item_id]: homeReads } }) }); return; }
+  const { [item.item_id]: _back, ...closing } = current.closing;
+  set({ home: withRows({ ...current, closing, closeFailures: { ...current.closeFailures, [item.item_id]: failure } }) });
+}
+
+/** Open in Jira (or the item's own tool), from an item you can open: the tool checks your access when it opens. */
+export async function openItemInTool(item: OpenItemView): Promise<boolean> {
+  const source = item.current?.source;
+  return source !== undefined && 'permalink' in source ? openImpactSource(source) : false;
 }
 
 function decisionShown(mine: number): DecisionState | null {
@@ -3418,22 +3557,25 @@ function decisionShown(mine: number): DecisionState | null {
   return decision && state.route.page === 'decision' && decision.seq === mine ? decision : null;
 }
 
-/** A decision, from its Home row: what was proposed, and what it changed if it was approved. */
-export async function openDecision(row: NeedRow): Promise<void> {
+/**
+ * A decision, from its Home row or from Tell the owners?'s Details: what was
+ * proposed, and what it changed once approved. `back` names the Tell the
+ * owners? card it was opened from.
+ */
+export async function openDecision(approval_id: string, run: PersonRunV1 | null = null, back?: string): Promise<void> {
   if (!expect() || state.concealed) return;
   readSeq += 1;
   const mine = ++seq;
-  const run = row.run ?? null;
   set({
-    route: { page: 'decision', approval_id: row.review.approval_id }, reader: null, ask: null, sources: null, toast: null, organization: null, list: null, roster: null,
+    route: { page: 'decision', approval_id }, reader: null, ask: null, sources: null, toast: null, organization: null, list: null, roster: null,
     barScope: { kind: 'global' },
-    decision: { approval_id: row.review.approval_id, seq: mine, loading: true, open: null, command: crypto.randomUUID(), audience: 'only-me', project_ids: [], share: false,
-      owners: [], busy: false, run, impact: undefined },
+    decision: { approval_id, seq: mine, loading: true, open: null, command: crypto.randomUUID(), audience: 'only-me', project_ids: [], share: false,
+      owners: [], busy: false, run, impact: undefined, ...(back === undefined ? {} : { back }) },
   });
   syncSearch();
   if (run?.state === 'done') void readImpact(mine, run.run_id);
   try {
-    const open = await meetingCommand({ operation: 'review_open', approval_id: row.review.approval_id });
+    const open = await meetingCommand({ operation: 'review_open', approval_id });
     const decision = decisionShown(mine);
     if (!decision) return;
     set({ decision: { ...decision, loading: false, open, audience: open.suggested_projects.length > 0 ? 'projects' : 'only-me',
@@ -3496,13 +3638,6 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
   }
 }
 
-/** Got it: the impact card leaves Home on this computer. */
-export function dismissImpact(): void {
-  const decision = state.decision;
-  if (decision?.run) markImpactSeen(decision.run.run_id);
-  goHome();
-}
-
 /** Try again on a failed impact check. */
 export async function retryImpact(): Promise<void> {
   const decision = state.decision;
@@ -3516,3 +3651,293 @@ export async function retryImpact(): Promise<void> {
     void driveRuns(runs.runs);
   } catch { /* the card still offers Try again */ }
 }
+
+// ---- Tell the owners? -------------------------------------------------------------
+
+/** Tell the owners?: the run's unsent items, ticked, with owner picks. */
+export interface SendState {
+  run_id: string;
+  seq: number;
+  loading: boolean;
+  failure?: string;
+  items: readonly OpenItemView[];
+  ticks: Record<string, boolean>;
+  /** Owners picked where ECHO matched no one; an item left unpicked stays yours. */
+  picks: Record<string, Member>;
+  /** The send's command id: a new one whenever a choice changes, so a resend repeats only the same choices. */
+  command: string;
+  busy: boolean;
+  /** Pick a person, open under one item: the organization's people by name. */
+  picker: { item_id: string; query: string; results: readonly Member[]; loading: boolean; failure?: string } | null;
+}
+
+function sendShown(mine?: number): SendState | null {
+  const send = state.send;
+  const route = state.route;
+  return send && route.page === 'send' && route.run_id === send.run_id && (mine === undefined || send.seq === mine) ? send : null;
+}
+
+function editSend(patch: Partial<SendState>): void {
+  const send = sendShown();
+  if (send) set({ send: { ...send, ...patch } });
+}
+
+/** Tell the owners?, from a Send row or a decision's Impact line: what the check found that has not been sent. */
+export async function openSend(run_id: string): Promise<void> {
+  if (!expect() || state.concealed) return;
+  readSeq += 1;
+  const mine = ++seq;
+  set({
+    route: { page: 'send', run_id }, reader: null, ask: null, sources: null, toast: null, organization: null, list: null, roster: null,
+    barScope: { kind: 'global' }, decision: null,
+    send: { run_id, seq: mine, loading: true, items: [], ticks: {}, picks: {}, command: crypto.randomUUID(), busy: false, picker: null },
+  });
+  syncSearch();
+  try {
+    const page = await runsCommand({ schema_version: 1, operation: 'items', scope: 'run', id: run_id });
+    const send = sendShown(mine);
+    if (!send) return;
+    const items = page.items.filter(item => item.state === 'unsent');
+    set({ send: { ...send, loading: false, items, ticks: Object.fromEntries(items.map(item => [item.item_id, true])) } });
+  } catch (error) {
+    const send = sendShown(mine);
+    if (send) set({ send: { ...send, loading: false, failure: error instanceof Error ? error.message : 'These could not be read. Try again.' } });
+  }
+}
+
+/** The decision a Tell the owners? card is about: from its items, or from Home's Send row. */
+export function sendDecision(current: State = state): OpenItemView['decision'] {
+  const send = current.send;
+  if (!send) return undefined;
+  return send.items.find(item => item.decision)?.decision ?? current.home?.open?.send.find(row => row.run_id === send.run_id)?.decision;
+}
+
+/** Who the ticked items go to other than you, each once, in the card's order: an item's pick, else its owner. */
+export function sendRecipients(send: SendState, me: string | undefined): string[] {
+  const names: string[] = [];
+  for (const item of send.items) {
+    if (!send.ticks[item.item_id]) continue;
+    const pick = send.picks[item.item_id];
+    const owner = pick ? { membership_id: pick.membership_id, name: pick.display_name } : item.owner;
+    if (owner.membership_id !== me && !names.includes(owner.name)) names.push(owner.name);
+  }
+  return names;
+}
+
+export function tickSend(item_id: string): void {
+  const send = sendShown();
+  if (!send || send.busy) return;
+  editSend({ ticks: { ...send.ticks, [item_id]: !send.ticks[item_id] }, command: crypto.randomUUID(), failure: undefined,
+    picker: send.picker?.item_id === item_id ? null : send.picker });
+}
+
+/** Typing in Pick a person, counted: a read for an older name is dropped. */
+let pickerSeq = 0;
+
+/** Pick a person: the organization's people by name, from the people directory. Opening it shows the first ones. */
+export async function searchOwner(item_id: string, query: string): Promise<void> {
+  const send = sendShown();
+  const account = expect();
+  if (!send || !account || send.busy) return;
+  const typing = send.picker?.item_id === item_id;
+  const mine = ++pickerSeq;
+  editSend({ picker: { item_id, query, results: typing ? send.picker!.results : [], loading: true } });
+  // Typing reads once it pauses.
+  if (typing) await new Promise(resolve => setTimeout(resolve, SEARCH_PAUSE_MS));
+  if (mine !== pickerSeq || !sendShown(send.seq)) return;
+  const name = query.trim();
+  const result = await rpc('people.directory', { expect: account, ...(name === '' ? {} : { query: name }) });
+  const picker = sendShown(send.seq)?.picker;
+  if (mine !== pickerSeq || !picker || picker.item_id !== item_id) return;
+  if (!result.ok) {
+    editSend({ picker: { ...picker, loading: false, results: [], failure: message(result.failure) } });
+    accountLost(result.failure);
+    return;
+  }
+  // An item no one is picked for stays yours, so the list is everyone else.
+  editSend({ picker: { item_id, query: picker.query, loading: false, results: result.value.items.filter(person => person.membership_id !== account.membership_id) } });
+}
+
+export function pickOwner(item_id: string, member: Member): void {
+  const send = sendShown();
+  if (!send || send.busy) return;
+  pickerSeq += 1;
+  editSend({ picks: { ...send.picks, [item_id]: member }, picker: null, command: crypto.randomUUID(), failure: undefined });
+}
+
+/** × on a picked person: the item goes back to you. */
+export function clearPick(item_id: string): void {
+  const send = sendShown();
+  if (!send || send.busy) return;
+  const { [item_id]: _cleared, ...picks } = send.picks;
+  editSend({ picks, command: crypto.randomUUID(), failure: undefined });
+}
+
+export function closePicker(): void {
+  pickerSeq += 1;
+  editSend({ picker: null });
+}
+
+/** Said when a card drawn before its items changed is refused: nothing was sent. */
+const ITEMS_CHANGED = 'These items changed meanwhile. Open them again from Home.';
+
+/**
+ * Send: the ticked items go to their owners and the unticked ones are not
+ * relevant, in one step, once per command. Home shows where they went.
+ */
+export async function sendToOwners(): Promise<void> {
+  const send = sendShown();
+  const account = expect();
+  if (!send || !account || send.busy || send.loading || send.items.length === 0) return;
+  const mine = send.seq;
+  const ticked = send.items.some(item => send.ticks[item.item_id]);
+  const kept = sendRecipients(send, account.membership_id).length === 0;
+  pickerSeq += 1;
+  editSend({ busy: true, failure: undefined, picker: null });
+  const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'send', run_id: send.run_id, command_id: send.command,
+    items: send.items.map(item => {
+      const include = send.ticks[item.item_id] === true;
+      const pick = include ? send.picks[item.item_id] : undefined;
+      return { item_id: item.item_id, include, ...(pick ? { owner_membership_id: pick.membership_id } : {}) };
+    }) } });
+  if (!sendShown(mine)) return;
+  if (!result.ok) {
+    const changed = result.failure.code === 'stale_access_state';
+    if (!changed) accountLost(result.failure);
+    editSend({ busy: false, failure: changed ? ITEMS_CHANGED : message(result.failure) });
+    return;
+  }
+  // Sent: its row leaves Home at once, and no read begun before now brings it back.
+  const home = state.home;
+  if (home) set({ home: withRows({ ...home, sent: { ...home.sent, [send.run_id]: homeReads } }) });
+  goHome();
+  set({ toast: !ticked ? 'Nothing to change' : kept ? 'Kept on your Home' : 'Sent' });
+}
+
+/** Details: the decision's page with its full impact card. Back returns to the card as it was. */
+export function sendDetails(): void {
+  const send = sendShown();
+  const decision = sendDecision();
+  if (!send || !decision) return;
+  // A Send row's check is done; Home's runs have it unless Tell the owners? came from elsewhere.
+  const run: PersonRunV1 = state.home?.runs.find(entry => entry.run_id === send.run_id) ?? {
+    run_id: send.run_id, trigger: 'approved_record', event_ref: decision.approval_id, state: 'done', error_code: null,
+    created_at: decision.approved_at, updated_at: decision.approved_at,
+  };
+  void openDecision(decision.approval_id, run, send.run_id);
+}
+
+/** Back, from Details: Tell the owners? as it was left. */
+export function returnToSend(): void {
+  const send = state.send;
+  if (!send || state.route.page !== 'decision' || state.decision?.back !== send.run_id) { goHome(); return; }
+  readSeq += 1;
+  set({ route: { page: 'send', run_id: send.run_id }, decision: null });
+  syncSearch();
+}
+
+// ---- a decision's and a project's open items -----------------------------------------
+
+/** A decision's or a project's open items, counted: the reader's Impact line, and the line above a project's feed. */
+export interface ItemsLine {
+  scope: 'record' | 'project';
+  id: string;
+  seq: number;
+  loading: boolean;
+  summary: OpenItemsView['summary'] | null;
+  /** A decision's own check. */
+  stage: PersonImpactStageV1 | null;
+  /** You approved the decision: Send and Try again are yours. */
+  yours: boolean;
+  busy: boolean;
+}
+
+function setLine(key: 'impactLine' | 'projectLine', line: ItemsLine): void {
+  set(key === 'impactLine' ? { impactLine: line } : { projectLine: line });
+}
+
+/** A scope's items read for its line. A read the person did not ask for fails quietly, unless the account is gone. */
+async function loadLine(key: 'impactLine' | 'projectLine', scope: ItemsLine['scope'], id: string): Promise<void> {
+  const account = expect();
+  if (!account || state.concealed) return;
+  const mine = ++seq;
+  setLine(key, { scope, id, seq: mine, loading: true, summary: null, stage: null, yours: false, busy: false });
+  const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope, id } });
+  if (state[key]?.seq !== mine) return;
+  if (!result.ok) {
+    setLine(key, { ...state[key]!, loading: false });
+    if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
+    return;
+  }
+  const page = result.value as OpenItemsView;
+  const stage = scope === 'record' ? page.stages.find(entry => entry.record_sha256 === id) ?? null : null;
+  let yours = page.items.some(item => item.approver.membership_id === account.membership_id);
+  // A failed check has no items to name its approver: your own runs say whether Try again is yours.
+  if (!yours && stage?.state === 'failed') {
+    const runs = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'list' } });
+    if (state[key]?.seq !== mine) return;
+    yours = runs.ok && (runs.value as RunsResults['list']).runs.some(run => run.run_id === stage.run_id);
+  }
+  setLine(key, { ...state[key]!, loading: false, summary: page.summary, stage, yours });
+}
+
+/** Try again, on a decision's Impact line: its check runs again, from your desktop. */
+export async function retryLineCheck(): Promise<void> {
+  const line = state.impactLine;
+  if (!line?.stage || line.stage.state !== 'failed' || !line.yours || line.busy) return;
+  const { id, stage } = line;
+  set({ impactLine: { ...line, busy: true } });
+  try {
+    await runsCommand({ schema_version: 1, operation: 'retry', run_id: stage.run_id });
+    await driveRuns((await runsCommand({ schema_version: 1, operation: 'list' })).runs);
+  } catch { /* the line offers Try again again */ }
+  if (state.impactLine?.seq === line.seq) await loadLine('impactLine', 'record', id);
+}
+
+/** A decision's or a project's items, grouped by owner, in place of the page they were opened over. Read-only in this version. */
+export interface OpenItemsState {
+  /** The page it shows over: another page closes it. */
+  route: Route;
+  scope: ItemsLine['scope'];
+  id: string;
+  /** The decision's title or the project's name. */
+  title: string;
+  seq: number;
+  loading: boolean;
+  failure?: Failure;
+  items: readonly OpenItemView[];
+  next: string | null;
+}
+
+export function openItemsShown(current: State = state): OpenItemsState | null {
+  const page = current.openItems;
+  return page && page.route === current.route ? page : null;
+}
+
+/** The Impact line or the project line: what the decision or the project has open, grouped by owner. */
+export function openOpenItems(scope: ItemsLine['scope'], id: string, title: string): Promise<void> {
+  if (!expect() || state.concealed) return Promise.resolve();
+  set({ openItems: { route: state.route, scope, id, title, seq: ++seq, loading: true, items: [], next: null }, ask: null, sources: null, toast: null });
+  return loadOpenItems(false);
+}
+
+/** More: the next page. */
+export function moreOpenItems(): Promise<void> { return loadOpenItems(true); }
+
+async function loadOpenItems(more: boolean): Promise<void> {
+  const account = expect();
+  const page = openItemsShown();
+  if (!account || !page || (more && (!page.next || page.loading))) return;
+  const mine = page.seq;
+  set({ openItems: { ...page, loading: true, failure: undefined } });
+  const result = await rpc('runs', { expect: account, request: {
+    schema_version: 1, operation: 'items', scope: page.scope, id: page.id, ...(more && page.next ? { cursor: page.next } : {}) } });
+  const current = openItemsShown();
+  if (current?.seq !== mine) return;
+  if (!result.ok) { set({ openItems: { ...current, loading: false, failure: result.failure } }); accountLost(result.failure); return; }
+  const read = result.value as OpenItemsView;
+  const seen = new Set(more ? current.items.map(item => item.item_id) : []);
+  set({ openItems: { ...current, loading: false, items: [...(more ? current.items : []), ...read.items.filter(item => !seen.has(item.item_id))], next: read.next_cursor } });
+}
+
+export function closeOpenItems(): void { set({ openItems: null }); }

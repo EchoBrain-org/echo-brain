@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'preact/hooks';
 import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initials } from '../format.js';
 import {
-  decide, dismissImpact, loadProjects, retryImpact, setDecisionAudience, setDecisionOwner, setDecisionShare, tickDecisionProject, type DecisionState, type State,
+  decide, loadProjects, retryImpact, setDecisionAudience, setDecisionOwner, setDecisionShare, tickDecisionProject, type DecisionState, type State,
 } from '../store.js';
 import { Passage } from './ask.js';
 import { ImpactSection } from './impact-card.js';
@@ -29,6 +29,7 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
     <article class="decision-card" data-testid="decision" aria-labelledby="decision-ask">
       <h1 id="decision-ask" class="decision-ask">Approve this decision?</h1>
       <div class="decision-from">From <b>{open.review.title}</b></div>
+      {open.review.first_line && <div class="decision-line" data-testid="decision-line">{open.review.first_line}</div>}
       <div class="passage selectable decision-body" data-testid="decision-body"><Passage text={open.content} label={open.review.title} /></div>
       {decision.owners.length > 0 && (
         <div class="decision-section">
@@ -72,7 +73,10 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
   );
 }
 
-/** What did it change? The approved decision and its impact card, or where the check stands. */
+/**
+ * What did it change? The approved decision and its impact card, or where the
+ * check stands: Tell the owners?' Details, and a failed check's Try again.
+ */
 function Impact({ state, decision }: { state: State; decision: DecisionState }) {
   const open = decision.open!;
   const run = decision.run;
@@ -87,9 +91,6 @@ function Impact({ state, decision }: { state: State; decision: DecisionState }) 
       <div class="passage selectable decision-body" data-testid="decision-body"><Passage text={open.content} label={open.review.title} /></div>
       <ImpactSection run={run ?? undefined} view={decision.impact} publishing={open.review.status === 'publishing'} busy={decision.busy}
         tools={state.tools?.items ?? undefined} onRetry={() => void retryImpact()} />
-      <div class="decision-foot">
-        <button type="button" class="primary-button small" data-testid="decision-done" onClick={dismissImpact}>Got it</button>
-      </div>
     </article>
   );
 }
