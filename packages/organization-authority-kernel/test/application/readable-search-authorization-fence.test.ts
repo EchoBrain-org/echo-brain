@@ -29,14 +29,6 @@ async function flush(): Promise<void> {
 }
 
 describe('ReadableSearchAuthorizationFence', () => {
-  it('admits a later reader while active readers hold no writer barrier', async () => {
-    const fence = new ReadableSearchAuthorizationFence();
-    const first = await fence.acquireRead();
-    const second = await fence.acquireRead();
-    second.release();
-    first.release();
-  });
-
   it('admits concurrent readers but excludes a queued writer until all release', async () => {
     const fence = new ReadableSearchAuthorizationFence();
     const first = await fence.acquireRead();

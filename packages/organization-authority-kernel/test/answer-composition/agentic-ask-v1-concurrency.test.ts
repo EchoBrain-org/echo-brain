@@ -4,12 +4,7 @@ import { createAgenticAskV1 } from '../../src/answer-composition/agentic-ask-v1.
 import type { StructuredGenerationInput, StructuredGenerationPort } from '../../src/answer-composition/structured-generation-v1.js';
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from '../../src/shared/evidence-desk-v1.js';
 import { withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-}
+import { deferred } from './fixtures/deferred.js';
 
 function item(id: string, text = `Evidence ${id}.`): EvidenceDeskItemV1 {
   return {

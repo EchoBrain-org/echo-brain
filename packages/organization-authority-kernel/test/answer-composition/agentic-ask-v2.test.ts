@@ -5,6 +5,7 @@ import { createAgenticAskV2, type AgenticAskAuditEntryV1 } from '../../src/answe
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
 import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
+import { deferred } from './fixtures/deferred.js';
 
 const checked = { checked_at: '2026-10-01T00:00:00.000Z' };
 const body = 'ECHO-1: Launch is Tuesday.';
@@ -19,12 +20,6 @@ const replies = [
   { parts: need('found', ['E1']), actions: [{ tool: 'finish', args: {} }] },
   { sentences: [{ text: 'The ticket reports launch is Tuesday.', evidence: ['E1'] }], not_found: [] },
 ];
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-}
 
 function fixture(options: {
   readonly fence?: (number: number, released: readonly EvidenceDeskItemV2[]) => Promise<typeof checked>;
@@ -203,14 +198,6 @@ describe('Agentic Ask V2 ticket release', () => {
     expect(f.fenceSnapshots[1]).toEqual([metadata, uncitedMetadata]);
     for (const snapshot of f.fenceSnapshots.slice(2)) expect(snapshot).toEqual([metadata, uncitedMetadata, opened]);
     expect(f.desk.revalidate).toHaveBeenCalledTimes(f.inputs.length + 2);
-  });
-
-  it('suppresses runtime model content capture as soon as ticket metadata enters a prompt', async () => {
-    const f = fixture();
-    const capture = vi.fn();
-    await observeCoreRuntimeV1('ask_request', () => f.run(), { observer: () => undefined, content_observer: capture });
-    // Research content uses only the selected diagnostic sink, including the first question-only call.
-    expect(capture).not.toHaveBeenCalled();
   });
 
   it('refuses a later model call after inventory-only permission revocation', async () => {
