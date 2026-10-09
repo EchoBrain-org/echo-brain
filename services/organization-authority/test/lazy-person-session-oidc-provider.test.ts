@@ -11,6 +11,11 @@ const CONFIGURATION: FrozenPersonSessionOidcConfiguration = {
   tenant_constraint_sha256: `sha256:${'a'.repeat(64)}`,
   oidc_configuration_sha256: `sha256:${'b'.repeat(64)}`,
 };
+const REDEMPTION = {
+  configuration: CONFIGURATION,
+  authorization_code: 'authorization-code',
+  pkce_verifier: 'v'.repeat(43),
+};
 
 describe('lazy Person-session OIDC provider', () => {
   it('stays offline until requested, retries discovery failure, and caches success', async () => {
@@ -31,23 +36,11 @@ describe('lazy Person-session OIDC provider', () => {
     });
 
     expect(discoveryCalls).toBe(0);
-    await expect(
-      lazy.redeemAuthorizationCode({
-        configuration: CONFIGURATION,
-        authorization_code: 'authorization-code',
-        pkce_verifier: 'v'.repeat(43),
-      }),
-    ).resolves.toEqual({ kind: 'retryable_before_redemption' });
+    await expect(lazy.redeemAuthorizationCode(REDEMPTION)).resolves.toEqual({ kind: 'retryable_before_redemption' });
     expect(discoveryCalls).toBe(1);
     expect(redemptionCalls).toBe(0);
 
-    await expect(
-      lazy.redeemAuthorizationCode({
-        configuration: CONFIGURATION,
-        authorization_code: 'authorization-code',
-        pkce_verifier: 'v'.repeat(43),
-      }),
-    ).resolves.toEqual({ kind: 'terminal_failure' });
+    await expect(lazy.redeemAuthorizationCode(REDEMPTION)).resolves.toEqual({ kind: 'terminal_failure' });
     expect(discoveryCalls).toBe(2);
     expect(redemptionCalls).toBe(1);
 

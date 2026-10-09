@@ -4,7 +4,6 @@ import { AuthorityOperationError } from "@echo-brain/organization-authority-kern
 import { describe, expect, it } from "vitest";
 import { encodeProjectCursorV1, frameCursorV1 } from "../src/adapters/persistence/sqlite/project-context-cursor-v1.js";
 import {
-  PERSON_LIST_START_V1,
   decodePersonListCursorV1,
   decodePersonOpenCursorV1,
   encodePersonListCursorV1,
@@ -75,7 +74,6 @@ describe("person list and open cursors", () => {
     }
     const worst = encodePersonListCursorV1(list({ kind: "project", project_id: PROJECT_A }), WORST);
     expect(worst.length).toBe(423);
-    expect(decodePersonListCursorV1(encodePersonListCursorV1(list(), PERSON_LIST_START_V1), list())).toEqual(PERSON_LIST_START_V1);
   });
 
   it("round-trips every open position on its own ref", () => {

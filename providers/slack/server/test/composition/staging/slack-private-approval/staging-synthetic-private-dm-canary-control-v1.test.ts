@@ -18,16 +18,13 @@ async function socketPath(): Promise<string> {
   return join(directory, "control.sock");
 }
 
-async function post(
-  socket_path: string,
-  path = "/v1/run",
-): Promise<{
+async function post(socket_path: string): Promise<{
   readonly status: number;
   readonly body: string;
 }> {
   return new Promise((resolve, reject) => {
     const client = request(
-      { socketPath: socket_path, path, method: "POST" },
+      { socketPath: socket_path, path: "/v1/run", method: "POST" },
       (response) => {
         let body = "";
         response.setEncoding("utf8");
@@ -42,13 +39,30 @@ async function post(
   });
 }
 
-function runtime(
+async function open(
   runCanary: CanaryRun,
-): Pick<
-  OpenedOrganizationAuthorityRuntime,
-  "run_staging_synthetic_canary"
-> {
-  return { run_staging_synthetic_canary: runCanary };
+  extra: Partial<Parameters<typeof openStagingSyntheticPrivateDmCanaryControlV1>[0]> = {},
+) {
+  return openStagingSyntheticPrivateDmCanaryControlV1({
+    authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
+    authority_host: "authority-staging.echobrain.org",
+    release_id: RELEASE_ID,
+    runtime: { run_staging_synthetic_canary: runCanary },
+    socket_path: extra.socket_path ?? (await socketPath()),
+    ...extra,
+  });
+}
+
+function untilAborted(options: Parameters<CanaryRun>[1]): Promise<never> {
+  return new Promise((_, reject) => {
+    options?.signal?.addEventListener(
+      "abort",
+      () => reject(options.signal?.reason),
+      {
+        once: true,
+      },
+    );
+  });
 }
 
 afterEach(async () => {
@@ -64,22 +78,17 @@ afterEach(async () => {
 
 describe("staging synthetic private-DM canary control", () => {
   it("refuses every origin except the exact staging Authority origin", async () => {
+    const staged: CanaryRun = async () => ({ kind: "staged", approval_id: "apr_test" });
     await expect(
-      openStagingSyntheticPrivateDmCanaryControlV1({
+      open(staged, {
         authority_url: "https://authority.echobrain.org",
         authority_host: "authority.echobrain.org",
-        release_id: RELEASE_ID,
-        runtime: runtime(async () => ({ kind: "staged", approval_id: "apr_test" })),
-        socket_path: await socketPath(),
       }),
     ).rejects.toThrow("staging-only");
     await expect(
-      openStagingSyntheticPrivateDmCanaryControlV1({
+      open(staged, {
         authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
         authority_host: "authority-staging.example.com",
-        release_id: RELEASE_ID,
-        runtime: runtime(async () => ({ kind: "staged", approval_id: "apr_test" })),
-        socket_path: await socketPath(),
       }),
     ).rejects.toThrow("host is invalid");
   });
@@ -88,13 +97,7 @@ describe("staging synthetic private-DM canary control", () => {
     const unsafe_path = await socketPath();
     await writeFile(unsafe_path, "not a socket", "utf8");
     await expect(
-      openStagingSyntheticPrivateDmCanaryControlV1({
-        authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
-        authority_host: "authority-staging.echobrain.org",
-        release_id: RELEASE_ID,
-        runtime: runtime(async () => ({ kind: "staged", approval_id: "apr_test" })),
-        socket_path: unsafe_path,
-      }),
+      open(async () => ({ kind: "staged", approval_id: "apr_test" }), { socket_path: unsafe_path }),
     ).rejects.toThrow("socket path is unsafe");
     expect((await lstat(unsafe_path)).isFile()).toBe(true);
   });
@@ -105,13 +108,7 @@ describe("staging synthetic private-DM canary control", () => {
     [{ kind: "not_actionable", approval_id: null }, { approval_outcome: "not_actionable" }],
   ] as const)("receipts the runtime's canary outcome %j for the startup release", async (outcome, fields) => {
     const releases: string[] = [];
-    const control = await openStagingSyntheticPrivateDmCanaryControlV1({
-      authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
-      authority_host: "authority-staging.echobrain.org",
-      release_id: RELEASE_ID,
-      runtime: runtime(async (release) => { releases.push(release); return outcome; }),
-      socket_path: await socketPath(),
-    });
+    const control = await open(async (release) => { releases.push(release); return outcome; });
 
     const response = await post(control.socket_path);
     expect(response.status).toBe(200);
@@ -129,16 +126,10 @@ describe("staging synthetic private-DM canary control", () => {
   it("serves duplicate requests and cleans up its private socket", async () => {
     let runs = 0;
     const socket_path = await socketPath();
-    const control = await openStagingSyntheticPrivateDmCanaryControlV1({
-      authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
-      authority_host: "authority-staging.echobrain.org",
-      release_id: RELEASE_ID,
-      runtime: runtime(async () => {
-        runs += 1;
-        return { kind: "staged", approval_id: "apr_test" };
-      }),
-      socket_path,
-    });
+    const control = await open(async () => {
+      runs += 1;
+      return { kind: "staged", approval_id: "apr_test" };
+    }, { socket_path });
 
     expect((await lstat(socket_path)).mode & 0o777).toBe(0o600);
     const [first, second] = await Promise.all([
@@ -152,54 +143,24 @@ describe("staging synthetic private-DM canary control", () => {
     await expect(lstat(socket_path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("aborts a canary that exceeds the control request deadline", async () => {
-    let observedSignal: AbortSignal | undefined;
-    const control = await openStagingSyntheticPrivateDmCanaryControlV1({
-      authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
-      authority_host: "authority-staging.echobrain.org",
-      release_id: RELEASE_ID,
-      runtime: runtime(async (_release, options) => {
-        observedSignal = options?.signal;
-        return await new Promise((_, reject) => {
-          options?.signal?.addEventListener(
-            "abort",
-            () => reject(options.signal?.reason),
-            {
-              once: true,
-            },
-          );
+  it.each([
+    ["rejects on abort", untilAborted],
+    ["resolves successfully on abort", async (options: Parameters<CanaryRun>[1]) => {
+      await new Promise<void>((resolve) => {
+        options?.signal?.addEventListener("abort", () => resolve(), {
+          once: true,
         });
-      }),
-      socket_path: await socketPath(),
-      operation_timeout_ms: 5,
-    });
+      });
+      return { kind: "staged" as const, approval_id: "apr_late" };
+    }],
+  ])("aborts and does not receipt a canary that %s after the control request deadline", async (_label, behave) => {
+    let observedSignal: AbortSignal | undefined;
+    const control = await open(async (_release, options) => {
+      observedSignal = options?.signal;
+      return await behave(options);
+    }, { operation_timeout_ms: 5 });
 
     expect((await post(control.socket_path)).status).toBe(500);
-    expect(observedSignal?.aborted).toBe(true);
-    await control.close();
-  });
-
-  it("does not receipt a successful canary result after its deadline", async () => {
-    let observedSignal: AbortSignal | undefined;
-    const control = await openStagingSyntheticPrivateDmCanaryControlV1({
-      authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
-      authority_host: "authority-staging.echobrain.org",
-      release_id: RELEASE_ID,
-      runtime: runtime(async (_release, options) => {
-        observedSignal = options?.signal;
-        await new Promise<void>((resolve) => {
-          options?.signal?.addEventListener("abort", () => resolve(), {
-            once: true,
-          });
-        });
-        return { kind: "staged", approval_id: "apr_late" };
-      }),
-      socket_path: await socketPath(),
-      operation_timeout_ms: 5,
-    });
-
-    const response = await post(control.socket_path);
-    expect(response.status).toBe(500);
     expect(observedSignal?.aborted).toBe(true);
     await control.close();
   });
@@ -215,24 +176,17 @@ describe("staging synthetic private-DM canary control", () => {
     });
     let queuedRun: ReturnType<CanaryRun> | undefined;
     let sideEffects = 0;
-    const control = await openStagingSyntheticPrivateDmCanaryControlV1({
-      authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
-      authority_host: "authority-staging.echobrain.org",
-      release_id: RELEASE_ID,
-      runtime: runtime((_release, options) => {
-        options?.signal?.addEventListener("abort", observeAbort, {
-          once: true,
-        });
-        queuedRun = preceding.then(() => {
-          options?.signal?.throwIfAborted();
-          sideEffects += 1;
-          return { kind: "staged" as const, approval_id: "apr_queued" };
-        });
-        return queuedRun;
-      }),
-      socket_path: await socketPath(),
-      operation_timeout_ms: 5,
-    });
+    const control = await open((_release, options) => {
+      options?.signal?.addEventListener("abort", observeAbort, {
+        once: true,
+      });
+      queuedRun = preceding.then(() => {
+        options?.signal?.throwIfAborted();
+        sideEffects += 1;
+        return { kind: "staged" as const, approval_id: "apr_queued" };
+      });
+      return queuedRun;
+    }, { operation_timeout_ms: 5 });
 
     const response = post(control.socket_path);
     await aborted;
@@ -249,24 +203,10 @@ describe("staging synthetic private-DM canary control", () => {
     let observedSignal: AbortSignal | undefined;
     let markStarted!: () => void;
     const started = new Promise<void>((resolve) => (markStarted = resolve));
-    const control = await openStagingSyntheticPrivateDmCanaryControlV1({
-      authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
-      authority_host: "authority-staging.echobrain.org",
-      release_id: RELEASE_ID,
-      runtime: runtime(async (_release, options) => {
-        observedSignal = options?.signal;
-        markStarted();
-        return await new Promise((_, reject) => {
-          options?.signal?.addEventListener(
-            "abort",
-            () => reject(options.signal?.reason),
-            {
-              once: true,
-            },
-          );
-        });
-      }),
-      socket_path: await socketPath(),
+    const control = await open(async (_release, options) => {
+      observedSignal = options?.signal;
+      markStarted();
+      return await untilAborted(options);
     });
 
     const pending = post(control.socket_path).catch(() => undefined);

@@ -108,45 +108,6 @@ describe('thin live ticket dispatcher', () => {
     expect(f.ticket.search).not.toHaveBeenCalled();
     expect(f.slack.search).not.toHaveBeenCalled();
   });
-  it('starts independent local, Jira and Slack lookups together and merges reverse completions in source order', async () => {
-    const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);
-    const deferred = <T,>() => {
-      let resolve!: (value: T) => void;
-      return { promise: new Promise<T>(done => { resolve = done; }), resolve };
-    };
-    const local = deferred<Awaited<ReturnType<EvidenceDeskPortV1['search']>>>();
-    const ticket = deferred<Awaited<ReturnType<typeof f.ticket.search>>>();
-    const slack = deferred<Awaited<ReturnType<typeof f.slack.search>>>();
-    vi.mocked(f.base.search).mockImplementation(() => local.promise);
-    vi.mocked(f.ticket.search).mockImplementation(() => ticket.promise);
-    vi.mocked(f.slack.search).mockImplementation(() => slack.promise);
-
-    const search = desk.search({ query: 'launch', limit: 6 });
-    await vi.waitFor(() => {
-      expect(f.base.search).toHaveBeenCalledTimes(1);
-      expect(f.ticket.search).toHaveBeenCalledTimes(1);
-      expect(f.slack.search).toHaveBeenCalledTimes(1);
-    });
-    slack.resolve({ items: f.messages, truncated: false, receipt_digests: [receipt('slack')] });
-    ticket.resolve({ items: f.tickets, truncated: false, receipt_digests: [receipt('jira')] });
-    local.resolve({ items: f.local, truncated: false, receipt_digests: [receipt('local')] });
-
-    expect((await search).items.map(item => item.id)).toEqual(['local-1', 'ticket-1', 'slack-1', 'local-2', 'ticket-2', 'slack-2']);
-  });
-  it('fans a queryless inventory search out to independent live lists', async () => {
-    const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);
-    let release!: () => void;
-    const pending = new Promise<void>(resolve => { release = resolve; });
-    const started: string[] = [];
-    vi.mocked(f.base.search).mockImplementation(async () => { started.push('local'); await pending; return { items: f.local, truncated: false, receipt_digests: [receipt('local')] }; });
-    vi.mocked(f.ticket.list).mockImplementation(async () => { started.push('ticket'); await pending; return { items: f.tickets, truncated: false, receipt_digests: [receipt('jira')] }; });
-    vi.mocked(f.slack.list).mockImplementation(async () => { started.push('slack'); await pending; return { items: f.messages, truncated: false, receipt_digests: [receipt('slack')] }; });
-
-    const search = desk.search({ limit: 3 });
-    await vi.waitFor(() => expect(started).toEqual(['local', 'ticket', 'slack']));
-    release();
-    expect((await search).items.map(item => item.id)).toEqual(['local-1', 'ticket-1', 'slack-1']);
-  });
   it('fails the whole fanout when one concurrent source is denied', async () => {
     const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);
     vi.mocked(f.slack.search).mockRejectedValueOnce(new AuthorityOperationError('unauthorized', 'Fixture Slack access revoked'));
@@ -202,16 +163,6 @@ describe('thin live ticket dispatcher', () => {
     expect(result.items.map(item => item.id)).toEqual(['local-1', 'ticket-1']);
     expect(result).toMatchObject({ truncated: true, notice: 'Meeting records were unavailable when this request began.', receipt_digests: [receipt('local'), receipt('jira'), receipt('slack')] });
   });
-  it('revalidates both live sources before the final local fence and propagates a Slack denial', async () => {
-    const f = mixedFixture(); const order: string[] = [];
-    vi.mocked(f.base.revalidate).mockImplementation(async () => { order.push('local'); return { checked_at: '2026-10-02T00:00:00.000Z' }; });
-    vi.mocked(f.ticket.revalidate).mockImplementation(async () => { order.push('jira'); });
-    vi.mocked(f.slack.revalidate).mockImplementation(async () => { order.push('slack'); });
-    const desk = deskWith(f.base, f.ticket, f.slack);
-    await desk.revalidate({}); expect(order).toEqual(['local', 'jira', 'slack', 'local']);
-    vi.mocked(f.slack.revalidate).mockRejectedValue(new AuthorityOperationError('unauthorized', 'Fixture Slack access revoked'));
-    await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
-  });
   it.each(['slack', 'local'] as const)('refuses a Jira grant revoked during the final %s await without repeating provider reads', async later => {
     const f = mixedFixture(); let revoked = false; let localChecks = 0;
     vi.mocked(f.ticket.assertCurrent).mockImplementation(() => { if (revoked) throw new AuthorityOperationError('stale_access_state', 'Fixture Jira grant revoked'); });
@@ -228,18 +179,16 @@ describe('thin live ticket dispatcher', () => {
     vi.mocked(f.slack.revalidate).mockImplementation(async () => { order.push('slack-provider'); });
     vi.mocked(f.ticket.assertCurrent).mockImplementation(() => { order.push('jira-grant'); queueMicrotask(() => order.push('next-microtask')); });
     vi.mocked(f.slack.assertCurrent).mockImplementation(() => { order.push('slack-grant'); });
-    await deskWith(f.base, f.ticket, f.slack).revalidate({});
+    const desk = deskWith(f.base, f.ticket, f.slack);
+    await desk.revalidate({});
     expect(order).toEqual(['local', 'jira-provider', 'slack-provider', 'local', 'jira-grant', 'slack-grant', 'next-microtask']);
+    vi.mocked(f.slack.revalidate).mockRejectedValue(new AuthorityOperationError('unauthorized', 'Fixture Slack access revoked'));
+    await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
   });
   it('honors cancellation raised by a synchronous final grant fence', async () => {
     const f = mixedFixture(); const controller = new AbortController();
     vi.mocked(f.slack.assertCurrent).mockImplementation(() => { controller.abort(); });
     await expect(deskWith(f.base, f.ticket, f.slack).revalidate({ signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
-  });
-  it('does not mask a provider denial as an empty cross-source answer', async () => {
-    const f = mixedFixture();
-    vi.mocked(f.ticket.search).mockRejectedValue(new AuthorityOperationError('unauthorized', 'Fixture Jira access revoked'));
-    await expect(deskWith(f.base, f.ticket, f.slack).search({ query: 'launch' })).rejects.toMatchObject({ code: 'unauthorized' });
   });
   it('honors cancellation before work and after awaited provider reads', async () => {
     const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);

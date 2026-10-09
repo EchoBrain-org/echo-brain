@@ -18,27 +18,62 @@ const CARD: PrivateSlackApprovalCardPresentationV1 = Object.freeze({
   }),
 });
 
+function testPoster(
+  fetchImpl: typeof globalThis.fetch,
+  options: Omit<NonNullable<ConstructorParameters<typeof PrivateSlackApprovalCardPosterV1>[1]>, "fetchImpl"> = {},
+) {
+  return new PrivateSlackApprovalCardPosterV1(async () => "test-token", { fetchImpl, ...options });
+}
+
+/** Answers marker recovery with two exact markers for apr_123, recording every method it is asked for. */
+function recoveryFetch(
+  requests: string[] = [],
+  onOther: (init?: RequestInit) => Response = () => {
+    throw new Error("unexpected Slack request");
+  },
+): typeof globalThis.fetch {
+  return async (url, init) => {
+    const method = new URL(String(url)).pathname.split("/").at(-1)!;
+    requests.push(method);
+    if (method === "auth.test") {
+      return new Response(JSON.stringify({ ok: true, team_id: "T123", enterprise_id: null, user_id: "U999", bot_id: "B123", app_id: "A123" }),
+        { headers: { "x-oauth-scopes": "users:read" } });
+    }
+    if (method === "bots.info") {
+      return new Response(JSON.stringify({ ok: true, bot: { id: "B123", user_id: "U999", app_id: "A123", deleted: false } }));
+    }
+    if (method === "conversations.history") {
+      return new Response(JSON.stringify({
+        ok: true, has_more: false, response_metadata: { next_cursor: "" },
+        messages: [
+          { ts: "1724292304.006000", text: "later\n[private-approval:apr_123]", bot_id: "B123" },
+          { ts: "1724292303.999999", text: "first\n[private-approval:apr_123]", bot_id: "B123" },
+        ],
+      }), { headers: { "x-oauth-scopes": "im:history" } });
+    }
+    return onOther(init);
+  };
+}
+
 describe("private Slack approval card poster V1", () => {
   it("opens the exact one-person DM, posts an inert marker, then publishes real blocks", async () => {
     const requests: Array<{ method: string; body: Record<string, unknown> }> = [];
-    const poster = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
-      fetchImpl: async (url, init) => {
-        const method = new URL(String(url)).pathname.split("/").at(-1)!;
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        requests.push({ method, body });
-        if (method === "conversations.open") {
-          return new Response(
-            JSON.stringify({
-              ok: true,
-              channel: { id: "D123", is_im: true, user: "U123" },
-            }),
-            { headers: { "x-oauth-scopes": "im:write" } },
-          );
-        }
+    const poster = testPoster(async (url, init) => {
+      const method = new URL(String(url)).pathname.split("/").at(-1)!;
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      requests.push({ method, body });
+      if (method === "conversations.open") {
         return new Response(
-          JSON.stringify({ ok: true, channel: "D123", ts: "123.000001" }),
+          JSON.stringify({
+            ok: true,
+            channel: { id: "D123", is_im: true, user: "U123" },
+          }),
+          { headers: { "x-oauth-scopes": "im:write" } },
         );
-      },
+      }
+      return new Response(
+        JSON.stringify({ ok: true, channel: "D123", ts: "123.000001" }),
+      );
     });
 
     await expect(poster.openDirectMessage("U123")).resolves.toEqual({
@@ -97,11 +132,9 @@ describe("private Slack approval card poster V1", () => {
 
   it("rejects every shared-channel write before calling Slack", async () => {
     let providerCalls = 0;
-    const poster = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
-      fetchImpl: async () => {
-        providerCalls += 1;
-        return new Response(JSON.stringify({ ok: true }));
-      },
+    const poster = testPoster(async () => {
+      providerCalls += 1;
+      return new Response(JSON.stringify({ ok: true }));
     });
     const sharedChannel = "C123";
     const error = "private Slack approval requires a direct-message channel";
@@ -147,63 +180,12 @@ describe("private Slack approval card poster V1", () => {
 
   it("recovers the earliest exact DM marker and makes duplicates inert", async () => {
     const updates: Record<string, unknown>[] = [];
-    const poster = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
-      fetchImpl: async (url, init) => {
-        const method = new URL(String(url)).pathname.split("/").at(-1);
-        if (method === "auth.test") {
-          return new Response(
-            JSON.stringify({
-              ok: true,
-              team_id: "T123",
-              enterprise_id: null,
-              user_id: "U999",
-              bot_id: "B123",
-              app_id: "A123",
-            }),
-            { headers: { "x-oauth-scopes": "users:read" } },
-          );
-        }
-        if (method === "bots.info") {
-          return new Response(
-            JSON.stringify({
-              ok: true,
-              bot: {
-                id: "B123",
-                user_id: "U999",
-                app_id: "A123",
-                deleted: false,
-              },
-            }),
-          );
-        }
-        if (method === "conversations.history") {
-          return new Response(
-            JSON.stringify({
-              ok: true,
-              has_more: false,
-              messages: [
-                {
-                  ts: "1724292304.006000",
-                  text: "later\n[private-approval:apr_123]",
-                  bot_id: "B123",
-                },
-                {
-                  ts: "1724292303.999999",
-                  text: "first\n[private-approval:apr_123]",
-                  bot_id: "B123",
-                },
-              ],
-              response_metadata: { next_cursor: "" },
-            }),
-            { headers: { "x-oauth-scopes": "im:history" } },
-          );
-        }
-        updates.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        return new Response(
-          JSON.stringify({ ok: true, channel: "D123", ts: "1724292304.006000" }),
-        );
-      },
-    });
+    const poster = testPoster(recoveryFetch([], (init) => {
+      updates.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(
+        JSON.stringify({ ok: true, channel: "D123", ts: "1724292304.006000" }),
+      );
+    }));
 
     await expect(
       poster.reconcileMarker({
@@ -228,13 +210,11 @@ describe("private Slack approval card poster V1", () => {
 
   it("removes every interactive block only after a consistent terminal outcome", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const poster = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
-      fetchImpl: async (_url, init) => {
-        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        return new Response(
-          JSON.stringify({ ok: true, channel: "D123", ts: "123.000001" }),
-        );
-      },
+    const poster = testPoster(async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(
+        JSON.stringify({ ok: true, channel: "D123", ts: "123.000001" }),
+      );
     });
 
     await expect(
@@ -284,43 +264,51 @@ describe("private Slack approval card poster V1", () => {
   });
 
   it("keeps transport ambiguity distinct from a definitive retryable rejection", async () => {
-    const ambiguous = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
-      fetchImpl: async () => {
-        throw new Error("connection closed");
-      },
+    const ambiguous = testPoster(async () => {
+      throw new Error("connection closed");
     });
+
+    await expect(ambiguous.postMarker({ approval_id: "apr_123", dm_channel_id: "D123" })).resolves.toEqual({
+      kind: "uncertain",
+    });
+  });
+
+  it.each([
+    [
+      "a marker post",
+      (poster: PrivateSlackApprovalCardPosterV1) => poster.postMarker({ approval_id: "apr_123", dm_channel_id: "D123" }),
+      () => new Response(JSON.stringify({ ok: true, channel: "D123", ts: "123.000001" })),
+      { kind: "posted", provider_message_ts: "123.000001" },
+    ],
+    [
+      "a direct-message open",
+      (poster: PrivateSlackApprovalCardPosterV1) => poster.openDirectMessage("U123"),
+      () =>
+        new Response(JSON.stringify({ ok: true, channel: { id: "D123", is_im: true, user: "U123" } }), {
+          headers: { "x-oauth-scopes": "im:write" },
+        }),
+      { kind: "opened", channel_id: "D123", user_id: "U123" },
+    ],
+  ])("honors Retry-After before retrying %s", async (_step, call, succeed, success) => {
     let now = 10_000;
-    let postRequests = 0;
-    const rejected = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
-      now: () => now,
-      fetchImpl: async () =>
-        (postRequests += 1) === 1
+    let requests = 0;
+    const poster = testPoster(
+      async () =>
+        (requests += 1) === 1
           ? new Response("", {
               status: 429,
               headers: { "retry-after": "2" },
             })
-          : new Response(
-              JSON.stringify({ ok: true, channel: "D123", ts: "123.000001" }),
-            ),
-    });
-    const input = { approval_id: "apr_123", dm_channel_id: "D123" };
+          : succeed(),
+      { now: () => now },
+    );
 
-    await expect(ambiguous.postMarker(input)).resolves.toEqual({
-      kind: "uncertain",
-    });
-    await expect(rejected.postMarker(input)).resolves.toEqual({
-      kind: "retry_allowed",
-    });
-    await expect(rejected.postMarker(input)).resolves.toEqual({
-      kind: "retry_allowed",
-    });
-    expect(postRequests).toBe(1);
+    await expect(call(poster)).resolves.toEqual({ kind: "retry_allowed" });
+    await expect(call(poster)).resolves.toEqual({ kind: "retry_allowed" });
+    expect(requests).toBe(1);
     now += 2_000;
-    await expect(rejected.postMarker(input)).resolves.toEqual({
-      kind: "posted",
-      provider_message_ts: "123.000001",
-    });
-    expect(postRequests).toBe(2);
+    await expect(call(poster)).resolves.toEqual(success);
+    expect(requests).toBe(2);
   });
 
   it("resolves the token for every Slack call", async () => {
@@ -385,24 +373,7 @@ describe("private Slack approval card poster V1", () => {
       if ((tokens += 1) > 2) throw new Error("Nango is unavailable");
       return "test-token";
     }, {
-      fetchImpl: async (url) => {
-        const method = new URL(String(url)).pathname.split("/").at(-1)!;
-        requests.push(method);
-        if (method === "auth.test") {
-          return new Response(JSON.stringify({ ok: true, team_id: "T123", enterprise_id: null, user_id: "U999", bot_id: "B123", app_id: "A123" }),
-            { headers: { "x-oauth-scopes": "users:read" } });
-        }
-        if (method === "bots.info") {
-          return new Response(JSON.stringify({ ok: true, bot: { id: "B123", user_id: "U999", app_id: "A123", deleted: false } }));
-        }
-        return new Response(JSON.stringify({
-          ok: true, has_more: false, response_metadata: { next_cursor: "" },
-          messages: [
-            { ts: "1724292304.006000", text: "later\n[private-approval:apr_123]", bot_id: "B123" },
-            { ts: "1724292303.999999", text: "first\n[private-approval:apr_123]", bot_id: "B123" },
-          ],
-        }), { headers: { "x-oauth-scopes": "im:history" } });
-      },
+      fetchImpl: recoveryFetch(requests),
     });
 
     // The duplicate is still live, so the earliest marker is not yet the card.
@@ -413,49 +384,11 @@ describe("private Slack approval card poster V1", () => {
     expect(requests).toEqual(["auth.test", "bots.info", "conversations.history"]);
   });
 
-  it("honors Retry-After before retrying a direct-message open", async () => {
-    let now = 10_000;
-    let requests = 0;
-    const poster = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
-      now: () => now,
-      fetchImpl: async () =>
-        (requests += 1) === 1
-          ? new Response("", {
-              status: 429,
-              headers: { "retry-after": "2" },
-            })
-          : new Response(
-              JSON.stringify({
-                ok: true,
-                channel: { id: "D123", is_im: true, user: "U123" },
-              }),
-              { headers: { "x-oauth-scopes": "im:write" } },
-            ),
-    });
-
-    await expect(poster.openDirectMessage("U123")).resolves.toEqual({
-      kind: "retry_allowed",
-    });
-    await expect(poster.openDirectMessage("U123")).resolves.toEqual({
-      kind: "retry_allowed",
-    });
-    expect(requests).toBe(1);
-    now += 2_000;
-    await expect(poster.openDirectMessage("U123")).resolves.toEqual({
-      kind: "opened",
-      channel_id: "D123",
-      user_id: "U123",
-    });
-    expect(requests).toBe(2);
-  });
-
   it("keeps an accepted-but-unknown marker uncertain when recovery is rate limited", async () => {
     let requests = 0;
-    const poster = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
-      fetchImpl: async () => {
-        requests += 1;
-        return new Response("", { status: 429, headers: { "retry-after": "60" } });
-      },
+    const poster = testPoster(async () => {
+      requests += 1;
+      return new Response("", { status: 429, headers: { "retry-after": "60" } });
     });
     const recovery = { approval_id: "apr_123", dm_channel_id: "D123", post_started_at: "2026-08-28T00:00:00.000Z", reconciliation_started_at: "2026-08-28T00:20:00.000Z" };
     await expect(poster.reconcileMarker(recovery)).resolves.toEqual({ kind: "uncertain" });

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { drop, emit, launch, type Launched } from './launch.js';
+import { quitPrompts } from './native.js';
 
 let run: Launched;
 const folders: string[] = [];
@@ -31,17 +32,6 @@ function onDisk(...names: string[]): string[] {
 
 async function chooseInDialog(paths: string[]): Promise<void> {
   await run.app.evaluate(({ dialog }, chosen) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: chosen }); }, paths);
-}
-
-/** What quitting now asks, answered with Cancel. */
-function quitPrompts(): Promise<string[]> {
-  return run.app.evaluate(async ({ app: electronApp, dialog }) => {
-    const prompts: string[] = [];
-    dialog.showMessageBoxSync = ((options: Electron.MessageBoxSyncOptions) => { prompts.push(options.message); return 1; }) as never; // Cancel
-    electronApp.quit();
-    await new Promise(resolveWait => setTimeout(resolveWait, 300));
-    return prompts;
-  });
 }
 
 test('New project is one page: name, people and files before Create, then the project, both people, the file, and it opens', async () => {
@@ -211,7 +201,7 @@ test('an add whose reply was lost holds back the rest: Try again resends the sam
   await expect(page.getByTestId('title')).toHaveText('Cedar');
   expect(adds()).toHaveLength(1);
   expect(uploads()).toHaveLength(0);
-  expect(await quitPrompts()).toEqual(['A project change may not have finished.']);
+  expect(await quitPrompts(run)).toEqual(['A project change may not have finished.']);
   // Done is asked first, and so is Skip…; Escape keeps both.
   await page.getByTestId('new-project-done').click();
   await expect(page.getByText('Close? Someone may still have been added.')).toBeVisible();

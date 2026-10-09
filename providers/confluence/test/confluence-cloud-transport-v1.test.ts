@@ -202,34 +202,22 @@ describe('bounded read-only Confluence Cloud transport', () => {
     expect(response.body!.locked).toBe(false);
   });
 
-  it('applies its 15-second deadline while fetch ignores cancellation and disposes a late response', async () => {
-    const deadline = new AbortController();
-    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
-    const late = deferred<Response>();
-    const fetch = vi.fn(() => late.promise);
-    const pending = createConfluenceCloudTransportV1({ binding, fetch }).request({ path: '/api/v2/pages' });
-    expect(timeout).toHaveBeenCalledWith(15_000);
-    deadline.abort(new DOMException('synthetic deadline', 'TimeoutError'));
-    await expect(pending).rejects.toMatchObject({ code: 'unavailable', message });
-    const cancel = vi.fn();
-    late.resolve(new Response(new ReadableStream<Uint8Array>({ cancel })));
-    await Promise.resolve(); await Promise.resolve();
-    expect(cancel).toHaveBeenCalledTimes(1);
-    expect(fetch).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps the same deadline active through a body read that never resolves', async () => {
+  // The fetch phase also proves a late response is disposed after the deadline.
+  it.each(['fetch', 'body'])('applies its 15-second deadline to a stalled %s even when cancellation is ignored', async phase => {
     const deadline = new AbortController();
     const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
     const reading = deferred<void>();
-    const cancel = vi.fn();
+    const late = deferred<Response>();
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
     const response = new Response(new ReadableStream<Uint8Array>({ pull() { reading.resolve(); }, cancel }, { highWaterMark: 0 }), { headers: { 'content-type': 'application/json' } });
-    const pending = createConfluenceCloudTransportV1({ binding, fetch: async () => response }).request({ path: '/api/v2/pages' });
-    await reading.promise;
+    const fetch = vi.fn(() => phase === 'fetch' ? late.promise : Promise.resolve(response));
+    const pending = createConfluenceCloudTransportV1({ binding, fetch }).request({ path: '/api/v2/pages' });
+    if (phase === 'body') await reading.promise;
     deadline.abort(new DOMException('synthetic deadline', 'TimeoutError'));
     await expect(pending).rejects.toMatchObject({ code: 'unavailable', message });
-    expect(timeout).toHaveBeenCalledTimes(1);
-    expect(timeout).toHaveBeenCalledWith(15_000);
+    if (phase === 'fetch') { late.resolve(response); await Promise.resolve(); await Promise.resolve(); }
+    expect(timeout).toHaveBeenCalledExactlyOnceWith(15_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 });

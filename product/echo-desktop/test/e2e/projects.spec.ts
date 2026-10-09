@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
+import { quitPrompts } from './native.js';
 
 let run: Launched;
 const folders: string[] = [];
@@ -17,9 +18,9 @@ const DOCUMENT = `doc_${'e'.repeat(64)}`;
 const MAYA = 'mem_33333333-3333-4333-8333-333333333333';
 const RAJ = 'mem_44444444-4444-4444-8444-444444444444';
 
-test('a project is one feed of notes and documents, and More reads older ones in order', async () => {
+test('a project is one feed of notes and documents, More reads older ones in order, and the feed keeps its place on Back from an original or when ECHO comes back', async () => {
   run = await launch('long-feed');
-  const { page } = run;
+  const { page, app } = run;
   await page.getByTestId('sidebar-project').nth(1).click();
   const rows = page.getByTestId('feed-row');
   // Ten notes are read; the document is older than the tenth, so it waits for More.
@@ -35,16 +36,7 @@ test('a project is one feed of notes and documents, and More reads older ones in
   await expect(page.getByTestId('feed-more')).toHaveCount(0);
   const lists = run.calls().filter(call => call.path === '/v1/person/list');
   expect(lists.map(call => call.body)).toEqual([{ schema_version: 1, project_id: BEACON }, { schema_version: 1, project_id: BEACON, cursor: expect.any(String) }]);
-});
 
-test('the feed keeps its place: Back from an original, or ECHO coming back, returns to where it was scrolled', async () => {
-  run = await launch('long-feed');
-  const { page, app } = run;
-  await page.getByTestId('sidebar-project').nth(1).click();
-  const rows = page.getByTestId('feed-row');
-  await expect(rows).toHaveCount(10);
-  await page.getByTestId('feed-more').click();
-  await expect(rows).toHaveCount(13);
   const feed = page.getByTestId('feed');
   const top = () => feed.evaluate(element => element.scrollTop);
   await feed.evaluate(element => { element.scrollTop = element.scrollHeight; });
@@ -325,7 +317,7 @@ test('People reads your role again, and a new one empties the bar', async () => 
 
 test('a change whose reply was lost is never called made: Try again resends the same request until the Authority answers', async () => {
   run = await launch('change-reply-lost');
-  const { page, app } = run;
+  const { page } = run;
   const adds = () => run.calls().filter(call => call.path === '/v1/person/projects/members/add').map(call => call.body!);
   await page.getByTestId('sidebar-project').nth(0).click();
   // People over a note: its line shows once, in People.
@@ -338,14 +330,7 @@ test('a change whose reply was lost is never called made: Try again resends the 
   // Nothing else changes until it is settled.
   await expect(page.getByTestId('candidate-add').first()).toBeDisabled();
   await expect(page.getByTestId('member-more')).toBeDisabled();
-  const asked = await app.evaluate(async ({ app: electronApp, dialog }) => {
-    const prompts: string[] = [];
-    dialog.showMessageBoxSync = ((options: Electron.MessageBoxSyncOptions) => { prompts.push(options.message); return 1; }) as never; // Cancel
-    electronApp.quit();
-    await new Promise(resolveWait => setTimeout(resolveWait, 300));
-    return prompts;
-  });
-  expect(asked).toEqual(['A project change may not have finished.']);
+  expect(await quitPrompts(run)).toEqual(['A project change may not have finished.']);
 
   // Closed and opened again, it shows at the top of the page, then back in People.
   await page.getByTestId('people-close').click();

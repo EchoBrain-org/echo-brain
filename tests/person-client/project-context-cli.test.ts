@@ -1,8 +1,8 @@
-import { readFileSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { canonicalJson } from '@echo-brain/federation-protocol';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 import { PersonClient } from '../../src/product/person-client/client.js';
@@ -69,9 +69,8 @@ const operation = (id: string) => cliOperations.find(item => item.id === id)!;
 const upload = operation('updates-submit-v3');
 const homes: string[] = [];
 const now = '2026-09-21T22:01:00.000Z';
-function setup() {
+function signedInHome(): string {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-project-cli-')));
-  homes.push(home);
   new PersonSessionStore(home).install('https://authority.example', 'oau_00000000-0000-4000-8000-000000000001', {
     organization_id: 'org_00000000-0000-4000-8000-000000000001',
     principal_id: 'prn_00000000-0000-4000-8000-000000000001',
@@ -83,23 +82,43 @@ function setup() {
     access_expires_at: '2026-09-21T22:11:00.000Z',
     refresh_expires_at: '2026-09-28T22:00:00.000Z', hard_reauthentication_at: '2026-09-28T22:00:00.000Z',
   });
-  const file = join(home, 'snapshot.txt');
-  writeFileSync(file, 'We agreed to ship.\n');
-  return { home, file };
+  writeFileSync(join(home, 'snapshot.txt'), 'We agreed to ship.\n');
+  return home;
+}
+/** A signed-in home of the test's own, for tests that change its account. */
+function setup() {
+  const home = signedInHome();
+  homes.push(home);
+  return { home };
+}
+/** The signed-in home run() shares: no CLI operation changes local state, which afterEach checks. */
+let shared: { home: string; session: string } | undefined;
+function sharedHome(): string {
+  if (shared === undefined) {
+    const home = signedInHome();
+    shared = { home, session: readFileSync(new PersonSessionStore(home).paths.live, 'utf8') };
+  }
+  return shared.home;
 }
 function json(value: unknown, status = 200) {
   return new Response(canonicalJson(value), { status, headers: { 'content-type': 'application/json' } });
 }
-async function run(operation: Operation, fetch: typeof globalThis.fetch, extraArgv: string[] = []) {
-  const { home, file } = setup();
+async function run(operation: Pick<Operation, 'argv'>, fetch: typeof globalThis.fetch, home = sharedHome()) {
   let stdout = ''; let stderr = '';
-  const argv = [...operation.argv.map(value => value === '/private/snapshot.txt' ? file : value), ...extraArgv];
+  const argv = operation.argv.map(value => value === '/private/snapshot.txt' ? join(home, 'snapshot.txt') : value);
   const code = await runPersonClientCli(argv, { home_directory: home, now: () => now, fetch,
     stdout: { write: value => { stdout += value; } }, stderr: { write: value => { stderr += value; } } });
   return { code, stdout, stderr };
 }
 function isMutation(item: Operation) { return item.http.body?.request_id !== undefined; }
-afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
+afterEach(() => {
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+  if (shared === undefined) return;
+  const store = new PersonSessionStore(shared.home);
+  expect(readdirSync(store.paths.directory)).toEqual(['session.v1.json']);
+  expect(readFileSync(store.paths.live, 'utf8')).toBe(shared.session);
+});
+afterAll(() => { if (shared !== undefined) rmSync(shared.home, { recursive: true, force: true }); });
 
 describe('frozen project context CLI contract', () => {
   it('sends V2 lifecycle reads and each project settings command on their exact paths', async () => {
@@ -121,7 +140,7 @@ describe('frozen project context CLI contract', () => {
         sentBody = init?.body === undefined ? undefined : JSON.parse(String(init.body));
         return json(response, status);
       });
-      const result = await run({ id: 'project-settings-v1', argv, http: { method: 'GET', path, status, response } }, network);
+      const result = await run({ argv }, network);
       expect(sentUrl).toBe(path);
       expect(result.code, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual(response);
@@ -258,28 +277,25 @@ describe('frozen project context CLI contract', () => {
   });
 
   it('searches a projects-audience upload in a project without downcasting its audience', async () => {
-    const { home } = setup(); let stdout = ''; let stderr = '';
     const contextId = `ctx_${'c'.repeat(64)}`;
     const response = { schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id: projectId, items: [{
       context_id: contextId, received_at: now, title: 'SCOUT MRD', excerpt: 'Autonomous inspection requirements', audience: { kind: 'projects', project_ids: [projectId, otherProject] },
     }], next_cursor: null };
-    const code = await runPersonClientCli(['projects', 'search-v2', '--project-id', projectId, '--query', 'inspection'], { home_directory: home, now: () => now,
-      fetch: async (url, init) => {
-        expect(String(url)).toBe('https://authority.example/v2/person/projects/context/search');
-        expect(init?.method).toBe('POST'); expect(JSON.parse(String(init?.body))).toEqual({ project_id: projectId, query: 'inspection', limit: 10 });
-        return json(response);
-      }, stdout: { write: value => { stdout += value; } }, stderr: { write: value => { stderr += value; } } });
-    expect(code, stderr).toBe(0); expect(JSON.parse(stdout)).toEqual(response);
+    const result = await run({ argv: ['projects', 'search-v2', '--project-id', projectId, '--query', 'inspection'] }, async (url, init) => {
+      expect(String(url)).toBe('https://authority.example/v2/person/projects/context/search');
+      expect(init?.method).toBe('POST'); expect(JSON.parse(String(init?.body))).toEqual({ project_id: projectId, query: 'inspection', limit: 10 });
+      return json(response);
+    });
+    expect(result.code, result.stderr).toBe(0); expect(JSON.parse(result.stdout)).toEqual(response);
   });
 
   it('prints the saved-only V3 note status an uploader gets after leaving a named project', async () => {
-    const { home } = setup(); let stdout = ''; let stderr = '';
     const requestId = '00000000-0000-4000-8000-000000000031';
     const saved = { schema_version: 3, kind: 'echo-person-update-saved-v3', request_id: requestId, context_id: `ctx_${'d'.repeat(64)}`, received_at: now, status: 'stored' };
-    const code = await runPersonClientCli(['updates', 'status-v3', '--request-id', requestId], { home_directory: home, now: () => now,
-      fetch: async url => { expect(String(url)).toBe(`https://authority.example/v3/person/updates/${requestId}`); return json(saved); },
-      stdout: { write: value => { stdout += value; } }, stderr: { write: value => { stderr += value; } } });
-    expect(code, stderr).toBe(0); expect(JSON.parse(stdout)).toEqual(saved);
+    const result = await run({ argv: ['updates', 'status-v3', '--request-id', requestId] }, async url => {
+      expect(String(url)).toBe(`https://authority.example/v3/person/updates/${requestId}`); return json(saved);
+    });
+    expect(result.code, result.stderr).toBe(0); expect(JSON.parse(result.stdout)).toEqual(saved);
   });
 
   it('reports actual transport timeout as unknown without a replay', async () => {
@@ -316,15 +332,18 @@ describe('frozen project context CLI contract', () => {
     expect(paths).toEqual(['/v3/person/updates', `/v3/person/updates/${original.request_id}`]);
   });
 
-  it('does not release a response after the local account changes', async () => {
+  it.each([
+    ['a project list', (client: PersonClient) => client.projectsV2(), operation('projects-list-v2').http.response],
+    ['a directory page', (client: PersonClient) => client.organizationDirectory({ query: 'ari' }), operation('person-directory').http.response],
+  ] as const)('does not release %s after the local account changes during the request', async (_name, call, response) => {
     const { home } = setup(); const store = new PersonSessionStore(home);
     const client = new PersonClient({ home_directory: home, now: () => now, fetch: async () => {
       const stored = store.read();
       store.install(stored.authority_origin, stored.authority_id, { ...stored.session,
         membership_id: 'mem_44444444-4444-4444-8444-444444444444' });
-      return json(operation('projects-list-v2').http.response);
+      return json(response);
     } });
-    await expect(client.projectsV2()).rejects.toMatchObject({ code: 'stale_access_state' });
+    await expect(call(client)).rejects.toMatchObject({ code: 'stale_access_state' });
   });
 
   it.each(failures.cases)('$id is rejected by its public codec', testCase => {
@@ -374,12 +393,10 @@ describe('frozen project context CLI contract', () => {
 describe('person directory CLI', () => {
   const page = operation('person-directory').http.response;
   async function directory(argv: string[], fetch: typeof globalThis.fetch, signedIn = true) {
-    const home = signedIn ? setup().home : realpathSync(mkdtempSync(join(tmpdir(), 'echo-project-cli-')));
-    if (!signedIn) homes.push(home);
-    let stdout = ''; let stderr = '';
-    const code = await runPersonClientCli(['directory', ...argv], { home_directory: home, now: () => now, fetch,
-      stdout: { write: value => { stdout += value; } }, stderr: { write: value => { stderr += value; } } });
-    return { code, stdout, stderr };
+    if (signedIn) return run({ argv: ['directory', ...argv] }, fetch);
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-project-cli-')));
+    homes.push(home);
+    return run({ argv: ['directory', ...argv] }, fetch, home);
   }
 
   it('browses the first page with no query or project, then follows the opaque cursor', async () => {
@@ -411,17 +428,6 @@ describe('person directory CLI', () => {
       const failure = JSON.parse(result.stderr);
       expect(failure).toEqual({ ok: false, action: 'directory', error: 'Person Authority rejected the request', code, status });
     });
-
-  it('does not release a page after the local account changes during the request', async () => {
-    const { home } = setup(); const store = new PersonSessionStore(home);
-    const client = new PersonClient({ home_directory: home, now: () => now, fetch: async () => {
-      const stored = store.read();
-      store.install(stored.authority_origin, stored.authority_id, { ...stored.session,
-        membership_id: 'mem_44444444-4444-4444-8444-444444444444' });
-      return json(page);
-    } });
-    await expect(client.organizationDirectory({ query: 'ari' })).rejects.toMatchObject({ code: 'stale_access_state' });
-  });
 
   it('withholds a page longer than the requested limit or carrying a project', async () => {
     const extra = { membership_id: 'mem_44444444-4444-4444-8444-444444444444', display_name: 'Bo' };

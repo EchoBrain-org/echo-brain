@@ -14,6 +14,12 @@ const OPERATION_ID = "2b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
 const SPAN_ID = "3b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
 const OBSERVED_AT = "2026-09-02T12:34:56.000Z";
 const RELEASE_SHA = "f7018e16232aa11d24f9ecc880943b0bbb8c6ea2";
+const CONTEXT = {
+  environment: "staging",
+  workflow: "core_runtime",
+  release_sha: RELEASE_SHA,
+  build_number: 123,
+} as const;
 
 function detail(overrides: Partial<CoreRuntimeDetailV1> = {}): CoreRuntimeDetailV1 {
   return {
@@ -42,28 +48,31 @@ function detail(overrides: Partial<CoreRuntimeDetailV1> = {}): CoreRuntimeDetail
   };
 }
 
-function coreEvent(
-  overrides: Record<string, unknown> = {},
-  vocabulary: TelemetryVocabularyV1 = { providers: [], models: [] },
-): JourneyTelemetryEventV1 {
-  return createJourneyTelemetryEventV1({
+function coreInput(
+  inputOverrides: Record<string, unknown> = {},
+  eventOverrides: Record<string, unknown> = {},
+): Parameters<typeof createJourneyTelemetryEventV1>[0] {
+  return {
     journey_id: JOURNEY_ID,
     sequence: 1,
     observed_at: OBSERVED_AT,
-    context: {
-      environment: "staging",
-      workflow: "core_runtime",
-      release_sha: RELEASE_SHA,
-      build_number: 123,
-    },
+    context: CONTEXT,
+    ...inputOverrides,
     event: {
       stage: "core_operation",
       event: "succeeded",
       elapsed_ms: 37,
       diagnostic: detail(),
-      ...overrides,
-    } as never,
-  }, vocabulary);
+      ...eventOverrides,
+    },
+  } as never;
+}
+
+function coreEvent(
+  overrides: Record<string, unknown> = {},
+  vocabulary: TelemetryVocabularyV1 = { providers: [], models: [] },
+): JourneyTelemetryEventV1 {
+  return createJourneyTelemetryEventV1(coreInput({}, overrides), vocabulary);
 }
 
 describe("journey telemetry v1", () => {
@@ -104,33 +113,11 @@ describe("journey telemetry v1", () => {
 
   it("requires the live core workflow, stage, identity, and terminal failure fields", () => {
     expect(() => coreEvent({ stage: "ask_response" })).toThrow("stage is invalid");
-    expect(() => createJourneyTelemetryEventV1({
-      journey_id: JOURNEY_ID,
-      sequence: 1,
-      observed_at: OBSERVED_AT,
-      context: {
-        environment: "staging",
-        workflow: "ask",
-        release_sha: RELEASE_SHA,
-        build_number: 123,
-      } as never,
-      event: {
-        stage: "core_operation",
-        event: "succeeded",
-        elapsed_ms: 1,
-        diagnostic: detail(),
-      },
-    })).toThrow("workflow is invalid");
+    expect(() => createJourneyTelemetryEventV1(coreInput({ context: { ...CONTEXT, workflow: "ask" } }, { elapsed_ms: 1 }))).toThrow("workflow is invalid");
     expect(() => coreEvent({ event: "failed", failure_class: "timeout" })).toThrow("failed failure fields");
     expect(() => coreEvent({ event: "started", elapsed_ms: 1 })).toThrow("elapsed_ms is invalid");
     expect(() => coreEvent({ event: "succeeded", failure_class: "timeout", retryable: true })).toThrow("non-failed failure fields");
-    expect(() => createJourneyTelemetryEventV1({
-      journey_id: "candidate-hash",
-      sequence: 1,
-      observed_at: OBSERVED_AT,
-      context: { environment: "staging", workflow: "core_runtime", release_sha: RELEASE_SHA, build_number: 123 },
-      event: { stage: "core_operation", event: "succeeded", elapsed_ms: 1, diagnostic: detail() },
-    })).toThrow("journey_id is not a UUID v4");
+    expect(() => createJourneyTelemetryEventV1(coreInput({ journey_id: "candidate-hash" }, { elapsed_ms: 1 }))).toThrow("journey_id is not a UUID v4");
   });
 
   it("keeps model and retrieval counters in the normalized core diagnostic", () => {
@@ -174,26 +161,14 @@ describe("journey telemetry v1", () => {
       },
       { now: () => OBSERVED_AT },
     );
-    const journey = telemetry.resumeJourney({
-      journey_id: JOURNEY_ID,
-      previous_sequence: 4,
-      environment: "staging",
-      workflow: "core_runtime",
-      release_sha: RELEASE_SHA,
-      build_number: 123,
-    });
+    const resume = (journey_id: string, previous_sequence: number) =>
+      telemetry.resumeJourney({ journey_id, previous_sequence, ...CONTEXT });
+    const journey = resume(JOURNEY_ID, 4);
     expect(journey?.emit({ stage: "core_operation", event: "started", elapsed_ms: 0, diagnostic: detail() })?.sequence).toBe(5);
     expect(journey?.emit({ stage: "core_operation", event: "failed", elapsed_ms: 4, failure_class: "timeout", retryable: true, diagnostic: detail({ result: "timeout" }) })?.sequence).toBe(6);
     await Promise.resolve();
     expect(observed.map(event => event.sequence)).toEqual([5, 6]);
-    expect(telemetry.resumeJourney({
-      journey_id: "not-a-uuid",
-      previous_sequence: 0,
-      environment: "staging",
-      workflow: "core_runtime",
-      release_sha: RELEASE_SHA,
-      build_number: 123,
-    })).toBeNull();
+    expect(resume("not-a-uuid", 0)).toBeNull();
   });
 
   it("recognizes only canonical UUID v4 operation ids", () => {

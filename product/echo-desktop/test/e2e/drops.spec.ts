@@ -55,6 +55,7 @@ test('Home rows take a drop while another app is in front, and a file dropped on
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await emit(app, 'echo-test:conceal');
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await expect(page.getByTestId('concealed')).toBeVisible();
   await drop(page, page.getByTestId('sidebar-project').nth(0), onDisk('Pricing.txt'));
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
   await emit(app, 'echo-test:resume');

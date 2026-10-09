@@ -7,6 +7,15 @@ import { PERSON_SOURCE_IDENTITY_V1 } from '../src/application/person-document-so
 
 const claim: DocumentExtractionClaimV1 = { document_id: `doc_${'a'.repeat(64)}`, lease_token: 'lease', filename: 'requirements.md', source_sha256: `sha256:${'b'.repeat(64)}`, authorization_sha256: `sha256:${'c'.repeat(64)}`, source_scope:{organization_id:'org_fixture',custody_ref:'organization:org_fixture',access_policy_ref:'document-audience:fixture',analysis_policy:'on_request'}, received_at:'2026-09-23T00:00:00.000Z', contributor:{principal_id:'prn_fixture',membership_id:'mem_fixture'}, media_type:'text/markdown', bytes: new TextEncoder().encode('requirements') };
 const result = { status: 'ready' as const, mediaType: 'text/markdown', sourceSha256: claim.source_sha256, extractorVersion: 'fixture-v1', chunks: [{ anchor_kind: 'paragraph' as const, anchor_start: 1, text: 'requirements' }], message: null };
+const ADMITTED = { admitSourceRevision: async () => 'admitted' as const };
+
+/** Advances fake time one segment at a time and checks the claim count after each. */
+async function ladder(claims: () => number, label: string, steps: readonly (readonly [ms: number, expected: number])[]) {
+  for (const [index, [ms, expected]] of steps.entries()) {
+    await vi.advanceTimersByTimeAsync(ms);
+    expect(claims(), `${label} step ${index}`).toBe(expected);
+  }
+}
 
 describe('document extraction runtime', () => {
   it('serializes claims and commits the same lease and source provenance', async () => {
@@ -14,7 +23,7 @@ describe('document extraction runtime', () => {
     const commits: [DocumentExtractionClaimV1, DocumentExtractionResultV1][] = [];
     let release!: () => void;
     const paused = new Promise<void>(resolve => { release = resolve; });
-    const worker = new PersonDocumentProcessingV1({ sourceAdmission:{admitSourceRevision:async()=> 'admitted' as const}, claimExtraction: () => { claims++; return claim; }, completeExtraction: (c, r) => { commits.push([c, r]); return true; } }, async input => {
+    const worker = new PersonDocumentProcessingV1({ sourceAdmission:ADMITTED, claimExtraction: () => { claims++; return claim; }, completeExtraction: (c, r) => { commits.push([c, r]); return true; } }, async input => {
       expect(input.bytes).toBe(claim.bytes); expect(input.sourceSha256).toBe(claim.source_sha256);
       await paused; return result;
     });
@@ -28,7 +37,7 @@ describe('document extraction runtime', () => {
   it('does not commit a parser result after shutdown and leaves the lease recoverable', async () => {
     let commits = 0;
     const abort = new AbortController();
-    const worker = new PersonDocumentProcessingV1({ sourceAdmission:{admitSourceRevision:async()=> 'admitted' as const}, claimExtraction: () => claim, completeExtraction: () => { commits++; return true; } }, async (_input, signal) => {
+    const worker = new PersonDocumentProcessingV1({ sourceAdmission:ADMITTED, claimExtraction: () => claim, completeExtraction: () => { commits++; return true; } }, async (_input, signal) => {
       expect(signal).toBe(abort.signal); abort.abort(); return result;
     });
     await expect(worker.runOnce(abort.signal)).rejects.toMatchObject({ name: 'AbortError' });
@@ -48,7 +57,7 @@ describe('document extraction runtime', () => {
   it('continues after an attempt fails without committing invented output', async () => {
     let attempts = 0; let commits = 0;
     const observed: unknown[] = [];
-    const worker = new PersonDocumentProcessingV1({ sourceAdmission:{admitSourceRevision:async()=> 'admitted' as const}, claimExtraction: () => claim, completeExtraction: () => { commits++; return true; } }, async () => {
+    const worker = new PersonDocumentProcessingV1({ sourceAdmission:ADMITTED, claimExtraction: () => claim, completeExtraction: () => { commits++; return true; } }, async () => {
       if (++attempts === 1) throw new Error('fixture parser failure');
       return result;
     },undefined,{on_failure:event=>observed.push(event)});
@@ -63,26 +72,13 @@ describe('document extraction runtime', () => {
   it('backs off idle polling, wakes an idle worker immediately, and close cancels its timer', async () => {
     vi.useFakeTimers();
     let claims = 0;
-    const worker = startPersonDocumentProcessingV1({ sourceAdmission:{admitSourceRevision:async()=> 'admitted' as const}, claimExtraction: () => { claims++; return undefined; }, completeExtraction: () => true });
+    const worker = startPersonDocumentProcessingV1({ sourceAdmission:ADMITTED, claimExtraction: () => { claims++; return undefined; }, completeExtraction: () => true });
     try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(claims).toBe(1);
-      await vi.advanceTimersByTimeAsync(249);
-      expect(claims).toBe(1);
+      await ladder(() => claims, 'idle', [[0, 1], [249, 1]]);
       worker.wake();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(claims).toBe(2);
-      await vi.advanceTimersByTimeAsync(249);
-      expect(claims).toBe(2);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(claims).toBe(3);
-      await vi.advanceTimersByTimeAsync(499);
-      expect(claims).toBe(3);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(claims).toBe(4);
+      await ladder(() => claims, 'woken', [[0, 2], [249, 2], [1, 3], [499, 3], [1, 4]]);
       await worker.close();
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(claims).toBe(4);
+      await ladder(() => claims, 'closed', [[10_000, 4]]);
     } finally { vi.useRealTimers(); }
   });
 
@@ -91,16 +87,7 @@ describe('document extraction runtime', () => {
     let claims = 0;
     const worker = startPersonDocumentProcessingV1({ sourceAdmission:{admitSourceRevision:async()=>{ throw new Error('admission failed'); }}, claimExtraction: () => { claims++; return claim; }, completeExtraction: () => true });
     try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(claims).toBe(1);
-      await vi.advanceTimersByTimeAsync(249);
-      expect(claims).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(claims).toBe(2);
-      await vi.advanceTimersByTimeAsync(499);
-      expect(claims).toBe(2);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(claims).toBe(3);
+      await ladder(() => claims, 'failed admission', [[0, 1], [249, 1], [1, 2], [499, 2], [1, 3]]);
       await worker.close();
     } finally { vi.useRealTimers(); }
   });

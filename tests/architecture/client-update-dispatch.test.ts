@@ -99,7 +99,7 @@ function packagedClient(root: string, label: 'a' | 'b'): { artifact: string; sou
 }
 
 /** Assemble the same fixed eight-file kit consumed by the production updater. */
-function updateKit(root: string, label: 'a' | 'b', client: ReturnType<typeof packagedClient>, releaseId: string, bootstrap?: unknown): { archive: string; release: string } {
+function updateKit(root: string, label: 'a' | 'b', client: ReturnType<typeof packagedClient>, releaseId: string, bootstrap?: unknown): { kit: string; release: string } {
   const kitParent = join(root, `kit-${label}`);
   const kit = join(kitParent, 'echo-person-onboarding-kit');
   mkdirSync(kit, { recursive: true, mode: 0o700 });
@@ -130,9 +130,7 @@ function updateKit(root: string, label: 'a' | 'b', client: ReturnType<typeof pac
   };
   writeFileSync(join(kit, 'kit-manifest.v1.json'), `${canonicalJson(manifest)}\n`, { mode: 0o600 });
   execFileSync('chmod', ['0700', 'Start-ECHO.sh', 'node', 'verify-person-onboarding-kit.mjs', 'clean-v1-release.mjs'], { cwd: kit });
-  const archive = join(root, `release-${label}.zip`);
-  execFileSync('zip', ['-qr', archive, 'echo-person-onboarding-kit'], { cwd: kitParent });
-  return { archive, release };
+  return { kit, release };
 }
 
 function issueLocalCertificate(root: string): { certificate: string; key: string } {
@@ -201,11 +199,11 @@ it.skipIf(!nativeTarget)('announces a signed update without changing Person disp
     };
     const kitA = updateKit(root, 'a', clientA, releaseA, bootstrap);
     const kitB = updateKit(root, 'b', clientB, releaseB, bootstrap);
-    artifact = readFileSync(kitB.archive);
-    const unpackedA = join(root, 'unpacked-a');
-    execFileSync('unzip', ['-q', kitA.archive, '-d', unpackedA]);
-    const starter = join(unpackedA, 'echo-person-onboarding-kit', 'Start-ECHO.sh');
-    run('/bin/bash', [starter, '--install-only'], environment);
+    // Only B is served as an archive; stored entries skip deflating the bundled Node.
+    const archiveB = join(root, 'release-b.zip');
+    execFileSync('zip', ['-0qr', archiveB, 'echo-person-onboarding-kit'], { cwd: resolve(kitB.kit, '..') });
+    artifact = readFileSync(archiveB);
+    run('/bin/bash', [join(kitA.kit, 'Start-ECHO.sh'), '--install-only'], environment);
     const platform = process.platform === 'linux'
       ? { platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'cli-kit' }
       : { platform: 'darwin', architecture: 'arm64', libc: null, installation: 'cli-kit' };

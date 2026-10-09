@@ -1,4 +1,4 @@
-import { runNorthstarPreSlackEvaluatorCommandV1 } from '../../../services/organization-authority/src/composition/synthetic-demo-pre-slack-evaluator-cli-v1.js';
+import { runNorthstarPreSlackEvaluatorCommandV1, type NorthstarPreSlackEvaluatorDependenciesV1 } from '../../../services/organization-authority/src/composition/synthetic-demo-pre-slack-evaluator-cli-v1.js';
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -108,6 +108,33 @@ function processor(
       } satisfies DecisionSet;
     },
   };
+}
+
+async function runCommand(
+  meetings: readonly MeetingDocument[],
+  dependencies: NorthstarPreSlackEvaluatorDependenciesV1,
+  extraArgs: readonly string[] = [],
+): Promise<{ readonly exit: number; readonly output: readonly string[] }> {
+  const output: string[] = [];
+  const exit = await runNorthstarPreSlackEvaluatorCommandV1(
+    [
+      "run",
+      "--meetings-dir", "/tmp/northstar-meetings",
+      "--expectations", "/tmp/northstar-expectations.json",
+      "--llm-credential-file", "/tmp/not-a-real-credential",
+      ...extraArgs,
+    ],
+    { stdout: (line) => output.push(line) },
+    {
+      read_credential: () => "test-credential-not-a-real-token",
+      load_corpus: async () => ({
+        meetings,
+        corpus_digest: `sha256:${"0".repeat(64)}` as `sha256:${string}`,
+      }),
+      ...dependencies,
+    },
+  );
+  return { exit, output };
 }
 
 describe("Echo pre-Slack evaluator", () => {
@@ -452,36 +479,21 @@ describe("Echo pre-Slack evaluator", () => {
 
   it("keeps the production command offline when its processor and corpus seams are injected", async () => {
     const { meetings, oracle } = await fixture();
-    const output: string[] = [];
-    const exit = await runNorthstarPreSlackEvaluatorCommandV1(
-      [
-        "run",
-        "--meetings-dir", "/tmp/northstar-meetings",
-        "--expectations", "/tmp/northstar-expectations.json",
-        "--llm-credential-file", "/tmp/not-a-real-credential",
-      ],
-      { stdout: (line) => output.push(line) },
-      {
-        read_credential: () => "test-credential-not-a-real-token",
-        create_processor: (config: AdapterConfig) => {
-          expect(config).toEqual(
-            fixedOpenRouterDecisionProcessorConfigV1(
-              "founder-llm-v1",
-              "file:/tmp/not-a-real-credential",
-            ),
-          );
-          expect(config.settings.model).toBe(
-            OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
-          );
-          return processor(oracle);
-        },
-        load_corpus: async () => ({
-          meetings,
-          corpus_digest: `sha256:${"0".repeat(64)}` as `sha256:${string}`,
-        }),
-        read_expectations: async () => oracle,
+    const { exit, output } = await runCommand(meetings, {
+      create_processor: (config: AdapterConfig) => {
+        expect(config).toEqual(
+          fixedOpenRouterDecisionProcessorConfigV1(
+            "founder-llm-v1",
+            "file:/tmp/not-a-real-credential",
+          ),
+        );
+        expect(config.settings.model).toBe(
+          OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
+        );
+        return processor(oracle);
       },
-    );
+      read_expectations: async () => oracle,
+    });
 
     expect(exit).toBe(0);
     expect(JSON.parse(output[0] ?? "")).toMatchObject({ passed: true, processed_meeting_count: 4 });
@@ -490,29 +502,17 @@ describe("Echo pre-Slack evaluator", () => {
 
   it("passes an optional OpenRouter model override through the same evaluator contract", async () => {
     const { meetings, oracle } = await fixture();
-    const output: string[] = [];
     let configuredModel: string | undefined;
-    const exit = await runNorthstarPreSlackEvaluatorCommandV1(
-      [
-        "run",
-        "--meetings-dir", "/tmp/northstar-meetings",
-        "--expectations", "/tmp/northstar-expectations.json",
-        "--llm-credential-file", "/tmp/not-a-real-credential",
-        "--model", "openai/gpt-4.1",
-      ],
-      { stdout: (line) => output.push(line) },
+    const { exit, output } = await runCommand(
+      meetings,
       {
-        read_credential: () => "test-credential-not-a-real-token",
         create_processor: (config: AdapterConfig) => {
           configuredModel = String(config.settings.model);
           return processor(oracle);
         },
-        load_corpus: async () => ({
-          meetings,
-          corpus_digest: `sha256:${"0".repeat(64)}` as `sha256:${string}`,
-        }),
         read_expectations: async () => oracle,
       },
+      ["--model", "openai/gpt-4.1"],
     );
 
     expect(exit).toBe(0);
@@ -659,7 +659,6 @@ describe("Echo pre-Slack evaluator", () => {
 
   it("stops before meetings when the selected model fails the health capability gate", async () => {
     const { meetings, oracle } = await fixture();
-    const output: string[] = [];
     let corpusLoaded = false;
     const unavailable: DecisionProcessorAdapter = {
       ...processor(oracle),
@@ -668,26 +667,16 @@ describe("Echo pre-Slack evaluator", () => {
         checked_at: "2026-08-30T00:00:00.000Z",
       }),
     };
-    const exit = await runNorthstarPreSlackEvaluatorCommandV1(
-      [
-        "run",
-        "--meetings-dir", "/tmp/northstar-meetings",
-        "--expectations", "/tmp/northstar-expectations.json",
-        "--llm-credential-file", "/tmp/not-a-real-credential",
-      ],
-      { stdout: (line) => output.push(line) },
-      {
-        read_credential: () => "test-credential-not-a-real-token",
-        create_processor: () => unavailable,
-        load_corpus: async () => {
-          corpusLoaded = true;
-          return {
-            meetings,
-            corpus_digest: `sha256:${"0".repeat(64)}` as `sha256:${string}`,
-          };
-        },
+    const { exit, output } = await runCommand(meetings, {
+      create_processor: () => unavailable,
+      load_corpus: async () => {
+        corpusLoaded = true;
+        return {
+          meetings,
+          corpus_digest: `sha256:${"0".repeat(64)}` as `sha256:${string}`,
+        };
       },
-    );
+    });
 
     expect(exit).toBe(1);
     expect(corpusLoaded).toBe(false);

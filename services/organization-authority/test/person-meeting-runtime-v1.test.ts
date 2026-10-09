@@ -124,14 +124,14 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   };
   const leave = (project_id: string, member: keyof typeof actors) => f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'")
     .run(new Date().toISOString(), project_id, actors[member].membership_id);
+  const listRoute = () => createPersonListRouteV1({ organization_id: person.organization_id, sessions, tools: async () => [], directory: new SqlitePersonListDirectoryV1(f.db), originals: new SqlitePersonOriginalItemsV1(f.db, sessions, person.organization_id),
+    meetings: { collectMeetings: () => ({ status: 'ok', rows: [], handle: {} }), commitMeetings: () => ({}), revalidateMeetingRelease() {}, admitMeeting() {}, openMeeting() { throw new Error('unused'); } },
+    transcripts: { readApprovedMeetingTranscriptByRecordV1() { throw new Error('unused'); } },
+  });
   // Who can find and open the imported note through the list route and the original-context desk.
   const readers = async (tokens: readonly (keyof typeof actors)[] = ['owner', 'other', 'reader-a', 'reader-b']) => {
-    const items = new SqlitePersonOriginalItemsV1(f.db, sessions, person.organization_id);
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, sessions, person.organization_id);
-    const list = createPersonListRouteV1({ organization_id: person.organization_id, sessions, tools: async () => [], directory: new SqlitePersonListDirectoryV1(f.db), originals: items,
-      meetings: { collectMeetings: () => ({ status: 'ok', rows: [], handle: {} }), commitMeetings: () => ({}), revalidateMeetingRelease() {}, admitMeeting() {}, openMeeting() { throw new Error('unused'); } },
-      transcripts: { readApprovedMeetingTranscriptByRecordV1() { throw new Error('unused'); } },
-    });
+    const list = listRoute();
     const can: string[] = [];
     for (const token of tokens) {
       const listed = (await list.list({ access_token: token, request: { schema_version: 1 } })).items.filter(item => item.kind === 'imported_meeting');
@@ -147,6 +147,13 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   const processUntilIdle = async (runtime: ReturnType<typeof create>) => {
     for (let pass = 0; pass < 10 && intake.list().some(s => intake.checkpoint(s.source_key).manual.length > 0); pass++) await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
   };
+  // Imports the meeting, processes it, and opens its one pending review.
+  const pendingReview = async (runtime: ReturnType<typeof create>, project_id: string | null = null) => {
+    await call(runtime, { operation: 'import', meeting_id: id, project_id, retain: true });
+    await processUntilIdle(runtime);
+    const [pending] = (await call(runtime, { operation: 'reviews' })).reviews;
+    return { pending, opened: await call(runtime, { operation: 'review_open', approval_id: pending!.approval_id }) };
+  };
   const count = (table: string) => f.db.prepare(`SELECT count(*) FROM ${table}`).pluck().get();
   // Proposals are counted per personal source.
   const proposals = (sourceKey: string) => f.db.prepare(`SELECT count(*) FROM authority_live_approval_outbox_v2 o
@@ -156,22 +163,10 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   const outbox = (sourceKey: string) => f.db.prepare(`SELECT o.approval_id, o.state, o.suggested_projects_json FROM authority_live_approval_outbox_v2 o
     JOIN authority_live_source_candidates_v2 c ON c.candidate_id=o.candidate_id
     JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256 WHERE a.source_key=? ORDER BY c.created_at, o.approval_id`).all(sourceKey) as { approval_id: string; state: string; suggested_projects_json: string | null }[];
-  return { ...f, person, other, sessions, create, call, outbox, grantProject, join, leave, readers, folderDeliveries, fakeProvider, sources, intake, processUntilIdle, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
+  return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, fakeProvider, sources, intake, processUntilIdle, pendingReview, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
     duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: () => { failExtraction = true; } };
 }
 describe('personal meeting intake uses the shared processing path', () => {
-  it('imports one note into two projects as one source and one extraction', async () => {
-    const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
-    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
-    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: projectB, retain: true });
-    await f.processUntilIdle(runtime);
-    expect(f.count('authority_person_meeting_sources_v2')).toBe(1);
-    expect(f.extracted()).toBe(1);
-    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
-    expect(f.proposals(source!.source_key)).toBe(1);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
-    expect(f.intake.suggestions(source!.source_key, id)).toEqual([project, projectB].sort());
-  });
   it('refuses an import suggestion for a project the person is not in', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(foreignProject, 'other');
     await expect(f.call(runtime, { operation: 'import', meeting_id: id, project_id: foreignProject, retain: true })).rejects.toMatchObject({ code: 'unauthorized' });
@@ -267,11 +262,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
-    const items = new SqlitePersonOriginalItemsV1(f.db, f.sessions, f.person.organization_id);
-    const list = createPersonListRouteV1({ organization_id: f.person.organization_id, sessions: f.sessions, tools: async () => [], directory: new SqlitePersonListDirectoryV1(f.db), originals: items,
-      meetings: { collectMeetings: () => ({ status: 'ok', rows: [], handle: {} }), commitMeetings: () => ({}), revalidateMeetingRelease() {}, admitMeeting() {}, openMeeting() { throw new Error('unused'); } },
-      transcripts: { readApprovedMeetingTranscriptByRecordV1() { throw new Error('unused'); } },
-    });
+    const list = f.listRoute();
     const page = await list.list({ access_token: 'owner', request: { schema_version: 1, mine: true } });
     expect(page.items).toHaveLength(1); expect(page.items[0]).toMatchObject({ kind: 'imported_meeting', visibility: 'project' });
     const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } });
@@ -337,20 +328,6 @@ describe('personal meeting intake uses the shared processing path', () => {
       expect(originals.deskOpen({ access_token: 'owner', scope, citation: notes.items[0]!.citation }).items[0]?.kind).toBe('imported_meeting');
     }
   });
-  it('lets current members of the import project read the unapproved notes, and only while they are members', async () => {
-    const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
-    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
-    // The project choice waits as pending until processing consumes the queued import.
-    expect(f.count('authority_person_meeting_suggestions_v1')).toBe(0);
-    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(1);
-    await f.processUntilIdle(runtime);
-    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
-    expect(f.intake.suggestions(source!.source_key, id)).toEqual([project]);
-    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
-    expect(await f.readers()).toEqual(['owner', 'reader-a']);
-    f.leave(project, 'reader-a');
-    expect(await f.readers()).toEqual(['owner']);
-  });
   it('keeps a folder-delivered meeting readable by the folder project after the watch moves', async () => {
     const f = await fixture(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
     const home = await f.call(f.create(), { operation: 'home' });
@@ -382,10 +359,16 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([]);
     expect(await f.readers()).toEqual(['owner']);
   });
-  it('lets members of each project a note was imported with read it', async () => {
+  it('lets members of each project a note was imported with read it, and only while they are members', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    // The project choice waits as pending until processing consumes the queued import.
+    expect(f.count('authority_person_meeting_suggestions_v1')).toBe(0);
+    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(1);
     await f.processUntilIdle(runtime);
+    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect(f.intake.suggestions(source!.source_key, id)).toEqual([project]);
+    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(await f.readers()).toEqual(['owner', 'reader-a']);
     const revisions = f.count('authority_source_revisions_v1');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: projectB, retain: true });
@@ -393,10 +376,11 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.processUntilIdle(f.create());
     // The unchanged revision is re-admitted as a duplicate; that admission consumes the queued import and promotes B.
     expect(f.count('authority_source_revisions_v1')).toBe(revisions); expect(f.extracted()).toBe(1);
-    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project, projectB].sort());
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(await f.readers()).toEqual(['owner', 'reader-a', 'reader-b']);
+    f.leave(project, 'reader-a');
+    expect(await f.readers()).toEqual(['owner', 'reader-b']);
   });
   it('grants nothing to the project of a cancelled import when the note is re-imported privately', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
@@ -455,7 +439,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(await f.readers()).toEqual(['owner']);
   });
-  it('records an in-flight re-import\'s project when the cursor advance drops the meeting', async () => {
+  it('records and freezes an in-flight re-import\'s project when the cursor advance drops the meeting', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     f.duringExtract(async () => {
@@ -468,6 +452,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const [source] = (await f.call(runtime, { operation: 'home' })).sources;
     expect(source!.pending_imports).toEqual([]);
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project, projectB].sort());
+    expect(JSON.parse(f.outbox(source!.source_key)[0]!.suggested_projects_json!)).toEqual([project, projectB].sort());
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(f.extracted()).toBe(1);
     expect(await f.readers()).toEqual(['owner', 'reader-a', 'reader-b']);
@@ -487,11 +472,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const f = await fixture({ transcriptOnly: true }), runtime = f.create();
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-    const items = new SqlitePersonOriginalItemsV1(f.db, f.sessions, f.person.organization_id);
-    const list = createPersonListRouteV1({ organization_id: f.person.organization_id, sessions: f.sessions, tools: async () => [], directory: new SqlitePersonListDirectoryV1(f.db), originals: items,
-      meetings: { collectMeetings: () => ({ status: 'ok', rows: [], handle: {} }), commitMeetings: () => ({}), revalidateMeetingRelease() {}, admitMeeting() {}, openMeeting() { throw new Error('unused'); } },
-      transcripts: { readApprovedMeetingTranscriptByRecordV1() { throw new Error('unused'); } },
-    });
+    const list = f.listRoute();
     const page = await list.list({ access_token: 'owner', request: { schema_version: 1, mine: true } });
     expect(page.items).toHaveLength(1);
     const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } });
@@ -541,35 +522,21 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.call(runtime, { operation: 'watch', folder_id: null, project_id: null, retain: true, settings_sha256: next.settings_sha256 });
     expect((await f.call(runtime, { operation: 'home' })).sources[0]?.folder_id).toBeNull();
   });
-  it('freezes both projects of a note saved to A and then B before processing', async () => {
+  it('imports a note saved to A and then B before processing as one source and one extraction, freezing both projects', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: projectB, retain: true });
     await f.processUntilIdle(runtime);
+    expect(f.count('authority_person_meeting_sources_v2')).toBe(1);
     const [source] = (await f.call(runtime, { operation: 'home' })).sources;
     expect(f.extracted()).toBe(1);
     expect(f.proposals(source!.source_key)).toBe(1);
+    expect(f.intake.suggestions(source!.source_key, id)).toEqual([project, projectB].sort());
     const [proposal] = f.outbox(source!.source_key);
     expect(JSON.parse(proposal!.suggested_projects_json!)).toEqual([project, projectB].sort());
     expect((await runtime.approvals()).proposal(proposal!.approval_id)!.project_ids).toEqual([project, projectB].sort());
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]?.project_ids).toEqual([project, projectB].sort());
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews.map(review => review.project_ids)).toEqual([[project, projectB].sort()]);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
-  });
-  it("freezes an import's project although the cursor advance records it", async () => {
-    const f = await fixture(), runtime = f.create(); f.grantProject();
-    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
-    await f.processUntilIdle(runtime);
-    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
-    expect(JSON.parse(f.outbox(source!.source_key)[0]!.suggested_projects_json!)).toEqual([project]);
-    expect(f.intake.suggestions(source!.source_key, id)).toEqual([project]);
-  });
-  it("freezes an in-flight re-import's project chosen before the freeze", async () => {
-    const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
-    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
-    f.duringExtract(async () => { f.duringExtract(undefined); await f.call(runtime, { operation: 'import', meeting_id: id, project_id: projectB, retain: true }); });
-    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
-    expect(JSON.parse(f.outbox(source!.source_key)[0]!.suggested_projects_json!)).toEqual([project, projectB].sort());
   });
   it('shows a failed first freeze on its source and re-freezes it on a later tick with no new import', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject();
@@ -628,10 +595,7 @@ describe('personal meeting intake uses the shared processing path', () => {
   });
   it('approves into the chosen project through the v2 route', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
-    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
-    await f.processUntilIdle(runtime);
-    const [pending] = (await f.call(runtime, { operation: 'reviews' })).reviews;
-    const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    const { pending, opened } = await f.pendingReview(runtime, project);
     await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-b', action: 'approve', project_ids: [projectB], share_transcript: true, owners: [] }))
       .resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
     const body = JSON.parse(f.db.prepare('SELECT body_json FROM authority_approval_decisions_v1').pluck().get() as string);
@@ -644,10 +608,7 @@ describe('personal meeting intake uses the shared processing path', () => {
   it('forwards after_record hooks from the runtime passthrough', async () => {
     const calls: AfterApprovedRecordEventV1[] = [];
     const f = await fixture(), runtime = f.create(undefined, { approval_core: { after_record: [(tx, event) => { expect(tx.inTransaction).toBe(true); calls.push(event); }] } });
-    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
-    await f.processUntilIdle(runtime);
-    const [pending] = (await f.call(runtime, { operation: 'reviews' })).reviews;
-    const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    const { pending, opened } = await f.pendingReview(runtime);
     await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-hooked', action: 'approve', project_ids: [], share_transcript: false, owners: [] });
     await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
     await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
@@ -658,10 +619,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const after_record = [(_tx: unknown, event: AfterApprovedRecordEventV1) => { calls.push(event); }];
     const f = await fixture();
     const crashing = f.create(undefined, { approval_core: { after_record }, record_append: { async append(input) { await f.context.record_append.append(input); throw new Error('crash after append'); } } });
-    await f.call(crashing, { operation: 'import', meeting_id: id, project_id: null, retain: true });
-    await f.processUntilIdle(crashing);
-    const [pending] = (await f.call(crashing, { operation: 'reviews' })).reviews;
-    const opened = await f.call(crashing, { operation: 'review_open', approval_id: pending!.approval_id });
+    const { pending, opened } = await f.pendingReview(crashing);
     await f.call(crashing, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-crash', action: 'approve', project_ids: [], share_transcript: false, owners: [] });
     await expect(crashing.processing.recoverV4Appends(new AbortController().signal)).rejects.toThrow('crash after append');
     expect(calls).toEqual([]);
@@ -675,10 +633,7 @@ describe('personal meeting intake uses the shared processing path', () => {
   });
   it('returns an earlier decision and writes no second row', async () => {
     const f = await fixture(), runtime = f.create();
-    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
-    await f.processUntilIdle(runtime);
-    const [pending] = (await f.call(runtime, { operation: 'reviews' })).reviews;
-    const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    const { pending, opened } = await f.pendingReview(runtime);
     const review = { operation: 'review' as const, approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-once', action: 'reject' as const, project_ids: [], share_transcript: false, owners: [] };
     await expect(f.call(runtime, review)).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
     await expect(f.call(runtime, review)).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
@@ -688,10 +643,7 @@ describe('personal meeting intake uses the shared processing path', () => {
   });
   it('approves into two projects with a confirmed owner through the route', async () => {
     const f = await fixture({ ownedAction: true }), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
-    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
-    await f.processUntilIdle(runtime);
-    const [pending] = (await f.call(runtime, { operation: 'reviews' })).reviews;
-    const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    const { pending, opened } = await f.pendingReview(runtime, project);
     expect(opened.content).toContain('Send the pilot plan.');
     expect(opened.content).toContain('  Due: Not specified');
     expect(opened.content).not.toMatch(/Owner|Rafael/);
@@ -703,10 +655,7 @@ describe('personal meeting intake uses the shared processing path', () => {
   });
   it('returns the earlier decision when Slack decided first', async () => {
     const f = await fixture(), runtime = f.create();
-    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
-    await f.processUntilIdle(runtime);
-    const [pending] = (await f.call(runtime, { operation: 'reviews' })).reviews;
-    const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    const { pending, opened } = await f.pendingReview(runtime);
     const slackReview = validateApprovalDecisionRequestV1('slack', { approval_id: pending!.approval_id, command_id: 'slack:k', snapshot_sha256: opened.snapshot_sha256,
       action: 'approve', project_ids: [], share_transcript: false, owners: [] });
     (await runtime.approvals()).decide('slack', slackReview, () => ({ actor: f.person, evidence: { kind: 'slack-click', sha256: canonicalSha256('slack click') } }));

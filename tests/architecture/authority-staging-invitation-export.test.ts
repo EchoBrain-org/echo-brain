@@ -47,6 +47,22 @@ function fixture() {
 }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
+// Planning generates an RSA-3072 recipient key. The receipt binds no paths, so
+// tests that only need a planned receipt reuse the first real plan's bytes.
+let cachedPlan: { receipt: Buffer; key: Buffer } | undefined;
+function planned() {
+  const f = fixture();
+  const keyPath = join(f.output, 'recipient-key.pem');
+  if (cachedPlan === undefined) {
+    planInvitationExport(f.input, f.dependencies);
+    cachedPlan = { receipt: readFileSync(f.receipt), key: readFileSync(keyPath) };
+  } else {
+    writeFileSync(f.receipt, cachedPlan.receipt, { mode: 0o600 });
+    writeFileSync(keyPath, cachedPlan.key, { mode: 0o600 });
+  }
+  return f;
+}
+
 describe('private staging invitation export', () => {
   it('plans without remote execution and writes only private recipient material', () => {
     const f = fixture(); const plan = planInvitationExport(f.input, f.dependencies);
@@ -60,8 +76,8 @@ describe('private staging invitation export', () => {
     expect(f.calls.every(args => !['s3api', 'iam', 'secretsmanager'].includes(args[0]))).toBe(true);
   });
 
-  it('decrypts directly to two private files, removes the recipient key and never resubmits after completion', () => {
-    const f = fixture(); planInvitationExport(f.input, f.dependencies);
+  it('decrypts directly to two private files, removes the recipient key, never resubmits after completion, and rejects a changed completed file', () => {
+    const f = planned();
     const result = executeInvitationExport(f.receipt, f.dependencies);
     expect(readFileSync(result.invitation_path)).toEqual(INVITATION);
     expect(readFileSync(result.release_path)).toEqual(f.release);
@@ -70,10 +86,13 @@ describe('private staging invitation export', () => {
     expect(JSON.stringify(result)).not.toContain('synthetic-private');
     expect(executeInvitationExport(f.receipt, f.dependencies)).toEqual(result);
     expect(f.state.submissions).toBe(1);
+    writeFileSync(result.invitation_path, 'changed');
+    expect(() => executeInvitationExport(f.receipt, f.dependencies)).toThrow('export_completed_output_changed');
+    expect(f.state.submissions).toBe(1);
   });
 
   it('authenticates the ciphertext and request binding before publishing anything', () => {
-    const f = fixture(); planInvitationExport(f.input, f.dependencies);
+    const f = planned();
     const key = readFileSync(join(f.output, 'recipient-key.pem'));
     expect(() => openInvitationPayload(f.encrypted(), key, { ...f.request(), binding_sha256: '0'.repeat(64) })).toThrow();
     const packet = sealInvitationPayload(f.payload(), f.request().public_key, f.request().binding_sha256);
@@ -82,14 +101,6 @@ describe('private staging invitation export', () => {
     f.state.rawOutput = true;
     expect(() => executeInvitationExport(f.receipt, f.dependencies)).toThrow('export_ciphertext_invalid');
     expect(existsSync(join(f.output, 'founder-person-invitation.json'))).toBe(false);
-  });
-
-  it('rejects changed completed files instead of reporting success again', () => {
-    const f = fixture(); planInvitationExport(f.input, f.dependencies);
-    const result = executeInvitationExport(f.receipt, f.dependencies);
-    writeFileSync(result.invitation_path, 'changed');
-    expect(() => executeInvitationExport(f.receipt, f.dependencies)).toThrow('export_completed_output_changed');
-    expect(f.state.submissions).toBe(1);
   });
 
   it('refuses credential-bearing release URLs before AWS inspection or recipient creation', () => {
@@ -103,7 +114,7 @@ describe('private staging invitation export', () => {
   });
 
   it('rejects unrecognized receipt fields when rendering and executing', () => {
-    const f = fixture(); planInvitationExport(f.input, f.dependencies);
+    const f = planned();
     const altered = { ...f.request(), host_path: '/unapproved' };
     expect(() => invitationExportCommands(altered)).toThrow('export_receipt_invalid');
     write(f.receipt, altered);
@@ -112,7 +123,7 @@ describe('private staging invitation export', () => {
   });
 
   it('removes the recipient key after a confirmed remote failure and refuses resubmission', () => {
-    const f = fixture(); planInvitationExport(f.input, f.dependencies); f.state.failed = true;
+    const f = planned(); f.state.failed = true;
     expect(() => executeInvitationExport(f.receipt, f.dependencies)).toThrow('export_command_failed');
     expect(existsSync(join(f.output, 'recipient-key.pem'))).toBe(false);
     expect(existsSync(join(f.output, 'founder-person-invitation.json'))).toBe(false);
@@ -121,7 +132,7 @@ describe('private staging invitation export', () => {
   });
 
   it('resumes polling the same command after a deadline', () => {
-    const f = fixture(); planInvitationExport(f.input, f.dependencies); f.state.pending = true;
+    const f = planned(); f.state.pending = true;
     expect(() => executeInvitationExport(f.receipt, f.dependencies)).toThrow('export_pending_retry_same_receipt');
     f.state.pending = false;
     expect(executeInvitationExport(f.receipt, f.dependencies).state).toBe('exported');
@@ -129,7 +140,7 @@ describe('private staging invitation export', () => {
   });
 
   it('preserves an unknown submission and never sends another command', () => {
-    const f = fixture(); planInvitationExport(f.input, f.dependencies); f.state.lostSend = true;
+    const f = planned(); f.state.lostSend = true;
     expect(() => executeInvitationExport(f.receipt, f.dependencies)).toThrow();
     expect(f.request().state).toBe('submitting');
     expect(() => executeInvitationExport(f.receipt, f.dependencies)).toThrow('export_submission_unconfirmed_do_not_resubmit');
@@ -137,7 +148,7 @@ describe('private staging invitation export', () => {
   });
 
   it('refuses changed targets and existing outputs before remote execution', () => {
-    const f = fixture(); planInvitationExport(f.input, f.dependencies); f.state.changedVolume = true;
+    const f = planned(); f.state.changedVolume = true;
     expect(() => executeInvitationExport(f.receipt, f.dependencies)).toThrow('export_target_changed');
     f.state.changedVolume = false;
     writeFileSync(join(f.output, 'founder-person-invitation.json'), 'existing', { mode: 0o600 });
@@ -154,7 +165,7 @@ describe('private staging invitation export', () => {
   });
 
   it.each(['valid', 'symlink', 'exposed', 'oversized', 'wrong-release', 'wrong-volume', 'busy'] as const)('executes the real host reader/encryptor offline: %s', mode => {
-    const f = fixture(); planInvitationExport(f.input, f.dependencies);
+    const f = planned();
     const host = join(f.root, 'host');
     const base = join(host, 'srv/echo-authority-clean-v1');
     const invitation = join(base, 'clean-data/state/onboarding/founder-person-invitation.json');

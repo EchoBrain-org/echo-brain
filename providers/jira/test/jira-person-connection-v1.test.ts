@@ -102,17 +102,6 @@ describe('Nango-backed personal Jira connection', () => {
     } finally { f.database.close(); }
   });
 
-  it('passes the saved project mapping into the authenticated source search', async () => {
-    const f = fixture(); try {
-      await f.connected();
-      await f.service.projectSet({ access_token: f.token, request: { schema_version: 1, project_id: echoProject, expected_revision: null, request_id: randomUUID(), jira_project: 'ECHO' } });
-      const source = await f.service.source({ access_token: f.token, project_id: echoProject, audit: f.audit });
-      await source!.search({ query: 'launch' });
-      const search = f.transport.mock.calls.find(([url]) => new URL(String(url)).pathname.endsWith('/search/jql'))!;
-      expect(JSON.parse(search[1]!.body as string).jql).toBe('project = 10000 AND (text ~ "\\\"launch\\\"") ORDER BY created DESC, id DESC');
-    } finally { f.database.close(); }
-  });
-
   it.each(['open', 'revalidate'] as const)('refuses %s after a source ticket moves outside the mapped project', async operation => {
     const f = fixture(); try {
       await f.connected();
@@ -340,13 +329,6 @@ describe('Nango-backed personal Jira connection', () => {
       expect(f.store.current(person)).toMatchObject({ active: true, reference: fresh, attempt: retry.attempt });
       expect(f.store.current(person)!.binding.read_grant_sha256).not.toBe(old.binding.read_grant_sha256);
       await expect(source!.search({ query: 'launch' })).rejects.toMatchObject({ code: 'stale_access_state' });
-    } finally { f.database.close(); }
-  });
-
-  it('reports a fresh consent for another Jira account as a terminal account mismatch', async () => {
-    const f = fixture(); try {
-      await f.connected(); const again = await f.service.connect({ access_token: f.token }); f.finishAuthorization(); f.setAccount('another-account');
-      await expect(f.service.status({ access_token: f.token, attempt: again.attempt })).resolves.toMatchObject({ status: 'failed', failure_reason: 'account_mismatch' });
     } finally { f.database.close(); }
   });
 

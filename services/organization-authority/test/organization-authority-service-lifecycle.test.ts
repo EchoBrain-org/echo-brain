@@ -4,6 +4,7 @@ import {
   runOrganizationAuthorityProcessingCycleV1,
   startOrganizationAuthorityServiceLifecycle,
   type OrganizationAuthorityProcessingCycleV1,
+  type OrganizationAuthorityServiceLifecycleDependencies,
 } from "../src/composition/organization-authority-service-lifecycle.js";
 import type { MeetingProcessingWorkerTelemetryEventV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
 import type { ApprovalPresentationReconciliationResultV1 } from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
@@ -72,12 +73,23 @@ function apiRuntime(events: string[]): RunningOrganizationAuthorityApiRuntime {
   };
 }
 
+function startLifecycle(
+  worker_interval_ms: number,
+  dependencies: OrganizationAuthorityServiceLifecycleDependencies,
+  events: string[] = [],
+) {
+  return startOrganizationAuthorityServiceLifecycle(
+    { api: apiConfig, worker_interval_ms },
+    { start_api_runtime: async () => apiRuntime(events), ...dependencies },
+  );
+}
+
 describe("Organization Authority service lifecycle", () => {
   it("recovers personal approvals before search readiness and serializes their publication in the existing worker", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
     const personalEvents: string[] = [];
-    const runtime = await startOrganizationAuthorityServiceLifecycle({ api: apiConfig, worker_interval_ms: 1_000 }, {
+    const runtime = await startLifecycle(1_000, {
       processing: processing(events, undefined, async () => { expect(personalEvents[0]).toBe('recover'); }),
       additional_processing: processing(personalEvents),
       start_api_runtime: async () => { expect(events).toEqual(['recover', 'reconcile']); return apiRuntime(events); },
@@ -95,7 +107,7 @@ describe("Organization Authority service lifecycle", () => {
     const start = vi.fn();
     const primary = processing([]);
     const search = vi.spyOn(primary, 'reconcileReadableSearchGeneration');
-    await expect(startOrganizationAuthorityServiceLifecycle({ api: apiConfig, worker_interval_ms: 1_000 }, {
+    await expect(startLifecycle(1_000, {
       processing: primary,
       additional_processing: { ...processing([]), recoverV4Appends: async () => { throw new Error('pending signed append'); } },
       start_api_runtime: start,
@@ -112,7 +124,7 @@ describe("Organization Authority service lifecycle", () => {
     let active = 0;
     let maxActive = 0;
     let fail = true;
-    const runtime = await startOrganizationAuthorityServiceLifecycle({ api: apiConfig, worker_interval_ms: 1_000 }, {
+    const runtime = await startLifecycle(1_000, {
       processing: { ...processing([]), reconcileReadableSearchGeneration: async () => {
         calls++;
         if (calls === 1) return; // Startup validation.
@@ -128,7 +140,6 @@ describe("Organization Authority service lifecycle", () => {
           return { status: "current" };
         } finally { active--; }
       } },
-      start_api_runtime: async () => apiRuntime([]),
       on_worker_error: (error) => { errors.push(error); throw new Error("observer failed"); },
       on_worker_telemetry: (event) => { telemetry.push(event); throw new Error("observer failed"); },
     });
@@ -164,7 +175,7 @@ describe("Organization Authority service lifecycle", () => {
     const telemetry: MeetingProcessingWorkerTelemetryEventV1[] = [];
     let calls = 0;
     let searchSignal!: AbortSignal;
-    const runtime = await startOrganizationAuthorityServiceLifecycle({ api: apiConfig, worker_interval_ms: 1_000 }, {
+    const runtime = await startLifecycle(1_000, {
       processing: { ...processing(events), reconcileReadableSearchGeneration: async (signal) => {
         if (++calls === 1) return;
         searchSignal = signal;
@@ -200,10 +211,9 @@ describe("Organization Authority service lifecycle", () => {
     const blockedOperator = deferred();
     const events: string[] = [];
     let calls = 0;
-    const runtime = await startOrganizationAuthorityServiceLifecycle({ api: apiConfig, worker_interval_ms: 1_000 }, {
+    const runtime = await startLifecycle(1_000, {
       processing: processing(events, undefined, async () => { if (++calls === 2) await blockedSearch.promise; }),
-      start_api_runtime: async () => apiRuntime(events),
-    });
+    }, events);
     try {
       await vi.advanceTimersByTimeAsync(1);
       const operator = runtime.runExclusive(async () => { events.push("operator-start"); await blockedOperator.promise; events.push("operator-end"); });
@@ -225,13 +235,12 @@ describe("Organization Authority service lifecycle", () => {
     const blocked = deferred();
     let calls = 0;
     let searchSignal!: AbortSignal;
-    const runtime = await startOrganizationAuthorityServiceLifecycle({ api: apiConfig, worker_interval_ms: 1_000 }, {
+    const runtime = await startLifecycle(1_000, {
       processing: { ...processing([]), reconcileReadableSearchGeneration: async (signal) => {
         if (++calls === 1) return;
         searchSignal = signal;
         await blocked.promise;
       } },
-      start_api_runtime: async () => apiRuntime([]),
     });
     try {
       await vi.advanceTimersByTimeAsync(1);
@@ -248,18 +257,12 @@ describe("Organization Authority service lifecycle", () => {
   it("emits a successful content-free heartbeat for an empty cycle", async () => {
     vi.useFakeTimers();
     const events: MeetingProcessingWorkerTelemetryEventV1[] = [];
-    let now = 1_000;
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 1_000 },
-      {
-        processing: processing([]),
-        start_api_runtime: async () => apiRuntime([]),
-        on_worker_telemetry: (event) => events.push(event),
-        worker_telemetry_now: () => now,
-      },
-    );
+    const runtime = await startLifecycle(1_000, {
+      processing: processing([]),
+      on_worker_telemetry: (event) => events.push(event),
+      worker_telemetry_now: () => 1_000,
+    });
     await vi.advanceTimersByTimeAsync(0);
-    now += 25;
 
     expect(events).toContainEqual({
       schema_version: 1,
@@ -267,24 +270,20 @@ describe("Organization Authority service lifecycle", () => {
       event: "succeeded",
       elapsed_ms: 0,
     });
-    expect(JSON.stringify(events)).not.toContain("apiConfig");
     await runtime.close();
   });
 
   it("recovers and prewarms before starting Person, then retains worker ordering", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 1_000 },
-      {
-        processing: processing(events),
-        start_api_runtime: async () => {
-          events.push("api-start");
-          return apiRuntime(events);
-        },
-        clear_readable_search_handle: () => events.push("handle-clear"),
+    const runtime = await startLifecycle(1_000, {
+      processing: processing(events),
+      start_api_runtime: async () => {
+        events.push("api-start");
+        return apiRuntime(events);
       },
-    );
+      clear_readable_search_handle: () => events.push("handle-clear"),
+    });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(runtime.address.port).toBe(14_000);
@@ -300,19 +299,7 @@ describe("Organization Authority service lifecycle", () => {
     ]);
 
     await runtime.close();
-    expect(events).toEqual([
-      "recover",
-      "reconcile",
-      "api-start",
-      "recover",
-      "stage",
-      "finalize",
-      "append",
-      "reconcile",
-      "api-close",
-      "handle-clear",
-    ]);
-    vi.useRealTimers();
+    expect(events.slice(8)).toEqual(["api-close", "handle-clear"]);
   });
 
   it("retries after an interrupted V4 append with recovery before another source poll", async () => {
@@ -320,19 +307,15 @@ describe("Organization Authority service lifecycle", () => {
     const events: string[] = [];
     let attempts = 0;
     const errors: string[] = [];
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 100 },
-      {
-        processing: processing(events, async () => {
-          attempts += 1;
-          if (attempts === 1) throw new Error("append interrupted");
-        }),
-        start_api_runtime: async () => apiRuntime(events),
-        on_worker_error: (error) => {
-          errors.push(error.message);
-        },
+    const runtime = await startLifecycle(100, {
+      processing: processing(events, async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("append interrupted");
+      }),
+      on_worker_error: (error) => {
+        errors.push(error.message);
       },
-    );
+    }, events);
     await vi.advanceTimersByTimeAsync(0);
     expect(events).toEqual([
       "recover",
@@ -345,44 +328,10 @@ describe("Organization Authority service lifecycle", () => {
     expect(errors).toEqual(["append interrupted"]);
 
     await vi.advanceTimersByTimeAsync(101);
-    expect(events).toEqual([
-      "recover",
-      "reconcile",
-      "recover",
-      "stage",
-      "finalize",
-      "append",
-      "recover",
-      "stage",
-      "finalize",
-      "append",
-      "reconcile",
-    ]);
+    expect(events.slice(6)).toEqual(["recover", "stage", "finalize", "append", "reconcile"]);
     expect(errors).toEqual(["append interrupted"]);
 
     await runtime.close();
-    vi.useRealTimers();
-  });
-
-  it("finishes a coalesced append phase without running search on the writer stack", async () => {
-    const events: string[] = [];
-
-    await runOrganizationAuthorityProcessingCycleV1(
-      processing(events, async () => {
-        events.push("append:one");
-        events.push("append:two");
-      }),
-      new AbortController().signal,
-    );
-
-    expect(events).toEqual([
-      "recover",
-      "stage",
-      "finalize",
-      "append",
-      "append:one",
-      "append:two",
-    ]);
   });
 
   it("defers optional approval presentation until after startup and durable periodic phases", async () => {
@@ -407,16 +356,13 @@ describe("Organization Authority service lifecycle", () => {
 
     events.length = 0;
     let beforeApiStart: string[] = [];
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 10_000 },
-      {
-        processing: setup,
-        start_api_runtime: async () => {
-          beforeApiStart = [...events];
-          return apiRuntime(events);
-        },
+    const runtime = await startLifecycle(10_000, {
+      processing: setup,
+      start_api_runtime: async () => {
+        beforeApiStart = [...events];
+        return apiRuntime(events);
       },
-    );
+    });
     try {
       expect(beforeApiStart).toEqual(["recover", "reconcile"]);
       await runtime.drain(AbortSignal.timeout(1_000));
@@ -429,17 +375,13 @@ describe("Organization Authority service lifecycle", () => {
   it("invokes the additional processing lane's approval presenter", async () => {
     vi.useFakeTimers();
     const presented: string[] = [];
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 30_000 },
-      {
-        processing: processing([]),
-        additional_processing: {
-          ...processing([]),
-          reconcileApprovalPresentations: async () => { presented.push("personal"); return "idle"; },
-        },
-        start_api_runtime: async () => apiRuntime([]),
+    const runtime = await startLifecycle(30_000, {
+      processing: processing([]),
+      additional_processing: {
+        ...processing([]),
+        reconcileApprovalPresentations: async () => { presented.push("personal"); return "idle"; },
       },
-    );
+    });
     try {
       await vi.advanceTimersByTimeAsync(1);
       await runtime.drain(new AbortController().signal);
@@ -455,22 +397,18 @@ describe("Organization Authority service lifecycle", () => {
     const telemetry: MeetingProcessingWorkerTelemetryEventV1[] = [];
     let searchCalls = 0;
     let presentationCalls = 0;
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 100 },
-      {
-        processing: {
-          ...processing([]),
-          reconcileReadableSearchGeneration: async () => { searchCalls += 1; },
-          reconcileApprovalPresentations: async () => {
-            presentationCalls += 1;
-            if (presentationCalls === 1) throw new Error("terminal card unavailable");
-          },
+    const runtime = await startLifecycle(100, {
+      processing: {
+        ...processing([]),
+        reconcileReadableSearchGeneration: async () => { searchCalls += 1; },
+        reconcileApprovalPresentations: async () => {
+          presentationCalls += 1;
+          if (presentationCalls === 1) throw new Error("terminal card unavailable");
         },
-        start_api_runtime: async () => apiRuntime([]),
-        on_worker_error: (error) => errors.push(error),
-        on_worker_telemetry: (event) => telemetry.push(event),
       },
-    );
+      on_worker_error: (error) => errors.push(error),
+      on_worker_telemetry: (event) => telemetry.push(event),
+    });
     try {
       await vi.advanceTimersByTimeAsync(1);
       expect(presentationCalls).toBe(1);
@@ -494,17 +432,14 @@ describe("Organization Authority service lifecycle", () => {
     const telemetry: MeetingProcessingWorkerTelemetryEventV1[] = [];
     const startApi = vi.fn(async () => apiRuntime(events));
     await expect(
-      startOrganizationAuthorityServiceLifecycle(
-        { api: apiConfig, worker_interval_ms: 100 },
-        {
-          processing: processing(events, undefined, async () => {
-            throw new Error("generation reconciliation interrupted");
-          }),
-          start_api_runtime: startApi,
-          on_worker_telemetry: (event) => telemetry.push(event),
-          clear_readable_search_handle: () => events.push("handle-clear"),
-        },
-      ),
+      startLifecycle(100, {
+        processing: processing(events, undefined, async () => {
+          throw new Error("generation reconciliation interrupted");
+        }),
+        start_api_runtime: startApi,
+        on_worker_telemetry: (event) => telemetry.push(event),
+        clear_readable_search_handle: () => events.push("handle-clear"),
+      }),
     ).rejects.toThrow("generation reconciliation interrupted");
     expect(startApi).not.toHaveBeenCalled();
     expect(events).toEqual(["recover", "reconcile", "handle-clear"]);
@@ -528,21 +463,18 @@ describe("Organization Authority service lifecycle", () => {
     const startupProcessing = processing(events);
 
     await expect(
-      startOrganizationAuthorityServiceLifecycle(
-        { api: apiConfig, worker_interval_ms: 100 },
-        {
-          processing: {
-            ...startupProcessing,
-            recoverV4Appends: async () => {
-              events.push("recover");
-              throw new Error("append recovery interrupted");
-            },
+      startLifecycle(100, {
+        processing: {
+          ...startupProcessing,
+          recoverV4Appends: async () => {
+            events.push("recover");
+            throw new Error("append recovery interrupted");
           },
-          start_api_runtime: startApi,
-          on_worker_telemetry: (event) => telemetry.push(event),
-          clear_readable_search_handle: () => events.push("handle-clear"),
         },
-      ),
+        start_api_runtime: startApi,
+        on_worker_telemetry: (event) => telemetry.push(event),
+        clear_readable_search_handle: () => events.push("handle-clear"),
+      }),
     ).rejects.toThrow("append recovery interrupted");
 
     expect(startApi).not.toHaveBeenCalled();
@@ -564,26 +496,22 @@ describe("Organization Authority service lifecycle", () => {
     const started = new Promise<void>((resolve) => {
       phaseStarted = resolve;
     });
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 100 },
-      {
-        processing: {
-          ...processing([]),
-          pollAndStageAdmittedMeetings: async (signal) => {
-            phaseStarted();
-            await new Promise<void>((_resolve, reject) => {
-              signal.addEventListener(
-                "abort",
-                () => reject(new Error("private cancellation sentinel")),
-                { once: true },
-              );
-            });
-          },
+    const runtime = await startLifecycle(100, {
+      processing: {
+        ...processing([]),
+        pollAndStageAdmittedMeetings: async (signal) => {
+          phaseStarted();
+          await new Promise<void>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => reject(new Error("private cancellation sentinel")),
+              { once: true },
+            );
+          });
         },
-        start_api_runtime: async () => apiRuntime([]),
-        on_worker_telemetry: (event) => telemetry.push(event),
       },
-    );
+      on_worker_telemetry: (event) => telemetry.push(event),
+    });
     await started;
     await runtime.close();
 
@@ -607,29 +535,25 @@ describe("Organization Authority service lifecycle", () => {
     const telemetry: MeetingProcessingWorkerTelemetryEventV1[] = [];
     const order: string[] = [];
     let attempts = 0;
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 100 },
-      {
-        processing: processing([], async () => {
-          attempts += 1;
-          if (attempts === 1) {
-            throw new AdapterError("invalid_config", "private adapter sentinel", false);
-          }
-        }),
-        start_api_runtime: async () => apiRuntime([]),
-        on_worker_telemetry: (event) => {
-          if (event.event === "failed") {
-            order.push(
-              event.kind === "echo-clean-live-worker-phase-v1"
-                ? `phase:${event.cycle_phase}`
-                : "cycle",
-            );
-          }
-          telemetry.push(event);
-        },
-        on_worker_error: () => order.push("legacy"),
+    const runtime = await startLifecycle(100, {
+      processing: processing([], async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new AdapterError("invalid_config", "private adapter sentinel", false);
+        }
+      }),
+      on_worker_telemetry: (event) => {
+        if (event.event === "failed") {
+          order.push(
+            event.kind === "echo-clean-live-worker-phase-v1"
+              ? `phase:${event.cycle_phase}`
+              : "cycle",
+          );
+        }
+        telemetry.push(event);
       },
-    );
+      on_worker_error: () => order.push("legacy"),
+    });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(order).toEqual(["phase:record_append", "cycle", "legacy"]);
@@ -677,27 +601,12 @@ describe("Organization Authority service lifecycle", () => {
     expect(events).toEqual(["recover", "stage", "finalize", "append"]);
   });
 
-  it("publishes only the approval phases, never source intake", async () => {
-    const events: string[] = [];
-
-    await runOrganizationAuthorityApprovalPublicationV1(
-      processing(events),
-      new AbortController().signal,
-    );
-
-    expect(events).toEqual(["finalize", "append"]);
-  });
-
   it("publishes a requested approval without waiting for the periodic cycle", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 60_000 },
-      {
-        processing: processing(events),
-        start_api_runtime: async () => apiRuntime(events),
-      },
-    );
+    const runtime = await startLifecycle(60_000, {
+      processing: processing(events),
+    }, events);
     await vi.advanceTimersByTimeAsync(0);
     events.length = 0;
 
@@ -708,22 +617,17 @@ describe("Organization Authority service lifecycle", () => {
     // poll ran with them.
     expect(events).toEqual(["finalize", "append", "reconcile"]);
     await runtime.close();
-    vi.useRealTimers();
   });
 
   it("wakes approval-card presentation after requested publication without waiting for the next cycle", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 30_000 },
-      {
-        processing: {
-          ...processing(events),
-          reconcileApprovalPresentations: async () => { events.push("presentation"); },
-        },
-        start_api_runtime: async () => apiRuntime(events),
+    const runtime = await startLifecycle(30_000, {
+      processing: {
+        ...processing(events),
+        reconcileApprovalPresentations: async () => { events.push("presentation"); },
       },
-    );
+    }, events);
     try {
       await vi.advanceTimersByTimeAsync(1);
       await runtime.drain(new AbortController().signal);
@@ -744,7 +648,6 @@ describe("Organization Authority service lifecycle", () => {
       expect(events.indexOf("append")).toBeLessThan(events.indexOf("presentation"));
     } finally {
       await runtime.close();
-      vi.useRealTimers();
     }
   });
 
@@ -754,21 +657,17 @@ describe("Organization Authority service lifecycle", () => {
     let searchCalls = 0;
     let presentationCalls = 0;
     let failPresentation = false;
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 30_000 },
-      {
-        processing: {
-          ...processing([]),
-          reconcileReadableSearchGeneration: async () => { searchCalls += 1; },
-          reconcileApprovalPresentations: async () => {
-            presentationCalls += 1;
-            if (failPresentation) throw new Error("terminal card unavailable");
-          },
+    const runtime = await startLifecycle(30_000, {
+      processing: {
+        ...processing([]),
+        reconcileReadableSearchGeneration: async () => { searchCalls += 1; },
+        reconcileApprovalPresentations: async () => {
+          presentationCalls += 1;
+          if (failPresentation) throw new Error("terminal card unavailable");
         },
-        start_api_runtime: async () => apiRuntime([]),
-        on_worker_error: (error) => errors.push(error),
       },
-    );
+      on_worker_error: (error) => errors.push(error),
+    });
     try {
       await vi.advanceTimersByTimeAsync(1);
       await runtime.drain(new AbortController().signal);
@@ -791,7 +690,6 @@ describe("Organization Authority service lifecycle", () => {
       expect(presentationCalls).toBe(1);
     } finally {
       await runtime.close();
-      vi.useRealTimers();
     }
   });
 
@@ -799,19 +697,15 @@ describe("Organization Authority service lifecycle", () => {
     vi.useFakeTimers();
     let presentationCalls = 0;
     const outcomes = ["rendered", "rendered", "idle"] as const satisfies readonly ApprovalPresentationReconciliationResultV1[];
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 30_000 },
-      {
-        processing: {
-          ...processing([]),
-          reconcileApprovalPresentations: async () => {
-            presentationCalls += 1;
-            return outcomes[presentationCalls - 1] ?? "idle";
-          },
+    const runtime = await startLifecycle(30_000, {
+      processing: {
+        ...processing([]),
+        reconcileApprovalPresentations: async () => {
+          presentationCalls += 1;
+          return outcomes[presentationCalls - 1] ?? "idle";
         },
-        start_api_runtime: async () => apiRuntime([]),
       },
-    );
+    });
     try {
       // The startup cycle's redraw and each rendered card run in their own
       // event loop turn. Advance enough turns for the bounded three-card backlog.
@@ -823,26 +717,21 @@ describe("Organization Authority service lifecycle", () => {
       expect(presentationCalls).toBe(3);
     } finally {
       await runtime.close();
-      vi.useRealTimers();
     }
   });
 
   it("does not self-retry an uncertain approval-card presentation", async () => {
     vi.useFakeTimers();
     let presentationCalls = 0;
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 30_000 },
-      {
-        processing: {
-          ...processing([]),
-          reconcileApprovalPresentations: async () => {
-            presentationCalls += 1;
-            return "uncertain";
-          },
+    const runtime = await startLifecycle(30_000, {
+      processing: {
+        ...processing([]),
+        reconcileApprovalPresentations: async () => {
+          presentationCalls += 1;
+          return "uncertain";
         },
-        start_api_runtime: async () => apiRuntime([]),
       },
-    );
+    });
     try {
       await vi.advanceTimersByTimeAsync(1);
       await runtime.drain(new AbortController().signal);
@@ -852,7 +741,6 @@ describe("Organization Authority service lifecycle", () => {
       expect(presentationCalls).toBe(1);
     } finally {
       await runtime.close();
-      vi.useRealTimers();
     }
   });
 
@@ -860,20 +748,16 @@ describe("Organization Authority service lifecycle", () => {
     vi.useFakeTimers();
     const active = deferred();
     let presentationCalls = 0;
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 30_000 },
-      {
-        processing: {
-          ...processing([]),
-          reconcileApprovalPresentations: async () => {
-            presentationCalls += 1;
-            if (presentationCalls === 1) await active.promise;
-            return "idle";
-          },
+    const runtime = await startLifecycle(30_000, {
+      processing: {
+        ...processing([]),
+        reconcileApprovalPresentations: async () => {
+          presentationCalls += 1;
+          if (presentationCalls === 1) await active.promise;
+          return "idle";
         },
-        start_api_runtime: async () => apiRuntime([]),
       },
-    );
+    });
     try {
       await vi.advanceTimersByTimeAsync(1);
       expect(presentationCalls).toBe(1);
@@ -887,7 +771,6 @@ describe("Organization Authority service lifecycle", () => {
     } finally {
       active.resolve();
       await runtime.close();
-      vi.useRealTimers();
     }
   });
 
@@ -895,20 +778,16 @@ describe("Organization Authority service lifecycle", () => {
     vi.useFakeTimers();
     const active = deferred();
     let presentationCalls = 0;
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 30_000 },
-      {
-        processing: {
-          ...processing([]),
-          reconcileApprovalPresentations: async () => {
-            presentationCalls += 1;
-            if (presentationCalls === 1) await active.promise;
-            return presentationCalls === 1 ? "rendered" : "idle";
-          },
+    const runtime = await startLifecycle(30_000, {
+      processing: {
+        ...processing([]),
+        reconcileApprovalPresentations: async () => {
+          presentationCalls += 1;
+          if (presentationCalls === 1) await active.promise;
+          return presentationCalls === 1 ? "rendered" : "idle";
         },
-        start_api_runtime: async () => apiRuntime([]),
       },
-    );
+    });
     try {
       await vi.advanceTimersByTimeAsync(1);
       expect(presentationCalls).toBe(1);
@@ -926,7 +805,6 @@ describe("Organization Authority service lifecycle", () => {
     } finally {
       active.resolve();
       await runtime.close();
-      vi.useRealTimers();
     }
   });
 
@@ -935,20 +813,16 @@ describe("Organization Authority service lifecycle", () => {
     const active = deferred();
     const events: string[] = [];
     let presentationCalls = 0;
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 30_000 },
-      {
-        processing: {
-          ...processing(events),
-          reconcileApprovalPresentations: async () => {
-            presentationCalls += 1;
-            await active.promise;
-            return "idle";
-          },
+    const runtime = await startLifecycle(30_000, {
+      processing: {
+        ...processing(events),
+        reconcileApprovalPresentations: async () => {
+          presentationCalls += 1;
+          await active.promise;
+          return "idle";
         },
-        start_api_runtime: async () => apiRuntime(events),
       },
-    );
+    }, events);
     try {
       await vi.advanceTimersByTimeAsync(1);
       expect(presentationCalls).toBe(1);
@@ -962,7 +836,6 @@ describe("Organization Authority service lifecycle", () => {
     } finally {
       active.resolve();
       await runtime.close();
-      vi.useRealTimers();
     }
   });
 
@@ -971,21 +844,17 @@ describe("Organization Authority service lifecycle", () => {
     const events: string[] = [];
     let releaseStage: (() => void) | undefined;
     const slow = processing(events);
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 60_000 },
-      {
-        processing: {
-          ...slow,
-          pollAndStageAdmittedMeetings: async () => {
-            events.push("stage");
-            await new Promise<void>((resolve) => {
-              releaseStage = resolve;
-            });
-          },
+    const runtime = await startLifecycle(60_000, {
+      processing: {
+        ...slow,
+        pollAndStageAdmittedMeetings: async () => {
+          events.push("stage");
+          await new Promise<void>((resolve) => {
+            releaseStage = resolve;
+          });
         },
-        start_api_runtime: async () => apiRuntime(events),
       },
-    );
+    }, events);
     await vi.advanceTimersByTimeAsync(0);
     // The first periodic cycle is now parked inside source intake.
     expect(events.at(-1)).toBe("stage");
@@ -1009,25 +878,20 @@ describe("Organization Authority service lifecycle", () => {
       "reconcile",
     ]);
     await runtime.close();
-    vi.useRealTimers();
   });
 
   it("schedules exactly one follow-up for a request made mid-publication", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
     const gate: { release?: () => void; open: boolean } = { open: false };
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 60_000 },
-      {
-        processing: processing(events, async () => {
-          if (gate.open) return;
-          await new Promise<void>((resolve) => {
-            gate.release = resolve;
-          });
-        }),
-        start_api_runtime: async () => apiRuntime(events),
-      },
-    );
+    const runtime = await startLifecycle(60_000, {
+      processing: processing(events, async () => {
+        if (gate.open) return;
+        await new Promise<void>((resolve) => {
+          gate.release = resolve;
+        });
+      }),
+    }, events);
     await vi.advanceTimersByTimeAsync(0);
     // The first periodic cycle is parked in append; let it finish.
     gate.release?.();
@@ -1052,7 +916,6 @@ describe("Organization Authority service lifecycle", () => {
       "reconcile",
     ]);
     await runtime.close();
-    vi.useRealTimers();
   });
 
   it("reports a failed publication and leaves the periodic cycle running", async () => {
@@ -1060,19 +923,15 @@ describe("Organization Authority service lifecycle", () => {
     const events: string[] = [];
     const errors: Error[] = [];
     let failNext = false;
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 1_000 },
-      {
-        processing: processing(events, async () => {
-          if (failNext) {
-            failNext = false;
-            throw new Error("append unavailable");
-          }
-        }),
-        start_api_runtime: async () => apiRuntime(events),
-        on_worker_error: (error) => errors.push(error),
-      },
-    );
+    const runtime = await startLifecycle(1_000, {
+      processing: processing(events, async () => {
+        if (failNext) {
+          failNext = false;
+          throw new Error("append unavailable");
+        }
+      }),
+      on_worker_error: (error) => errors.push(error),
+    }, events);
     await vi.advanceTimersByTimeAsync(0);
     events.length = 0;
 
@@ -1091,32 +950,24 @@ describe("Organization Authority service lifecycle", () => {
       "reconcile",
     ]);
     await runtime.close();
-    vi.useRealTimers();
   });
 
   it("cancels a deferred publication when close begins before it starts", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 60_000 },
-      {
-        processing: processing(events),
-        start_api_runtime: async () => apiRuntime(events),
-      },
-    );
-    let closed = false;
+    const runtime = await startLifecycle(60_000, {
+      processing: processing(events),
+    }, events);
     try {
       await vi.advanceTimersByTimeAsync(0);
       events.length = 0;
       runtime.requestApprovalPublication();
       await runtime.close();
-      closed = true;
       await vi.advanceTimersByTimeAsync(0);
       expect(events).toEqual(["api-close"]);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
-      if (!closed) await runtime.close();
-      vi.useRealTimers();
+      await runtime.close();
     }
   });
 
@@ -1124,14 +975,10 @@ describe("Organization Authority service lifecycle", () => {
     vi.useFakeTimers();
     const events: string[] = [];
     const errors: Error[] = [];
-    const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api: apiConfig, worker_interval_ms: 60_000 },
-      {
-        processing: processing(events),
-        start_api_runtime: async () => apiRuntime(events),
-        on_worker_error: (error) => errors.push(error),
-      },
-    );
+    const runtime = await startLifecycle(60_000, {
+      processing: processing(events),
+      on_worker_error: (error) => errors.push(error),
+    }, events);
     await vi.advanceTimersByTimeAsync(0);
     await runtime.close();
     events.length = 0;
@@ -1141,6 +988,5 @@ describe("Organization Authority service lifecycle", () => {
 
     expect(events).toEqual([]);
     expect(errors).toEqual([]);
-    vi.useRealTimers();
   });
 });

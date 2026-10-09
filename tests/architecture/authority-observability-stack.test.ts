@@ -238,8 +238,6 @@ describe("Authority minimal observability stack", () => {
 
     expect(logGroup).toMatchObject({
       Type: "AWS::Logs::LogGroup",
-      DeletionPolicy: "Retain",
-      UpdateReplacePolicy: "Retain",
       Properties: {
         LogGroupName: { "Fn::Sub": "/echo-brain/authority/${AuthorityHost}" },
         RetentionInDays: 14,

@@ -37,9 +37,7 @@ describe('PC-00 immutable command identity (no persistence or authorization impl
   ])('binds each changed original/audience/association coordinate: %j', (change) => {
     const changed = identity(validatePersonUpdateSubmitV2({ ...upload, ...change }));
     const original = identity(upload);
-    expect(changed.organization_id).toBe(original.organization_id);
-    expect(changed.membership_id).toBe(original.membership_id);
-    expect(changed.request_id).toBe(original.request_id);
+    expect({ ...changed, command_sha256: null }).toEqual({ ...original, command_sha256: null });
     expect(changed.command_sha256).not.toBe(original.command_sha256);
   });
 

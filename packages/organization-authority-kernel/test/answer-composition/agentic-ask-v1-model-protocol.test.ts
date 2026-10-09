@@ -182,13 +182,9 @@ describe("agentic Ask model protocol parity", () => {
 
   it("preserves identifiers and punctuation for each provider to interpret", () => {
     expect(normalizeQuery('"KAN-8"')).toBe('KAN-8');
-    expect(normalizeQuery('echo-123')).toBe('echo-123');
-    expect(normalizeQuery('HW_DVT-27 status')).toBe('HW_DVT-27 status');
-    expect(normalizeQuery('USB-C readiness')).toBe('USB-C readiness');
-    expect(normalizeQuery('org/repo#123')).toBe('org/repo#123');
-    expect(normalizeQuery('person@example.test')).toBe('person@example.test');
-    expect(normalizeQuery('C++ readiness')).toBe('C++ readiness');
-    expect(normalizeQuery('KAN-8 kan-8')).toBe('KAN-8 kan-8');
+    for (const query of ['echo-123', 'HW_DVT-27 status', 'USB-C readiness', 'org/repo#123', 'person@example.test', 'C++ readiness', 'KAN-8 kan-8']) {
+      expect(normalizeQuery(query), query).toBe(query);
+    }
     expect(normalizeQuery(Array.from({ length: 20 }, (_, i) => `HW${i}-${i}`).join(' '))).toBeNull();
   });
 });

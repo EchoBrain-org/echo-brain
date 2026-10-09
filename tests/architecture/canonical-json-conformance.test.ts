@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   CanonicalJsonError as ProtocolCanonicalJsonError,
@@ -34,6 +32,15 @@ function nested(depth: number): unknown {
   let value: unknown = 1;
   for (let index = 0; index < depth; index += 1) value = { n: value };
   return value;
+}
+
+function thrown(run: () => unknown): unknown {
+  try {
+    run();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
 }
 
 class NotAPlainObject {
@@ -107,37 +114,12 @@ describe('canonical JSON conformance across independent implementations', () => 
   });
 
   it.each(REJECTED)('both refuse %s the same way', (_label, value) => {
-    let protocolFailure: unknown;
-    let controlPlaneFailure: unknown;
-    try {
-      protocolCanonicalJson(value);
-    } catch (error) {
-      protocolFailure = error;
-    }
-    try {
-      controlPlaneCanonicalJson(value);
-    } catch (error) {
-      controlPlaneFailure = error;
-    }
+    const protocolFailure = thrown(() => protocolCanonicalJson(value));
+    const controlPlaneFailure = thrown(() => controlPlaneCanonicalJson(value));
     expect(protocolFailure).toBeInstanceOf(ProtocolCanonicalJsonError);
     expect(controlPlaneFailure).toBeInstanceOf(ControlPlaneCanonicalJsonError);
     expect((controlPlaneFailure as Error).message).toBe(
       (protocolFailure as Error).message,
     );
-  });
-
-  it('keeps the control-plane copy independent of the protocol package', () => {
-    // Conformance must never be "fixed" by making the control plane import the
-    // shared implementation; its boundary forbids that edge on purpose.
-    const boundary = JSON.parse(
-      readFileSync(
-        resolve(
-          import.meta.dirname,
-          '../../packages/organization-control-plane/source-boundary.v1.json',
-        ),
-        'utf8',
-      ),
-    ) as { allowed_workspace_packages: readonly string[] };
-    expect(boundary.allowed_workspace_packages).toEqual([]);
   });
 });

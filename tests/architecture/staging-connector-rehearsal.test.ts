@@ -124,19 +124,23 @@ describe('staging connector rehearsal wrapper', () => {
       } }), remote);
       assert.equal(reads, 1);
     }
-    for (const remote of [
-      { ...accepted, release_id: 'clean-v1-other-release' },
-      { ...accepted, profile_sha256: canonicalSha256('other') },
-      { ...accepted, tool: 'slack' },
-      { ...accepted, result: { ...accepted.result, text: 'private provider body' } },
-      undefined,
+    for (const reply of [
+      () => Response.json({ ...accepted, release_id: 'clean-v1-other-release' }),
+      () => Response.json({ ...accepted, profile_sha256: canonicalSha256('other') }),
+      () => Response.json({ ...accepted, tool: 'slack' }),
+      () => Response.json({ ...accepted, result: { ...accepted.result, text: 'private provider body' } }),
+      () => Response.json({ ...accepted, schema_version: 1, kind: 'echo-staging-connector-rehearsal-receipt-v1' }),
+      () => Response.json({ ...accepted, receipt: { source_text: 'private content' } }),
+      () => new Response(JSON.stringify({ error: { code: 'internal', message: 'private source text must not escape' } }), {
+        status: 500, headers: { 'content-type': 'application/json' },
+      }),
+      (): Response => { throw new Error('private lost-response details'); },
     ]) {
       let reads = 0;
       await assert.rejects(runStagingConnectorRehearsal(input, { fetch: async target => {
         if (url(target).pathname === '/v1/authority-descriptor') return Response.json(descriptor());
         reads += 1;
-        if (remote === undefined) throw new Error('private lost-response details');
-        return Response.json(remote);
+        return reply();
       } }), error => error instanceof Error && error.message === 'Staging connector rehearsal failed');
       assert.equal(reads, 1);
     }
@@ -150,27 +154,6 @@ describe('staging connector rehearsal wrapper', () => {
         fetch: async () => { calls += 1; return Response.json({}); },
       }), /Staging connector rehearsal failed/);
       assert.equal(calls, 0);
-    }
-  });
-
-  it('refuses a legacy receipt or content-bearing read receipt', async () => {
-    const directory = root(); const home = join(directory, 'person-home');
-    const profilePath = join(directory, 'profile.json'); const configured = profile(profilePath);
-    install(home);
-    const accepted = response(configured, 'verify-read');
-    for (const receipt of [
-      { ...accepted, schema_version: 1, kind: 'echo-staging-connector-rehearsal-receipt-v1' },
-      { ...accepted, receipt: { source_text: 'private content' } },
-    ]) {
-      let reads = 0;
-      await assert.rejects(runStagingConnectorRehearsal({ action: 'verify-read', release_id: 'clean-v1-fixture-release',
-        profile_path: profilePath, person_home: home, tool: 'jira' }, {
-        fetch: async input => {
-          if (url(input).pathname === '/v1/authority-descriptor') return Response.json(descriptor());
-          reads += 1; return Response.json(receipt);
-        },
-      }), /Staging connector rehearsal failed/);
-      assert.equal(reads, 1);
     }
   });
 
@@ -198,28 +181,6 @@ describe('staging connector rehearsal wrapper', () => {
     assert.deepEqual(result, response(configured, 'status'));
     assert.equal(calls.length, 2);
     assert.ok(!JSON.stringify(result).includes('a'.repeat(43)));
-  });
-
-  it('makes one read request and never retries a lost or refused response', async () => {
-    const directory = root();
-    const home = join(directory, 'person-home');
-    const profilePath = join(directory, 'profile.json');
-    profile(profilePath);
-    install(home);
-    let readCalls = 0;
-    const fetch: typeof globalThis.fetch = async (input) => {
-      const target = url(input);
-      if (target.pathname === '/v1/authority-descriptor') return Response.json(descriptor());
-      readCalls += 1;
-      return new Response(JSON.stringify({ error: { code: 'internal', message: 'private source text must not escape' } }), {
-        status: 500, headers: { 'content-type': 'application/json' },
-      });
-    };
-    await assert.rejects(
-      runStagingConnectorRehearsal({ action: 'verify-read', release_id: 'clean-v1-fixture-release', profile_path: profilePath, person_home: home, tool: 'jira' }, { fetch }),
-      /Staging connector rehearsal failed/,
-    );
-    assert.equal(readCalls, 1);
   });
 
   it('rejects capture-only inputs and retired profiles before bearer traffic', async () => {

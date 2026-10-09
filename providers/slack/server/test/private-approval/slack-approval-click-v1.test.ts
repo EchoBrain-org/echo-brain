@@ -62,16 +62,18 @@ async function fixture() {
       "2026-10-07T09:00:00.000Z",
       "2026-10-07T09:00:00.000Z",
     );
-  const link = vi.fn(() => ({
+  const linked = {
     ...f.person,
     connection_id: TARGET.connection_id,
     api_app_id: TARGET.api_app_id,
     external_identity_link_id: TARGET.external_identity_link_id,
     contract_sha256: TARGET.external_identity_link_contract_sha256,
-  }));
+  };
+  const link = vi.fn(() => linked);
   const redraw = vi.fn();
   return {
     ...f,
+    linked,
     link,
     redraw,
     decide: createSlackApprovalClickV1({
@@ -105,8 +107,6 @@ async function fixtureWithRuns() {
 describe("Slack approval click V1", () => {
   it("decides through the real core with project choices and proposal-keyed owners", async () => {
     const f = await fixture();
-    expect(f.core.proposal(f.approvalId)).toMatchObject({ reviewer: f.person });
-    expect(f.link()).toMatchObject(f.core.proposal(f.approvalId)!.reviewer);
     expect(f.core.ownerProposals(f.approvalId)).toContainEqual({
       signal_id: "act-1",
       action: expect.any(String),
@@ -148,13 +148,7 @@ describe("Slack approval click V1", () => {
     expect(f.decide(source)).toEqual({ outcome: "refused" });
     expect(f.decisionCount()).toBe(0);
     f.link.mockReset();
-    f.link.mockReturnValue({
-      ...f.person,
-      connection_id: TARGET.connection_id,
-      api_app_id: TARGET.api_app_id,
-      external_identity_link_id: TARGET.external_identity_link_id,
-      contract_sha256: TARGET.external_identity_link_contract_sha256,
-    });
+    f.link.mockReturnValue(f.linked);
     expect(
       f.decide({
         ...source,
@@ -165,15 +159,7 @@ describe("Slack approval click V1", () => {
     let calls = 0;
     f.link.mockImplementation(
       () =>
-        (++calls === 1
-          ? {
-              ...f.person,
-              connection_id: TARGET.connection_id,
-              api_app_id: TARGET.api_app_id,
-              external_identity_link_id: TARGET.external_identity_link_id,
-              contract_sha256: TARGET.external_identity_link_contract_sha256,
-            }
-          : null) as never,
+        (++calls === 1 ? f.linked : null) as never,
     );
     expect(f.decide(source)).toEqual({ outcome: "refused" });
     expect(f.decisionCount()).toBe(0);

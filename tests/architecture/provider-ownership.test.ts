@@ -52,36 +52,15 @@ describe('shared provider library ownership', () => {
     expect(report.workspace_edges).toBe(4);
   });
 
-  it('refuses the reverse dependency from a shared library to a concrete provider', () => {
+  it.each([
+    ['refuses the reverse dependency from a shared library to a concrete provider', 'providers/shared', 'providers/alpha', 'shared provider library imports a concrete provider or application'],
+    ['keeps neutral libraries unaware of shared provider implementations', 'packages/contracts', 'providers/shared', 'neutral module reaches shared-provider'],
+    ['refuses shared library dependencies on a service bootstrap', 'providers/shared', 'services/authority', 'provider imports the composing service'],
+    ['preserves the concrete-to-concrete provider prohibition', 'providers/alpha', 'providers/beta', 'cross-provider dependency'],
+  ])('%s', (_name, from, to, errorPrefix) => {
     const repository = fixture();
-    repository.import('providers/shared', 'providers/alpha');
-    expect(repository.check().errors).toEqual([
-      'shared provider library imports a concrete provider or application: providers/shared/src/index.ts -> providers/alpha/src/index.ts',
-    ]);
-  });
-
-  it('keeps neutral libraries unaware of shared provider implementations', () => {
-    const repository = fixture();
-    repository.import('packages/contracts', 'providers/shared');
-    expect(repository.check().errors).toEqual([
-      'neutral module reaches shared-provider: packages/contracts/src/index.ts -> providers/shared/src/index.ts',
-    ]);
-  });
-
-  it('refuses shared library dependencies on a service bootstrap', () => {
-    const repository = fixture();
-    repository.import('providers/shared', 'services/authority');
-    expect(repository.check().errors).toEqual([
-      'provider imports the composing service: providers/shared/src/index.ts -> services/authority/src/index.ts',
-    ]);
-  });
-
-  it('preserves the concrete-to-concrete provider prohibition', () => {
-    const repository = fixture();
-    repository.import('providers/alpha', 'providers/beta');
-    expect(repository.check().errors).toEqual([
-      'cross-provider dependency: providers/alpha/src/index.ts -> providers/beta/src/index.ts',
-    ]);
+    repository.import(from, to);
+    expect(repository.check().errors).toEqual([`${errorPrefix}: ${from}/src/index.ts -> ${to}/src/index.ts`]);
   });
 
   it('defaults the optional shared-root declaration to an empty list', () => {

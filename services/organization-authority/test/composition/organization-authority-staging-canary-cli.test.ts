@@ -17,6 +17,13 @@ const { runOrganizationAuthorityServiceCli } = await import(
 );
 
 const RELEASE_ID = "clean-v1-staging-canary";
+const RECEIPT = Object.freeze({
+  schema_version: 1,
+  kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
+  release_id: RELEASE_ID,
+  approval_outcome: "staged",
+  approval_id: "apr_private",
+});
 const previousReleaseId = process.env.ECHO_CLEAN_RELEASE_ID;
 
 afterEach(() => {
@@ -28,13 +35,7 @@ afterEach(() => {
 describe("Organization Authority staging canary CLI", () => {
   it("uses the existing private socket client without opening a runtime", async () => {
     process.env.ECHO_CLEAN_RELEASE_ID = RELEASE_ID;
-    state.request.mockResolvedValue({
-      schema_version: 1,
-      kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
-      release_id: RELEASE_ID,
-      approval_outcome: "staged",
-      approval_id: "apr_private",
-    });
+    state.request.mockResolvedValue(RECEIPT);
     const stdout: string[] = [];
 
     await expect(
@@ -47,15 +48,7 @@ describe("Organization Authority staging canary CLI", () => {
     expect(state.request).toHaveBeenCalledExactlyOnceWith({
       release_id: RELEASE_ID,
     });
-    expect(stdout).toEqual([
-      `${canonicalJson({
-        schema_version: 1,
-        kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
-        release_id: RELEASE_ID,
-        approval_outcome: "staged",
-        approval_id: "apr_private",
-      } as never)}\n`,
-    ]);
+    expect(stdout).toEqual([`${canonicalJson(RECEIPT as never)}\n`]);
   });
 
   it("refuses a requested release that differs from the running service", async () => {

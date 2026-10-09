@@ -75,6 +75,19 @@ describe("SlackWebApiClient conversations.open", () => {
   });
 });
 
+const HISTORY = {
+  channel: "D123",
+  oldest: "1724292304.000000",
+  latest: "1724292904.000000",
+} as const;
+
+function historyResponse(
+  scopes: string,
+  page: unknown = { ok: true, has_more: false, messages: [], response_metadata: { next_cursor: "" } },
+): Response {
+  return new Response(JSON.stringify(page), { headers: { "x-oauth-scopes": scopes } });
+}
+
 describe("SlackWebApiClient conversations.history recovery", () => {
   it("reads every cursor page and preserves exact bot-authored evidence", async () => {
     const urls: string[] = [];
@@ -82,68 +95,48 @@ describe("SlackWebApiClient conversations.history recovery", () => {
       fetchImpl: async (url) => {
         urls.push(String(url));
         const cursor = new URL(String(url)).searchParams.get("cursor");
-        return new Response(
-          JSON.stringify(
-            cursor === null
-              ? {
-                  ok: true,
-                  has_more: true,
-                  messages: [{ ts: "1724292304.005000", text: "first", bot_id: "B123" }],
-                  response_metadata: { next_cursor: "next" },
-                }
-              : {
-                  ok: true,
-                  has_more: false,
-                  messages: [{ ts: "1724292305.005000", text: "second", bot_id: "B123" }],
-                  response_metadata: { next_cursor: "" },
-                },
-          ),
-          { headers: { "x-oauth-scopes": "im:history" } },
+        return historyResponse(
+          "im:history",
+          cursor === null
+            ? {
+                ok: true,
+                has_more: true,
+                messages: [{ ts: "1724292304.005000", text: "first", bot_id: "B123" }],
+                response_metadata: { next_cursor: "next" },
+              }
+            : {
+                ok: true,
+                has_more: false,
+                messages: [{ ts: "1724292305.005000", text: "second", bot_id: "B123" }],
+                response_metadata: { next_cursor: "" },
+              },
         );
       },
     });
 
-    await expect(
-      client.channelHistory({
-        channel: "D123",
-        oldest: "1724292304.000000",
-        latest: "1724292904.000000",
-      }),
-    ).resolves.toEqual([
+    await expect(client.channelHistory(HISTORY)).resolves.toEqual([
       { ts: "1724292304.005000", text: "first", bot_id: "B123" },
       { ts: "1724292305.005000", text: "second", bot_id: "B123" },
     ]);
     expect(urls).toHaveLength(2);
     for (const url of urls) {
-      expect(new URL(url).searchParams.get("oldest")).toBe(
-        "1724292304.000000",
-      );
-      expect(new URL(url).searchParams.get("latest")).toBe(
-        "1724292904.000000",
-      );
+      expect(new URL(url).searchParams.get("oldest")).toBe("1724292304.000000");
+      expect(new URL(url).searchParams.get("latest")).toBe("1724292904.000000");
     }
   });
 
   it("never treats incomplete pagination as proof that no post exists", async () => {
     const client = new SlackWebApiClient("test-token", {
-      fetchImpl: async () => new Response(
-        JSON.stringify({
+      fetchImpl: async () =>
+        historyResponse("im:history", {
           ok: true,
           has_more: true,
           messages: [],
           response_metadata: { next_cursor: "" },
         }),
-        { headers: { "x-oauth-scopes": "im:history" } },
-      ),
     });
 
-    await expect(
-      client.channelHistory({
-        channel: "D123",
-        oldest: "1724292304.000000",
-        latest: "1724292904.000000",
-      }),
-    ).rejects.toMatchObject({ code: "invalid", retryable: false });
+    await expect(client.channelHistory(HISTORY)).rejects.toMatchObject({ code: "invalid", retryable: false });
   });
 
   it("never reads a public or private channel's history", async () => {
@@ -152,7 +145,7 @@ describe("SlackWebApiClient conversations.history recovery", () => {
       fetchImpl: async () => { requests += 1; return new Response("{}"); },
     });
     for (const channel of ["C123", "G123"]) {
-      await expect(client.channelHistory({ channel, oldest: "1724292304.000000", latest: "1724292904.000000" }))
+      await expect(client.channelHistory({ ...HISTORY, channel }))
         .rejects.toMatchObject({ code: "invalid", retryable: false });
     }
     expect(requests).toBe(0);
@@ -160,48 +153,18 @@ describe("SlackWebApiClient conversations.history recovery", () => {
 
   it("accepts im:history for direct-message recovery", async () => {
     const client = new SlackWebApiClient("test-token", {
-      fetchImpl: async () =>
-        new Response(
-          JSON.stringify({
-            ok: true,
-            has_more: false,
-            messages: [],
-            response_metadata: { next_cursor: "" },
-          }),
-          { headers: { "x-oauth-scopes": "im:history" } },
-        ),
+      fetchImpl: async () => historyResponse("im:history"),
     });
 
-    await expect(
-      client.channelHistory({
-        channel: "D123",
-        oldest: "1724292304.000000",
-        latest: "1724292904.000000",
-      }),
-    ).resolves.toEqual([]);
+    await expect(client.channelHistory(HISTORY)).resolves.toEqual([]);
   });
 
   it("rejects channels:history as insufficient for direct-message recovery", async () => {
     const client = new SlackWebApiClient("test-token", {
-      fetchImpl: async () =>
-        new Response(
-          JSON.stringify({
-            ok: true,
-            has_more: false,
-            messages: [],
-            response_metadata: { next_cursor: "" },
-          }),
-          { headers: { "x-oauth-scopes": "channels:history" } },
-        ),
+      fetchImpl: async () => historyResponse("channels:history"),
     });
 
-    await expect(
-      client.channelHistory({
-        channel: "D123",
-        oldest: "1724292304.000000",
-        latest: "1724292904.000000",
-      }),
-    ).rejects.toMatchObject({
+    await expect(client.channelHistory(HISTORY)).rejects.toMatchObject({
       code: "auth",
       message:
         "Slack conversations.history did not prove the required im:history scope",

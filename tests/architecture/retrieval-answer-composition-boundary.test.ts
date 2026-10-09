@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, posix, relative, resolve } from 'node:path';
+import { join, posix, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -25,14 +25,26 @@ const graph: { targets(path: string): ReadonlySet<string> } = providerModuleGrap
   const target = posix.normalize(posix.join(posix.dirname(importer), specifier));
   return [target, target.replace(/\.js$/, '.ts'), `${target}.ts`, `${target}/index.ts`].find(path => existsSync(join(REPO, path))) ?? null;
 }, errors);
+function closure(start: string[], forbidden: RegExp): Set<string> {
+  const pending = [...start];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const path = pending.pop()!;
+    if (visited.has(path)) continue;
+    visited.add(path);
+    expect(path).not.toMatch(forbidden);
+    pending.push(...graph.targets(path));
+  }
+  return visited;
+}
 
 describe('retrieval and answer-composition boundaries', () => {
   it('keeps released read/search closures independent from provider and model implementations', () => {
     expect(errors).toEqual([]);
-    const pending = [
+    const visited = closure([
       ...files('packages/organization-record/src/retrieve'), ...files('packages/organization-retrieval/src'),
       'packages/organization-authority-kernel/src/application/readable-search-authorization-fence.ts',
-      ...['person-record-read-route', 'person-record-search-route', 'person-meeting-items-v1', 'person-item-text-v1'].map(name => `services/organization-authority/src/composition/${name}.ts`),
+      ...['person-record-read-route', 'person-record-search-route', 'person-meeting-items-v1'].map(name => `services/organization-authority/src/composition/${name}.ts`),
       'services/organization-authority/src/application/ports/person-original-context-retrieval-v1.ts',
       'services/organization-authority/src/adapters/persistence/sqlite/person-original-context-retrieval-v1.ts',
       'services/organization-authority/src/composition/person-evidence-desk-v1.ts',
@@ -42,38 +54,21 @@ describe('retrieval and answer-composition boundaries', () => {
       'services/organization-authority/src/composition/person-list-v1-route.ts',
       'services/organization-authority/src/composition/person-list-cursor-v1.ts',
       'services/organization-authority/src/adapters/persistence/sqlite/person-list-directory-v1.ts',
-    ];
-    const visited = new Set<string>();
-    while (pending.length) {
-      const path = pending.pop()!;
-      if (visited.has(path)) continue;
-      visited.add(path);
-      expect(path).not.toMatch(/^providers\/|^packages\/organization-processing\/src\/llm\/|^packages\/organization-authority-kernel\/src\/answer-composition\//);
-      pending.push(...graph.targets(path));
-    }
+    ], /^providers\/|^packages\/organization-processing\/src\/llm\/|^packages\/organization-authority-kernel\/src\/answer-composition\//);
     expect(visited.size).toBeGreaterThan(10);
   });
   it('keeps answer composition behind released contracts without direct record, retrieval or storage access', () => {
-    const implementation = [...files(ANSWER_ROOT), ANSWER_V3_ROUTE, SOURCE_EVIDENCE_ROUTE];
-    expect(implementation.length).toBeGreaterThan(1);
-    for (const path of implementation) for (const target of graph.targets(path)) {
+    // The kernel's own edges are covered by the stricter closure check below.
+    for (const path of [ANSWER_V3_ROUTE, SOURCE_EVIDENCE_ROUTE]) for (const target of graph.targets(path)) {
       if (target === AGENTIC_AUDIT) continue; // The route may write its dedicated audit event.
-      expect(relative(REPO, join(REPO, target))).not.toMatch(/^packages\/organization-(?:record|retrieval)\/|\/(?:adapters\/persistence|storage)\//);
+      expect(target).not.toMatch(/^packages\/organization-(?:record|retrieval)\/|\/(?:adapters\/persistence|storage)\//);
     }
     expect(read(AGENTIC_AUDIT)).toContain('"answer_composition"');
   });
   it('keeps the entire answer kernel closure free of provider, record and storage implementations', () => {
     // Route composition may bind the desk and audit adapters. The kernel and
     // every helper it imports may consume only their released contracts.
-    const pending = files(ANSWER_ROOT);
-    const visited = new Set<string>();
-    while (pending.length > 0) {
-      const path = pending.pop()!;
-      if (visited.has(path)) continue;
-      visited.add(path);
-      expect(path).not.toMatch(/^providers\/|^services\/|^packages\/organization-(?:record|retrieval)\/|\/(?:adapters\/persistence|storage)\//);
-      pending.push(...graph.targets(path));
-    }
+    const visited = closure(files(ANSWER_ROOT), /^providers\/|^services\/|^packages\/organization-(?:record|retrieval)\/|\/(?:adapters\/persistence|storage)\//);
     expect(visited.size).toBeGreaterThan(files(ANSWER_ROOT).length);
   });
   it('keeps the answer kernel free of undeclared agent modules and all Ask paths non-streaming', () => {

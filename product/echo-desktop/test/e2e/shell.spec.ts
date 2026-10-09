@@ -35,20 +35,6 @@ test('the sidebar lists your projects, and one click switches project from any p
   await expect(rows.nth(1)).not.toHaveAttribute('aria-current', 'page');
 });
 
-test('the sidebar pages with More, sharing the list Home loaded', async () => {
-  run = await launch('many-projects');
-  const { page } = run;
-  const lists = () => run.calls().filter(call => call.method === 'GET' && call.path === '/v2/person/projects' &&
-    new URLSearchParams(call.query).get('status') === 'active').length;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(10);
-  await page.getByTestId('sidebar-more').click();
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
-  await expect(page.getByTestId('sidebar-more')).toHaveCount(0);
-  await expect(page.getByTestId('sidebar-more')).toHaveCount(0);
-  expect(lists()).toBe(2);
-});
-
 test('Capture in the sidebar opens capture where you are, and the account row names you', async () => {
   run = await launch();
   const { page } = run;
@@ -99,6 +85,7 @@ test('while another app is in front the page is covered, and the project rows st
   await expect(page.getByTestId('match-row')).toHaveCount(1);
   await emit(app, 'echo-test:conceal');
   await expect(page.getByTestId('concealed')).toBeVisible();
+  await expect(page.getByTestId('title')).toHaveText('ECHO');
   await expect(page.getByTestId('feed-row')).toHaveCount(0);
   await expect(page.getByTestId('sidebar-project')).toHaveText([/Apollo$/, /Beacon$/]);
   // Nothing says which project was open, or what was searched in it.
@@ -108,6 +95,8 @@ test('while another app is in front the page is covered, and the project rows st
   await expect(page.getByTestId('ask-field')).toHaveValue('');
   await expect(page.getByTestId('matches')).toHaveCount(0);
   await emit(app, 'echo-test:resume');
+  await expect(page.getByTestId('concealed')).toHaveCount(0);
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
   await expect(page.getByTestId('sidebar-project').nth(0)).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('scope-chip')).toHaveText('Apollo');
   await expect(page.getByTestId('feed-row')).toBeVisible();

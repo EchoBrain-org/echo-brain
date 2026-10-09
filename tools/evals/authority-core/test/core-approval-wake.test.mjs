@@ -155,82 +155,62 @@ async function createFixture(on_terminal_action_queued) {
   }
 }
 
-test("approval-port wake follows the persisted action", async () => {
+test("approval-port wake follows the persisted action", async t => {
   let observedActionCount = -1;
   let observedInTransaction;
-  let fixture;
-  try {
-    fixture = await createFixture(() => {
-      observedActionCount = queuedActionCount(fixture.authority);
-      observedInTransaction = fixture.authority.inTransaction;
-    });
-    const result = await fixture.approval("wake-after-durable");
-    assert.equal(result.status, "publishing");
-    assert.equal(observedActionCount, 1);
-    assert.equal(observedInTransaction, false, "the wake runs only after the action transaction commits");
-    assert.equal(queuedActionCount(fixture.authority), 1);
-    const action = fixture.authority.prepare("SELECT command_id, body_json FROM authority_approval_decisions_v1").get();
-    assert.equal(action.command_id, "wake-after-durable");
-    const { request } = JSON.parse(action.body_json);
-    assert.equal(request.snapshot_sha256, fixture.snapshot_sha256(), "the durable action binds the frozen snapshot the reviewer saw");
-    assert.equal(request.action, "approve");
-  } finally {
-    fixture?.close();
-  }
+  const fixture = await createFixture(() => {
+    observedActionCount = queuedActionCount(fixture.authority);
+    observedInTransaction = fixture.authority.inTransaction;
+  });
+  t.after(() => fixture.close());
+  const result = await fixture.approval("wake-after-durable");
+  assert.equal(result.status, "publishing");
+  assert.equal(observedActionCount, 1);
+  assert.equal(observedInTransaction, false, "the wake runs only after the action transaction commits");
+  assert.equal(queuedActionCount(fixture.authority), 1);
+  const action = fixture.authority.prepare("SELECT command_id, body_json FROM authority_approval_decisions_v1").get();
+  assert.equal(action.command_id, "wake-after-durable");
+  const { request } = JSON.parse(action.body_json);
+  assert.equal(request.snapshot_sha256, fixture.snapshot_sha256(), "the durable action binds the frozen snapshot the reviewer saw");
+  assert.equal(request.action, "approve");
 });
 
-test("a refused reviewer does not wake publication", async () => {
+test("a refused reviewer does not wake publication", async t => {
   let wakes = 0;
-  let fixture;
-  try {
-    fixture = await createFixture(() => { wakes += 1; });
-    await assert.rejects(fixture.approval("wrong-reviewer", "employee"), /not available/);
-    assert.equal(wakes, 0);
-    assert.equal(queuedActionCount(fixture.authority), 0, "a refused action leaves no durable action");
-  } finally {
-    fixture?.close();
-  }
+  const fixture = await createFixture(() => { wakes += 1; });
+  t.after(() => fixture.close());
+  await assert.rejects(fixture.approval("wrong-reviewer", "employee"), /not available/);
+  assert.equal(wakes, 0);
+  assert.equal(queuedActionCount(fixture.authority), 0, "a refused action leaves no durable action");
 });
 
-test("a rejected persistence step does not wake publication", async () => {
+test("a rejected persistence step does not wake publication", async t => {
   let wakes = 0;
-  let fixture;
-  try {
-    fixture = await createFixture(() => { wakes += 1; });
-    // The decision insert itself fails, after both authorizations ran.
-    fixture.authority.exec("CREATE TEMP TRIGGER refuse BEFORE INSERT ON authority_approval_decisions_v1 BEGIN SELECT RAISE(ABORT, 'refused'); END");
-    await assert.rejects(fixture.approval("refused-decision"), /refused/);
-    assert.equal(wakes, 0);
-    assert.equal(queuedActionCount(fixture.authority), 0, "a refused insert leaves no durable decision");
-  } finally {
-    fixture?.close();
-  }
+  const fixture = await createFixture(() => { wakes += 1; });
+  t.after(() => fixture.close());
+  // The decision insert itself fails, after both authorizations ran.
+  fixture.authority.exec("CREATE TEMP TRIGGER refuse BEFORE INSERT ON authority_approval_decisions_v1 BEGIN SELECT RAISE(ABORT, 'refused'); END");
+  await assert.rejects(fixture.approval("refused-decision"), /refused/);
+  assert.equal(wakes, 0);
+  assert.equal(queuedActionCount(fixture.authority), 0, "a refused insert leaves no durable decision");
 });
 
-test("a failing wake preserves the durable approval action", async () => {
-  let fixture;
-  try {
-    fixture = await createFixture(() => { throw new Error("observational wake failure"); });
-    const result = await fixture.approval("wake-failure");
-    assert.equal(result.idempotent, false);
-    assert.equal(queuedActionCount(fixture.authority), 1);
-  } finally {
-    fixture?.close();
-  }
+test("a failing wake preserves the durable approval action", async t => {
+  const fixture = await createFixture(() => { throw new Error("observational wake failure"); });
+  t.after(() => fixture.close());
+  const result = await fixture.approval("wake-failure");
+  assert.equal(result.idempotent, false);
+  assert.equal(queuedActionCount(fixture.authority), 1);
 });
 
-test("duplicate approval retains action idempotence and re-requests the lifecycle wake", async () => {
+test("duplicate approval retains action idempotence and re-requests the lifecycle wake", async t => {
   let wakes = 0;
-  let fixture;
-  try {
-    fixture = await createFixture(() => { wakes += 1; });
-    const first = await fixture.approval("duplicate-approval");
-    const replay = await fixture.approval("duplicate-approval");
-    assert.equal(first.idempotent, false);
-    assert.equal(replay.idempotent, true);
-    assert.equal(queuedActionCount(fixture.authority), 1);
-    assert.equal(wakes, 2);
-  } finally {
-    fixture?.close();
-  }
+  const fixture = await createFixture(() => { wakes += 1; });
+  t.after(() => fixture.close());
+  const first = await fixture.approval("duplicate-approval");
+  const replay = await fixture.approval("duplicate-approval");
+  assert.equal(first.idempotent, false);
+  assert.equal(replay.idempotent, true);
+  assert.equal(queuedActionCount(fixture.authority), 1);
+  assert.equal(wakes, 2);
 });

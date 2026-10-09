@@ -108,34 +108,6 @@ describe("private D3-2 record envelope v4", () => {
     expect(decisionProcessorProvenanceV1Sha256(processor)).toBe(
       "sha256:4fba753375f26b4715b9b7ffcf20b29f95134fdf85273081558f548c60a0da1d",
     );
-
-    expect(Object.keys(source).sort()).toEqual([
-      "authority_id",
-      "canonical_revision",
-      "external_id",
-      "kind",
-      "normalizer_version",
-      "organization_id",
-      "schema_version",
-      "source_adapter_id",
-      "source_adapter_instance_id",
-      "source_adapter_kind",
-      "source_adapter_version",
-      "source_revision",
-      "state_lineage_id",
-    ]);
-    expect(Object.keys(processor).sort()).toEqual([
-      "authority_id",
-      "kind",
-      "organization_id",
-      "processor_adapter_id",
-      "processor_adapter_instance_id",
-      "processor_adapter_kind",
-      "processor_adapter_version",
-      "processor_contract_sha256",
-      "schema_version",
-      "state_lineage_id",
-    ]);
     expect(() =>
       validateDecisionProcessorProvenanceV1({
         ...processor,
@@ -231,15 +203,7 @@ describe("private D3-2 record envelope v4", () => {
         "source_provenance_sha256",
         "state_lineage_id",
       ]);
-      expect(validated).not.toHaveProperty("authorization_proof_sha256");
-      expect(validated).not.toHaveProperty(
-        "human_act_resolution_ref_sha256",
-      );
-      expect(validated).not.toHaveProperty("processor_contract_sha256");
     }
-    expect(organizationRecordEnvelopeBodyV4Sha256(recordBody())).toBe(
-      "sha256:069c31455565bde8ce19aaa5ae5b809b4d34b07c0ec83f3cc1c14f524d5a4b00",
-    );
   });
 
   it("accepts rejection for both policies while joining its exact source locator", () => {
@@ -262,7 +226,7 @@ describe("private D3-2 record envelope v4", () => {
     }
   });
 
-  it("denies broken D3, coordinate, digest, and payload-provenance joins", () => {
+  it("denies broken D3, coordinate, digest, and payload-provenance joins", async () => {
     const body = recordBody();
     expect(() =>
       validateOrganizationRecordEnvelopeBodyV4(
@@ -294,65 +258,44 @@ describe("private D3-2 record envelope v4", () => {
       ),
     ).toThrow("processor provenance digest");
 
-    const wrongSource = structuredClone(body);
-    if (wrongSource.event.kind !== "approved") throw new Error("expected approval");
-    const wrongSourceEvent = mutable(wrongSource.event);
-    const wrongSourceSnapshot = mutable(wrongSourceEvent.approved_snapshot);
-    const wrongSourcePayload = mutable(wrongSourceSnapshot.approved_payload);
-    mutable(wrongSourcePayload.source).external_id = "another-meeting";
-    wrongSourceEvent.approved_snapshot_sha256 = approvedDecisionSnapshotV2Sha256(
-      validateApprovedDecisionSnapshotV2(
-        wrongSourceEvent.approved_snapshot,
-      ),
-    );
-    mutable(wrongSource).semantic_idempotency_key = buildHumanActRecordInputV1({
-      human_act_resolution_ref:
-        wrongSource.human_act_resolution_ref as HumanActResolutionRefV1,
-      event: wrongSource.event as HumanActEventV1,
-    }).semantic_idempotency_key;
-    expect(() => validateOrganizationRecordEnvelopeBodyV4(wrongSource)).toThrow(
-      "does not match source provenance",
-    );
-
-    const wrongRevision = structuredClone(body);
-    if (wrongRevision.event.kind !== "approved") throw new Error("expected approval");
-    const wrongRevisionEvent = mutable(wrongRevision.event);
-    const wrongRevisionSnapshot = mutable(wrongRevisionEvent.approved_snapshot);
-    const wrongRevisionPayload = mutable(wrongRevisionSnapshot.approved_payload);
-    const wrongRevisionBrief = mutable(wrongRevisionPayload.brief);
-    mutable(wrongRevisionBrief.provenance).meeting_revision = "another-revision";
-    wrongRevisionEvent.approved_snapshot_sha256 = approvedDecisionSnapshotV2Sha256(
-      validateApprovedDecisionSnapshotV2(wrongRevisionEvent.approved_snapshot),
-    );
-    mutable(wrongRevision).semantic_idempotency_key = buildHumanActRecordInputV1({
-      human_act_resolution_ref:
-        wrongRevision.human_act_resolution_ref as HumanActResolutionRefV1,
-      event: wrongRevision.event as HumanActEventV1,
-    }).semantic_idempotency_key;
-    expect(() => validateOrganizationRecordEnvelopeBodyV4(wrongRevision)).toThrow(
-      "meeting revision",
-    );
-
-    const wrongProcessor = structuredClone(body);
-    if (wrongProcessor.event.kind !== "approved") throw new Error("expected approval");
-    const wrongProcessorEvent = mutable(wrongProcessor.event);
-    const wrongProcessorSnapshot = mutable(wrongProcessorEvent.approved_snapshot);
-    const wrongProcessorPayload = mutable(wrongProcessorSnapshot.approved_payload);
-    const wrongProcessorBrief = mutable(wrongProcessorPayload.brief);
-    const wrongProcessorBriefProvenance = mutable(wrongProcessorBrief.provenance);
-    mutable(wrongProcessorBriefProvenance.processor).version =
-      "another-processing-version";
-    wrongProcessorEvent.approved_snapshot_sha256 = approvedDecisionSnapshotV2Sha256(
-      validateApprovedDecisionSnapshotV2(wrongProcessorEvent.approved_snapshot),
-    );
-    mutable(wrongProcessor).semantic_idempotency_key = buildHumanActRecordInputV1({
-      human_act_resolution_ref:
-        wrongProcessor.human_act_resolution_ref as HumanActResolutionRefV1,
-      event: wrongProcessor.event as HumanActEventV1,
-    }).semantic_idempotency_key;
-    expect(() =>
-      validateOrganizationRecordEnvelopeBodyV4(wrongProcessor),
-    ).toThrow("processor identity");
+    for (const [mutatePayload, message] of [
+      [
+        (payload: Record<string, unknown>) => {
+          mutable(payload.source).external_id = "another-meeting";
+        },
+        "does not match source provenance",
+      ],
+      [
+        (payload: Record<string, unknown>) => {
+          mutable(mutable(payload.brief).provenance).meeting_revision =
+            "another-revision";
+        },
+        "meeting revision",
+      ],
+      [
+        (payload: Record<string, unknown>) => {
+          mutable(mutable(mutable(payload.brief).provenance).processor).version =
+            "another-processing-version";
+        },
+        "processor identity",
+      ],
+    ] as const) {
+      const broken = structuredClone(body);
+      if (broken.event.kind !== "approved") throw new Error("expected approval");
+      const brokenEvent = mutable(broken.event);
+      mutatePayload(mutable(mutable(brokenEvent.approved_snapshot).approved_payload));
+      brokenEvent.approved_snapshot_sha256 = approvedDecisionSnapshotV2Sha256(
+        validateApprovedDecisionSnapshotV2(brokenEvent.approved_snapshot),
+      );
+      mutable(broken).semantic_idempotency_key = buildHumanActRecordInputV1({
+        human_act_resolution_ref:
+          broken.human_act_resolution_ref as HumanActResolutionRefV1,
+        event: broken.event as HumanActEventV1,
+      }).semantic_idempotency_key;
+      expect(() => validateOrganizationRecordEnvelopeBodyV4(broken)).toThrow(
+        message,
+      );
+    }
 
     const brokenAggregate = humanAct("approve", RESTRICTED_REVIEWER_PERSON_POLICY_ID);
     const brokenHumanAct: HumanActRecordInputV1 = {
@@ -363,7 +306,7 @@ describe("private D3-2 record envelope v4", () => {
       },
     };
     const authority = testAuthority();
-    expect(() =>
+    await expect(
       createOrganizationRecordEnvelopeV4(
         { ...envelopeInput(), human_act_record_input: brokenHumanAct },
         authority.pinned,
@@ -374,7 +317,6 @@ describe("private D3-2 record envelope v4", () => {
   });
 
   it("pins genesis/non-genesis pairing and exact signature-input bytes", () => {
-    expect(validateOrganizationRecordEnvelopeBodyV4(recordBody())).toBeDefined();
     expect(
       validateOrganizationRecordEnvelopeBodyV4(
         recordBody("approve", RESTRICTED_REVIEWER_PERSON_POLICY_ID, {

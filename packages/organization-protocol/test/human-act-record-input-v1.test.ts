@@ -451,15 +451,6 @@ describe("D3 human-act record input v1", () => {
     const unpairedSurrogate = snapshot();
     unpairedSurrogate.approval_id = "approval-\ud800";
     expect(() => validateApprovedDecisionSnapshotV2(unpairedSurrogate)).toThrow();
-    for (const version of [1, 2, 3]) {
-      expect(() =>
-        validateApprovedDecisionSnapshotV2({
-          schema_version: version,
-          kind: `echo-organization-record-envelope-v${version}`,
-          envelope_id: "legacy-envelope",
-        }),
-      ).toThrow();
-    }
   });
 
   it("recomputes and joins the reference, event, and semantic idempotency digests", () => {
@@ -468,13 +459,7 @@ describe("D3 human-act record input v1", () => {
     const input = {
       human_act_resolution_ref: resolved,
       event,
-      idempotency: {
-        ...idempotency(),
-        human_act_resolution_ref_sha256: humanActResolutionRefV1Sha256(
-          validateHumanActResolutionRefV1(resolved),
-        ),
-        human_act_event_sha256: humanActEventV1Sha256(validateHumanActEventV1(event)),
-      },
+      idempotency: idempotency(),
     };
     const validated = validateHumanActRecordInputV1(input);
     expect(validated.semantic_idempotency_key).toBe(
@@ -512,13 +497,7 @@ describe("D3 human-act record input v1", () => {
     const rejectedInput = {
       human_act_resolution_ref: rejectedReference,
       event: rejected,
-      idempotency: {
-        ...idempotency("reject"),
-        human_act_resolution_ref_sha256: humanActResolutionRefV1Sha256(
-          validateHumanActResolutionRefV1(rejectedReference),
-        ),
-        human_act_event_sha256: humanActEventV1Sha256(validateHumanActEventV1(rejected)),
-      },
+      idempotency: idempotency("reject"),
     };
     expect(validateHumanActRecordInputV1(rejectedInput).event.kind).toBe("rejected");
   });

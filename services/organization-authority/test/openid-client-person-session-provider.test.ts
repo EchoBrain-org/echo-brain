@@ -67,6 +67,21 @@ const BEGUN_ATTEMPT: BegunPersonOidcLogin = {
   expires_at: '2026-08-18T00:10:00.000Z',
 };
 
+const AUTHORIZATION_PARAMS = {
+  client_id: CLIENT_ID,
+  redirect_uri: REDIRECT_URI,
+  response_type: 'code',
+  scope: 'openid email',
+  state: STATE,
+  nonce: NONCE,
+  code_challenge: CODE_CHALLENGE,
+  code_challenge_method: 'S256',
+  prompt: 'select_account',
+};
+
+// One immutable signing key for every offline issuer; RSA generation dominates this file's runtime.
+const SIGNING_KEYS = generateKeyPairSync('rsa', { modulusLength: 2048 });
+
 type ProviderFetch = NonNullable<
   OpenIdClientPersonSessionProviderOptions['fetch']
 >;
@@ -93,6 +108,25 @@ function jsonResponse(value: unknown): Response {
   });
 }
 
+function discoveryDocument(overrides: Readonly<Record<string, unknown>> = {}) {
+  return {
+    issuer: ISSUER,
+    authorization_endpoint: AUTHORIZATION_ENDPOINT,
+    token_endpoint: TOKEN_ENDPOINT,
+    jwks_uri: JWKS_ENDPOINT,
+    response_types_supported: ['code'],
+    subject_types_supported: ['public'],
+    id_token_signing_alg_values_supported: ['RS256'],
+    token_endpoint_auth_methods_supported: [
+      'none',
+      'client_secret_basic',
+      'client_secret_post',
+    ],
+    code_challenge_methods_supported: ['S256'],
+    ...overrides,
+  };
+}
+
 class OfflineOidcIssuer {
   readonly publicJwk: JsonWebKey & {
     alg: 'RS256';
@@ -107,10 +141,9 @@ class OfflineOidcIssuer {
   private readonly privateKey: KeyObject;
 
   constructor() {
-    const keys = generateKeyPairSync('rsa', { modulusLength: 2048 });
-    this.privateKey = keys.privateKey;
+    this.privateKey = SIGNING_KEYS.privateKey;
     this.publicJwk = {
-      ...keys.publicKey.export({ format: 'jwk' }),
+      ...SIGNING_KEYS.publicKey.export({ format: 'jwk' }),
       alg: 'RS256',
       kid: KEY_ID,
       use: 'sig',
@@ -118,21 +151,7 @@ class OfflineOidcIssuer {
     this.fetch = async (url, options) => {
       this.requests.push(url);
       if (url === `${ISSUER}.well-known/openid-configuration`) {
-        return jsonResponse({
-          issuer: ISSUER,
-          authorization_endpoint: AUTHORIZATION_ENDPOINT,
-          token_endpoint: TOKEN_ENDPOINT,
-          jwks_uri: JWKS_ENDPOINT,
-          response_types_supported: ['code'],
-          subject_types_supported: ['public'],
-          id_token_signing_alg_values_supported: ['RS256'],
-          token_endpoint_auth_methods_supported: [
-            'none',
-            'client_secret_basic',
-            'client_secret_post',
-          ],
-          code_challenge_methods_supported: ['S256'],
-        });
+        return jsonResponse(discoveryDocument());
       }
       if (url === TOKEN_ENDPOINT) {
         if (!(options.body instanceof URLSearchParams)) {
@@ -243,24 +262,17 @@ describe('OpenIdClientPersonSessionProvider', () => {
         },
         client_authentication: { method: 'none' },
         fetch: async () =>
-          jsonResponse({
+          jsonResponse(discoveryDocument({
             issuer: 'https://different-issuer.example.test/',
-            authorization_endpoint: AUTHORIZATION_ENDPOINT,
-            token_endpoint: TOKEN_ENDPOINT,
-            jwks_uri: JWKS_ENDPOINT,
-            response_types_supported: ['code'],
-            subject_types_supported: ['public'],
-            id_token_signing_alg_values_supported: ['RS256'],
             token_endpoint_auth_methods_supported: ['none'],
-            code_challenge_methods_supported: ['S256'],
-          }),
+          })),
       }),
     ).rejects.toThrow(
       'Person-session OIDC discovery issuer differs from configured issuer',
     );
   });
 
-  it('discovers once, builds an exact authorization URL, and returns only verified claims', async () => {
+  it('discovers once, builds exact authorization URLs with and without a login hint, and returns only verified claims', async () => {
     const issuer = new OfflineOidcIssuer();
     const provider = await discover(issuer);
 
@@ -270,16 +282,13 @@ describe('OpenIdClientPersonSessionProvider', () => {
     expect(authorizationUrl.origin + authorizationUrl.pathname).toBe(
       AUTHORIZATION_ENDPOINT,
     );
-    expect(Object.fromEntries(authorizationUrl.searchParams)).toEqual({
-      client_id: CLIENT_ID,
-      redirect_uri: REDIRECT_URI,
-      response_type: 'code',
-      scope: 'openid email',
-      state: STATE,
-      nonce: NONCE,
-      code_challenge: CODE_CHALLENGE,
-      code_challenge_method: 'S256',
-      prompt: 'select_account',
+    expect(Object.fromEntries(authorizationUrl.searchParams)).toEqual(AUTHORIZATION_PARAMS);
+    const hintedUrl = new URL(
+      provider.buildAuthorizationUrl({ ...BEGUN_ATTEMPT, login_hint: VERIFIED_EMAIL }),
+    );
+    expect(Object.fromEntries(hintedUrl.searchParams)).toEqual({
+      ...AUTHORIZATION_PARAMS,
+      login_hint: VERIFIED_EMAIL,
     });
 
     const result = await redeem(provider);
@@ -322,63 +331,35 @@ describe('OpenIdClientPersonSessionProvider', () => {
     });
   });
 
-  it('forwards a verified login hint without changing the authorization request contract', async () => {
+  it.each<{
+    authentication: OpenIdClientAuthentication;
+    body: Record<string, string>;
+  }>([
+    {
+      authentication: { method: 'none' },
+      body: { client_id: CLIENT_ID },
+    },
+    {
+      authentication: { method: 'client_secret_post', client_secret: CLIENT_SECRET },
+      body: {
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code: AUTHORIZATION_CODE,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: PKCE_VERIFIER,
+      },
+    },
+  ])('uses $authentication.method client authentication without an authorization header', async ({ authentication, body }) => {
     const issuer = new OfflineOidcIssuer();
-    const provider = await discover(issuer);
-
-    const authorizationUrl = new URL(
-      provider.buildAuthorizationUrl({
-        ...BEGUN_ATTEMPT,
-        login_hint: VERIFIED_EMAIL,
-      }),
-    );
-
-    expect(Object.fromEntries(authorizationUrl.searchParams)).toEqual({
-      client_id: CLIENT_ID,
-      redirect_uri: REDIRECT_URI,
-      response_type: 'code',
-      scope: 'openid email',
-      state: STATE,
-      nonce: NONCE,
-      code_challenge: CODE_CHALLENGE,
-      code_challenge_method: 'S256',
-      prompt: 'select_account',
-      login_hint: VERIFIED_EMAIL,
-    });
-  });
-
-  it('uses public-client authentication without a client credential', async () => {
-    const issuer = new OfflineOidcIssuer();
-    const provider = await discover(issuer, { method: 'none' });
+    const provider = await discover(issuer, authentication);
 
     await expect(redeem(provider)).resolves.toMatchObject({
       kind: 'verified',
     });
     expect(issuer.tokenRequests).toHaveLength(1);
     expect(issuer.tokenRequests[0]?.authorization).toBeNull();
-    expect(issuer.tokenRequests[0]?.body.get('client_id')).toBe(CLIENT_ID);
-  });
-
-  it('uses client_secret_post without an authorization header', async () => {
-    const issuer = new OfflineOidcIssuer();
-    const provider = await discover(issuer, {
-      method: 'client_secret_post',
-      client_secret: CLIENT_SECRET,
-    });
-
-    await expect(redeem(provider)).resolves.toMatchObject({
-      kind: 'verified',
-    });
-    expect(issuer.tokenRequests).toHaveLength(1);
-    expect(issuer.tokenRequests[0]?.authorization).toBeNull();
-    expect(Object.fromEntries(issuer.tokenRequests[0]!.body)).toMatchObject({
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
-      grant_type: 'authorization_code',
-      code: AUTHORIZATION_CODE,
-      redirect_uri: REDIRECT_URI,
-      code_verifier: PKCE_VERIFIER,
-    });
+    expect(Object.fromEntries(issuer.tokenRequests[0]!.body)).toMatchObject(body);
   });
 
   it.each<{

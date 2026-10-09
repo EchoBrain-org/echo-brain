@@ -2,14 +2,9 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it, vi } from "vitest";
 import { createAgenticAskV1, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1 } from "../../src/shared/evidence-desk-v1.js";
+import { deferred } from "./fixtures/deferred.js";
 
 const checked = { checked_at: "2026-09-29T00:00:00.000Z" };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-}
 
 function fixture(options: {
   readonly finalFence?: () => Promise<typeof checked>;

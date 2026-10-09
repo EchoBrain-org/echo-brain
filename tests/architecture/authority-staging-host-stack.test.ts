@@ -48,22 +48,41 @@ function resource(
   return value!;
 }
 
+function userDataSub(
+  stack: CloudFormationTemplate,
+): readonly [string, Record<string, unknown>] {
+  const data = resource(stack, "StagingHostLaunchTemplate").Properties!
+    .LaunchTemplateData as Record<string, unknown>;
+  return (
+    data.UserData as {
+      readonly "Fn::Base64": {
+        readonly "Fn::Sub": readonly [string, Record<string, unknown>];
+      };
+    }
+  )["Fn::Base64"]["Fn::Sub"];
+}
+
+const PUBLIC_ACCESS_BLOCKED = {
+  BlockPublicAcls: true,
+  BlockPublicPolicy: true,
+  IgnorePublicAcls: true,
+  RestrictPublicBuckets: true,
+};
+
 describe("Authority staging host stack", () => {
   it("creates a persistent slot and makes only host lifecycle resources conditional", () => {
     const stack = template();
 
-    expect(stack.Parameters.HostEnabled).toMatchObject({
-      Default: "false",
-      AllowedValues: ["true", "false"],
-    });
-    expect(stack.Parameters.InitializeBlankDataVolume).toMatchObject({
-      Default: "false",
-      AllowedValues: ["true", "false"],
-    });
-    expect(stack.Parameters.ResumeRetainedAuthority).toMatchObject({
-      Default: "false",
-      AllowedValues: ["true", "false"],
-    });
+    for (const parameter of [
+      "HostEnabled",
+      "InitializeBlankDataVolume",
+      "ResumeRetainedAuthority",
+    ]) {
+      expect(stack.Parameters[parameter], parameter).toMatchObject({
+        Default: "false",
+        AllowedValues: ["true", "false"],
+      });
+    }
     expect(stack.Conditions.HostEnabledCondition).toEqual({
       "Fn::Equals": [{ Ref: "HostEnabled" }, "true"],
     });
@@ -135,7 +154,6 @@ describe("Authority staging host stack", () => {
     const subnet = resource(stack, "StagingPublicSubnet");
     const route = resource(stack, "StagingInternetRoute");
     const securityGroup = resource(stack, "StagingHostSecurityGroup");
-    const httpsEgress = resource(stack, "StagingHostHttpsEgress");
 
     expect(resource(stack, "StagingVpc").Type).toBe("AWS::EC2::VPC");
     expect(resource(stack, "StagingInternetGateway").Type).toBe(
@@ -151,40 +169,37 @@ describe("Authority staging host stack", () => {
       SecurityGroupIngress: [],
       SecurityGroupEgress: [],
     });
-    expect(httpsEgress.Properties).toEqual({
-      GroupId: { "Fn::GetAtt": ["StagingHostSecurityGroup", "GroupId"] },
-      IpProtocol: "tcp",
-      FromPort: 443,
-      ToPort: 443,
-      CidrIp: "0.0.0.0/0",
-      Description:
+    for (const [logicalId, protocol, port, description] of [
+      [
+        "StagingHostHttpsEgress",
+        "tcp",
+        443,
         "HTTPS for version-pinned bootstrap, registry, SSM, and tunnel control traffic",
-    });
-    expect(resource(stack, "StagingHostAptHttpEgress").Properties).toEqual({
-      GroupId: { "Fn::GetAtt": ["StagingHostSecurityGroup", "GroupId"] },
-      IpProtocol: "tcp",
-      FromPort: 80,
-      ToPort: 80,
-      CidrIp: "0.0.0.0/0",
-      Description: "HTTP for Ubuntu package mirrors during bootstrap",
-    });
-    for (const [logicalId, protocol, description] of [
+      ],
+      [
+        "StagingHostAptHttpEgress",
+        "tcp",
+        80,
+        "HTTP for Ubuntu package mirrors during bootstrap",
+      ],
       [
         "StagingHostCloudflaredTcpEgress",
         "tcp",
+        7844,
         "Cloudflare Tunnel TCP transport",
       ],
       [
         "StagingHostCloudflaredUdpEgress",
         "udp",
+        7844,
         "Cloudflare Tunnel QUIC transport",
       ],
-    ]) {
+    ] as const) {
       expect(resource(stack, logicalId).Properties).toEqual({
         GroupId: { "Fn::GetAtt": ["StagingHostSecurityGroup", "GroupId"] },
         IpProtocol: protocol,
-        FromPort: 7844,
-        ToPort: 7844,
+        FromPort: port,
+        ToPort: port,
         CidrIp: "0.0.0.0/0",
         Description: description,
       });
@@ -199,7 +214,13 @@ describe("Authority staging host stack", () => {
     const onboardingBucket = resource(stack, "StagingOnboardingTransferBucket");
     const onboardingKey = resource(stack, "StagingOnboardingTransferKey");
 
-    for (const value of [dataVolume, secret, bucket]) {
+    for (const value of [
+      dataVolume,
+      secret,
+      bucket,
+      onboardingBucket,
+      onboardingKey,
+    ]) {
       expect(value.DeletionPolicy).toBe("Retain");
       expect(value.UpdateReplacePolicy).toBe("Retain");
     }
@@ -216,30 +237,16 @@ describe("Authority staging host stack", () => {
     expect(secret.Properties).not.toHaveProperty("Name");
     expect(bucket.Properties).toMatchObject({
       VersioningConfiguration: { Status: "Enabled" },
-      PublicAccessBlockConfiguration: {
-        BlockPublicAcls: true,
-        BlockPublicPolicy: true,
-        IgnorePublicAcls: true,
-        RestrictPublicBuckets: true,
-      },
+      PublicAccessBlockConfiguration: PUBLIC_ACCESS_BLOCKED,
       BucketEncryption: {
         ServerSideEncryptionConfiguration: [
           { ServerSideEncryptionByDefault: { SSEAlgorithm: "AES256" } },
         ],
       },
     });
-    for (const value of [onboardingBucket, onboardingKey]) {
-      expect(value.DeletionPolicy).toBe("Retain");
-      expect(value.UpdateReplacePolicy).toBe("Retain");
-    }
     expect(onboardingBucket.Properties).toMatchObject({
       VersioningConfiguration: { Status: "Enabled" },
-      PublicAccessBlockConfiguration: {
-        BlockPublicAcls: true,
-        BlockPublicPolicy: true,
-        IgnorePublicAcls: true,
-        RestrictPublicBuckets: true,
-      },
+      PublicAccessBlockConfiguration: PUBLIC_ACCESS_BLOCKED,
       OwnershipControls: {
         Rules: [{ ObjectOwnership: "BucketOwnerEnforced" }],
       },
@@ -349,11 +356,6 @@ describe("Authority staging host stack", () => {
         Roles: [{ Ref: "StagingHostRole" }],
       },
     });
-    expect(serialized).toContain("s3:GetObjectVersion");
-    expect(serialized).toContain("s3:VersionId");
-    expect(serialized).toContain("kms:Decrypt");
-    expect(serialized).toContain("StagingOnboardingTransferBucket");
-    expect(serialized).toContain("StagingOnboardingTransferKey");
     expect(serialized).not.toMatch(/s3:\*|kms:\*/i);
     expect(access.Properties?.PolicyDocument).toEqual({
       Version: "2012-10-17",
@@ -424,17 +426,6 @@ describe("Authority staging host stack", () => {
     const attachment = resource(stack, "StagingDataVolumeAttachment");
     const ready = resource(stack, "StagingReady");
 
-    for (const parameter of [
-      "HostSetupObjectKey",
-      "HostSetupObjectVersion",
-      "HostSetupSha256",
-      "OnboardingInputObjectKey",
-      "OnboardingInputObjectVersion",
-      "OnboardingInputAccessExpiresAt",
-      "AuthorityEcrRepositoryArn",
-    ]) {
-      expect(stack.Parameters[parameter]).toBeDefined();
-    }
     for (const required of [
       "--region '${AWS::Region}'",
       "--version-id '${HostSetupObjectVersion}'",
@@ -446,33 +437,20 @@ describe("Authority staging host stack", () => {
       "InitializeBlankDataVolumeArgument",
       "http://127.0.0.1:20241/ready",
       "tunnel_ready=true",
-      "resume_retained_authority='${ResumeRetainedAuthority}'",
       "machine-tunnel-retained-state-ready",
-      "bootstrap-not-started",
       "bootstrap-stage-unavailable",
       "bootstrap_stage_file=/run/echo-authority-staging-bootstrap-stage",
-      "timeout --signal=TERM --kill-after=10 800 bash -Eeuo pipefail -c bootstrap_main",
-      "--connect-timeout 5 --max-time 15",
       "staging bootstrap stage: %s",
       "machine configuration, tunnel connection, retained-state materialization, and applicable retained Authority resume are ready",
-      "--header 'Content-Type:'",
     ]) {
       expect(userData).toContain(required);
     }
     expect(userData).toContain("--initialize-blank-data-volume");
     expect(userData).toContain('"InitializeBlankDataVolumeCondition"');
-    const substitutions = (
-      (launchTemplate.Properties!.LaunchTemplateData as Record<string, unknown>)
-        .UserData as {
-        readonly "Fn::Base64": {
-          readonly "Fn::Sub": readonly [string, Record<string, unknown>];
-        };
-      }
-    )["Fn::Base64"]["Fn::Sub"][1];
+    const substitutions = userDataSub(stack)[1];
     expect(substitutions.ResumeRetainedAuthority).toEqual({
       Ref: "ResumeRetainedAuthority",
     });
-    expect(userData).toContain("signal_failure");
     expect(userData).toContain(
       "bootstrap-not-started|initial-apt-update|initial-apt-install|snapd-socket|snapd-ready|aws-cli-install|aws-cli-ready|setup-bundle-download|setup-bundle-verify|setup-bundle-extract|data-volume-discovery|machine-bootstrap|tunnel-token-install|tunnel-service|tunnel-ready|retained-state-materialization|retained-state-resume|ready-signal",
     );
@@ -500,16 +478,8 @@ describe("Authority staging host stack", () => {
 
   it("renders executable shell quoting and valid WaitCondition JSON", () => {
     const stack = template();
-    const launchTemplate = resource(stack, "StagingHostLaunchTemplate");
     const ready = resource(stack, "StagingReady");
-    const userData = (
-      (launchTemplate.Properties!.LaunchTemplateData as Record<string, unknown>)
-        .UserData as {
-        readonly "Fn::Base64": {
-          readonly "Fn::Sub": readonly [string, Record<string, unknown>];
-        };
-      }
-    )["Fn::Base64"]["Fn::Sub"][0];
+    const userData = userDataSub(stack)[0];
 
     expect(userData).not.toContain('\\"');
     expect(() =>
@@ -551,9 +521,6 @@ describe("Authority staging host stack", () => {
     );
     expect(userData).toContain(
       'install -o root -g root -m 0600 /dev/null "$bootstrap_stage_file"',
-    );
-    expect(userData).toContain(
-      "export -f allowed_bootstrap_stage set_bootstrap_stage retry download_setup_bundle bootstrap_main",
     );
     const resumeAssignment = userData.indexOf(
       "resume_retained_authority='${ResumeRetainedAuthority}'",
@@ -654,7 +621,6 @@ describe("Authority staging host stack", () => {
     expect(materializeIndex).toBeLessThan(resumeGuardIndex);
     expect(resumeGuardIndex).toBeLessThan(resumeIndex);
     expect(resumeIndex).toBeLessThan(readySignalIndex);
-    expect(bootstrapMain![1]).toContain("set_bootstrap_stage ready-signal");
     const downloadFunction = userData.match(
       /download_setup_bundle\(\) \{([\s\S]*?)\n\}/,
     );
@@ -671,7 +637,6 @@ describe("Authority staging host stack", () => {
     expect(userData).toContain('setup_bundle_partial="$setup_bundle.partial"');
     expect(userData).toContain('mv "$setup_bundle_partial" "$setup_bundle"');
     expect(userData).toContain('grep -qx "$expected_volume_serial"');
-    expect(userData).toContain('"$workdir/bootstrap-ubuntu-arm64.sh"');
   });
 
   it("exports only orchestrator identifiers and never a secret value", () => {

@@ -141,53 +141,26 @@ describe('canonical meeting document validator', () => {
     expect(() => assertCanonicalMeetingDocument(invalid, source)).toThrow(/does not resolve/);
   });
 
-  it('requires the canonical meeting owner to resolve to exactly one canonical email', () => {
+  it('requires the canonical meeting owner to resolve', () => {
     const danglingOwner = {
       ...minimalMeeting,
       context: { owner_participant_id: 'missing-owner' },
     };
-    const nonCanonicalOwnerEmail = {
-      ...minimalMeeting,
-      participants: [
-        {
-          id: 'owner',
-          identities: [{ kind: 'email', value: 'OWNER@example.test' }],
-        },
-      ],
-      context: { owner_participant_id: 'owner' },
-    };
-    const nonAsciiOwnerEmail = {
-      ...minimalMeeting,
-      participants: [
-        {
-          id: 'owner',
-          identities: [{ kind: 'email', value: 'rené@example.test' }],
-        },
-      ],
-      context: { owner_participant_id: 'owner' },
-    };
-    const ambiguousOwnerEmail = {
-      ...minimalMeeting,
-      participants: [
-        {
-          id: 'owner',
-          identities: [
-            { kind: 'email', value: 'owner@example.test' },
-            { kind: 'email', value: 'other@example.test' },
-          ],
-        },
-      ],
-      context: { owner_participant_id: 'owner' },
-    };
 
     expect(() => assertCanonicalMeetingDocument(danglingOwner, source)).toThrow(/does not resolve/);
-    expect(() => assertCanonicalMeetingDocument(nonCanonicalOwnerEmail, source)).toThrow(
-      /one canonical email identity/,
-    );
-    expect(() => assertCanonicalMeetingDocument(nonAsciiOwnerEmail, source)).toThrow(
-      /one canonical email identity/,
-    );
-    expect(() => assertCanonicalMeetingDocument(ambiguousOwnerEmail, source)).toThrow(
+  });
+
+  const ownedBy = (identities: readonly { kind: string; value: string }[]) => ({
+    ...minimalMeeting,
+    participants: [{ id: 'owner', identities }],
+    context: { owner_participant_id: 'owner' },
+  });
+  it.each([
+    ['non-canonical', [{ kind: 'email', value: 'OWNER@example.test' }]],
+    ['non-ASCII', [{ kind: 'email', value: 'rené@example.test' }]],
+    ['ambiguous', [{ kind: 'email', value: 'owner@example.test' }, { kind: 'email', value: 'other@example.test' }]],
+  ])('requires the canonical meeting owner to have exactly one canonical email, not a %s one', (_label, identities) => {
+    expect(() => assertCanonicalMeetingDocument(ownedBy(identities), source)).toThrow(
       /one canonical email identity/,
     );
   });

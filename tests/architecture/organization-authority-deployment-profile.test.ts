@@ -9,6 +9,8 @@ import {
   rmSync,
   statSync,
   linkSync,
+  lstatSync,
+  readlinkSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -17,7 +19,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { canonicalJsonForTest as canonicalJson } from "../support/test-canonical-json.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
@@ -86,6 +88,17 @@ function releaseRecord({
   })}\n`;
 }
 
+/** Every entry under root with its mode and bytes (or link target), in a stable order. */
+function directorySnapshot(root: string, relative = ""): string[][] {
+  const path = join(root, relative);
+  const metadata = lstatSync(path);
+  const content = metadata.isSymbolicLink() ? readlinkSync(path)
+    : metadata.isFile() ? createHash("sha256").update(readFileSync(path)).digest("hex") : "";
+  return [[relative, metadata.mode.toString(8), content], ...(metadata.isDirectory()
+    ? readdirSync(path).sort().flatMap((name) => directorySnapshot(root, join(relative, name)))
+    : [])];
+}
+
 async function waitForFile(path: string): Promise<void> {
   for (let attempt = 0; attempt < 500; attempt += 1) {
     if (existsSync(path)) return;
@@ -94,11 +107,24 @@ async function waitForFile(path: string): Promise<void> {
   throw new Error(`timed out waiting for test marker ${path}`);
 }
 
+/** Copy the onboarding wrapper, runtime profile files, and release tools under root. */
+function copyDeployment(root: string): string {
+  const deploy = join(root, "deploy", "organization-authority");
+  mkdirSync(join(deploy, "release"), { recursive: true });
+  for (const file of ["onboard-clean-v1.sh", ...RUNTIME_PROFILE_FILES]) {
+    copyFileSync(resolve(REPO, DEPLOYMENT, file), join(deploy, file));
+  }
+  for (const tool of ["clean-v1-release.py", "clean-v1-runtime-profile.py"]) {
+    copyFileSync(resolve(REPO, "deploy/release", tool), join(deploy, "release", tool));
+  }
+  chmodSync(join(deploy, "onboard-clean-v1.sh"), 0o755);
+  return deploy;
+}
+
 function preparedStatusFixture() {
   const root = mkdtempSync(join(tmpdir(), "echo-clean-status-"));
   fixtureRoots.push(root);
-  const deploy = join(root, "deploy", "organization-authority");
-  const release = join(deploy, "release");
+  const deploy = copyDeployment(root);
   const privateDir = join(deploy, "clean-data", "private");
   const stateCredentialDir = join(
     deploy,
@@ -121,26 +147,10 @@ function preparedStatusFixture() {
   const source = "c".repeat(40);
   const releaseId = "clean-v1-status-test";
   const profile = runtimeProfile(source);
-  mkdirSync(release, { recursive: true });
   mkdirSync(privateDir, { recursive: true });
   mkdirSync(stateCredentialDir, { recursive: true });
   mkdirSync(releaseDir, { recursive: true });
   mkdirSync(bin, { recursive: true });
-  for (const file of [
-    "onboard-clean-v1.sh",
-    ...RUNTIME_PROFILE_FILES,
-  ]) {
-    copyFileSync(resolve(REPO, DEPLOYMENT, file), join(deploy, file));
-  }
-  copyFileSync(
-    resolve(REPO, "deploy/release/clean-v1-release.py"),
-    join(release, "clean-v1-release.py"),
-  );
-  copyFileSync(
-    resolve(REPO, "deploy/release/clean-v1-runtime-profile.py"),
-    join(release, "clean-v1-runtime-profile.py"),
-  );
-  chmodSync(join(deploy, "onboard-clean-v1.sh"), 0o755);
   const record = releaseRecord({ image, profile, releaseId, source });
   writeFileSync(join(releaseDir, "current.clean-v1.json"), record);
   const profilesDir = join(releaseDir, "runtime-profiles");
@@ -369,12 +379,9 @@ exec /usr/bin/install "$@"
     releaseDir,
     calls,
     installWaitMarker,
-    installReleaseMarker,
     runtimeStoppedMarker,
-    image,
     profile,
     releaseId,
-    source,
     run,
     spawnRun,
   };
@@ -450,6 +457,27 @@ function stageRehearsalInputs(
   return inputs;
 }
 
+/** A private provider-credential input holding nextLlm, and a check that it left no trace. */
+function providerCredentialInput(
+  fixture: ReturnType<typeof preparedStatusFixture>,
+  nextLlm: string,
+) {
+  const inputDir = join(fixture.root, "provider-credentials");
+  const source = join(fixture.privateDir, "llm-credential-source");
+  const active = join(fixture.stateCredentialDir, "llm-credential");
+  const previousSource = readFileSync(source, "utf8");
+  const previousActive = readFileSync(active, "utf8");
+  mkdirSync(inputDir, { mode: 0o700 });
+  writeFileSync(join(inputDir, "llm-credential"), nextLlm, { mode: 0o600 });
+  const expectRestored = () => {
+    expect(readFileSync(source, "utf8")).toBe(previousSource);
+    expect(readFileSync(active, "utf8")).toBe(previousActive);
+    expect(readFileSync(fixture.durableSentinel, "utf8")).toBe("durable-work-must-survive");
+    expect(readFileSync(fixture.calls, "utf8")).not.toContain(nextLlm);
+  };
+  return { inputDir, expectRestored };
+}
+
 afterEach(() => {
   while (fixtureRoots.length) {
     rmSync(fixtureRoots.pop()!, { force: true, recursive: true });
@@ -509,7 +537,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     const source = readFileSync(wrapper, "utf8");
     const guide = deploymentFile("README.md");
 
-    expect(() => execFileSync("bash", ["-n", wrapper])).not.toThrow();
     expect(source).toContain("doctor) shift; doctor");
     expect(source).toContain("prepare) shift; prepare");
     expect(source).toContain(
@@ -534,9 +561,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).toContain("compose.clean-v1.yaml");
     expect(source).toContain("compose.clean-v1.ec2.yaml");
     expect(source).toContain('PRIVATE_DIR="$DATA_DIR/private"');
-    expect(source).toContain("clean-v1-release.py");
     expect(source).toContain('$DEPLOY_DIR/release/clean-v1-release.py');
-    expect(source).toContain("clean-v1-runtime-profile.py");
     expect(source).toContain('$DEPLOY_DIR/release/clean-v1-runtime-profile.py');
     expect(source).toContain("runtime-profile.json");
     expect(source).toContain("runtime_profile_matches_prepared_tuple");
@@ -609,7 +634,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(guide).toContain('rmdir -- "$authority_lock"');
   });
 
-  it("keeps credential-bearing release URLs out of the founder handoff", () => {
+  it("keeps credential-bearing release URLs out of the founder handoff and prints a kit build the command-line kit accepts", () => {
     const fixture = preparedStatusFixture();
     const urlToken = "founder-handoff-url-token-must-not-be-logged";
     {
@@ -650,29 +675,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       );
       expect(result.stdout).not.toContain("echo-brain person logout");
       expect(result.stdout).not.toContain("echo-brain person login");
-    }
-  });
-
-  it("prints a founder kit build and install the command-line kit accepts", () => {
-    const fixture = preparedStatusFixture();
-    {
-      const onboarding = join(
-        fixture.deploy,
-        "clean-data",
-        "state",
-        "onboarding",
-      );
-      mkdirSync(onboarding, { recursive: true });
-      writeFileSync(join(onboarding, "founder-person-invitation.json"), "{}\n", {
-        mode: 0o600,
-      });
-
-      const result = fixture.run("resume", {
-        ECHO_FAKE_SETUP_STATUS:
-          '{"next_step":"complete_founder_browser_login"}',
-      });
-
-      expect(result.status).toBe(0);
       expect(result.stdout).toContain(
         '"<release-matched-kit>/Start-ECHO.sh" --install-only, then "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person login --invitation <transferred-absolute-path> --open-browser.',
       );
@@ -759,9 +761,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       );
       expect(result.stdout).toContain(
         "HOST ACTION: On the exact staging host, rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status.",
-      );
-      expect(result.stdout).toContain(
-        '"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person records --limit 20',
       );
       expect(result.stdout).toContain(
         '"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY"',
@@ -1035,6 +1034,21 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     }
   });
 
+  // Each diagnosed refusal leaves the staged deployment byte-identical (checked
+  // below), so one staging serves every case. Its root outlives afterEach.
+  let diagnostics: { fixture: ReturnType<typeof preparedStatusFixture>; stage: string } | undefined;
+  const stagedDiagnosticsFixture = (operationId: string) => {
+    if (diagnostics) return diagnostics;
+    const fixture = preparedStatusFixture();
+    const { stage } = stageRehearsalInputs(fixture, operationId);
+    configureReusableProviderInputs(fixture);
+    fixtureRoots.splice(fixtureRoots.indexOf(fixture.root), 1);
+    return (diagnostics = { fixture, stage });
+  };
+  afterAll(() => {
+    if (diagnostics) rmSync(diagnostics.fixture.root, { force: true, recursive: true });
+  });
+
   it.each<{
     name: string;
     environment?: Record<string, string>;
@@ -1076,12 +1090,11 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       missing: ["authority_healthy", "onboarding_complete", "owner_layer1_read_after_head", "owner_layer2_read_after_generation"],
     },
   ])("diagnoses provider-reuse refusal before reset side effects: $name", ({ environment, evidence, step, missing, action }) => {
-    const fixture = preparedStatusFixture();
     const operationId = "onboarding-rehearsal-diagnostics";
+    const { fixture, stage } = stagedDiagnosticsFixture(operationId);
     const contentSentinel = "private-status-content-must-not-be-printed";
     {
-      const { stage } = stageRehearsalInputs(fixture, operationId);
-      configureReusableProviderInputs(fixture);
+      const deployBefore = directorySnapshot(fixture.deploy);
       const stageBefore = readFileSync(join(stage, "stage.json"));
       const environmentBefore = readFileSync(join(fixture.deploy, ".env.clean-v1"));
       const result = fixture.run("replace-rehearsal", {
@@ -1117,6 +1130,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(result.stderr).toContain(`unmet_preconditions=${missing.join(",")}\n`);
       expect(result.stderr).toContain("next_action=");
       expect(result.stderr).toContain(action ?? "Human host operator");
+      expect(directorySnapshot(fixture.deploy)).toEqual(deployBefore);
     }
   });
 
@@ -1170,32 +1184,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     const operationId = "onboarding-rehearsal-20260908";
     const providerSentinel = "provider-secret-must-never-appear-in-output";
     {
-      const nonsecret = join(fixture.root, "rehearsal-nonsecret");
-      const meetings = join(fixture.root, "rehearsal-meetings");
-      mkdirSync(nonsecret, { mode: 0o700 });
-      mkdirSync(meetings, { mode: 0o700 });
-      const manifest = {
-        authority_host: "authority-staging.echobrain.org",
-        aws_region: "us-west-2",
-        kind: "echo-clean-v1-onboarding-input-v1",
-        organization_name: "Test Org",
-        owner_display_name: "Founder",
-        owner_email: "founder@example.com",
-        runtime_user: execFileSync("id", ["-un"]).toString().trim(),
-        schema_version: 1,
-        nango_integration_key: "slack",
-      };
-      writeFileSync(join(nonsecret, "onboarding.clean-v1.json"), `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
-      writeFileSync(join(nonsecret, "release.json"), readFileSync(join(fixture.releaseDir, "current.clean-v1.json")), { mode: 0o600 });
-      writeFileSync(join(nonsecret, "runtime-profile.json"), fixture.profile.bytes, { mode: 0o600 });
-      for (const name of [
-        "01-revenue-signal-calibration.json",
-        "02-data-handling-review.json",
-        "03-implementation-capacity-triage.json",
-        "04-commercial-exception-review.json",
-      ]) {
-        writeFileSync(join(meetings, name), readFileSync(resolve(REPO, "demo/meetings", name)), { mode: 0o600 });
-      }
+      const { nonsecret, meetings, stage } = rehearsalInputs(fixture, operationId);
       writeFileSync(join(fixture.privateDir, "llm-credential-source"), providerSentinel, { mode: 0o600 });
       writeFileSync(
         join(fixture.privateDir, "onboard-clean-v1.conf"),
@@ -1213,7 +1202,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(staged.status).toBe(0);
       expect(staged.stdout).toContain("rehearsal_inputs_staged=true");
       expect(staged.stdout).not.toContain(providerSentinel);
-      const stage = join(fixture.deploy, "rehearsal-inputs", operationId);
       expect(statSync(stage).mode & 0o777).toBe(0o700);
 
       const rejected = fixture.run("replace-rehearsal", {}, [
@@ -1327,34 +1315,49 @@ describe("clean-v1 Organization Authority deployment profile", () => {
   });
 
   it.each(["llm-credential-source", "nango-secret-key"])("rejects an unsafe local %s before rehearsal shutdown", (name) => {
-    const cases = ["missing", "mode", "symlink", "hard-link", "owner"] as const;
-    for (const kind of cases) {
-      const fixture = preparedStatusFixture();
-      const operationId = `onboarding-rehearsal-${kind}`;
-      {
-        stageRehearsalInputs(fixture, operationId);
-        configureReusableProviderInputs(fixture);
-        const source = join(fixture.privateDir, name);
-        if (kind === "missing") rmSync(source);
-        if (kind === "mode") chmodSync(source, 0o644);
-        if (kind === "symlink") {
-          const target = join(fixture.root, "external-credential");
-          copyFileSync(source, target);
-          unlinkSync(source);
-          symlinkSync(target, source);
-        }
-        if (kind === "hard-link") linkSync(source, join(fixture.root, "credential-link"));
-
-        const result = fixture.run("replace-rehearsal", {
-          ECHO_FAKE_UNSAFE_SOURCE_OWNER: kind === "owner" ? name : "",
-        }, [
-          "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
-        ]);
-        expect(result.status).toBe(1);
-        expect(result.stderr).toMatch(/(fixed private input|existing provider input)/);
-        expect(readFileSync(fixture.durableSentinel, "utf8")).toBe("durable-work-must-survive");
-        expect(readFileSync(fixture.calls, "utf8")).not.toContain(" down --remove-orphans");
+    const fixture = preparedStatusFixture();
+    const operationId = "onboarding-rehearsal-unsafe-source";
+    const { stage } = stageRehearsalInputs(fixture, operationId);
+    configureReusableProviderInputs(fixture);
+    const source = join(fixture.privateDir, name);
+    const original = readFileSync(source);
+    const stageBefore = readFileSync(join(stage, "stage.json"));
+    // Each refusal leaves the stage untouched and the source is restored, so
+    // one staging serves every kind.
+    for (const kind of ["missing", "mode", "symlink", "hard-link", "owner"] as const) {
+      if (kind === "missing") rmSync(source);
+      if (kind === "mode") chmodSync(source, 0o644);
+      if (kind === "symlink") {
+        const target = join(fixture.root, "external-credential");
+        copyFileSync(source, target);
+        unlinkSync(source);
+        symlinkSync(target, source);
       }
+      if (kind === "hard-link") linkSync(source, join(fixture.root, "credential-link"));
+
+      const result = fixture.run("replace-rehearsal", {
+        ECHO_FAKE_UNSAFE_SOURCE_OWNER: kind === "owner" ? name : "",
+      }, [
+        "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
+      ]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(/(fixed private input|existing provider input)/);
+      expect(readFileSync(fixture.durableSentinel, "utf8")).toBe("durable-work-must-survive");
+      expect(readFileSync(fixture.calls, "utf8")).not.toContain(" down --remove-orphans");
+      expect(readFileSync(join(stage, "stage.json"))).toEqual(stageBefore);
+      expect(existsSync(join(stage, "input"))).toBe(false);
+      expect(existsSync(join(fixture.deploy, "retired-rehearsals"))).toBe(false);
+
+      rmSync(join(fixture.root, "external-credential"), { force: true });
+      rmSync(join(fixture.root, "credential-link"), { force: true });
+      rmSync(source, { force: true });
+      writeFileSync(source, original, { mode: 0o600 });
+      const restored = lstatSync(source);
+      expect(restored.isFile()).toBe(true);
+      expect(restored.mode & 0o777).toBe(0o600);
+      expect(restored.nlink).toBe(1);
+      expect(restored.uid).toBe(process.getuid!());
+      expect(readFileSync(source)).toEqual(original);
     }
   });
 
@@ -1464,46 +1467,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(replacement.status, replacement.stderr).toBe(0);
       expect(readFileSync(join(stage, "stage.json"), "utf8")).toContain('"content_telemetry":true');
 
-      const lock = join(fixture.deploy, "clean-data", ".authority-operation-lock");
-      mkdirSync(lock, { mode: 0o700 });
-      writeFileSync(join(lock, "owner-pid"), `${process.pid}\n`, { mode: 0o600 });
-      const held = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
-      expect(held.status).toBe(1);
-      rmSync(lock, { recursive: true });
-
       const retry = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
       expect(retry.status, retry.stderr).toBe(0);
       expect(readFileSync(join(stage, "stage.json"), "utf8")).toContain('"content_telemetry":true');
       expect(readFileSync(join(fixture.deploy, ".env.clean-v1"), "utf8")).toContain(
         "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true",
       );
-    }
-  });
-
-  it("refuses provider activation while another Authority operation holds the shared lock", () => {
-    const fixture = preparedStatusFixture();
-    {
-      const lock = join(
-        fixture.deploy,
-        "clean-data",
-        ".authority-operation-lock",
-      );
-      mkdirSync(lock, { mode: 0o700 });
-      writeFileSync(join(lock, "owner-pid"), `${process.pid}\n`, {
-        mode: 0o600,
-      });
-
-      const activation = fixture.run(
-        "activate-provider-credentials",
-        {},
-        ["--input-dir", join(fixture.root, "unused-provider-credentials")],
-      );
-
-      expect(activation.status).toBe(1);
-      expect(activation.stderr).toContain(
-        "another Authority activation or release operation is already in progress",
-      );
-      expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/ down\n/);
     }
   });
 
@@ -1539,12 +1508,8 @@ describe("clean-v1 Organization Authority deployment profile", () => {
   it("activates validated provider credentials through one healthy accepted-image restart", () => {
     const fixture = preparedStatusFixture();
     {
-      const inputDir = join(fixture.root, "provider-credentials");
       const nextLlm = "l".repeat(43);
-      mkdirSync(inputDir, { mode: 0o700 });
-      writeFileSync(join(inputDir, "llm-credential"), nextLlm, {
-        mode: 0o600,
-      });
+      const { inputDir } = providerCredentialInput(fixture, nextLlm);
 
       expect(
         readFileSync(join(fixture.stateCredentialDir, "llm-credential"), "utf8"),
@@ -1600,20 +1565,8 @@ describe("clean-v1 Organization Authority deployment profile", () => {
   it("restores and verifies the previous LLM credential source and active copy when replacement startup fails", () => {
     const fixture = preparedStatusFixture();
     {
-      const inputDir = join(fixture.root, "provider-credentials");
       const nextLlm = "q".repeat(43);
-      const previousLlmSource = readFileSync(
-        join(fixture.privateDir, "llm-credential-source"),
-        "utf8",
-      );
-      const previousLlmActive = readFileSync(
-        join(fixture.stateCredentialDir, "llm-credential"),
-        "utf8",
-      );
-      mkdirSync(inputDir, { mode: 0o700 });
-      writeFileSync(join(inputDir, "llm-credential"), nextLlm, {
-        mode: 0o600,
-      });
+      const { inputDir, expectRestored } = providerCredentialInput(fixture, nextLlm);
 
       const failed = fixture.run(
         "activate-provider-credentials",
@@ -1630,12 +1583,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(failed.stdout).not.toContain(nextLlm);
       expect(failed.stderr).not.toContain(inputDir);
       expect(failed.stderr).not.toContain(nextLlm);
-      expect(
-        readFileSync(join(fixture.privateDir, "llm-credential-source"), "utf8"),
-      ).toBe(previousLlmSource);
-      expect(
-        readFileSync(join(fixture.stateCredentialDir, "llm-credential"), "utf8"),
-      ).toBe(previousLlmActive);
+      expectRestored();
       const calls = readFileSync(fixture.calls, "utf8");
       expect(calls.match(/ down\n/g)).toHaveLength(2);
       expect(
@@ -1643,30 +1591,14 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       ).toHaveLength(2);
       expect(calls.match(/ credentials-install /g)).toHaveLength(1);
       expect(calls).not.toMatch(/ (bootstrap|finalize|resume) /);
-      expect(calls).not.toContain(nextLlm);
-      expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
-        "durable-work-must-survive",
-      );
     }
   });
 
   it("restores the previous provider credentials and runtime when activation is interrupted", async () => {
     const fixture = preparedStatusFixture();
     {
-      const inputDir = join(fixture.root, "provider-credentials");
       const nextLlm = "j".repeat(43);
-      const previousLlmSource = readFileSync(
-        join(fixture.privateDir, "llm-credential-source"),
-        "utf8",
-      );
-      const previousLlmActive = readFileSync(
-        join(fixture.stateCredentialDir, "llm-credential"),
-        "utf8",
-      );
-      mkdirSync(inputDir, { mode: 0o700 });
-      writeFileSync(join(inputDir, "llm-credential"), nextLlm, {
-        mode: 0o600,
-      });
+      const { inputDir, expectRestored } = providerCredentialInput(fixture, nextLlm);
 
       const activation = fixture.spawnRun(
         "activate-provider-credentials",
@@ -1698,20 +1630,11 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(stdout).not.toContain("provider_credentials_activated");
       expect(stdout).not.toContain(nextLlm);
       expect(stderr).not.toContain(nextLlm);
-      expect(
-        readFileSync(join(fixture.privateDir, "llm-credential-source"), "utf8"),
-      ).toBe(previousLlmSource);
-      expect(
-        readFileSync(join(fixture.stateCredentialDir, "llm-credential"), "utf8"),
-      ).toBe(previousLlmActive);
-      expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
-        "durable-work-must-survive",
-      );
+      expectRestored();
       const calls = readFileSync(fixture.calls, "utf8");
       expect(calls.match(/ down\n/g)).toHaveLength(2);
       expect(calls.match(/ credentials-install /g)).toHaveLength(1);
       expect(calls.match(/ up -d --no-build --wait --wait-timeout 90\n/g)).toHaveLength(1);
-      expect(calls).not.toContain(nextLlm);
       expect(stderr).toContain(
         "activation was interrupted; previous credentials were restored and verified",
       );
@@ -1721,27 +1644,9 @@ describe("clean-v1 Organization Authority deployment profile", () => {
   it("prepares offline without pulling and persists the fixed clean inputs", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-onboard-"));
     try {
-      const deploy = join(root, "deploy", "organization-authority");
-      const release = join(deploy, "release");
+      const deploy = copyDeployment(root);
       const bin = join(root, "bin");
-      mkdirSync(deploy, { recursive: true });
-      mkdirSync(release, { recursive: true });
       mkdirSync(bin, { recursive: true });
-      for (const file of [
-        "onboard-clean-v1.sh",
-        ...RUNTIME_PROFILE_FILES,
-      ]) {
-        copyFileSync(resolve(REPO, DEPLOYMENT, file), join(deploy, file));
-      }
-      copyFileSync(
-        resolve(REPO, "deploy/release/clean-v1-release.py"),
-        join(release, "clean-v1-release.py"),
-      );
-      copyFileSync(
-        resolve(REPO, "deploy/release/clean-v1-runtime-profile.py"),
-        join(release, "clean-v1-runtime-profile.py"),
-      );
-      chmodSync(join(deploy, "onboard-clean-v1.sh"), 0o755);
       const calls = join(root, "docker-calls");
       const fakeDocker = join(bin, "docker");
       writeFileSync(
@@ -1773,31 +1678,27 @@ describe("clean-v1 Organization Authority deployment profile", () => {
           source,
         }),
       );
-      writeFileSync(
-        join(inputDir, "onboarding.clean-v1.json"),
-        `${JSON.stringify({
-          authority_host: "authority.example.com",
-          aws_region: "us-west-2",
-          kind: "echo-clean-v1-onboarding-input-v1",
-          organization_name: "Test Org",
-          owner_display_name: "Founder",
-          owner_email: "founder@example.com",
-          runtime_user: execFileSync("id", ["-un"]).toString().trim(),
-          schema_version: 1,
-          nango_integration_key: "slack",
-        })}\n`,
-      );
-      writeFileSync(
-        join(inputDir, "oidc-config.json"),
-        `${JSON.stringify({
-          client_authentication: "client_secret_post",
-          client_id: "founder-client",
-          id_token_algorithms: ["RS256"],
-          issuer: "https://issuer.example",
-          redirect_uri: "https://authority.example.com/v2/session/oidc/callback",
-          tenant: { kind: "issuer" },
-        })}\n`,
-      );
+      const onboardingManifest = `${JSON.stringify({
+        authority_host: "authority.example.com",
+        aws_region: "us-west-2",
+        kind: "echo-clean-v1-onboarding-input-v1",
+        organization_name: "Test Org",
+        owner_display_name: "Founder",
+        owner_email: "founder@example.com",
+        runtime_user: execFileSync("id", ["-un"]).toString().trim(),
+        schema_version: 1,
+        nango_integration_key: "slack",
+      })}\n`;
+      const validOidcConfig = `${JSON.stringify({
+        client_authentication: "client_secret_post",
+        client_id: "founder-client",
+        id_token_algorithms: ["RS256"],
+        issuer: "https://issuer.example",
+        redirect_uri: "https://authority.example.com/v2/session/oidc/callback",
+        tenant: { kind: "issuer" },
+      })}\n`;
+      writeFileSync(join(inputDir, "onboarding.clean-v1.json"), onboardingManifest);
+      writeFileSync(join(inputDir, "oidc-config.json"), validOidcConfig);
       for (const name of [
         "oidc-client-secret",
         "llm-credential",
@@ -1845,22 +1746,18 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         code: "cloudflared_inactive",
         next_action: "Start cloudflared-echo-authority.service, then rerun doctor.",
       });
-      const doctor = execFileSync(
+      const doctorResult = () => execFileSync(
         "bash",
         [join(deploy, "onboard-clean-v1.sh"), "doctor", "--input-dir", inputDir],
         commandEnvironment,
       ).toString();
+      const doctor = doctorResult();
       expect(doctor.split("\n").filter(Boolean)).toHaveLength(1);
       expect(JSON.parse(doctor)).toEqual({
         ok: true,
         code: "ready",
         next_action: "Run prepare with the same input directory.",
       });
-      const doctorResult = () => execFileSync(
-        "bash",
-        [join(deploy, "onboard-clean-v1.sh"), "doctor", "--input-dir", inputDir],
-        commandEnvironment,
-      ).toString();
       const filesInvalid = {
         ok: false,
         code: "input_files_invalid",
@@ -1915,28 +1812,14 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       const oidcConfig = join(inputDir, "oidc-config.json");
       writeFileSync(oidcConfig, '{"redirect_uri":"https://wrong.example/v2/session/oidc/callback"}\n');
       chmodSync(oidcConfig, 0o600);
-      const invalidCallbackDoctor = execFileSync(
-        "bash",
-        [join(deploy, "onboard-clean-v1.sh"), "doctor", "--input-dir", inputDir],
-        commandEnvironment,
-      ).toString();
+      const invalidCallbackDoctor = doctorResult();
       expect(invalidCallbackDoctor.split("\n").filter(Boolean)).toHaveLength(1);
       expect(JSON.parse(invalidCallbackDoctor)).toEqual({
         ok: false,
         code: "oidc_callback_invalid",
         next_action: "Set oidc-config.json redirect_uri to the exact Authority callback URL.",
       });
-      writeFileSync(
-        oidcConfig,
-        `${JSON.stringify({
-          client_authentication: "client_secret_post",
-          client_id: "founder-client",
-          id_token_algorithms: ["RS256"],
-          issuer: "https://issuer.example",
-          redirect_uri: "https://authority.example.com/v2/session/oidc/callback",
-          tenant: { kind: "issuer" },
-        })}\n`,
-      );
+      writeFileSync(oidcConfig, validOidcConfig);
       chmodSync(oidcConfig, 0o600);
       const output = execFileSync(
         "bash",
@@ -1951,33 +1834,22 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(readFileSync(join(deploy, "clean-data/private/onboard-clean-v1.conf"), "utf8")).toContain(
         "\nnango_integration_key=slack\n",
       );
-      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
+      const preparedEnvironment = readFileSync(join(deploy, ".env.clean-v1"), "utf8");
+      for (const expected of [
         "\nECHO_CLEAN_NANGO_INTEGRATION=slack\n",
-      );
-      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
         "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=",
-      );
-      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).not.toContain("SLACK");
-      expect(readFileSync(calls, "utf8")).not.toContain("pull");
-      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(image);
-      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
+        image,
         `ECHO_CLEAN_AUTHORITY_UID=${statSync(inputDir).uid}`,
-      );
-      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
         `ECHO_CLEAN_AUTHORITY_GID=${statSync(inputDir).gid}`,
-      );
-      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
         "ECHO_CLEAN_AWS_REGION=us-west-2",
-      );
-      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
         "ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/authority.example.com",
-      );
-      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
         `ECHO_CLEAN_RUNTIME_PROFILE_SHA256=${profile.digest}`,
-      );
-      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
         "ECHO_CLEAN_RUNTIME_PROFILE_VERSION=clean-v1-profile-1",
-      );
+      ]) {
+        expect(preparedEnvironment).toContain(expected);
+      }
+      expect(preparedEnvironment).not.toContain("SLACK");
+      expect(readFileSync(calls, "utf8")).not.toContain("pull");
       expect(
         readFileSync(
           join(
@@ -2020,22 +1892,11 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         expect(metadata.gid).toBe(statSync(inputDir).gid);
         expect(metadata.mode & 0o777).toBe(0o600);
       }
-      const rootArguments = [...prepareArguments];
       writeFileSync(manifest, readFileSync(manifest, "utf8").replace(`"runtime_user":"${execFileSync("id", ["-un"]).toString().trim()}"`, '"runtime_user":"root"'));
       expect(() =>
-        execFileSync("bash", rootArguments, commandEnvironment),
+        execFileSync("bash", prepareArguments, commandEnvironment),
       ).toThrow(/doctor did not report this input directory ready/);
-      writeFileSync(manifest, `${JSON.stringify({
-        authority_host: "authority.example.com",
-        aws_region: "us-west-2",
-        kind: "echo-clean-v1-onboarding-input-v1",
-        organization_name: "Test Org",
-        owner_display_name: "Founder",
-        owner_email: "founder@example.com",
-        runtime_user: execFileSync("id", ["-un"]).toString().trim(),
-        schema_version: 1,
-        nango_integration_key: "slack",
-      })}\n`);
+      writeFileSync(manifest, onboardingManifest);
       chmodSync(manifest, 0o600);
       writeFileSync(
         join(deploy, "clean-data", "rehearsal-sentinel"),

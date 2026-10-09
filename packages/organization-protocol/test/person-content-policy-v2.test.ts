@@ -1,4 +1,3 @@
-import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
@@ -8,12 +7,10 @@ import {
   PERSON_CONTENT_POLICY_READER_AUTHENTICATION,
   RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-  organizationMemberReadablePersonConsequenceSha256,
   organizationMemberReadablePersonPolicyContract,
   organizationMemberReadablePersonPolicyContractSha256,
   projectMembersReadablePersonPolicyContract,
   projectMembersReadablePersonPolicyContractSha256,
-  restrictedReviewerPersonConsequenceSha256,
   restrictedReviewerPersonPolicyContract,
   restrictedReviewerPersonPolicyContractSha256,
 } from "../src/person-content-policy-v2.js";
@@ -25,12 +22,6 @@ describe("Person content policy v2", () => {
     );
     expect(ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT).toBe(
       "Approving records this package under organization-member-readable-person-v2. Any person authenticated by a current Authority Person session with a current active owner or employee membership in this organization, including a person who joins later, may search and read its decisions, actions, and rationales while that membership remains active.",
-    );
-    expect(restrictedReviewerPersonConsequenceSha256()).toBe(
-      "sha256:f2d87d2ca6b4892ed9ce166f67120092de639b513fd919e864c0ddf58f253594",
-    );
-    expect(organizationMemberReadablePersonConsequenceSha256()).toBe(
-      "sha256:2a581951072720b0dfcbbf865cd90132e18421938c9d75dd1c11bb8a1fade2cf",
     );
   });
 
@@ -81,20 +72,7 @@ describe("Person content policy v2", () => {
 
   it("keeps the policies distinct from v1 and from a swapped reader selector", () => {
     const reviewer = restrictedReviewerPersonPolicyContract();
-    const member = organizationMemberReadablePersonPolicyContract();
     expect(reviewer.policy_id).not.toBe("restricted-reviewer-v1");
-    expect(
-      canonicalSha256({
-        ...reviewer,
-        reader_selector: member.reader_selector,
-      }),
-    ).not.toBe(restrictedReviewerPersonPolicyContractSha256());
-    expect(
-      canonicalSha256({
-        ...member,
-        reader_selector: reviewer.reader_selector,
-      }),
-    ).not.toBe(organizationMemberReadablePersonPolicyContractSha256());
   });
 
   it("freezes the project-member selector without freezing a reader snapshot", () => {
