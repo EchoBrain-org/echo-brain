@@ -7,11 +7,11 @@ test.afterEach(async () => { await run?.close(); });
 test('home lists your projects and a project reads its items', async () => {
   run = await launch();
   const { page } = run;
-  const rows = page.getByTestId('project-row');
+  const rows = page.getByTestId('sidebar-project');
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0)).toContainText('Apollo');
-  await expect(rows.nth(0)).toContainText('Lead');
-  await expect(rows.nth(1)).not.toContainText('Lead');
+  await expect(rows.nth(0)).toHaveAttribute('data-role', 'lead');
+  await expect(rows.nth(1)).toHaveAttribute('data-role', 'member');
   await expect(page.getByTestId('title')).toHaveText('ECHO');
 
   await rows.nth(0).click();
@@ -24,13 +24,13 @@ test('home lists your projects and a project reads its items', async () => {
   await expect(page.getByTestId('feed-row')).toBeVisible();
   await page.getByTestId('back').click();
   await expect(page.getByTestId('title')).toHaveText('ECHO');
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
 });
 
 test('ask inside a project is scoped to it until the chip is cleared', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
   await expect(page.getByTestId('scope-chip')).toHaveText('Apollo');
 
   await page.getByTestId('ask-field').fill('What did we decide?');
@@ -69,7 +69,7 @@ const notes = () => run.calls().filter(call => call.method === 'POST' && call.pa
 test('capture starts private outside a project, closes itself on save and says where it went', async () => {
   run = await launch();
   const { page, app } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await emit(app, 'echo-test:capture');
   await expect(page.getByTestId('compose')).toBeVisible();
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
@@ -96,7 +96,7 @@ test('capture starts private outside a project, closes itself on save and says w
 test('capturing inside a project saves to it, and Only me keeps it filed there', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
   await page.getByTestId('write-button').click();
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
   await expect(page.getByTestId('compose-readers')).toHaveText('Apollo members can read this.');
@@ -119,7 +119,7 @@ test('capturing inside a project saves to it, and Only me keeps it filed there',
 test('Only me and Organization keep a capture filed in the projects ticked, readable only by you or by everyone', async () => {
   run = await launch();
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   const group = page.getByRole('radiogroup', { name: 'Who can read' });
   await expect(group.getByRole('radio')).toHaveText(['Only me', 'Projects', 'Organization']);
@@ -140,7 +140,7 @@ test('Only me and Organization keep a capture filed in the projects ticked, read
   expect(notes()[0]!.body?.association_project_ids).toEqual([BEACON]);
 
   // Inside Apollo, Apollo is ticked and listed first. Beacon too, then Organization: filed in both, for everyone.
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
   await page.getByTestId('write-button').click();
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
   await page.getByTestId('readers-projects').click();
@@ -160,7 +160,7 @@ test('Only me and Organization keep a capture filed in the projects ticked, read
 test('an unconfirmed save says so, locks the text and never claims it was sent', async () => {
   run = await launch('write-unavailable');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Draft');
   // Shared, it may not have been sent; kept for yourself, it may not have been saved.
@@ -178,7 +178,7 @@ test('an unconfirmed save says so, locks the text and never claims it was sent',
 test('retry resends the identical request and then says where it went', async () => {
   run = await launch('write-unavailable-once');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Pricing call notes');
   await page.getByTestId('compose-send').click();
@@ -194,7 +194,7 @@ test('retry resends the identical request and then says where it went', async ()
 test('check status on an unconfirmed save learns it was not saved, then sends it', async () => {
   run = await launch('write-unavailable-once');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Security questionnaire sent');
   await page.getByTestId('compose-send').click();
@@ -209,7 +209,7 @@ test('check status on an unconfirmed save learns it was not saved, then sends it
 test('an unresolved save comes back on capture, and write new asks once', async () => {
   run = await launch('write-unavailable');
   const { page, app } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Unsure');
   await page.getByTestId('compose-send').click();
@@ -229,7 +229,7 @@ test('an unresolved save comes back on capture, and write new asks once', async 
 test('quitting with an unresolved save asks first', async () => {
   run = await launch('write-unavailable');
   const { page, app } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Unsure');
   await page.getByTestId('compose-send').click();
@@ -248,7 +248,7 @@ test('quitting with an unresolved save asks first', async () => {
 test('escape keeps the draft and capture brings it back', async () => {
   run = await launch();
   const { page, app } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Half a thought');
   await page.keyboard.press('Escape');
@@ -261,10 +261,10 @@ test('escape keeps the draft and capture brings it back', async () => {
 test('more projects loads the next page', async () => {
   run = await launch('many-projects');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(10);
-  await page.getByTestId('more-projects').click();
-  await expect(page.getByTestId('project-row')).toHaveCount(13);
-  await expect(page.getByTestId('more-projects')).toHaveCount(0);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(10);
+  await page.getByTestId('sidebar-more').click();
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
+  await expect(page.getByTestId('sidebar-more')).toHaveCount(0);
 });
 
 test('a session left behind by the weekly expiry shows sign-in at once', async () => {
@@ -275,21 +275,21 @@ test('a session left behind by the weekly expiry shows sign-in at once', async (
 test('a failed ask shows a fixed message, not server text', async () => {
   run = await launch('ask-unavailable');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('ask-field').fill('Anything?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('ask-error')).toHaveText('ECHO is unavailable right now. Try again.');
 });
 
-test('switching to another app covers a project, but Home rows stay for drops', async () => {
+test('switching to another app covers Home and projects, while sidebar rows stay for drops', async () => {
   run = await launch();
   const { page, app } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await emit(app, 'echo-test:conceal');
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
-  await expect(page.getByTestId('concealed')).toHaveCount(0);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await expect(page.getByTestId('concealed')).toBeVisible();
   await emit(app, 'echo-test:resume');
-  await page.getByTestId('project-row').first().click();
+  await page.getByTestId('sidebar-project').first().click();
   await expect(page.getByTestId('feed-row')).toBeVisible();
   await emit(app, 'echo-test:conceal');
   await expect(page.getByTestId('concealed')).toBeVisible();

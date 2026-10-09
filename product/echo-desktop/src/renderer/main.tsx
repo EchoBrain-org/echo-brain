@@ -4,6 +4,7 @@ import { on } from './api.js';
 import { ConfirmSignOut } from './screens/account.js';
 import { AskView, Bar, SourcePane } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
+import { Decision } from './screens/decision.js';
 import { Home } from './screens/home.js';
 import { ChangeLine, changeShownInPlace } from './screens/change.js';
 import { Back, Saved, SidebarIcon, Warning } from './screens/icons.js';
@@ -120,6 +121,7 @@ function App() {
   }
 
   const inProject = state.route.page === 'project' ? state.route.project : null;
+  const decision = state.route.page === 'decision' ? state.decision : null;
   const organization = state.route.page === 'organization' ? state.organization : null;
   const mine = state.route.page === 'mine';
   const tools = state.route.page === 'tools' ? state.tools : null;
@@ -127,7 +129,7 @@ function App() {
   // answer or an original shows until ECHO is back. Project rows stay (Home's
   // and the sidebar's), so a file dragged from Finder can still be dropped on one.
   const covered = pageCovered(state);
-  const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : mine ? 'Mine' : null;
+  const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : mine ? 'Mine' : decision ? 'Decision' : null;
   const title = covered ? 'ECHO' : state.ask ? 'Ask' : pageName ?? 'ECHO';
   // Back leaves Ask for the page it was asked from; asked over a reader, Back goes to the reader.
   const backLabel = covered ? null : state.ask && state.reader ? 'Back'
@@ -147,6 +149,7 @@ function App() {
           : inProject ? <Project state={state} project={inProject} />
           : organization ? <Organization state={state} page={organization} />
           : tools ? <Tools state={state} page={tools} />
+          : decision ? <Decision state={state} decision={decision} />
           : mine ? <Mine state={state} /> : <Home state={state} />}
       </main>
       {/* Always there, so a screen reader announces each toast as it appears. A save only Mine shows opens it. */}

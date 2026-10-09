@@ -22,9 +22,9 @@ type Rpc = (method: string, params?: unknown) => Promise<{ ok: boolean; failure?
 test('Mine lists only what you added, newest first, with what each is, where it is filed and who can read it; More reads the rest', async () => {
   run = await launch('mine');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   // Under New project, and above your projects; Tools stays at the bottom.
-  await expect(page.getByTestId('sidebar').locator('.side-row')).toHaveText([/Capture/, 'New project', 'Mine', 'Tools']);
+  await expect(page.getByTestId('sidebar').locator('.side-row')).toHaveText(['Home', /Capture/, 'New project', 'Mine', 'Tools']);
   await page.getByTestId('sidebar-mine').click();
   await expect(page.getByTestId('title')).toHaveText('Mine');
   await expect(page.getByTestId('back')).toHaveText('Home');
@@ -129,7 +129,7 @@ test('signing out on Mine leaves it and clears what it read, and signing in agai
   await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Sign in with Google…');
   await page.getByTestId('signin-url').fill('https://authority.example');
   await page.getByTestId('signin-button').click();
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await expect(page.getByTestId('title')).toHaveText('ECHO');
   await expect(page.getByTestId('sidebar-mine')).not.toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('reader')).toHaveCount(0);
@@ -140,7 +140,7 @@ test('signing out on Mine leaves it and clears what it read, and signing in agai
 test('while meetings wait to be indexed, a save on Mine keeps the meetings shown, and the next read applies', async () => {
   run = await launch('mine-meetings-held');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('sidebar-mine').click();
   const rows = page.getByTestId('mine-row');
   await expect(rows.filter({ hasText: 'Pricing review' })).toHaveCount(1);
@@ -237,7 +237,7 @@ test(`Mine's bar asks only what you added through ordinary Ask (${mode})`, async
 test('a save only Mine shows opens it from its toast, and a save made on Mine joins the list', async () => {
   run = await launch('mine');
   const { page, app } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await emit(app, 'echo-test:capture');
   await page.getByTestId('compose-body').fill('Call notes with Dana');
   await page.getByTestId('compose-send').click();
@@ -308,7 +308,7 @@ test('Mine that could not be read says why and reads again; a project you were t
   await run.close();
   run = await launch('feed-unauthorized');
   ({ page } = run);
-  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('feed-error')).toContainText('This is no longer available to you.');
   await expect(page.getByText('Sign in again')).toHaveCount(0);
   await expect(page.getByTestId('title')).toHaveText('Apollo');
@@ -323,7 +323,7 @@ test('Mine that could not be read says why and reads again; a project you were t
 test('Mine refused for the same account says your access changed, and reads status again once', async () => {
   run = await launch('mine-unauthorized');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('sidebar-mine').click();
   await expect(page.getByTestId('mine-error')).toContainText('Your access changed. Sign in again.');
   const after = () => log().split('list.page unauthorized')[1] ?? '';
@@ -336,7 +336,7 @@ test('Mine refused for the same account says your access changed, and reads stat
 test('the host opens only a well-formed ref, in a scope the app lists, and anything you cannot read is not_found', async () => {
   run = await launch('mine');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   const replies = await page.evaluate(async () => {
     const { rpc } = (window as unknown as { echo: { rpc: Rpc } }).echo;
     const expect = { authority: 'https://authority.example', membership_id: 'mem_22222222-2222-4222-8222-222222222222' };
@@ -367,7 +367,7 @@ test('a project\'s page lists its approved meetings too, and an owner\'s Mine ho
   run = await launch('owner-mine');
   const { page } = run;
   await expect(page.getByTestId('sidebar-organization')).toBeVisible();
-  await page.getByTestId('project-row').nth(1).click();
+  await page.getByTestId('sidebar-project').nth(1).click();
   const rows = page.getByTestId('feed-row');
   await expect(rows.filter({ hasText: 'Beacon kickoff' })).toHaveAttribute('data-kind', 'meeting');
   await expect(rows.filter({ hasText: 'Launch checklist' })).toHaveCount(1);

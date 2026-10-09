@@ -397,7 +397,7 @@ function Runs({ runs }: { runs: readonly Inline[] }) {
 }
 
 /** A passage's markdown as its document reads: headings, lists, bold. Never markup from the text itself. */
-function Passage({ text, label }: { text: string; label: string }) {
+export function Passage({ text, label }: { text: string; label: string }) {
   return <>{passageBlocks(text, label).map((block, index) =>
     block.kind === 'heading' ? <h3 key={index}><Runs runs={block.text} /></h3>
       : block.kind === 'paragraph' ? <p key={index}><Runs runs={block.text} /></p>

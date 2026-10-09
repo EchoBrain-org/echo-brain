@@ -7,7 +7,7 @@ test.afterEach(async () => { await run?.close(); });
 test('a refused read for the same account shows why instead of loading forever', async () => {
   run = await launch('feed-unauthorized');
   const { page } = run;
-  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByText('This is no longer available to you.')).toBeVisible();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
 });
@@ -17,16 +17,16 @@ test('Back keeps the pages Home had loaded, and showing the window re-reads it',
   const { page, app } = run;
   const lists = () => run.calls().filter(call => call.method === 'GET' && call.path === '/v2/person/projects' &&
     new URLSearchParams(call.query).get('status') === 'active').length;
-  await expect(page.getByTestId('project-row')).toHaveCount(10);
-  await page.getByTestId('more-projects').click();
-  await expect(page.getByTestId('project-row')).toHaveCount(13);
-  await page.getByTestId('project-row').nth(12).click();
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(10);
+  await page.getByTestId('sidebar-more').click();
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
+  await page.getByTestId('sidebar-project').nth(12).click();
   await page.getByTestId('back').click();
-  await expect(page.getByTestId('project-row')).toHaveCount(13);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
   expect(lists()).toBe(2);
   await emit(app, 'echo-test:shown');
   await expect.poll(lists).toBe(3);
-  await expect(page.getByTestId('project-row')).toHaveCount(13);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
 });
 
 test('opening ECHO again while it runs brings the window forward, as Open ECHO does', async () => {
@@ -34,7 +34,7 @@ test('opening ECHO again while it runs brings the window forward, as Open ECHO d
   const { page, app } = run;
   const lists = () => run.calls().filter(call => call.method === 'GET' && call.path === '/v2/person/projects' &&
     new URLSearchParams(call.query).get('status') === 'active').length;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   const before = lists();
   // What macOS sends when ECHO is opened from Spotlight or Finder while it runs.
   await app.evaluate(({ app: electronApp }) => { electronApp.emit('activate', {}, false); });
@@ -46,7 +46,7 @@ test('the ask bar has the caret at launch and whenever the window comes forward'
   run = await launch();
   const { page, app } = run;
   await expect(page.getByTestId('ask-field')).toBeFocused();
-  await page.getByTestId('project-row').nth(0).focus();
+  await page.getByTestId('sidebar-project').nth(0).focus();
   await emit(app, 'echo-test:shown');
   await expect(page.getByTestId('ask-field')).toBeFocused();
 });
@@ -54,19 +54,19 @@ test('the ask bar has the caret at launch and whenever the window comes forward'
 test('an ask can be cancelled, and its late answer is dropped', async () => {
   run = await launch('ask-hangs');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('ask-field').fill('Where are we?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('asking')).toBeVisible();
   await page.getByTestId('ask-cancel').click();
   await expect(page.getByTestId('ask-view')).toHaveCount(0);
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
 });
 
 test('a source shows at most 2,000 characters', async () => {
   run = await launch('long-evidence');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('ask-field').fill('What did we agree?');
   await page.getByTestId('ask-field').press('Enter');
   await page.getByTestId('source-row').nth(1).click();

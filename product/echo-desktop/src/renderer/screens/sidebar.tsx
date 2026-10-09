@@ -1,8 +1,10 @@
 import type { ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initial } from '../format.js';
-import { loadProjects, openCompose, openMine, openNewProject, openOrganization, openProject, openTools, showAccountMenu, type State } from '../store.js';
+import { message } from '../messages.js';
+import { useState } from 'preact/hooks';
+import { goHome, loadArchivedProjects, loadProjects, needsCount, openCompose, openMine, openNewProject, openOrganization, openProject, openTools, showAccountMenu, type State } from '../store.js';
 import { useDropTarget } from './drop.js';
-import { Capture, FolderPlus, OnePerson, People, Person, Plug } from './icons.js';
+import { Capture, Chevron, FolderPlus, Home as HomeIcon, OnePerson, People, Person, Plug } from './icons.js';
 import { ProjectSettingsButton } from './project-settings.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
@@ -13,7 +15,7 @@ function SidebarProject({ project, current, state }: { project: ProjectSummary; 
   return (
     <div class={`side-project-row${current ? ' current' : ''}${drop.over ? ' drop-target' : ''}`} {...drop.handlers}>
       <button
-        type="button" data-testid="sidebar-project" class="side-project"
+        type="button" data-testid="sidebar-project" class="side-project" data-role={project.role}
         aria-current={current ? 'page' : undefined} onClick={() => void openProject(project)}
       >
         <span class="dot" style={{ background: colorFor(project.project_id) }} aria-hidden="true">{initial(project.name)}</span>
@@ -33,16 +35,24 @@ function SidebarProject({ project, current, state }: { project: ProjectSummary; 
  */
 export function Sidebar({ state }: { state: State }) {
   const account = state.status?.account ?? null;
-  const { items, next, loading } = state.projects;
+  const { items, next, loading, failure } = state.projects;
   const current = !state.concealed && state.route.page === 'project' ? state.route.project.project_id : null;
   const mine = !state.concealed && state.route.page === 'mine';
   const tools = !state.concealed && state.route.page === 'tools';
+  const home = !state.concealed && (state.route.page === 'home' || state.route.page === 'decision');
+  const needs = needsCount(state);
+  const archived = state.archivedProjects;
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const noDrop = (event: DragEvent) => event.stopPropagation();
   return (
     <aside class="sidebar" data-testid="sidebar">
       <div class="sidebar-drag" />
       {account && (
         <div class="sidebar-rows">
+          <button type="button" class={`side-row${home ? ' current' : ''}`} data-testid="sidebar-home" aria-current={home ? 'page' : undefined}
+            onClick={goHome} onDragOver={noDrop} onDrop={noDrop}>
+            <HomeIcon /><span class="label">Home</span>{needs > 0 && <span class="badge" data-testid="sidebar-badge">{needs}</span>}
+          </button>
           <button type="button" class="side-row" data-testid="sidebar-capture" onClick={() => openCompose()}>
             <Capture /><span class="label">Capture</span><span class="hint">{CAPTURE_HINT}</span>
           </button>
@@ -56,7 +66,7 @@ export function Sidebar({ state }: { state: State }) {
         </div>
       )}
       <nav class="sidebar-list" aria-label="Projects">
-        {account && items.length > 0 && (
+        {account && (items.length > 0 || failure) && (
           <>
             <div class="side-header">PROJECTS</div>
             {items.filter(project => project.status === 'active').map(project => <SidebarProject key={project.project_id} project={project} current={project.project_id === current} state={state} />)}
@@ -65,7 +75,27 @@ export function Sidebar({ state }: { state: State }) {
                 More
               </button>
             )}
+            {failure && <div class="error side-more" data-testid="sidebar-projects-error">{message(failure)} <button type="button" class="link-button"
+              disabled={loading} onClick={() => void loadProjects()}>Try again</button></div>}
           </>
+        )}
+        {account && (archived.items.length > 0 || archived.loading || archived.failure) && (
+          <section class="archived-projects" data-testid="archived-projects" aria-label="Archived projects">
+            <button type="button" class="archived-heading" data-testid="archived-projects-toggle" aria-expanded={archivedOpen}
+              onClick={() => setArchivedOpen(!archivedOpen)}><Chevron /><span>ARCHIVED</span></button>
+            {archivedOpen && archived.items.map(project => (
+              <button type="button" key={project.project_id} data-testid="archived-project-row" class="side-project" onClick={() => void openProject(project)}>
+                <span class="dot" style={{ background: colorFor(project.project_id) }} aria-hidden="true">{initial(project.name)}</span>
+                <span class="label">{project.name}</span>
+              </button>
+            ))}
+            {archivedOpen && archived.next && (
+              <button type="button" class="link-button side-more" data-testid="more-archived-projects" disabled={archived.loading}
+                onClick={() => void loadArchivedProjects(true)}>More</button>
+            )}
+            {archivedOpen && archived.failure && <div class="error side-more" data-testid="archived-projects-error">{message(archived.failure)} <button type="button" class="link-button"
+              disabled={archived.loading} onClick={() => void loadArchivedProjects()}>Try again</button></div>}
+          </section>
         )}
       </nav>
       {account?.role === 'owner' && (

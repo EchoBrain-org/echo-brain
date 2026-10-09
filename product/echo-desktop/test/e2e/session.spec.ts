@@ -8,12 +8,12 @@ test.afterEach(async () => { await run?.close(); });
 
 const refreshes = () => run.calls().filter(call => call.path === '/v2/session/refresh');
 
-/** Both startup lists fail before sending; a known-not-sent refresh preserves the session for the next call. */
+/** Both startup lists and Home's tools read fail before sending; a known-not-sent refresh preserves the session for the next call. */
 async function expectOfflineStartup(): Promise<void> {
   const completedLists = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')
-    .match(/projects\.list transport_failed/g)?.length ?? 0;
-  await expect.poll(completedLists).toBe(2);
-  expect(run.calls().map(call => call.path)).toEqual(['/v2/session/refresh', '/v2/session/refresh']);
+    .match(/(projects\.list|account\.tools) transport_failed/g)?.length ?? 0;
+  await expect.poll(completedLists).toBe(3);
+  expect(run.calls().map(call => call.path)).toEqual(['/v2/session/refresh', '/v2/session/refresh', '/v2/session/refresh']);
 }
 
 /** Sign in with the fixture's browser, which stands in for Google, and land on Home. */
@@ -22,7 +22,7 @@ async function signIn(page: Page) {
   await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Sign in with Google…');
   await page.getByTestId('signin-url').fill('https://authority.example');
   await page.getByTestId('signin-button').click();
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   // Neither the sign-in address, the loopback receiver nor a token reaches the page.
   const html = await page.content();
   for (const secret of ['accounts.example', '127.0.0.1', 'A'.repeat(43), 'R'.repeat(43)]) expect(html).not.toContain(secret);
@@ -56,8 +56,8 @@ test('the weekly sign-in works from a session left under a refresh claim', async
 test('an expired access token is refreshed once, before the calls that need it', async () => {
   run = await launch('refresh-ok');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
-  await page.getByTestId('project-row').nth(0).click();
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('feed-row')).toHaveCount(1);
   await page.getByTestId('ask-field').fill('What did we agree?');
   await page.getByTestId('ask-field').press('Enter');
@@ -79,7 +79,7 @@ test('a refresh that never left the machine keeps you signed in, and status alon
   await emit(app, 'echo-test:resume');
   await expect.poll(statuses).toBe(before + 1);
   await expect(page.getByTestId('home-error')).toBeVisible();
-  expect(refreshes()).toHaveLength(2);
+  expect(refreshes()).toHaveLength(3);
 });
 
 test('a note written while the refresh cannot leave the machine is not sent, and that call refreshes again', async () => {
@@ -162,13 +162,13 @@ test('a note sent while quit waits out a refresh is asked about, once', async ()
 test('a crashed page reloads and reads status again', async () => {
   run = await launch();
   const { page, app } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.webContents.forcefullyCrashRenderer(); });
   // Playwright drops a crashed page, so look from main at the reloaded one.
   // (A script sent to the dead page never settles, so each look is capped.)
   const rows = () => app.evaluate(({ BrowserWindow }) => Promise.race([
     BrowserWindow.getAllWindows()[0]!.webContents
-      .executeJavaScript('document.querySelectorAll("[data-testid=project-row]").length').catch(() => -1),
+      .executeJavaScript('document.querySelectorAll("[data-testid=sidebar-project]").length').catch(() => -1),
     new Promise(resolveLook => setTimeout(() => resolveLook(-1), 500)),
   ]));
   await expect.poll(rows, { timeout: 10_000 }).toBe(2);

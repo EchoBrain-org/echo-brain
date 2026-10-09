@@ -66,7 +66,7 @@ test('the Home search survives every way back in, and a sidebar click narrows it
   run = await launch();
   const { page, app } = run;
   const field = page.getByTestId('ask-field');
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await field.fill('apollo');
   await expect(page.getByTestId('matches-head')).toHaveText('Matches in all context');
   // Newer notes first; one whose title does not match shows where its text does.
@@ -86,12 +86,13 @@ test('the Home search survives every way back in, and a sidebar click narrows it
   await field.fill('apollo');
   await expect(page.getByTestId('match-row')).toHaveCount(2);
 
-  // Another app in front: the matches are covered, the text stays, and they are read again on return.
+  // Another app in front: matches and search text are covered, then restored on return.
   const before = noteSearches();
   await emit(app, 'echo-test:conceal');
   await expect(page.getByTestId('matches')).toHaveCount(0);
-  await expect(field).toHaveValue('apollo');
+  await expect(field).toHaveValue('');
   await emit(app, 'echo-test:resume');
+  await expect(field).toHaveValue('apollo');
   await expect(page.getByTestId('match-row')).toHaveCount(2);
   await expect.poll(noteSearches).toBe(before + 1);
 
@@ -105,7 +106,7 @@ test('the Home search survives every way back in, and a sidebar click narrows it
   const folder = mkdtempSync(join(tmpdir(), 'echo-drop-'));
   folders.push(folder);
   writeFileSync(join(folder, 'Brief.md'), 'Annual pricing.');
-  await drop(page, page.getByTestId('project-row').nth(1), join(folder, 'Brief.md'));
+  await drop(page, page.getByTestId('sidebar-project').nth(1), join(folder, 'Brief.md'));
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Beacon');
   await page.keyboard.press('Escape');
   await expect(field).toHaveValue('apollo');
@@ -132,7 +133,7 @@ test('only a real change of access empties the bar: an outage keeps the text, a 
   run = await launch('search-fails');
   const { page } = run;
   const field = page.getByTestId('ask-field');
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await field.fill('apollo');
   await expect(page.getByTestId('matches-error')).toContainText('ECHO is unavailable right now. Try again.');
   await expect(field).toHaveValue('apollo');
@@ -151,11 +152,11 @@ test('a new role in a project is a change of access, and empties the bar', async
   run = await launch('role-changes');
   const { page, app } = run;
   const field = page.getByTestId('ask-field');
-  await expect(page.getByTestId('project-row').nth(0)).toContainText('Lead');
+  await expect(page.getByTestId('sidebar-project').nth(0)).toHaveAttribute('data-role', 'lead');
   await field.fill('apollo');
   await expect(page.getByTestId('match-row')).toHaveCount(2);
   await emit(app, 'echo-test:shown');
-  await expect(page.getByTestId('project-row').nth(0)).not.toContainText('Lead');
+  await expect(page.getByTestId('sidebar-project').nth(0)).toHaveAttribute('data-role', 'member');
   await expect(field).toHaveValue('');
   await expect(page.getByTestId('matches')).toHaveCount(0);
 });

@@ -43,35 +43,40 @@ export function ImpactSection({ run, view, publishing, busy, tools, onRetry }: {
   if (run === undefined && !publishing) return null;
   const label = (source: AnswerSource | undefined) => source?.label ?? 'Item';
   return <section class="impact" aria-label="Impact">
-    <h4>Impact</h4>
-    {(run === undefined || run.state === 'pending') && <p class="context">Impact check queued.</p>}
-    {run?.state === 'running' && <p class="context">Checking what this changes. This can take a few minutes.</p>}
-    {run?.state === 'failed' && <>
-      <p>{REASONS[run.error_code ?? 'research_failed']}</p>
-      <button type="button" class="plain-button small" disabled={busy} onClick={onRetry}>Try again</button>
-    </>}
-    {run?.state === 'done' && view === undefined && <p class="context">Opening the impact check…</p>}
+    <div class="impact-head">
+      <h4 class="section-label">Impact</h4>
+      {(run === undefined || run.state === 'pending') && <span class="notice-line">Check queued</span>}
+      {run?.state === 'running' && <span class="asking"><i /><i /><i /><span>Checking what this changes · a few minutes</span></span>}
+      {run?.state === 'done' && view === undefined && <span class="notice-line">Opening…</span>}
+    </div>
+    {run?.state === 'failed' && <div class="choices start">
+      <span class="error">{REASONS[run.error_code ?? 'research_failed']}</span>
+      <button type="button" class="link-button" disabled={busy} onClick={onRetry}>Try again</button>
+    </div>}
     {run?.state === 'done' && view === null && <p class="error">The impact check could not be opened. Open the meeting again to retry.</p>}
     {run?.state === 'done' && view && <>
-      {view.decided.length > 0 && <><h5>What was decided</h5><ul>{view.decided.map((row, index) => <li key={index}>{row.text}</li>)}</ul></>}
-      <h5>Affected items</h5>
-      {view.status === 'not_assessed' && <p class="context">Not assessed. These items may be affected.</p>}
-      {view.affected.length === 0 ? <p class="context">No affected items found.</p> : <ul class="impact-items">{view.affected.map(row => {
-        const source = view.sources[row.citation_index];
-        return <li key={row.citation_index} class="record-item">
-          <span>{row.relation && <span class="status">{RELATIONS[row.relation]}</span>} {label(source)}</span>
-          <span>{row.says_now}</span>
-          {row.owner && <span class="owner">Owner: {row.owner}</span>}
-          {row.date_at_risk && <span class="owner">Date at risk: {row.date_at_risk.milestone}, {row.date_at_risk.date}</span>}
-          {source && 'permalink' in source && <span><OpenSource source={source} tools={tools} /></span>}
-        </li>;
-      })}</ul>}
-      {view.unconfirmed.length > 0 && <><h5>Couldn't confirm</h5><ul>{view.unconfirmed.map(note => <li key={note}>{note}</li>)}</ul></>}
-      {view.people.length > 0 && <><h5>People to tell</h5><ul>{view.people.map(person => <li key={person.name}>
-        {person.name}{person.items.length > 0 && <span class="owner"> · {person.items.map(index => label(view.sources[index])).join(', ')}</span>}
-      </li>)}</ul></>}
-      <p class="context">Checked {dateTime(view.checked_at)}</p>
-      {view.hidden > 0 && <p class="context">{hiddenLine(view.hidden)}</p>}
+      {view.decided.length > 0 && <div class="impact-section"><h5>What was decided</h5>
+        {view.decided.map((row, index) => <div key={index} class="record-item">{row.text}</div>)}</div>}
+      <div class="impact-section"><h5>Affected items</h5>
+        {view.status === 'not_assessed' && <div class="notice-line">Not assessed. These items may be affected.</div>}
+        {view.affected.length === 0 ? <div class="notice-line">No affected items found.</div> : <ul class="impact-items">{view.affected.map(row => {
+          const source = view.sources[row.citation_index];
+          return <li key={row.citation_index} class="record-item">
+            <span class="impact-item-head">{row.relation && <span class={`status ${row.relation}`}>{RELATIONS[row.relation]}</span>}<span class="impact-label">{label(source)}</span></span>
+            <span>{row.says_now}</span>
+            {row.owner && <span class="owner">Owner: {row.owner}</span>}
+            {row.date_at_risk && <span class="owner">Date at risk: {row.date_at_risk.milestone}, {row.date_at_risk.date}</span>}
+            {source && 'permalink' in source && <span class="impact-open"><OpenSource source={source} tools={tools} /></span>}
+          </li>;
+        })}</ul>}
+      </div>
+      {view.unconfirmed.length > 0 && <div class="impact-section"><h5>Couldn't confirm</h5>
+        {view.unconfirmed.map(note => <div key={note} class="record-item">{note}</div>)}</div>}
+      {view.people.length > 0 && <div class="impact-section"><h5>People to tell</h5>
+        {view.people.map(person => <div key={person.name} class="record-item impact-person">
+          <span>{person.name}</span>{person.items.length > 0 && <span class="owner"> · {person.items.map(index => label(view.sources[index])).join(', ')}</span>}
+        </div>)}</div>}
+      <div class="impact-foot notice-line">Checked {dateTime(view.checked_at)}{view.hidden > 0 ? ` · ${hiddenLine(view.hidden)}` : ''}</div>
     </>}
   </section>;
 }

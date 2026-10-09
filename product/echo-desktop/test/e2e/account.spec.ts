@@ -57,7 +57,7 @@ test('signed out shows "Sign in to use ECHO"; Sign in with Google… asks for th
   await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Sign in with Google…');
   await page.getByTestId('signin-url').fill('https://authority.example');
   await page.getByTestId('signin-button').click();
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await expect(page.getByTestId('account-row')).toContainText('Ari');
 });
 
@@ -88,7 +88,7 @@ test('sign out asks first, then shows sign-in; Cancel keeps you signed in', asyn
   await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Sign in with Google…');
   await page.getByTestId('signin-url').fill('https://authority.example');
   await page.getByTestId('signin-button').click();
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await emit(app, 'echo-test:capture');
   await expect(page.getByTestId('compose-body')).toHaveValue('');
 });
@@ -165,7 +165,7 @@ test('Open invitation… signs in with the folder the owner sent, and the page n
 
   await choose(folder);
   await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Open invitation…');
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   const begun = run.calls().filter(call => call.path === '/v2/session/oidc/begin');
   expect(begun).toHaveLength(1);
   expect(begun[0]!.body).toMatchObject({ kind: 'identity_bootstrap', login_grant: grant });
@@ -192,7 +192,7 @@ test('a sign-out still forgets everything when a status read showed sign-in firs
   await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Sign in with Google…');
   await page.getByTestId('signin-url').fill('https://authority.example');
   await page.getByTestId('signin-button').click();
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await emit(app, 'echo-test:capture');
   await expect(page.getByTestId('compose-body')).toHaveValue('');
 });
@@ -217,6 +217,6 @@ test('a sign-in begun while a sign-out is still finishing is left alone', async 
   await page.waitForTimeout(500);
   await expect(page.getByTestId('signin-button')).toBeDisabled({ timeout: 1_000 });
   await expect(page.getByTestId('signin-button')).toHaveText('Waiting for your browser');
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   expect(run.calls().filter(call => call.path === '/v2/session/oidc/begin')).toHaveLength(1);
 });

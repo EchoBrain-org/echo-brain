@@ -20,7 +20,7 @@ const RAJ = 'mem_44444444-4444-4444-8444-444444444444';
 test('a project is one feed of notes and documents, and More reads older ones in order', async () => {
   run = await launch('long-feed');
   const { page } = run;
-  await page.getByTestId('project-row').nth(1).click();
+  await page.getByTestId('sidebar-project').nth(1).click();
   const rows = page.getByTestId('feed-row');
   // Ten notes are read; the document is older than the tenth, so it waits for More.
   await expect(rows).toHaveCount(10);
@@ -40,7 +40,7 @@ test('a project is one feed of notes and documents, and More reads older ones in
 test('the feed keeps its place: Back from an original, or ECHO coming back, returns to where it was scrolled', async () => {
   run = await launch('long-feed');
   const { page, app } = run;
-  await page.getByTestId('project-row').nth(1).click();
+  await page.getByTestId('sidebar-project').nth(1).click();
   const rows = page.getByTestId('feed-row');
   await expect(rows).toHaveCount(10);
   await page.getByTestId('feed-more').click();
@@ -72,7 +72,7 @@ test('the feed keeps its place: Back from an original, or ECHO coming back, retu
 test('the reader says who can read an original when it is not the project\'s members', async () => {
   run = await launch('long-feed');
   const { page } = run;
-  await page.getByTestId('project-row').nth(1).click();
+  await page.getByTestId('sidebar-project').nth(1).click();
   const rows = page.getByTestId('feed-row');
   await expect(rows).toHaveCount(10);
   await page.getByTestId('write-button').click();
@@ -103,7 +103,7 @@ test('a save into the project on screen keeps the rows shown, even when reading 
   const { page } = run;
   const feeds = () => run.calls().filter(call => call.path === '/v1/person/list').length;
   const log = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8');
-  await page.getByTestId('project-row').nth(1).click();
+  await page.getByTestId('sidebar-project').nth(1).click();
   const rows = page.getByTestId('feed-row');
   await expect(rows).toHaveCount(10);
   await page.getByTestId('feed-more').click();
@@ -135,7 +135,7 @@ test('a page More could not read says why below the rows, and Try again reads on
   run = await launch('long-feed-more-fails');
   const { page } = run;
   const cursors = () => run.calls().filter(call => call.path === '/v1/person/list').map(call => call.body?.cursor ?? null);
-  await page.getByTestId('project-row').nth(1).click();
+  await page.getByTestId('sidebar-project').nth(1).click();
   const rows = page.getByTestId('feed-row');
   await expect(rows).toHaveCount(10);
   await page.getByTestId('feed-more').click();
@@ -155,7 +155,7 @@ test('a page More could not read says why below the rows, and Try again reads on
 test('a document reads a page of text at a time, and Save original writes the checked original where main was told', async () => {
   run = await launch();
   const { page, app } = run;
-  await page.getByTestId('project-row').nth(1).click();
+  await page.getByTestId('sidebar-project').nth(1).click();
   await page.locator('[data-kind="document"]').click();
   await expect(page.getByTestId('reader-chunk')).toHaveText(['Hire two engineers in October.']);
   await expect(page.getByTestId('reader-meta')).toContainText('PDF · 24 bytes');
@@ -209,7 +209,7 @@ test('a document reads a page of text at a time, and Save original writes the ch
 test('an original can leave the project it is in, or be added to another, and the reader says where it went', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('sidebar-project').nth(0).click();
   await page.getByTestId('feed-row').click();
   await expect(page.getByTestId('reader-text')).toHaveText('We agreed to ship.');
   await page.getByTestId('reader-actions').click();
@@ -247,7 +247,7 @@ test('a lead adds someone at once, Undo removes only them, and making a lead or 
   run = await launch();
   const { page, app } = run;
   const changes = (kind: string) => run.calls().filter(call => call.path === `/v1/person/projects/members/${kind}`).map(call => call.body!);
-  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('members-button')).toHaveText('AMC');
   await page.getByTestId('members-button').click();
   const members = page.getByTestId('member-row');
@@ -301,7 +301,7 @@ test('a lead adds someone at once, Undo removes only them, and making a lead or 
 test('a member sees who is in a project and cannot change it', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('project-row').nth(1).click();
+  await page.getByTestId('sidebar-project').nth(1).click();
   await page.getByTestId('members-button').click();
   await expect(page.getByTestId('member-row')).toHaveText(['MCMaya ChenLead', 'AAri']);
   await expect(page.getByTestId('people-find')).toHaveCount(0);
@@ -313,7 +313,7 @@ test('a member sees who is in a project and cannot change it', async () => {
 test('People reads your role again, and a new one empties the bar', async () => {
   run = await launch('demoted');
   const { page } = run;
-  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await page.getByTestId('ask-field').fill('apollo');
   await page.getByTestId('members-button').click();
@@ -327,7 +327,7 @@ test('a change whose reply was lost is never called made: Try again resends the 
   run = await launch('change-reply-lost');
   const { page, app } = run;
   const adds = () => run.calls().filter(call => call.path === '/v1/person/projects/members/add').map(call => call.body!);
-  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('sidebar-project').nth(0).click();
   // People over a note: its line shows once, in People.
   await page.getByTestId('feed-row').click();
   await expect(page.getByTestId('reader-text')).toBeVisible();

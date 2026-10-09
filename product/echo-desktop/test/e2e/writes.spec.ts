@@ -43,7 +43,7 @@ async function chooseFile(name: string): Promise<void> {
 test('capture after switching away from a project starts as Only me', async () => {
   run = await launch();
   const { page, app } = run;
-  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await emit(app, 'echo-test:conceal');
   await emit(app, 'echo-test:capture');
@@ -54,7 +54,7 @@ test('capture after switching away from a project starts as Only me', async () =
 test('a retry refused for a known reason still says the first try may have arrived', async () => {
   run = await launch('write-unavailable-then-refused');
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Budget moved');
   await page.getByTestId('compose-send').click();
@@ -68,7 +68,7 @@ test('a retry refused for a known reason still says the first try may have arriv
 test('if the host dies mid-save the note is unconfirmed, and check status finds it saved', async () => {
   run = await launch('write-hangs');
   const { page, app } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Hiring plan');
   await page.getByTestId('compose-send').click();
@@ -87,7 +87,7 @@ test('if the host dies mid-save the note is unconfirmed, and check status finds 
 test('quitting while a note is sending asks first', async () => {
   run = await launch('write-hangs');
   const { page, app } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Offsite dates');
   await page.getByTestId('compose-send').click();
@@ -107,7 +107,7 @@ test('a note and a file are never sent together', async () => {
   run = await launch();
   const { page } = run;
   await chooseFile('Pricing.txt');
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Some words');
   await page.getByTestId('compose-attach').click();
@@ -124,7 +124,7 @@ test('a note and a file are never sent together', async () => {
 test('a note over 8 KiB says so before anything is sent, and one that fits is saved', async () => {
   run = await launch();
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill(`Long note\n${'x'.repeat(8 * 1024)}`);
   await page.getByTestId('compose-send').click();
@@ -143,7 +143,7 @@ test('a file attached in a project is sent to that project under its own name', 
   run = await launch();
   const { page } = run;
   await chooseFile('Pricing.txt');
-  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-attach').click();
@@ -162,7 +162,7 @@ test('an upload whose reply was lost is retried from the kept copy and stored on
   run = await launch('document-reply-lost');
   const { page } = run;
   await chooseFile('Pricing.txt');
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-attach').click();
   await page.getByTestId('compose-send').click();
@@ -180,7 +180,7 @@ test('quitting with an unconfirmed file says a file may not have been sent', asy
   run = await launch('document-reply-lost');
   const { page, app } = run;
   await chooseFile('Pricing.txt');
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-attach').click();
   await page.getByTestId('compose-send').click();
@@ -200,7 +200,7 @@ test('check status settles an upload whose reply was lost', async () => {
   run = await launch('document-reply-lost');
   const { page } = run;
   await chooseFile('Pricing.txt');
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-attach').click();
   await page.getByTestId('compose-send').click();
@@ -215,7 +215,7 @@ test('starting over on an unconfirmed upload removes the copy kept to resend it'
   run = await launch('document-reply-lost');
   const { page } = run;
   await chooseFile('Pricing.txt');
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-attach').click();
   await page.getByTestId('compose-send').click();
@@ -234,7 +234,7 @@ test('starting over on an unconfirmed upload removes the copy kept to resend it'
 test('Organization warns before it is saved, and the toast says it was shared', async () => {
   run = await launch();
   const { page } = run;
-  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
   await page.getByTestId('readers-team').click();
@@ -251,7 +251,7 @@ test('Organization warns before it is saved, and the toast says it was shared', 
 test('saving to the project on screen adds to its feed and leaves the rest of the page alone', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('feed-row')).toHaveCount(1);
   await page.getByTestId('scope-clear').click();
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);

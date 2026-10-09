@@ -154,8 +154,8 @@ function ConfluenceSpaces({ state }: { state: State }) {
     <p>Questions in {settings.project.name} read these spaces live, using each person’s connected Confluence account.</p>
     {confluence.value && <>
       <p data-testid="project-confluence-current">{confluence.value.mapping ? `${confluence.value.mapping.space_ids.length} space${confluence.value.mapping.space_ids.length === 1 ? '' : 's'} mapped` : 'No Confluence spaces mapped'}</p>
-      {lead ? <div data-testid="project-confluence-spaces">{confluence.spaces.map(space => <label key={space.id}>
-        <input type="checkbox" checked={confluence.selected.includes(space.id)} disabled={confluence.status !== 'ready'} onChange={() => toggleProjectConfluenceSpace(space.id)} /> {space.name} ({space.key})
+      {lead ? <div class="check-list" data-testid="project-confluence-spaces">{confluence.spaces.map(space => <label key={space.id} class="check">
+        <input type="checkbox" checked={confluence.selected.includes(space.id)} disabled={confluence.status !== 'ready'} onChange={() => toggleProjectConfluenceSpace(space.id)} /><span>{space.name} ({space.key})</span>
       </label>)}</div> : <p>A project lead can change this setting.</p>}
       {lead && <p>Connect your Confluence account in Tools before saving.</p>}
       {confluence.next !== null && <button type="button" class="plain-button" data-testid="project-confluence-more" disabled={confluence.loadingMore || confluence.status !== 'ready'} onClick={() => void moreProjectConfluenceSpaces()}>{confluence.loadingMore ? 'Loading…' : 'Load more spaces'}</button>}

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { chooseFromAccountMenu, emit, launch, type Launched } from './launch.js';
 
 let run: Launched;
@@ -25,7 +25,8 @@ test('Tools lists every tool by your connection, from the sidebar or the Account
   await expect(page.getByTestId('tools')).toHaveCount(0);
   await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Connected tools…');
   await expect(page.getByTestId('tools')).toBeVisible();
-  await expect.poll(() => run.calls().filter(call => call.path === '/v4/person/tools')).toHaveLength(2);
+  // Home reads the tools too, on sign-in and on Back: it needs to know whether meetings are turned on.
+  await expect.poll(() => run.calls().filter(call => call.path === '/v4/person/tools')).toHaveLength(4);
 });
 
 test('Tools is covered while ECHO is concealed and returns on resume', async () => {
@@ -126,59 +127,69 @@ test('a stopped connection needs attention and reconnects; Manage disconnects on
 });
 
 
-test('Granola browsing requires explicit retention, then offers personal review with transcript sharing off', async ({}, testInfo) => {
-  run = await launch('granola');
-  const { page } = run;
+/** Adds the fixture meeting through Tools → Granola, so its decision reaches Home. */
+async function addMeeting(page: Page) {
   await page.getByTestId('sidebar-tools').click();
   await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
   const meetings = page.getByRole('region', { name: 'Personal meetings' });
   await expect(meetings).toContainText('ari@example.test · EchoBrain');
   await meetings.getByLabel('Granola folder').selectOption({ label: 'ECHO (1)' });
-  await meetings.getByRole('button', { name: 'Browse meetings' }).click();
   await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
   const add = meetings.getByRole('button', { name: 'Add to ECHO', exact: true });
   await expect(add).toBeDisabled();
-  expect(run.calls().filter(call => call.body?.operation === 'import')).toHaveLength(0);
   await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
   await add.click();
-  await expect(meetings.getByRole('button', { name: 'Pilot planning', exact: true })).toHaveCount(2);
-  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).last().click();
-  await expect(meetings.getByLabel('Share the transcript with the selected audience')).not.toBeChecked();
-  await meetings.getByRole('radio', { name: 'Only me' }).check();
-  await meetings.getByRole('button', { name: 'Approve', exact: true }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath('granola-review.png') });
-  await meetings.getByRole('button', { name: 'Approve', exact: true }).click();
-  await expect.poll(() => run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
+  await expect(meetings.getByRole('status')).toContainText('Added.');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('sidebar-home').click();
+  return meetings;
+}
+
+test('a meeting added through Granola reaches Home as a decision to approve, with transcript sharing off', async ({}, testInfo) => {
+  run = await launch('granola');
+  const { page } = run;
+  await expect(page.getByTestId('home-clear')).toContainText('Nothing needs you');
+  await addMeeting(page);
   expect(run.calls().find(call => call.body?.operation === 'import')?.body).toMatchObject({ retain: true, project_id: null });
+  const row = page.getByTestId('need-row');
+  await expect(row).toHaveCount(1);
+  await expect(row).toHaveAttribute('data-kind', 'approve');
+  await expect(row).toContainText('Pilot planning');
+  await expect(page.getByTestId('sidebar-badge')).toHaveText('1');
+  await page.screenshot({ path: testInfo.outputPath('home-needs-you.png') });
+  await row.click();
+  const card = page.getByTestId('decision');
+  await expect(card).toContainText('Approve this decision?');
+  await expect(card).toContainText('Launch the pilot next week.');
+  await expect(card.getByLabel('Share the transcript with the selected audience')).not.toBeChecked();
+  await card.getByRole('radio', { name: 'Only me' }).check();
+  await page.screenshot({ path: testInfo.outputPath('decision-approve.png') });
+  await card.getByTestId('decision-approve').click();
+  await expect.poll(() => run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
   expect(run.calls().find(call => call.body?.operation === 'review')?.body).toMatchObject({
     action: 'approve', share_transcript: false, project_ids: [], owners: [
       { signal_id: 'act-1', owner: 'Rafael Moreno' },
       { signal_id: 'act-2', owner: 'Mina Patel' },
     ],
   });
+  // Back on Home: the row says the check is on its way, then that it found what it changes.
+  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('toast')).toContainText('Approved');
+  await expect(page.getByTestId('need-row')).toHaveAttribute('data-kind', /checking|impact/);
 });
 
 test('approves a meeting into two projects with an edited owner', async () => {
   run = await launch('granola');
   const { page } = run;
-  await page.getByTestId('sidebar-tools').click();
-  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
-  const meetings = page.getByRole('region', { name: 'Personal meetings' });
-  await meetings.getByLabel('Granola folder').selectOption({ label: 'ECHO (1)' });
-  await meetings.getByRole('button', { name: 'Browse meetings' }).click();
-  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
-  await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
-  await meetings.getByRole('button', { name: 'Add to ECHO', exact: true }).click();
-  await expect(meetings.getByRole('button', { name: 'Pilot planning', exact: true })).toHaveCount(2);
-  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).last().click();
-
-  await meetings.getByRole('radio', { name: 'Projects' }).check();
-  await expect(meetings.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
-  await meetings.getByRole('checkbox', { name: 'Supplier review' }).check();
-  await meetings.getByLabel('Owner for: Send the revised quote').fill('Rafael M.');
-  await meetings.getByLabel('Owner for: Confirm the trace').fill('');
-  await meetings.getByRole('button', { name: 'Approve', exact: true }).click();
-
+  await addMeeting(page);
+  await page.getByTestId('need-row').click();
+  const card = page.getByTestId('decision');
+  await expect(card.getByRole('radio', { name: /Thermostat redesign/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(card.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
+  await card.getByRole('checkbox', { name: 'Supplier review' }).check();
+  await card.getByLabel('Owner for: Send the revised quote').fill('Rafael M.');
+  await card.getByLabel('Owner for: Confirm the trace').fill('');
+  await card.getByTestId('decision-approve').click();
   await expect.poll(() => run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
   const body = run.calls().find(call => call.body?.operation === 'review')?.body;
   expect(body).toMatchObject({ action: 'approve', share_transcript: false, owners: [{ signal_id: 'act-1', owner: 'Rafael M.' }] });
@@ -188,13 +199,9 @@ test('approves a meeting into two projects with an edited owner', async () => {
 test('shows that the meeting was already approved in Slack', async () => {
   run = await launch('granola-decided-in-slack');
   const { page } = run;
-  await page.getByTestId('sidebar-tools').click();
-  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
-  const meetings = page.getByRole('region', { name: 'Personal meetings' });
-  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
-  await meetings.getByRole('button', { name: 'Approve', exact: true }).click();
-  await expect(meetings.getByRole('status')).toHaveText('Already approved in Slack');
-  await expect(meetings).toContainText('approved · Approved in Slack');
+  await page.getByTestId('need-row').click();
+  await page.getByTestId('decision-approve').click();
+  await expect(page.getByTestId('toast')).toHaveText('Already approved in Slack');
 });
 
 test('Granola saves a selected folder while its initial baseline is preparing', async () => {
@@ -207,23 +214,41 @@ test('Granola saves a selected folder while its initial baseline is preparing', 
   await meetings.getByLabel('Save to').selectOption({ label: 'Apollo' });
   await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
   await meetings.getByRole('button', { name: 'Use folder for automatic import' }).click();
-  await expect(meetings).toContainText('Preparing automatic import: ECHO → Apollo.');
-  await expect(meetings.getByRole('status')).toHaveText('Folder saved. Existing history stays in Granola until you import it.');
+  await expect(meetings.getByTestId('meeting-watch')).toContainText('ECHO → Apollo');
+  await expect(meetings.getByTestId('meeting-watch')).toContainText('Preparing automatic import');
+  await expect(meetings.getByRole('status')).toContainText('Folder saved.');
   await meetings.getByRole('button', { name: 'Refresh', exact: true }).click();
-  await expect(meetings).toContainText('Automatic import active: ECHO → Apollo.');
+  await expect(meetings.getByTestId('meeting-watch')).toContainText('Automatic import active');
   expect(run.calls().find(call => call.body?.operation === 'watch')?.body).toMatchObject({ folder_id: '00000000-0000-4000-8000-000000000011', project_id: 'prj_11111111-1111-4111-8111-111111111111', retain: true });
 });
 
-test('Granola browsing failure leaves retained meetings available for review', async () => {
+test('a Granola outage still lets a retained meeting be approved from Home', async () => {
   run = await launch('granola-browse-unavailable');
   const { page } = run;
-  await page.getByTestId('sidebar-tools').click();
-  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
-  const meetings = page.getByRole('region', { name: 'Personal meetings' });
-  await expect(meetings.getByRole('status')).toBeVisible();
-  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click({ timeout: 5_000 });
-  await expect(meetings.getByLabel('Share the transcript with the selected audience')).not.toBeChecked();
-  await meetings.getByRole('button', { name: 'Approve', exact: true }).click();
-  await expect(meetings).toContainText('approved');
+  await page.getByTestId('need-row').click({ timeout: 5_000 });
+  const card = page.getByTestId('decision');
+  await expect(card.getByLabel('Share the transcript with the selected audience')).not.toBeChecked();
+  await card.getByTestId('decision-approve').click();
+  await expect(page.getByTestId('toast')).toContainText('Approved');
   expect(run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
+});
+
+test('Home and the decision card hide meeting content while ECHO is concealed', async () => {
+  run = await launch('granola-browse-unavailable');
+  const { page, app } = run;
+  await expect(page.getByTestId('need-row')).toContainText('Pilot planning');
+  await emit(app, 'echo-test:conceal');
+  await expect(page.getByTestId('concealed')).toBeVisible();
+  await expect(page.getByTestId('need-row')).toHaveCount(0);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await emit(app, 'echo-test:resume');
+  await page.getByTestId('need-row').click();
+  const owner = page.getByLabel('Owner for: Send the revised quote');
+  await owner.fill('Edited owner');
+  await emit(app, 'echo-test:conceal');
+  await expect(page.getByTestId('concealed')).toBeVisible();
+  await expect(page.getByTestId('decision')).toHaveCount(0);
+  await expect(page.locator('body')).not.toContainText('Pilot planning');
+  await emit(app, 'echo-test:resume');
+  await expect(owner).toHaveValue('Edited owner');
 });
