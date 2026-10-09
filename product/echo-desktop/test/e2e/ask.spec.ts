@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
+import { captureOpenExternal } from './native.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
@@ -31,11 +32,7 @@ test('global Ask reads Jira live and opens its ticket citation', async () => {
   const { page, app } = run;
   const question = 'Open one Jira ticket I can access and tell me its title.';
   const permalink = 'https://example.atlassian.net/browse/ECHO-7';
-  await app.evaluate(({ shell }) => {
-    (globalThis as { openedTickets?: string[] }).openedTickets = [];
-    shell.openExternal = async url => { (globalThis as { openedTickets?: string[] }).openedTickets!.push(url); };
-  });
-  const opened = () => app.evaluate(() => (globalThis as { openedTickets?: string[] }).openedTickets);
+  const opened = await captureOpenExternal(app);
   await askFromHome(page, question);
   await expect(page.getByTestId('answer')).toBeVisible();
   expect(run.calls().filter(call => /^\/v5\/person\/ask$/.test(call.path)).map(call => ({ path: call.path, body: call.body })))
@@ -59,17 +56,14 @@ for (const [tool, label] of [['notion', 'Notion'], ['knowledge-base', 'Knowledge
     run = await launch(`ask-page-${tool}`);
     const { page, app } = run;
     const permalink = `https://${tool}.example.test/pages/12345?view=current`;
-    await app.evaluate(({ shell }) => {
-      (globalThis as { openedSources?: string[] }).openedSources = [];
-      shell.openExternal = async url => { (globalThis as { openedSources?: string[] }).openedSources!.push(url); };
-    });
+    const opened = await captureOpenExternal(app);
     await askFromHome(page, 'When does the launch begin?');
     await page.getByTestId('citation').click();
     const pane = page.getByTestId('source-pane');
     await expect(pane).toContainText(`${label} · Page`);
     await expect(pane).not.toContainText('Confluence');
     await pane.getByRole('button', { name: `Open in ${label}` }).click();
-    await expect.poll(() => app.evaluate(() => (globalThis as { openedSources?: string[] }).openedSources)).toEqual([permalink]);
+    await expect.poll(opened).toEqual([permalink]);
     expect(evidenceReads()).toHaveLength(0);
   });
 }
@@ -293,12 +287,7 @@ test('a Slack citation survives the client and IPC, keeps its label, and opens o
   run = await launch('ask-slack');
   const { page, app } = run;
   const permalink = 'https://acme.slack.com/archives/C01ABCDEF/p1758873600000100?thread_ts=1758873600.000100';
-  // The actual main-process opener runs, but its browser call is captured by the test.
-  await app.evaluate(({ shell }) => {
-    (globalThis as { openedSlack?: string[] }).openedSlack = [];
-    shell.openExternal = async url => { (globalThis as { openedSlack?: string[] }).openedSlack!.push(url); };
-  });
-  const opened = () => app.evaluate(() => (globalThis as { openedSlack?: string[] }).openedSlack);
+  const opened = await captureOpenExternal(app);
   await askFromHome(page, 'What did Maya confirm?');
   await expect(page.getByTestId('statement-text')).toHaveText([
     'We agreed to ship Apollo with annual plans first.', 'Maya confirmed the launch in Slack.',

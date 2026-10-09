@@ -48,8 +48,9 @@ test('signing in lands on Home, and signing in again as the same person keeps th
   await expect(page.getByTestId('compose-body')).toHaveValue('Half a thought');
 });
 
-test('the weekly sign-in works from a session left under a refresh claim', async () => {
+test('a session left under a refresh claim by the weekly expiry shows sign-in at once, and signing in works', async () => {
   run = await launch('expired-claim');
+  await expect(run.page.getByTestId('signed-out')).toBeVisible({ timeout: 2500 });
   await signIn(run.page);
 });
 
@@ -65,7 +66,7 @@ test('an expired access token is refreshed once, before the calls that need it',
   expect(refreshes()).toHaveLength(1);
 });
 
-test('a refresh that never left the machine keeps you signed in, and status alone never refreshes', async () => {
+test('a refresh that never left the machine keeps you signed in, status alone never refreshes, and a note written then is not sent but refreshes again', async () => {
   run = await launch('refresh-offline');
   const { page, app } = run;
   await expect(page.getByTestId('home-error')).toContainText('ECHO cannot be reached. Check your connection');
@@ -80,13 +81,8 @@ test('a refresh that never left the machine keeps you signed in, and status alon
   await expect.poll(statuses).toBe(before + 1);
   await expect(page.getByTestId('home-error')).toBeVisible();
   expect(refreshes()).toHaveLength(3);
-});
 
-test('a note written while the refresh cannot leave the machine is not sent, and that call refreshes again', async () => {
-  run = await launch('refresh-offline');
-  const { page } = run;
-  await expect(page.getByTestId('home-error')).toBeVisible();
-  await expectOfflineStartup();
+  // A note written while the refresh cannot leave the machine: that call refreshes again.
   const startupRefreshes = refreshes().length;
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Offline note');

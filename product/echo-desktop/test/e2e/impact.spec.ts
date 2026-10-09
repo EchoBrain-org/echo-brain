@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { launch, type Launched } from './launch.js';
+import { captureOpenExternal } from './native.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
@@ -36,21 +37,14 @@ async function openImpactCard(page: Page) {
   return page.getByTestId('decision');
 }
 
-async function approveMeeting(page: Page) {
-  await approveFromHome(page);
-  // The check runs by itself; what it found waits on Home, to send to the owners.
-  return openImpactCard(page);
-}
-
 test('approving a meeting shows its impact card once the check finishes', async ({}, testInfo) => {
   run = await launch('granola');
   const { page, app } = run;
   const permalink = 'https://example.atlassian.net/browse/ECHO-12';
-  await app.evaluate(({ shell }) => {
-    (globalThis as { openedTickets?: string[] }).openedTickets = [];
-    shell.openExternal = async url => { (globalThis as { openedTickets?: string[] }).openedTickets!.push(url); };
-  });
-  const meetings = await approveMeeting(page);
+  const opened = await captureOpenExternal(app);
+  await approveFromHome(page);
+  // The check runs by itself; what it found waits on Home, to send to the owners.
+  const meetings = await openImpactCard(page);
   const impact = meetings.getByRole('region', { name: 'Impact' });
   await expect(impact.getByRole('heading', { name: 'Affected items' })).toBeVisible({ timeout: 30_000 });
   await expect(impact.getByRole('heading', { name: 'What was decided' })).toBeVisible();
@@ -65,7 +59,7 @@ test('approving a meeting shows its impact card once the check finishes', async 
   // Only outside items open in their tool; ECHO's own records do not.
   await expect(impact.getByRole('button', { name: /^Open in / })).toHaveCount(2);
   await impact.getByRole('button', { name: 'Open in Jira' }).click();
-  await expect.poll(() => app.evaluate(() => (globalThis as { openedTickets?: string[] }).openedTickets)).toEqual([permalink]);
+  await expect.poll(opened).toEqual([permalink]);
   await impact.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('impact-card.png') });
   // The card is a page of its own: no Got it. Back returns to Tell the owners?, as it was.

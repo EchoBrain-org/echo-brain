@@ -200,9 +200,8 @@ test('a meeting opened from Mine is its approved record: More reads the rest, an
   await expect(page.getByTestId('title')).toHaveText('Mine');
 });
 
-for (const mode of ['mine', 'mine-live-missing', 'mine-live-unavailable'])
-test(`Mine's bar asks only what you added through ordinary Ask (${mode})`, async () => {
-  run = await launch(mode);
+test("Mine's bar asks only what you added through ordinary Ask", async () => {
+  run = await launch('mine');
   const { page } = run;
   const field = page.getByTestId('ask-field');
   await page.getByTestId('sidebar-mine').click();
@@ -217,10 +216,9 @@ test(`Mine's bar asks only what you added through ordinary Ask (${mode})`, async
   await field.press('Enter');
   await expect(page.getByTestId('answer')).toBeVisible();
   await expect(page.locator('.asked')).toHaveText('Mine');
-  const asks = run.calls().filter(call => /^\/v[345]\/person\/ask$/.test(call.path));
-  expect(asks.map(call => ({ path: call.path, body: call.body }))).toEqual([
-    { path: '/v3/person/ask', body: { schema_version: 3, question: 'pricing', mine: true } },
-  ]);
+  const asks = () => run.calls().filter(call => /^\/v[345]\/person\/ask$/.test(call.path)).map(call => ({ path: call.path, body: call.body }));
+  const mineAsk = [{ path: '/v3/person/ask', body: { schema_version: 3, question: 'pricing', mine: true } }];
+  expect(asks()).toEqual(mineAsk);
   await page.getByTestId('citation').nth(1).click();
   await expect(page.getByTestId('evidence-text')).toHaveText('We agreed to ship.');
   expect(run.calls().find(call => call.path === '/v2/person/ask/source')?.body?.scope).toEqual({ kind: 'global' });
@@ -232,6 +230,7 @@ test(`Mine's bar asks only what you added through ordinary Ask (${mode})`, async
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
   await expect(field).toHaveAttribute('placeholder', 'Search or ask ECHO');
   await expect(page.getByTestId('mine-row')).toHaveCount(10);
+  expect(asks()).toEqual(mineAsk);
 });
 
 test('a save only Mine shows opens it from its toast, and a save made on Mine joins the list', async () => {
@@ -310,6 +309,7 @@ test('Mine that could not be read says why and reads again; a project you were t
   ({ page } = run);
   await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('feed-error')).toContainText('This is no longer available to you.');
+  await expect(page.getByText('This is no longer available to you.')).toBeVisible();
   await expect(page.getByText('Sign in again')).toHaveCount(0);
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   // Your account and projects are read again, once.

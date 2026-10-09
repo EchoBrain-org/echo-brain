@@ -1,7 +1,8 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { chooseFromTray, emit, launch, type Launched } from './launch.js';
+import { captureOpenExternal } from './native.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
@@ -11,13 +12,17 @@ const BEACON = 'prj_44444444-4444-4444-8444-444444444444';
 
 const settingCalls = () => run.calls().filter(call => call.path === '/v1/person/projects/rename' || call.path === '/v1/person/projects/archive' || call.path === '/v1/person/projects/leave');
 
+/** Opens Apollo and its settings menu, then the menu's item if one is named. */
+async function openApolloSetting(page: Page, item?: string): Promise<void> {
+  await page.getByTestId('sidebar-project').first().click();
+  await page.getByTestId('project-settings').click();
+  if (item) await page.getByTestId(`project-${item}`).click();
+}
+
 test('a lead renames then archives and restores a project while its existing feed remains readable', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('sidebar-project').first().click();
-
-  await page.getByTestId('project-settings').click();
-  await page.getByTestId('project-rename').click();
+  await openApolloSetting(page, 'rename');
   await page.getByTestId('project-rename-input').fill('Apollo 2');
   await page.getByTestId('project-rename-save').click();
   await expect(page.getByTestId('title')).toHaveText('Apollo 2');
@@ -70,7 +75,6 @@ test('a sidebar action targets its row without navigating and preserves member p
   await page.getByTestId('project-settings-confirm').click();
   await expect(page.getByTestId('title')).toHaveText('ECHO');
   await expect(page.getByTestId('sidebar-project')).toHaveCount(1);
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(1);
   expect(settingCalls().at(-1)?.body).toMatchObject({ kind: 'echo-project-leave-v1', project_id: BEACON });
 });
 
@@ -117,9 +121,7 @@ for (const tool of ['jira', 'confluence']) {
   test(`Capture preserves the open ${tool} project setting`, async () => {
     run = await launch();
     const { page } = run;
-    await page.getByTestId('sidebar-project').first().click();
-    await page.getByTestId('project-settings').click();
-    await page.getByTestId(`project-${tool}`).click();
+    await openApolloSetting(page, tool);
     await expect(page.getByTestId(`project-${tool}-current`)).toBeVisible();
     await emit(run.app, 'echo-test:capture');
     await expect(page.getByTestId('compose')).toHaveCount(0);
@@ -162,9 +164,7 @@ for (const role of ['member', 'lead'] as const) {
 test('a last lead is told to promote another lead before leaving', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('sidebar-project').first().click();
-  await page.getByTestId('project-settings').click();
-  await page.getByTestId('project-leave').click();
+  await openApolloSetting(page, 'leave');
   await page.getByTestId('project-settings-confirm').click();
   await expect(page.getByTestId('project-settings-error')).toHaveText('Promote another lead before leaving this project.');
   await expect(page.getByTestId('title')).toHaveText('Apollo');
@@ -173,9 +173,7 @@ test('a last lead is told to promote another lead before leaving', async () => {
 test('an unconfirmed rename is retried with its same request instead of being called successful', async () => {
   run = await launch('change-reply-lost');
   const { page } = run;
-  await page.getByTestId('sidebar-project').first().click();
-  await page.getByTestId('project-settings').click();
-  await page.getByTestId('project-rename').click();
+  await openApolloSetting(page, 'rename');
   await page.getByTestId('project-rename-input').fill('Apollo retry');
   await page.getByTestId('project-rename-save').click();
   await expect(page.getByTestId('project-settings-error')).toHaveText('This may not have been sent.');
@@ -193,9 +191,7 @@ test('an unconfirmed rename is retried with its same request instead of being ca
 test('rename does not submit an empty or unchanged name', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('sidebar-project').first().click();
-  await page.getByTestId('project-settings').click();
-  await page.getByTestId('project-rename').click();
+  await openApolloSetting(page, 'rename');
   await expect(page.getByTestId('project-rename-save')).toBeDisabled();
   await page.getByTestId('project-rename-input').fill('   ');
   await expect(page.getByTestId('project-rename-save')).toBeDisabled();
@@ -205,9 +201,7 @@ test('rename does not submit an empty or unchanged name', async () => {
 test('switching away conceals a project settings draft and returning preserves it', async () => {
   run = await launch();
   const { page, app } = run;
-  await page.getByTestId('sidebar-project').first().click();
-  await page.getByTestId('project-settings').click();
-  await page.getByTestId('project-rename').click();
+  await openApolloSetting(page, 'rename');
   await page.getByTestId('project-rename-input').fill('Private draft name');
   await emit(app, 'echo-test:conceal');
   await expect(page.getByTestId('concealed')).toBeVisible();
@@ -221,9 +215,7 @@ test('switching away conceals a project settings draft and returning preserves i
 test('a lead maps a Jira project, asks in that scope, and removes the mapping', async () => {
   run = await launch('ask-ticket');
   const { page } = run;
-  await page.getByTestId('sidebar-project').first().click();
-  await page.getByTestId('project-settings').click();
-  await page.getByTestId('project-jira').click();
+  await openApolloSetting(page, 'jira');
   await expect(page.getByTestId('project-jira-current')).toHaveText('No Jira project mapped');
   await page.getByTestId('project-jira-input').fill('echo');
   await page.getByTestId('project-jira-save').click();
@@ -255,14 +247,8 @@ test('a lead maps accessible Confluence spaces, loads another page, asks with a 
   run = await launch('ask-confluence');
   const { page, app } = run;
   const permalink = 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345';
-  await app.evaluate(({ shell }) => {
-    (globalThis as { openedPages?: string[] }).openedPages = [];
-    shell.openExternal = async url => { (globalThis as { openedPages?: string[] }).openedPages!.push(url); };
-  });
-  const opened = () => app.evaluate(() => (globalThis as { openedPages?: string[] }).openedPages);
-  await page.getByTestId('sidebar-project').first().click();
-  await page.getByTestId('project-settings').click();
-  await page.getByTestId('project-confluence').click();
+  const opened = await captureOpenExternal(app);
+  await openApolloSetting(page, 'confluence');
   await expect(page.getByTestId('project-confluence-current')).toHaveText('No Confluence spaces mapped');
   await expect(page.getByTestId('project-confluence-spaces')).toContainText('ECHO product (ECHO)');
   await expect(page.getByTestId('project-confluence-spaces')).not.toContainText('100');
@@ -323,9 +309,7 @@ test('a member reads the saved Confluence mapping without loading a personal spa
 test('a lead keeps a saved Confluence mapping and can remove it when the personal picker is unavailable', async () => {
   run = await launch('confluence-spaces-unavailable');
   const { page } = run;
-  await page.getByTestId('sidebar-project').first().click();
-  await page.getByTestId('project-settings').click();
-  await page.getByTestId('project-confluence').click();
+  await openApolloSetting(page, 'confluence');
   await expect(page.getByTestId('project-confluence-current')).toHaveText('1 space mapped');
   await expect(page.getByTestId('project-confluence-picker-error')).toContainText('ECHO is unavailable right now. Try again.');
   await expect(page.getByTestId('project-confluence-save')).toBeDisabled();
@@ -338,9 +322,7 @@ for (const mode of ['confluence-project-conflict', 'confluence-project-reply-los
   test(`${mode}: reloads the saved mapping after an unconfirmed change without resubmitting`, async () => {
     run = await launch(mode);
     const { page } = run;
-    await page.getByTestId('sidebar-project').first().click();
-    await page.getByTestId('project-settings').click();
-    await page.getByTestId('project-confluence').click();
+    await openApolloSetting(page, 'confluence');
     await page.getByLabel(/ECHO product/).check();
     await page.getByTestId('project-confluence-save').click();
     await expect(page.getByTestId('project-confluence-error')).toContainText(mode === 'confluence-project-conflict' ? 'This setting changed.' : 'The change could not be confirmed.');
@@ -355,9 +337,7 @@ for (const mode of ['jira-project-conflict', 'jira-project-reply-lost']) {
   test(`${mode}: reloads the current setting after a failed save without silently resubmitting`, async () => {
     run = await launch(mode);
     const { page } = run;
-    await page.getByTestId('sidebar-project').first().click();
-    await page.getByTestId('project-settings').click();
-    await page.getByTestId('project-jira').click();
+    await openApolloSetting(page, 'jira');
     await page.getByTestId('project-jira-input').fill('ECHO');
     await page.getByTestId('project-jira-save').click();
     await expect(page.getByTestId('project-jira-error')).toBeVisible();
@@ -372,9 +352,7 @@ for (const mode of ['jira-project-conflict', 'jira-project-reply-lost']) {
 test('a Jira mapping save stays visible until its reply and Escape closes the settled sheet', async () => {
   run = await launch('jira-project-slow');
   const { page } = run;
-  await page.getByTestId('sidebar-project').first().click();
-  await page.getByTestId('project-settings').click();
-  await page.getByTestId('project-jira').click();
+  await openApolloSetting(page, 'jira');
   await page.getByTestId('project-jira-input').fill('ECHO');
   await page.getByTestId('project-jira-save').click();
   await expect.poll(() => run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set').length).toBe(1);
