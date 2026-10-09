@@ -3422,12 +3422,13 @@ async function readHome(mine: number, quiet: boolean): Promise<void> {
   if (quiet && homeShown(mine) && (openUnread || resultOwed || ended)) {
     [open] = await Promise.allSettled([readOpen()]);
   }
+  // A read that is no longer Home's shows nothing, so it settles nothing Home owes either.
+  const previous = homeShown(mine);
+  if (!previous) return;
   if (open.status === 'rejected' || open.value !== null) openUnread = open.status === 'rejected';
   // A check that ended owes a read of what it found; only a read that succeeds pays it.
   if (ended) resultOwed = true;
   if (open.status === 'fulfilled' && open.value !== null) resultOwed = false;
-  const previous = homeShown(mine);
-  if (!previous) return;
   const next = {
     reviews: reviews.status === 'fulfilled' ? reviews.value.reviews : previous.reviews,
     runs: runs.status === 'fulfilled' ? runs.value.runs : previous.runs,
@@ -3546,9 +3547,9 @@ export async function markDone(item: OpenItemView): Promise<void> {
   set({ home: withRows({ ...current, closing, closeFailures: { ...current.closeFailures, [item.item_id]: failure } }) });
 }
 
-/** Open in Jira (or the item's own tool), from an item you can open: the tool checks your access when it opens. */
+/** Open in Jira (or the item's own tool), from an item ECHO opened for you: the tool checks your access when it opens. */
 export async function openItemInTool(item: OpenItemView): Promise<boolean> {
-  const source = item.current?.source;
+  const source = item.reach === 'opened' ? item.current?.source : undefined;
   return source !== undefined && 'permalink' in source ? openImpactSource(source) : false;
 }
 
@@ -3778,7 +3779,7 @@ export function closePicker(): void {
   editSend({ picker: null });
 }
 
-/** Said when a card drawn before its items changed is refused: nothing was sent. */
+/** Said when a card drawn before its items changed is refused (a `conflict`): nothing was sent. */
 const ITEMS_CHANGED = 'These items changed meanwhile. Open them again from Home.';
 
 /**
@@ -3800,25 +3801,28 @@ export async function sendToOwners(): Promise<void> {
       const pick = include ? send.picks[item.item_id] : undefined;
       return { item_id: item.item_id, include, ...(pick ? { owner_membership_id: pick.membership_id } : {}) };
     }) } });
+  // Sent, whatever page is showing now: its row leaves Home at once, and no read begun before now brings it back.
+  const home = state.home;
+  if (result.ok && home && JSON.stringify(expect()) === JSON.stringify(account)) {
+    set({ home: withRows({ ...home, sent: { ...home.sent, [send.run_id]: homeReads } }) });
+  }
   if (!sendShown(mine)) return;
   if (!result.ok) {
-    const changed = result.failure.code === 'stale_access_state';
+    // Items that changed since the card was drawn are a conflict, not lost access: the account stays.
+    const changed = result.failure.code === 'conflict';
     if (!changed) accountLost(result.failure);
     editSend({ busy: false, failure: changed ? ITEMS_CHANGED : message(result.failure) });
     return;
   }
-  // Sent: its row leaves Home at once, and no read begun before now brings it back.
-  const home = state.home;
-  if (home) set({ home: withRows({ ...home, sent: { ...home.sent, [send.run_id]: homeReads } }) });
   goHome();
   set({ toast: !ticked ? 'Nothing to change' : kept ? 'Kept on your Home' : 'Sent' });
 }
 
-/** Details: the decision's page with its full impact card. Back returns to the card as it was. */
+/** Details: the decision's page with its full impact card. Back returns to the card as it was; not while it is sending. */
 export function sendDetails(): void {
   const send = sendShown();
   const decision = sendDecision();
-  if (!send || !decision) return;
+  if (!send || !decision || send.busy) return;
   // A Send row's check is done; Home's runs have it unless Tell the owners? came from elsewhere.
   const run: PersonRunV1 = state.home?.runs.find(entry => entry.run_id === send.run_id) ?? {
     run_id: send.run_id, trigger: 'approved_record', event_ref: decision.approval_id, state: 'done', error_code: null,
@@ -3856,13 +3860,17 @@ function setLine(key: 'impactLine' | 'projectLine', line: ItemsLine): void {
   set(key === 'impactLine' ? { impactLine: line } : { projectLine: line });
 }
 
-/** A scope's items read for its line. A read the person did not ask for fails quietly, unless the account is gone. */
+/**
+ * A scope's counts read for its line: counts and stages only, so no item is
+ * opened in its tool (opening the line lists them). A read the person did not
+ * ask for fails quietly, unless the account is gone.
+ */
 async function loadLine(key: 'impactLine' | 'projectLine', scope: ItemsLine['scope'], id: string): Promise<void> {
   const account = expect();
   if (!account || state.concealed) return;
   const mine = ++seq;
   setLine(key, { scope, id, seq: mine, loading: true, summary: null, stage: null, yours: false, busy: false });
-  const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope, id } });
+  const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope, id, summary_only: true } });
   if (state[key]?.seq !== mine) return;
   if (!result.ok) {
     setLine(key, { ...state[key]!, loading: false });
@@ -3871,9 +3879,9 @@ async function loadLine(key: 'impactLine' | 'projectLine', scope: ItemsLine['sco
   }
   const page = result.value as OpenItemsView;
   const stage = scope === 'record' ? page.stages.find(entry => entry.record_sha256 === id) ?? null : null;
-  let yours = page.items.some(item => item.approver.membership_id === account.membership_id);
-  // A failed check has no items to name its approver: your own runs say whether Try again is yours.
-  if (!yours && stage?.state === 'failed') {
+  // Counts name no approver: your own runs say whether the check is yours, when Send or Try again would show.
+  let yours = false;
+  if (stage !== null && (stage.state === 'failed' || page.summary.unsent > 0)) {
     const runs = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'list' } });
     if (state[key]?.seq !== mine) return;
     yours = runs.ok && (runs.value as RunsResults['list']).runs.some(run => run.run_id === stage.run_id);

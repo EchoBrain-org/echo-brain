@@ -1,10 +1,11 @@
 /**
- * Who may see and act on an open item (open items and Home v1, section 4;
- * ADR-0033). Every open-items operation asks this function; nothing else
- * decides access. These rules are a foundation (founder, 2026-10-08): a later
- * organization rule, such as an admin or an org-wide view, changes this
- * function and its facts, not the table or the queries. An outside item's
- * words stay behind `opens_item` whatever the rules become (ADR-0032).
+ * Who may see and act on an open item, and who may send a run's items (open
+ * items and Home v1, section 4; ADR-0033). Every open-items operation asks
+ * these functions; nothing else decides access. These rules are a foundation
+ * (founder, 2026-10-08): a later organization rule, such as an admin or an
+ * org-wide view, changes these functions and their facts, not the table or
+ * the queries. An outside item's words stay behind `opens_item` whatever the
+ * rules become (ADR-0032).
  */
 export interface OpenItemFactsV1 {
   readonly viewer: string;                     // membership ids throughout
@@ -36,6 +37,8 @@ export interface OpenItemFactsV1 {
 }
 export interface OpenItemAccessV1 {
   readonly see_row: boolean;
+  /** The viewer may see the decision part (title, first line, approval time, projects). */
+  readonly see_decision: boolean;
   readonly see_outside: boolean;
   readonly set_state: boolean;
   readonly assign: boolean;
@@ -52,10 +55,17 @@ export function openItemAccessV1(facts: OpenItemFactsV1): OpenItemAccessV1 {
   const waits_on = !unsent && facts.owner_active ? 'owner' as const : facts.approver_active ? 'approver' as const : 'leads' as const;
   return Object.freeze({
     see_row,
+    // An owner who cannot read the decision sees who sent the item, never the decision itself.
+    see_decision: facts.reads_decision,
     see_outside: see_row && facts.opens_item === true,
     set_state: see_row && !unsent && (approver || owner),
     assign: see_row && !unsent && (approver || owner || facts.leads_decision_project),
     waits_on,
     waits_on_viewer: see_row && !closed && (waits_on === 'owner' ? owner : waits_on === 'approver' ? approver : facts.leads_decision_project),
   });
+}
+
+/** Who may send a run's items: its approver, while they can read the decision. */
+export function openItemSendAccessV1(facts: { readonly viewer: string; readonly approver: string; readonly reads_decision: boolean }): { readonly send: boolean } {
+  return Object.freeze({ send: facts.viewer === facts.approver && facts.reads_decision });
 }

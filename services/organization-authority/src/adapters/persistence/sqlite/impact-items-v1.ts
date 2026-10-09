@@ -137,7 +137,18 @@ export class SqliteImpactItemsV1 {
   }
 
   /**
-   * One immediate transaction. Replayed when any item of the run carries `command_id`.
+   * What a send of the run under `command_id` already did, reported from its
+   * items as they stand now; undefined when no item of the run carries it.
+   */
+  sentBy(runId: string, commandId: string): { readonly sent: number; readonly not_relevant: number } | undefined {
+    const states = this.database.prepare('SELECT state FROM authority_impact_items_v1 WHERE run_id=? AND send_command_id=?').pluck().all(runId, commandId) as ImpactItemStateV1[];
+    if (states.length === 0) return undefined;
+    const notRelevant = states.filter(state => state === 'not_relevant').length;
+    return Object.freeze({ sent: states.length - notRelevant, not_relevant: notRelevant });
+  }
+
+  /**
+   * One immediate transaction. Replayed when any item of the run carries `command_id` (`sentBy`).
    * Stale when the run has no unsent item or `choices` is not exactly its unsent items.
    * Included → open (with the picked owner, `owner_match = picked`, when one is given and differs);
    * excluded → not_relevant. Sets sent_at, send_command_id, state_set_by/at = `by`.
@@ -145,14 +156,10 @@ export class SqliteImpactItemsV1 {
   send(input: { readonly run_id: string; readonly by: string; readonly command_id: string; readonly choices: readonly ImpactSendChoiceV1[] }):
     { readonly kind: 'sent' | 'replayed'; readonly sent: number; readonly not_relevant: number } | { readonly kind: 'stale' } {
     return this.immediate(() => {
-      const items = this.database.prepare('SELECT item_id, owner_membership_id, state, send_command_id FROM authority_impact_items_v1 WHERE run_id=?')
-        .all(input.run_id) as Pick<StoredItemV1, 'item_id' | 'owner_membership_id' | 'state' | 'send_command_id'>[];
-      const earlier = items.filter(item => item.send_command_id === input.command_id);
-      if (earlier.length > 0) {
-        // A replay reports the command's items as they stand now.
-        const notRelevant = earlier.filter(item => item.state === 'not_relevant').length;
-        return Object.freeze({ kind: 'replayed' as const, sent: earlier.length - notRelevant, not_relevant: notRelevant });
-      }
+      const earlier = this.sentBy(input.run_id, input.command_id);
+      if (earlier !== undefined) return Object.freeze({ kind: 'replayed' as const, ...earlier });
+      const items = this.database.prepare('SELECT item_id, owner_membership_id, state FROM authority_impact_items_v1 WHERE run_id=?')
+        .all(input.run_id) as Pick<StoredItemV1, 'item_id' | 'owner_membership_id' | 'state'>[];
       const unsent = new Map(items.filter(item => item.state === 'unsent').map(item => [item.item_id, item]));
       const chosen = new Set(input.choices.map(choice => choice.item_id));
       if (unsent.size === 0 || chosen.size !== input.choices.length || chosen.size !== unsent.size || [...chosen].some(id => !unsent.has(id))) {

@@ -20,7 +20,10 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * the caller, `items` and `item` show the rows the caller can see, and `send`,
  * `set_state` and `assign` change them. A row's own fields are ECHO's: its
  * decision is shown only to a viewer who can read it, and what the item says
- * now only to a viewer who opened it in its tool in this request.
+ * now only to a viewer who opened it in its tool in this request. Each row
+ * says how that live read went (`reach`), so an outage is never shown as lost
+ * access. `items` with `summary_only` answers the counts and stages alone and
+ * opens nothing.
  */
 export const PERSON_RUNS_PATH_V1 = '/v1/person/runs';
 
@@ -32,7 +35,9 @@ export type PersonRunsRequestV1 =
   | { readonly schema_version: 1; readonly operation: 'list' }
   | { readonly schema_version: 1; readonly operation: 'home' }
   | { readonly schema_version: 1; readonly operation: 'start' | 'retry' | 'view'; readonly run_id: string }
-  | { readonly schema_version: 1; readonly operation: 'items'; readonly scope: 'mine' | 'run' | 'record' | 'project'; readonly id?: string; readonly cursor?: string }
+  | { readonly schema_version: 1; readonly operation: 'items'; readonly scope: 'mine' | 'run' | 'record' | 'project'; readonly id?: string; readonly cursor?: string;
+      /** Counts and stages only: no items, no live reads. */
+      readonly summary_only?: true }
   | { readonly schema_version: 1; readonly operation: 'item'; readonly item_id: string }
   | { readonly schema_version: 1; readonly operation: 'send'; readonly run_id: string; readonly command_id: string;
       readonly items: readonly { readonly item_id: string; readonly include: boolean; readonly owner_membership_id?: string }[] }
@@ -49,6 +54,14 @@ export type PersonOpenItemStateV1 = 'unsent' | 'open' | 'done' | 'not_relevant';
 export type PersonOpenItemVerdictV1 = 'landed' | 'still_open' | 'changed' | 'unreadable';
 export type PersonOpenItemKindV1 = 'ticket' | 'page' | 'slack_message' | 'record' | 'document';
 export type PersonOpenItemOwnerMatchV1 = 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned';
+/**
+ * How this request's live read of an item went, for this viewer. `opened`: it
+ * was read, and `current` shows it. `no_access`: the viewer's own access
+ * refused it. `unavailable`: the read failed otherwise (an outage, a rate
+ * limit, a timeout), which says nothing about access. `not_read`: no read was
+ * tried for it in this request.
+ */
+export type PersonOpenItemReachV1 = 'opened' | 'no_access' | 'unavailable' | 'not_read';
 export interface PersonOpenItemPersonV1 { readonly membership_id: string; readonly name: string; readonly active: boolean }
 /** Only for a viewer who can read the decision now. ECHO data. */
 export interface PersonOpenItemDecisionV1 {
@@ -77,6 +90,8 @@ export interface PersonOpenItemV1 {
   readonly created_at: string; readonly sent_at: string | null; readonly state_set_at: string | null;
   readonly check: { readonly verdict: PersonOpenItemVerdictV1; readonly checked_at: string; readonly checked_by: string } | null;
   readonly can: { readonly set_state: boolean; readonly assign: boolean };
+  /** `current` comes exactly with `opened`. */
+  readonly reach: PersonOpenItemReachV1;
 }
 export interface PersonHomeSendV1 {
   readonly run_id: string; readonly decision: PersonOpenItemDecisionV1;
@@ -144,6 +159,7 @@ const KINDS = ['ticket', 'page', 'slack_message', 'record', 'document'] as const
 const OWNER_MATCHES = ['jira_account', 'name', 'picked', 'approver', 'reassigned'] as const;
 const RELATIONS = ['conflicts', 'needs_updating'] as const;
 const WAITS_ON = ['owner', 'approver', 'leads'] as const;
+const REACHES = ['opened', 'no_access', 'unavailable', 'not_read'] as const;
 const CURRENT_DETAILS = ['assignee', 'status', 'due_at'] as const;
 /** Names, decided lines and what an item says now are bounded as the impact card bounds them. */
 const LIMITS = PERSON_IMPACT_CARD_LIMITS_V1;
@@ -240,8 +256,8 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
   const operation = request.operation;
   if (typeof operation !== 'string' || !Object.hasOwn(REQUEST_KEYS, operation)) fail('Runs request operation is invalid');
   const kind = operation as PersonRunsRequestV1['operation'];
-  // `items` may leave out its scope id and its cursor.
-  const optional = kind === 'items' ? ['id', 'cursor'].filter(key => Object.hasOwn(request, key)) : [];
+  // `items` may leave out its scope id and its cursor, and may ask for its counts only.
+  const optional = kind === 'items' ? ['id', 'cursor', 'summary_only'].filter(key => Object.hasOwn(request, key)) : [];
   assertExactKeys(request, ['schema_version', 'operation', ...REQUEST_KEYS[kind], ...optional], 'Runs request');
   if (request.schema_version !== 1) fail('Runs request version is invalid');
   switch (kind) {
@@ -256,10 +272,15 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       const scope = oneOf(request.scope, SCOPES, 'Runs request scope');
       // `mine` names no id; every other scope names its run, record or project.
       if ((scope === 'mine') === Object.hasOwn(request, 'id')) fail('Runs request scope id is invalid');
+      const counts = Object.hasOwn(request, 'summary_only');
+      if (counts && request.summary_only !== true) fail('Runs request summary_only is invalid');
+      // Counts cover the whole scope at once: there is no next page to ask for.
+      if (counts && Object.hasOwn(request, 'cursor')) fail('Runs request summary_only takes no cursor');
       return Object.freeze({
         schema_version: 1 as const, operation: kind, scope,
         ...(scope === 'mine' ? {} : { id: scopeId(scope, request.id) }),
         ...(Object.hasOwn(request, 'cursor') ? { cursor: matching(request.cursor, CURSOR, 'Runs request cursor') } : {}),
+        ...(counts ? { summary_only: true as const } : {}),
       });
     }
     case 'item':
@@ -365,8 +386,11 @@ function openItem(value: unknown): PersonOpenItemV1 {
   const entry = asEnumerableRecord(value, 'Open item');
   // What a viewer may not see is left out, never sent empty.
   const parts = ['decision', 'current'].filter(key => Object.hasOwn(entry, key));
-  assertExactKeys(entry, ['item_id', 'run_id', 'kind', 'relation', 'expected', 'approver', 'owner', 'waits_on', 'state', 'created_at', 'sent_at', 'state_set_at', 'check', 'can', ...parts], 'Open item');
+  assertExactKeys(entry, ['item_id', 'run_id', 'kind', 'relation', 'expected', 'approver', 'owner', 'waits_on', 'state', 'created_at', 'sent_at', 'state_set_at', 'check', 'can', 'reach', ...parts], 'Open item');
   assertTimestamp(entry.created_at, 'Open item created_at');
+  const reach = oneOf(entry.reach, REACHES, 'Open item reach');
+  // What the item says now comes exactly with a read that opened it.
+  if ((reach === 'opened') !== Object.hasOwn(entry, 'current')) fail('Open item reach does not match its current part');
   return Object.freeze({
     item_id: itemId(entry.item_id, 'Open item id'), run_id: runId(entry.run_id, 'Open item run id'), kind: oneOf(entry.kind, KINDS, 'Open item kind'),
     ...(Object.hasOwn(entry, 'decision') ? { decision: decision(entry.decision) } : {}),
@@ -376,7 +400,7 @@ function openItem(value: unknown): PersonOpenItemV1 {
     approver: person(entry.approver, 'Open item approver'), owner: owner(entry.owner),
     waits_on: oneOf(entry.waits_on, WAITS_ON, 'Open item waits_on'), state: oneOf(entry.state, ITEM_STATES, 'Open item state'),
     created_at: entry.created_at as string, sent_at: timestampOrNull(entry.sent_at, 'Open item sent_at'), state_set_at: timestampOrNull(entry.state_set_at, 'Open item state_set_at'),
-    check: check(entry.check), can: can(entry.can),
+    check: check(entry.check), can: can(entry.can), reach,
   });
 }
 

@@ -75,7 +75,9 @@ test('a decision reader who cannot open an item sees what it is, never what it s
   await expect(row).toContainText('A Jira ticket you can\'t open → confirm the trace by Friday');
   await expect(row).toContainText('Jira ticket you own · from Pilot planning');
   await expect(row.getByRole('button', { name: /^Open in / })).toHaveCount(0);
-  await expect(row.getByRole('button', { name: 'Done: A Jira ticket you can\'t open' })).toBeVisible();
+  // Two items Ari can't open would share a name: each Done says what the decision requires of its item.
+  await expect(row.getByRole('button', { name: 'Done: A Jira ticket you can\'t open → confirm the trace by Friday', exact: true })).toBeVisible();
+  await expect(app.page.getByRole('button', { name: 'Done: A Jira ticket you can\'t open → order six weeks ahead', exact: true })).toBeVisible();
   const home = await app.page.content();
   for (const withheld of WITHHELD) expect(home).not.toContain(withheld);
   // The decision's items show it the same way.
@@ -126,17 +128,55 @@ test('an approved decision shows its Impact line and the project shows its open 
   const impact = app.page.getByTestId('impact-line');
   await expect(impact).toContainText('Impact · 2 not sent');
   await expect(impact.getByRole('button', { name: 'Send' })).toBeVisible();
-  // The line opens the decision's items, grouped by owner.
+  // The line read the decision's counts only; opening it lists the items.
+  const recordReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items' && call.body.scope === 'record')
+    .map(call => call.body?.summary_only === true);
+  expect(recordReads().length).toBeGreaterThan(0);
+  expect(recordReads().every(counts => counts)).toBe(true);
   await impact.getByRole('button', { name: /Impact/ }).click();
   const items = app.page.getByTestId('open-items');
   await expect(items.getByRole('heading', { name: 'Open items' })).toBeVisible();
   await expect(items.getByTestId('open-item')).toHaveCount(2);
   await expect(items.getByRole('region', { name: 'Mina Patel' })).toContainText('ECHO-12 · Pilot launch');
   await expect(items.getByRole('region', { name: 'Ari' })).toContainText('Thermostat PRD · Pilot scope');
+  expect(recordReads().filter(counts => !counts)).toHaveLength(1);
   // Back returns to the decision, then to the project, whose line opens its items too.
   await app.page.getByTestId('back').click();
   await expect(impact).toBeVisible();
   await app.page.getByTestId('back').click();
   await line.click();
   await expect(items.getByTestId('open-item')).toHaveCount(2);
+});
+
+test('an outage is not shown as lost access', async () => {
+  app = await launch('granola-owner-outage');
+  // Jira did not answer for this item just now: ECHO says so, and never that Ari lost access to it.
+  const outage = app.page.getByTestId('need-row').filter({ hasText: 'A Jira ticket ECHO couldn\'t read just now' });
+  await expect(outage).toBeVisible();
+  await expect(outage).toContainText('A Jira ticket ECHO couldn\'t read just now → confirm the trace by Friday');
+  await expect(outage.getByRole('button', { name: /^Open in / })).toHaveCount(0);
+  await expect(outage.getByRole('button', { name: 'Done: A Jira ticket ECHO couldn\'t read just now', exact: true })).toBeVisible();
+  // An item Ari truly cannot open still says so.
+  await expect(app.page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toContainText('A Jira ticket you can\'t open');
+  const home = await app.page.content();
+  for (const withheld of WITHHELD) expect(home).not.toContain(withheld);
+});
+
+test('the project line reads counts without listing items', async () => {
+  app = await launch('granola');
+  await approveFromHome(app);
+  await expect(app.page.getByTestId('need-row').filter({ hasText: 'need updating' })).toBeVisible({ timeout: 20_000 });
+  await app.page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
+  const line = app.page.getByTestId('project-line');
+  await expect(line).toContainText('2 open items · from 1 decision');
+  await expect(app.page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' })).toContainText('2 open');
+  // Counting opened nothing: every items read so far asked for the project's counts only.
+  const itemReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items')
+    .map(call => ({ scope: call.body?.scope, counts: call.body?.summary_only === true }));
+  expect(itemReads().length).toBeGreaterThan(0);
+  expect(itemReads().every(read => read.scope === 'project' && read.counts)).toBe(true);
+  // Opening the line lists its items.
+  await line.click();
+  await expect(app.page.getByTestId('open-items').getByTestId('open-item')).toHaveCount(2);
+  expect(itemReads().filter(read => !read.counts)).toEqual([{ scope: 'project', counts: false }]);
 });

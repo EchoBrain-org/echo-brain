@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
-  actionCount, impactWords, itemChange, itemFrom, itemKind, itemParts, monthDay, nameList, needUpdating, projectWords, shortNames, titleLine,
+  actionCount, impactWords, itemChange, itemFrom, itemKind, itemNames, itemParts, itemTitle, monthDay, nameList, needUpdating, projectWords, shortNames, titleLine,
 } from '../../src/renderer/needs.js';
 
 const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name: 'Mina Patel', active: true };
+/** An item you opened carries what it says now; any other, why it does not (here, by default, that you can't open it). */
 const item = (patch: Partial<OpenItemView> = {}): OpenItemView => ({
   item_id: 'itm_00000001', run_id: 'run_00000001', kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: person,
   owner: { ...person, match: 'jira_account' }, waits_on: 'owner', state: 'open', created_at: '2026-10-07T10:05:00.000Z', sent_at: '2026-10-07T11:00:00.000Z',
-  state_set_at: '2026-10-07T11:00:00.000Z', check: null, can: { set_state: true, assign: true }, ...patch,
+  state_set_at: '2026-10-07T11:00:00.000Z', check: null, can: { set_state: true, assign: true }, reach: patch.current ? 'opened' : 'no_access', ...patch,
 });
 const ticket = { kind: 'ticket' as const, tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink: 'https://example.atlassian.net/browse/ECHO-12' };
 const summary = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
@@ -52,6 +53,32 @@ describe('the words Home and Tell the owners? use', () => {
     expect(itemFrom(item())).toBe('Mina Patel');
     expect(itemFrom(item({ decision: { approval_id: 'apr_1', record_sha256: 'sha256:1', title: 'Pilot planning', first_line: null, approved_at: '2026-10-07T10:00:00.000Z', project_ids: [] } })))
       .toBe('Pilot planning');
+  });
+
+  it('names an item by how its live read went: opened, refused, an outage, or not read', () => {
+    expect(itemTitle(item({ current: { source: ticket, says_now: 'Planned.' } }))).toBe('ECHO-12 · Pilot launch');
+    expect(itemTitle(item({ reach: 'no_access' }))).toBe('A Jira ticket you can\'t open');
+    // An outage or a rate limit is not lost access.
+    expect(itemTitle(item({ reach: 'unavailable' }))).toBe('A Jira ticket ECHO couldn\'t read just now');
+    expect(itemTitle(item({ reach: 'not_read' }))).toBe('A Jira ticket');
+    expect([itemTitle(item({ kind: 'page' })), itemTitle(item({ kind: 'page', reach: 'unavailable' })), itemTitle(item({ kind: 'page', reach: 'not_read' }))])
+      .toEqual(['A page you can\'t open', 'A page ECHO couldn\'t read just now', 'A page']);
+    expect([itemTitle(item({ kind: 'slack_message' })), itemTitle(item({ kind: 'slack_message', reach: 'unavailable' })), itemTitle(item({ kind: 'slack_message', reach: 'not_read' }))])
+      .toEqual(['A Slack message you can\'t open', 'A Slack message ECHO couldn\'t read just now', 'A Slack message']);
+    expect(itemParts(item({ reach: 'unavailable' }))).toEqual({ title: 'A Jira ticket ECHO couldn\'t read just now', change: '→ launch next week' });
+  });
+
+  it('tells two items that would share a name apart by what the decision requires of each', () => {
+    const names = itemNames([
+      item({ item_id: 'itm_00000001', expected: 'confirm the trace by Friday' }), item({ item_id: 'itm_00000002', expected: 'order six weeks ahead' }),
+      item({ item_id: 'itm_00000003', reach: 'unavailable' }), item({ item_id: 'itm_00000004', current: { source: ticket, says_now: 'Planned.' } }),
+    ]);
+    expect(Object.fromEntries(names)).toEqual({
+      itm_00000001: 'A Jira ticket you can\'t open → confirm the trace by Friday', itm_00000002: 'A Jira ticket you can\'t open → order six weeks ahead',
+      itm_00000003: 'A Jira ticket ECHO couldn\'t read just now', itm_00000004: 'ECHO-12 · Pilot launch',
+    });
+    // One such item keeps its plain name.
+    expect(itemNames([item()]).get('itm_00000001')).toBe('A Jira ticket you can\'t open');
   });
 
   it('says what a decision changed, and what a project has open', () => {

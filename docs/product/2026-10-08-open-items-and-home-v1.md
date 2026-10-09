@@ -180,21 +180,22 @@ the decision (it was approver-only), rebuilt with the viewer's access.
 
 These are this round's rules, not the final ones: the founder wants a
 foundation to build on once the business rules inside an organization are
-clearer. So every decision below is made in **one access policy**, a pure
-function next to the open-items service:
+clearer. So every decision below is made in **one access policy**, pure
+functions next to the open-items service:
 
 ```
-policy(viewer, item, facts) → { see_row, see_outside, set_state, assign }
+policy(viewer, item, facts) → { see_row, see_decision, see_outside, set_state, assign }
+send_policy(viewer, run)    → { send }   (its approver, while they can read the decision)
 
 facts: can the viewer read the decision now; can they open the item now;
        the viewer's roles in the decision's projects; whether the approver
        and the owner are still active members
 ```
 
-Every operation calls it, and nothing else decides access. A later rule (an
+Every operation calls them, and nothing else decides access. A later rule (an
 organization admin, an org-wide view, delegated roles, a team lead seeing
-their reports' items) is a change to this function and its inputs, not to the
-table or the queries. The stored facts (approver, owner, how the owner was
+their reports' items) is a change to these functions and their inputs, not to
+the table or the queries. The stored facts (approver, owner, how the owner was
 matched, who clicked and checked last, the decision) are what such rules will
 need.
 
@@ -208,14 +209,21 @@ exact check the record reader uses), or when it was sent to them as owner.
 
 | Part | Shown to |
 | --- | --- |
-| Decision line, `expected`, owner, approver, stage, age | everyone who sees the row |
+| The decision: its title, first decided line, approval time and projects | viewers who can read the decision (`see_decision`) |
+| `expected`, owner, approver, stage, age | everyone who sees the row |
 | Last check: verdict and time | everyone who sees the row |
 | Item title, what it says now, its current assignee, status and due date | only viewers who can open the item in its tool right now (live read) |
 
-A viewer who cannot open the item sees "A Jira ticket you can't open" (or
-page, or Slack message) with the rest of the row. An owner who cannot read the
-decision sees their item, its `expected` line and who sent it, never the
-decision itself: Send is the approver's choice to tell them.
+Each row says how its live read went for this viewer (`reach`): `opened`, or
+why there are no live details. `no_access`: the viewer's own access refused
+the item. `unavailable`: the read failed for any other reason (the tool was
+down or rate limited, a read timed out, or the request's final access check
+failed), which says nothing about access. `not_read`: no read was tried in
+this request. A viewer who cannot open the item sees "A Jira ticket you can't
+open" (or page, or Slack message) with the rest of the row; an outage is
+never shown as lost access. An owner who cannot read the decision sees their
+item, its `expected` line and who sent it, never the decision itself: Send is
+the approver's choice to tell them.
 
 There is no organization-wide view and no count that includes rows the viewer
 cannot see.
@@ -292,16 +300,24 @@ All on `POST /v1/person/runs`, one envelope `{schema_version: 1, operation,
 | --- | --- | --- | --- |
 | `view` | `run_id` | card (unchanged shape) | anyone who can read the decision (was: approver only) |
 | `home` | — | Send rows; the open items that wait on the caller (Update, or Check once their last check is `changed`) and open items the caller sent whose last check is `changed`; `landed`, `waiting`, `last_checked_at`, `sweep_due` | the caller's own |
-| `items` | `scope: mine \| run \| record \| project`, `id?`, `cursor?` | unsent, open and closed items the caller can see, 50 per page, oldest first; a summary of the whole scope (counts by state and last check, decisions, latest check, and per decision its open count); and each decision's impact run stage | per section 4 |
+| `items` | `scope: mine \| run \| record \| project`, `id?`, `cursor?`, `summary_only?` | unsent, open and closed items the caller can see, 50 per page, oldest first; a summary of the whole scope (counts by state and last check, decisions, latest check, and per decision its open count); and each decision's impact run stage. With `summary_only: true` (never with `cursor`): the summary and stages only, no items and no live reads | per section 4 |
 | `item` | `item_id` | one item rebuilt for the caller | per section 4 |
-| `send` | `run_id`, `command_id`, `items: [{item_id, include, owner_membership_id?}]` | `{sent, not_relevant}` | the approver |
+| `send` | `run_id`, `command_id`, `items: [{item_id, include, owner_membership_id?}]` | `{sent, not_relevant}`; a `command_id` already sent answers what it did, before any other check; items that changed since the card was drawn answer `conflict` and nothing is written | the approver, while they can read the decision |
 | `set_state` | `item_id`, `state: open \| done \| not_relevant` | `{state}` | the approver or the owner |
-| `assign` | `item_id`, `owner_membership_id` | `{owner}` | the approver, the owner, a lead of the decision's projects |
+| `assign` | `item_id`, `owner_membership_id` | `{owner}`; the item's current owner writes nothing | the approver, the owner, a lead of the decision's projects |
 | `sweep` | `scope: mine \| record \| project`, `id?` | `{run_id}` or `{state: 'nothing_to_check'}` | anyone, over items they can see |
 
 Every item read rebuilds outside parts with one live open per item shown, at
 most 50 per call. A row's own fields never include a word read from outside
-ECHO.
+ECHO. Each item carries `reach` (section 4), and `current` exactly when it is
+`opened`. A refusal by the viewer's access (`unauthorized`, `not_found` or
+`stale_access_state` from the desk, an empty read, or a read of another item)
+is `no_access`; every other failure, including a desk that cannot be bound or
+a final access check that fails, is `unavailable` and is reported as a
+content-free observation (`open_items_live_read` with where it failed and the
+error's code, never an id, a title or outside text), as is a stored card whose
+first decided line cannot be read. The project and Impact lines ask for
+`summary_only`, so showing a count opens nothing in Jira or Confluence.
 
 `meetings.reviews` rows (and `review_open`'s review) gain `first_line` (the
 proposal's first decision, else its first action; ECHO text), `action_count`
@@ -331,8 +347,13 @@ An item is at most one row per person. Its owner sees Update, or Check once
 its last check is `changed`; its approver, when not the owner, sees Check only
 when it is `changed`. A viewer who cannot open the item in its tool sees "A
 Jira ticket you can't open" (or page, or Slack message) for its title and no
-live details. A viewer who cannot read the decision sees "from Ari" (who sent
-it) instead of the meeting.
+live details. An item ECHO could not read just now (`unavailable`: an outage
+or a rate limit) reads "A Jira ticket ECHO couldn't read just now", and one
+not read in that request (`not_read`) "A Jira ticket"; only an item ECHO
+opened offers "Open in Jira". When two rows would name their buttons alike
+(two items you can't open), each name adds the item's `expected` phrase. A
+viewer who cannot read the decision sees "from Ari" (who sent it) instead of
+the meeting.
 
 Footer, under the rows and also on an empty Home (9.5): "2 landed since
 yesterday · 1 with others · checked 2 h ago" and "Mark done" when anything
@@ -350,7 +371,9 @@ and the owner as a chip, or "Pick a person" where there is no match), "Untick
 anything that's wrong. Owners get it on their Home.", "Details" (the full
 impact card), and "Send to Mina and Rafael" / "Not now". With no one but you to
 tell, the button reads "Keep on my Home"; with nothing ticked, "None of these
-need changing".
+need changing". When the items changed since the card was drawn (`conflict`),
+nothing is sent and the card says "These items changed meanwhile. Open them
+again from Home." Details waits while the card is sending.
 
 **Did it land? (9.4)**: "<meeting> · checked just now · 3 items", the decided
 line large when the scope is one decision, then "Landed · N" (ticked
@@ -362,13 +385,15 @@ item on their Home.
 **Reader, an approved decision (9.6)**: an Impact line under the title,
 "Impact · 1 open · 1 handled · 1 couldn't read · checked just now" (or "Not
 checked yet", "Checking…", "Check failed · Try again", "Nothing to change"),
-with "Send" when it waits on you and "Check now". The line opens the
-decision's items.
+with "Send" when it waits on you and "Check now". The line reads the
+decision's counts only (`items` with `summary_only`) and opens the decision's
+items, which are read then.
 
 **Project page (9.7)**: a line above the feed, "4 open items · from 2
 decisions · checked today", with "Check now", and "N open" on each decision's
-row in the feed. The line opens the project's open items grouped by owner,
-oldest first, each with its stage and age.
+row in the feed. The line reads the project's counts only (`summary_only`)
+and opens the project's open items grouped by owner, oldest first, each with
+its stage and age.
 
 **Runs**: `driveRuns` starts pending impact runs first, then sweeps; it asks
 for a `mine` sweep when `home` says `sweep_due`.

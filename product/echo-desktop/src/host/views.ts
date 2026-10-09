@@ -425,8 +425,9 @@ export function impactCardView(result: PersonRunsResultsV1['view']): ImpactView 
 
 /**
  * One open item, validated by the client. What it says now crosses only
- * when the Authority opened it for this viewer, its citation as a source
- * "Open in …" can open; the tool's own coordinates stay behind.
+ * when the Authority opened it for this viewer (`reach: 'opened'`), its
+ * citation as a source "Open in …" can open; the tool's own coordinates stay
+ * behind. Any other `reach` says why there is none.
  */
 export function openItemView(item: PersonOpenItemV1): OpenItemView {
   const current = item.current;
@@ -440,7 +441,7 @@ export function openItemView(item: PersonOpenItemV1): OpenItemView {
       ...(current.due_at === undefined ? {} : { due_at: current.due_at }),
     } }),
     relation: item.relation, expected: item.expected, approver: item.approver, owner: item.owner, waits_on: item.waits_on, state: item.state,
-    created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at, check: item.check, can: item.can,
+    created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at, check: item.check, can: item.can, reach: item.reach,
   };
 }
 

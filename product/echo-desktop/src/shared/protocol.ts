@@ -416,7 +416,10 @@ export interface OpenItemCurrent extends Omit<PersonOpenItemCurrentV1, 'citation
 }
 /**
  * One open item a decision found, as you may see it: its decision only when
- * you can read it, and what it says now only when you could open it.
+ * you can read it, and what it says now only when you could open it. `reach`
+ * says how that live read went: `opened`, refused to you (`no_access`), not
+ * answered just now (`unavailable`: an outage, never lost access), or not tried
+ * (`not_read`).
  */
 export interface OpenItemView extends Omit<PersonOpenItemV1, 'current'> {
   readonly current?: OpenItemCurrent;

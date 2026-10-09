@@ -1,8 +1,8 @@
 import { expect, it } from 'vitest';
-import { openItemAccessV1 } from '../src/composition/open-items-policy-v1.js';
+import { openItemAccessV1, openItemSendAccessV1 } from '../src/composition/open-items-policy-v1.js';
 
 const base = { viewer: 'mem_x', approver: 'mem_ari', owner: 'mem_mina', approver_active: true, owner_active: true, sent_to_owner: false, state: 'open', reads_decision: false, leads_decision_project: false } as const;
-it.each([
+const table = [
   ['approver reading the decision', { viewer: 'mem_ari', reads_decision: true }, { see_row: true, set_state: true, assign: true, waits_on: 'owner', waits_on_viewer: false }],
   ['owner who cannot read the decision', { viewer: 'mem_mina', sent_to_owner: true }, { see_row: true, set_state: true, assign: true, waits_on: 'owner', waits_on_viewer: true }],
   ['owner of an unsent item who cannot read the decision', { viewer: 'mem_mina' }, { see_row: false, see_outside: false, set_state: false, assign: false, waits_on_viewer: false }],
@@ -29,6 +29,22 @@ it.each([
   ['owner of a done item who cannot read the decision', { viewer: 'mem_mina', sent_to_owner: true, state: 'done' }, { see_row: true, set_state: true, assign: true, waits_on: 'owner', waits_on_viewer: false }],
   ['approver of a not-relevant item', { viewer: 'mem_ari', reads_decision: true, state: 'not_relevant' }, { see_row: true, set_state: true, waits_on_viewer: false }],
   ['lead of a done item after both left', { reads_decision: true, leads_decision_project: true, owner_active: false, approver_active: false, state: 'done' }, { assign: true, waits_on: 'leads', waits_on_viewer: false }],
-] as const)('%s', (_name, facts, expected) => {
+] as const;
+
+it.each(table)('%s', (_name, facts, expected) => {
   expect(openItemAccessV1({ ...base, ...facts })).toMatchObject(expected);
+});
+
+// The decision part (title, first line, approval time, projects) goes to its readers only: an owner who cannot read it sees who sent the item instead.
+it('shows the decision part exactly to those who read the decision', () => {
+  for (const [name, facts] of table) {
+    const all = { ...base, ...facts };
+    expect(openItemAccessV1(all).see_decision, name).toBe(all.reads_decision);
+  }
+});
+
+it('lets only a reading approver send', () => {
+  expect(openItemSendAccessV1({ viewer: 'mem_ari', approver: 'mem_ari', reads_decision: true })).toEqual({ send: true });
+  expect(openItemSendAccessV1({ viewer: 'mem_ari', approver: 'mem_ari', reads_decision: false })).toEqual({ send: false });
+  expect(openItemSendAccessV1({ viewer: 'mem_mina', approver: 'mem_ari', reads_decision: true })).toEqual({ send: false });
 });

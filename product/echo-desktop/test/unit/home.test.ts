@@ -14,6 +14,13 @@ let failNextList = false;
 let failLists = false;
 let failNextHome = false;
 let failSetState = false;
+/** Home reads to hold until the test answers them, each with what `home` holds then. */
+let holdHome = 0;
+let held: (() => void)[] = [];
+/** The next send waits until the test answers it; `sendFailure` makes it fail. */
+let holdSend = false;
+let answerSend: (() => void) | null = null;
+let sendFailure: { code: string; retryable: boolean } | null = null;
 
 const impactRun = (state: PersonRunV1['state'], id = '20', event = approval): PersonRunV1 => ({
   run_id: `run_00000000-0000-4000-8000-0000000000${id}`, trigger: 'approved_record', event_ref: event, state,
@@ -30,6 +37,7 @@ const item = (id: string, verdict: 'changed' | null = null): OpenItemView => ({
   approver: person('Mina Patel'), owner: { ...person('Fixture'), match: 'jira_account' }, waits_on: 'owner', state: 'open',
   created_at: '2026-10-08T10:05:00.000Z', sent_at: '2026-10-08T11:00:00.000Z', state_set_at: '2026-10-08T11:00:00.000Z',
   check: verdict === null ? null : { verdict, checked_at: '2026-10-08T12:00:00.000Z', checked_by: 'Mina Patel' }, can: { set_state: true, assign: true },
+  reach: 'no_access',
 });
 const sendRow = (): HomeView['send'][number] => ({ run_id: impactRun('done').run_id, decision, items: 2, kinds: ['ticket'], owners: ['Mina Patel'], finished_at: '2026-10-08T10:05:00.000Z' });
 const emptyHome = (): HomeView => ({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null });
@@ -47,6 +55,11 @@ beforeEach(() => {
   failLists = false;
   failNextHome = false;
   failSetState = false;
+  holdHome = 0;
+  held = [];
+  holdSend = false;
+  answerSend = null;
+  sendFailure = null;
   rpc.mockReset();
   rpc.mockImplementation(async (method: string, params: { request?: { operation: string } }) => {
     const ok = (value: unknown) => ({ ok: true, value });
@@ -67,6 +80,7 @@ beforeEach(() => {
           return ok({ runs: run ? [{ ...run }] : [] });
         }
         if (params.request?.operation === 'home') {
+          if (holdHome > 0) { holdHome -= 1; return new Promise(resolve => { held.push(() => resolve(ok(home))); }); }
           if (failNextHome) { failNextHome = false; return unavailable; }
           return ok(home);
         }
@@ -76,7 +90,11 @@ beforeEach(() => {
           return ok({ items: [{ ...item('5'), state: 'unsent', sent_at: null, state_set_at: null, waits_on: 'approver' }], next_cursor: null, stages: [],
             summary: { unsent: 1, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 1, last_checked_at: null, by_decision: [] } });
         }
-        if (params.request?.operation === 'send') return ok({ sent: 1, not_relevant: 0 });
+        if (params.request?.operation === 'send') {
+          const answer = () => (sendFailure ? { ok: false, failure: sendFailure } : ok({ sent: 1, not_relevant: 0 }));
+          if (holdSend) { holdSend = false; return new Promise(resolve => { answerSend = () => resolve(answer()); }); }
+          return answer();
+        }
         if (params.request?.operation === 'view') return ok({ status: 'assessed', decided: [], affected: [], unconfirmed: [], people: [], sources: [], hidden: 0, checked_at: '2026-10-08T10:05:00.000Z' });
     }
     throw new Error(`Unexpected request: ${method} ${params.request?.operation ?? ''}`);
@@ -350,5 +368,91 @@ describe('Home decisions and impact checks', () => {
     await failed;
     expect(store.getState().home?.rows.filter(row => row.kind === 'update')).toMatchObject([{ item: { item_id: second.item_id } }]);
     expect(store.getState().home?.closeFailures[second.item_id]).toBe('ECHO is unavailable right now. Try again.');
+  });
+
+  it('keeps owing what a finished check found until a read that is still Home\'s brings it', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('running');
+    const store = await start();
+    // The check ends, and the poll's read of what it found is slow.
+    run = impactRun('done');
+    home = { ...emptyHome(), send: [sendRow()] };
+    holdHome = 1;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flush();
+    expect(held).toHaveLength(1);
+    // Meanwhile Home is read again, and that read of what the check found fails.
+    failNextHome = true;
+    await store.loadHome();
+    expect(store.getState().home?.rows).toEqual([]);
+    // The slow read answers now. It is no longer Home's read: it shows nothing, and settles nothing Home still owes.
+    held.shift()!();
+    await flush();
+    expect(store.getState().home?.rows).toEqual([]);
+    // So Home keeps looking, and its next read brings the Send row.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
+  });
+
+  it('keeps a sent check off Home when the send is answered after its card was left', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('done');
+    home = { ...emptyHome(), send: [sendRow()] };
+    const store = await start();
+    await store.openSend(run.run_id);
+    holdSend = true;
+    const sending = store.sendToOwners();
+    await flush();
+    // Home, before the send is answered: what it reads still has the Send row.
+    store.goHome();
+    await flush();
+    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send' }]);
+    answerSend!();
+    await sending;
+    await flush();
+    expect(store.getState().home?.sent).toHaveProperty(run.run_id);
+    expect(store.getState().home?.rows).toEqual([]);
+  });
+
+  it('offers no Details while Tell the owners? is sending', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('done');
+    home = { ...emptyHome(), send: [sendRow()] };
+    const store = await start();
+    await store.openSend(run.run_id);
+    holdSend = true;
+    const sending = store.sendToOwners();
+    await flush();
+    expect(store.getState().send?.busy).toBe(true);
+    // Leaving for Details now would bring the card back stuck on Sending.
+    store.sendDetails();
+    await flush();
+    expect(store.getState().route).toEqual({ page: 'send', run_id: run.run_id });
+    answerSend!();
+    await sending;
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.getState().toast).toBe('Sent');
+  });
+
+  it('says the items changed when a send is refused as a conflict, and reads the account again only when access was lost', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('done');
+    home = { ...emptyHome(), send: [sendRow()] };
+    const store = await start();
+    await store.openSend(run.run_id);
+    const statusReads = () => rpc.mock.calls.filter(([method]) => method === 'app.status').length;
+    const before = statusReads();
+    sendFailure = { code: 'conflict', retryable: false };
+    await store.sendToOwners();
+    expect(store.getState().send).toMatchObject({ busy: false, failure: 'These items changed meanwhile. Open them again from Home.' });
+    expect(store.getState().route).toEqual({ page: 'send', run_id: run.run_id });
+    await flush();
+    expect(statusReads()).toBe(before);
+    // Lost access is another matter: the account is read again.
+    sendFailure = { code: 'stale_access_state', retryable: false };
+    await store.sendToOwners();
+    await flush();
+    expect(store.getState().send?.failure).not.toBe('These items changed meanwhile. Open them again from Home.');
+    expect(statusReads()).toBe(before + 1);
   });
 });

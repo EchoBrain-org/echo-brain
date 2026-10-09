@@ -4,7 +4,7 @@ import type { OpenItemView } from '../../shared/protocol.js';
 import { externalSourceProvider } from '../answer.js';
 import { colorFor, initial, when } from '../format.js';
 import { message } from '../messages.js';
-import { actionCount, itemFrom, itemKind, itemParts, itemTitle, liveDetails, monthDay, needUpdating, shortNames, titleLine } from '../needs.js';
+import { actionCount, itemFrom, itemKind, itemNames, itemParts, itemTitle, liveDetails, monthDay, needUpdating, shortNames, titleLine } from '../needs.js';
 import { loadHome, markDone, openDecision, openItemInTool, openNewProject, openSend, type NeedRow, type State } from '../store.js';
 import { Plus, Saved } from './icons.js';
 
@@ -81,14 +81,17 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
   );
 }
 
-/** Open in Jira: the tool checks your access when it opens. Its name says which item, as Done's does. */
-function OpenInTool({ state, item }: { state: State; item: OpenItemView }) {
+/**
+ * Open in Jira, only for an item ECHO opened for you just now: the tool checks
+ * your access when it opens. Its name says which item, as Done's does.
+ */
+function OpenInTool({ state, item, name }: { state: State; item: OpenItemView; name: string }) {
   const [failed, setFailed] = useState(false);
-  const source = item.current?.source;
+  const source = item.reach === 'opened' ? item.current?.source : undefined;
   if (!source || !('permalink' in source)) return null;
   const label = `Open in ${externalSourceProvider(source, state.tools?.items)}`;
   return <>
-    <button type="button" class="need-open" title={source.permalink} aria-label={`${label}: ${itemTitle(item)}`}
+    <button type="button" class="need-open" title={source.permalink} aria-label={`${label}: ${name}`}
       onClick={async () => { setFailed(false); setFailed(!(await openItemInTool(item))); }}>{label}</button>
     {failed && <span class="error need-error">The item could not be opened. Try again.</span>}
   </>;
@@ -96,9 +99,10 @@ function OpenInTool({ state, item }: { state: State; item: OpenItemView }) {
 
 /**
  * Update and Check: an item that waits on you, closed in place. "Open in
- * Jira" only when you can open it; Done when you may close it.
+ * Jira" only when you can open it; Done when you may close it. `name` names
+ * the item on its buttons.
  */
-function ItemRow({ state, row }: { state: State; row: Extract<NeedRow, { item: unknown }> }) {
+function ItemRow({ state, row, name }: { state: State; row: Extract<NeedRow, { item: unknown }>; name: string }) {
   const item = row.item;
   const failure = state.home?.closeFailures[item.item_id];
   const kind = itemKind(item, state.tools?.items);
@@ -123,9 +127,9 @@ function ItemRow({ state, row }: { state: State; row: Extract<NeedRow, { item: u
       </span>
       <Side state={state} at={row.kind === 'check' ? item.check?.checked_at : null} projects={item.decision?.project_ids ?? []}>
         <span class="need-actions">
-          <OpenInTool state={state} item={item} />
+          <OpenInTool state={state} item={item} name={name} />
           {item.can.set_state && (
-            <button type="button" class="need-act" aria-label={`Done: ${itemTitle(item)}`} onClick={() => void markDone(item)}>Done</button>
+            <button type="button" class="need-act" aria-label={`Done: ${name}`} onClick={() => void markDone(item)}>Done</button>
           )}
         </span>
       </Side>
@@ -176,11 +180,12 @@ export function Home({ state }: { state: State }) {
     );
   }
   const waiting = rows.filter(row => row.kind !== 'checking').length;
+  const names = itemNames(rows.flatMap(row => ('item' in row ? [row.item] : [])));
   return (
     <div class="column needs" data-testid="needs" aria-busy={home?.loading ?? true}>
       <div class="section-label needs-head">Needs you{waiting > 0 ? ` · ${waiting}` : ''}</div>
       {rows.map(row => 'item' in row
-        ? <ItemRow key={row.item.item_id} state={state} row={row} />
+        ? <ItemRow key={row.item.item_id} state={state} row={row} name={names.get(row.item.item_id) ?? itemTitle(row.item)} />
         : <Row key={row.kind === 'send' ? row.send.run_id : row.review.approval_id} state={state} row={row} />)}
       {home?.failure && <div class="error more">{message(home.failure)} <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button></div>}
       <Footer state={state} />

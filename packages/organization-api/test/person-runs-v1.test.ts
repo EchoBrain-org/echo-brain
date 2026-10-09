@@ -54,9 +54,11 @@ const CURRENT = { citation: echo12, says_now: 'ECHO-12 · Pilot launch: planned 
 const APPROVER = { membership_id: ARI, name: 'Ari', active: true };
 const OWNER = { membership_id: MINA, name: 'Mina Patel', active: true, match: 'jira_account' };
 const CHECK = { verdict: 'changed', checked_at: LATER, checked_by: 'Mina Patel' };
+/** An item the viewer opened carries what it says now; any other says why it does not. */
 const openItem = (overrides: Record<string, unknown>) => ({
   item_id: ITEM, run_id: RUN, kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: APPROVER, owner: OWNER,
   waits_on: 'owner', state: 'open', created_at: NOW, sent_at: LATER, state_set_at: null, check: CHECK, can: { set_state: true, assign: true },
+  reach: Object.hasOwn(overrides, 'current') ? 'opened' : 'no_access',
   ...overrides,
 });
 const without = (value: Record<string, unknown>, key: string) => Object.fromEntries(Object.entries(value).filter(([name]) => name !== key));
@@ -245,6 +247,27 @@ describe('runs API open items', () => {
     expect(validatePersonRunsResultV1('item', { item: openItem({}) }).item).not.toHaveProperty('current');
     expect(() => validatePersonRunsResultV1('item', { item: { ...seen, pointer: {} } })).toThrow();      // no extra key ever
     expect(() => validatePersonRunsResultV1('home', { send: [], items: Array.from({ length: 21 }, () => seen), landed: 0, waiting: 0, last_checked_at: null })).toThrow();
+  });
+  it('accepts summary_only only as true and never with a cursor, and requires reach', () => {
+    // Counts and stages only: a line that shows how many items there are opens none of them.
+    const counts = { schema_version: 1, operation: 'items', scope: 'project', id: PROJECT, summary_only: true };
+    expect(validatePersonRunsRequestV1(counts)).toEqual(counts);
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', summary_only: true })).toEqual({ schema_version: 1, operation: 'items', scope: 'mine', summary_only: true });
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'record', id: RECORD })).not.toHaveProperty('summary_only');
+    for (const summary_only of [false, 'true', 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...counts, summary_only }), `summary_only ${JSON.stringify(summary_only)}`);
+    refused(() => validatePersonRunsRequestV1({ ...counts, cursor: 'next-page_2' }), 'summary_only with a cursor');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', summary_only: true }), 'summary_only on home');
+    // Every item says how its live read went, and carries what it says now exactly when it was opened.
+    for (const reach of ['no_access', 'unavailable', 'not_read'] as const) {
+      expect(validatePersonRunsResultV1('item', { item: openItem({ reach }) }).item.reach).toBe(reach);
+    }
+    expect(validatePersonRunsResultV1('item', { item: openItem({ current: CURRENT }) }).item.reach).toBe('opened');
+    refused(() => validatePersonRunsResultV1('item', { item: without(openItem({}), 'reach') }), 'an item without reach');
+    refused(() => validatePersonRunsResultV1('item', { item: openItem({ reach: 'opened' }) }), 'opened without what it says now');
+    for (const reach of ['no_access', 'unavailable', 'not_read']) {
+      refused(() => validatePersonRunsResultV1('item', { item: openItem({ current: CURRENT, reach }) }), `what it says now with ${reach}`);
+    }
+    for (const reach of ['denied', '', null, true]) refused(() => validatePersonRunsResultV1('item', { item: openItem({ reach }) }), `reach ${JSON.stringify(reach)}`);
   });
 });
 

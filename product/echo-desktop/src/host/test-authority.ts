@@ -56,8 +56,8 @@ interface Contract {
 
 /** A runs request, as the contract's validator returns it. */
 interface RunsRequest {
-  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; item_id?: string; command_id?: string;
-  state?: 'open' | 'done' | 'not_relevant'; owner_membership_id?: string;
+  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; summary_only?: true;
+  item_id?: string; command_id?: string; state?: 'open' | 'done' | 'not_relevant'; owner_membership_id?: string;
   items?: { item_id: string; include: boolean; owner_membership_id?: string }[];
 }
 
@@ -76,6 +76,8 @@ interface OpenItem {
   live: Record<string, unknown>;
   /** Ari can open it in its tool: only then does its live read reach Ari. */
   opens: boolean;
+  /** Its tool did not answer just now (an outage or a rate limit): Ari is told ECHO couldn't read it, not that Ari can't open it. */
+  outage?: boolean;
   relation: 'conflicts' | 'needs_updating'; expected: string;
   approver: { membership_id: string; name: string };
   owner: { membership_id: string; name: string; match: 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned' };
@@ -84,7 +86,7 @@ interface OpenItem {
 }
 
 /** The granola modes whose projects are the meeting's: Thermostat redesign (Ari leads it) and Supplier review. */
-const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-home-fails-once', 'granola-all']);
+const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-owner-outage', 'granola-home-fails-once', 'granola-all']);
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
 /** Who an impact check names, besides Ari: fictional people of the organization. */
@@ -500,7 +502,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const openItems: OpenItem[] = [];
   const minaSent = (item: Omit<OpenItem, 'approver' | 'state' | 'sent_at' | 'state_set_at'> & { sent_at: string | null }): OpenItem =>
     ({ ...item, approver: MINA, state: item.sent_at === null ? 'unsent' : 'open', state_set_at: item.sent_at });
-  if (mode === 'granola-owner' || mode === 'granola-home-fails-once') {
+  // granola-owner-outage is granola-owner while Jira does not answer for its second item.
+  const sentToAri = mode === 'granola-owner' || mode === 'granola-owner-outage';
+  if (sentToAri || mode === 'granola-home-fails-once') {
     openItems.push(minaSent({
       item_id: 'itm_00000000-0000-4000-8000-000000000041', run_id: 'run_00000000-0000-4000-8000-000000000041', kind: 'ticket',
       decision: { approval_id: 'apr_' + 'c'.repeat(64), record_sha256: sha('record:Pilot planning, approved by Mina'), title: 'Pilot planning',
@@ -510,13 +514,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       relation: 'conflicts', expected: 'launch next week', owner: { ...ARI, match: 'jira_account' }, created_at: '2026-10-06T18:05:00.000Z', sent_at: '2026-10-06T19:00:00.000Z',
     }));
     // A decision reader who cannot open the item: Ari reads Pilot planning, but this ticket is in a
-    // Jira project Ari has no access to. Its title, link and assignee never reach Ari.
-    if (mode === 'granola-owner') {
+    // Jira project Ari has no access to. Its title, link and assignee never reach Ari. In
+    // granola-owner-outage, Jira does not answer for it just now instead.
+    if (sentToAri) {
       openItems.push(minaSent({
         item_id: 'itm_00000000-0000-4000-8000-000000000044', run_id: 'run_00000000-0000-4000-8000-000000000041', kind: 'ticket',
         decision: { approval_id: 'apr_' + 'c'.repeat(64), record_sha256: sha('record:Pilot planning, approved by Mina'), title: 'Pilot planning',
           first_line: 'Launch the pilot next week.', approved_at: '2026-10-06T18:00:00.000Z', project_ids: [THERMOSTAT] },
-        readable: true, opens: false, live: { citation: ticket('ECHO-31', 'Trace sign-off', '10031'), says_now: 'The trace is signed off after the launch.',
+        readable: true, opens: false, outage: mode === 'granola-owner-outage',
+        live: { citation: ticket('ECHO-31', 'Trace sign-off', '10031'), says_now: 'The trace is signed off after the launch.',
           assignee: 'S. Okafor', status: 'Blocked', due_at: '2026-11-12' },
         relation: 'conflicts', expected: 'confirm the trace by Friday', owner: { ...ARI, match: 'picked' }, created_at: '2026-10-06T18:05:00.000Z',
         sent_at: '2026-10-06T19:00:00.000Z',
@@ -531,7 +537,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       readable: false, opens: false, live: { citation: ticket('ECHO-20', 'Vendor order', '10020'), says_now: 'The vendor order goes out in four weeks.',
         assignee: 'Rafael Moreno', status: 'To Do' },
       relation: 'conflicts', expected: 'order six weeks ahead', owner: { ...ARI, match: 'picked' },
-      created_at: '2026-10-05T15:05:00.000Z', sent_at: mode === 'granola-owner' ? '2026-10-05T16:00:00.000Z' : null,
+      created_at: '2026-10-05T15:05:00.000Z', sent_at: sentToAri ? '2026-10-05T16:00:00.000Z' : null,
     }));
   }
   if (mode === 'granola-all') {
@@ -571,13 +577,19 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const involved = (item: OpenItem) => item.approver.membership_id === ARI.membership_id || mineAsOwner(item);
   /** Ari sees a row whose decision Ari can read, and an item sent to Ari as its owner. */
   const visible = (item: OpenItem) => item.readable || (mineAsOwner(item) && item.state !== 'unsent');
-  /** A row rebuilt for Ari: the decision only for a reader, what it says now only when Ari could open it. */
-  const itemView = (item: OpenItem) => ({
-    item_id: item.item_id, run_id: item.run_id, kind: item.kind, ...(item.readable ? { decision: item.decision } : {}), ...(item.opens ? { current: item.live } : {}),
-    relation: item.relation, expected: item.expected, approver: { ...item.approver, active: true }, owner: { ...item.owner, active: true },
-    waits_on: item.state === 'unsent' ? 'approver' : 'owner', state: item.state, created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at,
-    check: null, can: { set_state: item.state !== 'unsent' && involved(item), assign: involved(item) },
-  });
+  /**
+   * A row rebuilt for Ari: the decision only for a reader, what it says now only when Ari could open it,
+   * and how its live read went: opened, refused to Ari, or not answered just now.
+   */
+  const itemView = (item: OpenItem) => {
+    const reach = item.outage ? 'unavailable' : item.opens ? 'opened' : 'no_access';
+    return {
+      item_id: item.item_id, run_id: item.run_id, kind: item.kind, ...(item.readable ? { decision: item.decision } : {}), ...(reach === 'opened' ? { current: item.live } : {}),
+      relation: item.relation, expected: item.expected, approver: { ...item.approver, active: true }, owner: { ...item.owner, active: true },
+      waits_on: item.state === 'unsent' ? 'approver' : 'owner', state: item.state, created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at,
+      check: null, can: { set_state: item.state !== 'unsent' && involved(item), assign: involved(item) }, reach,
+    };
+  };
   /** Send commands applied, by command id: a resend gets the same answer. */
   const sends = new Map<string, { sent: number; not_relevant: number }>();
   let homeReads = 0;
@@ -782,7 +794,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             ...records.filter(record => record !== PILOT_RECORD).map(record => ({
               record_sha256: record, run_id: items.find(item => item.decision.record_sha256 === record)!.run_id, state: 'done', error_code: null })),
           ];
-          return result('items', { items: items.map(itemView), next_cursor: null, stages, summary: {
+          // Counts only (a project's or a decision's line): the summary and stages, no item.
+          return result('items', { items: request.summary_only === true ? [] : items.map(itemView), next_cursor: null, stages, summary: {
             unsent: count('unsent'), open: count('open'), done: count('done'), not_relevant: count('not_relevant'), landed: 0, changed: 0, unreadable: 0,
             decisions: records.length, last_checked_at: null, by_decision: records.map(record => {
               const of = items.filter(item => item.decision.record_sha256 === record);
@@ -801,7 +814,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           if (earlier) return result('send', earlier);
           const unsent = openItems.filter(item => item.run_id === runId && item.state === 'unsent');
           const asked = request.items ?? [];
-          if (asked.length !== unsent.length || !unsent.every(item => asked.some(entry => entry.item_id === item.item_id))) return failure('stale_access_state', 409);
+          if (asked.length !== unsent.length || !unsent.every(item => asked.some(entry => entry.item_id === item.item_id))) return failure('conflict', 409);
           if (asked.some(entry => entry.owner_membership_id !== undefined && !desktop.people.some(person => person.membership_id === entry.owner_membership_id))) {
             return failure('invalid_request', 400);
           }

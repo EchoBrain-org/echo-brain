@@ -71,13 +71,13 @@ describe('view models copy only what the renderer may see', () => {
     const base = {
       item_id: 'itm_00000001', run_id: 'run_00000001', kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: person,
       owner: { ...person, match: 'jira_account' }, waits_on: 'owner', state: 'open', created_at: '2026-10-07T10:05:00.000Z', sent_at: '2026-10-07T11:00:00.000Z',
-      state_set_at: '2026-10-07T11:00:00.000Z', check: null, can: { set_state: true, assign: true },
+      state_set_at: '2026-10-07T11:00:00.000Z', check: null, can: { set_state: true, assign: true }, reach: 'no_access',
     } as const;
-    const opened = { ...base, decision, current: { citation, says_now: 'Planned for the end of the month.', due_at: '2026-10-30' } };
+    const opened = { ...base, decision, reach: 'opened', current: { citation, says_now: 'Planned for the end of the month.', due_at: '2026-10-30' } };
     const home = homeView({ send: [], items: [opened, base], landed: 0, waiting: 1, last_checked_at: null } as unknown as Parameters<typeof homeView>[0]);
-    expect(home.items[0]).toEqual({ ...base, decision, current: { source: { kind: 'ticket', tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink },
+    expect(home.items[0]).toEqual({ ...base, decision, reach: 'opened', current: { source: { kind: 'ticket', tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink },
       says_now: 'Planned for the end of the month.', due_at: '2026-10-30' } });
-    expect(home.items[1]).toEqual(base);
+    expect(home.items[1]).toStrictEqual(base);
     expect(home).toMatchObject({ send: [], landed: 0, waiting: 1, last_checked_at: null });
     expect(JSON.stringify(home)).not.toContain('private-tenant');
     const page = openItemsView({ items: [opened], next_cursor: null, stages: [], summary: { unsent: 0, open: 1, done: 0, not_relevant: 0, landed: 0, changed: 0,

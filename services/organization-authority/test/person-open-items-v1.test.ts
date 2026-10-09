@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { PersonOpenItemV1 } from '@echo-brain/organization-api';
+import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { createPersonOpenItemsV1 } from '../src/composition/person-open-items-v1.js';
 import { CLOUD, openItemsFixture, sentFixture, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 const scope = (f: OpenItemsFixtureV1, access_token: FixturePerson, kind: 'mine' | 'run' | 'record' | 'project', cursor?: string) => f.app.items({ access_token, request: {
@@ -22,6 +24,7 @@ describe('open items: who sees what', () => {
     expect(mina.items.every(item => item.state === 'unsent' && item.decision?.title === 'Pilot planning')).toBe(true);
     const rafael = await f.app.items({ access_token: 'rafael', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record } });
     expect(rafael.items.find(item => item.kind === 'ticket')).not.toHaveProperty('current');   // the desk refuses Rafael this ticket
+    expect(rafael.items.find(item => item.kind === 'ticket')).toMatchObject({ reach: 'no_access' });
     expect(JSON.stringify(rafael)).not.toContain('ECHO-12');                                   // no title, permalink or citation leaks
     expect(JSON.stringify(rafael)).not.toContain(f.outsideText);
     expect(JSON.stringify(rafael)).not.toContain('acct-');                                     // nor the Jira account matched at finish
@@ -39,6 +42,7 @@ describe('open items: who sees what', () => {
       owner: { membership_id: f.membership('mina'), name: 'Mina Patel', active: true, match: 'jira_account' },
       decision: { approval_id: f.approvalId, record_sha256: f.record, title: 'Pilot planning', first_line: 'The pilot starts next week.', project_ids: [f.projectA] },
       current: { says_now: `${f.outsideText} ships on Oct 30.`, assignee: 'Mina Patel', status: 'In Progress', due_at: '2026-10-30', citation: { kind: 'ticket', label: `ECHO-12 ${f.outsideText}` } },
+      reach: 'opened',
       can: { set_state: false, assign: false },                           // Send picks the owner; nothing changes it before
     });
     expect(items.find(entry => entry.kind === 'record')).toMatchObject({ owner: { name: 'Ari', match: 'approver' }, current: { says_now: 'Start the pilot after the freeze.', assignee: 'Nobody Here' } });
@@ -100,24 +104,31 @@ describe('open items: who sees what', () => {
 
   it('shows rows without live parts when the desk cannot vouch for a read', async () => {
     const f = await openItemsFixture(); await f.finishImpactRun();
+    const reaches = async () => Object.fromEntries((await scope(f, 'mina', 'run')).items.map(entry => [entry.kind, entry.reach]));
     const live = async () => (await scope(f, 'mina', 'run')).items.filter(entry => entry.current !== undefined).map(entry => entry.kind).sort();
     expect(await live()).toEqual(['record', 'ticket']);
     const wrongItem = { id: 'desk-other', citation: { kind: 'approved_record', atom_id: `sha256:${'b'.repeat(64)}`, record_sha256: `sha256:${'c'.repeat(64)}`, policy_id: 'project-members-readable-person-v1' },
       kind: 'decision', label: 'Another meeting', visibility: 'team', text: 'Something else.', receipt_sha256: `sha256:${'d'.repeat(64)}` };
     const desk = (overrides: Record<string, unknown>) => async () => ({ openCitation: async () => ({ items: [wrongItem], truncated: false, receipt_digests: [] }), revalidate: async () => ({}), ...overrides });
-    // A read of anything but the item itself is not a read of the item.
+    // A read of anything but the item itself is not a read of the item: the desk did not release it to this viewer.
     f.bindDesk.mockImplementationOnce(desk({}) as never);
-    expect(await live()).toEqual([]);
-    // Nothing read in a request whose desk fails its final check is shown.
+    expect(await reaches()).toEqual({ ticket: 'no_access', record: 'no_access' });
+    expect(f.liveFailures).toEqual([]);
+    // Nothing read in a request whose desk fails its final check is shown, and nothing blames access for it.
     const fixtureDesk = f.bindDesk.getMockImplementation()!;
     f.bindDesk.mockImplementationOnce((async (...args: Parameters<typeof fixtureDesk>) => ({ ...(await fixtureDesk(...args)), revalidate: async () => { throw new Error('access changed'); } })) as never);
-    expect(await live()).toEqual([]);
-    // A desk that cannot be bound leaves every row in place, with no live part.
-    f.bindDesk.mockImplementationOnce((async () => { throw new Error('Jira is unavailable'); }) as never);
+    expect(await reaches()).toEqual({ ticket: 'unavailable', record: 'unavailable' });
+    expect(f.liveFailures).toEqual([{ kind: 'open_items_live_read', reason: 'fence', code: 'error' }]);
+    // A desk that cannot be bound leaves every row in place, with no live part: ECHO could not read them just now.
+    f.bindDesk.mockImplementationOnce((async () => { throw new AuthorityOperationError('unavailable', 'Jira is unavailable'); }) as never);
     const unbound = await scope(f, 'mina', 'run');
     expect(unbound.items).toHaveLength(2);
     expect(unbound.items.some(entry => entry.current !== undefined)).toBe(false);
+    expect(unbound.items.map(entry => entry.reach)).toEqual(['unavailable', 'unavailable']);
+    expect(f.liveFailures.at(-1)).toEqual({ kind: 'open_items_live_read', reason: 'bind', code: 'unavailable' });
+    expect(f.liveFailures).toHaveLength(2);
     expect(await live()).toEqual(['record', 'ticket']);
+    expect(await reaches()).toEqual({ ticket: 'opened', record: 'opened' });
   });
 
   it('keeps an odd member name or live value from failing a response', async () => {
@@ -136,20 +147,85 @@ describe('open items: who sees what', () => {
     expect(ticket.owner.name).toBe('Mina Patel');
     expect(ticket.current).toMatchObject({ assignee: 'Mina Patel', status: 'In Progress' });
     expect(ticket.current).not.toHaveProperty('due_at');
-    // A title the API cannot carry leaves the row without its live part.
+    // A title the API cannot carry leaves the row without its live part: read, but not in a form ECHO can show.
     oddTicket(item => ({ ...item, label: 'x'.repeat(2000) }));
     const untitled = (await scope(f, 'ari', 'run')).items.find(entry => entry.kind === 'ticket')!;
     expect(untitled).not.toHaveProperty('current');
+    expect(untitled.reach).toBe('unavailable');
     expect(untitled.owner.name).toBe('Mina Patel');
+    expect(f.liveFailures).toEqual([{ kind: 'open_items_live_read', reason: 'open', code: 'invalid_output' }]);
   });
 
   it('answers one item rebuilt for the viewer, and not_found to anyone who cannot see it', async () => {
     const f = await openItemsFixture(); await f.finishImpactRun();
     const [ticket] = (await scope(f, 'ari', 'run')).items.filter(entry => entry.kind === 'ticket');
-    await expect(item(f, 'rafael', ticket!.item_id)).resolves.toMatchObject({ item: { item_id: ticket!.item_id, decision: { title: 'Pilot planning' } } });
+    await expect(item(f, 'rafael', ticket!.item_id)).resolves.toMatchObject({ item: { item_id: ticket!.item_id, decision: { title: 'Pilot planning' }, reach: 'no_access' } });
     expect((await item(f, 'rafael', ticket!.item_id)).item).not.toHaveProperty('current');
     await expect(item(f, 'okafor', ticket!.item_id)).rejects.toMatchObject({ code: 'not_found' });
     await expect(item(f, 'ari', 'itm_00000000-0000-4000-8000-000000000000')).rejects.toMatchObject({ code: 'not_found' });
+  });
+});
+
+describe('open items: counts and live reads', () => {
+  it('answers counts without a single live read', async () => {
+    const f = await openItemsFixture(); await f.finishImpactRun();
+    const opens = f.openCitation.mock.calls.length;
+    const binds = f.bindDesk.mock.calls.length;
+    const result = await f.app.items({ access_token: 'mina', request: { schema_version: 1, operation: 'items', scope: 'project', id: f.projectA, summary_only: true } });
+    expect(result).toMatchObject({ items: [], next_cursor: null, summary: { unsent: 2 } });
+    // The same counts and stages a full read answers.
+    const full = await f.app.items({ access_token: 'mina', request: { schema_version: 1, operation: 'items', scope: 'project', id: f.projectA } });
+    expect(result.summary).toEqual(full.summary);
+    expect(result.stages).toEqual(full.stages);
+    expect(f.openCitation.mock.calls.length - opens).toBe(2);              // only the full read opened anything
+    expect(f.bindDesk.mock.calls.length - binds).toBe(1);
+    await f.app.items({ access_token: 'mina', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record, summary_only: true } });
+    expect(f.openCitation.mock.calls.length - opens).toBe(2);
+    expect(f.bindDesk.mock.calls.length - binds).toBe(1);
+  });
+
+  it('tells an outage from lost access, and reports the outage without content', async () => {
+    const failures: unknown[] = [];
+    const f = await openItemsFixture({ on_live_failure: event => failures.push(event), openFails: { ticket: new AuthorityOperationError('rate_limited', 'slow down') } });
+    await f.finishImpactRun();
+    const items = (await f.app.items({ access_token: 'mina', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record } })).items;
+    expect(items.find(item => item.kind === 'ticket')).toMatchObject({ reach: 'unavailable' });
+    expect(items.find(item => item.kind === 'ticket')).not.toHaveProperty('current');
+    expect(items.find(item => item.kind === 'record')).toMatchObject({ reach: 'opened', current: { says_now: 'Start the pilot after the freeze.' } });
+    expect(failures).toEqual([{ kind: 'open_items_live_read', reason: 'open', code: 'rate_limited' }]);
+    const rafael = (await f.app.items({ access_token: 'rafael', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record } })).items;
+    expect(rafael.find(item => item.kind === 'ticket')).toMatchObject({ reach: 'no_access' });
+    expect(failures).toHaveLength(1);                                       // a refusal is not an outage
+  });
+
+  it('logs a failed live read by default as one line of JSON, without an id, a title or the tool\'s words', async () => {
+    const f = await openItemsFixture({ openFails: { ticket: new AuthorityOperationError('unavailable', `ECHO-12 ${'Kestrel cooling fan drift 0xC0FFEE'} timed out`) } });
+    await f.finishImpactRun();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const app = createPersonOpenItemsV1({ ...f.openItemsOptions, on_live_failure: undefined });
+      const { items } = await app.items({ access_token: 'mina', request: { schema_version: 1, operation: 'items', scope: 'run', id: f.runId } });
+      expect(items.find(item => item.kind === 'ticket')).toMatchObject({ reach: 'unavailable' });
+      expect(logged.mock.calls).toEqual([[JSON.stringify({ kind: 'open_items_live_read', reason: 'open', code: 'unavailable' })]]);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it('reports a stored card it cannot read, and shows the decision without its first line', async () => {
+    const f = await openItemsFixture(); await f.finishImpactRun();
+    const runs = new Proxy(f.runs, { get(target, property, receiver) {
+      if (property === 'readUnfenced') return (runId: string) => {
+        const row = target.readUnfenced(runId);
+        return row === undefined ? undefined : { ...row, result_json: '{' };
+      };
+      return Reflect.get(target, property, receiver);
+    } });
+    const app = createPersonOpenItemsV1({ ...f.openItemsOptions, runs });
+    const { items } = await app.items({ access_token: 'mina', request: { schema_version: 1, operation: 'items', scope: 'run', id: f.runId } });
+    expect(items.map(entry => entry.decision?.first_line)).toEqual([null, null]);
+    expect(items.map(entry => entry.reach)).toEqual(['opened', 'opened']);
+    expect(f.liveFailures).toEqual([{ kind: 'open_items_live_read', reason: 'first_line', code: 'unavailable' }]);
   });
 });
 
@@ -161,7 +237,8 @@ describe('open items: send, update, reassign', () => {
       items: unsent.map(item => ({ item_id: item.item_id, include: true, ...(item.owner.match === 'approver' ? { owner_membership_id: f.okaforMembership } : {}) })) };
     await expect(f.app.send({ access_token: 'ari', request: send })).resolves.toEqual({ sent: 2, not_relevant: 0 });
     await expect(f.app.send({ access_token: 'ari', request: send })).resolves.toEqual({ sent: 2, not_relevant: 0 });
-    await expect(f.app.send({ access_token: 'ari', request: { ...send, command_id: 'c2' } })).rejects.toMatchObject({ code: 'stale_access_state' });
+    // A card drawn before the items changed: a conflict to open again, never a sign the account lost access.
+    await expect(f.app.send({ access_token: 'ari', request: { ...send, command_id: 'c2' } })).rejects.toMatchObject({ code: 'conflict', message: 'The items changed. Open them again.' });
     const okaforHome = await f.app.home({ access_token: 'okafor' });
     expect(okaforHome.items).toHaveLength(1);
     expect(okaforHome.items[0]).not.toHaveProperty('decision');       // Okafor cannot read the decision; only Send told them
@@ -186,6 +263,35 @@ describe('open items: send, update, reassign', () => {
     f.removeProjectMembership(f.projectA);
     await expect(sendAll(f, unsent, 'c1', () => ({ include: true }))).rejects.toMatchObject({ code: 'not_found' });
     expect(f.items.forRun(f.runId).map(row => row.state)).toEqual(['unsent', 'unsent']);
+  });
+
+  it('answers a replayed send with its counts even after the picked owner left', async () => {
+    const f = await openItemsFixture(); await f.finishImpactRun();
+    const unsent = (await scope(f, 'ari', 'run')).items;
+    const choose = (entry: PersonOpenItemV1) => ({ include: true, ...(entry.kind === 'record' ? { owner_membership_id: f.membership('rafael') } : {}) });
+    await expect(sendAll(f, unsent, 'c1', choose)).resolves.toEqual({ sent: 2, not_relevant: 0 });
+    // The picked owner leaves, then the approver can no longer read the decision: a retry of the sent command still answers what it did.
+    f.revoke('rafael');
+    await expect(sendAll(f, unsent, 'c1', choose)).resolves.toEqual({ sent: 2, not_relevant: 0 });
+    f.removeProjectMembership(f.projectA);
+    await expect(sendAll(f, unsent, 'c1', choose)).resolves.toEqual({ sent: 2, not_relevant: 0 });
+    // Only the caller's own run replays; a new command goes through every check.
+    await expect(f.app.send({ access_token: 'mina', request: { schema_version: 1, operation: 'send', run_id: f.runId, command_id: 'c1', items: unsent.map(entry => ({ item_id: entry.item_id, include: true })) } }))
+      .rejects.toMatchObject({ code: 'not_found' });
+    await expect(sendAll(f, unsent, 'c2', () => ({ include: true }))).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('writes nothing when an item is assigned to its current owner', async () => {
+    const f = await sentFixture();
+    const ticket = f.ticket.item_id;                                       // Mina's, matched by her Jira account
+    const before = f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(ticket);
+    f.advance(5_000);
+    await expect(assign(f, 'ari', ticket, 'mina')).resolves.toEqual({ owner: { membership_id: f.membership('mina'), name: 'Mina Patel', active: true } });
+    expect(f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(ticket)).toEqual(before);
+    expect(f.items.read(ticket)).toMatchObject({ owner_membership_id: f.membership('mina'), owner_match: 'jira_account' });
+    expect(f.db.prepare('SELECT owner_set_by FROM authority_impact_items_v1 WHERE item_id=?').pluck().get(ticket)).toBeNull();
+    // Someone who may not reassign it learns nothing more than before.
+    await expect(assign(f, 'rafael', ticket, 'mina')).rejects.toMatchObject({ code: 'not_found' });
   });
 
   it('lets only the approver or the owner change state, and a project lead reassign', async () => {

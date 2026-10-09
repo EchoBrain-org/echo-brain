@@ -185,4 +185,22 @@ describe('open items written when an impact check finishes', () => {
     f.revoke('rafael');
     await expect(view('rafael')).rejects.toMatchObject({ code: 'unauthorized' });
   });
+
+  it('shows a decision reader the card without the item the desk refuses them', async () => {
+    const f = await openItemsFixture();
+    await f.finishImpactRun();
+    // Rafael reads the decision, but the desk refuses him the Jira ticket.
+    const rafael = await f.app.view({ access_token: 'rafael', request: { schema_version: 1, operation: 'view', run_id: f.runId } });
+    expect(rafael.hidden).toBe(1);
+    expect(rafael.card.citations.map(entry => entry.kind)).toEqual(['decision', 'action', 'page']);
+    expect(rafael.card.affected.map(row => row.relation)).toEqual(['conflicts', 'confirms']);
+    expect(rafael.card.decided).toEqual([{ text: 'The pilot starts next week.', citation_index: 0 }]);
+    // Nothing of the ticket: no key, id, link, or the assignee only its details name.
+    for (const withheld of ['ECHO-12', '10012', 'browse/', 'Mina Patel']) expect(JSON.stringify(rafael)).not.toContain(withheld);
+    expect(f.bindDesk.mock.calls.at(-1)![2]).toMatchObject({ access_token: 'rafael' });
+    // Mina, who can open it, sees the same card with the ticket.
+    const mina = await f.app.view({ access_token: 'mina', request: { schema_version: 1, operation: 'view', run_id: f.runId } });
+    expect(mina.hidden).toBe(0);
+    expect(mina.card.citations.map(entry => entry.kind)).toEqual(['decision', 'ticket', 'action', 'page']);
+  });
 });

@@ -50,14 +50,39 @@ export function nameList(names: readonly string[]): string {
   return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
-const CANNOT_OPEN: Readonly<Record<PersonOpenItemKindV1, string>> = {
-  ticket: 'A Jira ticket you can\'t open', page: 'A page you can\'t open', slack_message: 'A Slack message you can\'t open',
-  record: 'A record you can\'t open', document: 'A document you can\'t open',
+/** What an item is, when its title is not shown. */
+const WHAT: Readonly<Record<PersonOpenItemKindV1, string>> = {
+  ticket: 'A Jira ticket', page: 'A page', slack_message: 'A Slack message', record: 'A record', document: 'A document',
 };
 
-/** An item's title as you can open it now, or what it is when you cannot. */
+/**
+ * An item's title as you opened it now, else what it is and why its title is
+ * not shown: "A Jira ticket you can't open" when your access refused it, "A
+ * Jira ticket ECHO couldn't read just now" when the read failed otherwise (an
+ * outage is not lost access), and "A Jira ticket" when it was not read.
+ */
 export function itemTitle(item: OpenItemView): string {
-  return item.current?.source.label ?? CANNOT_OPEN[item.kind];
+  if (item.current) return item.current.source.label;
+  switch (item.reach) {
+    case 'unavailable': return `${WHAT[item.kind]} ECHO couldn't read just now`;
+    case 'not_read': return WHAT[item.kind];
+    default: return `${WHAT[item.kind]} you can't open`;
+  }
+}
+
+/**
+ * Each item's name for its buttons ("Done: …", "Open in …", "Pick a
+ * person: …"): its title, and where two items would share one (two items you
+ * can't open), what the decision requires of it, as its row shows it.
+ */
+export function itemNames(items: readonly OpenItemView[]): ReadonlyMap<string, string> {
+  const titles = new Map(items.map(item => [item.item_id, itemTitle(item)]));
+  const counts = new Map<string, number>();
+  for (const title of titles.values()) counts.set(title, (counts.get(title) ?? 0) + 1);
+  return new Map(items.map(item => {
+    const title = titles.get(item.item_id)!;
+    return [item.item_id, counts.get(title)! > 1 && item.expected ? `${title} → ${item.expected}` : title];
+  }));
 }
 
 /** Longest quote of what an item says that a row shows. */

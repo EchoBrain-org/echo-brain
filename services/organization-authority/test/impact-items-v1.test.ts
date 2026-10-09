@@ -93,6 +93,10 @@ describe('SQLite open items v1', () => {
     expect(f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-1', choices })).toEqual({ kind: 'sent', sent: 1, not_relevant: 1 });
     expect(f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-1', choices })).toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
     expect(f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-2', choices })).toEqual({ kind: 'stale' });
+    // What a command did, without sending: only that command, only on that run.
+    expect(f.items.sentBy(f.run.run_id, 'cmd-1')).toEqual({ sent: 1, not_relevant: 1 });
+    expect(f.items.sentBy(f.run.run_id, 'cmd-2')).toBeUndefined();
+    expect(f.items.sentBy('run_00000000-0000-4000-8000-000000000999', 'cmd-1')).toBeUndefined();
     expect(f.items.read(a!.item_id)).toMatchObject({ state: 'open', owner_membership_id: f.mina, owner_match: 'picked' });
     expect(f.items.read(b!.item_id)).toMatchObject({ state: 'not_relevant' });
   });

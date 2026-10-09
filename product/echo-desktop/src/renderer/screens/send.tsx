@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { Member, OpenItemView } from '../../shared/protocol.js';
 import { colorFor, initials } from '../format.js';
-import { itemParts, itemTitle, monthDay, nameList, shortNames } from '../needs.js';
+import { itemNames, itemParts, itemTitle, monthDay, nameList, shortNames } from '../needs.js';
 import {
   clearPick, closePicker, goHome, pickOwner, searchOwner, sendDecision, sendDetails, sendRecipients, sendToOwners, tickSend, type SendState, type State,
 } from '../store.js';
@@ -42,8 +42,8 @@ function Picker({ send, item }: { send: SendState; item: OpenItemView }) {
   );
 }
 
-/** Who an item goes to: the person picked, its owner, or Pick a person where ECHO matched no one (it stays yours). */
-function Owner({ send, item, me }: { send: SendState; item: OpenItemView; me: string | undefined }) {
+/** Who an item goes to: the person picked, its owner, or Pick a person where ECHO matched no one (it stays yours). `name` names the item. */
+function Owner({ send, item, me, name: itemName }: { send: SendState; item: OpenItemView; me: string | undefined; name: string }) {
   const pick: Member | undefined = send.picks[item.item_id];
   if (pick) {
     const [name] = shortNames([pick.display_name]);
@@ -57,7 +57,7 @@ function Owner({ send, item, me }: { send: SendState; item: OpenItemView; me: st
   if (item.owner.match === 'approver' && item.owner.membership_id === me) {
     return (
       <button type="button" class="pick-button" disabled={send.busy || !send.ticks[item.item_id]} aria-expanded={send.picker?.item_id === item.item_id}
-        aria-label={`Pick a person: ${itemTitle(item)}`} onClick={() => void searchOwner(item.item_id, '')}>Pick a person</button>
+        aria-label={`Pick a person: ${itemName}`} onClick={() => void searchOwner(item.item_id, '')}>Pick a person</button>
     );
   }
   const [name] = shortNames([item.owner.name]);
@@ -83,6 +83,7 @@ export function Send({ state, send }: { state: State; send: SendState }) {
   const me = state.status?.account?.membership_id;
   const decision = sendDecision(state);
   const approved = decision ? monthDay(decision.approved_at) : null;
+  const names = itemNames(send.items);
   return (
     <div class="column decision" ref={box}>
       <article class="decision-card" data-testid="send" aria-labelledby="send-ask" aria-busy={send.busy}>
@@ -103,7 +104,7 @@ export function Send({ state, send }: { state: State; send: SendState }) {
                       <input type="checkbox" checked={send.ticks[item.item_id] === true} disabled={send.busy} onChange={() => tickSend(item.item_id)} />
                       <span><b>{title}</b>{change && <span class="faint"> {change}</span>}</span>
                     </label>
-                    <Owner send={send} item={item} me={me} />
+                    <Owner send={send} item={item} me={me} name={names.get(item.item_id) ?? itemTitle(item)} />
                   </div>
                   {send.picker?.item_id === item.item_id && <Picker send={send} item={item} />}
                 </div>
@@ -113,7 +114,7 @@ export function Send({ state, send }: { state: State; send: SendState }) {
         ) : !send.failure && <div class="notice" data-testid="send-none">Nothing is waiting to be sent.</div>}
         <div class="send-note">
           <span class="notice">Untick anything that's wrong. Owners get it on their Home.</span>
-          {decision && <button type="button" class="link-button" data-testid="send-details" onClick={sendDetails}>Details</button>}
+          {decision && <button type="button" class="link-button" data-testid="send-details" disabled={send.busy} onClick={sendDetails}>Details</button>}
         </div>
         {send.failure && <div class="error" data-testid="send-error" aria-live="polite">{send.failure}</div>}
         <div class="decision-foot">

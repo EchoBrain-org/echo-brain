@@ -8,7 +8,7 @@ import { SqliteImpactItemsV1, type ImpactItemVerdictV1 } from '../../src/adapter
 import { SqliteOpenItemPeopleV1 } from '../../src/adapters/persistence/sqlite/open-item-people-v1.js';
 import { SqliteTriggerRunsV1, enqueueApprovedRecordRunV1 } from '../../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import type { JiraOwnerAccountsV1 } from '../../src/application/ports/jira-owner-accounts-v1.js';
-import { createPersonOpenItemsV1 } from '../../src/composition/person-open-items-v1.js';
+import { createPersonOpenItemsV1, type OpenItemsLiveFailureV1 } from '../../src/composition/person-open-items-v1.js';
 import type { PersonReadableDecisionsV1 } from '../../src/composition/person-record-search-route.js';
 import { createPersonTriggerRunsV1 } from '../../src/composition/person-trigger-runs-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../../src/presentation/person-trigger-runs-http-application.js';
@@ -44,6 +44,13 @@ export interface OpenItemsFixtureOptionsV1 {
   readonly jiraFails?: boolean;
   /** The card also cites the ticket at a later text hash. */
   readonly duplicateTicket?: boolean;
+  /**
+   * What a live open throws, by the item's kind, once the desk has not refused
+   * the viewer first: an outage or a rate limit in the tool itself.
+   */
+  readonly openFails?: Partial<Record<'ticket' | 'page' | 'approved_record', unknown>>;
+  /** Where the open-items service reports a failed live read; otherwise the fixture keeps them in `liveFailures`. */
+  readonly on_live_failure?: (event: OpenItemsLiveFailureV1) => void;
 }
 
 /** One impact card as the renderer returns it, with a copy of the ticket at another text hash when asked. */
@@ -159,19 +166,21 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
   };
   const opened: { readonly token: string; readonly kind: string }[] = [];
   const revalidated: string[] = [];
+  type Citation = { readonly kind: string; readonly record_sha256?: string };
+  /** One live open on a desk bound to `name`: the desk's own refusals first, then the tool. */
+  const openCitation = vi.fn(async (name: FixturePerson, citation: Citation) => {
+    opened.push({ token: name, kind: citation.kind });
+    const result = (found: readonly unknown[]) => ({ items: found, truncated: false, receipt_digests: [receipt] });
+    if (citation.kind === 'ticket' && name === 'rafael') throw new AuthorityOperationError('not_found', 'The ticket is not available');
+    if (citation.kind === 'approved_record' && !reads(name)) return result([]);
+    const fails = options.openFails?.[citation.kind as keyof NonNullable<OpenItemsFixtureOptionsV1['openFails']>];
+    if (fails !== undefined) throw fails;
+    if (citation.kind === 'ticket') return result([deskItems.ticket]);
+    if (citation.kind === 'page') return result([deskItems.page]);
+    return result([citation.record_sha256 === recordSha256 ? deskItems.decision : deskItems.rollout]);
+  });
   const bindDesk = vi.fn(async (_options: unknown, _sources: unknown, input: { readonly access_token: string }) => ({
-    async openCitation({ citation }: { readonly citation: { readonly kind: string; readonly record_sha256?: string } }) {
-      const name = token(input.access_token);
-      opened.push({ token: name, kind: citation.kind });
-      const result = (found: readonly unknown[]) => ({ items: found, truncated: false, receipt_digests: [receipt] });
-      if (citation.kind === 'ticket') {
-        if (name === 'rafael') throw new AuthorityOperationError('not_found', 'The ticket is not available');
-        return result([deskItems.ticket]);
-      }
-      if (citation.kind === 'page') return result([deskItems.page]);
-      if (!reads(name)) return result([]);
-      return result([citation.record_sha256 === recordSha256 ? deskItems.decision : deskItems.rollout]);
-    },
+    openCitation: ({ citation }: { readonly citation: Citation }) => openCitation(token(input.access_token), citation),
     async revalidate() { revalidated.push(input.access_token); return { checked_at: now.toISOString() }; },
   }));
   const research = vi.fn(() => ({ renderWithResearch: async () => ({
@@ -194,7 +203,11 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
   const bind_options = { authority_id: 'authority', state_lineage_id: 'lineage' } as never;
   const runsApp = createPersonTriggerRunsV1({ runs, sessions, records, bindDesk: bindDesk as never, audit: {} as never, bind_options, research: research as never,
     items, people: directory, jira_owners, lease_ms: 60_000 });
-  const openItemsApp = createPersonOpenItemsV1({ sessions, runs, items, people: directory, records, bindDesk: bindDesk as never, bind_options });
+  const liveFailures: OpenItemsLiveFailureV1[] = [];
+  /** The open-items service's options, so a test can build it again with one of them changed. */
+  const openItemsOptions = { sessions, runs, items, people: directory, records, bindDesk: bindDesk as never, bind_options,
+    on_live_failure: options.on_live_failure ?? ((event: OpenItemsLiveFailureV1) => { liveFailures.push(event); }) };
+  const openItemsApp = createPersonOpenItemsV1(openItemsOptions);
   /** Every response passes the API's own result validator, as the desktop's client would apply it. */
   const checked = <K extends keyof PersonRunsResultsV1>(operation: K, read: (input: never) => Promise<unknown>) =>
     async (input: unknown): Promise<PersonRunsResultsV1[K]> => validatePersonRunsResultV1(operation, await read(input as never));
@@ -217,7 +230,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
   const runItems = (access_token: FixturePerson = 'ari') => app.items({ access_token, request: { schema_version: 1, operation: 'items', scope: 'run', id: run.run_id } });
   return {
     // `db` comes with `f`, typed by the approval fixture's named interface, so this inferred type can be emitted.
-    ...f, runs, items, directory, records, readable, bindDesk, opened, revalidated, jira_owners, research, card, app, runsApp, openItemsApp,
+    ...f, runs, items, directory, records, readable, bindDesk, openCitation, opened, revalidated, liveFailures, openItemsOptions, jira_owners, research, card, app, runsApp, openItemsApp,
     runId: run.run_id, record: recordSha256, people, outsideText, finishImpactRun, runItems,
     membership: (name: FixturePerson) => people[name].membership_id,
     okaforMembership: people.okafor.membership_id,
