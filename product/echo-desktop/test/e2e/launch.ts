@@ -1,7 +1,7 @@
-import { _electron as electron, expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..', '..');
 
@@ -36,7 +36,11 @@ export async function launch(mode = ''): Promise<Launched> {
       ECHO_DESKTOP_HIDDEN: '1',
     },
   });
+  // Electron contexts need explicit tracing; the test runner's trace alone
+  // contains assertion steps but no browser snapshots.
+  if (process.env.CI) await app.context().tracing.start({ screenshots: true, snapshots: true });
   const page = await app.firstWindow();
+  let closed = false;
   return {
     app, page, home, userData,
     calls() {
@@ -45,11 +49,26 @@ export async function launch(mode = ''): Promise<Launched> {
       return readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
     },
     async close() {
-      // Answer the quit guard's native dialog (an unresolved save) with Quit Anyway.
-      await app.evaluate(({ dialog }) => { dialog.showMessageBoxSync = () => 0; }).catch(() => undefined);
-      await app.close();
-      rmSync(home, { recursive: true, force: true });
-      rmSync(userData, { recursive: true, force: true });
+      if (closed) return;
+      closed = true;
+      try {
+        if (process.env.CI && !page.isClosed()) {
+          const info = test.info();
+          const failed = info.status !== info.expectedStatus;
+          const path = failed ? info.outputPath(`electron-${basename(home)}.zip`) : undefined;
+          await app.context().tracing.stop({ path });
+          if (path) await info.attach('electron-trace', { path, contentType: 'application/zip' });
+        }
+      } finally {
+        // Answer the quit guard's native dialog (an unresolved save) with Quit Anyway.
+        await app.evaluate(({ dialog }) => { dialog.showMessageBoxSync = () => 0; }).catch(() => undefined);
+        try {
+          await app.close();
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+          rmSync(userData, { recursive: true, force: true });
+        }
+      }
     },
   };
 }

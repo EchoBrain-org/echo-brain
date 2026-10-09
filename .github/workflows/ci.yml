@@ -21,7 +21,7 @@ env:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -33,6 +33,10 @@ jobs:
         with:
           node-version: ${{ env.PRODUCT_NODE_VERSION }}
           cache: npm
+      - name: Record the test runner
+        run: |
+          printf 'ECHO_CI_REPORT_DIR=%s/ci-diagnostics\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          node tools/ci-runner-info.mjs "$RUNNER_TEMP/ci-diagnostics/runner.json"
       - run: npm ci
       - name: Prove staging control isolation with real POSIX ownership
         run: sudo -n python3 -B tests/fixtures/staging-release-posix-proof.py tools/authority-staging-release-host.py deploy/organization-authority/update-clean-v1.sh deploy/organization-authority/onboard-clean-v1.sh
@@ -41,10 +45,19 @@ jobs:
         run: node tests/fixtures/person-onboarding-smoke.mjs
       - name: Verify four-meeting answer coverage and privacy
         run: node --test demo/test/rehearsal-evaluator.test.mjs
+      - name: Verify the research-loop evaluator
+        run: npm run test:research-loop-eval
       - name: Verify the Authority core evaluation components
         run: npm run test:capacity
       - name: Exercise the Authority core evaluation checkpoint
         run: npm run capacity:checkpoint
+      - name: Preserve check diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: check-diagnostics-${{ github.run_attempt }}
+          path: ${{ env.ECHO_CI_REPORT_DIR }}
+          retention-days: 7
 
   person-client-package:
     name: macOS arm64 Person-client package
@@ -162,11 +175,12 @@ jobs:
           test -x "$kit_root/node"
           "$kit_root/node" "$kit_root/verify-person-onboarding-kit.mjs" "$kit_root"
           node tests/fixtures/person-onboarding-smoke.mjs --kit-root "$kit_root"
-      - name: Exercise the macOS command-line kit installer and update dispatch
+      - name: Exercise the macOS command-line kit installer, update dispatch, and enrollment
         run: >-
           npx vitest run --config vitest.config.ts
           tests/architecture/mac-person-cli-kit.test.ts
           tests/architecture/client-update-dispatch.test.ts
+          tests/person-client/client-update.test.ts
 
   desktop-app:
     name: ${{ matrix.name }} desktop app
@@ -202,6 +216,11 @@ jobs:
         env:
           TARGET_ARCH: ${{ matrix.arch }}
         run: node -e 'if (process.arch !== process.env.TARGET_ARCH) throw new Error("Unexpected runner architecture")'
+      - name: Record the test runner
+        working-directory: .
+        run: |
+          printf 'ECHO_CI_REPORT_DIR=%s/ci-diagnostics\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          node tools/ci-runner-info.mjs "$RUNNER_TEMP/ci-diagnostics/runner.json"
       - name: Cache Electron and packaging-tool downloads
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -231,7 +250,7 @@ jobs:
       - name: Typecheck the desktop app
         run: npm run typecheck
       - name: Run the desktop unit tests
-        run: npx vitest run
+        run: npx vitest run --reporter=default --reporter=json --outputFile.json="$ECHO_CI_REPORT_DIR/desktop-unit.json"
       - name: Build the desktop bundles with the test hook
         run: npm run build
       - name: Run the full desktop end-to-end suite
@@ -267,6 +286,15 @@ jobs:
           xvfb-run -a dbus-run-session -- npm run smoke -- /opt/ECHO/echo-desktop
       - name: Assert packaging left the checkout clean
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Preserve desktop diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: desktop-diagnostics-${{ runner.os }}-${{ runner.arch }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.ECHO_CI_REPORT_DIR }}
+            product/echo-desktop/test-results
+          retention-days: 7
 
   authority-container:
     name: Organization authority container
@@ -466,13 +494,16 @@ jobs:
 
   authority-recovery-infrastructure:
     name: Authority recovery infrastructure
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.PRODUCT_NODE_VERSION }}
+          # This job installs no npm dependencies. Do not save an empty cache
+          # before the check job can populate the shared lockfile key.
+          package-manager-cache: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.10"
@@ -483,7 +514,7 @@ jobs:
     name: CI required checks
     if: ${{ always() }}
     needs: [check, person-client-package, desktop-app, authority-container, authority-recovery-infrastructure]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require every CI proof to succeed

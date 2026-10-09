@@ -515,7 +515,8 @@ test("the existing required CI check job runs this Node suite without masking fa
   const workflow = readFileSync(resolve(demo, "../.github/workflows/ci.yml"), "utf8");
   const job = workflow.slice(workflow.indexOf("  check:"), workflow.indexOf("  person-client-package:"));
   assert.match(job, /^        run: node --test demo\/test\/rehearsal-evaluator\.test\.mjs$/m);
-  assert.doesNotMatch(job, /continue-on-error:|if:/);
+  const proofSteps = job.split(/(?=^      - )/m).filter(step => !step.includes('uses: actions/upload-artifact@'));
+  for (const step of proofSteps) assert.doesNotMatch(step, /continue-on-error:|if:/);
   assert.match(workflow, /needs: \[check,/);
   assert.ok(workflow.includes('test "$CHECK_RESULT" = success'));
 });

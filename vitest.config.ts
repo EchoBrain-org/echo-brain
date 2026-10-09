@@ -1,7 +1,14 @@
 import { defineConfig } from 'vitest/config';
+import { join } from 'node:path';
+
+const reportDir = process.env.ECHO_CI_REPORT_DIR;
 
 export default defineConfig({
   test: {
+    ...(reportDir ? {
+      reporters: ['default', 'json'],
+      outputFile: { json: join(reportDir, 'vitest.json') },
+    } : {}),
     include: [
       'packages/*/test/**/*.test.ts',
       'services/*/test/**/*.test.ts',

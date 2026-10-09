@@ -28,6 +28,38 @@ function dependencyInputs(dockerfile: string) {
 }
 
 describe("CI workflow", () => {
+  it("runs the research-loop evaluator as an unconditional required proof", () => {
+    const check = between("  check:", "  person-client-package:");
+    const steps = check.split(/(?=^      - )/m);
+    const research = steps.find((step) => step.includes("run: npm run test:research-loop-eval"));
+    expect(research).toBeDefined();
+    expect(research).not.toMatch(/if:|continue-on-error:/);
+  });
+
+  it("pins Ubuntu and prevents the dependency-free recovery job from owning npm caches", () => {
+    expect(source).not.toContain("ubuntu-latest");
+    const recovery = between("  authority-recovery-infrastructure:", "  required-checks:");
+    expect(recovery).toContain("package-manager-cache: false");
+    expect(recovery).not.toMatch(/cache: npm|npm ci/);
+  });
+
+  it("retains bounded test diagnostics after failures without uploading builds or homes", () => {
+    const uploads = source.split(/(?=^      - )/m)
+      .filter((step) => step.includes("uses: actions/upload-artifact@"));
+    expect(uploads).toHaveLength(2);
+    for (const step of uploads) {
+      expect(step).toContain("if: ${{ !cancelled() }}");
+      expect(step).toMatch(/actions\/upload-artifact@[0-9a-f]{40}/);
+      expect(step).toContain("retention-days: 7");
+      expect(step).toContain("github.run_attempt");
+      expect(step).not.toMatch(/include-hidden-files|overwrite:|continue-on-error/);
+    }
+    expect(uploads[0]).toMatch(/path: \$\{\{ env.ECHO_CI_REPORT_DIR \}\}\n/);
+    expect(uploads[1]).toMatch(/path: \|\n            \$\{\{ env.ECHO_CI_REPORT_DIR \}\}\n            product\/echo-desktop\/test-results\n/);
+    expect(uploads[1]).toContain("runner.os");
+    expect(uploads[1]).toContain("runner.arch");
+  });
+
   it("only cancels superseded pull-request runs", () => {
     const concurrency = between("concurrency:", "permissions:");
 
@@ -157,7 +189,7 @@ describe("CI workflow", () => {
   });
 
   it("runs the macOS-only CLI-kit and update-dispatch proofs in the macOS Person-client job", () => {
-    const personClientJob = between("  person-client-package:", "  authority-container:");
+    const personClientJob = between("  person-client-package:", "  desktop-app:");
 
     expect(personClientJob).toContain(
       "tests/architecture/mac-person-cli-kit.test.ts",
@@ -165,6 +197,7 @@ describe("CI workflow", () => {
     expect(personClientJob).toContain(
       "tests/architecture/client-update-dispatch.test.ts",
     );
+    expect(personClientJob).toContain("tests/person-client/client-update.test.ts");
     expect(source).not.toMatch(/swift|echo-overlay|echo-onboarding/i);
   });
 
@@ -224,11 +257,15 @@ describe("CI workflow", () => {
       expect(position, step).toBeGreaterThan(index === 0 ? 0 : steps[index - 1]![1]);
     }
     // Shared tests and package proofs must not be skipped while the matrix
-    // reports success to the aggregate. Only native platform setup may vary.
+    // reports success to the aggregate. Native setup and diagnostic uploads
+    // may vary; an upload must still run after a failed test.
     const conditionalSteps = desktopJob
       .split(/(?=^      - )/m)
       .filter((step) => /^        if:/m.test(step));
-    expect(conditionalSteps).toHaveLength(3);
+    expect(conditionalSteps).toHaveLength(4);
+    expect(conditionalSteps).toContainEqual(expect.stringContaining(
+      "- name: Preserve desktop diagnostics\n        if: ${{ !cancelled() }}",
+    ));
     for (const [name, os] of [
       ["Prepare Linux for sandboxed Electron", "Linux"],
       ["Verify the macOS signature", "macOS"],
@@ -240,7 +277,7 @@ describe("CI workflow", () => {
     }
     expect(desktopJob).not.toMatch(/^    if:/m);
     expect(desktopJob).not.toMatch(
-      /secrets\.|upload-artifact|--allow-dirty|continue-on-error|--publish always/,
+      /secrets\.|--allow-dirty|continue-on-error|--publish always/,
     );
     expect(desktopJob).toContain("xvfb-run -a dbus-run-session -- npx playwright test");
     expect(desktopJob).toContain("\n            npx playwright test\n");
