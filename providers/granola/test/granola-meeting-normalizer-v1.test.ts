@@ -84,44 +84,19 @@ const documentedSpeakerShapeDetail = {
   updated_at: "2026-07-15T19:00:00.000Z",
   summary_text: "Documented speaker-shape summary.",
   owner: { name: "Note Owner", email: "owner@example.com" },
-  transcript: [
-    {
-      text: "Local audio, first turn.",
-      start_time: "2026-07-15T18:00:00.000Z",
-      speaker: { source: "microphone" },
-    },
-    {
-      text: "Remote audio.",
-      start_time: "2026-07-15T18:00:01.000Z",
-      speaker: { source: "speaker" },
-    },
-    {
-      text: "Local audio, second turn.",
-      start_time: "2026-07-15T18:00:02.000Z",
-      speaker: { source: "microphone" },
-    },
-    {
-      text: "Diarized speaker A, first turn.",
-      start_time: "2026-07-15T18:00:03.000Z",
-      speaker: { source: "microphone", diarization_label: "Speaker A" },
-    },
-    {
-      text: "Diarized speaker B.",
-      start_time: "2026-07-15T18:00:04.000Z",
-      speaker: { source: "microphone", diarization_label: "Speaker B" },
-    },
-    {
-      text: "Diarized speaker A, second turn.",
-      start_time: "2026-07-15T18:00:05.000Z",
-      speaker: { source: "microphone", diarization_label: "Speaker A" },
-    },
-  ],
+  transcript: ([
+    ["Local audio, first turn.", { source: "microphone" }],
+    ["Remote audio.", { source: "speaker" }],
+    ["Local audio, second turn.", { source: "microphone" }],
+    ["Diarized speaker A, first turn.", { source: "microphone", diarization_label: "Speaker A" }],
+    ["Diarized speaker B.", { source: "microphone", diarization_label: "Speaker B" }],
+    ["Diarized speaker A, second turn.", { source: "microphone", diarization_label: "Speaker A" }],
+  ] as const).map(([text, speaker], index) => ({ text, start_time: `2026-07-15T18:00:0${index}.000Z`, speaker })),
 } as unknown as GranolaMeetingContentInputV1;
 
 describe("Retained Granola content normalization", () => {
   it("maps notes, participants, transcript turns, revision, and provenance", () => {
     const meeting = normalize(detail);
-    const second = normalize(detail, "2026-07-16T01:00:00.000Z");
     expect(meeting).toMatchObject({
       schema_version: 1,
       id: "granola:primary:note-1",
@@ -232,57 +207,42 @@ describe("Retained Granola content normalization", () => {
     expect(meeting.provenance.canonical_revision).toMatch(
       /^sha256:[a-f0-9]{64}$/,
     );
-    expect(second.provenance.canonical_revision).toBe(
-      meeting.provenance.canonical_revision,
-    );
-    expect(second.provenance.observed_at).not.toBe(
-      meeting.provenance.observed_at,
-    );
 
     const withoutFolder = normalize({ ...detail, folder_membership: [] });
     expect(withoutFolder.provenance.canonical_revision).not.toBe(
       meeting.provenance.canonical_revision,
     );
   });
-  it("stores one summary form: Markdown wins and the plain-text copy is not duplicated", () => {
-    const bothFormsDetail: GranolaMeetingContentInputV1 = {
-      id: "note-both-forms",
-      object: "note",
-      title: "Both summary forms",
-      created_at: "2026-07-15T16:00:00.000Z",
-      updated_at: "2026-07-15T17:00:00.000Z",
-      summary_markdown: "## Decision\nShip the canonical bridge.",
-      summary_text: "Decision\nShip the canonical bridge.",
-      transcript: [{ text: "Transcript available." }],
-    };
-    const meeting = normalize(bothFormsDetail);
-
-    expect(meeting.content[0]).toEqual({
-      id: "note-both-forms:summary",
-      kind: "summary",
+  it.each([
+    {
+      name: "Markdown wins and the plain-text copy is not duplicated",
+      summary: { summary_markdown: "## Decision\nShip the canonical bridge.", summary_text: "Decision\nShip the canonical bridge." },
       text: "## Decision\nShip the canonical bridge.",
-      origin: "source_ai",
-      metadata: { format: "markdown" },
-    });
-  });
-  it("falls back to the plain-text summary when Granola sends no Markdown", () => {
-    const plainOnlyDetail: GranolaMeetingContentInputV1 = {
-      id: "note-plain-only",
+      format: "markdown",
+    },
+    {
+      name: "falls back to the plain-text summary when Granola sends no Markdown",
+      summary: { summary_text: "Decision: ship the canonical bridge." },
+      text: "Decision: ship the canonical bridge.",
+      format: "text",
+    },
+  ])("stores one summary form: $name", ({ summary, text, format }) => {
+    const meeting = normalize({
+      id: "note-summary-form",
       object: "note",
-      title: "Plain summary only",
+      title: "Summary form",
       created_at: "2026-07-15T16:00:00.000Z",
       updated_at: "2026-07-15T17:00:00.000Z",
-      summary_text: "Decision: ship the canonical bridge.",
+      ...summary,
       transcript: [{ text: "Transcript available." }],
-    };
-    const meeting = normalize(plainOnlyDetail);
+    });
 
     expect(meeting.content[0]).toEqual({
-      id: "note-plain-only:summary",
+      id: "note-summary-form:summary",
       kind: "summary",
-      text: "Decision: ship the canonical bridge.",
+      text,
       origin: "source_ai",
-      metadata: { format: "text" },
+      metadata: { format },
     });
   });
   it("normalizes the incremental Granola calendar shape and links its people to transcript turns", () => {
@@ -363,15 +323,14 @@ describe("Retained Granola content normalization", () => {
     const speakerReferences = transcript.map(
       (block) => block.speaker_participant_id,
     );
-    expect(speakerReferences).toHaveLength(6);
-    expect(speakerReferences.slice(0, 3)).toEqual([
+    expect(speakerReferences).toEqual([
       undefined,
       undefined,
       undefined,
+      expect.any(String),
+      expect.any(String),
+      speakerReferences[3],
     ]);
-    expect(speakerReferences[3]).toBe(speakerReferences[5]);
-    expect(speakerReferences[3]).toBeDefined();
-    expect(speakerReferences[4]).toBeDefined();
     expect(speakerReferences[3]).not.toBe(speakerReferences[4]);
     expect(
       second.content

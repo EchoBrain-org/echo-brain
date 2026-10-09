@@ -22,6 +22,7 @@ const ticket = (id = '10001', summary = 'Ship connector') => ({ id, key: `ECHO-$
     { type: 'paragraph', content: [{ type: 'mention', attrs: { text: '@Alex', id: 'never-return-this-id' } }] },
   ] }, created: '2026-09-30T12:34:56.000+0000', status: { name: 'In progress' }, assignee: { displayName: 'Alex', emailAddress: 'never-return@example.test' }, duedate: '2026-10-02',
     comment: { comments: [{ body: 'never-return-comment' }] }, attachment: [{ content: 'https://never-fetch.example.test' }], issuelinks: [] } });
+const withFields = (fields: Record<string, unknown>, base = ticket()) => ({ ...base, fields: { ...base.fields, ...fields } });
 const page = (ids = ['10001'], token?: string) => ({ isLast: token === undefined, issues: ids.map(id => ({ id })), ...(token === undefined ? {} : { nextPageToken: token }) });
 
 function fixture() {
@@ -63,7 +64,8 @@ function fixture() {
         read_status: 'connected', read_capabilities: ['live_evidence'] }, read_grant_sha256: binding.read_grant_sha256, reader, authorization, audit });
     return { reader, source };
   }
-  return { ...f, state: f, request, transport, authorization, releases, audit, make };
+  const jqls = () => request.mock.calls.filter(([input]) => input.path.endsWith('/search/jql')).map(([input]) => input.body?.jql);
+  return { ...f, state: f, request, transport, authorization, releases, audit, make, jqls };
 }
 
 describe('person-bound Jira live reader through the shared audited wrapper', () => {
@@ -95,16 +97,6 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
       expect(f.audit.record).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
   });
-  it('discovers ticket summaries before fetching a selected body', async () => {
-    const f = fixture(); const { source } = await f.make();
-    const discovered = await source.search({ query: 'ship' });
-    expect(discovered.items[0]).toMatchObject({ label: 'ECHO-1: Ship connector', date_kind: 'created', attributes: { status: 'In progress' } });
-    expect(discovered.items[0]).not.toHaveProperty('text');
-    expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !request.query?.fields?.includes('description'))).toBe(true);
-    const opened = await source.open({ item: discovered.items[0]!.id });
-    expect(opened.items[0]).toMatchObject({ id: discovered.items[0]!.id, text: 'ECHO-1: Ship connector\n\nLaunch Friday\n@Alex' });
-  });
-
   it('shares only queued connection checks and keeps post-read fences independent', async () => {
     const f = fixture(); const { reader } = await f.make('ECHO');
     const verificationReads = () => f.request.mock.calls.filter(([request]) =>
@@ -135,11 +127,11 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
   it('opens an anchor first and admits bounded, deduplicated linked-ticket metadata through the existing item refs', async () => {
     const f = fixture();
     for (const id of ['10002', '10003', '10004', '10005', '10006', '10007']) f.state.tickets.set(id, ticket(id, `Linked ${id}`));
-    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: [
+    f.state.tickets.set('10001', withFields({ issuelinks: [
       { outwardIssue: { id: '10007' } }, { inwardIssue: { id: '10003' } }, { outwardIssue: { id: '10002' } },
       { inwardIssue: { id: '10003' } }, { outwardIssue: { id: '10001' } }, { outwardIssue: { id: '10006' } },
       { inwardIssue: { id: '10005' } }, { outwardIssue: { id: '10004' } },
-    ] } });
+    ] }));
     const { source } = await f.make('ECHO');
     const anchor = (await source.search({ query: 'ship' })).items[0]!;
 
@@ -179,7 +171,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
   it('bounds a large valid link list without blocking the anchor, including limit one', async () => {
     const f = fixture();
     for (const id of ['10002', '10003', '10004', '10005']) f.state.tickets.set(id, ticket(id, `Linked ${id}`));
-    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: Array.from({ length: 65 }, (_, index) => ({ outwardIssue: { id: String(10002 + index) } })) } });
+    f.state.tickets.set('10001', withFields({ issuelinks: Array.from({ length: 65 }, (_, index) => ({ outwardIssue: { id: String(10002 + index) } })) }));
     const { source } = await f.make('ECHO');
     const anchor = (await source.search({ query: 'ship' })).items[0]!;
     f.request.mockClear();
@@ -197,7 +189,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
 
   it('refreshes a citation as anchor-only without reading optional linked context', async () => {
     const f = fixture();
-    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: [{ outwardIssue: { id: '10002' } }] } });
+    f.state.tickets.set('10001', withFields({ issuelinks: [{ outwardIssue: { id: '10002' } }] }));
     f.state.denied.set('10002', 'unauthorized');
     const { source } = await f.make('ECHO');
     const discovered = (await source.search({ query: 'ship' })).items[0]!;
@@ -217,7 +209,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
       const related = ticket('10002', 'Private linked issue');
       f.state.tickets.set('10002', state === 'outside_project' ? { ...related, key: 'OTHER-2', fields: { ...related.fields,
         project: { id: '20000', key: 'OTHER', self: `${origin}/rest/api/3/project/20000` } } } : related);
-      f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: [{ outwardIssue: { id: '10002' } }] } });
+      f.state.tickets.set('10001', withFields({ issuelinks: [{ outwardIssue: { id: '10002' } }] }));
       if (state === 'denied') f.state.denied.set('10002', 'unauthorized');
       const { source } = await f.make('ECHO');
       const anchor = (await source.search({ query: 'ship' })).items[0]!;
@@ -233,7 +225,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
 
   it('fails closed for a transient linked-issue error after the final connection fence', async () => {
     const f = fixture();
-    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: [{ outwardIssue: { id: '10002' } }] } });
+    f.state.tickets.set('10001', withFields({ issuelinks: [{ outwardIssue: { id: '10002' } }] }));
     f.state.hook = request => {
       if (request.path === `${prefix}/issue/10002`) throw new AuthorityOperationError('unavailable', 'synthetic temporary provider failure');
     };
@@ -250,9 +242,9 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const f = fixture();
     f.state.tickets.set('10002', ticket('10002', 'First related'));
     f.state.tickets.set('10003', ticket('10003', 'Second related'));
-    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: [
+    f.state.tickets.set('10001', withFields({ issuelinks: [
       { outwardIssue: { id: '10003' } }, { inwardIssue: { id: '10002' } },
-    ] } });
+    ] }));
     const { source } = await f.make('ECHO');
     const anchor = (await source.search({ query: 'ship' })).items[0]!;
     const limited = await source.open({ item: anchor.id, limit: 2 });
@@ -260,7 +252,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(limited.truncated).toBe(true);
 
     const malformed = fixture();
-    malformed.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, issuelinks: [{ outwardIssue: { id: '10002' }, inwardIssue: { id: '10003' } }] } });
+    malformed.state.tickets.set('10001', withFields({ issuelinks: [{ outwardIssue: { id: '10002' }, inwardIssue: { id: '10003' } }] }));
     const malformedSource = await malformed.make('ECHO');
     const malformedAnchor = (await malformedSource.source.search({ query: 'ship' })).items[0]!;
     await expect(malformedSource.source.open({ item: malformedAnchor.id })).rejects.toMatchObject({ code: 'invalid_output' });
@@ -274,11 +266,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     f.state.pages = [page(['10001', '10002'])];
     const global = await f.make();
     expect((await global.source.list({})).items.map(item => item.citation.ticket_id)).toEqual(['10001', '10002']);
-    expect(f.request.mock.calls.find(([request]) => request.path.endsWith('/search/jql'))![0].body?.jql).toBe('created >= "1970-01-01" ORDER BY created DESC, id DESC');
-    f.request.mockClear(); f.state.pages = [page(['10001'])];
-    const scoped = await f.make('ECHO');
-    expect((await scoped.source.list({})).items.map(item => item.citation.ticket_id)).toEqual(['10001']);
-    expect(f.request.mock.calls.find(([request]) => request.path.endsWith('/search/jql'))![0].body?.jql).toBe('project = 10000 ORDER BY created DESC, id DESC');
+    expect(f.jqls()[0]).toBe('created >= "1970-01-01" ORDER BY created DESC, id DESC');
   });
 
   it('finishes 22-ticket research and both release fences within the 200-credential-request window', async () => {
@@ -307,7 +295,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const reader = await createJiraPersonLiveEvidenceReaderV1({ binding, transport: f.transport, project: selection });
     const result = await reader.list({ limit: 5 });
     expect(result.items[0]).toMatchObject({ label: 'ECHO-1: Ship connector', citation: { ticket_id: '10001' } });
-    expect(f.request.mock.calls.find(([request]) => request.path === `${prefix}/search/jql`)![0].body?.jql).toBe('project = 10000 ORDER BY created DESC, id DESC');
+    expect(f.jqls()[0]).toBe('project = 10000 ORDER BY created DESC, id DESC');
   });
 
   it.each([undefined, [], ['OTHER'], 'KAN', ['KAN', 'invalid key'], ['KAN', '10000']])('rejects an unverified or malformed previous project key (%j)', async keys => {
@@ -332,8 +320,8 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const { source } = await f.make('ECHO');
     await source.search({ query: 'launch' });
     await source.search({ query: 'ECHO-1' });
-    await source.list({});
-    expect(f.request.mock.calls.filter(([request]) => request.path === `${prefix}/search/jql`).map(([request]) => request.body?.jql)).toEqual([
+    expect((await source.list({})).items.map(item => item.citation.ticket_id)).toEqual(['10001']);
+    expect(f.jqls()).toEqual([
       'project = 10000 AND (text ~ "\\\"launch\\\"") ORDER BY created DESC, id DESC',
       'project = 10000 AND (key = "ECHO-1") ORDER BY created DESC, id DESC',
       'project = 10000 ORDER BY created DESC, id DESC',
@@ -345,8 +333,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const f = fixture(); const { source } = await f.make('ECHO');
     const first = operation === 'open' || operation === 'revalidate' ? await source.search({ query: 'launch' }) : undefined;
     const auditsBefore = f.audit.record.mock.calls.length;
-    f.state.tickets.set('10001', { ...ticket(), key: 'OTHER-1', fields: { ...ticket().fields,
-      project: { id: '99999', key: 'OTHER', self: `${origin}/rest/api/3/project/99999` } } });
+    f.state.tickets.set('10001', { ...withFields({ project: { id: '99999', key: 'OTHER', self: `${origin}/rest/api/3/project/99999` } }), key: 'OTHER-1' });
     const result = operation === 'search' ? source.search({ query: 'launch' })
       : operation === 'list' ? source.list({})
       : operation === 'open' ? source.open({ item: first!.items[0]!.id }) : source.revalidate({});
@@ -382,7 +369,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     await expect(source.open({ item: '10001' })).rejects.toMatchObject({ code: 'not_found' });
     const result = await source.search({ query: 'launch' });
     const item = result.items[0]!;
-    expect(item).toMatchObject({ kind: 'ticket', label: 'ECHO-1: Ship connector',
+    expect(item).toMatchObject({ kind: 'ticket', label: 'ECHO-1: Ship connector', date_kind: 'created',
       visibility: 'only_me', attributes: { status: 'In progress', owner: 'Alex', due_at: '2026-10-02' }, occurred_at: '2026-09-30',
       citation: { ticket_id: '10001', external_scope_id: cloudid, permalink: `${origin}/browse/ECHO-1`, text_sha256: digest('') } });
     expect(item).not.toHaveProperty('text');
@@ -393,6 +380,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     for (const hidden of ['Ship connector', 'Launch Friday', 'launch', 'jira_item_', 'never-return', 'emailAddress']) expect(auditText).not.toContain(hidden);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,status,assignee,duedate' } }));
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ fields: ['id'], maxResults: 5 }) }));
+    expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !request.query?.fields?.includes('description'))).toBe(true);
     const opened = await source.open({ item: item.id });
     const text = 'ECHO-1: Ship connector\n\nLaunch Friday\n@Alex';
     expect(opened.items[0]).toMatchObject({ id: item.id, text, citation: { text_sha256: digest(text) } });
@@ -469,10 +457,21 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(getter).not.toHaveBeenCalled();
   });
 
-  it.each(['not-v3-ADF', { type: 'doc', version: 1, content: [{ type: 'unknown' }] },
-    { type: 'doc', version: 1, content: [{ type: 'text', text: '\u0000bad' }] }])('refuses malformed bodies on open after metadata discovery (%j)', async description => {
-    const f = fixture(); const { source } = await f.make();
-    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, description } });
+  const checklist = (state: unknown) => ({ type: 'doc', version: 1, content: [{ type: 'taskList', attrs: { localId: 'list' }, content: [
+    { type: 'taskItem', attrs: { localId: 'task', ...(state === undefined ? {} : { state }) }, content: [{ type: 'text', text: 'Review gate' }] },
+  ] }] });
+  const inlineCard = (attrs: unknown) => ({ type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'inlineCard', attrs }] }] });
+  it.each<[string, unknown]>([
+    ['non-ADF body', 'not-v3-ADF'],
+    ['unknown body node', { type: 'doc', version: 1, content: [{ type: 'unknown' }] }],
+    ['NUL body text', { type: 'doc', version: 1, content: [{ type: 'text', text: '\u0000bad' }] }],
+    ...[undefined, null, 'done', 'IN_PROGRESS'].map((state): [string, unknown] => [`checklist completion state ${JSON.stringify(state)}`, checklist(state)]),
+    ...[{}, { url: 7 }, { url: 'https://example.test/\u0000' }, { url: 'https://example.test', data: {} }]
+      .map((attrs): [string, unknown] => [`inline link card ${JSON.stringify(attrs)}`, inlineCard(attrs)]),
+  ])('refuses a malformed %s on open after metadata discovery', async (_name, description) => {
+    const f = fixture();
+    f.state.tickets.set('10001', withFields({ description }));
+    const { source } = await f.make();
     const discovered = await source.search({ query: 'ship' });
     expect(discovered.items[0]).not.toHaveProperty('text');
     await expect(source.open({ item: discovered.items[0]!.id })).rejects.toMatchObject({ code: 'invalid_output' });
@@ -482,11 +481,11 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
   it('opens a ticket containing an inline link card without fetching the linked page', async () => {
     const f = fixture();
     const url = 'https://never-fetch.example.test/walkthrough';
-    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, description: {
+    f.state.tickets.set('10001', withFields({ description: {
       type: 'doc', version: 1, content: [{ type: 'paragraph', content: [
         { type: 'text', text: 'Read ' }, { type: 'inlineCard', attrs: { url } }, { type: 'text', text: ' before the gate.' },
       ] }],
-    } } });
+    } }));
     const { source } = await f.make();
     const inventory = await source.list({ limit: 1 });
     const opened = await source.open({ item: inventory.items[0]!.id });
@@ -499,7 +498,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
 
   it('searches and opens checklist tickets while preserving task completion in the cited text', async () => {
     const f = fixture();
-    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, description: {
+    f.state.tickets.set('10001', withFields({ description: {
       type: 'doc', version: 1, content: [{ type: 'taskList', attrs: { localId: 'private-list-id' }, content: [
         { type: 'taskItem', attrs: { localId: 'private-task-id', state: 'TODO' }, content: [
           { type: 'text', text: 'Review ' }, { type: 'text', text: 'gate', marks: [{ type: 'strong' }] },
@@ -508,7 +507,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
           { type: 'taskItem', attrs: { localId: 'private-done-id', state: 'DONE' }, content: [{ type: 'text', text: 'Run tests' }] },
         ] },
       ] }],
-    } } });
+    } }));
     f.state.pages = [page(['10002', '10001']), page()];
     const { source } = await f.make();
     const searched = await source.search({ query: 'gate' });
@@ -525,49 +524,23 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     }
   });
 
-  it.each([undefined, null, 'done', 'IN_PROGRESS'])('refuses a checklist with an unknown completion state (%j)', async state => {
-    const f = fixture();
-    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, description: {
-      type: 'doc', version: 1, content: [{ type: 'taskList', attrs: { localId: 'list' }, content: [
-        { type: 'taskItem', attrs: { localId: 'task', ...(state === undefined ? {} : { state }) }, content: [{ type: 'text', text: 'Review gate' }] },
-      ] }],
-    } } });
-    const { source } = await f.make();
-    const discovered = await source.search({ query: 'gate' });
-    await expect(source.open({ item: discovered.items[0]!.id })).rejects.toMatchObject({ code: 'invalid_output' });
-    expect(f.releases.map(release => release.operation)).toEqual(['search']);
-  });
-
   it.each(['ECHO-1', 'echo-1'])('uses exact issue-key search for %s', async query => {
     const f = fixture(); const { source } = await f.make();
     const result = await source.search({ query });
     expect(result.items).toHaveLength(1);
-    expect(f.request.mock.calls.find(([request]) => request.path.endsWith('/search/jql'))![0].body?.jql)
-      .toBe('key = "ECHO-1" ORDER BY created DESC, id DESC');
+    expect(f.jqls()[0]).toBe('key = "ECHO-1" ORDER BY created DESC, id DESC');
   });
 
   it('compiles keyword search as independent terms within the pinned project', async () => {
     const f = fixture(); const { source } = await f.make('ECHO');
     await source.search({ query: 'launch connector' });
-    const request = f.request.mock.calls.find(([request]) => request.path.endsWith('/search/jql'))![0];
-    expect(request.body?.jql).toBe('project = 10000 AND (text ~ "\\\"launch\\\"" AND text ~ "\\\"connector\\\"") ORDER BY created DESC, id DESC');
-  });
-
-  it.each([{}, { url: 7 }, { url: 'https://example.test/\u0000' }, { url: 'https://example.test', data: {} }])('refuses malformed inline link cards (%j)', async attrs => {
-    const f = fixture();
-    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, description: {
-      type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'inlineCard', attrs }] }],
-    } } });
-    const { source } = await f.make();
-    const discovered = await source.search({ query: 'ship' });
-    await expect(source.open({ item: discovered.items[0]!.id })).rejects.toMatchObject({ code: 'invalid_output' });
-    expect(f.releases.map(release => release.operation)).toEqual(['search']);
+    expect(f.jqls()[0]).toBe('project = 10000 AND (text ~ "\\\"launch\\\"" AND text ~ "\\\"connector\\\"") ORDER BY created DESC, id DESC');
   });
 
   it('bounds NFC text by UTF-8 bytes before hashing, with aggregate releases accepted by the wrapper', async () => {
     const f = fixture();
     f.state.pages = [page(Array.from({ length: 5 }, (_, i) => String(10001 + i)))];
-    for (let i = 0; i < 5; i++) f.state.tickets.set(String(10001 + i), { ...ticket(String(10001 + i), 'Cafe\u0301'), fields: { ...ticket().fields, summary: 'Cafe\u0301', description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: '\t😀'.repeat(3000) }] }] } } });
+    for (let i = 0; i < 5; i++) f.state.tickets.set(String(10001 + i), withFields({ summary: 'Cafe\u0301', description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: '\t😀'.repeat(3000) }] }] } }, ticket(String(10001 + i), 'Cafe\u0301')));
     const { source } = await f.make(); const result = await source.search({ query: 'launch', limit: 50 });
     expect(result.items).toHaveLength(5);
     for (const discovered of result.items) {
@@ -586,21 +559,19 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
   it('keeps query operators literal and connection/grant selectors outside method arguments', async () => {
     const f = fixture(); const { source, reader } = await f.make();
     await source.search({ query: 'hello" OR project = SECRET' });
-    const request = f.request.mock.calls.find(([r]) => r.path.endsWith('/search/jql'))![0];
     const literals = ['"hello\\""', '"OR"', '"project"', '"="', '"SECRET"'];
-    expect(request.body!.jql).toBe(literals.map(value => `text ~ ${JSON.stringify(value)}`).join(' AND ') + ' ORDER BY created DESC, id DESC');
+    expect(f.jqls()[0]).toBe(literals.map(value => `text ~ ${JSON.stringify(value)}`).join(' AND ') + ' ORDER BY created DESC, id DESC');
     expect(Object.isFrozen(reader.binding)).toBe(true);
     f.state.pages = [page()];
     await reader.search({ query: 'ECHO-1', limit: 1, ...{ person: 'another-person', cloudid: 'another-site', connectionId: 'another-connection' } });
-    expect(f.request.mock.calls.filter(([r]) => r.path.endsWith('/search/jql')).at(-1)![0].body!.jql).toBe('key = "ECHO-1" ORDER BY created DESC, id DESC');
+    expect(f.jqls().at(-1)).toBe('key = "ECHO-1" ORDER BY created DESC, id DESC');
     expect(f.request.mock.calls.every(([r]) => !r.path.includes('another'))).toBe(true);
   });
 
   it('counts repeated keywords once when compiling a bounded query', async () => {
     const f = fixture(); const { source } = await f.make();
     await source.search({ query: Array.from({ length: 40 }, (_, i) => i % 2 === 0 ? 'MRD' : 'mrd').join(' ') });
-    const request = f.request.mock.calls.find(([r]) => r.path.endsWith('/search/jql'))![0];
-    expect(request.body!.jql).toBe(`text ~ ${JSON.stringify('"mrd"')} ORDER BY created DESC, id DESC`);
+    expect(f.jqls()[0]).toBe(`text ~ ${JSON.stringify('"mrd"')} ORDER BY created DESC, id DESC`);
   });
 
   it('lists metadata with opaque request-bound pagination and validates the project and date selection', async () => {
@@ -624,7 +595,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
 
   it('filters UTC dates inclusively and audits empty pages while advancing pagination', async () => {
     const f = fixture(); f.state.pages = [page(['10001'], 'page-2'), page(['10002'])];
-    f.state.tickets.set('10002', { ...ticket('10002'), fields: { ...ticket().fields, created: '2026-09-30T23:30:00.000-0700' } });
+    f.state.tickets.set('10002', withFields({ created: '2026-09-30T23:30:00.000-0700' }, ticket('10002')));
     const { source } = await f.make();
     const first = await source.list({ since: '2026-10-01', until: '2026-10-01', limit: 1 });
     expect(first.items).toEqual([]); expect(first.next_cursor).toBeDefined();

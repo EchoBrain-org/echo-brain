@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs, { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { privateDirectory, readJson, savedRunFiles, writePrivateJson, writePrivateText } from "../lib/private-files.mjs";
@@ -14,7 +14,6 @@ const git = (...args) => execFileSync("git", ["-C", checkout, ...args], { encodi
 const common = resolve(checkout, git("rev-parse", "--git-common-dir"));
 const worktrees = git("worktree", "list", "--porcelain", "-z").split("\0").filter(line => line.startsWith("worktree ")).map(line => line.slice(9)).filter(existsSync).map(path => realpathSync(path));
 const main = worktrees.find(path => resolve(path, ".git") === common) ?? worktrees[0];
-const inside = (root, path) => { const name = relative(root, path); return name === "" || (name !== ".." && !name.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(name)); };
 function temporary(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-private-files-security-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -45,12 +44,6 @@ test("rejects the current checkout and every active associated worktree before c
   assert.ok(main && existsSync(main));
   const suffix = `.diagnostic-output-must-not-exist-${randomUUID()}`;
   for (const path of new Set([checkout, main, ...worktrees])) refusedBeforeMutation(t, join(path, suffix, "nested"));
-});
-
-test("rejects an active associated worktree outside the main checkout before mutation", t => {
-  const external = worktrees.find(path => !inside(main, path));
-  if (external === undefined) { t.skip("This checkout has no existing external worktree; the full inventory test still runs."); return; }
-  refusedBeforeMutation(t, join(external, `.diagnostic-output-must-not-exist-${randomUUID()}`, "nested"));
 });
 
 test("resolves a parent symlink into the main checkout before creating missing descendants", t => {

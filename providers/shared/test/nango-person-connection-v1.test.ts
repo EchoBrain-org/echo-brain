@@ -22,18 +22,13 @@ function fixture() {
   const nango = createNangoPersonConnectionV1({ provider, integration_id: integration, authorization: () => 'synthetic-nango-key', fetch: fetch as typeof globalThis.fetch });
   return { fetch, nango };
 }
-  it('preserves credential throttling without exposing the response or retrying it', async () => {
-    const f = fixture();
-    f.fetch.mockResolvedValueOnce(new Response('private provider body', { status: 429, headers: { 'Retry-After': '41' } }));
-    await expect(f.nango.connection('reference-fixture')).rejects.toMatchObject({ code: 'rate_limited', message: failureMessage });
-    expect(f.fetch).toHaveBeenCalledTimes(1);
-  });
-  it('attributes a Nango connection 429 without reading its response body', async () => {
+  it('preserves and attributes credential throttling without reading, exposing or retrying the response', async () => {
     const f = fixture(); const events: CoreRuntimeObservationV1[] = [];
     const response = new Response('private Nango rejection body', { status: 429, headers: { 'Retry-After': '41', 'X-RateLimit-Remaining': '0' } });
     const readers = [vi.spyOn(response, 'text'), vi.spyOn(response, 'json'), vi.spyOn(response.body!, 'getReader')];
     f.fetch.mockResolvedValueOnce(response);
-    await expect(observeCoreRuntimeV1('ask_request', () => f.nango.connection('reference-fixture'), { observer: event => { events.push(event); } })).rejects.toMatchObject({ code: 'rate_limited' });
+    await expect(observeCoreRuntimeV1('ask_request', () => f.nango.connection('reference-fixture'), { observer: event => { events.push(event); } })).rejects.toMatchObject({ code: 'rate_limited', message: failureMessage });
+    expect(f.fetch).toHaveBeenCalledTimes(1);
     expect(events.filter(event => event.event === 'succeeded' && event.phase === 'http_request')).toEqual(expect.arrayContaining([
       expect.objectContaining({ upstream_service: 'nango', upstream_operation: 'connection_read', counts: expect.objectContaining({ http_status: 429, upstream_retry_after_seconds: 41, upstream_rate_remaining: 0 }) }),
     ]));
@@ -115,9 +110,13 @@ function fixture() {
     await expect(f.nango.connection('reference-fixture')).rejects.toMatchObject({ code: 'unavailable' });
     await expect(f.nango.connect(tags)).rejects.toMatchObject({ code: 'unavailable' });
   });
-  it.each([{ connection_id: 'another-reference' }, { provider_config_key: 'another-integration' }, { provider: product === 'jira' ? 'confluence' : 'jira' }, { credentials: { type: 'BASIC', password: 'synthetic-private' } }, { tags: { ...tags, echo_attempt: undefined } }])('fails closed for mismatched or malformed connection data', async change => {
+  it.each([
+    [{ connection_id: 'another-reference' }, 'unauthorized'], [{ provider_config_key: 'another-integration' }, 'unauthorized'],
+    [{ provider: product === 'jira' ? 'confluence' : 'jira' }, 'unauthorized'], [{ credentials: { type: 'BASIC', password: 'synthetic-private' } }, 'unauthorized'],
+    [{ tags: { ...tags, echo_attempt: undefined } }, 'invalid_output'],
+  ] as const)('fails closed for mismatched or malformed connection data', async (change, code) => {
     const f = fixture(); f.fetch.mockResolvedValueOnce(json({ ...connection, ...change }));
-    await expect(f.nango.connection('reference-fixture')).rejects.toMatchObject({ message: failureMessage });
+    await expect(f.nango.connection('reference-fixture')).rejects.toMatchObject({ code, message: failureMessage });
   });
   it('bounds streamed Nango responses and sanitizes provider failures', async () => {
     const f = fixture(); f.fetch.mockResolvedValueOnce(json({ private: 'x'.repeat(128 * 1024) }));
