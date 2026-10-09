@@ -114,6 +114,22 @@ describe('SQLite open items v1', () => {
     expect(f.items.read(a!.item_id)).toMatchObject({ state: 'open', owner_membership_id: ARI, owner_match: 'approver', sent_at: f.clock().toISOString(), send_command_id: 'cmd-1', state_set_by: ARI, state_set_at: f.clock().toISOString() });
   });
 
+  it.each([true, false])('replays the original include=%s counts after state and owner changes', async include => {
+    const f = await doneRunWithItems(['46']);
+    const item = f.items.forRun(f.run.run_id)[0]!;
+    const command = { run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: item.item_id, include }] };
+    const counts = { sent: include ? 1 : 0, not_relevant: include ? 0 : 1 };
+    expect(f.items.send(command)).toEqual({ kind: 'sent', ...counts });
+    // Even changes in the same clock tick cannot change the command's answer.
+    f.items.setState(item.item_id, include ? 'not_relevant' : 'open', ARI);
+    expect(f.items.sentBy(f.run.run_id, command.command_id)).toEqual(counts);
+    f.advance(1_000);
+    f.items.setState(item.item_id, 'done', ARI);
+    f.items.assign(item.item_id, f.mina, ARI);
+    expect(f.items.send({ ...command, choices: [{ item_id: item.item_id, include: !include }] })).toEqual({ kind: 'replayed', ...counts });
+    expect(f.items.read(item.item_id)).toMatchObject({ state: 'done', owner_membership_id: f.mina });
+  });
+
   it('changes the state or owner only of a sent item', async () => {
     const f = await doneRunWithItems(['46', '47']);
     const [a, b] = f.items.forRun(f.run.run_id);
@@ -127,6 +143,18 @@ describe('SQLite open items v1', () => {
     expect(f.items.assign(b!.item_id, f.rafael, ARI)).toMatchObject({ owner_membership_id: f.rafael, owner_match: 'reassigned', state: 'open' });
     expect(f.db.prepare('SELECT owner_set_by, owner_set_at FROM authority_impact_items_v1 WHERE item_id=?').get(b!.item_id)).toEqual({ owner_set_by: ARI, owner_set_at: f.clock().toISOString() });
     expect(f.items.assign('itm_missing', f.rafael, ARI)).toBeUndefined();
+  });
+
+  it('requires a matching initial Send choice and freezes that choice after Send', async () => {
+    const f = await doneRunWithItems(['46']);
+    const item = f.items.forRun(f.run.run_id)[0]!;
+    const at = f.clock().toISOString();
+    expect(() => f.db.prepare("UPDATE authority_impact_items_v1 SET state='open', sent_at=?, send_command_id='cmd-1', send_included=0 WHERE item_id=?").run(at, item.item_id)).toThrow('state move is not allowed');
+    expect(f.items.read(item.item_id)?.state).toBe('unsent');
+    f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: item.item_id, include: true }] });
+    expect(() => f.db.prepare('UPDATE authority_impact_items_v1 SET send_included=0 WHERE item_id=?').run(item.item_id)).toThrow('state move is not allowed');
+    expect(() => f.db.prepare('UPDATE authority_impact_items_v1 SET send_included=NULL WHERE item_id=?').run(item.item_id)).toThrow('state move is not allowed');
+    expect(f.items.sentBy(f.run.run_id, 'cmd-1')).toEqual({ sent: 1, not_relevant: 0 });
   });
 
   it('never moves an item back to unsent, keeps identity frozen, and keeps only a newer check', async () => {

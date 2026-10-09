@@ -853,6 +853,7 @@ CREATE TABLE authority_impact_items_v1 (
   state_set_at TEXT CHECK (state_set_at IS NULL OR unixepoch(state_set_at) IS NOT NULL),
   sent_at TEXT CHECK (sent_at IS NULL OR unixepoch(sent_at) IS NOT NULL),
   send_command_id TEXT CHECK (send_command_id IS NULL OR length(send_command_id) BETWEEN 1 AND 128),
+  send_included INTEGER CHECK (send_included IS NULL OR send_included IN (0, 1)),
   checked_verdict TEXT CHECK (checked_verdict IS NULL OR checked_verdict IN ('landed', 'still_open', 'changed', 'unreadable')),
   checked_by TEXT REFERENCES authority_memberships(membership_id),
   checked_at TEXT CHECK (checked_at IS NULL OR unixepoch(checked_at) IS NOT NULL),
@@ -863,6 +864,7 @@ CREATE TABLE authority_impact_items_v1 (
   CHECK (relation IS NOT NULL OR expected IS NULL),
   CHECK ((state = 'unsent') = (sent_at IS NULL)),
   CHECK ((sent_at IS NULL) = (send_command_id IS NULL)),
+  CHECK ((sent_at IS NULL) = (send_included IS NULL)),
   CHECK ((state_set_by IS NULL) = (state_set_at IS NULL)),
   CHECK ((owner_set_by IS NULL) = (owner_set_at IS NULL)),
   CHECK ((checked_verdict IS NULL) = (checked_at IS NULL) AND (checked_at IS NULL) = (checked_by IS NULL) AND (checked_by IS NULL) = (checked_run_id IS NULL))
@@ -886,9 +888,10 @@ WHEN NEW.item_id != OLD.item_id OR NEW.run_id != OLD.run_id OR NEW.item_key != O
   OR NEW.relation IS NOT OLD.relation OR NEW.expected IS NOT OLD.expected OR NEW.created_at != OLD.created_at
 BEGIN SELECT RAISE(ABORT, 'open item identity is immutable'); END;
 CREATE TRIGGER authority_impact_item_send_v1
-BEFORE UPDATE OF state, sent_at, send_command_id ON authority_impact_items_v1
+BEFORE UPDATE OF state, sent_at, send_command_id, send_included ON authority_impact_items_v1
 WHEN (OLD.state = 'unsent' AND NEW.state NOT IN ('unsent', 'open', 'not_relevant'))
-  OR (OLD.state != 'unsent' AND (NEW.state = 'unsent' OR NEW.sent_at IS NOT OLD.sent_at OR NEW.send_command_id IS NOT OLD.send_command_id))
+  OR (OLD.state = 'unsent' AND NEW.state != 'unsent' AND NEW.send_included IS NOT (NEW.state = 'open'))
+  OR (OLD.state != 'unsent' AND (NEW.state = 'unsent' OR NEW.sent_at IS NOT OLD.sent_at OR NEW.send_command_id IS NOT OLD.send_command_id OR NEW.send_included IS NOT OLD.send_included))
 BEGIN SELECT RAISE(ABORT, 'open item state move is not allowed'); END;
 -- Any change to the last check needs a strictly newer checked_at; the first check comes from NULL.
 CREATE TRIGGER authority_impact_item_check_newer_v1

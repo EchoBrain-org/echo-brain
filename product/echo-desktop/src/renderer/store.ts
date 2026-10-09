@@ -3269,7 +3269,7 @@ export interface HomeState {
   seq: number;
   loading: boolean;
   failure?: Failure;
-  /** Meetings are turned on for the organization: decisions can reach Home at all. */
+  /** Meeting review is available; shared open items do not depend on it. */
   meetings: boolean;
   /** Each part keeps its last good value when a later read of it fails. */
   reviews: readonly PersonMeetingReviewV2[];
@@ -3384,11 +3384,9 @@ export async function loadHome(): Promise<void> {
   if (!homeShown(mine)) return;
   if (!tools.ok) { set({ home: { ...state.home!, loading: false, failure: tools.failure } }); accountLost(tools.failure); return; }
   const granola = tools.value.tools.find(tool => tool.tool_id === 'granola');
-  // Meetings are off for the organization: no decision can reach Home.
-  if (granola === undefined || granola.status === 'unavailable') {
-    set({ home: { ...state.home!, loading: false, meetings: false, reviews: [], runs: [], open: null, rows: [] } });
-    return;
-  }
+  // An owner can receive items from someone else's decision without Granola.
+  // Only the meeting-review read depends on its availability.
+  set({ home: { ...state.home!, meetings: granola !== undefined && granola.status !== 'unavailable' } });
   await readHome(mine, false);
 }
 
@@ -3418,7 +3416,7 @@ async function readHome(mine: number, quiet: boolean): Promise<void> {
   const before = state.home?.runs ?? [];
   const readOpen = () => runsCommand({ schema_version: 1, operation: 'home' });
   const [reviews, runs, eager] = await Promise.allSettled([
-    meetingCommand({ operation: 'reviews' }),
+    state.home?.meetings ? meetingCommand({ operation: 'reviews' }) : Promise.resolve({ reviews: [] }),
     runsCommand({ schema_version: 1, operation: 'list' }),
     quiet ? Promise.resolve(null) : readOpen(),
   ]);
@@ -3447,7 +3445,7 @@ async function readHome(mine: number, quiet: boolean): Promise<void> {
   const shown = new Set(next.open?.items.map(item => item.item_id) ?? []);
   const closeFailures = Object.fromEntries(Object.entries(previous.closeFailures).filter(([item]) => shown.has(item)));
   const failure: Failure | undefined = reviews.status === 'fulfilled' ? undefined : quiet ? previous.failure : { code: 'unavailable', retryable: true };
-  set({ home: withRows({ ...previous, ...next, closing, closeFailures, sent, loading: false, meetings: true, failure }) });
+  set({ home: withRows({ ...previous, ...next, closing, closeFailures, sent, loading: false, failure }) });
   updateDecisionRun(next.runs);
   // The next poll waits longer after a failed runs read, or a failed read of what a check found.
   const failed = runs.status === 'rejected' ? failureOf(runs.reason) : resultOwed && open.status === 'rejected' ? failureOf(open.reason) : undefined;

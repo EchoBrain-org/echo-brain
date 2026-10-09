@@ -294,6 +294,16 @@ describe('open items: send, update, reassign', () => {
     await expect(assign(f, 'rafael', ticket, 'mina')).rejects.toMatchObject({ code: 'not_found' });
   });
 
+  it('replays Send with its original counts after an owner marks an item not relevant', async () => {
+    const f = await openItemsFixture(); await f.finishImpactRun();
+    const unsent = (await scope(f, 'ari', 'run')).items;
+    const choose = () => ({ include: true });
+    await expect(sendAll(f, unsent, 'c1', choose)).resolves.toEqual({ sent: 2, not_relevant: 0 });
+    const ticket = unsent.find(entry => entry.kind === 'ticket')!;
+    await expect(setState(f, 'mina', ticket.item_id, 'not_relevant')).resolves.toEqual({ state: 'not_relevant' });
+    await expect(sendAll(f, unsent, 'c1', choose)).resolves.toEqual({ sent: 2, not_relevant: 0 });
+  });
+
   it('lets only the approver or the owner change state, and a project lead reassign', async () => {
     const f = await sentFixture();
     const ticket = f.ticket.item_id;                                       // sent to Mina, its matched owner
