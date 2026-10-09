@@ -8,7 +8,7 @@ import {
 import { Close } from './icons.js';
 
 /** A person, as a chip: their initials in their color, and their first name. */
-function Chip({ person, label }: { person: { membership_id: string; name: string }; label: string }) {
+export function Chip({ person, label }: { person: { membership_id: string; name: string }; label: string }) {
   return (
     <span class="owner-chip">
       <span class="face" style={{ background: colorFor(person.membership_id) }} aria-hidden="true">{initials(person.name)}</span>
@@ -50,7 +50,8 @@ function Owner({ send, item, me, name: itemName }: { send: SendState; item: Open
     return (
       <span class="owner-slot">
         <Chip person={{ membership_id: pick.membership_id, name: pick.display_name }} label={name ?? pick.display_name} />
-        <button type="button" class="icon-button" aria-label={`Remove ${pick.display_name}`} disabled={send.busy} onClick={() => clearPick(item.item_id)}><Close /></button>
+        <button type="button" class="icon-button" aria-label={`Remove ${name ?? pick.display_name} from ${itemName}`} disabled={send.busy}
+          onClick={() => clearPick(item.item_id)}><Close /></button>
       </span>
     );
   }
