@@ -22,14 +22,16 @@ function rateLimited(error: unknown): boolean {
  * OpenRouter credential. Interactive calls (Ask) are served first and may use
  * every slot; background calls (extraction, notes, search, trigger research)
  * use at most four. It never retries: a 429 only pauses background admission,
- * 5 s doubling to 60 s, until a call succeeds. Callers wrap the call itself,
- * so time spent queued never counts against the call's own timeout.
+ * once per episode, 5 s doubling to 60 s until a call succeeds. Callers wrap
+ * the call itself, so time spent queued never counts against its own timeout.
  */
 export function createModelCallLimiterV1(): ModelCallLimiterV1 {
   let active = 0;
   let background = 0;
   let cooldownMs = 0;
   let pausedUntil = 0;
+  /** Pauses begun. A call speaks for the provider only if admitted since the latest one began, and once it is over. */
+  let pauses = 0;
   let wake: ReturnType<typeof setTimeout> | undefined;
   const waiting: Record<ModelCallPriorityV1, (() => void)[]> = { interactive: [], background: [] };
   const pump = (): void => {
@@ -47,27 +49,29 @@ export function createModelCallLimiterV1(): ModelCallLimiterV1 {
     async run<T>(priority: ModelCallPriorityV1, signal: AbortSignal | undefined, op: () => Promise<T>): Promise<T> {
       signal?.throwIfAborted();
       const queue = waiting[priority];
-      await new Promise<void>((resolve, reject) => {
-        const abort = () => { queue.splice(queue.indexOf(admit), 1); reject(signal!.reason); };
+      const admittedAt = await new Promise<number>((resolve, reject) => {
+        const abort = () => { const at = queue.indexOf(admit); if (at >= 0) queue.splice(at, 1); reject(signal!.reason); };
         const admit = () => {
           queue.shift();
           signal?.removeEventListener("abort", abort);
           active++;
           if (priority === "background") background++;
-          resolve();
+          resolve(pauses);
         };
         signal?.addEventListener("abort", abort, { once: true });
         queue.push(admit);
         pump();
       });
+      const current = () => admittedAt === pauses && Date.now() >= pausedUntil;
       try {
         const value = await op();
-        cooldownMs = 0;
+        if (current()) cooldownMs = 0;
         return value;
       } catch (error) {
-        if (rateLimited(error)) {
+        if (rateLimited(error) && current()) {
           cooldownMs = Math.min(cooldownMs === 0 ? COOLDOWN_MIN_MS : cooldownMs * 2, COOLDOWN_MAX_MS);
           pausedUntil = Date.now() + cooldownMs;
+          pauses++;
         }
         throw error;
       } finally {

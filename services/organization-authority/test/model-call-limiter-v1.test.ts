@@ -71,4 +71,20 @@ describe('model call limiter', () => {
     void f.call('b5', 'background'); await vi.advanceTimersByTimeAsync(5_000); await flush();
     expect(f.started.at(-1)).toBe('b5');
   });
+
+  it('pauses once for concurrent 429s, ignores calls admitted before the pause, and doubles on the next episode', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const f = held();
+    const limited = { diagnostic: { http_status: 429 } };
+    for (const name of ['b1', 'b2', 'b3']) void f.call(name, 'background').catch(() => undefined);
+    await flush();
+    await f.release('b1', limited); await f.release('b2', limited);
+    await f.release('b3'); // admitted before the pause: its success resets nothing
+    void f.call('b4', 'background').catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(4_999); expect(f.started).not.toContain('b4');
+    await vi.advanceTimersByTimeAsync(1); await flush(); await f.release('b4', limited);
+    void f.call('b5', 'background');
+    await vi.advanceTimersByTimeAsync(9_999); expect(f.started).not.toContain('b5');
+    await vi.advanceTimersByTimeAsync(1); await flush(); expect(f.started.at(-1)).toBe('b5');
+  });
 });

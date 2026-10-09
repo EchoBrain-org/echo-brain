@@ -169,9 +169,11 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
         if (!persisted) throw new AuthorityOperationError('conflict', 'The research attempt no longer owns its run');
       } catch (error) {
         if (closing && controller.signal.aborted) throw error;
-        // The desktop's access token rotates every 12 h, revoking the old one, and `start` checks access again: no attempt is spent.
-        if (error instanceof PersonRecordSearchIndexLagV1 || (error instanceof AuthorityOperationError && error.code === 'unauthorized')) options.runs.release(row.run_id, lease_token, { counted: false });
-        else if (error instanceof AuthorityOperationError && (error.code === 'stale_access_state' || error.code === 'not_found')) options.runs.fail(row.run_id, lease_token, 'no_access');
+        // The desktop's access token rotates every 12 h, revoking the old one: while the membership is active no attempt is spent.
+        // This relies on `start` checking access again before any model call, so a lasting `unauthorized` cannot loop paid calls.
+        const rotated = error instanceof AuthorityOperationError && error.code === 'unauthorized' && options.people.isActiveMember(row.actor.organization_id, row.actor.membership_id);
+        if (error instanceof PersonRecordSearchIndexLagV1 || rotated) options.runs.release(row.run_id, lease_token, { counted: false });
+        else if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'stale_access_state' || error.code === 'not_found')) options.runs.fail(row.run_id, lease_token, 'no_access');
         else if (controller.signal.aborted || error instanceof AgenticAskDeadlineErrorV1) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'timed_out' });
         else if (unavailable(error)) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'unavailable' });
         else options.runs.fail(row.run_id, lease_token, 'research_failed');

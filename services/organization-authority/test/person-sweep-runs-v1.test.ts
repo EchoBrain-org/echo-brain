@@ -447,14 +447,13 @@ describe('sweeps on the runs API', () => {
     ]));
   });
 
-  it('records nothing when the sweeper loses their membership mid-run, and leaves the run to a start that checks access again', async () => {
+  it('records nothing when the sweeper loses their membership mid-run, and ends without access', async () => {
     const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'landed', approved_record: 'landed' } });
     const { run_id } = await f.queueAndStart('mina');
     f.revoke('mina');
     await f.settled(run_id);
-    expect(f.runs.readUnfenced(run_id)).toMatchObject({ state: 'pending', attempts: 0, result_json: null });
+    expect(f.runs.readUnfenced(run_id)).toMatchObject({ state: 'failed', error_code: 'no_access', result_json: null });
     expect(f.verdicts()).toEqual([null, null]);
-    await expect(f.start('mina', run_id)).rejects.toMatchObject({ code: 'unauthorized' });
   });
 
   it('lets a capture read a sweep that found nothing to check, once the session still holds', async () => {
