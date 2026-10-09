@@ -15,7 +15,7 @@ import { sourceGroups, type SourceGroup } from './answer.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
 import { message } from './messages.js';
-import { markable } from './needs.js';
+import { closable } from './needs.js';
 
 /** Mine: only what you added, to see and to ask about. Send: Tell the owners?, for one check's run. */
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision'; approval_id: string }
@@ -439,10 +439,10 @@ export interface State {
   send: SendState | null;
   /** A decision's or a project's open items, over the page they were opened from. */
   openItems: OpenItemsState | null;
-  /** The item a Check row opened, over Home. */
-  checkCard: CheckCardState | null;
-  /** Did it land?, over the page it was opened from. */
-  didItLand: DidItLandState | null;
+  /** The item a changed item's row (Update or Review) opened, over Home. */
+  itemCard: ItemCardState | null;
+  /** Your open items (a scope's open items and how each stands), over the page it was opened from. */
+  itemStatus: ItemStatusState | null;
   /** The Impact line of the approved meeting the reader shows. */
   impactLine: ItemsLine | null;
   /** The open-items line above the feed of the project on screen. */
@@ -460,7 +460,7 @@ let state: State = {
   archivedProjects: { items: [], next: null, loading: false }, list: null, roster: null, reader: null, change: null, projectSettings: null,
   barScope: { kind: 'global' }, barText: '', matches: null, ask: null, sources: null, compose: null, toast: null, concealed: false,
   signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null, employeeWrite: null,
-  home: null, decision: null, send: null, openItems: null, checkCard: null, didItLand: null, impactLine: null, projectLine: null,
+  home: null, decision: null, send: null, openItems: null, itemCard: null, itemStatus: null, impactLine: null, projectLine: null,
 };
 const listeners = new Set<() => void>();
 let seq = 0;
@@ -564,8 +564,8 @@ function forgetAccount(): void {
   emptyBar();
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
     barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false }, archivedProjects: { items: [], next: null, loading: false },
-    projectSettings: null, organization: null, tools: null, employeeWrite: null, home: null, decision: null, send: null, openItems: null, checkCard: null,
-    didItLand: null, impactLine: null, projectLine: null });
+    projectSettings: null, organization: null, tools: null, employeeWrite: null, home: null, decision: null, send: null, openItems: null, itemCard: null,
+    itemStatus: null, impactLine: null, projectLine: null });
   setCompose(null);
   setChange(null);
 }
@@ -2818,14 +2818,14 @@ export function matchesShown(current: State = state): boolean {
 
 /**
  * Another app is in front and the page is covered: a project, Mine, People &
- * invites, Tools, Home, a decision, Tell the owners?, open items, a Check row's
- * item, Did it land?, an answer or an original. The bar's text is covered
+ * invites, Tools, Home, a decision, Tell the owners?, open items, an item's
+ * card, Your open items, an answer or an original. The bar's text is covered
  * with it.
  */
 export function pageCovered(current: State = state): boolean {
   const { route } = current;
   return current.concealed && (current.ask !== null || route.page === 'home' || route.page === 'decision' || route.page === 'send' || route.page === 'project' ||
-    route.page === 'mine' || current.reader !== null || openItemsShown(current) !== null || checkCardShown(current) !== null || didItLandShown(current) !== null ||
+    route.page === 'mine' || current.reader !== null || openItemsShown(current) !== null || itemCardShown(current) !== null || itemStatusShown(current) !== null ||
     (route.page === 'organization' && current.organization !== null) || (route.page === 'tools' && current.tools !== null));
 }
 
@@ -3259,19 +3259,22 @@ export async function windowShown(): Promise<void> {
 // ---- Home: what needs you ---------------------------------------------------------
 
 /**
- * One row on Home (open items and Home v1, section 8). `approve`: a meeting's
- * decisions wait for you. `send`: a check of a decision you approved found
- * what it changes, and the owners have not been told. `update`: an item waits
- * on you. `check`: ECHO saw an item change, not as decided. `failed`: the
+ * One row on Home (open items and Home v1, section 8; R63–R65). `approve`: a
+ * meeting's decisions wait for you. `send`: a check of a decision you
+ * approved found what it changes, and the owners have not been told.
+ * `update`: an item waits on you; `changed` when ECHO saw it change since it
+ * was sent and it still does not match. `review`: an item someone else owns
+ * changed, and still does not match, since you sent it. `failed`: the impact
  * check did not finish. `checking`: it is on its way.
  */
-export type NeedKind = 'approve' | 'send' | 'update' | 'check' | 'checking' | 'failed';
+export type NeedKind = 'approve' | 'send' | 'update' | 'review' | 'checking' | 'failed';
 export type NeedRow =
   | { kind: 'approve'; review: PersonMeetingReviewV2 }
   | { kind: 'checking'; review: PersonMeetingReviewV2; run?: PersonRunV1 }
   | { kind: 'failed'; review: PersonMeetingReviewV2; run: PersonRunV1 }
   | { kind: 'send'; send: HomeView['send'][number] }
-  | { kind: 'update' | 'check'; item: OpenItemView };
+  | { kind: 'update'; item: OpenItemView; changed: boolean }
+  | { kind: 'review'; item: OpenItemView };
 export interface HomeState {
   seq: number;
   loading: boolean;
@@ -3323,11 +3326,13 @@ export interface DecisionState {
 }
 
 /**
- * Rows that wait on you first; what is on its way last. Check rows sort before
- * Update rows. Only impact checks make rows: a sweep never does, going or
- * failed.
+ * Rows that wait on you first; what is on its way last. Changed items (Update
+ * or Review) sort before the others. An item whose last check is `changed`
+ * and whose owner is not you (`me`) is a Review row; every other item is an
+ * Update row (R64). Only impact checks make rows: a sweep never does, going
+ * or failed.
  */
-export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readonly PersonRunV1[], open: HomeView | null): NeedRow[] {
+export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readonly PersonRunV1[], open: HomeView | null, me: string | null): NeedRow[] {
   const byApproval = new Map(runs.filter(run => run.trigger === 'approved_record').map(run => [run.event_ref, run]));
   const approve: NeedRow[] = [];
   const failed: NeedRow[] = [];
@@ -3350,8 +3355,8 @@ export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readon
   return [
     ...approve,
     ...(open?.send ?? []).map(send => ({ kind: 'send' as const, send })),
-    ...items.filter(changed).map(item => ({ kind: 'check' as const, item })),
-    ...items.filter(item => !changed(item)).map(item => ({ kind: 'update' as const, item })),
+    ...items.filter(changed).map((item): NeedRow => (me === null || item.owner.membership_id === me ? { kind: 'update', item, changed: true } : { kind: 'review', item })),
+    ...items.filter(item => !changed(item)).map((item): NeedRow => ({ kind: 'update', item, changed: false })),
     ...failed, ...checking,
   ];
 }
@@ -3373,7 +3378,7 @@ function withRows(home: HomeState): HomeState {
     send: home.open.send.filter(row => !Object.hasOwn(home.sent, row.run_id)),
     items: home.open.items.filter(item => !Object.hasOwn(home.closing, item.item_id)),
   } : home.open;
-  return { ...home, rows: needRows(home.reviews, home.runs, open) };
+  return { ...home, rows: needRows(home.reviews, home.runs, open, state.status?.account?.membership_id ?? null) };
 }
 
 function homeNeedsPolling(): boolean {
@@ -3605,9 +3610,9 @@ function updateDecisionRun(runs: readonly PersonRunV1[]): void {
 }
 
 /**
- * Done (an Update row, or a Check row's item) or Not relevant (a Check row's
- * item): the item is closed for everyone. Its row leaves Home at once, and
- * comes back with a line saying why if this fails.
+ * Mark updated (`done`: an Update row, or an item's card) or No change needed
+ * (`not_relevant`: an item's card): the item is closed for everyone. Its row
+ * leaves Home at once, and comes back with a line saying why if this fails.
  */
 export async function closeItem(item: OpenItemView, to: 'done' | 'not_relevant'): Promise<void> {
   const home = state.home;
@@ -3985,15 +3990,15 @@ function linePageShown(key: LineKey, line: ItemsLine): boolean {
 
 /** The line is in sight: its page shows, with nothing over it. */
 function lineInSight(key: LineKey, line: ItemsLine): boolean {
-  return linePageShown(key, line) && !state.concealed && state.ask === null && openItemsShown() === null && checkCardShown() === null &&
-    didItLandShown() === null && (key === 'impactLine' || state.reader === null);
+  return linePageShown(key, line) && !state.concealed && state.ask === null && openItemsShown() === null && itemCardShown() === null &&
+    itemStatusShown() === null && (key === 'impactLine' || state.reader === null);
 }
 
 /**
  * Check now, on a decision's Impact line or a project's line (canvas 9.6,
  * 9.7): a sweep of that scope. With nothing open the line says so; otherwise
- * it says "Checking…" until the sweep ends, then Did it land? opens for that
- * scope, named `title`. A sweep that fails says so, and Try again asks for
+ * it says "Checking…" until the sweep ends, then the scope's open items open
+ * as a status view (Your open items), named `title`. A sweep that fails says so, and Try again asks for
  * another.
  */
 export async function checkNow(key: LineKey, title: string): Promise<void> {
@@ -4058,10 +4063,10 @@ async function followSweep(key: LineKey, runId: string, title: string, ours: () 
     if (!line) return;
     const run = runs.find(entry => entry.run_id === runId);
     if (run?.state === 'done') {
-      // What it found: Did it land?, when the line is in sight; the line's counts are read again either way.
+      // What it found: the scope's open items and how each stands, when the line is in sight; the line's counts are read again either way.
       const inSight = lineInSight(key, line);
       void loadLine(key, line.scope, line.id);
-      if (inSight) void openDidItLand(line.scope, line.id, title);
+      if (inSight) void openItemStatus(line.scope, line.id, title);
       return;
     }
     if (!run || run.state === 'failed') { setLine(key, { ...line, check: 'failed' }); return; }
@@ -4097,7 +4102,7 @@ export function openItemsShown(current: State = state): OpenItemsState | null {
 /** The Impact line or the project line: what the decision or the project has open, grouped by owner. */
 export function openOpenItems(scope: ItemsLine['scope'], id: string, title: string): Promise<void> {
   if (!expect() || state.concealed) return Promise.resolve();
-  set({ openItems: { route: state.route, scope, id, title, seq: ++seq, loading: true, items: [], next: null }, checkCard: null, didItLand: null, ask: null, sources: null,
+  set({ openItems: { route: state.route, scope, id, title, seq: ++seq, loading: true, items: [], next: null }, itemCard: null, itemStatus: null, ask: null, sources: null,
     toast: null });
   return loadOpenItems(false);
 }
@@ -4109,7 +4114,7 @@ function loadOpenItems(more: boolean): Promise<void> {
   return loadItemsPage(openItemsShown, page => set({ openItems: page }), more);
 }
 
-/** What a page of a scope's items shows over another page: open items, and Did it land?. */
+/** What a page of a scope's items shows over another page: open items, and Your open items. */
 interface ItemsPage {
   seq: number;
   loading: boolean;
@@ -4121,14 +4126,21 @@ interface ItemsPage {
   next: string | null;
 }
 
+/** How a page of a scope's items is read: which items it keeps, what else it takes from the read, and whether it asks for open items alone. */
+interface ItemsPageOptions<View extends ItemsPage> {
+  keep?: (item: OpenItemView) => boolean;
+  withRead?: (view: View, read: OpenItemsView) => View;
+  /** Open items alone, on More too (R51). */
+  openOnly?: boolean;
+}
+
 /**
  * The first page of a scope's items, or the next one (More), each opened live
  * for you, joined to what `shown` shows: the items `keep` keeps, then what
- * `withRead` takes from the read. `openOnly` asks for open items alone, on
- * More too. A read for a view since left is dropped.
+ * `withRead` takes from the read. A read for a view since left is dropped.
  */
 async function loadItemsPage<View extends ItemsPage>(shown: () => View | null, show: (view: View) => void, more: boolean,
-  keep: (item: OpenItemView) => boolean = () => true, withRead: (view: View, read: OpenItemsView) => View = view => view, openOnly = false): Promise<void> {
+  { keep = () => true, withRead = view => view, openOnly = false }: ItemsPageOptions<View> = {}): Promise<void> {
   const account = expect();
   const page = shown();
   if (!account || !page || (more && (!page.next || page.loading))) return;
@@ -4147,39 +4159,43 @@ async function loadItemsPage<View extends ItemsPage>(shown: () => View | null, s
 
 export function closeOpenItems(): void { set({ openItems: null }); }
 
-// ---- a Check row's item, and Did it land? ------------------------------------------------
+// ---- an item's card, and Your open items ------------------------------------------------
 
-/** The item a Check row opened (ruling 3), over Home: nothing closes until Done or Not relevant is chosen. */
-export interface CheckCardState {
+/** The item a changed item's row opened (ruling 3), over Home: nothing closes until Mark updated or No change needed is chosen. */
+export interface ItemCardState {
   /** The page it shows over: another page closes it. */
   route: Route;
   /** The item as Home read it. */
   item: OpenItemView;
 }
 
-export function checkCardShown(current: State = state): CheckCardState | null {
-  const card = current.checkCard;
+export function itemCardShown(current: State = state): ItemCardState | null {
+  const card = current.itemCard;
   return card && card.route === current.route ? card : null;
 }
 
-/** A Check row: its item, over Home. */
-export function openCheckCard(item: OpenItemView): void {
+/** A changed item's row, Update or Review: its item, over Home. */
+export function openItemCard(item: OpenItemView): void {
   if (!expect() || state.concealed) return;
-  set({ checkCard: { route: state.route, item }, didItLand: null, openItems: null, ask: null, sources: null, toast: null });
+  set({ itemCard: { route: state.route, item }, itemStatus: null, openItems: null, ask: null, sources: null, toast: null });
 }
 
-export function closeCheckCard(): void { set({ checkCard: null }); }
+export function closeItemCard(): void { set({ itemCard: null }); }
 
-/** Done or Not relevant, on a Check row's item: the card goes, and the item closes as an Update row's Done does. */
-export function closeCheckedItem(to: 'done' | 'not_relevant'): void {
-  const card = checkCardShown();
+/** Mark updated or No change needed, on an item's card: the card goes, and the item closes as an Update row's Mark updated does. */
+export function closeCardItem(to: 'done' | 'not_relevant'): void {
+  const card = itemCardShown();
   if (!card) return;
-  set({ checkCard: null });
+  set({ itemCard: null });
   void closeItem(card.item, to);
 }
 
-/** Did it land? (canvas 9.4): a scope's open items by their last check, over the page it was opened from. */
-export interface DidItLandState {
+/**
+ * Your open items (R68): a status view of a scope's open items, over the page
+ * it was opened from: your own, a decision's or a project's, each with how it
+ * stands since ECHO last checked it.
+ */
+export interface ItemStatusState {
   /** The page it shows over: another page closes it. */
   route: Route;
   /** Your own items (sent or owned), a decision's, or a project's. */
@@ -4197,61 +4213,54 @@ export interface DidItLandState {
   /** How many open items the scope has, and when ECHO last checked one of its items. */
   open: number;
   checked_at: string | null;
-  /** Landed items unticked: Mark N done leaves them open. */
-  unticked: Readonly<Record<string, true>>;
-  /** Mark N done is on its way. */
+  /** Close or Close all is on its way. */
   busy: boolean;
-  /** Why Mark N done left items open, and that it closed others (what the page below shows is stale). */
-  markFailure?: string;
+  /** Why Close left an item open. */
+  closeFailure?: string;
+  /** It closed items: what the page below shows is stale. */
   closed?: true;
 }
 
-export function didItLandShown(current: State = state): DidItLandState | null {
-  const page = current.didItLand;
+export function itemStatusShown(current: State = state): ItemStatusState | null {
+  const page = current.itemStatus;
   return page && page.route === current.route ? page : null;
 }
 
-/** Did it land?: from Home's footer for your own items, or after Check now for that decision or project (named `title`). */
-export function openDidItLand(scope: DidItLandState['scope'], id: string | undefined, title: string | null): Promise<void> {
+/** Your open items: from Home's footer for your own, or after Check now for that decision or project (named `title`). */
+export function openItemStatus(scope: ItemStatusState['scope'], id: string | undefined, title: string | null): Promise<void> {
   if (!expect() || state.concealed) return Promise.resolve();
-  set({ didItLand: { route: state.route, scope, ...(id === undefined ? {} : { id }), title, seq: ++seq, loading: true, items: [], next: null, open: 0, checked_at: null,
-    unticked: {}, busy: false }, checkCard: null, openItems: null, ask: null, sources: null, toast: null });
-  return loadDidItLand(false);
+  set({ itemStatus: { route: state.route, scope, ...(id === undefined ? {} : { id }), title, seq: ++seq, loading: true, items: [], next: null, open: 0, checked_at: null,
+    busy: false }, itemCard: null, openItems: null, ask: null, sources: null, toast: null });
+  return loadItemStatus(false);
 }
 
 /** More: the next page. */
-export function moreDidItLand(): Promise<void> { return loadDidItLand(true); }
+export function moreItemStatus(): Promise<void> { return loadItemStatus(true); }
 
 /**
  * A page of the scope's open items only, each opened live (R51): closed ones
  * are never read, so they never hide open ones behind More. The open check
  * stays as a guard. With the scope's open count and latest check.
  */
-function loadDidItLand(more: boolean): Promise<void> {
-  return loadItemsPage(didItLandShown, page => set({ didItLand: page }), more, item => item.state === 'open',
-    (page, read) => ({ ...page, open: read.summary.open, checked_at: read.summary.last_checked_at }), true);
-}
-
-export function tickLanded(item_id: string): void {
-  const page = didItLandShown();
-  if (!page || page.busy) return;
-  const { [item_id]: was, ...unticked } = page.unticked;
-  set({ didItLand: { ...page, unticked: was ? unticked : { ...page.unticked, [item_id]: true }, markFailure: undefined } });
+function loadItemStatus(more: boolean): Promise<void> {
+  return loadItemsPage(itemStatusShown, page => set({ itemStatus: page }), more, {
+    keep: item => item.state === 'open', withRead: (page, read) => ({ ...page, open: read.summary.open, checked_at: read.summary.last_checked_at }), openOnly: true,
+  });
 }
 
 /**
- * Mark N done: each landed item still ticked that you may close is set done,
- * one at a time. Then Did it land? closes and what it was opened over is read
- * again; an item that could not be closed stays, with why.
+ * Close (one line) or Close all N that match: each matching item you may close
+ * is set done, one at a time. The view stays, without the items it closed; an
+ * item that could not be closed stays, with why.
  */
-export async function markLandedDone(): Promise<void> {
-  const page = didItLandShown();
-  const marked = page ? markable(page.items, page.unticked) : [];
-  if (!page || page.busy || page.loading || marked.length === 0) return;
-  set({ didItLand: { ...page, busy: true, markFailure: undefined } });
+async function closeMatches(items: readonly OpenItemView[]): Promise<void> {
+  const page = itemStatusShown();
+  const closing = page ? closable(items.filter(item => page.items.some(entry => entry.item_id === item.item_id))) : [];
+  if (!page || page.busy || page.loading || closing.length === 0) return;
+  set({ itemStatus: { ...page, busy: true, closeFailure: undefined } });
   const closed = new Set<string>();
   let failure: string | undefined;
-  for (const item of marked) {
+  for (const item of closing) {
     try {
       await runsCommand({ schema_version: 1, operation: 'set_state', item_id: item.item_id, state: 'done' });
       closed.add(item.item_id);
@@ -4259,22 +4268,27 @@ export async function markLandedDone(): Promise<void> {
       failure ??= error instanceof Error ? error.message : 'That was not sent. Try again.';
     }
   }
-  const current = didItLandShown();
+  const current = itemStatusShown();
   if (current?.seq !== page.seq) return;
-  if (failure === undefined) { leaveDidItLand(current, true); return; }
-  set({ didItLand: { ...current, busy: false, items: current.items.filter(item => !closed.has(item.item_id)), open: current.open - closed.size, markFailure: failure,
-    ...(closed.size > 0 || current.closed ? { closed: true as const } : {}) } });
+  set({ itemStatus: { ...current, busy: false, items: current.items.filter(item => !closed.has(item.item_id)), open: Math.max(0, current.open - closed.size),
+    closeFailure: failure, ...(closed.size > 0 || current.closed ? { closed: true as const } : {}) } });
 }
 
-/** Back, from Did it land?: not while Mark N done is on its way. */
-export function closeDidItLand(): void {
-  const page = didItLandShown();
-  if (page && !page.busy) leaveDidItLand(page, page.closed === true);
+/** Close, on a line that matches its decision now. */
+export function closeMatching(item: OpenItemView): Promise<void> { return closeMatches([item]); }
+
+/** Close all N that match. */
+export function closeAllMatching(): Promise<void> { return closeMatches(itemStatusShown()?.items ?? []); }
+
+/** Back, from Your open items: not while Close is on its way. */
+export function closeItemStatus(): void {
+  const page = itemStatusShown();
+  if (page && !page.busy) leaveItemStatus(page, page.closed === true);
 }
 
-/** Did it land? goes; after it closed items, what it was over is read again: Home, or the lines on the page. */
-function leaveDidItLand(page: DidItLandState, closed: boolean): void {
-  set({ didItLand: null });
+/** Your open items goes; after it closed items, what it was over is read again: Home, or the lines on the page. */
+function leaveItemStatus(page: ItemStatusState, closed: boolean): void {
+  set({ itemStatus: null });
   if (!closed) return;
   if (page.route.page === 'home') { void loadHome(); return; }
   const reader = state.reader;

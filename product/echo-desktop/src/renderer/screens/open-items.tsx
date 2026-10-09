@@ -3,10 +3,10 @@ import type { OpenItemView } from '../../shared/protocol.js';
 import { externalSourceProvider } from '../answer.js';
 import { colorFor, initials, when } from '../format.js';
 import { message } from '../messages.js';
-import { checkedAgo, itemChange, itemFrom, itemKind, itemTitle, STAGES, stageSince } from '../needs.js';
-import { closeCheckedItem, moreOpenItems, openItemInTool, openOpenItems, type CheckCardState, type ItemsLine, type OpenItemsState, type State } from '../store.js';
+import { approvedMeeting, checkLine, itemChange, itemKind, itemNow, itemTitle, itemWhose, STAGES, stageSince } from '../needs.js';
+import { closeCardItem, moreOpenItems, openItemInTool, openOpenItems, type ItemCardState, type ItemsLine, type OpenItemsState, type State } from '../store.js';
 
-/** A person, as a chip: their initials in their color, and their first name (Tell the owners?, Did it land?). */
+/** A person, as a chip: their initials in their color, and their first name (Tell the owners?, Your open items). */
 export function Chip({ person, label }: { person: { membership_id: string; name: string }; label: string }) {
   return (
     <span class="owner-chip">
@@ -93,44 +93,60 @@ export function OpenInTool({ state, item, name }: { state: State; item: OpenItem
   </>;
 }
 
-/** A last check's verdict, on a Check row's item. */
-const VERDICTS: Readonly<Record<NonNullable<OpenItemView['check']>['verdict'], string>> = {
-  landed: 'Landed', still_open: 'Still open', changed: 'Not what was decided', unreadable: 'Couldn\'t read',
-};
-
 /**
- * The item a Check row opened (ruling 3): what it says now beside what the
- * decision requires of it, its last check ("Checked 2 h ago by Mina Patel"),
- * Open in Jira when ECHO opened it for you, and Done or Not relevant when you
- * may close it. Nothing closes before one is chosen.
+ * The item a changed item's row opened (ruling 3; R67): whose it is to
+ * update, the decision it came from (when you can read it), what it says now
+ * beside what the decision needs, what ECHO saw when it last checked it,
+ * Open in its tool when ECHO opened it for you, and Mark updated or No change
+ * needed when you may close it. Nothing closes before one is chosen.
  */
-export function CheckCard({ state, card }: { state: State; card: CheckCardState }) {
+export function ItemCard({ state, card }: { state: State; card: ItemCardState }) {
   const box = useRef<HTMLDivElement>(null);
-  // Its main control takes the focus, as Tell the owners?'s and Did it land?'s do.
+  // Its main control takes the focus, as Tell the owners?'s does.
   useEffect(() => { box.current?.querySelector<HTMLElement>('.decision-foot button:not(:disabled)')?.focus({ preventScroll: true }); }, [card.item.item_id]);
   const { item } = card;
   const title = itemTitle(item);
-  const change = itemChange(item);
   const assignee = item.current?.assignee;
+  const checked = checkLine(item.check);
+  const { decision } = item;
   return (
     <div class="column decision" ref={box}>
-      <article class="decision-card" data-testid="check-card" aria-labelledby="check-title">
-        <h1 id="check-title" class="decision-ask">{title}</h1>
-        <div class="decision-from">{itemKind(item, state.tools?.items)}{assignee ? ` · now ${assignee}` : ''} · from <b>{itemFrom(item)}</b></div>
-        {change && <div class="decision-line check-change">{change}</div>}
-        {item.check && (
-          <div class="check-verdict">
-            <span class={`check-verdict-word ${item.check.verdict}`}>{VERDICTS[item.check.verdict]}</span>
-            <span class="faint"> · Checked {checkedAgo(item.check.checked_at)} by {item.check.checked_by}</span>
+      <article class="decision-card" data-testid="item-card" aria-labelledby="item-card-title">
+        <div class="item-card-head">
+          <div class="item-card-name">
+            <h1 id="item-card-title" class="decision-ask">{title}</h1>
+            <div class="decision-from">
+              {itemKind(item, state.tools?.items)} · {itemWhose(item, state.status?.account?.membership_id ?? null)}{assignee ? ` · now ${assignee}` : ''}
+            </div>
           </div>
-        )}
-        <div class="decision-foot">
-          {item.can.set_state && <>
-            <button type="button" class="primary-button small" onClick={() => closeCheckedItem('done')}>Done</button>
-            <button type="button" class="plain-button" onClick={() => closeCheckedItem('not_relevant')}>Not relevant</button>
-          </>}
           <OpenInTool state={state} item={item} name={title} />
         </div>
+        {decision ? (
+          <section class="item-card-decision" aria-labelledby="item-card-decision">
+            <div id="item-card-decision" class="item-card-label">The decision</div>
+            <div class="item-card-decided">{decision.first_line ?? decision.title}</div>
+            <div class="faint">{approvedMeeting(decision, ' · ')}</div>
+          </section>
+        ) : <div class="faint">Sent by {item.approver.name}</div>}
+        <div class="item-card-boxes">
+          <section class="item-card-box" aria-labelledby="item-card-now">
+            <div id="item-card-now" class="item-card-label">Now</div>
+            <div>{itemNow(item)}</div>
+          </section>
+          {item.expected !== null && (
+            <section class="item-card-box" aria-labelledby="item-card-needs">
+              <div id="item-card-needs" class="item-card-label">The decision needs</div>
+              <div>{item.expected}</div>
+            </section>
+          )}
+        </div>
+        {checked && <div class={`item-card-check ${item.check!.verdict}`}>{checked}</div>}
+        {item.can.set_state && (
+          <div class="decision-foot">
+            <button type="button" class="primary-button small" onClick={() => closeCardItem('done')}>Mark updated</button>
+            <button type="button" class="plain-button" onClick={() => closeCardItem('not_relevant')}>No change needed</button>
+          </div>
+        )}
       </article>
     </div>
   );

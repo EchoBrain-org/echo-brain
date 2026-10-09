@@ -5,13 +5,13 @@ import { ConfirmSignOut } from './screens/account.js';
 import { AskView, Bar, SourcePane } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
 import { Decision } from './screens/decision.js';
-import { DidItLand } from './screens/did-it-land.js';
 import { Home } from './screens/home.js';
+import { ItemStatus } from './screens/item-status.js';
 import { ChangeLine, changeShownInPlace } from './screens/change.js';
 import { Back, Saved, SidebarIcon, Warning } from './screens/icons.js';
 import { Mine } from './screens/mine.js';
 import { NewProject } from './screens/new-project.js';
-import { CheckCard, OpenItems } from './screens/open-items.js';
+import { ItemCard, OpenItems } from './screens/open-items.js';
 import { Organization } from './screens/organization.js';
 import { People } from './screens/people.js';
 import { MembersButton, Project } from './screens/project.js';
@@ -22,9 +22,9 @@ import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
-  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, checkCardShown, clearBar, closeAsk, closeCheckCard,
-  closeCompose, closeDidItLand, closeOpenItems, closePicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, didItLandShown, findingSheet, getState, goHome,
-  hostFailed, keepNewProject, matchesShown, openCapture, openItemsShown, openMine, pageCovered, refreshStatus, resume, retryStart, returnToSend, signinPhase, toastOpensMine,
+  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeItemCard,
+  closeItemStatus, closeOpenItems, closePicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, findingSheet, getState, goHome,
+  hostFailed, itemCardShown, itemStatusShown, keepNewProject, matchesShown, openCapture, openItemsShown, openMine, pageCovered, refreshStatus, resume, retryStart, returnToSend, signinPhase, toastOpensMine,
   toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, useStore, WARNINGS, windowShown, windowTakesDrop, type State,
 } from './store.js';
 
@@ -55,7 +55,7 @@ function escape(): void {
 
 /**
  * Back steps back one level: a sheet (or what is open in it), compose, the
- * answer (and the source beside it), a Check row's item, Did it land?, open
+ * answer (and the source beside it), an item's card, Your open items, open
  * items, reader, then a project or People & invites. Pick a person closes
  * first; a decision opened as Tell the owners?' Details goes back to the card.
  */
@@ -72,8 +72,8 @@ function back(): void {
   // Escape closes the Projects list first, and only the list.
   if (state.compose && !state.compose.hidden) return state.compose.picking ? closeProjects() : closeCompose();
   if (state.ask) return closeAsk();
-  if (checkCardShown(state)) return closeCheckCard();
-  if (didItLandShown(state)) return closeDidItLand();
+  if (itemCardShown(state)) return closeItemCard();
+  if (itemStatusShown(state)) return closeItemStatus();
   if (openItemsShown(state)) return closeOpenItems();
   if (state.reader?.menu !== undefined && state.reader.menu !== 'closed') return toggleReaderMenu();
   if (state.reader) return closeReader();
@@ -134,8 +134,8 @@ function App() {
   const decision = state.route.page === 'decision' ? state.decision : null;
   const send = state.route.page === 'send' ? state.send : null;
   const openItems = openItemsShown(state);
-  const checkCard = checkCardShown(state);
-  const didItLand = didItLandShown(state);
+  const itemCard = itemCardShown(state);
+  const itemStatus = itemStatusShown(state);
   const organization = state.route.page === 'organization' ? state.organization : null;
   const mine = state.route.page === 'mine';
   const tools = state.route.page === 'tools' ? state.tools : null;
@@ -145,9 +145,9 @@ function App() {
   const covered = pageCovered(state);
   const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : mine ? 'Mine' : decision || send ? 'Decision' : null;
   const title = covered ? 'ECHO' : state.ask ? 'Ask' : pageName ?? 'ECHO';
-  // Back leaves Ask for the page it was asked from; asked over a reader (or open items, a Check row's item or Did it land?), Back goes to it.
-  // Open items and Did it land? opened over a reader go back to the reader; Details go back to Tell the owners?.
-  const overlay = openItems !== null || checkCard !== null || didItLand !== null;
+  // Back leaves Ask for the page it was asked from; asked over a reader (or open items, an item's card or Your open items), Back goes to it.
+  // Open items and Your open items opened over a reader go back to the reader; Details go back to Tell the owners?.
+  const overlay = openItems !== null || itemCard !== null || itemStatus !== null;
   const over = state.reader !== null || overlay;
   const backLabel = covered ? null : (state.ask && over) || (overlay && state.reader) ? 'Back'
     : state.ask || over ? pageName ?? 'Home' : decision?.back !== undefined ? 'Back' : pageName ? 'Home' : null;
@@ -162,8 +162,8 @@ function App() {
       <main class={`page${mine && !covered && !state.ask && !state.reader ? ' top' : ''}`}>
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} />
-          : checkCard ? <CheckCard state={state} card={checkCard} />
-          : didItLand ? <DidItLand page={didItLand} />
+          : itemCard ? <ItemCard state={state} card={itemCard} />
+          : itemStatus ? <ItemStatus page={itemStatus} />
           : openItems ? <OpenItems page={openItems} />
           : state.reader ? <Reader state={state} reader={state.reader} backTo={pageName ?? 'Home'} />
           : inProject ? <Project state={state} project={inProject} />

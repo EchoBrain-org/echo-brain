@@ -180,14 +180,14 @@ describe('Home rows', () => {
     expect(operations()).toContain('home');
   });
 
-  it('orders rows approve, send, check, update, failed, checking', async () => {
+  it('orders rows approve, send, review, update, failed, checking', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
     const reviews = [meeting('c', 'approved'), meeting('b', 'approved'), meeting('d', 'publishing'), meeting('e', 'approved'), meeting('a', 'pending')];
     const runs = [impactRun('running', '21', reviews[0]!.approval_id), impactRun('failed', '22', reviews[1]!.approval_id), impactRun('done', '23', reviews[3]!.approval_id)];
     const open: HomeView = { ...emptyHome(), send: [sendRow()], items: [item('1'), item('2', 'changed')] };
-    const rows = needRows(reviews, runs, open);
-    expect(rows.map(row => row.kind)).toEqual(['approve', 'send', 'check', 'update', 'failed', 'checking', 'checking']);
-    expect(rows[2]).toMatchObject({ kind: 'check', item: { item_id: 'itm_00000002' } });
+    const rows = needRows(reviews, runs, open, 'member');
+    expect(rows.map(row => row.kind)).toEqual(['approve', 'send', 'review', 'update', 'failed', 'checking', 'checking']);
+    expect(rows[2]).toMatchObject({ kind: 'review', item: { item_id: 'itm_00000002' } });
     expect(rows[5]).toMatchObject({ kind: 'checking', run: { state: 'running' } });
     // A finished check makes no row of its own: what it found comes from `home`.
     expect(rows.some(row => 'review' in row && row.review.approval_id === reviews[3]!.approval_id)).toBe(false);
@@ -195,8 +195,28 @@ describe('Home rows', () => {
 
   it('leaves only review and run rows when the home part was never read', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
-    const rows = needRows([meeting('a', 'pending'), meeting('b', 'approved')], [impactRun('failed', '22', meeting('b', 'approved').approval_id)], null);
+    const rows = needRows([meeting('a', 'pending'), meeting('b', 'approved')], [impactRun('failed', '22', meeting('b', 'approved').approval_id)], null, 'member');
     expect(rows.map(row => row.kind)).toEqual(['approve', 'failed']);
+  });
+
+  it('keeps the owner\'s changed item an Update row, flagged, and makes someone else\'s changed item a Review row (R64)', async () => {
+    const { needRows } = await import('../../src/renderer/store.js');
+    const me = 'member';
+    const own = (id: string, verdict: Parameters<typeof item>[1] = null): OpenItemView => ({ ...item(id, verdict), owner: { membership_id: me, name: 'Fixture', active: true, match: 'jira_account' } });
+    const open: HomeView = { ...emptyHome(), items: [own('1'), own('2', 'changed'), item('3', 'changed'), own('4', 'still_open'), item('5')] };
+    const rows = needRows([], [], open, me);
+    // Changed items first, Update or Review; then the others, all Update.
+    expect(rows.map(row => [row.kind, 'item' in row ? row.item.item_id : null, 'changed' in row ? row.changed : null])).toEqual([
+      ['update', 'itm_00000002', true], ['review', 'itm_00000003', null], ['update', 'itm_00000001', false], ['update', 'itm_00000004', false],
+      ['update', 'itm_00000005', false],
+    ]);
+  });
+
+  it('takes the viewer from the account Home was read for', async () => {
+    home = { ...emptyHome(), items: [item('1', 'changed'), { ...item('2', 'changed'), owner: { membership_id: 'member', name: 'Fixture', active: true, match: 'jira_account' } }] };
+    granola = null;
+    const store = await start();
+    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['review', 'update']);
   });
 
   it('names who Send tells: a pick, else the owner, never you, each once', async () => {
@@ -597,7 +617,7 @@ describe('Sweeps from Home', () => {
     const approved = meeting('b', 'approved');
     // Even a sweep naming an approval does not stand for its impact check.
     for (const state of ['pending', 'running', 'failed'] as const) {
-      expect(needRows([approved], [{ ...sweepRun(state), event_ref: approved.approval_id }], null)).toEqual([]);
+      expect(needRows([approved], [{ ...sweepRun(state), event_ref: approved.approval_id }], null, 'member')).toEqual([]);
     }
   });
 
@@ -652,7 +672,7 @@ describe('Sweeps from Home', () => {
     sweep = sweepRun('done');
     home = { ...emptyHome(), items: [item('1', 'changed')], landed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' };
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['check']);
+    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['review']);
     expect(store.getState().home?.open).toMatchObject({ landed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' });
     // Then Home stops looking.
     const calls = rpc.mock.calls.length;
@@ -686,7 +706,7 @@ describe('Sweeps from Home', () => {
     sweep = sweepRun('done');
     home = { ...emptyHome(), items: [item('1', 'changed')] };
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['check']);
+    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['review']);
     expect(requests('sweep')).toHaveLength(1);
   });
 
@@ -724,73 +744,93 @@ describe('Sweeps from Home', () => {
   });
 });
 
-describe('Check rows and Did it land?', () => {
+describe('The item card and Your open items', () => {
   const landedItem = (id: string, set_state = true): OpenItemView => ({ ...item(id, 'landed'), can: { set_state, assign: true } });
 
-  it('opens the item a Check row names, and closes it only on Done or Not relevant', async () => {
+  it('opens the item a Review row names, and closes it only on Mark updated or No change needed', async () => {
     granola = null;
     home = { ...emptyHome(), items: [item('1', 'changed'), item('2')] };
     const store = await start();
     const row = store.getState().home!.rows[0]!;
-    expect(row.kind).toBe('check');
-    store.openCheckCard((row as { item: OpenItemView }).item);
-    expect(store.checkCardShown()?.item.item_id).toBe('itm_00000001');
+    expect(row.kind).toBe('review');
+    store.openItemCard((row as { item: OpenItemView }).item);
+    expect(store.itemCardShown()?.item.item_id).toBe('itm_00000001');
     expect(requests('set_state')).toEqual([]);
-    store.closeCheckedItem('not_relevant');
-    expect(store.checkCardShown()).toBeNull();
+    store.closeCardItem('not_relevant');
+    expect(store.itemCardShown()).toBeNull();
     // Its row leaves Home at once; the request follows.
     expect(store.getState().home?.rows.map(entry => entry.kind)).toEqual(['update']);
     await flush();
     expect(requests('set_state')).toEqual([{ schema_version: 1, operation: 'set_state', item_id: 'itm_00000001', state: 'not_relevant' }]);
   });
 
-  it('marks done each ticked landed item you may close, then reads Home again', async () => {
+  it('closes all that match, each one you may close, and stays a status view of what is left', async () => {
     granola = null;
     home = { ...emptyHome(), landed: 3 };
     page = { items: [landedItem('1'), landedItem('2'), landedItem('3', false), item('4', 'changed'), { ...landedItem('5'), state: 'done' }], next_cursor: null, stages: [],
       summary: { ...summary, open: 4, landed: 3, changed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' } };
     const store = await start();
-    await store.openDidItLand('mine', undefined, null);
+    await store.openItemStatus('mine', undefined, null);
     // Your own items, open ones only (R51): the scope names no id.
     expect(requests('items')).toEqual([{ schema_version: 1, operation: 'items', scope: 'mine', open_only: true }]);
-    expect(store.didItLandShown()).toMatchObject({ scope: 'mine', title: null, open: 4, checked_at: '2026-10-08T12:05:00.000Z' });
-    expect(store.didItLandShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000001', 'itm_00000002', 'itm_00000003', 'itm_00000004']);
-    store.tickLanded('itm_00000002');
-    home = emptyHome();
+    expect(store.itemStatusShown()).toMatchObject({ scope: 'mine', title: null, open: 4, checked_at: '2026-10-08T12:05:00.000Z' });
+    expect(store.itemStatusShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000001', 'itm_00000002', 'itm_00000003', 'itm_00000004']);
+    home = { ...emptyHome(), landed: 1 };
     const homeReads = requests('home').length;
-    await store.markLandedDone();
-    expect(requests('set_state')).toEqual([{ schema_version: 1, operation: 'set_state', item_id: 'itm_00000001', state: 'done' }]);
-    expect(store.didItLandShown()).toBeNull();
+    await store.closeAllMatching();
+    expect(requests('set_state')).toEqual([
+      { schema_version: 1, operation: 'set_state', item_id: 'itm_00000001', state: 'done' }, { schema_version: 1, operation: 'set_state', item_id: 'itm_00000002', state: 'done' },
+    ]);
+    // What is left stays in view: the match you may not close, and the changed item.
+    expect(store.itemStatusShown()).toMatchObject({ busy: false, open: 2, closed: true });
+    expect(store.itemStatusShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000003', 'itm_00000004']);
+    // Back reads Home again: it closed items.
+    store.closeItemStatus();
+    expect(store.itemStatusShown()).toBeNull();
     await flush();
     expect(requests('home')).toHaveLength(homeReads + 1);
-    expect(store.getState().home?.open?.landed).toBe(0);
+    expect(store.getState().home?.open?.landed).toBe(1);
+  });
+
+  it('closes one matching item from its line', async () => {
+    granola = null;
+    page = { items: [landedItem('1'), landedItem('2'), item('3', 'still_open')], next_cursor: null, stages: [], summary: { ...summary, open: 3, landed: 2 } };
+    const store = await start();
+    await store.openItemStatus('record', record, 'Pilot planning');
+    await store.closeMatching(store.itemStatusShown()!.items[1]!);
+    expect(requests('set_state')).toEqual([{ schema_version: 1, operation: 'set_state', item_id: 'itm_00000002', state: 'done' }]);
+    expect(store.itemStatusShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000001', 'itm_00000003']);
+    expect(store.itemStatusShown()).toMatchObject({ open: 2, closed: true, busy: false });
+    // Only a matching item you may close is closed from its line.
+    await store.closeMatching(store.itemStatusShown()!.items[1]!);
+    expect(requests('set_state')).toHaveLength(1);
   });
 
   it('pages open items only, with the same filter on More, and still keeps open ones only', async () => {
     granola = null;
     page = { items: [landedItem('1'), item('2', 'still_open')], next_cursor: 'cGFnZTI', stages: [], summary: { ...summary, open: 3, landed: 1, done: 60 } };
     const store = await start();
-    await store.openDidItLand('project', project.project_id, project.name);
+    await store.openItemStatus('project', project.project_id, project.name);
     // A closed item answered anyway is left out: the filter is the Authority's, the check stays ours.
     page = { items: [item('3'), { ...landedItem('4'), state: 'done' }], next_cursor: null, stages: [], summary: { ...summary, open: 3, landed: 1, done: 60 } };
-    await store.moreDidItLand();
+    await store.moreItemStatus();
     expect(requests('items')).toEqual([
       { schema_version: 1, operation: 'items', scope: 'project', id: project.project_id, open_only: true },
       { schema_version: 1, operation: 'items', scope: 'project', id: project.project_id, open_only: true, cursor: 'cGFnZTI' },
     ]);
-    expect(store.didItLandShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000001', 'itm_00000002', 'itm_00000003']);
-    expect(store.didItLandShown()).toMatchObject({ open: 3, next: null });
+    expect(store.itemStatusShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000001', 'itm_00000002', 'itm_00000003']);
+    expect(store.itemStatusShown()).toMatchObject({ open: 3, next: null });
   });
 
-  it('keeps an item that could not be marked done, with why', async () => {
+  it('keeps an item that could not be closed, with why', async () => {
     granola = null;
-    page = { items: [landedItem('1')], next_cursor: null, stages: [], summary: { ...summary, open: 1, landed: 1 } };
+    page = { items: [landedItem('1'), landedItem('2')], next_cursor: null, stages: [], summary: { ...summary, open: 2, landed: 2 } };
     const store = await start();
-    await store.openDidItLand('mine', undefined, null);
+    await store.openItemStatus('mine', undefined, null);
     failSetState = true;
-    await store.markLandedDone();
-    expect(store.didItLandShown()).toMatchObject({ busy: false, markFailure: 'ECHO is unavailable right now. Try again.' });
-    expect(store.didItLandShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000001']);
+    await store.closeAllMatching();
+    expect(store.itemStatusShown()).toMatchObject({ busy: false, closeFailure: 'ECHO is unavailable right now. Try again.' });
+    expect(store.itemStatusShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000001', 'itm_00000002']);
   });
 });
 
@@ -812,7 +852,7 @@ describe('Check now', () => {
     expect(store.getState().projectLine?.check).toBe('failed');
   });
 
-  it('checks until its sweep ends, then opens Did it land? for that scope', async () => {
+  it('checks until its sweep ends, then opens Your open items for that scope', async () => {
     granola = null;
     page = linePage();
     sweepAnswer = { run_id: sweepRun('pending').run_id };
@@ -824,11 +864,11 @@ describe('Check now', () => {
     expect(requests('start')).toEqual([{ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id }]);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(store.getState().projectLine?.check).toBe('checking');
-    expect(store.didItLandShown()).toBeNull();
+    expect(store.itemStatusShown()).toBeNull();
     sweep = sweepRun('done');
     await vi.advanceTimersByTimeAsync(5_000);
     await checking;
-    expect(store.didItLandShown()).toMatchObject({ scope: 'project', id: project.project_id, title: project.name });
+    expect(store.itemStatusShown()).toMatchObject({ scope: 'project', id: project.project_id, title: project.name });
     // The line was read again, ready for another check.
     expect(store.getState().projectLine?.check).toBeNull();
     expect(requests('sweep')).toHaveLength(1);
@@ -855,7 +895,7 @@ describe('Check now', () => {
     sweep = sweepRun('done');
     await vi.advanceTimersByTimeAsync(5_000);
     await checking;
-    expect(store.didItLandShown()).toMatchObject({ scope: 'project', id: project.project_id });
+    expect(store.itemStatusShown()).toMatchObject({ scope: 'project', id: project.project_id });
   });
 
   it('waits longer after each start that starts nothing, busy or failed', async () => {
@@ -890,7 +930,7 @@ describe('Check now', () => {
     sweep = sweepRun('done');
     await vi.advanceTimersByTimeAsync(5_000);
     await checking;
-    expect(store.didItLandShown()).toMatchObject({ scope: 'project', id: project.project_id });
+    expect(store.itemStatusShown()).toMatchObject({ scope: 'project', id: project.project_id });
   });
 
   it('stops following its sweep once its page goes, leaving Home the only one to look', async () => {
@@ -926,7 +966,7 @@ describe('Check now', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     await checking;
     expect(store.getState().projectLine?.check).toBe('failed');
-    expect(store.didItLandShown()).toBeNull();
+    expect(store.itemStatusShown()).toBeNull();
     sweepAnswer = { state: 'nothing_to_check' };
     await store.checkNow('projectLine', project.name);
     expect(requests('sweep')).toHaveLength(2);
