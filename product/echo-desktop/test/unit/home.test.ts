@@ -184,6 +184,23 @@ describe('Home rows', () => {
     expect(operations()).toContain('home');
   });
 
+  it('merges Home loads asked for while one is on its way: one set of reads, then at most one more', async () => {
+    const store = await start();
+    rpc.mockClear();
+    holdHome = 1;
+    const first = store.loadHome();
+    await flush();
+    // The window comes forward (resume and shown) while that load waits: both join it.
+    const joined = [store.loadHome(), store.loadHome()];
+    await flush();
+    const loads = () => rpc.mock.calls.filter(([method]) => method === 'account.tools').length;
+    expect(loads()).toBe(1);
+    held.shift()!();
+    await Promise.all([first, ...joined]);
+    expect(loads()).toBe(2);
+    expect(operations().filter(operation => operation === 'home')).toEqual(['home', 'home']);
+  });
+
   it('orders rows approve, send, review, update, failed, checking', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
     const reviews = [meeting('c', 'approved'), meeting('b', 'approved'), meeting('d', 'publishing'), meeting('e', 'approved'), meeting('a', 'pending')];

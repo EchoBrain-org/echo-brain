@@ -561,6 +561,9 @@ function forgetAccount(): void {
   resultOwed = false;
   sweepOwed = null;
   lastAccount = null;
+  // A Home load on its way is the last account's: the next one starts afresh.
+  homeLoading = null;
+  homeToken += 1;
   emptyBar();
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
     barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false }, archivedProjects: { items: [], next: null, loading: false },
@@ -919,9 +922,13 @@ export function goHome(): void {
 export async function refreshHome(): Promise<void> {
   const account = expect();
   if (!account || state.route.page !== 'home' || state.projects.loading) return;
+  set({ projects: { ...state.projects, loading: true } });
   const result = await rpc('projects.list', { expect: account, status: 'active' });
-  if (!result.ok) { accountLost(result.failure); return; }
-  if (state.route.page !== 'home') return;
+  if (!result.ok || state.route.page !== 'home') {
+    set({ projects: { ...state.projects, loading: false } });
+    if (!result.ok) accountLost(result.failure);
+    return;
+  }
   const first = result.value.items;
   if (rolesChanged(first)) emptyBar();
   const seen = new Set(first.map(project => project.project_id));
@@ -3385,12 +3392,32 @@ function homeNeedsPolling(): boolean {
   return resultOwed || sweepOwed !== null || state.route.page === 'decision' || (state.home?.rows.some(row => row.kind === 'checking') ?? false);
 }
 
+/** The Home load on its way, if any; one more is owed after it when `homeAgain`. */
+let homeLoading: Promise<void> | null = null;
+let homeAgain = false;
+/** Bumped on an account change, so an older load neither clears nor repeats a newer one. */
+let homeToken = 0;
+
 /**
  * Home: what waits on you. Read when Home opens, when the window comes
  * forward, and after a decision or a Send; read again while a check is going.
- * Each of these is a Home load: it may start one sweep.
+ * Each of these is a Home load: it may start one sweep. A load asked for while
+ * one is on its way joins it, and one more load runs after it, never more.
  */
-export async function loadHome(): Promise<void> {
+export function loadHome(): Promise<void> {
+  if (homeLoading) { homeAgain = true; return homeLoading; }
+  const token = ++homeToken;
+  homeLoading = (async () => {
+    try {
+      do { homeAgain = false; await loadHomeOnce(); } while (homeAgain && token === homeToken);
+    } finally {
+      if (token === homeToken) homeLoading = null;
+    }
+  })();
+  return homeLoading;
+}
+
+async function loadHomeOnce(): Promise<void> {
   const account = expect();
   if (!account || state.concealed || (state.route.page !== 'home' && state.route.page !== 'decision')) return;
   stopRunPolling();

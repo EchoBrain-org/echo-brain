@@ -131,36 +131,40 @@ function expected(expect: Expect): string[] {
 }
 
 // Refresh gate. Calls normally run side by side. Before a call that needs the
-// network, when the access token is within a minute of expiring, one explicit
-// refresh runs alone first, so a concurrent call never reads the session while
-// it is being replaced. Status is local: it waits out a refresh, never starts one.
+// network, when the access token would expire within that call's own time limit
+// plus a minute, one explicit refresh runs first, so no call starts with less
+// sign-in time left than it may take. The refresh waits for the calls already
+// running to end (the client's network timeouts bound each) and runs alone: the
+// Authority revokes the old token on rotation, so no call may hold it then.
+// Status is local: it waits out a refresh, never starts one.
 let active = 0;
 let exclusive: Promise<void> | null = null;
 const idle: Array<() => void> = [];
 
-function refreshDue(store: SessionStore, now: number): boolean {
+function refreshDue(store: SessionStore, now: number, ahead: number): boolean {
   try {
-    return now >= Date.parse(store.read().session.access_expires_at) - 60_000;
+    return now >= Date.parse(store.read().session.access_expires_at) - ahead;
   } catch {
     return false; // Signed out or mid-refresh: the command itself reports it.
   }
 }
 
-async function gated<T>(run: () => Promise<T>, network: boolean, refreshFailed?: (refresh: CliRun) => T): Promise<T> {
+async function gated<T>(run: () => Promise<T>, method: HostMethodName, refreshFailed?: (refresh: CliRun) => T): Promise<T> {
   const { store, now } = await modules;
+  const ahead = TIMEOUT_MS[method] + 60_000;
   while (exclusive) await exclusive;
-  if (network && refreshDue(store, now())) {
+  if (!LOCAL.has(method) && refreshDue(store, now(), ahead)) {
     let release!: () => void;
     exclusive = new Promise(resolve => { release = resolve; });
     try {
       while (active > 0) await new Promise<void>(resolve => idle.push(resolve));
       // A refresh that failed leaves the client signed out, and the call
       // reports that; only one that never left the machine (no network yet)
-      // puts the session back. Then the call is not made, since its client
-      // would only try the same refresh again; the next call does.
-      if (refreshDue(store, now())) {
+      // puts the session back. Then the call is not made, since it would start
+      // with too little sign-in time left; the next call tries the refresh again.
+      if (refreshDue(store, now(), ahead)) {
         const refresh = await cli(['session-refresh']);
-        if (refresh.exit !== 0 && refreshFailed && refreshDue(store, now())) return refreshFailed(refresh);
+        if (refresh.exit !== 0 && refreshFailed && refreshDue(store, now(), ahead)) return refreshFailed(refresh);
       }
     } finally {
       exclusive = null;
@@ -748,7 +752,7 @@ port.on('message', ({ data }) => {
       return fail(write ? { ...failure, mutation_outcome: 'not_submitted' as const } : failure);
     };
   // Status goes through the gate too: mid-refresh the client reports signed out.
-  const work = gated(() => expired ? timeout : handle(request.method, request.params, abort?.signal), !LOCAL.has(request.method), refreshFailed)
+  const work = gated(() => expired ? timeout : handle(request.method, request.params, abort?.signal), request.method, refreshFailed)
     // A write that threw after reaching the client may have landed.
     .catch((error: unknown) => {
       if (__ECHO_TEST_HOOK__) console.error(`[client] ${request.method} threw:`, error);
