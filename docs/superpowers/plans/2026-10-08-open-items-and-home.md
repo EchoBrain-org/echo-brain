@@ -1783,7 +1783,7 @@ Unnumbered rulings:
 3. Wave 2, in separate worktrees: Task 12 (desktop, against the fixture Authority) and Task 13 (evaluation) from `bc2e9a3` (R41); Task 11 (service) from `41ceec0` (R46). Task 13 (`0ba71df`, fix `fef1c79`) merged as `ce76f0b`. Main, with PR #301, merged at `c4c2310`. Tasks 11 and 12 merged after their reviews: Task 12 (`43bbe12`, fix `cc5fb08`) as `dbf29fa`, then Task 11 (`05f75d3`, `b5b82a6`, fixes `7024358` and `34c5a87`) as `c31a46f`. Task 11 merged once its review approved it, ahead of the scoped re-review of its two fix rounds; that re-review found nothing critical or important.
 4. Task 12c on the merged branch (R51): `5e3cab0`, `01001ce`; its review fixes rode in Task 12d.
 5. Task 12d, the founder's UI rulings (R63–R70): `2244c69`, merged as `a2e3f46` after the founder viewed its screenshots; its part of the final fix round: `7aa2f54` and the docs commit.
-6. Task 14: docs written in their own worktree in parallel with Wave 2 (R53; draft `0ab233a`), checked again against the code once Tasks 11 and 12 had merged, then the final whole-branch review with one fix round, the final check, one push and a draft PR against main (R52): `<to be filled at the final check>`.
+6. Task 14: docs written in their own worktree in parallel with Wave 2 (R53; draft `0ab233a`), checked again against the code once Tasks 11 and 12 had merged, then the founder's UI review (R63–R70, Task 12d), one lean whole-branch review (two reviewers, one skeptic per important finding; R74) with one fix round (`7aa2f54`, `9211ea5`, `f83481b`; rulings R75, R76), the final check, one push and a draft PR against main (R52, R73).
 
 #### Models
 
@@ -1799,10 +1799,10 @@ Unnumbered rulings:
 - Part 2 with main merged, at `c4c2310`: the build, the person client, root `tsc`, the desktop build, typecheck and unit tests, and the search, open-items and impact e2e passed. `search.spec.ts:65` failed at the Part 2 base and passes once PR #301's `a0c2f79` is in.
 - Task 12 merged, at `dbf29fa`: the build, the person client, root `tsc`, the desktop build and typecheck, 145 of 145 unit tests and full Playwright 185 of 185 passed.
 - Task 11 merged, at `c31a46f`: `npm run check` exit 0 (334 files; 4,884 passed, 2 expected failures, 1 skipped); desktop build and typecheck passed; 145 of 145 unit tests; full Playwright 185 of 185.
-- Final candidate commit: `<to be filled at the final check>`.
-- Final `npm run check`: `<to be filled at the final check>`.
-- Final desktop build, typecheck and unit tests: `<to be filled at the final check>`.
-- Final full desktop e2e (`npx playwright test`): `<to be filled at the final check>`.
+- Final candidate commit: recorded in the draft PR's description; the final check ran on the PR's head commit itself.
+- Final `npm run check`: recorded in the draft PR's description; the final check ran on the PR's head commit itself.
+- Final desktop build, typecheck and unit tests: recorded in the draft PR's description; the final check ran on the PR's head commit itself.
+- Final full desktop e2e (`npx playwright test`): recorded in the draft PR's description; the final check ran on the PR's head commit itself.
 
 #### Left open for the founder
 

@@ -546,7 +546,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const context = assess(viewer, rows, scopeRecords);
       const visible = context.assessed.filter(entry => entry.access.see_row).sort((left, right) => oldestFirst(left.row, right.row));
       const open = visible.filter(entry => entry.row.state === 'open');
-      // Open items only (Did it land?): pages over them alone, so a closed item is never opened only to be left out (R51).
+      // Open items only (Your open items): pages over them alone, so a closed item is never opened only to be left out (R51).
       const pageable = request.open_only === true ? open : visible;
       const following = after === undefined ? pageable : pageable.filter(entry => oldestFirst(entry.row, after) > 0);
       const page = following.slice(0, PERSON_OPEN_ITEMS_PAGE_V1);
