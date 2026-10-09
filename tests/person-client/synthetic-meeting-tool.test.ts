@@ -45,4 +45,10 @@ describe('synthetic meeting CLI', () => {
     expect(await runPersonClientCli(['tools', 'meetings', '--help'], { stdout: { write: value => { output += value; return true; } } })).toBe(0);
     expect(output).toContain('--tool synthetic'); expect(output).toContain('--meeting-file'); expect(output).toContain('--retain');
   });
+  it('requires file submission even when a valid submit payload is supplied through --request', async () => {
+    const f = fixture();
+    const request = JSON.stringify({ schema_version: 2, tool_id: 'synthetic', operation: 'submit', meeting, project_id: null, retain: true });
+    await expect(createSyntheticMeetingToolV1().verbs.meetings!.run({ ...f.context, values: { request } })).rejects.toThrow('--meeting-file');
+    expect(f.session).not.toHaveBeenCalled();
+  });
 });

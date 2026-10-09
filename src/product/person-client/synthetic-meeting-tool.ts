@@ -38,6 +38,7 @@ export function createSyntheticMeetingToolV1(): PersonToolProviderV1 {
         schema_version: 2, tool_id: 'synthetic', operation: 'submit', retain: true,
         project_id: values['echo-project'] ?? null, meeting: readMeeting(String(values['meeting-file'])),
       } : JSON.parse(String(values.request)));
+      if (values.request !== undefined && request.operation === 'submit') throw new Error('Custom submission requires --meeting-file and --retain; meeting content must not be passed in arguments');
       if (request.tool_id !== 'synthetic') throw new Error('Meeting request must select the synthetic staging tool');
       context.print({ ok: true, result: await personMeetingCommandV2(context.host, request) });
     },

@@ -494,7 +494,9 @@ echo-brain person tools meetings --tool synthetic \
 ```
 
 Use an actual joined project ID, or omit `--echo-project` for no suggestion.
-`--retain` explicitly permits storing the fixture and processing it. The queued
+`--retain` explicitly permits storing the fixture and processing it. CLI
+submission must use `--meeting-file`; `--request` refuses `submit` so meeting
+content stays out of command-line arguments and shell history. The queued
 receipt is not an approval: the usual worker extracts decisions and presents
 one proposal for the owner to review on the desktop or its linked Slack DM.
 Approval then uses the ordinary record publisher and automatic impact check.
