@@ -12,6 +12,8 @@ vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (impo
   } };
 });
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { ApprovedMeetingTranscriptGrantReaderV1 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256 } from '@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1';
 import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
 import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_FOLDER_CURSOR_POLICY_V1 } from '@echo-brain/provider-granola/granola-folder-source-v1';
@@ -286,6 +288,54 @@ describe('personal meeting intake uses the shared processing path', () => {
     // Project scope itself still needs current project membership.
     expect(() => originals.deskSearch({ access_token: 'owner', scope: { kind: 'project', project_id: project }, query: 'cohort' })).toThrow();
     expect(JSON.stringify(await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } }))).toContain('Ship the cohort');
+  });
+  it.each([false, true])('keeps imported notes and an approved transcript independently readable (project audience: %s)', async (sharedWithProject) => {
+    const f = await fixture(), runtime = f.create();
+    f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    await f.processUntilIdle(runtime);
+    const [pending] = (await f.call(runtime, { operation: 'reviews' })).reviews;
+    const review = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: review.snapshot_sha256,
+      command_id: 'approve-shared-transcript', action: 'approve', project_ids: sharedWithProject ? [projectB] : [], share_transcript: true, owners: [] });
+    await runtime.processing.recoverV4Appends(new AbortController().signal);
+    f.disconnect(); // Reading retained evidence must not require a provider connection.
+    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id, {
+      ...f.context.coordinates, grants: new ApprovedMeetingTranscriptGrantReaderV1(f.record),
+      is_expected_policy_contract: grant => grant.policy_contract_sha256 === (sharedWithProject ? PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256 : RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256),
+    });
+    const scope = { kind: 'global' } as const;
+    const notes = originals.deskSearch({ access_token: 'owner', scope, query: 'cohort', kinds: ['imported_meeting'] });
+    expect(notes.items).toHaveLength(1);
+    expect(JSON.stringify(notes.items)).not.toContain('TRANSCRIPT_SECRET');
+    const transcript = originals.deskSearch({ access_token: 'owner', scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE', kinds: ['note'] });
+    expect(transcript.items).toHaveLength(1);
+    expect(transcript.items[0]).toMatchObject({ kind: 'note', visibility: sharedWithProject ? 'project' : 'only_me' });
+    const citation = transcript.items[0]!.citation;
+    expect(citation.source_id).toBe(notes.items[0]!.citation.source_id);
+    expect(citation.representation_sha256).not.toBe(notes.items[0]!.citation.representation_sha256);
+    expect(originals.deskOpen({ access_token: 'owner', scope, citation }).items[0]?.text).toContain('TRANSCRIPT_SECRET');
+    expect(originals.read({ access_token: 'owner', scope, citation }).atom.text).toContain('TRANSCRIPT_SECRET');
+    expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release: transcript })).not.toThrow();
+    expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release: notes })).not.toThrow();
+    expect(originals.deskOpen({ access_token: 'owner', scope, citation: notes.items[0]!.citation }).items[0]?.kind).toBe('imported_meeting');
+    for (const token of ['reader-a', 'other']) {
+      expect(originals.deskSearch({ access_token: token, scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toEqual([]);
+      expect(() => originals.deskOpen({ access_token: token, scope, citation })).toThrow();
+    }
+    expect(originals.deskSearch({ access_token: 'reader-b', scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toHaveLength(sharedWithProject ? 1 : 0);
+    for (const changed of [{ ...citation, representation_sha256: notes.items[0]!.citation.representation_sha256 }, { ...citation, anchor_sha256: canonicalSha256('wrong anchor') }]) {
+      expect(() => originals.deskOpen({ access_token: 'owner', scope, citation: changed })).toThrow();
+      expect(() => originals.read({ access_token: 'owner', scope, citation: changed })).toThrow();
+    }
+    expect(() => originals.deskOpen({ access_token: 'owner', scope: { kind: 'mine' }, citation })).toThrow();
+    if (sharedWithProject) {
+      f.leave(projectB, 'owner');
+      expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release: transcript })).toThrow();
+      expect(() => originals.deskOpen({ access_token: 'owner', scope, citation })).toThrow();
+      expect(originals.deskSearch({ access_token: 'owner', scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toEqual([]);
+      expect(originals.deskOpen({ access_token: 'owner', scope, citation: notes.items[0]!.citation }).items[0]?.kind).toBe('imported_meeting');
+    }
   });
   it('lets current members of the import project read the unapproved notes, and only while they are members', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
