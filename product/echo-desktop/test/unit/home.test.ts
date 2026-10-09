@@ -212,6 +212,51 @@ describe('Home decisions and impact checks', () => {
     expect(store.getState().home?.rows).toMatchObject([{ kind: 'send' }]);
   });
 
+  it('reads what waits on you on a poll only once a check ends, since that read opens each item live', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('running');
+    const store = await start();
+    const homeReads = () => operations().filter(operation => operation === 'home').length;
+    expect(homeReads()).toBe(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(operations().filter(operation => operation === 'list')).toHaveLength(2);
+    expect(homeReads()).toBe(1);
+    run = impactRun('done');
+    home = { ...emptyHome(), send: [sendRow()] };
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(homeReads()).toBe(2);
+    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send' }]);
+  });
+
+  it('keeps an item closed with Done off Home through polls that do not read it again', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('running');
+    home = { ...emptyHome(), items: [item('1')] };
+    const store = await start();
+    await store.markDone(store.getState().home!.open!.items[0]!);
+    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['checking']);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(operations().filter(operation => operation === 'list')).toHaveLength(2);
+    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['checking']);
+    // A read of what waits on you, begun after Done was answered, decides from then on.
+    home = emptyHome();
+    run = impactRun('done');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(store.getState().home?.rows).toEqual([]);
+    expect(store.getState().home?.closing).toEqual({});
+  });
+
+  it('reads what waits on you again on the next poll after that read failed', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('running');
+    failNextHome = true;
+    const store = await start();
+    expect(store.getState().home?.open).toBeNull();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(operations().filter(operation => operation === 'home')).toHaveLength(2);
+    expect(store.getState().home?.open).toEqual(emptyHome());
+  });
+
   it('never polls an Authority whose runs are unavailable when nothing is in flight', async () => {
     review = { ...review, status: 'approved', decided_on: 'desktop' };
     failLists = true;

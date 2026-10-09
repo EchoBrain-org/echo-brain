@@ -552,6 +552,7 @@ function applyStatus(status: AppStatus): void {
 function forgetAccount(): void {
   stopRunPolling();
   runFailures = 0;
+  openUnread = false;
   lastAccount = null;
   emptyBar();
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
@@ -3378,28 +3379,48 @@ export async function loadHome(): Promise<void> {
 
 /** Home reads begun, counted: a Done answered before a read began is closed in that read's answer. */
 let homeReads = 0;
+/** The last read of what waits on you failed: the next poll reads it again. */
+let openUnread = false;
+
+const going = (run: PersonRunV1) => run.state === 'pending' || run.state === 'running';
+
+/** A check that was going before and is not now: what it found may wait on Home. */
+function checkEnded(before: readonly PersonRunV1[], after: readonly PersonRunV1[]): boolean {
+  return before.some(run => going(run) && !after.some(next => next.run_id === run.run_id && going(next)));
+}
 
 /**
  * The reviews, your runs and what waits on you, read side by side. Each part
  * keeps its last good value when its read fails; the runs and home parts fail
- * silently, and only a failed reviews read says so (never on a poll).
+ * silently, and only a failed reviews read says so (never on a poll). What
+ * waits on you is read with every item opened live in its tool, so a poll
+ * (`quiet`) reads it only once a check has ended, or after that read failed.
  */
 async function readHome(mine: number, quiet: boolean): Promise<void> {
   const begun = ++homeReads;
-  const [reviews, runs, open] = await Promise.allSettled([
+  const before = state.home?.runs ?? [];
+  const readOpen = () => runsCommand({ schema_version: 1, operation: 'home' });
+  const [reviews, runs, eager] = await Promise.allSettled([
     meetingCommand({ operation: 'reviews' }),
     runsCommand({ schema_version: 1, operation: 'list' }),
-    runsCommand({ schema_version: 1, operation: 'home' }),
+    quiet ? Promise.resolve(null) : readOpen(),
   ]);
+  let open = eager;
+  if (quiet && homeShown(mine) && (openUnread || (runs.status === 'fulfilled' && checkEnded(before, runs.value.runs)))) {
+    [open] = await Promise.allSettled([readOpen()]);
+  }
+  if (open.status === 'rejected' || open.value !== null) openUnread = open.status === 'rejected';
   const previous = homeShown(mine);
   if (!previous) return;
   const next = {
     reviews: reviews.status === 'fulfilled' ? reviews.value.reviews : previous.reviews,
     runs: runs.status === 'fulfilled' ? runs.value.runs : previous.runs,
-    open: open.status === 'fulfilled' ? open.value : previous.open,
+    open: open.status === 'fulfilled' && open.value !== null ? open.value : previous.open,
   };
   // A Done answered before this read began is closed in its answer: its row needs hiding no longer.
-  const closing = Object.fromEntries(Object.entries(previous.closing).filter(([, answered]) => answered === null || begun <= answered));
+  // A poll that did not read what waits on you keeps every row hidden.
+  const fresh = open.status === 'fulfilled' && open.value !== null;
+  const closing = fresh ? Object.fromEntries(Object.entries(previous.closing).filter(([, answered]) => answered === null || begun <= answered)) : previous.closing;
   const shown = new Set(next.open?.items.map(item => item.item_id) ?? []);
   const closeFailures = Object.fromEntries(Object.entries(previous.closeFailures).filter(([item]) => shown.has(item)));
   const failure: Failure | undefined = reviews.status === 'fulfilled' ? undefined : quiet ? previous.failure : { code: 'unavailable', retryable: true };
