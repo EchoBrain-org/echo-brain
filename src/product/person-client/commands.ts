@@ -242,7 +242,15 @@ Reads one item under your current access: a note's full text, a document's extra
 `,
   runs: `usage: echo-brain person runs --request <json>
 
-Runs a versioned request against your own approved-record impact runs. Use {"schema_version":1,"operation":"list"}, or include run_id for start, retry and view.
+Runs a versioned request against approved-record impact runs and the open items they found. Every request is {"schema_version":1,"operation":<operation>,...}:
+  list                 your own impact runs
+  start, retry, view   with run_id; view shows a finished run's impact card to anyone who can read its decision
+  home                 what waits on you: Send rows and open items
+  items                with scope mine, run, record or project, an id for run, record and project, and an optional cursor
+  item                 with item_id
+  send                 with run_id, command_id and items [{item_id, include, owner_membership_id?}]; the approver only
+  set_state            with item_id and state open, done or not_relevant; the approver or the owner
+  assign               with item_id and owner_membership_id; the approver, the owner or a lead of the decision's projects
 `,
   evidence: `usage: echo-brain person evidence <search|open> [options]
 

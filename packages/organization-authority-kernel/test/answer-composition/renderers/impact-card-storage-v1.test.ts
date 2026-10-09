@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { cleanLine } from "../../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import {
   currentImpactLineV1,
+  impactCardLineV1,
   impactItemKeyV1,
   refreshImpactCardV1,
   storableImpactCardV1,
@@ -270,6 +271,14 @@ describe("impact items", () => {
     const ticket = ticketCitation("THERM-46", "THERM-46: Display precision");
     expect(currentImpactLineV1(fresh(ticket, { text: "Formats one\ndecimal." }))).toBe("Formats one decimal.");
     expect(currentImpactLineV1(fresh(ticket, { attributes: { status: "In Progress", due_at: "2026-10-15" } }))).toBe("THERM-46: Display precision; status In Progress; due 2026-10-15");
+  });
+
+  it("writes any value as one line in the card's own form, for names and live details", () => {
+    expect(impactCardLineV1("  Mina\u2028Patel \t", 200)).toBe("Mina Patel");
+    expect(impactCardLineV1("Rafael Moreno", 7)).toBe("Rafael…");
+    expect(impactCardLineV1("\u0007 ", 200)).toBe("");
+    expect(impactCardLineV1(undefined, 200)).toBe("");
+    expect(impactCardLineV1("Jose\u0301", 200)).toBe("José".normalize("NFC"));
   });
 });
 

@@ -161,6 +161,17 @@ export function impactItemKeyV1(pointer: unknown): Sha256Digest | undefined {
   return item === undefined ? undefined : canonicalSha256(item);
 }
 
+/**
+ * A value as one line in the card's own form: NFC, control and line-break
+ * characters as spaces, whitespace runs as one space, trimmed, and cut at
+ * `maximum` characters with "…". Empty when nothing printable remains. Open
+ * items shape names and an item's live details with it, so one odd value
+ * never fails a response's line checks.
+ */
+export function impactCardLineV1(value: unknown, maximum: number): string {
+  return cleanLine(value, maximum);
+}
+
 /** What an outside item says now: the first characters of its current text on one line, else its title and details. */
 export function currentImpactLineV1(item: FreshImpactItemV1): string {
   const text = cleanLine(item.text, LIMITS.line_chars);

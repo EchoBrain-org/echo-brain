@@ -8,7 +8,11 @@ import { createPersonDocumentUploadStagingV1 } from '../adapters/files/document-
 import { startPersonDocumentProcessingV1 } from './person-document-processing-v1.js';
 import { createPersonResearchEvalV1 } from './person-research-eval-v1.js';
 import { createPersonTriggerRunsV1 } from './person-trigger-runs-v1.js';
+import { createPersonOpenItemsV1 } from './person-open-items-v1.js';
 import { SqliteTriggerRunsV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
+import { SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
+import { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
+import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
 import { createAgenticResearchV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 import { createProjectContextApplicationV1 } from '../application/project-context-application-v1.js';
@@ -65,6 +69,22 @@ import type {
   OpenedPersonExternalIdentityRuntimeV1,
 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import type { AskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
+
+/**
+ * The runs API on an Authority with no answer model: every operation,
+ * open items included, authenticates the caller and then answers unavailable.
+ */
+export function unavailablePersonTriggerRunsV1(sessions: { authenticateAccess(input: { readonly access_token: string }): unknown }): PersonTriggerRunsHttpApplicationV1 {
+  const unavailable = async (input: { readonly access_token: string }): Promise<never> => {
+    sessions.authenticateAccess({ access_token: input.access_token });
+    throw new AuthorityOperationError('unavailable', 'an answer model is not configured');
+  };
+  return Object.freeze({
+    list: unavailable, start: unavailable, retry: unavailable, view: unavailable,
+    home: unavailable, items: unavailable, item: unavailable, send: unavailable, set_state: unavailable, assign: unavailable,
+    close() {},
+  });
+}
 
 export interface OrganizationAuthorityApiRuntimeConfig {
   readonly state_directory: string;
@@ -336,17 +356,22 @@ export async function startOrganizationAuthorityApiRuntime(
     const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && answerOptions !== undefined
       ? createPersonResearchEvalV1({ ...answerOptions, live_sources: liveSources })
       : undefined;
-    const triggerRuns = answerOptions === undefined ? Object.freeze({
-      async list(input: { readonly access_token: string }) { sessions.authenticateAccess({ access_token: input.access_token }); throw new AuthorityOperationError('unavailable', 'an answer model is not configured'); },
-      async start(input: { readonly access_token: string }) { sessions.authenticateAccess({ access_token: input.access_token }); throw new AuthorityOperationError('unavailable', 'an answer model is not configured'); },
-      async retry(input: { readonly access_token: string }) { sessions.authenticateAccess({ access_token: input.access_token }); throw new AuthorityOperationError('unavailable', 'an answer model is not configured'); },
-      async view(input: { readonly access_token: string }) { sessions.authenticateAccess({ access_token: input.access_token }); throw new AuthorityOperationError('unavailable', 'an answer model is not configured'); },
-      close() {},
-    }) : createPersonTriggerRunsV1({
-      runs: new SqliteTriggerRunsV1(database), sessions, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, audit: answerOptions.audit, bind_options: answerOptions, live_sources: liveSources,
-      research: ({ desk, context }) => createAgenticResearchV1({ desk, model: answerOptions.model, generation: answerOptions.generation, audit: answerOptions.audit.forRequest(context),
-        ...(answerOptions.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}) }),
-    });
+    const triggerRuns: PersonTriggerRunsHttpApplicationV1 = answerOptions === undefined ? unavailablePersonTriggerRunsV1(sessions) : (() => {
+      const runs = new SqliteTriggerRunsV1(database);
+      const items = new SqliteImpactItemsV1(database);
+      const people = new SqliteOpenItemPeopleV1(database);
+      // Jira assignees match impact owners only when the Jira live connector is configured.
+      const jiraOwners = liveConnectors.find(({ runtime }) => runtime.owners !== undefined)?.runtime.owners;
+      return Object.freeze({
+        ...createPersonTriggerRunsV1({
+          runs, sessions, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, audit: answerOptions.audit, bind_options: answerOptions, live_sources: liveSources,
+          research: ({ desk, context }) => createAgenticResearchV1({ desk, model: answerOptions.model, generation: answerOptions.generation, audit: answerOptions.audit.forRequest(context),
+            ...(answerOptions.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}) }),
+          items, people, ...(jiraOwners === undefined ? {} : { jira_owners: jiraOwners }),
+        }),
+        ...createPersonOpenItemsV1({ sessions, runs, items, people, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, bind_options: answerOptions, live_sources: liveSources }),
+      });
+    })();
     let closing = false;
     const server = createOrganizationAuthorityHttpServer({
       is_closing: () => closing,

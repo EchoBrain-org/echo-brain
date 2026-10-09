@@ -717,12 +717,19 @@ export function createOrganizationAuthorityHttpServer(
     ...(options.person_trigger_runs === undefined ? [] : [
       [PERSON_RUNS_PATH_V1, personCancellablePost(options.person_trigger_runs, validatePersonRunsRequestV1, (application, input) => {
         const common = { access_token: input.access_token, ...(input.signal === undefined ? {} : { signal: input.signal }) };
-        switch (input.request.operation) {
+        const request = input.request;
+        switch (request.operation) {
           case 'list': return application.list(common);
-          case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: input.request.run_id } });
-          case 'retry': return application.retry({ ...common, request: { schema_version: 1, operation: 'retry', run_id: input.request.run_id } });
-          case 'view': return application.view({ ...common, request: { schema_version: 1, operation: 'view', run_id: input.request.run_id } });
-          // Temporary: the open-items operations are validated but not served yet.
+          case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: request.run_id } });
+          case 'retry': return application.retry({ ...common, request: { schema_version: 1, operation: 'retry', run_id: request.run_id } });
+          case 'view': return application.view({ ...common, request: { schema_version: 1, operation: 'view', run_id: request.run_id } });
+          case 'home': return application.home(common);
+          case 'items': return application.items({ ...common, request });
+          case 'item': return application.item({ ...common, request });
+          case 'send': return application.send({ ...common, request });
+          case 'set_state': return application.set_state({ ...common, request });
+          case 'assign': return application.assign({ ...common, request });
+          // An operation the API knows that this Authority does not serve yet.
           default: throw new AuthorityOperationError('unavailable', 'This operation is not available yet');
         }
       })],

@@ -414,6 +414,11 @@ written in the same transaction as the approval's receipt. `POST /v1/person/runs
 check as the approver. A stored run keeps pointers and ECHO's own judgments
 only, and every view re-releases the items through a fresh desk
 ([ADR-0032](../../docs/decisions/ADR-0032-stored-trigger-runs.md)).
+A finished check writes one shared open item per affected item in the same
+transaction; the same route's home, items, item, send, set_state and assign
+operations show and change them under one access policy, and read each
+item's outside words live as the viewer
+([ADR-0033](../../docs/decisions/ADR-0033-shared-open-items.md)).
 
 A later source-folder move does not reinterpret a frozen proposal or an approved
 record.

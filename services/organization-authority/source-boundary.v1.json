@@ -124,6 +124,11 @@
         "name": "Open item access policy",
         "path": "services/organization-authority/src/composition/open-items-policy-v1.ts",
         "export": "openItemAccessV1"
+      },
+      {
+        "name": "Open items service",
+        "path": "services/organization-authority/src/composition/person-open-items-v1.ts",
+        "export": "createPersonOpenItemsV1"
       }
     ],
     "compatibility_entrypoints": [

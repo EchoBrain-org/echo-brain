@@ -1,14 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonAnswerCitationV6, validatePersonImpactCardV1 } from '@echo-brain/organization-api';
+import { validatePersonAnswerCitationV6, validatePersonImpactCardV1, type PersonImpactCardV1 } from '@echo-brain/organization-api';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
-import { refreshImpactCardV1, storableImpactCardV1, type FreshImpactItemV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
+import { impactItemKeyV1, refreshImpactCardV1, storableImpactCardV1, type FreshImpactItemV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { SqliteTriggerRunsV1, type ApprovalActorV1, type TriggerRunRowV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
+import type { ImpactItemDraftV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { SqlitePersonAgenticAskAuditV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
-import { PersonRecordSearchIndexLagV1, type PersonRecordAnchorV1, type PersonRecordProjectsV1 } from './person-record-search-route.js';
+import type { JiraOwnerAccountsV1 } from '../application/ports/jira-owner-accounts-v1.js';
+import { matchImpactOwnersV1, type ImpactOwnerPeopleV1 } from './impact-owner-matching-v1.js';
+import { PersonRecordSearchIndexLagV1, type PersonReadableDecisionsV1, type PersonRecordAnchorV1, type PersonRecordProjectsV1 } from './person-record-search-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1, type PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
 
@@ -19,7 +22,13 @@ type BoundOptions = CreatePersonLiveAnswerRouteOptionsV1;
 export interface CreatePersonTriggerRunsV1Options {
   readonly runs: SqliteTriggerRunsV1;
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
-  readonly records: PersonRecordAnchorV1 & PersonRecordProjectsV1;
+  readonly records: PersonRecordAnchorV1 & PersonRecordProjectsV1 & Pick<PersonReadableDecisionsV1, 'readableDecisions'>;
+  /** Where a finished impact run writes its open items, in the run's finishing transaction. */
+  readonly items: Pick<SqliteImpactItemsV1, 'insertForRun'>;
+  /** ECHO's member directory, for exact owner matches. */
+  readonly people: ImpactOwnerPeopleV1;
+  /** Jira assignee accounts, read with the approver's own connection; absent without the Jira live connector. */
+  readonly jira_owners?: JiraOwnerAccountsV1;
   /** Kept injectable for focused service tests and shared with the live evaluator. */
   readonly bindDesk: typeof bindPersonLiveEvidenceDeskV1;
   readonly audit: SqlitePersonAgenticAskAuditV1;
@@ -36,7 +45,11 @@ const scopeFor = (records: PersonRecordProjectsV1, token: string, record_sha256:
   const projects = records.recordProjects({ access_token: token, record_sha256 });
   return projects.length === 1 ? Object.freeze({ kind: 'project' as const, project_id: projects[0]! }) : Object.freeze({ kind: 'global' as const });
 };
-function stored(json: string): StoredImpactCardV1 {
+/**
+ * A run's stored impact card, checked to hold pointers and ECHO's own lines
+ * only, or `unavailable`. Open items read its first decided line from here.
+ */
+export function readStoredImpactCardV1(json: string): StoredImpactCardV1 {
   let value: unknown;
   try { value = JSON.parse(json); } catch { throw new AuthorityOperationError('unavailable', 'stored impact card is invalid'); }
   try {
@@ -89,8 +102,32 @@ function impactRecord(row: TriggerRunRowV1): Sha256Digest {
 function unavailable(error: unknown): boolean {
   return error instanceof AuthorityOperationError && error.code === 'unavailable';
 }
+/**
+ * The open items a finished card makes (open items and Home v1, section 3):
+ * one per affected item that conflicts, needs updating or was not assessed,
+ * never one that confirms, and one per item however often the card cites it.
+ * The owner name is the card's, from the item's own details, and is used only
+ * to match a member; it is never stored.
+ */
+function itemCandidates(card: PersonImpactCardV1, stored: StoredImpactCardV1) {
+  const seen = new Set<Sha256Digest>();
+  return card.affected.flatMap((row, index) => {
+    if (row.relation === 'confirms') return [];
+    const pointer = card.citations[row.citation_index]!.citation as unknown as Readonly<Record<string, unknown>>;
+    const item_key = impactItemKeyV1(pointer);
+    if (item_key === undefined || seen.has(item_key)) return [];
+    seen.add(item_key);
+    const relation = row.relation ?? null;
+    // The stored phrase: screened against outside titles. Only an assessed item carries one.
+    const expected = relation === null ? undefined : stored.affected[index]?.expected;
+    return [{ item_key, pointer, relation, expected: expected ?? null, ...(row.owner === undefined ? {} : { owner_name: row.owner }) }];
+  });
+}
 
-export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Options): PersonTriggerRunsHttpApplicationV1 {
+/** The runs themselves; the open items a finished run found are served by `createPersonOpenItemsV1`. */
+export type PersonTriggerRunsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'list' | 'start' | 'retry' | 'view' | 'close'>;
+
+export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Options): PersonTriggerRunsApplicationV1 {
   const lease = options.lease_ms ?? LEASE_MS;
   const controllers = new Set<AbortController>();
   let closing = false;
@@ -116,8 +153,23 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
         const outsideLabels = output.research.items
           .filter(item => (item.citation as { readonly kind?: unknown }).kind !== 'approved_record' && (item.citation as { readonly kind?: unknown }).kind !== 'source_revision').map(item => item.title);
         const value = storableImpactCardV1(card, outsideLabels);
+        const candidates = itemCandidates(card, value);
+        const owners = candidates.length === 0 ? [] : await matchImpactOwnersV1({
+          candidates: candidates.map(candidate => ({ pointer: candidate.pointer, ...(candidate.owner_name === undefined ? {} : { owner_name: candidate.owner_name }) })),
+          approver: { organization_id: row.actor.organization_id, membership_id: row.actor.membership_id },
+          access_token: token, people: options.people, signal: controller.signal,
+          ...(options.jira_owners === undefined ? {} : { jira: options.jira_owners }),
+        });
+        // A cancelled assignee read matches no one; its fallbacks are never stored as the run's owners.
+        controller.signal.throwIfAborted();
+        const drafts: ImpactItemDraftV1[] = candidates.map((candidate, index) => ({
+          item_key: candidate.item_key, pointer: candidate.pointer, relation: candidate.relation, expected: candidate.expected,
+          owner_membership_id: owners[index]!.owner_membership_id, owner_match: owners[index]!.owner_match,
+        }));
         if (closing && controller.signal.aborted) return;
-        options.runs.finish(row.run_id, lease_token, { json: canonicalJson(value), sha256: canonicalSha256(value) });
+        // The items are written in the transaction that stores the card, so a run is never done without them.
+        options.runs.finish(row.run_id, lease_token, { json: canonicalJson(value), sha256: canonicalSha256(value) },
+          drafts.length === 0 ? undefined : transaction => options.items.insertForRun(transaction, row, drafts));
       } catch (error) {
         if (closing && controller.signal.aborted) return;
         if (error instanceof PersonRecordSearchIndexLagV1) options.runs.release(row.run_id, lease_token, { counted: false });
@@ -148,10 +200,14 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     },
     async view(input: Parameters<PersonTriggerRunsHttpApplicationV1['view']>[0]) {
       input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token }); const actor = actorOf(authorization);
-      const row = options.runs.read(actor, input.request.run_id); if (row === undefined) throw new AuthorityOperationError('not_found', 'run is not available');
-      if (!sameActor(row.actor, actor) || row.state !== 'done' || row.result_json === null) throw new AuthorityOperationError('not_found', 'run is not available');
+      // The approver's own finished run, or one whose decision this person can read now (open items and Home v1, section 3).
+      const row = options.runs.readUnfenced(input.request.run_id);
+      if (row === undefined || row.actor.organization_id !== actor.organization_id || row.state !== 'done' || row.result_json === null) throw new AuthorityOperationError('not_found', 'run is not available');
       const record_sha256 = impactRecord(row);
-      const card = stored(row.result_json); const scope = scopeFor(options.records, input.access_token, record_sha256); const requestContext = context(authorization);
+      if (!sameActor(row.actor, actor) && !options.records.readableDecisions({ access_token: input.access_token, record_sha256s: [record_sha256] }).has(record_sha256)) {
+        throw new AuthorityOperationError('not_found', 'run is not available');
+      }
+      const card = readStoredImpactCardV1(row.result_json); const scope = scopeFor(options.records, input.access_token, record_sha256); const requestContext = context(authorization);
       const desk = await options.bindDesk(options.bind_options, compatible, { access_token: input.access_token, scope, ...(input.signal === undefined ? {} : { signal: input.signal }) }, requestContext);
       const fresh = await Promise.all(card.citations.map(async citation => {
         try { const opened = await desk.openCitation!({ citation, ...(input.signal === undefined ? {} : { signal: input.signal }) }); const item = opened.items[0]; return item === undefined ? null : { citation: { citation: item.citation, kind: item.kind, label: item.label, visibility: item.visibility }, text: item.text, label: item.label, ...(item.attributes === undefined ? {} : { attributes: item.attributes }) } as FreshImpactItemV1; } catch { return null; }
