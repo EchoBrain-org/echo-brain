@@ -23,9 +23,10 @@ decision_ids:
   - ADR-0026
   - ADR-0030
   - ADR-0032
+  - ADR-0033
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view, and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads, and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -113,7 +114,16 @@ outside ECHO. Every view re-releases the stored items through a fresh desk under
 the viewer's current session, membership tenure and grants: an item the viewer
 can no longer open is hidden and counted, and outside text is read again rather
 than stored. Anyone but the approver sees no such run in a list and gets
-`not_found` when starting, retrying or viewing it.
+`not_found` when starting or retrying it. ADR-0033 widens viewing: anyone who
+can read the decision may view the run's card, rebuilt the same way under that
+viewer's access; anyone else gets `not_found`.
+
+ADR-0033 applies the same rule to open items. A row keeps pointers, ECHO's own
+`expected` phrase, member ids and the latest check's verdict, never words read
+from outside ECHO. Every item read opens the item again through a fresh desk as
+the viewer, and only a viewer who can open it live gets its title, text or
+current details. Who sees a row and who may act on it comes from one access
+policy. A sweep acts as the person who asked and stores only verdicts.
 
 For ADR-0015, original-context storage remains behind a Layer 3 release port.
 Both original and approved-record citations bind the exact released evidence.

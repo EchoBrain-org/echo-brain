@@ -10,6 +10,19 @@ the [research trigger contract v1](2026-10-06-research-trigger-contract-v1.md).
 Implementation plan: `docs/superpowers/plans/2026-10-07-unified-approval-and-runs.md`.
 Implementation plan executed; see the plan's As built section.
 
+Implementation note, 2026-10-08: open items and Sweep, listed below under "Not
+in this round", are specified in
+[open items and Home v1](2026-10-08-open-items-and-home-v1.md) and built. The
+runs table now ships in Authority baseline V13 and also holds sweep runs
+(`trigger = sweep`, with a scope); `list` returns a person's runs, at most 100:
+up to the 20 newest sweeps, and impact runs for the rest. `view` is open to
+the approver and anyone who can read the decision, rebuilt with the viewer's
+access ([ADR-0033](../decisions/ADR-0033-shared-open-items.md)). On the
+desktop, Home starts runs; the decision page opened from Home shows the impact
+card, and an approved meeting's reader shows its Impact line. Text below that
+names V12, the meetings sheet or approver-only views describes this design as
+written.
+
 ## Goal
 
 When a person approves a meeting, on the desktop or in Slack, ECHO checks what

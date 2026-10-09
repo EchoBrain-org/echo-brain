@@ -90,3 +90,25 @@ per person means sweeps queue behind impact checks.
   that the access policy gives each role the specified answers, that no new
   row holds seeded outside text, that a sweep never changes state, and the
   desktop end-to-end path from approval through Send to an owner's Done.
+
+## Implementation note, 2026-10-08
+
+Built as decided above, in both parts of
+[open items and Home v1](../product/2026-10-08-open-items-and-home-v1.md).
+Details the decision text does not spell out:
+
+- Send records, once per item, whether it included the item
+  (`send_included`), and a repeated Send answers its original counts. An
+  owner who cannot read the decision sees an item once it has reached them:
+  Send included it, or it is open or done after Send (the approver reopened
+  an item Send left out).
+- The access policy is three functions in `open-items-policy-v1.ts`: one per
+  item, one for Send, and one for whether a viewer sees a decision's parts.
+- A last check is a verdict, its time, who ran it and which sweep. The
+  database refuses any change to them that is not strictly newer. A sweep run
+  stores only its counts by verdict.
+- A sweep takes up to 20 of the open items the caller sees in its scope,
+  never-checked first. It names the decision to research only when the caller
+  can read the decision. The server refuses to start a sweep (`busy`) while
+  one of the person's impact runs is pending or running, so impact runs go
+  first. Home asks for an automatic sweep at most once an hour.

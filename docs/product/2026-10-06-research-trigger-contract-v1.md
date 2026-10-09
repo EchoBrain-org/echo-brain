@@ -304,3 +304,18 @@ One commit per phase. The golden replay and `npm run check` pass after each.
   ([runs store spec](2026-10-07-runs-store-and-impact-card-v1.md),
   [ADR-0032](../decisions/ADR-0032-stored-trigger-runs.md)). "Not in this round"
   above describes this round only.
+- Implementation note, 2026-10-08: Sweep now has a renderer
+  (`SWEEP_RENDERER_V1`). For each finding it gives a verdict (`landed`,
+  `still_open`, `changed` or `unreadable`) and one ECHO line, under the impact
+  card's screens. A finding's own items are its first citation and any further
+  Jira, Confluence or Slack item it cites. A finding is judged only when all its
+  own items are in what the model is shown; otherwise it stays not assessed
+  (no verdict). A finding whose own item could not be read is `unreadable`
+  without a model call. The staging endpoint returns the sweep result, line
+  included. The product stores no line: a sweep run keeps only its counts by
+  verdict, and each open item keeps only its latest verdict as a shared last
+  check ([open items and Home v1](2026-10-08-open-items-and-home-v1.md),
+  section 6). Results reach owners through Send: the approver sends each open
+  item to its owner's Home, and everyone who sees the item sees its last check
+  ([ADR-0033](../decisions/ADR-0033-shared-open-items.md)). "Not in this
+  round" above describes this round only.

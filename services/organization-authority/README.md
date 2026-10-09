@@ -409,16 +409,40 @@ revision to the record's audience through `echo-brain person transcript`
 (`POST /v1/person/meeting-transcripts/read`). Ask does not search transcripts.
 
 Each approved record also enqueues one impact check (`authority_trigger_runs_v1`),
-written in the same transaction as the approval's receipt. `POST /v1/person/runs`
-(`echo-brain person runs --request <json>`: list, start, retry, view) runs the
-check as the approver. A stored run keeps pointers and ECHO's own judgments
-only, and every view re-releases the items through a fresh desk
-([ADR-0032](../../docs/decisions/ADR-0032-stored-trigger-runs.md)).
-A finished check writes one shared open item per affected item in the same
-transaction; the same route's home, items, item, send, set_state and assign
-operations show and change them under one access policy, and read each
-item's outside words live as the viewer
+written in the same transaction as the approval's receipt. The check runs as
+the approver. A stored run keeps pointers and ECHO's own judgments only, and
+every view re-releases the items through a fresh desk
+([ADR-0032](../../docs/decisions/ADR-0032-stored-trigger-runs.md)). A
+finished check writes one shared open item per affected item in the same
+transaction. One access policy answers every see and act question, and each
+item's outside words are read live as the viewer
 ([ADR-0033](../../docs/decisions/ADR-0033-shared-open-items.md)).
+
+`POST /v1/person/runs` (`echo-brain person runs --request <json>`) serves these
+operations:
+
+| Operation | What it does |
+| --- | --- |
+| `list` | The caller's own runs, newest first, at most 100: up to the 20 newest sweeps, and impact runs for the rest. A running run whose lease has lapsed is listed as pending. |
+| `start` | Claims a pending run (or one whose lease expired) and runs it as its actor. A person has one live run, and a sweep waits while one of their impact runs is pending or running; a start that must wait answers `busy`. |
+| `retry` | Puts the caller's failed impact run back to pending. A failed sweep stays failed; the next sweep replaces it. |
+| `view` | A finished impact run's card, for its approver and anyone who can read its decision, rebuilt with the viewer's access. |
+| `home` | What waits on the caller: Send rows, the open items to update or check, the counts under Home, and `sweep_due`. |
+| `items` | The items the caller can see (unsent, open and closed) for `mine`, a run, a record or a project, oldest first, 50 a page, with a summary and each decision's stage. `summary_only` answers the summary and stages alone, with no live reads; `open_only` pages over items in state open only. |
+| `item` | One open item, rebuilt for the caller. |
+| `send` | The approver sends a run's items to their owners, once per command id. |
+| `set_state` | The approver or the owner sets a sent item to open, done or not relevant. |
+| `assign` | The approver, the owner or a lead of one of the decision's active projects changes a sent item's owner to another active member. |
+| `sweep` | Queues a re-check of the open items the caller can see in `mine`, a record or a project, or answers `nothing_to_check`. Asked again while that scope's sweep is pending or running, it answers the same run. |
+
+A sweep acts as the person who asked, with their access, and stores only
+verdicts. Its run keeps the counts by verdict. Each item it judged keeps that
+verdict as its shared last check, replaced only by a newer one, and only while
+the person can still see the item. A sweep never changes an item's state.
+`sweep_due` is true when the caller has an open item they sent or own that
+was last checked over 24 hours ago or never, no sweep of theirs is running,
+and they asked for no sweep in the last hour. A sweep left pending for longer
+than that does not block it; asking again for its scope returns that run.
 
 A later source-folder move does not reinterpret a frozen proposal or an approved
 record.
