@@ -302,6 +302,30 @@ describe('what a sweep checks and how', () => {
     expect(kinds()).toEqual(['ticket', 'approved_record']);
   });
 
+  it('checks at most twenty items at a time; the others wait for the next sweep', async () => {
+    const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'still_open', approved_record: 'still_open' } });
+    // Twenty more tickets the impact check found, all sent: 22 open items.
+    const tickets = Array.from({ length: 20 }, (_, index) => ({ ...f.card.pointers.ticket, ticket_id: String(20_000 + index) }));
+    f.db.transaction(() => f.items.insertForRun(f.db, f.runs.readUnfenced(f.runId)!, tickets.map(pointer => ({ item_key: impactItemKeyV1(pointer)!, pointer,
+      relation: 'needs_updating' as const, expected: 'launch next week', owner_membership_id: f.membership('mina'), owner_match: 'approver' as const }))))();
+    const unsent = f.items.forRun(f.runId).filter(row => row.state === 'unsent');
+    expect(f.items.send({ run_id: f.runId, by: f.membership('ari'), command_id: 'send-more', choices: unsent.map(row => ({ item_id: row.item_id, include: true })) })).toMatchObject({ sent: 20 });
+    const unchecked = () => f.items.forRun(f.runId).filter(row => row.state === 'open' && row.check === null).map(row => row.item_id);
+    const first = await f.queueAndStart('ari');
+    await f.settled(first.run_id);
+    expect(f.findings.at(-1)).toHaveLength(20);
+    const waiting = unchecked();
+    expect(waiting).toHaveLength(2);
+    f.advance(1_000);
+    const next = await f.queueAndStart('ari');
+    await f.settled(next.run_id);
+    // The two never checked come first; the rest of the twenty are those checked longest ago.
+    const pointerKey = (pointer: unknown) => impactItemKeyV1(pointer);
+    const keysOf = (itemIds: readonly string[]) => itemIds.map(itemId => f.items.read(itemId)!.item_key).sort();
+    expect(f.findings.at(-1)!.slice(0, 2).map(finding => pointerKey(finding.citations[0])).sort()).toEqual(keysOf(waiting));
+    expect(unchecked()).toEqual([]);
+  });
+
   it('never sweeps an item on a pointer the sweep trigger does not take', async () => {
     const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'still_open', approved_record: 'still_open' } });
     // A Slack message the impact check found, sent to Mina.
