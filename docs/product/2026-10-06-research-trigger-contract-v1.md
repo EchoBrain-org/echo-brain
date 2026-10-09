@@ -308,9 +308,12 @@ One commit per phase. The golden replay and `npm run check` pass after each.
   (`SWEEP_RENDERER_V1`). For each finding it gives a verdict (`landed`,
   `still_open`, `changed` or `unreadable`) and one ECHO line, under the impact
   card's screens. A finding's own items are its first citation and any further
-  Jira, Confluence or Slack item it cites. A finding is judged only when all its
-  own items are in what the model is shown; otherwise it stays not assessed
-  (no verdict). A finding whose own item could not be read is `unreadable`
+  Jira or Confluence item it cites. The renderer's rule would also count a
+  cited Slack message, but the `sweep` trigger refuses Slack message
+  citations: no reader in ECHO can open one yet, so the product leaves items
+  on a Slack message out of sweeps. A finding is judged only when all its own
+  items are in what the model is shown; otherwise it stays not assessed (no
+  verdict). A finding whose own item could not be read is `unreadable`
   without a model call. The staging endpoint returns the sweep result, line
   included. The product stores no line: a sweep run keeps only its counts by
   verdict, and each open item keeps only its latest verdict as a shared last

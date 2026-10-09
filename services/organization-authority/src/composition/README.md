@@ -35,7 +35,8 @@ Provider-neutral runtime components must not import a provider implementation.
   open items. `person-sweep-runs-v1.ts` does a sweep's own work: which open
   items it re-checks, the findings it hands research, and the counts and
   verdicts it keeps. `person-open-items-v1.ts` serves the open-items
-  operations on the same route, asking `open-items-policy-v1.ts` every access
+  operations on the same route, `sweep` (which queues a sweep) and `home`'s
+  `sweep_due` included, asking `open-items-policy-v1.ts` every access
   question. Both services read a run's stored impact card through
   `person-stored-impact-card-v1.ts`.
 - `organization-authority-state-bootstrap.ts`, `organization-authority-setup-cli.ts`

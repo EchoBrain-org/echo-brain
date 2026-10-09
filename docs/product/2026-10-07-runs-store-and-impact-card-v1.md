@@ -15,9 +15,14 @@ in this round", are specified in
 [open items and Home v1](2026-10-08-open-items-and-home-v1.md) and built. The
 runs table now ships in Authority baseline V13 and also holds sweep runs
 (`trigger = sweep`, with a scope); `list` returns a person's runs, at most 100:
-up to the 20 newest sweeps, and impact runs for the rest. `view` is open to
+up to the 20 newest sweeps, and impact runs for the rest, and lists a
+`running` run whose lease has lapsed as `pending` (its stored state is
+unchanged). Impact runs start first: a sweep's `start` answers `busy` while
+one of the person's impact runs is pending or running, and `retry` refuses a
+failed sweep (the next sweep replaces it). `view` of an impact run is open to
 the approver and anyone who can read the decision, rebuilt with the viewer's
-access ([ADR-0033](../decisions/ADR-0033-shared-open-items.md)). On the
+access ([ADR-0033](../decisions/ADR-0033-shared-open-items.md)); a sweep,
+which stores only counts, has no view (`not_found`). On the
 desktop, Home starts runs; the decision page opened from Home shows the impact
 card, and an approved meeting's reader shows its Impact line. Text below that
 names V12, the meetings sheet or approver-only views describes this design as

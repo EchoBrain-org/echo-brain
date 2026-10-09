@@ -308,6 +308,55 @@ with the saved capture ID after a lost response; do not repeat the Ask to
 recover its trace. The staging evaluator uses the same operational spans;
 payload capture has one API and collector, on ordinary product requests.
 
+#### Follow sweep runs and failed open-item reads
+
+A sweep run (a re-check of open items,
+[open items and Home v1](../product/2026-10-08-open-items-and-home-v1.md)
+section 6) goes through the same launch path and observation as an impact
+run. Each attempt is its own background `research_run` operation with trigger
+`sweep`, the hashed run ID, a hashed event ID (the sweep's own event
+reference; there is no approval) and a unique attempt ID. Its output link
+names the stored counts by verdict; a sweep has no card, so no later card read
+follows it. Capture a sweep as any queued run: an exact `trigger_run` target
+and its `capture_id` on `start`. The capture records the same lifecycle
+outcomes as an impact run's: trigger started, persistence succeeded (or
+skipped when the attempt no longer owned the run), and application succeeded
+or failed. A sweep that finds no item left to check reads nothing and binds no
+desk, so its capture checks the person's session alone.
+
+The open-item operations (`home`, `items` and `item` on the runs route) open
+each item they show live as the viewer. A failure that is not the viewer's own
+access writes one content-free JSON line to the Authority's standard error,
+which reaches the retained `authority` log stream (step 3). A sweep writes the
+same line when the stored card of a decision it names cannot be read:
+
+```
+fields @timestamp, reason, code
+| filter kind = "open_items_live_read"
+| sort @timestamp desc
+```
+
+`reason` says where the read failed:
+
+| `reason` | Meaning |
+| --- | --- |
+| `bind` | The request's desk could not be bound; every item it tried reads as unavailable. One line per request. |
+| `open` | One item failed to open, or opened in a form the API cannot carry (code `invalid_output`). One line per item. |
+| `fence` | The request's final access check failed, so nothing it read is shown. One line per request. |
+| `first_line` | A stored impact card could not be read for its decision's first line. |
+
+`code` is the Authority error code (for example `unavailable` or
+`rate_limited`), else `error`. The line never carries an item, run, record or
+person ID, a title, a pointer or words from outside ECHO. When one item's open
+is refused by the viewer's own access (`unauthorized`, `not_found`,
+`stale_access_state`), the person sees "you can't open" and no line is
+written; a cancelled request writes nothing. A `bind` or `fence` line can
+carry those codes too, for example when the viewer's session is revoked
+mid-request; its items show as "ECHO couldn't read just now", not as "you
+can't open". Repeated `open` lines with `rate_limited` or `unavailable` point
+at the item's tool, not at anyone's access: people see "ECHO couldn't read
+just now" for those items.
+
 #### Staging journey overview and Explorer
 
 A read-only staging inspection on 2026-09-08 verified the journey overview,

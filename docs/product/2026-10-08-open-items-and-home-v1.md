@@ -193,20 +193,23 @@ clearer. So every decision below is made in **one access policy**, pure
 functions next to the open-items service:
 
 ```
-policy(viewer, item, facts) → { see_row, see_decision, see_outside, set_state, assign }
+policy(viewer, item, facts) → { see_row, see_decision, see_outside, set_state, assign, waits_on }
+decision_policy(facts)      → { see_decision }   (also asked alone: Send rows, stages, a sweep's desk)
 send_policy(viewer, run)    → { send }   (its approver, while they can read the decision)
 
 facts: can the viewer read the decision now; can they open the item now;
        the viewer's roles in the decision's projects; whether the approver
-       and the owner are still active members
+       and the owner are still active members; whether the item reached its
+       owner; its state
 ```
 
-Every operation calls them, and nothing else decides access. A later rule (an
-organization admin, an org-wide view, delegated roles, a team lead seeing
-their reports' items) is a change to these functions and their inputs, not to
-the table or the queries. The stored facts (approver, owner, how the owner was
-matched, who clicked and checked last, the decision) are what such rules will
-need.
+Every open-items operation calls them, and nothing else decides access; the
+impact card's `view` still checks the decision itself (see "Not in this
+round"). A later rule (an organization admin, an org-wide view, delegated
+roles, a team lead seeing their reports' items) is a change to these
+functions and their inputs, not to the table or the queries. The stored facts
+(approver, owner, how the owner was matched, who clicked and checked last, the
+decision) are what such rules will need.
 
 One part is not a business choice and stays strict: an outside item's words
 are shown only to a viewer who can open it live (ADR-0032, Slack's API terms).
@@ -227,10 +230,12 @@ or done after Send (an item Send left out that someone reopened).
 
 Each row says how its live read went for this viewer (`reach`): `opened`, or
 why there are no live details. `no_access`: the viewer's own access refused
-the item. `unavailable`: the read failed for any other reason (the tool was
-down or rate limited, a read timed out, or the request's final access check
-failed), which says nothing about access. `not_read`: no read was tried in
-this request. A viewer who cannot open the item sees "A Jira ticket you can't
+the item; this round, ECHO also refuses every Slack message it is asked to
+open, whatever the viewer's Slack access (see "Not in this round").
+`unavailable`: the read failed for any other reason (the tool was down or
+rate limited, a read timed out, or the request's final access check failed),
+which says nothing about access. `not_read`: no read was tried in this
+request. A viewer who cannot open the item sees "A Jira ticket you can't
 open" (or page, or Slack message) with the rest of the row; an outage is
 never shown as lost access. An owner who cannot read the decision sees their
 item, its `expected` line and who sent it, never the decision itself: Send is
@@ -267,12 +272,15 @@ gets an Update row.
 A sweep is a run with `trigger = sweep`: same start, lease, attempts and
 storage rules. It acts as the person who asked, with their access.
 
-- **What it covers.** Open items of every kind: a Jira ticket, a page, a
-  Slack message, or an ECHO record or document. `mine`: those the caller sent
-  or owns. `record` or `project`: those there that the caller can see, as
-  `items` shows them. At start, the server reads the scope again and takes up
-  to 20 items the caller still sees: never checked first, then the oldest
-  last check, then the oldest item. The rest wait for the next sweep.
+- **What it covers.** Open items on a Jira ticket, a page, or an ECHO record
+  or document. An item on a Slack message is left out, and the `sweep`
+  trigger refuses a Slack message citation: no reader in ECHO can open one
+  yet, so a sweep could only record it `unreadable` (see "Not in this
+  round"). `mine`: those the caller sent or owns. `record` or `project`:
+  those there that the caller can see, as `items` shows them. At start, the
+  server reads the scope again and takes up to 20 items the caller still
+  sees: never checked first, then the oldest last check, then the oldest
+  item. The rest wait for the next sweep.
 - **Findings.** One per item, in that order. A finding names the item by what
   the impact check found and its kind ("Outdated Jira ticket", "Conflicting
   page", "Affected page" when not assessed). It adds "from <decision title>"
@@ -290,12 +298,11 @@ storage rules. It acts as the person who asked, with their access.
   decision and it is in exactly one project. Any other sweep reads everywhere
   the caller may read.
 - **A finding's own items.** Its first citation, and every further citation of
-  an item in an outside tool (a ticket, a page, a Slack message). A further
-  ECHO record or document, such as the decision, is context. Own items are
-  matched by identity: the same item and, for a page, the same section; the
-  page's other sections stand in only when that section is gone. A new text
-  digest, version or link does not matter: edited items are what a sweep
-  checks.
+  an item in an outside tool (a ticket or a page). A further ECHO record or
+  document, such as the decision, is context. Own items are matched by
+  identity: the same item and, for a page, the same section; the page's other
+  sections stand in only when that section is gone. A new text digest,
+  version or link does not matter: edited items are what a sweep checks.
 - **Sweep renderer** (new). One verdict and one ECHO line per finding:
   - `unreadable` when research could not read one of the finding's own
     items. No model hears of it. A context citation that could not be read,
@@ -320,28 +327,33 @@ storage rules. It acts as the person who asked, with their access.
     titles are not replaced. The product stores only the verdict.
 - **Finish.** In one transaction with the run's finish, each finding's
   verdict becomes its item's last check when it is newer than the item's
-  current one and the caller still sees the item (the policy is asked again
-  as the run finishes). The check carries the time the attempt started, so a
-  check someone else made meanwhile stays newer. A null verdict leaves the
-  last check as it is: the item stays oldest, and the next sweep takes it
-  first. The run's stored result is the counts by verdict, not assessed
-  included, and nothing else: no line, title or citation. A sweep never sets
-  `state`. With no item left to check at start (all closed meanwhile), it
+  current one and the caller still sees the item. The policy is asked again
+  who still sees each item just before that transaction, in the same
+  synchronous step with nothing in between. It cannot be asked inside the
+  transaction: the decision check behind it reads the person's project grants
+  in a transaction of its own, and transactions do not nest. The check
+  carries the time the attempt started, so a check someone else made
+  meanwhile stays newer. A null verdict leaves the last check as it is: the
+  item stays oldest, and the next sweep takes it first. The run's stored
+  result is the counts by verdict, not assessed included, and nothing else:
+  no line, title or citation. A sweep never sets `state`. With no item left
+  to check at start (all closed, or out of the caller's sight, meanwhile), it
   reads nothing and finishes with zero counts.
 - **When it runs.** Home reports `sweep_due` when all of these hold: the
-  caller has an open item they sent or own whose last check, by anyone, is
-  older than 24 hours or missing; no sweep of theirs is running; and none of
-  their sweeps was created in the last hour, whatever its state. So a sweep
-  that keeps failing, or leaves items not assessed, is not asked for again on
-  every Home load. A sweep left pending for more than an hour does not hold
-  `sweep_due` back, so a stuck sweep cannot stop automatic sweeps. When
-  `sweep_due` is true, the desktop asks for a `mine` sweep; if the stuck
-  sweep is a `mine` sweep, that request returns it. "Check now" on a record
-  or a project asks for a sweep of that scope, and the hour does not limit
-  it. A second request for the same scope while one is pending or running
-  returns that run. Impact runs start before sweeps, enforced by the server:
-  starting a sweep answers `busy` while one of the caller's impact runs is
-  pending or running.
+  caller has an open item they sent or own, of a kind a sweep covers (not a
+  Slack message), whose last check, by anyone, is older than 24 hours or
+  missing; no sweep of theirs is running; and none of their sweeps was
+  created in the last hour, whatever its state. So a sweep that keeps
+  failing, or leaves items not assessed, is not asked for again on every Home
+  load. A sweep left pending for more than an hour does not hold `sweep_due`
+  back, so a stuck sweep cannot stop automatic sweeps. When `sweep_due` is
+  true, the desktop asks for a `mine` sweep; if the stuck sweep is a `mine`
+  sweep, that request returns it. "Check now" on a record or a project asks
+  for a sweep of that scope, and the hour does not limit it. A second request
+  for the same scope while one is pending or running returns that run.
+  Impact runs start before sweeps, enforced by the server: starting a sweep
+  answers `busy` while one of the caller's impact runs is pending or
+  running.
 
 Because the last check is shared, one person's sweep refreshes the item for
 everyone; a person whose items were all checked in the last 24 hours is not
@@ -366,9 +378,9 @@ All on `POST /v1/person/runs`, one envelope `{schema_version: 1, operation,
 …}`. Existing operations keep their shapes, with these additions for sweeps:
 
 - `list` returns the caller's runs, newest first, at most 100: at most the 20
-  newest sweeps, with the newest impact runs filling the rest, so frequent
-  sweeps never push a failed impact run and its Try again off the list. Each
-  run carries `trigger`: `approved_record` or `sweep`.
+  newest sweeps, with the newest impact runs filling the rest, so however
+  often sweeps run, at least 80 places stay for impact runs and their Try
+  again. Each run carries `trigger`: `approved_record` or `sweep`.
 - A `running` run whose lease has lapsed (its worker stopped) is reported as
   `pending`, in `list` and in the stages of `items`, because it can be
   started again; the stored state is unchanged.
@@ -381,12 +393,12 @@ All on `POST /v1/person/runs`, one envelope `{schema_version: 1, operation,
 | --- | --- | --- | --- |
 | `view` | `run_id` | card (unchanged shape) | the approver and anyone who can read the decision (was: approver only) |
 | `home` | — | Send rows; the open items that wait on the caller (Update, or Check once their last check is `changed`) and open items the caller sent whose last check is `changed`; `landed`, `waiting`, `last_checked_at`, and `sweep_due` (section 6) | the caller's own |
-| `items` | `scope: mine \| run \| record \| project`, `id?`, `cursor?`, `summary_only?`, `open_only?` | unsent, open and closed items the caller can see, 50 per page, oldest first; a summary of the whole scope (counts by state and last check, decisions, latest check, and per decision its `unsent` and `open` counts and, of the open ones, how many last checked `landed` and `unreadable`); and each decision's impact run stage, with `mine` when the stage's run is the caller's own (they may Send or Try again). With `summary_only: true` (never with `cursor`): the summary and stages only, no items and no live reads. With `open_only: true` (never with `summary_only`): items in state `open` only, paged the same way, with live reads for that page's items only; a `cursor` is sent with the same flag; the summary and stages still cover the whole scope | per section 4 |
+| `items` | `scope: mine \| run \| record \| project`, `id?`, `cursor?`, `summary_only?`, `open_only?` | unsent, open and closed items the caller can see, 50 per page, oldest first; a summary of the whole scope (counts by state, open items by last check, decisions, latest check, and per decision the caller can read its `unsent` and `open` counts and, of the open ones, how many last checked `landed` and `unreadable`); and each decision's impact run stage, with `mine` when the stage's run is the caller's own (they may Send or Try again). With `summary_only: true` (never with `cursor`): the summary and stages only, no items and no live reads. With `open_only: true` (never with `summary_only`): items in state `open` only, paged the same way, with live reads for that page's items only; a `cursor` is sent with the same flag; the summary and stages still cover the whole scope | per section 4 |
 | `item` | `item_id` | one item rebuilt for the caller | per section 4 |
 | `send` | `run_id`, `command_id`, `items: [{item_id, include, owner_membership_id?}]` | `{sent, not_relevant}`. A `command_id` already sent answers the counts it sent, frozen at Send (`send_included`), even after later state or owner changes and after the caller lost read access to the decision. For a new command, items that changed since the card was drawn answer `conflict` and nothing is written | checked first: the run is the caller's own finished impact run, else `not_found`. A replay is answered right after that check. A new command also needs the caller to read the decision now, and each picked owner to be an active member |
 | `set_state` | `item_id`, `state: open \| done \| not_relevant` | `{state}`; a click that changes nothing writes nothing | the approver or the owner, once the item is sent |
 | `assign` | `item_id`, `owner_membership_id` | `{owner}`; the item's current owner writes nothing | the approver, the owner, a lead of one of the decision's active projects, once the item is sent; the new owner is an active member |
-| `sweep` | `scope: mine \| record \| project`, `id?` (none for `mine`) | `{run_id}`: the caller's pending or running sweep of that scope, else a new pending one. `{state: 'nothing_to_check'}` when the scope holds no open item the caller can see; no run is made | anyone, over items they can see. A scope where they see nothing answers `nothing_to_check`, never `unauthorized`, so a request cannot probe what exists |
+| `sweep` | `scope: mine \| record \| project`, `id?` (none for `mine`) | `{run_id}`: the caller's pending or running sweep of that scope, else a new pending one. `{state: 'nothing_to_check'}` when the scope holds no open item the caller can see that a sweep covers (section 6; a Slack message is not covered); no run is made | anyone, over items they can see. A scope where they see nothing answers `nothing_to_check`, never `unauthorized`, so a request cannot probe what exists |
 
 Every item read rebuilds outside parts with one live open per item shown, at
 most 50 per call. A row's own fields never include a word read from outside
@@ -441,7 +453,7 @@ its decision's first project:
 | Update | `home` | "<item> · due Oct 30 → next week" (live details → `expected`) / "Jira ticket you own · from Pilot planning" | inline: "Open in Jira" and Done, no page |
 | Check | `home` (last check `changed`) | "<item> · <live details> — not what was decided" / "Jira ticket · now <assignee> · from Kickoff review" (the assignee part only when the live read shows one) | opens the Check card; nothing on the row closes the item |
 | Checking | runs `list` (pending, running impact run) | "Approved · checking what it changes" | none; not counted in the badge |
-| Check failed | runs `list` (failed impact run) | "Approved · the check did not finish" | opens the reason and Try again |
+| Check failed (verb "Retry") | runs `list` (failed impact run) | "Approved · the check did not finish" | opens the reason and Try again |
 
 A sweep never makes a Home row, and a failed sweep shows nothing: a later
 Home load may ask for another.
@@ -540,21 +552,23 @@ first, each with its stage and age.
 **Check now**, on the Impact line and the project line, is a quiet link as
 the canvas draws it. It asks for a `sweep` of that decision or project.
 `nothing_to_check` makes the line say "Nothing open to check". Otherwise the
-line says "Checking…": the desktop starts any of the viewer's waiting impact
-checks first (the server refuses the sweep while one waits), then the sweep,
-and follows the run with Part 1's polling backoff. When the sweep is done,
-the line's counts are read again, and Did it land? opens for that scope if
-the line is still in sight. A failed sweep makes the line say "Check
+line says "Checking…" and the desktop starts the sweep. While the server
+answers `busy` because one of the viewer's impact checks waits, the desktop
+starts those first, then the sweep, and it follows the run with Part 1's
+polling backoff. When the sweep is done, the line's counts are read again,
+and Did it land? opens for that scope if the line is still in sight. A
+failed sweep, or a sweep request that fails, makes the line say "Check
 failed · Try again", and Try again asks for a new sweep.
 
 **Runs**: `driveRuns` starts pending impact runs first, then pending sweeps,
 one at a time, under Part 1's polling backoff. A pending sweep may be one put
-back after a timed-out or rate-limited attempt, or one Check now queued; it
-is started like an impact run. A start answered `busy` is tried again later
-and never shown as an error. When `home` says `sweep_due` and no run is
-waiting or going, the desktop asks for one new `mine` sweep and starts it: at
-most one new sweep request per Home load. When a sweep ends, Home is read
-again to show what it found.
+back after a timed-out or rate-limited attempt, one whose attempt stopped
+(listed as `pending`, section 7), or one Check now queued; it is started like
+an impact run. A start answered `busy` is tried again later and never shown
+as an error. When `home` says `sweep_due` and no run is waiting or going, the
+desktop asks for one new `mine` sweep and starts it: at most one new sweep
+request per Home load. When a sweep ends, Home is read again to show what it
+found.
 
 ## 9. Delivery
 
@@ -601,21 +615,24 @@ separate pull request. The plan's As built section records the split.
 - No stored row or column holds text, a title or a name read from outside ECHO
   (a test seeds distinctive outside text and searches every new row for it).
 - A sweep replaces an item's last check only with a newer one, never changes
-  `state`, and skips items the sweeper can no longer see. Its run stores the
-  counts by verdict only.
+  `state`, and skips items the sweeper no longer sees as it finishes. Its run
+  stores the counts by verdict only.
+- An item on a Slack message is not swept and does not make a sweep due; the
+  `sweep` trigger refuses a Slack message citation.
 - No finding is judged without all of its own items. A finding that was not
   assessed leaves its item's last check as it is. A finding is `unreadable`
   only when one of its own items could not be read.
 - A sweep finding names the decision, its first line and its record only to
   a caller who can read the decision.
-- `sweep_due` is true only with an open item of the caller's whose last check
-  is over 24 hours old or missing, no running sweep of theirs, and none of
-  their sweeps created in the last hour; a sweep left pending longer than an
-  hour does not block it.
+- `sweep_due` is true only with an open item of the caller's, of a kind a
+  sweep covers, whose last check is over 24 hours old or missing, no running
+  sweep of theirs, and none of their sweeps created in the last hour; a sweep
+  left pending longer than an hour does not block it, and asking again for a
+  `mine` sweep returns a stuck `mine` sweep.
 - Starting a sweep answers `busy` while the caller has a pending or running
   impact run.
 - `sweep` answers `nothing_to_check`, and makes no run, when the scope holds
-  no open item the caller can see.
+  no open item the caller can see that a sweep covers.
 - Did it land? reads open items only. A decision's feed row and the project
   line count "open" as unsent + open − landed − unreadable; the Impact line's
   "open" leaves unsent items out.
@@ -625,8 +642,9 @@ separate pull request. The plan's As built section records the split.
 - Desktop, against the test Authority: Home asks for a sweep by itself when
   one is due and then shows a Check row and "1 landed since yesterday"; Mark
   done opens Did it land?, and "Mark 1 done" closes the landed item. Check now
-  on a decision sweeps only that decision. A Check row opens the item before
-  anything is closed.
+  on a decision sweeps only that decision, and on a project only that
+  project. A sweep attempt that went back to the queue is started again. A
+  Check row opens the item before anything is closed.
 - The research-loop evaluation grades each sweep finding against its key:
   `landed` as landed, `still_open` and `changed` as not landed, `unreadable`
   as no evidence. A null verdict is wrong, and a failed run scores zero.
@@ -668,6 +686,26 @@ separate pull request. The plan's As built section records the split.
   newest shared check it replaces a reader's `landed`. Home's landed count and
   Check rows read the shared check. Whether such a check should replace a
   reader's verdict is a founder call.
+- Checking Slack messages. No reader in ECHO can open a Slack message
+  citation yet: it names no tool connection, no live Slack reader is
+  registered, and ECHO's own desk leaves Slack messages to Slack. A sweep
+  could only record such an item `unreadable`, spending a background
+  research run on a result known in advance. So an item on a Slack message is
+  not swept, does not make a sweep due, and stays "not checked yet" until a
+  Slack reader exists. For the same reason a live read of it is refused as
+  `no_access`, so a viewer sees "A Slack message you can't open" even when
+  their own Slack access would allow it.
+- A revocation in the instant a sweep finishes. Who still sees each item is
+  asked just before the finishing transaction, not inside it. Nothing in the
+  Authority process can run in between, but access revoked by another
+  process in that instant is not seen, and that item's check is written.
+- Undoing Not relevant on a reopened item. An item Send left out that someone
+  reopened reaches its owner. If an owner who cannot read the decision sets
+  it not relevant, it leaves their sight, and they cannot reopen it.
+- The impact card's `view` under the access policy. `view` checks who reads
+  the decision itself, not through `decision_policy`: its approver keeps the
+  card, decided lines included, after losing read access to the decision,
+  and a later decision rule does not reach it until `view` asks the policy.
 
 ## Rulings
 
