@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { Member, OpenItemView } from '../../shared/protocol.js';
 import { colorFor, initials } from '../format.js';
-import { itemParts, monthDay, nameList, shortNames } from '../needs.js';
+import { itemParts, itemTitle, monthDay, nameList, shortNames } from '../needs.js';
 import {
   clearPick, closePicker, goHome, pickOwner, searchOwner, sendDecision, sendDetails, sendRecipients, sendToOwners, tickSend, type SendState, type State,
 } from '../store.js';
@@ -57,7 +57,7 @@ function Owner({ send, item, me }: { send: SendState; item: OpenItemView; me: st
   if (item.owner.match === 'approver' && item.owner.membership_id === me) {
     return (
       <button type="button" class="pick-button" disabled={send.busy || !send.ticks[item.item_id]} aria-expanded={send.picker?.item_id === item.item_id}
-        onClick={() => void searchOwner(item.item_id, '')}>Pick a person</button>
+        aria-label={`Pick a person: ${itemTitle(item)}`} onClick={() => void searchOwner(item.item_id, '')}>Pick a person</button>
     );
   }
   const [name] = shortNames([item.owner.name]);

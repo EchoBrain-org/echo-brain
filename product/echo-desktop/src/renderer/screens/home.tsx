@@ -81,14 +81,15 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
   );
 }
 
-/** Open in Jira: the tool checks your access when it opens. */
+/** Open in Jira: the tool checks your access when it opens. Its name says which item, as Done's does. */
 function OpenInTool({ state, item }: { state: State; item: OpenItemView }) {
   const [failed, setFailed] = useState(false);
   const source = item.current?.source;
   if (!source || !('permalink' in source)) return null;
+  const label = `Open in ${externalSourceProvider(source, state.tools?.items)}`;
   return <>
-    <button type="button" class="need-open" title={source.permalink}
-      onClick={async () => { setFailed(false); setFailed(!(await openItemInTool(item))); }}>Open in {externalSourceProvider(source, state.tools?.items)}</button>
+    <button type="button" class="need-open" title={source.permalink} aria-label={`${label}: ${itemTitle(item)}`}
+      onClick={async () => { setFailed(false); setFailed(!(await openItemInTool(item))); }}>{label}</button>
     {failed && <span class="error need-error">The item could not be opened. Try again.</span>}
   </>;
 }
@@ -124,7 +125,7 @@ function ItemRow({ state, row }: { state: State; row: Extract<NeedRow, { item: u
         <span class="need-actions">
           <OpenInTool state={state} item={item} />
           {item.can.set_state && (
-            <button type="button" class="need-act" onClick={() => void markDone(item)}>Done</button>
+            <button type="button" class="need-act" aria-label={`Done: ${itemTitle(item)}`} onClick={() => void markDone(item)}>Done</button>
           )}
         </span>
       </Side>

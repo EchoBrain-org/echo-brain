@@ -553,6 +553,7 @@ function forgetAccount(): void {
   stopRunPolling();
   runFailures = 0;
   openUnread = false;
+  resultOwed = false;
   lastAccount = null;
   emptyBar();
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
@@ -3282,6 +3283,12 @@ export interface HomeState {
   closing: Readonly<Record<string, number | null>>;
   /** Items whose Done failed: their rows came back with this line. */
   closeFailures: Readonly<Record<string, string>>;
+  /**
+   * Checks whose items were sent from Tell the owners?, by run: their Send
+   * rows stay off Home until a read of it begun after the send was answered
+   * (the value: how many Home reads had begun by then).
+   */
+  sent: Readonly<Record<string, number>>;
 }
 
 type ReviewOpen = PersonMeetingResultsV2['review_open'];
@@ -3347,10 +3354,13 @@ function homeShown(mine?: number): HomeState | null {
   return home && !state.concealed && state.status?.signed_in && (state.route.page === 'home' || state.route.page === 'decision') && (mine === undefined || home.seq === mine) ? home : null;
 }
 
-/** Home's rows from its parts, less the items whose Done was clicked. */
+/** Home's rows from its parts, less the items whose Done was clicked and the checks already sent. */
 function withRows(home: HomeState): HomeState {
-  const open = home.open && Object.keys(home.closing).length > 0
-    ? { ...home.open, items: home.open.items.filter(item => !Object.hasOwn(home.closing, item.item_id)) } : home.open;
+  const open = home.open && (Object.keys(home.closing).length > 0 || Object.keys(home.sent).length > 0) ? {
+    ...home.open,
+    send: home.open.send.filter(row => !Object.hasOwn(home.sent, row.run_id)),
+    items: home.open.items.filter(item => !Object.hasOwn(home.closing, item.item_id)),
+  } : home.open;
   return { ...home, rows: needRows(home.reviews, home.runs, open) };
 }
 
@@ -3363,7 +3373,7 @@ export async function loadHome(): Promise<void> {
   if (!account || state.concealed || (state.route.page !== 'home' && state.route.page !== 'decision')) return;
   stopRunPolling();
   const mine = ++seq;
-  const previous: Omit<HomeState, 'seq' | 'loading'> = state.home ?? { meetings: false, reviews: [], runs: [], open: null, rows: [], closing: {}, closeFailures: {} };
+  const previous: Omit<HomeState, 'seq' | 'loading'> = state.home ?? { meetings: false, reviews: [], runs: [], open: null, rows: [], closing: {}, closeFailures: {}, sent: {} };
   set({ home: { ...previous, seq: mine, loading: true, failure: undefined } });
   const tools = await rpc('account.tools', { expect: account });
   if (!homeShown(mine)) return;
@@ -3381,6 +3391,8 @@ export async function loadHome(): Promise<void> {
 let homeReads = 0;
 /** The last read of what waits on you failed: the next poll reads it again. */
 let openUnread = false;
+/** A check ended and what it found has not been read since: Home keeps looking until it has. */
+let resultOwed = false;
 
 const going = (run: PersonRunV1) => run.state === 'pending' || run.state === 'running';
 
@@ -3405,11 +3417,15 @@ async function readHome(mine: number, quiet: boolean): Promise<void> {
     runsCommand({ schema_version: 1, operation: 'list' }),
     quiet ? Promise.resolve(null) : readOpen(),
   ]);
+  const ended = runs.status === 'fulfilled' && checkEnded(before, runs.value.runs);
   let open = eager;
-  if (quiet && homeShown(mine) && (openUnread || (runs.status === 'fulfilled' && checkEnded(before, runs.value.runs)))) {
+  if (quiet && homeShown(mine) && (openUnread || resultOwed || ended)) {
     [open] = await Promise.allSettled([readOpen()]);
   }
   if (open.status === 'rejected' || open.value !== null) openUnread = open.status === 'rejected';
+  // A check that ended owes a read of what it found; only a read that succeeds pays it.
+  if (ended) resultOwed = true;
+  if (open.status === 'fulfilled' && open.value !== null) resultOwed = false;
   const previous = homeShown(mine);
   if (!previous) return;
   const next = {
@@ -3417,16 +3433,19 @@ async function readHome(mine: number, quiet: boolean): Promise<void> {
     runs: runs.status === 'fulfilled' ? runs.value.runs : previous.runs,
     open: open.status === 'fulfilled' && open.value !== null ? open.value : previous.open,
   };
-  // A Done answered before this read began is closed in its answer: its row needs hiding no longer.
-  // A poll that did not read what waits on you keeps every row hidden.
+  // A Done or a Send answered before this read began is in its answer: its row needs hiding no longer.
+  // A read that did not bring what waits on you keeps every row hidden.
   const fresh = open.status === 'fulfilled' && open.value !== null;
   const closing = fresh ? Object.fromEntries(Object.entries(previous.closing).filter(([, answered]) => answered === null || begun <= answered)) : previous.closing;
+  const sent = fresh ? Object.fromEntries(Object.entries(previous.sent).filter(([, answered]) => begun <= answered)) : previous.sent;
   const shown = new Set(next.open?.items.map(item => item.item_id) ?? []);
   const closeFailures = Object.fromEntries(Object.entries(previous.closeFailures).filter(([item]) => shown.has(item)));
   const failure: Failure | undefined = reviews.status === 'fulfilled' ? undefined : quiet ? previous.failure : { code: 'unavailable', retryable: true };
-  set({ home: withRows({ ...previous, ...next, closing, closeFailures, loading: false, meetings: true, failure }) });
+  set({ home: withRows({ ...previous, ...next, closing, closeFailures, sent, loading: false, meetings: true, failure }) });
   updateDecisionRun(next.runs);
-  void driveRuns(next.runs, next.reviews.some(review => review.status === 'publishing'), runs.status === 'rejected' ? failureOf(runs.reason) : undefined);
+  // The next poll waits longer after a failed runs read, or a failed read of what a check found.
+  const failed = runs.status === 'rejected' ? failureOf(runs.reason) : resultOwed && open.status === 'rejected' ? failureOf(open.reason) : undefined;
+  void driveRuns(next.runs, next.reviews.some(review => review.status === 'publishing'), failed);
 }
 
 let runPoll: ReturnType<typeof setTimeout> | null = null;
@@ -3454,13 +3473,16 @@ function pollRuns(mine: number, delay: number): void {
 /**
  * Milliseconds until the next runs read, or null for none. `failures` counts
  * consecutive failed reads. Home looks again only while a check is pending or
- * running or a review is publishing; after failed reads it waits twice as long
- * each time (10 s, 20 s, at most 60 s). A read that failed as unavailable with
- * nothing in flight is not tried again: an Authority with no model answers so
- * for good.
+ * running, a review is publishing, or what a finished check found is still
+ * unread (`owed`); after failed reads it waits twice as long each time (10 s,
+ * 20 s, at most 60 s). A read that failed as unavailable with nothing in
+ * flight is not tried again: an Authority with no model answers so for good,
+ * and no check ever ends there.
  */
-export function runPollDelay(input: { readonly runs: readonly PersonRunV1[]; readonly publishing: boolean; readonly failures: number; readonly lastFailure?: Failure }): number | null {
-  const inFlight = input.publishing || input.runs.some(run => run.state === 'pending' || run.state === 'running');
+export function runPollDelay(input: {
+  readonly runs: readonly PersonRunV1[]; readonly publishing: boolean; readonly failures: number; readonly lastFailure?: Failure; readonly owed?: boolean;
+}): number | null {
+  const inFlight = input.publishing || input.owed === true || input.runs.some(run => run.state === 'pending' || run.state === 'running');
   if (input.failures === 0) return inFlight ? RUN_POLL_MS : null;
   if (!inFlight && input.lastFailure?.code === 'unavailable') return null;
   return Math.min(RUN_POLL_MAX_MS, RUN_POLL_MS * 2 ** input.failures);
@@ -3487,7 +3509,7 @@ async function driveRuns(listed: readonly PersonRunV1[], publishing = false, fai
     if (!current()) return;
   }
   runFailures = failed ? runFailures + 1 : 0;
-  const delay = runPollDelay({ runs: listed, publishing, failures: runFailures, lastFailure: failed });
+  const delay = runPollDelay({ runs: listed, publishing, failures: runFailures, lastFailure: failed, owed: resultOwed });
   if (delay !== null && current()) pollRuns(mine, delay);
 }
 
@@ -3785,6 +3807,9 @@ export async function sendToOwners(): Promise<void> {
     editSend({ busy: false, failure: changed ? ITEMS_CHANGED : message(result.failure) });
     return;
   }
+  // Sent: its row leaves Home at once, and no read begun before now brings it back.
+  const home = state.home;
+  if (home) set({ home: withRows({ ...home, sent: { ...home.sent, [send.run_id]: homeReads } }) });
   goHome();
   set({ toast: !ticked ? 'Nothing to change' : kept ? 'Kept on your Home' : 'Sent' });
 }

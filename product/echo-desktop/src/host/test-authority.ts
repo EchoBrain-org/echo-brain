@@ -64,16 +64,18 @@ interface RunsRequest {
 /**
  * One open item (open items and Home v1): an item a decision's impact check
  * found, one shared row, as the Authority keeps it. Rows hold pointers and
- * ECHO's own words; what an item says now is `current`, given only to a
- * viewer who could open it.
+ * ECHO's own words; what an item says now is read live, and reaches a viewer
+ * (as `current`) only when that viewer could open it.
  */
 interface OpenItem {
   item_id: string; run_id: string; kind: 'ticket' | 'page';
   decision: { approval_id: string; record_sha256: string; title: string; first_line: string | null; approved_at: string; project_ids: string[] };
   /** Ari can read its decision. */
   readable: boolean;
-  /** What opening it live gives Ari; null when Ari cannot open it. */
-  current: Record<string, unknown> | null;
+  /** What a live open of it reads, for someone with access to it in its tool. */
+  live: Record<string, unknown>;
+  /** Ari can open it in its tool: only then does its live read reach Ari. */
+  opens: boolean;
   relation: 'conflicts' | 'needs_updating'; expected: string;
   approver: { membership_id: string; name: string };
   owner: { membership_id: string; name: string; match: 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned' };
@@ -503,17 +505,32 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       item_id: 'itm_00000000-0000-4000-8000-000000000041', run_id: 'run_00000000-0000-4000-8000-000000000041', kind: 'ticket',
       decision: { approval_id: 'apr_' + 'c'.repeat(64), record_sha256: sha('record:Pilot planning, approved by Mina'), title: 'Pilot planning',
         first_line: 'Launch the pilot next week.', approved_at: '2026-10-06T18:00:00.000Z', project_ids: [THERMOSTAT] },
-      readable: true, current: { citation: ticket('ECHO-12', 'Pilot launch', '10012'), says_now: 'The pilot launch is planned for the end of the month.',
+      readable: true, opens: true, live: { citation: ticket('ECHO-12', 'Pilot launch', '10012'), says_now: 'The pilot launch is planned for the end of the month.',
         assignee: 'Ari', status: 'In Progress', due_at: '2026-10-30' },
       relation: 'conflicts', expected: 'launch next week', owner: { ...ARI, match: 'jira_account' }, created_at: '2026-10-06T18:05:00.000Z', sent_at: '2026-10-06T19:00:00.000Z',
     }));
+    // A decision reader who cannot open the item: Ari reads Pilot planning, but this ticket is in a
+    // Jira project Ari has no access to. Its title, link and assignee never reach Ari.
+    if (mode === 'granola-owner') {
+      openItems.push(minaSent({
+        item_id: 'itm_00000000-0000-4000-8000-000000000044', run_id: 'run_00000000-0000-4000-8000-000000000041', kind: 'ticket',
+        decision: { approval_id: 'apr_' + 'c'.repeat(64), record_sha256: sha('record:Pilot planning, approved by Mina'), title: 'Pilot planning',
+          first_line: 'Launch the pilot next week.', approved_at: '2026-10-06T18:00:00.000Z', project_ids: [THERMOSTAT] },
+        readable: true, opens: false, live: { citation: ticket('ECHO-31', 'Trace sign-off', '10031'), says_now: 'The trace is signed off after the launch.',
+          assignee: 'S. Okafor', status: 'Blocked', due_at: '2026-11-12' },
+        relation: 'conflicts', expected: 'confirm the trace by Friday', owner: { ...ARI, match: 'picked' }, created_at: '2026-10-06T18:05:00.000Z',
+        sent_at: '2026-10-06T19:00:00.000Z',
+      }));
+    }
     // A ticket Ari cannot open, from a decision Ari cannot read: only Send told Ari of it. In
     // granola-home-fails-once Mina sends it after Home's second read.
     openItems.push(minaSent({
       item_id: 'itm_00000000-0000-4000-8000-000000000042', run_id: 'run_00000000-0000-4000-8000-000000000042', kind: 'ticket',
       decision: { approval_id: 'apr_' + 'd'.repeat(64), record_sha256: sha('record:Vendor review'), title: 'Vendor review',
         first_line: 'Order with six weeks of lead time.', approved_at: '2026-10-05T15:00:00.000Z', project_ids: [SUPPLIER] },
-      readable: false, current: null, relation: 'conflicts', expected: 'order six weeks ahead', owner: { ...ARI, match: 'picked' },
+      readable: false, opens: false, live: { citation: ticket('ECHO-20', 'Vendor order', '10020'), says_now: 'The vendor order goes out in four weeks.',
+        assignee: 'Rafael Moreno', status: 'To Do' },
+      relation: 'conflicts', expected: 'order six weeks ahead', owner: { ...ARI, match: 'picked' },
       created_at: '2026-10-05T15:05:00.000Z', sent_at: mode === 'granola-owner' ? '2026-10-05T16:00:00.000Z' : null,
     }));
   }
@@ -522,13 +539,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       item_id: 'itm_00000000-0000-4000-8000-000000000043', run_id: 'run_00000000-0000-4000-8000-000000000043', kind: 'ticket',
       decision: { approval_id: 'apr_' + 'e'.repeat(64), record_sha256: sha('record:Kickoff review'), title: 'Kickoff review',
         first_line: 'Freeze the firmware after the pilot.', approved_at: '2026-10-03T15:00:00.000Z', project_ids: [THERMOSTAT] },
-      readable: true, current: { citation: ticket('ECHO-7', 'Firmware freeze', '10007'), says_now: 'The firmware freezes before the pilot.',
+      readable: true, opens: true, live: { citation: ticket('ECHO-7', 'Firmware freeze', '10007'), says_now: 'The firmware freezes before the pilot.',
         assignee: 'Ari', status: 'To Do', due_at: '2026-11-04' },
       relation: 'conflicts', expected: 'freeze after the pilot', owner: { ...ARI, match: 'name' }, created_at: '2026-10-03T15:05:00.000Z', sent_at: '2026-10-03T16:00:00.000Z',
     }));
   }
-  // The meetings Mina approved that Ari can read: in their project's feed, where their Impact line shows.
+  // The meetings Mina approved that Ari can read, each once: in their project's feed, where their Impact line shows.
   for (const item of openItems.filter(entry => entry.readable)) {
+    if (meetings.some(meeting => meeting.record_sha256 === item.decision.record_sha256)) continue;
     meetings.push({
       record_sha256: item.decision.record_sha256, title: item.decision.title, added_at: item.decision.approved_at, meeting_date: item.decision.approved_at.slice(0, 10),
       visibility: 'project', project_ids: item.decision.project_ids, approver: MINA.membership_id, started_at: item.decision.approved_at, timezone: 'Europe/London',
@@ -543,10 +561,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const unsent = { run_id: PILOT_RUN, decision, readable: true, approver: ARI, state: 'unsent' as const, created_at: '2026-10-07T10:05:00.000Z', sent_at: null, state_set_at: null };
     openItems.push(
       { ...unsent, item_id: 'itm_00000000-0000-4000-8000-000000000031', kind: 'ticket', relation: 'conflicts', expected: 'launch next week',
-        current: { citation: ticket('ECHO-12', 'Pilot launch', '10012'), says_now: 'The pilot launch is planned for the end of the month.',
+        opens: true, live: { citation: ticket('ECHO-12', 'Pilot launch', '10012'), says_now: 'The pilot launch is planned for the end of the month.',
           assignee: 'Mina Patel', status: 'In Progress', due_at: '2026-10-30' }, owner: { ...MINA, match: 'jira_account' } },
       { ...unsent, item_id: 'itm_00000000-0000-4000-8000-000000000032', kind: 'page', relation: 'needs_updating', expected: 'pilot starts next week',
-        current: { citation: PRD_PAGE, says_now: 'starts after freeze' }, owner: { ...ARI, match: 'approver' } },
+        opens: true, live: { citation: PRD_PAGE, says_now: 'starts after freeze' }, owner: { ...ARI, match: 'approver' } },
     );
   };
   const mineAsOwner = (item: OpenItem) => item.owner.membership_id === ARI.membership_id;
@@ -555,7 +573,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const visible = (item: OpenItem) => item.readable || (mineAsOwner(item) && item.state !== 'unsent');
   /** A row rebuilt for Ari: the decision only for a reader, what it says now only when Ari could open it. */
   const itemView = (item: OpenItem) => ({
-    item_id: item.item_id, run_id: item.run_id, kind: item.kind, ...(item.readable ? { decision: item.decision } : {}), ...(item.current ? { current: item.current } : {}),
+    item_id: item.item_id, run_id: item.run_id, kind: item.kind, ...(item.readable ? { decision: item.decision } : {}), ...(item.opens ? { current: item.live } : {}),
     relation: item.relation, expected: item.expected, approver: { ...item.approver, active: true }, owner: { ...item.owner, active: true },
     waits_on: item.state === 'unsent' ? 'approver' : 'owner', state: item.state, created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at,
     check: null, can: { set_state: item.state !== 'unsent' && involved(item), assign: involved(item) },

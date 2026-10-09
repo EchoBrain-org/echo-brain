@@ -39,7 +39,7 @@ test('the approver sends the impact to its owners from Home', async () => {
   await expect(app.page.locator('body')).not.toContainText('ECHO-12');
   await emit(app.app, 'echo-test:resume');
   await expect(app.page.getByRole('heading', { name: 'Tell the owners?' })).toBeVisible();
-  await app.page.getByRole('button', { name: 'Pick a person' }).click();
+  await app.page.getByRole('button', { name: 'Pick a person: Thermostat PRD · Pilot scope' }).click();
   await app.page.getByRole('searchbox', { name: 'Find a person' }).fill('Raf');
   await app.page.getByRole('option', { name: 'Rafael Moreno' }).click();
   await app.page.getByRole('button', { name: 'Send to Mina and Rafael' }).click();
@@ -54,15 +54,42 @@ test('an owner closes an item from Home', async () => {
   app = await launch('granola-owner');
   const row = app.page.getByTestId('need-row').filter({ hasText: 'ECHO-12' });
   await expect(row).toContainText('due Oct 30 → launch next week');
-  await expect(row.getByRole('button', { name: 'Open in Jira' })).toBeVisible();
+  await expect(row.getByRole('button', { name: 'Open in Jira: ECHO-12 · Pilot launch' })).toBeVisible();
   // The fixture's second item has no `current`: Ari cannot open it in Jira.
-  const hidden = app.page.getByTestId('need-row').filter({ hasText: 'A Jira ticket you can\'t open' });
-  await expect(hidden).toBeVisible();
-  await expect(hidden.getByRole('button', { name: 'Open in Jira' })).toHaveCount(0);
-  await row.getByRole('button', { name: 'Done' }).click();
+  const hidden = app.page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' });
+  await expect(hidden).toContainText('A Jira ticket you can\'t open');
+  await expect(hidden.getByRole('button', { name: /^Open in / })).toHaveCount(0);
+  await row.getByRole('button', { name: 'Done: ECHO-12 · Pilot launch' }).click();
   await expect(row).toHaveCount(0);
   // The row leaves at once; the request follows.
   await expect.poll(() => app.calls().some(call => call.body?.operation === 'set_state' && call.body.state === 'done')).toBe(true);
+});
+
+/** What a live open of an item Ari cannot open would read: its key, title, link and assignee. */
+const WITHHELD = ['ECHO-31', 'Trace sign-off', 'browse/ECHO-31', 'S. Okafor', 'ECHO-20', 'Vendor order', 'Rafael Moreno'];
+
+test('a decision reader who cannot open an item sees what it is, never what it says', async () => {
+  app = await launch('granola-owner');
+  // Ari reads Pilot planning, but cannot open this ticket in Jira.
+  const row = app.page.getByTestId('need-row').filter({ hasText: 'confirm the trace by Friday' });
+  await expect(row).toContainText('A Jira ticket you can\'t open → confirm the trace by Friday');
+  await expect(row).toContainText('Jira ticket you own · from Pilot planning');
+  await expect(row.getByRole('button', { name: /^Open in / })).toHaveCount(0);
+  await expect(row.getByRole('button', { name: 'Done: A Jira ticket you can\'t open' })).toBeVisible();
+  const home = await app.page.content();
+  for (const withheld of WITHHELD) expect(home).not.toContain(withheld);
+  // The decision's items show it the same way.
+  await app.page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
+  await app.page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' }).click();
+  const impact = app.page.getByTestId('impact-line');
+  await expect(impact).toContainText('Impact · 2 open');
+  await impact.getByRole('button', { name: /Impact/ }).click();
+  const items = app.page.getByTestId('open-item');
+  await expect(items).toHaveCount(2);
+  await expect(items.filter({ hasText: 'confirm the trace by Friday' })).toContainText('A Jira ticket you can\'t open');
+  // No title, permalink or assignee of an item Ari cannot open reaches the page.
+  const page = await app.page.content();
+  for (const withheld of WITHHELD) expect(page).not.toContain(withheld);
 });
 
 test('a Home read that fails once keeps the rows it had', async () => {

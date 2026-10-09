@@ -72,6 +72,11 @@ beforeEach(() => {
         }
         if (params.request?.operation === 'start') { run = impactRun('running'); return ok({ state: 'running' }); }
         if (params.request?.operation === 'set_state') return failSetState ? unavailable : ok({ state: 'done' });
+        if (params.request?.operation === 'items') {
+          return ok({ items: [{ ...item('5'), state: 'unsent', sent_at: null, state_set_at: null, waits_on: 'approver' }], next_cursor: null, stages: [],
+            summary: { unsent: 1, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 1, last_checked_at: null, by_decision: [] } });
+        }
+        if (params.request?.operation === 'send') return ok({ sent: 1, not_relevant: 0 });
         if (params.request?.operation === 'view') return ok({ status: 'assessed', decided: [], affected: [], unconfirmed: [], people: [], sources: [], hidden: 0, checked_at: '2026-10-08T10:05:00.000Z' });
     }
     throw new Error(`Unexpected request: ${method} ${params.request?.operation ?? ''}`);
@@ -132,6 +137,11 @@ describe('Home rows', () => {
     // A model-less Authority answers unavailable for good: with nothing in flight it is not asked again.
     expect(runPollDelay({ runs: [], publishing: false, failures: 1, lastFailure: { code: 'unavailable', retryable: true } })).toBeNull();
     expect([1, 2, 4, 9].map(failures => runPollDelay({ runs: running, publishing: false, failures, lastFailure: timeout }))).toEqual([10_000, 20_000, 60_000, 60_000]);
+    // What a finished check found, still unread, keeps Home looking as a check in flight does, even through unavailable reads.
+    const unavailable = { code: 'unavailable', retryable: true };
+    expect(runPollDelay({ runs: [impactRun('done')], publishing: false, failures: 0, owed: true })).toBe(5_000);
+    expect([1, 2, 4].map(failures => runPollDelay({ runs: [impactRun('done')], publishing: false, failures, lastFailure: unavailable, owed: true })))
+      .toEqual([10_000, 20_000, 60_000]);
   });
 });
 
@@ -244,6 +254,52 @@ describe('Home decisions and impact checks', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(store.getState().home?.rows).toEqual([]);
     expect(store.getState().home?.closing).toEqual({});
+  });
+
+  it('reads what a finished check found again, more slowly, until that read succeeds', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('running');
+    const store = await start();
+    const homeReads = () => operations().filter(operation => operation === 'home').length;
+    expect(homeReads()).toBe(1);
+    // The check ends, and the read of what it found fails on that poll.
+    run = impactRun('done');
+    home = { ...emptyHome(), send: [sendRow()] };
+    failNextHome = true;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(homeReads()).toBe(2);
+    expect(store.getState().home?.rows).toEqual([]);
+    // Home keeps looking, from 10 s, until the read succeeds; then it stops.
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(homeReads()).toBe(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(homeReads()).toBe(3);
+    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send' }]);
+    const requests = rpc.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(rpc.mock.calls).toHaveLength(requests);
+  });
+
+  it('keeps a sent check off Home until a read begun after the send says otherwise', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('done');
+    home = { ...emptyHome(), send: [sendRow()] };
+    const store = await start();
+    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send' }]);
+    await store.openSend(run.run_id);
+    expect(store.getState().send?.items).toHaveLength(1);
+    // Sent: Home is read again, and that read fails; the kept part still has the Send row.
+    failNextHome = true;
+    await store.sendToOwners();
+    await flush();
+    expect(operations()).toContain('send');
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.getState().home?.rows).toEqual([]);
+    // A later read, begun after the send was answered, decides.
+    home = emptyHome();
+    await store.loadHome();
+    expect(store.getState().home?.rows).toEqual([]);
+    expect(store.getState().home?.sent).toEqual({});
   });
 
   it('reads what waits on you again on the next poll after that read failed', async () => {
