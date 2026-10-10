@@ -45,6 +45,8 @@ services:
       ECHO_STAGING_SYNTHETIC_MEETINGS_DIR: "${ECHO_STAGING_SYNTHETIC_MEETINGS_DIR:-}"
       # The host wrapper writes this only for the staging-only connector rehearsal.
       ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:-}"
+      # An absent or expired private selection disables hosted research tracing.
+      ECHO_STAGING_LANGSMITH_TRACING_FILE: /echo-clean/private/langsmith-tracing.json
     restart: unless-stopped
     stop_grace_period: 45s
     volumes:

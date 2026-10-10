@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticToolV1, type CoreRuntimeDiagnosticObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReleaseV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { JiraCloudRequestV1, JiraCloudTransportV1 } from '../src/jira-cloud-transport-v1.js';
@@ -69,6 +70,23 @@ function fixture() {
 }
 
 describe('person-bound Jira live reader through the shared audited wrapper', () => {
+  it('captures the exact generated JQL only in diagnostics and preserves concurrent tool identity', async () => {
+    const f = fixture(); const { reader } = await f.make('ECHO');
+    const diagnostics: CoreRuntimeDiagnosticObservationV1[] = [];
+    const metadata: unknown[] = [];
+    await observeCoreRuntimeV1('research_run', () => Promise.all(['DVT accuracy', 'ECHO-1'].map((query, index) =>
+      withCoreRuntimeDiagnosticToolV1({ tool_call_id: index + 1, round: 1 }, () => reader.search({ query, limit: 5 })))), {
+      diagnostic_observer: event => { diagnostics.push(event); }, observer: event => { metadata.push(event); },
+    });
+    const queries = diagnostics.filter(event => event.kind === 'provider_query');
+    expect(queries).toHaveLength(2);
+    for (const query of queries) expect(f.request.mock.calls).toContainEqual([
+      expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ jql: query.query, maxResults: query.max_results }) }),
+    ]);
+    expect(queries.find(query => query.query.includes('DVT'))?.tool_context).toEqual({ tool_call_id: 1, round: 1 });
+    expect(queries.find(query => query.query.includes('ECHO-1'))?.tool_context).toEqual({ tool_call_id: 2, round: 1 });
+    expect(JSON.stringify(metadata)).not.toContain('DVT');
+  });
   it('bounds exact inventory reads at four and preserves discovery order', async () => {
     vi.useFakeTimers();
     try {

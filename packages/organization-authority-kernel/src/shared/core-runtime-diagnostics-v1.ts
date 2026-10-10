@@ -27,6 +27,7 @@ export type CoreRuntimeDiagnosticEventV1 =
   | (ToolIdentity & { readonly kind: 'tool_request'; readonly args: Readonly<Record<string, string>> })
   | (ToolIdentity & { readonly kind: 'tool_response'; readonly result: Readonly<Record<string, unknown>> })
   | (ToolIdentity & { readonly kind: 'tool_error'; readonly error_kind: CoreRuntimeDiagnosticErrorKindV1 })
+  | { readonly kind: 'provider_query'; readonly provider: 'jira'; readonly operation: 'search'; readonly query: string; readonly max_results: number }
   | { readonly kind: 'lifecycle'; readonly stage: 'trigger' | 'application' | 'persistence' | 'output_view' | 'run' | 'brief' | 'starting_read' | 'preload' | 'research' | 'renderer' | 'revalidation' | 'audit' | 'release' | 'extraction' | 'grounding'; readonly event: 'started' | 'succeeded' | 'failed' | 'skipped'; readonly data?: Readonly<Record<string, unknown>>; readonly error_kind?: CoreRuntimeDiagnosticErrorKindV1 }
   | { readonly kind: 'capture_error'; readonly error_kind: 'snapshot_failed' };
 
@@ -35,6 +36,8 @@ export type CoreRuntimeDiagnosticObservationV1 = CoreRuntimeDiagnosticEventV1 & 
   readonly operation_id: string;
   readonly span_id: string;
   readonly parent_span_id: string | null;
+  /** Model-facing tool that caused this nested provider request, including concurrent reads. */
+  readonly tool_context?: { readonly tool_call_id: number; readonly round: number };
 };
 export type CoreRuntimeDiagnosticObserverV1 = (event: CoreRuntimeDiagnosticObservationV1) => void | Promise<void>;
 

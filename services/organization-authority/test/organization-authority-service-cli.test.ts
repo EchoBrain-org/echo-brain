@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { captureCoreRuntimeContentV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { AdapterError } from "@echo-brain/organization-processing/core/contracts/adapter";
 import { MeetingProcessingWorkerLifecycleV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
 
@@ -157,8 +157,10 @@ afterEach(() => {
     "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE",
     "ECHO_CLEAN_RELEASE_ID",
     "ECHO_CLEAN_AUTHORITY_HOST",
+    "ECHO_STAGING_LANGSMITH_TRACING_FILE",
   ]) delete process.env[name];
   Object.assign(runtimeState, initialRuntimeState());
+  vi.unstubAllGlobals();
   for (const root of temporaryRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -214,6 +216,31 @@ function stagingProfileDirectory(): string {
 }
 
 describe("admitted runtime CLI events", () => {
+  it('wires hosted traces to ordinary research without a Person capture and drains on shutdown', async () => {
+    runtimeState.authority_url = 'https://authority-staging.echobrain.org';
+    process.env.ECHO_SOURCE_SHA = 'a'.repeat(40);
+    const path = nangoKeyFile();
+    writeFileSync(path, JSON.stringify({ project: 'echo-staging', region: 'us', api_key: 'private-fixture-langsmith-key', expires_at: new Date(Date.now() + 3600_000).toISOString() }));
+    process.env.ECHO_STAGING_LANGSMITH_TRACING_FILE = path;
+    const fetcher = vi.fn<typeof fetch>(async () => new Response('', { status: 202 }));
+    vi.stubGlobal('fetch', fetcher);
+    const lines: string[] = [];
+    const serving = start({ stderr: value => { lines.push(value); } });
+    await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+    await observeCoreRuntimeV1('research_run', async () => {
+      observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', tool_call_id: 1, round: 1, tool: 'search', args: { query: 'private THERM question' } });
+      observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', tool_call_id: 1, round: 1, tool: 'search', result: { items: [] } });
+    }, runtimeState.core_runtime_observation);
+    process.emit('SIGTERM');
+    await expect(serving).resolves.toBe(0);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const form = fetcher.mock.calls[0]![1]!.body as FormData;
+    const parts = await Promise.all([...form.values()].map(value => (value as Blob).text()));
+    expect(parts.join('')).toContain('private THERM question');
+    expect(lines.join('')).not.toContain('private THERM question');
+    expect(lines.join('')).not.toContain('private-fixture-langsmith-key');
+    expect(lines.map(line => JSON.parse(line))).toContainEqual(expect.objectContaining({ kind: 'echo-langsmith-tracing-status-v1', exported: 1, failed: 0 }));
+  });
   it.each([
     [undefined, undefined] as const,
     ...(["", "false", "true"] as const).flatMap(flag => [

@@ -12,6 +12,20 @@ const payload = () => ({ kind: 'tool_response' as const, tool_call_id: 1, round:
 const vocabulary = { providers: [], models: [], triggers: ['ask', 'approved_record', 'future_trigger'] };
 
 describe('shared selected-run diagnostics', () => {
+  it('isolates runtime exporter selection and mutation from the private capture and product', async () => {
+    const privateSink = vi.fn();
+    await expect(observeCoreRuntimeV1('research_run', async () => {
+      observeCoreRuntimeDiagnosticV1(payload()); return 42;
+    }, { diagnostic_observer: privateSink, diagnostic_exporter: () => { throw new Error('selection failure'); } })).resolves.toBe(42);
+    expect(privateSink).toHaveBeenCalledTimes(1);
+    const source = payload();
+    await observeCoreRuntimeV1('research_run', async () => observeCoreRuntimeDiagnosticV1(source), {
+      diagnostic_observer: privateSink,
+      diagnostic_exporter: () => event => { if (event.kind === 'tool_response') (event.result as { text: string }).text = 'mutated'; },
+    });
+    expect(source.result.text).toBe('private released text');
+    expect(privateSink.mock.calls[1]![0].result.text).toBe('private released text');
+  });
   it('uses the existing operation/span identity and never sends payloads to metadata', async () => {
     const metadata: CoreRuntimeObservationV1[] = [];
     const diagnostics: CoreRuntimeDiagnosticObservationV1[] = [];

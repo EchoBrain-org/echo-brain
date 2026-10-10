@@ -348,6 +348,7 @@ exec /usr/bin/install "$@"
       | "activate-provider-credentials"
       | "extraction-attempts"
       | "retry-extraction"
+      | "langsmith-tracing"
       | "replace-rehearsal"
       | "stage-rehearsal-inputs"
       | "prepare-rehearsal"
@@ -485,6 +486,76 @@ afterEach(() => {
 });
 
 describe("clean-v1 Organization Authority deployment profile", () => {
+  it('writes the hosted tracing selection privately with an expiry and no key output', () => {
+    const fixture = preparedStatusFixture();
+    const command = deploymentFile('onboard-clean-v1.sh').split('langsmith_tracing() {')[1]!;
+    const writer = command.match(/<<'PY'\n([\s\S]*?)\nPY/)![1]!;
+    // Supply the hidden prompt through getpass's test double; no interactive terminal or real credential.
+    const program = "import getpass\ngetpass.getpass = lambda prompt: 'private-fixture-key-no-output'\n" + writer;
+    const result = spawnSync('python3', ['-c', program, fixture.privateDir, String(process.getuid!()), String(process.getgid!()), 'false', 'echo-staging', 'eu', '2', ''], { encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe('');
+    const path = join(fixture.privateDir, 'langsmith-tracing.json');
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    const value = JSON.parse(readFileSync(path, 'utf8')) as Record<string, string>;
+    expect(value).toMatchObject({ project: 'echo-staging', region: 'eu', api_key: 'private-fixture-key-no-output' });
+    expect(Date.parse(value.expires_at!) - Date.now()).toBeGreaterThan(7_100_000);
+    expect(Date.parse(value.expires_at!) - Date.now()).toBeLessThanOrEqual(7_200_000);
+  });
+  it('disables hosted tracing only on the exact running staging runtime and restarts to release its key', () => {
+    const fixture = preparedStatusFixture();
+    const setup = join(fixture.privateDir, 'onboard-clean-v1.conf');
+    writeFileSync(setup, readFileSync(setup, 'utf8').replace('https://authority.example', 'https://authority-staging.echobrain.org'));
+    const selection = join(fixture.privateDir, 'langsmith-tracing.json');
+    writeFileSync(selection, 'private-fixture-key', { mode: 0o600 });
+    const result = fixture.run('langsmith-tracing', {}, ['--disable']);
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(existsSync(selection)).toBe(false);
+    expect(result.stdout).toContain('langsmith_tracing_configured=false');
+    const calls = readFileSync(fixture.calls, 'utf8');
+    expect(calls).toContain('stop -t 30 authority');
+    expect(calls).toContain('up -d --no-build --wait --wait-timeout 90');
+    expect(calls).toContain('restart proxy');
+    expect(calls + result.stdout + result.stderr).not.toContain('private-fixture-key');
+    expect(existsSync(join(fixture.deploy, '.staging-release-guard'))).toBe(false);
+  });
+
+  it('refuses hosted tracing outside staging or with drift before changing the selection', () => {
+    for (const fault of ['production', 'drift', 'guard']) {
+      const fixture = preparedStatusFixture();
+      const setup = join(fixture.privateDir, 'onboard-clean-v1.conf');
+      if (fault !== 'production') writeFileSync(setup, readFileSync(setup, 'utf8').replace('https://authority.example', 'https://authority-staging.echobrain.org'));
+      if (fault === 'drift') writeFileSync(join(fixture.deploy, '.env.clean-v1'), 'drift\n');
+      if (fault === 'guard') mkdirSync(join(fixture.deploy, '.staging-release-guard'), { mode: 0o700 });
+      const selection = join(fixture.privateDir, 'langsmith-tracing.json');
+      writeFileSync(selection, 'private-fixture-key', { mode: 0o600 });
+      const result = fixture.run('langsmith-tracing', {}, ['--disable']);
+      expect(result.status).toBe(1);
+      expect(readFileSync(selection, 'utf8')).toBe('private-fixture-key');
+      expect(existsSync(fixture.calls) ? readFileSync(fixture.calls, 'utf8') : '').not.toContain('stop -t');
+    }
+  });
+
+  it('uses the staged candidate tuple when changing hosted tracing before promotion', () => {
+    const fixture = preparedStatusFixture();
+    const setup = join(fixture.privateDir, 'onboard-clean-v1.conf');
+    writeFileSync(setup, readFileSync(setup, 'utf8').replace('https://authority.example', 'https://authority-staging.echobrain.org'));
+    const accepted = JSON.parse(readFileSync(join(fixture.releaseDir, 'current.clean-v1.json'), 'utf8')) as { authority_image: { reference: string } };
+    const profile = runtimeProfile('d'.repeat(40));
+    const releaseId = 'clean-v1-langsmith-candidate';
+    writeFileSync(join(fixture.releaseDir, 'candidate.clean-v1.json'), releaseRecord({ image: accepted.authority_image.reference, profile, releaseId, source: 'd'.repeat(40) }));
+    writeFileSync(join(fixture.releaseDir, 'runtime-profiles', `${releaseId}.profile`), profile.bytes);
+    writeFileSync(join(fixture.releaseDir, 'runtime-profile.active'), profile.bytes);
+    const environment = readFileSync(join(fixture.deploy, '.env.clean-v1'), 'utf8').replace(fixture.releaseId, releaseId).replace(fixture.profile.digest, profile.digest);
+    writeFileSync(join(fixture.deploy, '.env.clean-v1'), environment);
+    writeFileSync(join(fixture.releaseDir, 'runtime-environments', `${releaseId}.env`), environment);
+    const selection = join(fixture.privateDir, 'langsmith-tracing.json');
+    writeFileSync(selection, 'private-fixture-key', { mode: 0o600 });
+    const result = fixture.run('langsmith-tracing', { ECHO_FAKE_SOURCE: 'd'.repeat(40), ECHO_FAKE_RELEASE_ID: releaseId, ECHO_FAKE_RUNTIME_PROFILE_SHA256: profile.digest }, ['--disable']);
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(selection)).toBe(false);
+  });
   const extractionRetryArguments = ["--admission-sha256", `sha256:${"a".repeat(64)}`,
     "--review-lineage-id", `rli_${"b".repeat(64)}`, "--review-input-sha256", `sha256:${"c".repeat(64)}`,
     "--expected-attempt", "1", "--expected-outcome", "failed", "--confirm-new-model-call"];
