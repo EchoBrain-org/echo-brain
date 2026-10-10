@@ -284,8 +284,8 @@ export function createSlackApprovalPresenterV1(options: {
         const proposal = options.core.proposal(row.approval_id);
         if (row.delivery === "opening") {
           if (!pendingActive(proposal)) { unrepresentable.run(asIso(now()), row.approval_id); changed = true; continue; }
-          try { card(proposal); } catch (error) {
-            if (!(error instanceof Error) || !error.message.includes("exceeds Slack limits")) throw error;
+          // Any card-build failure is this row's problem; it must not stall the rows after it.
+          try { card(proposal); } catch {
             cannotRepresent(row); changed = true; continue;
           }
           try {
@@ -345,9 +345,10 @@ export function createSlackApprovalPresenterV1(options: {
           }
           const liveProposal = options.core.proposal(row.approval_id);
           const shows = liveProposal === undefined ? "superseded" : outcome(liveProposal);
-          const publishedCard = shows === "open" ? card(liveProposal!) : buildClosedApprovalCardV4({ title: liveProposal?.title ?? "Meeting", outcome: shows, surface: liveProposal?.decided_on ?? "desktop", audience_label: liveProposal?.project_ids.length ? "Projects" : "Only me" });
           const message = database.prepare("SELECT dm_channel_id,message_ts FROM authority_approval_presentations_v1 WHERE approval_id=? AND surface='slack'").get(row.approval_id) as { dm_channel_id: string; message_ts: string };
           try {
+            // Built inside the try: a card that cannot be built backs this row off instead of stalling the others.
+            const publishedCard = shows === "open" ? card(liveProposal!) : buildClosedApprovalCardV4({ title: liveProposal?.title ?? "Meeting", outcome: shows, surface: liveProposal?.decided_on ?? "desktop", audience_label: liveProposal?.project_ids.length ? "Projects" : "Only me" });
             const published = await deliver(row, "publish_card", () => provider(target).publish({ approval_id: row.approval_id, dm_channel_id: message.dm_channel_id, provider_message_ts: message.message_ts, card: publishedCard }, signal));
             if (!options.targetCurrent(target) || published.kind !== "done") { backoff(row); uncertain = true; continue; }
             persistCard.run(shows, canonicalSha256(publishedCard as unknown as JsonValue), asIso(now()), row.approval_id); changed = true;
@@ -360,8 +361,8 @@ export function createSlackApprovalPresenterV1(options: {
         if (row.delivery !== "posted" || proposal === undefined || row.dm_channel_id === null || row.message_ts === null) continue;
         const shows = outcome(proposal);
         if (shows === row.shows && row.card_sha256 !== null) continue;
-        const redraw = shows === "open" ? card(proposal) : buildClosedApprovalCardV4({ title: proposal.title, outcome: shows, surface: proposal.decided_on ?? "desktop", audience_label: proposal.project_ids.length ? "Projects" : "Only me" });
         try {
+          const redraw = shows === "open" ? card(proposal) : buildClosedApprovalCardV4({ title: proposal.title, outcome: shows, surface: proposal.decided_on ?? "desktop", audience_label: proposal.project_ids.length ? "Projects" : "Only me" });
           const published = await deliver(row, "publish_card", () => provider(target).publish({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id!, provider_message_ts: row.message_ts!, card: redraw }, signal));
           if (!options.targetCurrent(target) || published.kind !== "done") { backoff(row); uncertain = true; continue; }
           persistCard.run(shows, canonicalSha256(redraw as unknown as JsonValue), asIso(now()), row.approval_id); changed = true;
