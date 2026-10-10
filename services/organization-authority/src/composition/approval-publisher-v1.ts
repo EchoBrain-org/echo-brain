@@ -60,7 +60,8 @@ async function publisherAppendOptionsV1(context: ApprovalWorkflowContextV1): Pro
  * runs the after-record hooks in that receipt's transaction. Each row is isolated, shows as a failed record_append span, and is retried
  * on every pass. Append rethrows the first row failure after the pass; recovery does not, so one unpublishable row cannot stop startup
  * or the rest of a cycle. A failure of the whole pass (signer, page query, abort) throws from both. The core adds
- * reconcileApprovalPresentations when it has presenters; the lifecycle requests search and presentation after each pass.
+ * reconcileApprovalPresentations when it has presenters; the lifecycle requests search and presentation after each cycle and
+ * publication wake.
  */
 export function createApprovalPublisherV1(database: Database.Database, context: ApprovalWorkflowContextV1,
   hooks: readonly AfterApprovedRecordHookV1[]): ApprovalWorkflowProcessingV1 {

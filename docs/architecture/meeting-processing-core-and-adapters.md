@@ -115,6 +115,73 @@ organization-record submission. The Person client owns none of
 that state. Its provider client fragments use only authenticated Authority ports;
 server adapters remain outside its dependency closure.
 
+## Held meetings, lanes and the writer gate
+
+**Held meetings.** The attempt ledger reserves one paid extraction per review
+input before the provider call. When an extraction fails (grounding or schema
+rejection, unusable output, a provider error, an interrupted attempt, or a paid
+result that was not saved), the cycle parks the meeting in
+`authority_live_source_held_extractions_v1` with an allowlisted failure stage
+(IDs and the stage only, never meeting text) and advances the cursor past it,
+so the source's later meetings continue. A parked import is consumed like a
+staged one: its "Save to" projects become suggestions, so current members of
+those projects can read its notes. Cancelling an import deletes its held row.
+A run cut off by shutdown is not parked by that run; the next poll parks it as
+`cancelled`. The owner's meetings status reads "Meeting `<id>` is held after
+extraction attempt `<n>` failed at `<stage>`…", and the operator extraction
+CLI's status marks the held key with its stage.
+
+**Retry.** Only an operator `retry-extraction` grant for the exact attempt key
+retries a held meeting, one paid attempt per grant. The source's next poll
+re-runs only that meeting from retained custody: no provider pull and no cursor
+move. Success stages it and drops the held row; another failure holds it at the
+new attempt and stage.
+
+**Imports during an extraction.** Another import that lands, or an unrelated
+import cancelled, while a meeting is being extracted does not discard the paid
+result. Staging and parking accept a queue changed only by other imports,
+and the cursor advance rebases onto the current queue at the intake boundary
+(the person intake's `rebase`), keeping those changes. A cancel of the
+meeting's own import, or a folder or baseline change, still refuses.
+
+**Writer gate.** The worker's single-file gate covers only recovery and approval
+publication: record-log appends and their after-record hooks. An approval
+therefore never waits behind a source poll, an extraction call or a Slack post.
+Notes enrichment, personal meeting intake, Slack card presentation and the
+staging canary run outside it. Durable fences keep that safe:
+
+- the attempt reservation is also a 660 s in-flight lease: a younger pending
+  attempt is left `in_flight` (no park, no cursor move), an older one parks as
+  `interrupted`;
+- the cursor compare-and-swap, with the rebase above;
+- a 120 s notes claim lease whose `retry_at` fences a stale claimant's writes;
+- compare-and-swap on each presenter row, with one presenter turn at a time.
+
+One approval row that cannot publish does not block startup, intake or the
+other rows; it shows as a failed record append and is retried on later passes. A failing notes item is
+reported without aborting the cycle's intake and publication. Failed cycles and
+publication wakes still request search and card presentation.
+
+**Meeting lanes.** Up to three personal sources (`MEETING_LANES`) run a meeting
+pass at once, each source single-file. Lanes outlive the cycle that started
+them, top up as each one settles and wake card presentation as they settle;
+drain and close wait for them. A source whose queued head is still in flight
+elsewhere (another process, or a crashed attempt's unexpired lease) waits 60 s
+before its next pull.
+
+**Model calls.** One process-wide limiter admits the Authority's OpenRouter
+generation calls: at most six at once, at most four of them background (extraction, notes, search
+projection, impact research). Interactive Ask is served first and may use every
+slot. A 429 pauses background admission once per episode, 5 s doubling to 60 s
+until a call succeeds; the limiter never retries. Time spent queued does not
+count against a call's own timeout.
+
+The 660 s lease (`EXTRACTION_IN_FLIGHT_MS`) assumes an extraction's limiter
+wait plus its 600 s request timeout fit inside it. When two processes overlap,
+as in a rolling deploy, a longer wait lets the second process park a live
+extraction as `interrupted`. That never spends twice, but the late result may
+not stage, and the meeting then waits for an operator retry.
+
 ## Typed capabilities
 
 - A **source** pulls versioned context through `SourceAdapterV1<TContent>`;
@@ -185,17 +252,19 @@ extraction, and error normalization.
 The Slack approval adapter owns its narrow Web API transport, click
 verification and identity-link check. It never writes records: a verified click
 calls the approval core's `decide`, which owns idempotency and the one decision
-per proposal. Slack actors are tenant-namespaced `(team_id, user_id)` subjects,
-never bare user IDs.
+per proposal. The click is acknowledged as soon as the decision is durable; the
+response-URL feedback post is best-effort and never delays it. Slack actors are
+tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
 
 Decided approvals have two ordered responsibilities. The durable worker
-publishes each decision before Authority startup can serve: the one publisher
-appends the V4 record, then writes the receipt and runs the after-record hooks
-in one Authority transaction, so a crash between the append and the receipt
-finishes once on recovery. Card redraw is provider presentation only: publication
-requests it immediately after the durable work, independently of search. Each
-presenter turn tries one card that no longer shows the proposal's state and
-records the new state only after Slack confirms the replacement update.
+recovers every publishable decision before Authority startup can serve: the one
+publisher appends the V4 record, then writes the receipt and runs the
+after-record hooks in one Authority transaction, so a crash between the append
+and the receipt finishes once on recovery. Card redraw is provider presentation
+only: publication requests it immediately after the durable work, independently
+of search. Each presenter turn, outside the writer gate, handles one bounded
+page of cards that no longer show their proposal's state and records each new
+state only after Slack confirms the replacement update.
 Confirmed progress schedules another turn so a burst drains without waiting for
 source polling. An uncertain result or failure waits for a new approval wake or
 periodic pass; the cursor rotates so one unavailable card cannot starve the

@@ -30,7 +30,12 @@ import {
 } from "./review-lineage-semantics.js";
 
 const MAXIMUM_PULL_LIMIT = 1;
-/** A pending attempt younger than this may still be running elsewhere; it outlasts the 600 s extraction timeout. */
+/**
+ * A pending attempt younger than this may still be running elsewhere; it outlasts the 600 s extraction timeout.
+ * It assumes the model-call limiter's queue wait, which that timeout does not count, fits in the margin. A longer
+ * wait during a two-process overlap can park a live extraction as interrupted: never a second spend, but its late
+ * result may not stage.
+ */
 const EXTRACTION_IN_FLIGHT_MS = 660_000;
 
 export interface AdmittedMeetingProcessingAdmissionV1 {
@@ -457,7 +462,8 @@ function rebindDecisionsToRevision(
  * it advances that cursor only after a verified empty provider page, after
  * the candidate and approval outbox are durably recorded for independent
  * delivery, or after a revision whose extraction failed is durably parked
- * (only with an attempt ledger; an aborted run is never parked). A parked
+ * (only with an attempt ledger). An aborted run parks nothing itself; the next
+ * poll parks its revision as `cancelled`. A parked
  * revision stays in source custody for an operator-authorized retry
  * (`retryHeldOnce`). A revision whose pending attempt is still within its lease
  * is left in place (`in_flight`) for a later poll. Advancing past a queued

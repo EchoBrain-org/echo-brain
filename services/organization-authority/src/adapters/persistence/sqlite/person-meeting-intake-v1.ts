@@ -159,9 +159,10 @@ export class SqlitePersonMeetingIntakeV1 {
   }
   /**
    * Called inside the processing cursor-advance transaction, after its compare-and-set succeeded. Each
-   * import the advance drops from the queue has been processed: its pending projects become suggestions,
-   * except any project the person has since left. A cancelled import changed the cursor first, so its
-   * advance never succeeds and its (already deleted) pending projects are never recorded.
+   * import the advance drops from the queue was consumed, whether its meeting was staged or parked after a
+   * failed extraction: its pending projects become suggestions, except any project the person has since
+   * left. A cancelled import changed the cursor first, so its advance never succeeds and its (already
+   * deleted) pending projects are never recorded.
    */
   promoteConsumedImports(setting: MeetingIntakeSettingV1, expectedCursor: string, nextCursor: string): void {
     const next = new Set(this.cursor.read(nextCursor).manual);

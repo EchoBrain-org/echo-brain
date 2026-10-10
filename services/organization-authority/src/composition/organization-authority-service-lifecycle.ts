@@ -129,7 +129,8 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
  * on providers and models outside it, kept correct by durable fences (leases,
  * cursor compare-and-swap). Direct callers run everything in place. Given
  * `report`, a failed primary intake (the Authority's notes enrichment, which
- * defers its item for a later cycle) is reported and the cycle goes on, and the
+ * marks a corrupt item unavailable and defers any other failure to a later
+ * cycle) is reported and the cycle goes on, and the
  * personal intake may leave detached meeting lanes running, reporting their
  * failures there and calling `settled` as each one settles.
  */

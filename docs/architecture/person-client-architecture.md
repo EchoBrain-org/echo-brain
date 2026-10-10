@@ -40,8 +40,11 @@ only process that reads the session or holds a token. It sends the app window
 token-free view models and failure codes, never a sign-in URL, grant, or
 provider body. Each account-scoped call is fenced: the host reads status before
 and after the command and refuses the result if the account changed, reporting
-a write's outcome as unknown. A packaged app carries the Person client package
-produced by `tools/pack-person-client.mjs`.
+a write's outcome as unknown. Before a network call, the host refreshes the
+sign-in when less than that call's own timeout plus one minute remains, so a
+long upload never starts on a token that lapses mid-call. Home loads asked for
+while one is running join it, with at most one follow-up load. A packaged app
+carries the Person client package produced by `tools/pack-person-client.mjs`.
 
 The sidebar's **Mine** row, under New project, opens a page that reads
 `person list --mine`

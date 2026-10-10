@@ -75,7 +75,7 @@ export interface ReadableSearchGenerationReconcilerV1Options<
   readonly build_generation: (
     snapshot: Snapshot,
   ) => BuiltReadableSearchGenerationV1;
-  /** Complete immutable validation must succeed before current/publication. */
+  /** Complete immutable validation must succeed before publication, and before current unless the generation is warm. */
   readonly prepare_generation?: (
     generation: BuiltReadableSearchGenerationV1,
   ) => void;

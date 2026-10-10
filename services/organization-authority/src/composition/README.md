@@ -21,9 +21,17 @@ Provider-neutral runtime components must not import a provider implementation.
   The Slack bot reads nothing, and the rehearsal has no capture or storage
   path.
 - `organization-authority-runtime.ts` composes the provider-neutral runtime.
-  `organization-authority-service-lifecycle.ts` owns startup, the serialized
-  worker, shutdown order and the operator-work gate.
+  `organization-authority-service-lifecycle.ts` owns startup, the worker,
+  shutdown order and the writer gate. The gate covers only recovery and
+  approval publication; meeting lanes, card presentation and `runUngated` work
+  (the staging canary) run outside it, and drain and close wait for them.
   `organization-authority-api-runtime.ts` owns request-serving database handles.
+  `model-call-limiter-v1.ts` is the one process-wide model-call limiter: Ask
+  first, background calls capped, and a pause after a 429.
+- `person-meeting-runtime-v1.ts` runs personal meeting sources in up to three
+  lanes, one pass per source at a time. A meeting whose extraction failed is
+  parked by the shared cycle; the runtime re-runs it from custody on an
+  operator grant and tells the owner why it is held.
 - `approval-core-v1.ts` owns one proposal per meeting and the decision table
   (first decision wins, from any surface). `approval-publisher-v1.ts` turns each
   approval into one record through `approval-decision-projection-v1.ts`, writes

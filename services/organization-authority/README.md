@@ -355,7 +355,10 @@ startup, the runtime reconciles the search index once, then each cycle recovers
 decided approvals whose record was not appended, polls the personal meeting
 sources and freezes one proposal per meeting, publishes the decisions made since
 (one V4 record per approval, then the after-record hooks), and reconciles the
-search index again.
+search index again. Only recovery and publication hold the writer gate. Up to
+three personal sources run their meeting pass at once, in lanes that outlive
+the cycle; a meeting whose extraction fails is parked and its source moves on
+(see the [meeting processing architecture](../../docs/architecture/meeting-processing-core-and-adapters.md#held-meetings-lanes-and-the-writer-gate)).
 
 The deployment wrapper's `resume` output is the single source for staging's
 actor-scoped host, Slack, and release-matched Person-client actions. A staging
@@ -385,7 +388,9 @@ releasing results.
 | Indexed search | `echo-brain person records --query 'text'` | Searches the current immutable generation and returns its generation/head metadata plus per-item atom, record, and policy identity. It is unavailable until the active generation matches the exact record head. |
 
 The search index is rebuilt at startup and after a coalesced approved-record append; a
-query never triggers a build. If the head advances or a generation build fails,
+query never triggers a build. A wake whose active generation is unchanged and
+already validated in this process skips re-reading its files; startup always
+validates. If the head advances or a generation build fails,
 the existing pointer is not used for the new head. The Person client reports
 that search is catching up; wait for the next worker cycle and retry.
 
@@ -424,7 +429,7 @@ operations:
 | Operation | What it does |
 | --- | --- |
 | `list` | The caller's own runs, newest first, at most 100: up to the 20 newest sweeps, and impact runs for the rest. A running run whose lease has lapsed is listed as pending. |
-| `start` | Claims a pending run (or one whose lease expired) and runs it as its actor. A person has one live run, and a sweep waits while one of their impact runs is pending or running; a start that must wait answers `busy`. |
+| `start` | Claims a pending run (or one whose lease expired) and runs it as its actor. A person has one live run, and a sweep waits while one of their impact runs is pending or running; a start that must wait answers `busy`, as does any start while four runs are already running in this Authority process. A run that hits `unauthorized` while its actor's membership is still active (for example, after a token rotation) goes back to pending without counting an attempt; once the membership is revoked it fails as `no_access`. |
 | `retry` | Puts the caller's failed impact run back to pending. A failed sweep stays failed; the next sweep replaces it. |
 | `view` | A finished impact run's card, for its approver and anyone who can read its decision, rebuilt with the viewer's access. A sweep has no card (`not_found`). |
 | `home` | What waits on the caller: Send rows, the open items to update or check, the counts under Home, and `sweep_due`. |

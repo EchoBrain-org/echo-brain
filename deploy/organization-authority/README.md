@@ -416,8 +416,10 @@ organization.
 ### Replace unreleased rehearsal state
 
 The current release requires fresh Authority V14 state. It cannot start over
-an earlier rehearsal lineage. For disposable rehearsal state with no live users,
-retire it through the explicit initial-owner attestation:
+an earlier rehearsal lineage. V14 adds the held-extraction table, so a V13 host
+needs this reset and then initial-owner onboarding again. For disposable
+rehearsal state with no live users, retire it through the explicit
+initial-owner attestation:
 
 ```sh
 ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
@@ -700,14 +702,20 @@ restarts. Observation timestamps, moving source cursors, and provider revision
 changes alone do not grant another attempt. Frozen candidates continue to reuse
 their existing output.
 
-The hold preserves the source cursor. Pending approvals, publication, and
-Person reads continue, but later source items behind that cursor can wait until
-the held input is resolved. This is a per-input spend bound, not an account-wide
-budget; changed review content or processor configuration can require a new
-extraction.
+A hold parks the meeting instead of stopping its source. Authority records it
+in `authority_live_source_held_extractions_v1` with an allowlisted failure stage
+and moves the cursor past it, so the source's later meetings continue. A parked
+import counts as consumed: its "Save to" projects are recorded as for a staged
+meeting. Cancelling an import forgets its held row. An attempt still pending
+for less than 11 minutes is treated as running elsewhere and left in place; an
+older one parks as `interrupted`. The owner's meetings status names the held
+meeting's ID, attempt and stage, and whether a retry is authorized. This is a
+per-input spend bound, not an account-wide budget; changed review content or
+processor configuration can require a new extraction.
 
 On the exact host, the human operator inspects bounded, content-free attempt
-status through the installed wrapper:
+status through the installed wrapper. A held key also shows `held: true` and
+its `failure_stage`:
 
 ```sh
 ./onboard-clean-v1.sh extraction-attempts --limit 100
@@ -735,7 +743,10 @@ refuses stale attempts, duplicate grants, lineage mismatch, and any input with
 a frozen candidate. A successful grant restarts the accepted runtime. A refusal
 or uncertain grant leaves it stopped: inspect status before resuming, and do
 not repeat the grant to recover a restart failure. Each grant permits exactly
-one reservation and preserves the previous history.
+one reservation and preserves the previous history. On the source's next check,
+the runtime re-runs only that held meeting from retained custody, without a
+provider pull or a cursor move. Success stages it for review; another failure
+holds it again at the new attempt.
 
 The private `state/extraction-attempts.sqlite` file is durable spend history.
 Keep it with the retained Authority state and backups; never delete it to clear
