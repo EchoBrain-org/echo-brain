@@ -78,7 +78,11 @@ GitHub App is `github-actions` with application ID `15368`. In the committed
 [CI workflow](../../.github/workflows/ci.yml), the `required-checks` job needs:
 
 ```text
-check
+Select CI jobs
+check (static)
+check (vitest)
+check (tail)
+Documentation history
 macOS arm64 Person-client package
 macOS arm64 desktop app
 Linux x64 desktop app
@@ -86,12 +90,46 @@ Organization authority container
 Authority recovery infrastructure
 ```
 
-The aggregate uses `if: always()` and succeeds only when every dependency
-result equals `success`. The executable architecture test
+`Select CI jobs` runs [`tools/ci-select-jobs.mjs`](../../tools/ci-select-jobs.mjs)
+and publishes which jobs the run needs:
+
+- A pull request into `main` always runs `check`, the Authority container, and
+  the recovery infrastructure. It skips the desktop matrix or the macOS
+  Person-client package only when its tested merge commit leaves that job's
+  traced inputs identical to `main` and the latest `CI required checks` on
+  that `main` commit passed on its tree. The plan waits up to 150 seconds for
+  a `main` run still in progress. Pull-request skips are therefore anchored to
+  a green `main` base: after a red `main`, every later pull request runs every
+  job until a fix lands.
+- A push to `main` is a verified light run when its tree is byte-identical to
+  the head of the merged pull request and the head's latest
+  `CI required checks` from app `15368` succeeded on that same tree. It runs
+  only `Documentation history` (the history-dependent `check:docs`) and the
+  Authority container, which binds this exact SHA and run ID into the image.
+- Every other run selects every job: a stacked pull request, a manual
+  dispatch, a push without a single verified pull request (including a bypass),
+  or any lookup failure.
+
+Every successful `CI required checks` run records the tree its jobs checked
+out as a `CI tested tree` notice annotation, and the plan trusts a green
+result only for that tree. A pull-request run tests a merge with its base, so
+a stacked pull request's green run against another branch never vouches for
+its head's own tree.
+
+The aggregate uses `if: always()` and succeeds only when the plan succeeded,
+every selected job's result equals `success`, and every deselected job's
+result equals `skipped`. A failed or cancelled plan, or a missing plan output,
+fails closed. The executable architecture tests
 [`tests/architecture/ci-workflow.test.ts`](../../tests/architecture/ci-workflow.test.ts)
-asserts the dependency topology and each success test. The two desktop runs
-come from one `desktop-app` matrix with `fail-fast: false`; both must succeed
-before its aggregate dependency succeeds. Requiring the individual
+and
+[`tests/architecture/ci-select-jobs.test.ts`](../../tests/architecture/ci-select-jobs.test.ts)
+assert the dependency topology, each selection rule, the aggregate's
+success-or-deselected test, and each job's traced inputs. The three `check`
+legs come from one matrix: `static` runs `npm run check` up to its vitest step,
+`vitest` runs the workspace tests, and `tail` runs the proofs after it. The two
+desktop runs come from one `desktop-app` matrix. Both matrices use
+`fail-fast: false`; when selected, every leg must succeed before its aggregate
+dependency succeeds. Requiring the individual
 implementation checks separately would duplicate the committed topology in
 GitHub settings and make safe CI evolution brittle.
 
@@ -216,7 +254,18 @@ from the owner account, then repeat the full readback.
 After issue #25 is closed and before the first beta is published:
 
 1. Select the protected `main` commit whose `CI required checks` result is
-   green. Record its full SHA. Never use a moving tag.
+   green. Record its full SHA. Never use a moving tag. A verified light run
+   also produces that green result. It certifies that the commit's tree is
+   byte-identical to a pull-request head whose selected proofs passed on that
+   tree, that `check:docs` passed against the merged history, and that the
+   Authority image was built and exercised from this exact SHA. The desktop
+   and Person-client proofs that pull request deselected last ran on an
+   earlier `main` tree with the same inputs. The run's `Select CI jobs`
+   summary names the pull request. A manual dispatch runs every job but takes
+   a branch or tag, not a SHA. To re-prove every job on that SHA with current
+   runner images, dispatch the CI workflow on `main` while it still points at
+   that SHA, or on a tag created at that SHA, and confirm the dispatched run's
+   SHA before relying on it.
 2. Build and validate the release record, Person-client artifact and onboarding
    kit, Authority image digest, and runtime profile from that exact commit.
 3. Create a draft release with a new semantic-version tag pointing

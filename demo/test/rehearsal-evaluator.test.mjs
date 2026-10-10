@@ -513,11 +513,27 @@ test("the captured-result CLI returns failure without printing answer content", 
 
 test("the existing required CI check job runs this Node suite without masking failures", () => {
   const workflow = readFileSync(resolve(demo, "../.github/workflows/ci.yml"), "utf8");
-  const job = workflow.slice(workflow.indexOf("  check:"), workflow.indexOf("  person-client-package:"));
-  assert.match(job, /^        run: node --test demo\/test\/rehearsal-evaluator\.test\.mjs$/m);
-  assert.doesNotMatch(job, /continue-on-error:|if:/);
-  assert.match(workflow, /needs: \[check,/);
-  assert.ok(workflow.includes('test "$CHECK_RESULT" = success'));
+  const start = workflow.indexOf("\n  check:\n") + 1;
+  const job = workflow.slice(start, start + workflow.slice(start).search(/\n  [a-z-]+:\n/) + 1);
+  const [header, ...steps] = job.split(/(?=^      - )/m);
+  // Pull requests always run check; only a verified main push replaces it.
+  assert.match(header, /^    if: \$\{\{ !cancelled\(\) && \(github\.event_name == 'pull_request' \|\| needs\.plan\.outputs\.check == 'true'\) \}\}$/m);
+  assert.doesNotMatch(header, /continue-on-error:/);
+  // check is a matrix: a proof step's only condition is the leg it runs in.
+  const legs = header.match(/^        leg: \[(.+)\]$/m)[1].split(", ");
+  const evaluator = steps.find(step => /^        run: node --test demo\/test\/rehearsal-evaluator\.test\.mjs$/m.test(step));
+  assert.ok(evaluator);
+  assert.ok(legs.includes(evaluator.match(/^        if: matrix\.leg == '([a-z]+)'$/m)?.[1]));
+  const proofSteps = steps.filter(step => !step.includes('uses: actions/upload-artifact@'));
+  for (const step of proofSteps) {
+    assert.doesNotMatch(step, /continue-on-error:/);
+    for (const condition of step.match(/^ *if:.*$/gm) ?? []) {
+      assert.ok(legs.includes(condition.match(/^        if: matrix\.leg == '([a-z]+)'$/)?.[1]), condition);
+    }
+  }
+  assert.match(workflow, /needs: \[plan, check,/);
+  assert.ok(workflow.includes('selected "$CHECK_RESULT" "$CHECK_SELECTED"'));
+  assert.ok(workflow.includes('true) test "$1" = success ;;'));
 });
 
 test("reports context absence only from captured content-free counts, independently of missing groups", () => {

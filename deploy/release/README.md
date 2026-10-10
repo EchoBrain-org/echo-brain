@@ -216,9 +216,14 @@ npm run pack:person-client -- /absolute/private/release-artifacts
 
 Build the Authority image from that same committed source with the guarded
 build command. Supply the successful CI run ID (`github.run_id`), never the
-workflow run number. It refuses a dirty worktree, derives the source SHA
-itself, checks that the source stays unchanged during the build, and verifies
-the OCI revision label, build-number label, telemetry capability, and image
+workflow run number. A verified light run on `main` qualifies. It skips the
+proofs the merged pull request selected and passed on the identical tree, and
+the desktop and Person-client proofs that pull request deselected because their
+inputs matched `main`; those last ran on an earlier tree. It still builds and
+exercises the Authority image for that exact SHA and run ID. The build command
+refuses a dirty worktree, derives the source SHA itself, checks
+that the source stays unchanged during the build, and verifies the OCI
+revision label, build-number label, telemetry capability, and image
 environment bindings. The deploy verifier requires those identity bindings
 for telemetry-capable images and verifies the effective container environment;
 older retained images remain rollback-compatible with telemetry disabled.
