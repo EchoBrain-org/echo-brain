@@ -162,7 +162,19 @@ global shortcut is unavailable. Linux ARM64 and automatic desktop updates are
 outside this package target.
 
 
-Project leads can choose **Jira project** from the project menu to save or remove
-one Jira project mapping. Each asker connects their own Jira account in Tools.
-Project Ask uses the saved mapping for live ticket reads and citations; an unmapped
-project includes no Jira evidence. The setting retains only project coordinates.
+A project's **Tools** (in its title bar, the line above its feed, or the
+project menu) is one sheet for every tool a project can read: a Jira project
+key and up to 20 Confluence spaces. Each row shows your own connection; a tool
+you have not connected has **Connect** in its row, which waits on the browser
+and then shows the pick, without leaving the sheet. A project lead's **Save**
+writes every changed setting and closes the sheet; a member sees what the
+project reads and can connect their own account. Project Ask uses the saved
+settings for live reads and citations, under each asker's own connection; a
+project with none includes no Jira or Confluence evidence. The settings retain
+only project coordinates.
+
+**Create** in New project opens the project at once. The people picked are
+added and the files saved behind it, with a toast saying how far it got; the
+sheet comes back only for one whose outcome needs you (Try again, Check status,
+Skip…), and otherwise closes by itself. Toasts that confirm something go after
+a few seconds; warnings stay until the next page.

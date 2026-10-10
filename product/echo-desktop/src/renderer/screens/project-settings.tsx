@@ -1,15 +1,16 @@
-import type { ComponentChildren } from 'preact';
 import { createPortal } from 'preact/compat';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ProjectSummary } from '../../shared/protocol.js';
-import { message } from '../messages.js';
+import { message, toolMessage } from '../messages.js';
 import {
-  beginProjectJira, setProjectJira, saveProjectJira, projectJiraValid, beginProjectConfluence, toggleProjectConfluenceSpace, moreProjectConfluenceSpaces, saveProjectConfluence,
-  askProjectSetting, beginProjectRename, cancelProjectSettingsAction, closeProjectSettings, confirmProjectSetting, dismissProjectSetting,
-  keepProjectSetting, projectRenameValid, projectSettingsBlocked, retryProjectSetting, setProjectRename, toggleProjectSettings, type State, type ProjectSettingsState, type ProjectToolSetting,
+  askProjectSetting, beginProjectRename, cancelProjectConnect, cancelProjectSettingsAction, clearProjectTool, closeProjectSettings, confirmProjectSetting,
+  connectProjectTool, dismissProjectSetting, keepProjectSetting, moreProjectConfluenceSpaces, openProjectTools, PROJECT_MAPPING_TOOLS, projectRenameValid,
+  projectSettingsBlocked, projectToolChange, projectToolEntry, projectToolsSavable, projectToolUsable, reloadProjectTool, retryProjectSetting, saveProjectTools,
+  setProjectJira, setProjectRename, sheetShown, toggleProjectConfluenceSpace, toggleProjectSettings, type MappingTool, type ProjectSettingsState, type State,
 } from '../store.js';
 import { trapTab } from './compose.js';
-import { Ellipsis } from './icons.js';
+import { Check, Close, Ellipsis, Plug } from './icons.js';
+import { expiresIn } from './tools.js';
 
 /** Both entry points share one target and the same project actions. */
 export function ProjectSettingsButton({ state, project }: { state: State; project?: ProjectSummary }) {
@@ -27,6 +28,18 @@ export function ProjectSettingsButton({ state, project }: { state: State; projec
         aria-expanded={settings?.menu ?? false} disabled={busy} onClick={() => toggleProjectSettings(target, origin)}><Ellipsis /></button>
       {settings?.menu && opener.current && <ProjectMenu settings={settings} anchor={opener.current} />}
     </div>
+  );
+}
+
+/** Tools, in the project's title bar, once the organization has a tool a project can read. */
+export function ProjectToolsButton({ state }: { state: State }) {
+  const route = state.route;
+  if (route.page !== 'project' || state.concealed || state.ask || state.reader) return null;
+  const reads = state.projectReads?.project_id === route.project.project_id ? state.projectReads : null;
+  if (!reads?.available) return null;
+  return (
+    <button type="button" class="tools-pill" data-testid="project-tools" disabled={projectSettingsBlocked(state)}
+      onClick={() => openProjectTools(route.project)}><Plug /><span>Tools</span></button>
   );
 }
 
@@ -76,8 +89,7 @@ function ProjectMenu({ settings, anchor }: { settings: ProjectSettingsState; anc
   }, [anchor]);
   return createPortal(
     <div ref={menu} class="menu project-actions-menu" style={position} role="menu" data-testid="project-settings-menu">
-      <button type="button" role="menuitem" class="menu-item" data-testid="project-jira" onClick={() => void beginProjectJira()}>Jira project</button>
-      <button type="button" role="menuitem" class="menu-item" data-testid="project-confluence" onClick={() => void beginProjectConfluence()}>Confluence spaces</button>
+      <button type="button" role="menuitem" class="menu-item" data-testid="project-tools-item" onClick={() => openProjectTools(settings.project)}>Tools…</button>
       {settings.project.role === 'lead' && <button type="button" role="menuitem" class="menu-item" data-testid="project-rename" onClick={beginProjectRename}>Rename project</button>}
       {settings.project.role === 'lead' && <button type="button" role="menuitem" class="menu-item" data-testid="project-archive"
         onClick={() => askProjectSetting(settings.project.status === 'archived' ? 'unarchive' : 'archive')}>
@@ -89,79 +101,214 @@ function ProjectMenu({ settings, anchor }: { settings: ProjectSettingsState; anc
   );
 }
 
-/** Both collection editors share focus, dismissal, write-state and conflict handling. */
-function ProjectMappingDialog({ settings, setting, tool, title, loading, canSave, retry, focus, reload, save, children }: {
-  settings: ProjectSettingsState;
-  setting: ProjectToolSetting<{ mapping: unknown | null }>;
-  tool: string; title: string; loading: string; canSave: boolean; retry?: boolean;
-  focus?: () => void; reload: () => Promise<unknown>; save: (remove?: boolean) => Promise<void>;
-  children: ComponentChildren;
-}) {
-  const box = useRef<HTMLDivElement>(null);
-  const done = useRef<HTMLButtonElement>(null);
+/** The tool's name as the Authority lists it, until it is read. */
+const NAMES: Record<MappingTool, string> = { jira: 'Jira', confluence: 'Confluence' };
+/** What each tool's setting holds. */
+const SCOPE: Record<MappingTool, string> = { jira: 'One project', confluence: 'Up to 20 spaces' };
+
+/** What the project reads from a tool now, as the Authority last said. */
+function currentWords(settings: ProjectSettingsState, tool: MappingTool): string {
+  const setting = settings[tool];
+  if (!setting || setting.status === 'loading') return 'Loading…';
+  if (!setting.value) return SCOPE[tool];
+  if (tool === 'jira') return settings.jira?.value?.mapping ? `Reads ${settings.jira.value.mapping.project_key}` : 'Not set';
+  const spaces = settings.confluence?.value?.mapping?.space_ids.length ?? 0;
+  return spaces > 0 ? `Reads ${spaces} space${spaces === 1 ? '' : 's'}` : 'Not set';
+}
+
+/** Why a row's setting cannot be edited until it is read again. */
+function failureWords(settings: ProjectSettingsState, tool: MappingTool): string | null {
+  const setting = settings[tool];
+  if (setting?.status !== 'failed' || !setting.failure) return null;
+  return setting.failure.code === 'conflict' ? 'This setting changed. Reload it before editing.'
+    : setting.writeFailed ? 'The change could not be confirmed. Reload the setting before editing again.' : message(setting.failure);
+}
+
+/** Connected, Connect or Reconnect, on the right of a row. */
+function Connection({ settings, tool, name }: { settings: ProjectSettingsState; tool: MappingTool; name: string }) {
+  const sheet = settings.tools!;
+  const entry = projectToolEntry(settings, tool);
+  const connecting = sheet.connect?.tool.tool_id === tool && sheet.connect.phase !== 'failed';
+  if (!entry || connecting) return null;
+  if (entry.status === 'linked') {
+    return <span class="tool-linked" data-testid={`project-${tool}-linked`}><Check />{sheet.connected === tool ? 'Connected just now' : 'Connected'}</span>;
+  }
+  if (entry.status === 'unavailable') return <span class="tool-off">Not turned on</span>;
+  return (
+    <button type="button" class="primary-button small" data-testid={`project-${tool}-connect`} disabled={sheet.saving || Boolean(sheet.connect && sheet.connect.phase !== 'failed')}
+      aria-label={`${entry.status === 'revoked' ? 'Reconnect' : 'Connect'} ${name}`} onClick={() => void connectProjectTool(entry)}>
+      {entry.status === 'revoked' ? 'Reconnect' : 'Connect'}
+    </button>
+  );
+}
+
+/** A connection started in the row: waiting on the browser, or why it did not connect. */
+function Connecting({ settings, tool, name }: { settings: ProjectSettingsState; tool: MappingTool; name: string }) {
+  const connect = settings.tools!.connect;
+  if (connect?.tool.tool_id !== tool) return null;
+  if (connect.phase === 'failed') {
+    return (
+      <div class="tool-body tool-trouble" role="alert">
+        <span class="error" data-testid={`project-${tool}-connect-failure`}>{toolMessage(name, connect.reason, connect.failure)}</span>
+        <button type="button" class="link-button" onClick={() => void connectProjectTool(connect.tool)}>Try again</button>
+      </div>
+    );
+  }
+  return (
+    <div class="tool-body tool-wait" role="status" data-testid={`project-${tool}-waiting`}>
+      <span class="asking" aria-hidden="true"><i /><i /><i /></span>
+      <span class="lines">
+        <span>Finish connecting {name} in your browser</span>
+        <span class="detail">{connect.phase === 'starting' ? `Opening ${name}…` : `This row updates by itself · ${expiresIn(connect.attempt!.expires_at)}`}</span>
+      </span>
+      <button type="button" class="link-button" data-testid={`project-${tool}-connect-cancel`} onClick={cancelProjectConnect}>Cancel</button>
+    </div>
+  );
+}
+
+/** What a lead picks: the Jira project's key, or Confluence spaces from their own. */
+function Picker({ settings, tool, name, onSave }: { settings: ProjectSettingsState; tool: MappingTool; name: string; onSave: () => void }) {
+  const sheet = settings.tools!;
+  const editing = !sheet.saving;
+  if (tool === 'jira') {
+    const jira = settings.jira!;
+    const invalid = projectToolChange(settings, 'jira') === 'invalid';
+    return (
+      <label class="tool-body tool-field">
+        <span class="select-label">Project key</span>
+        <input class="field small" data-testid="project-jira-input" aria-label="Jira project key" maxLength={64} placeholder="e.g. KAN" autocomplete="off"
+          value={jira.key} disabled={!editing || jira.status !== 'ready'} onInput={event => setProjectJira((event.target as HTMLInputElement).value)}
+          onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); onSave(); } }} />
+        {invalid && <span class="notice-line">Use the project’s key, like KAN.</span>}
+      </label>
+    );
+  }
+  const confluence = settings.confluence!;
+  if (confluence.catalog !== 'read') return <div class="tool-body notice-line" role="status">Loading your {name} spaces…</div>;
+  if (confluence.pickerFailure) {
+    return (
+      <div class="tool-body tool-trouble">
+        <span class="error" data-testid="project-confluence-picker-error">Could not load your spaces. {message(confluence.pickerFailure)}</span>
+        <button type="button" class="link-button" onClick={() => reloadProjectTool('confluence')}>Try again</button>
+      </div>
+    );
+  }
+  return (
+    <div class="tool-body tool-spaces">
+      <span class="select-label">Spaces</span>
+      <div class="check-list" data-testid="project-confluence-spaces">
+        {confluence.spaces.map(space => (
+          <label key={space.id} class="check">
+            <input type="checkbox" checked={confluence.selected.includes(space.id)} disabled={!editing || confluence.status !== 'ready'}
+              onChange={() => toggleProjectConfluenceSpace(space.id)} />
+            <span>{space.name} <span class="faint">({space.key})</span></span>
+          </label>
+        ))}
+        {confluence.spaces.length === 0 && <span class="notice-line">You can’t see any spaces in {name}.</span>}
+      </div>
+      {confluence.status === 'ready' && confluence.failure && (
+        <span class="error" data-testid="project-confluence-more-error">More spaces could not be read. {message(confluence.failure)}</span>
+      )}
+      {confluence.next !== null && (
+        <button type="button" class="link-button tool-more" data-testid="project-confluence-more" disabled={confluence.loadingMore || !editing}
+          onClick={() => void moreProjectConfluenceSpaces()}>{confluence.loadingMore ? 'Loading…' : 'More spaces'}</button>
+      )}
+    </div>
+  );
+}
+
+/** One tool: your connection, what the project reads, and, for a lead who is connected, the pick. */
+function ToolSection({ state, tool, onSave }: { state: State; tool: MappingTool; onSave: () => void }) {
+  const settings = state.projectSettings!;
+  const sheet = settings.tools!;
+  const setting = settings[tool]!;
+  const name = projectToolEntry(settings, tool)?.name ?? NAMES[tool];
   const lead = settings.project.role === 'lead';
-  useEffect(() => { if (setting.status === 'ready' && lead && focus) focus(); else done.current?.focus(); }, [setting.status, lead]);
-  return <div class="overlay" onClick={cancelProjectSettingsAction}>
-    <div class="sheet confirm project-setting-sheet" role="dialog" aria-labelledby={`${tool}-mapping-title`} ref={box}
-      onClick={event => event.stopPropagation()} onKeyDown={event => {
-        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelProjectSettingsAction(); }
-        else trapTab(event, box.current);
-      }}>
-      <h2 id={`${tool}-mapping-title`}>{title}</h2>
-      {setting.status === 'loading' && <p role="status">{loading}</p>}
-      {children}
-      {setting.status === 'saving' && <p role="status">Checking access and saving…</p>}
-      {setting.failure && <p class="error" data-testid={`project-${tool}-error`}>{setting.failure.code === 'conflict'
-        ? 'This setting changed. Reload it before editing.' : setting.writeFailed
-          ? 'The change could not be confirmed. Reload the setting before editing again.' : message(setting.failure)}</p>}
-      <div class="choices">
-        <button ref={done} type="button" class="plain-button" disabled={setting.status === 'saving'} onClick={cancelProjectSettingsAction}>Done</button>
-        {(setting.status === 'failed' || retry) && <button type="button" class="plain-button" onClick={() => void reload()}>Reload setting</button>}
-        {lead && setting.value?.mapping != null && <button type="button" class="plain-button" data-testid={`project-${tool}-remove`} disabled={setting.status !== 'ready'} onClick={() => void save(true)}>Remove mapping</button>}
-        {lead && setting.value && <button type="button" class="plain-button" data-testid={`project-${tool}-save`} disabled={setting.status !== 'ready' || !canSave} onClick={() => void save()}>Save</button>}
+  const usable = projectToolUsable(settings, tool);
+  const connecting = sheet.connect?.tool.tool_id === tool;
+  const failure = failureWords(settings, tool);
+  const mapped = tool === 'jira' ? Boolean(settings.jira?.value?.mapping) : Boolean(settings.confluence?.value?.mapping);
+  const change = projectToolChange(settings, tool);
+  return (
+    <section class="tool-section" aria-label={name} data-testid={`project-${tool}`}>
+      <div class="tool-section-head">
+        <span class="tool-mark" aria-hidden="true">{name.slice(0, 1).toUpperCase()}</span>
+        <span class="lines">
+          <span class="name">{name}</span>
+          <span class="state" data-testid={`project-${tool}-current`}>{currentWords(settings, tool)}{change === 'remove' ? ' · stops on Save' : ''}</span>
+        </span>
+        {lead && mapped && setting.status === 'ready' && change !== 'remove' && (
+          <button type="button" class="link-button" data-testid={`project-${tool}-remove`} disabled={sheet.saving} onClick={() => clearProjectTool(tool)}>Stop reading</button>
+        )}
+        <Connection settings={settings} tool={tool} name={name} />
+      </div>
+      <Connecting settings={settings} tool={tool} name={name} />
+      {failure && (
+        <div class="tool-body tool-trouble">
+          <span class="error" data-testid={`project-${tool}-error`}>{failure}</span>
+          <button type="button" class="link-button" data-testid={`project-${tool}-reload`} disabled={sheet.saving} onClick={() => reloadProjectTool(tool)}>Reload setting</button>
+        </div>
+      )}
+      {setting.status === 'saving' && <div class="tool-body notice-line" role="status">Checking access and saving…</div>}
+      {lead && !connecting && setting.value && setting.status !== 'failed' && (usable
+        ? <Picker settings={settings} tool={tool} name={name} onSave={onSave} />
+        : <div class="tool-body notice-line">Connect {name} to choose what {settings.project.name} reads.</div>)}
+    </section>
+  );
+}
+
+/**
+ * A project's Tools: every tool a project can read, on one sheet. Connect
+ * waits in its row; Save writes what changed and closes the sheet. A member
+ * who is not a lead sees what the project reads, and can connect their own
+ * account.
+ */
+function ProjectTools({ state }: { state: State }) {
+  const settings = state.projectSettings!;
+  const sheet = settings.tools!;
+  const box = useRef<HTMLDivElement>(null);
+  const lead = settings.project.role === 'lead';
+  useEffect(() => { box.current?.focus(); }, []);
+  const savable = projectToolsSavable(settings);
+  const save = () => { if (savable) void saveProjectTools(); };
+  const tools = PROJECT_MAPPING_TOOLS.filter(tool => {
+    const entry = projectToolEntry(settings, tool);
+    const mapped = tool === 'jira' ? settings.jira?.value?.mapping : settings.confluence?.value?.mapping;
+    return !sheet.items || (entry !== undefined && entry.status !== 'unavailable') || Boolean(mapped);
+  });
+  return (
+    <div class="overlay" onClick={cancelProjectSettingsAction}>
+      <div class="sheet tools-sheet" role="dialog" aria-labelledby="project-tools-title" data-testid="project-tools-sheet" ref={box} tabIndex={-1}
+        onClick={event => event.stopPropagation()} onKeyDown={event => {
+          if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelProjectSettingsAction(); }
+          else trapTab(event, box.current);
+        }}>
+        <div class="tools-sheet-head">
+          <div class="lines">
+            <h2 id="project-tools-title">Tools for {settings.project.name}</h2>
+            <p>Questions in {settings.project.name} read these live, with each person’s own access. ECHO never changes anything in them.</p>
+          </div>
+          <button type="button" class="circle small" aria-label="Close" data-testid="project-tools-x" disabled={sheet.saving} onClick={cancelProjectSettingsAction}><Close /></button>
+        </div>
+        <div class="tools-sheet-rows" aria-live="polite">
+          {sheet.failure && <p class="error tool-list-failure">Your connections could not be read. {message(sheet.failure)}</p>}
+          {tools.map(tool => <ToolSection key={tool} state={state} tool={tool} onSave={save} />)}
+          {tools.length === 0 && <p class="notice-line tool-none">Your organization hasn’t turned on a tool a project can read.</p>}
+        </div>
+        <div class="tools-sheet-foot">
+          <span class="notice-line">{lead ? 'Other tools are set up per person in Tools.' : `A project lead can change what ${settings.project.name} reads.`}</span>
+          {lead ? (
+            <>
+              <button type="button" class="plain-button" data-testid="project-tools-cancel" disabled={sheet.saving} onClick={cancelProjectSettingsAction}>Cancel</button>
+              <button type="button" class="primary-button small" data-testid="project-tools-save" disabled={!savable} onClick={save}>
+                {sheet.saving ? 'Saving…' : 'Save'}
+              </button>
+            </>
+          ) : <button type="button" class="plain-button" data-testid="project-tools-close" onClick={cancelProjectSettingsAction}>Close</button>}
+        </div>
       </div>
     </div>
-  </div>;
-}
-
-function JiraProject({ state }: { state: State }) {
-  const settings = state.projectSettings!;
-  const jira = settings.jira!;
-  const field = useRef<HTMLInputElement>(null);
-  const lead = settings.project.role === 'lead';
-  return <ProjectMappingDialog settings={settings} setting={jira} tool="jira" title="Jira project" loading="Loading setting…"
-    canSave={projectJiraValid(jira)} focus={() => field.current?.focus()} reload={beginProjectJira} save={saveProjectJira}>
-    <p>Questions in {settings.project.name} read this Jira project live, using each person’s connected Jira account.</p>
-    {jira.value && <>
-      <p data-testid="project-jira-current">{jira.value.mapping ? `Mapped to ${jira.value.mapping.project_key}` : 'No Jira project mapped'}</p>
-      {lead ? <label class="jira-project-field">Jira project key
-        <input ref={field} class="field" data-testid="project-jira-input" aria-label="Jira project key" maxLength={64} placeholder="e.g. KAN"
-          value={jira.key} disabled={jira.status !== 'ready'} onInput={event => setProjectJira((event.target as HTMLInputElement).value)}
-          onKeyDown={event => { if (event.key === 'Enter' && projectJiraValid(jira)) { event.preventDefault(); void saveProjectJira(); } }} />
-      </label> : <p>A project lead can change this setting.</p>}
-      {lead && <p>Connect your Jira account in Tools before saving.</p>}
-    </>}
-  </ProjectMappingDialog>;
-}
-
-function ConfluenceSpaces({ state }: { state: State }) {
-  const settings = state.projectSettings!;
-  const confluence = settings.confluence!;
-  const lead = settings.project.role === 'lead';
-  return <ProjectMappingDialog settings={settings} setting={confluence} tool="confluence" title="Confluence spaces" loading="Loading accessible spaces…"
-    canSave={confluence.pickerFailure === undefined && confluence.selected.length > 0} retry={confluence.pickerFailure !== undefined}
-    reload={beginProjectConfluence} save={saveProjectConfluence}>
-    <p>Questions in {settings.project.name} read these spaces live, using each person’s connected Confluence account.</p>
-    {confluence.value && <>
-      <p data-testid="project-confluence-current">{confluence.value.mapping ? `${confluence.value.mapping.space_ids.length} space${confluence.value.mapping.space_ids.length === 1 ? '' : 's'} mapped` : 'No Confluence spaces mapped'}</p>
-      {lead ? <div class="check-list" data-testid="project-confluence-spaces">{confluence.spaces.map(space => <label key={space.id} class="check">
-        <input type="checkbox" checked={confluence.selected.includes(space.id)} disabled={confluence.status !== 'ready'} onChange={() => toggleProjectConfluenceSpace(space.id)} /><span>{space.name} ({space.key})</span>
-      </label>)}</div> : <p>A project lead can change this setting.</p>}
-      {lead && <p>Connect your Confluence account in Tools before saving.</p>}
-      {confluence.next !== null && <button type="button" class="plain-button" data-testid="project-confluence-more" disabled={confluence.loadingMore || confluence.status !== 'ready'} onClick={() => void moreProjectConfluenceSpaces()}>{confluence.loadingMore ? 'Loading…' : 'Load more spaces'}</button>}
-    </>}
-    {confluence.pickerFailure && <p class="error" data-testid="project-confluence-picker-error">Could not load accessible spaces. {message(confluence.pickerFailure)}</p>}
-  </ProjectMappingDialog>;
+  );
 }
 
 function Rename({ state }: { state: State }) {
@@ -242,8 +389,7 @@ function Write({ state }: { state: State }) {
 export function ProjectSettings({ state }: { state: State }) {
   const settings = state.projectSettings;
   if (!settings) return null;
-  if (settings.jira) return state.sheet ? null : <JiraProject state={state} />;
-  if (settings.confluence) return state.sheet ? null : <ConfluenceSpaces state={state} />;
+  if (settings.tools) return sheetShown(state) ? null : <ProjectTools state={state} />;
   if (settings.write) return <Write state={state} />;
   if (settings.rename !== null) return <Rename state={state} />;
   if (settings.confirm) return <Confirm state={state} />;

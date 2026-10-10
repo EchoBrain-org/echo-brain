@@ -108,7 +108,7 @@ export function ToolConnect({ sheet }: { sheet: ToolConnectSheet }) {
   );
 }
 
-function expiresIn(expiresAt: string): string {
+export function expiresIn(expiresAt: string): string {
   const minutes = Math.max(1, Math.round((Date.parse(expiresAt) - Date.now()) / 60_000));
   return `expires in ${minutes} min`;
 }

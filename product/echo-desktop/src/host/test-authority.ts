@@ -681,8 +681,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
 
   // Your connections to the organization's tools, as Tools changes them.
   let slackLinked = true;
-  let jiraLinked = false;
-  let confluenceLinked = false;
+  // Modes that map a project to a tool start connected to it, as a lead must be to pick.
+  let jiraLinked = mode === 'ask-ticket' || mode.startsWith('jira-project');
+  let confluenceLinked = mode === 'ask-confluence' || mode.startsWith('confluence-');
   let jiraAttempt: { attempt: string; expires_at: string; status: string; failure_reason: string | null; reads: number } | null = null;
   let confluenceAttempt: { attempt: string; expires_at: string; status: string; failure_reason: string | null; reads: number } | null = null;
 

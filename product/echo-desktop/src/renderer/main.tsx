@@ -15,25 +15,28 @@ import { ItemCard, OpenItems } from './screens/open-items.js';
 import { Organization } from './screens/organization.js';
 import { People } from './screens/people.js';
 import { MembersButton, Project } from './screens/project.js';
-import { ProjectSettings, ProjectSettingsButton } from './screens/project-settings.js';
+import { ProjectSettings, ProjectSettingsButton, ProjectToolsButton } from './screens/project-settings.js';
 import { Reader } from './screens/reader.js';
 import { Send } from './screens/send.js';
 import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
-  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeItemCard,
+  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeItemCard,
   closeItemStatus, closeOpenItems, closePicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, findingSheet, getState, goHome,
-  hostFailed, itemCardShown, itemStatusShown, keepNewProject, matchesShown, openCapture, openItemsShown, openMine, pageCovered, refreshStatus, resume, retryStart, returnToSend, signinPhase, toastOpensMine,
+  hostFailed, itemCardShown, itemStatusShown, keepNewProject, matchesShown, newProjectProgress, openCapture, openItemsShown, openMine, pageCovered, refreshStatus, resume, retryStart, returnToSend, sheetShown, signinPhase, toastOpensMine,
   toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, useStore, WARNINGS, windowShown, windowTakesDrop, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
 
 function sheetUp(): boolean {
-  const { compose, sheet, projectSettings } = getState();
-  return Boolean((compose && !compose.hidden) || sheet || projectSettings?.jira);
+  const { compose, projectSettings } = getState();
+  return Boolean((compose && !compose.hidden) || sheetShown() || projectSettings?.tools);
 }
+
+/** How long a toast that says something went well stays: one that warns stays until the next page. */
+const TOAST_MS = 8_000;
 
 /** The caret waits in the ask bar whenever the window comes forward, unless a sheet is up. */
 function focusBar(): void {
@@ -64,10 +67,11 @@ function back(): void {
   const finding = findingSheet(state);
   if (finding?.confirm) return cancelMemberChange();
   if (finding?.menu) return toggleMemberMenu(finding.menu);
-  if (state.sheet?.kind === 'new-project' && state.sheet.skip !== null) return cancelSkip();
-  if (state.sheet?.kind === 'new-project' && state.sheet.confirmClose) return keepNewProject();
-  if (state.sheet) return closeSheet();
-  if (state.projectSettings?.jira) return cancelProjectSettingsAction();
+  const sheet = sheetShown(state);
+  if (sheet?.kind === 'new-project' && sheet.skip !== null) return cancelSkip();
+  if (sheet?.kind === 'new-project' && sheet.confirmClose) return keepNewProject();
+  if (sheet) return closeSheet();
+  if (state.projectSettings?.tools) return cancelProjectSettingsAction();
   if (!state.status?.signed_in) return closeSigninForm();
   // Escape closes the Projects list first, and only the list.
   if (state.compose && !state.compose.hidden) return state.compose.picking ? closeProjects() : closeCompose();
@@ -90,6 +94,19 @@ function App() {
   // Capture closed (saved, or put away): the caret goes back to the bar.
   const capturing = Boolean(state.compose && !state.compose.hidden);
   useEffect(() => { if (!capturing) focusBar(); }, [capturing]);
+  // New project stepped aside or closed: the caret goes to the bar of the project it opened.
+  const making = sheetShown(state)?.kind === 'new-project';
+  useEffect(() => { if (!making) focusBar(); }, [making]);
+
+  // A toast that says something went well goes by itself, counted while it can be seen.
+  const working = state.sheet?.kind === 'new-project' && state.sheet.hidden;
+  useEffect(() => {
+    const toast = state.toast;
+    if (!toast || WARNINGS.has(toast) || state.concealed || working) return;
+    const shown = state.toastShown;
+    const timer = setTimeout(() => clearToast(shown), TOAST_MS);
+    return () => clearTimeout(timer);
+  }, [state.toastShown, state.toast, state.concealed, working]);
 
   useEffect(() => {
     void refreshStatus().then(focusBar);
@@ -155,11 +172,12 @@ function App() {
   // A project change not shown where it was asked for shows at the top of the page.
   const banner = state.change && !state.concealed && !changeShownInPlace(state) ? state.change : null;
   const sheet = state.sheet;
+  // New project, stepped aside after Create: the toast says how far it got.
+  const progress = sheet?.kind === 'new-project' ? newProjectProgress(sheet) : null;
   return (
     <Shell state={state} title={title} backLabel={backLabel} pane={pane}
-      trailing={inProject && !covered && !state.ask ? <><MembersButton state={state} /><ProjectSettingsButton state={state} /></> : null}>
-      {/* Mine's list runs from the top, the full height of the page. */}
-      <main class={`page${mine && !covered && !state.ask && !state.reader ? ' top' : ''}`}>
+      trailing={inProject && !covered && !state.ask ? <><MembersButton state={state} /><ProjectToolsButton state={state} /><ProjectSettingsButton state={state} /></> : null}>
+      <main class="page">
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} />
           : itemCard ? <ItemCard state={state} card={itemCard} />
@@ -175,7 +193,12 @@ function App() {
       </main>
       {/* Always there, so a screen reader announces each toast as it appears. A save only Mine shows opens it. */}
       <div role="status">
-        {state.toast && !state.concealed && (toastOpensMine(state.toast) ? (
+        {progress && !state.concealed ? (
+          <div class="toast" data-testid="new-project-progress">
+            <span class="asking" aria-hidden="true"><i /><i /><i /></span><span>{progress.words}</span>
+            {progress.total > 0 && <span class="toast-count">{progress.done} of {progress.total}</span>}
+          </div>
+        ) : state.toast && !state.concealed && (toastOpensMine(state.toast) ? (
           <button type="button" class="toast" data-testid="toast" onClick={() => void openMine()}><Saved /><span>{state.toast}</span></button>
         ) : (
           <div class="toast" data-testid="toast">{WARNINGS.has(state.toast) ? <Warning /> : <Saved />}<span>{state.toast}</span></div>
@@ -190,7 +213,7 @@ function App() {
       {sheet?.kind === 'tool-connect' ? !state.concealed && <ToolConnect sheet={sheet} />
         : sheet?.kind === 'tool-manage' ? !state.concealed && <ToolManage sheet={sheet} />
         : sheet?.kind === 'people' ? !state.concealed && <People state={state} sheet={sheet} />
-        : sheet?.kind === 'new-project' ? <NewProject state={state} sheet={sheet} />
+        : sheet?.kind === 'new-project' ? !sheet.hidden && <NewProject state={state} sheet={sheet} />
         : sheet && <ConfirmSignOut state={state} sheet={sheet} />}
     </Shell>
   );
