@@ -20,34 +20,138 @@ env:
   PRODUCT_NODE_VERSION: "22.22.1"
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+  plan:
+    name: Select CI jobs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Pull requests read main's required check; main pushes read the merged
+    # pull request and its head's required check.
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    outputs:
+      check: ${{ steps.select.outputs.check }}
+      docs: ${{ steps.select.outputs.docs }}
+      person_client_package: ${{ steps.select.outputs.person_client_package }}
+      desktop_app: ${{ steps.select.outputs.desktop_app }}
+      authority_recovery_infrastructure: ${{ steps.select.outputs.authority_recovery_infrastructure }}
+      tree: ${{ steps.select.outputs.tree }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Documentation proof links are verified against their exact
-          # historical commits, not the current worktree alone.
+          # A pull request compares its tested merge commit with main, its
+          # first parent.
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.PRODUCT_NODE_VERSION }}
+          package-manager-cache: false
+      - name: Select the jobs this run needs
+        id: select
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/ci-select-jobs.mjs
+
+  check:
+    needs: plan
+    # Pull requests always run check. Only a verified main push skips it.
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.plan.outputs.check == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      # The legs split npm run check and the proofs after it across three
+      # runners; together they run every proof, each in exactly one leg.
+      # Report every leg even when one fails.
+      fail-fast: false
+      matrix:
+        leg: [static, vitest, tail]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Documentation proof links and several tests read exact historical
+          # commits, not the current worktree alone.
           fetch-depth: 0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.PRODUCT_NODE_VERSION }}
           cache: npm
+      - name: Record the test runner
+        run: |
+          printf 'ECHO_CI_REPORT_DIR=%s/ci-diagnostics\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          node tools/ci-runner-info.mjs "$RUNNER_TEMP/ci-diagnostics/runner.json"
       - run: npm ci
       - name: Prove staging control isolation with real POSIX ownership
+        if: matrix.leg == 'static'
         run: sudo -n python3 -B tests/fixtures/staging-release-posix-proof.py tools/authority-staging-release-host.py deploy/organization-authority/update-clean-v1.sh deploy/organization-authority/onboard-clean-v1.sh
-      - run: npm run check
+      # npm run check, in its order, with vitest in its own leg.
+      - name: Check architecture boundaries and documentation
+        if: matrix.leg == 'static'
+        run: npm run check:architecture-boundaries && npm run check:docs
+      - name: Lint
+        if: matrix.leg == 'static'
+        run: npm run lint
+      - name: Build and typecheck the workspaces
+        if: matrix.leg == 'static'
+        run: npm run build && npx tsc --noEmit -p tsconfig.json
+      - name: Build the workspaces the tests import
+        if: matrix.leg == 'vitest'
+        run: npm run build
+      - name: Run the workspace tests
+        if: matrix.leg == 'vitest'
+        # Each worker keeps about one core busy. Three leave headroom on the
+        # 4-vCPU runner (runner.json); local runs keep the configured 2.
+        run: npx vitest run --config vitest.config.ts --maxWorkers=3
+      - name: Build the workspaces the evaluators import
+        if: matrix.leg == 'tail'
+        run: npm run build
       - name: Build and install the Linux x64 Person kit without system Node
+        if: matrix.leg == 'tail'
         run: node tests/fixtures/person-onboarding-smoke.mjs
       - name: Verify four-meeting answer coverage and privacy
+        if: matrix.leg == 'tail'
         run: node --test demo/test/rehearsal-evaluator.test.mjs
+      - name: Verify the research-loop evaluator
+        if: matrix.leg == 'tail'
+        run: npm run test:research-loop-eval
       - name: Verify the Authority core evaluation components
+        if: matrix.leg == 'tail'
         run: npm run test:capacity
       - name: Exercise the Authority core evaluation checkpoint
+        if: matrix.leg == 'tail'
         run: npm run capacity:checkpoint
+      - name: Preserve check diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: check-diagnostics-${{ matrix.leg }}-${{ github.run_attempt }}
+          path: ${{ env.ECHO_CI_REPORT_DIR }}
+          retention-days: 7
+
+  docs:
+    name: Documentation history
+    needs: plan
+    # Replaces check on a verified main push: check:docs is the one proof
+    # that depends on history, which a squash merge can change.
+    if: ${{ needs.plan.outputs.docs == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.PRODUCT_NODE_VERSION }}
+          package-manager-cache: false
+      - name: Verify documentation against the merged history
+        run: node tools/check-docs.mjs
 
   person-client-package:
     name: macOS arm64 Person-client package
+    needs: plan
+    if: ${{ needs.plan.outputs.person_client_package == 'true' }}
     runs-on: macos-15
     timeout-minutes: 20
     steps:
@@ -162,18 +266,22 @@ jobs:
           test -x "$kit_root/node"
           "$kit_root/node" "$kit_root/verify-person-onboarding-kit.mjs" "$kit_root"
           node tests/fixtures/person-onboarding-smoke.mjs --kit-root "$kit_root"
-      - name: Exercise the macOS command-line kit installer and update dispatch
+      - name: Exercise the macOS command-line kit installer, update dispatch, and enrollment
         run: >-
           npx vitest run --config vitest.config.ts
           tests/architecture/mac-person-cli-kit.test.ts
           tests/architecture/client-update-dispatch.test.ts
+          tests/person-client/client-update.test.ts
 
   desktop-app:
     name: ${{ matrix.name }} desktop app
+    needs: plan
+    if: ${{ needs.plan.outputs.desktop_app == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
-      # Report both platforms even when one fails. Both remain required.
+      # Report both platforms even when one fails. Both are required whenever
+      # the plan selects the desktop app.
       fail-fast: false
       matrix:
         include:
@@ -202,6 +310,11 @@ jobs:
         env:
           TARGET_ARCH: ${{ matrix.arch }}
         run: node -e 'if (process.arch !== process.env.TARGET_ARCH) throw new Error("Unexpected runner architecture")'
+      - name: Record the test runner
+        working-directory: .
+        run: |
+          printf 'ECHO_CI_REPORT_DIR=%s/ci-diagnostics\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          node tools/ci-runner-info.mjs "$RUNNER_TEMP/ci-diagnostics/runner.json"
       - name: Cache Electron and packaging-tool downloads
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -209,6 +322,10 @@ jobs:
             ${{ matrix.cache-root }}/electron
             ${{ matrix.cache-root }}/electron-builder
           key: desktop-downloads-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('product/echo-desktop/package-lock.json') }}
+          # A verified light run on main skips this job, so main rarely saves
+          # a new key; a pull request after a lockfile change starts from
+          # main's newest entry instead of an empty cache.
+          restore-keys: desktop-downloads-v1-${{ runner.os }}-${{ runner.arch }}-
       - name: Prepare Linux for sandboxed Electron
         if: runner.os == 'Linux'
         run: |
@@ -231,7 +348,7 @@ jobs:
       - name: Typecheck the desktop app
         run: npm run typecheck
       - name: Run the desktop unit tests
-        run: npx vitest run
+        run: npx vitest run --reporter=default --reporter=json --outputFile.json="$ECHO_CI_REPORT_DIR/desktop-unit.json"
       - name: Build the desktop bundles with the test hook
         run: npm run build
       - name: Run the full desktop end-to-end suite
@@ -267,6 +384,15 @@ jobs:
           xvfb-run -a dbus-run-session -- npm run smoke -- /opt/ECHO/echo-desktop
       - name: Assert packaging left the checkout clean
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Preserve desktop diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: desktop-diagnostics-${{ runner.os }}-${{ runner.arch }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.ECHO_CI_REPORT_DIR }}
+            product/echo-desktop/test-results
+          retention-days: 7
 
   authority-container:
     name: Organization authority container
@@ -274,7 +400,29 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # A Docker Hub outage must not fail this proof. Docker and BuildKit try
+      # Google's Docker Hub mirror first and fall back to Docker Hub. Every
+      # image is pinned by digest, so either source yields the same bytes.
+      - name: Pull Docker Hub images through a mirror first
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo python3 - <<'PYTHON'
+          import json, pathlib
+          path = pathlib.Path("/etc/docker/daemon.json")
+          config = json.loads(path.read_text()) if path.exists() else {}
+          config["registry-mirrors"] = ["https://mirror.gcr.io"]
+          path.write_text(json.dumps(config, indent=2) + "\n")
+          PYTHON
+          sudo systemctl restart docker
+          docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -F https://mirror.gcr.io
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        with:
+          # buildx-stable-1 as of 2026-09-30.
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.PRODUCT_NODE_VERSION }}
@@ -466,13 +614,18 @@ jobs:
 
   authority-recovery-infrastructure:
     name: Authority recovery infrastructure
-    runs-on: ubuntu-latest
+    needs: plan
+    if: ${{ needs.plan.outputs.authority_recovery_infrastructure == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.PRODUCT_NODE_VERSION }}
+          # This job installs no npm dependencies. Do not save an empty cache
+          # before the check job can populate the shared lockfile key.
+          package-manager-cache: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.10"
@@ -482,22 +635,42 @@ jobs:
   required-checks:
     name: CI required checks
     if: ${{ always() }}
-    needs: [check, person-client-package, desktop-app, authority-container, authority-recovery-infrastructure]
-    runs-on: ubuntu-latest
+    needs: [plan, check, docs, person-client-package, desktop-app, authority-container, authority-recovery-infrastructure]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Require every CI proof to succeed
+      - name: Require every selected CI proof to succeed
         shell: bash
         env:
+          PLAN_RESULT: ${{ needs.plan.result }}
           CHECK_RESULT: ${{ needs.check.result }}
+          CHECK_SELECTED: ${{ needs.plan.outputs.check }}
+          DOCS_RESULT: ${{ needs.docs.result }}
+          DOCS_SELECTED: ${{ needs.plan.outputs.docs }}
           PERSON_CLIENT_PACKAGE_RESULT: ${{ needs.person-client-package.result }}
+          PERSON_CLIENT_PACKAGE_SELECTED: ${{ needs.plan.outputs.person_client_package }}
           DESKTOP_APP_RESULT: ${{ needs.desktop-app.result }}
+          DESKTOP_APP_SELECTED: ${{ needs.plan.outputs.desktop_app }}
           AUTHORITY_CONTAINER_RESULT: ${{ needs.authority-container.result }}
           AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT: ${{ needs.authority-recovery-infrastructure.result }}
+          AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED: ${{ needs.plan.outputs.authority_recovery_infrastructure }}
+          TESTED_TREE: ${{ needs.plan.outputs.tree }}
         run: |
           set -euo pipefail
-          test "$CHECK_RESULT" = success
-          test "$PERSON_CLIENT_PACKAGE_RESULT" = success
-          test "$DESKTOP_APP_RESULT" = success
+          # A job may be skipped only when the plan deselected it.
+          selected() {
+            case "$2" in
+              true) test "$1" = success ;;
+              false) test "$1" = skipped ;;
+              *) return 1 ;;
+            esac
+          }
+          test "$PLAN_RESULT" = success
+          selected "$CHECK_RESULT" "$CHECK_SELECTED"
+          selected "$DOCS_RESULT" "$DOCS_SELECTED"
+          selected "$PERSON_CLIENT_PACKAGE_RESULT" "$PERSON_CLIENT_PACKAGE_SELECTED"
+          selected "$DESKTOP_APP_RESULT" "$DESKTOP_APP_SELECTED"
           test "$AUTHORITY_CONTAINER_RESULT" = success
-          test "$AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT" = success
+          selected "$AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT" "$AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED"
+          # Later plans trust this success only for the tree it tested.
+          echo "::notice title=CI tested tree::$TESTED_TREE"

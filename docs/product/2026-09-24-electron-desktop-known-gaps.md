@@ -131,5 +131,6 @@ person out cleanly, as ADR-0002 §4 requires.
   they contain no test code. The shared smoke command verifies release fuses,
   source identity, startup, and refusal of remote debugging. macOS verifies
   the code signature; Linux runs under Xvfb and additionally installs and
-  smokes the deb. Both assert a clean checkout afterward. `CI required checks`
-  requires both targets, and a failed target does not cancel the other.
+  smokes the deb. Both assert a clean checkout afterward. Whenever CI selects
+  the desktop app, `CI required checks` requires both targets, and a failed
+  target does not cancel the other.
