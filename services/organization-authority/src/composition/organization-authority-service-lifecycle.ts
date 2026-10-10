@@ -5,6 +5,7 @@ import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-aut
 import type { AddressInfo } from "node:net";
 import {
   SerializedMeetingProcessingWorker,
+  type MeetingProcessingExclusiveV1,
   type SerializedMeetingProcessingWorkerOptions,
 } from "@echo-brain/organization-processing/admitted-meeting-processing/serialized-meeting-processing-worker";
 import {
@@ -82,16 +83,21 @@ export interface OrganizationAuthorityServiceLifecycleDependencies {
 
 export interface RunningOrganizationAuthorityServiceLifecycle {
   readonly address: AddressInfo;
-  /** Excludes both writer and search work for bounded operator mutations. */
+  /**
+   * Excludes search and every gated writer turn (recovery, publication, card
+   * presentation) for bounded operator mutations. Source intake and notes
+   * enrichment run outside the gate and are not excluded.
+   */
   runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
-  /** Waits for queued writer/search work; callers must supply a bounded signal.
+  /** Waits for the running cycle and queued writer/search work; callers must supply a bounded signal.
    * This is a readiness barrier, not operator exclusion or a retry trigger. */
   drain(signal: AbortSignal): Promise<void>;
   /**
    * Asks the worker to publish queued approval actions now instead of at the
    * next periodic cycle. It runs only the approval phases (finalize, append,
    * then requests search and card presentation) through the same writer gate
-   * as the periodic cycle.
+   * as the periodic cycle's recovery and publication, never behind its source
+   * intake.
    * Requests made while one is still waiting for
    * the gate coalesce into that one run; a request made while a publication is
    * already executing schedules exactly one follow-up run. It never throws and
@@ -106,20 +112,23 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
  * Runs exactly one Organization Authority processing cycle. Recovery leads so
  * a restart completes every recoverable finalized action before consuming new
  * source input; a row that cannot publish waits for a later pass. Every operation
- * is awaited in order; `SerializedMeetingProcessingWorker` supplies the single
- * in-process serialization guarantee.
+ * is awaited in order. Only recovery and publication, which append to the record
+ * log, hold the writer gate (`exclusive`); notes enrichment and source intake wait
+ * on providers and models outside it, kept correct by durable fences (leases,
+ * cursor compare-and-swap). Direct callers run everything in place.
  */
 export async function runOrganizationAuthorityProcessingCycleV1(
   processing: OrganizationAuthorityProcessingCycleV1,
   signal: AbortSignal,
   lifecycle?: MeetingProcessingWorkerPhaseRunnerV1,
   additional?: OrganizationAuthorityProcessingCycleV1,
+  exclusive: MeetingProcessingExclusiveV1 = (operation) => operation(signal),
 ): Promise<void> {
   const phase = <T>(
     name: Parameters<MeetingProcessingWorkerPhaseRunnerV1["runPhase"]>[0],
     operation: () => Promise<T>,
   ): Promise<T> => lifecycle?.runPhase(name, operation, signal) ?? operation();
-  await phase("recovery", async () => { await processing.recoverV4Appends(signal); await additional?.recoverV4Appends(signal); });
+  await exclusive(() => phase("recovery", async () => { await processing.recoverV4Appends(signal); await additional?.recoverV4Appends(signal); }));
   signal.throwIfAborted();
   if (processing.hasFineGrainedSourceLifecycle === true) {
     await processing.pollAndStageAdmittedMeetings(signal);
@@ -131,17 +140,19 @@ export async function runOrganizationAuthorityProcessingCycleV1(
   signal.throwIfAborted();
   await additional?.pollAndStageAdmittedMeetings(signal);
   signal.throwIfAborted();
-  await runOrganizationAuthorityApprovalPublicationV1(processing, signal, lifecycle, additional);
+  await exclusive(() => runOrganizationAuthorityApprovalPublicationV1(processing, signal, lifecycle, additional));
 }
 
 /**
  * Runs only the approval-publication phases of the cycle: finalize queued
  * actions and append approved ones to V4. The lifecycle requests search after
  * releasing the writer gate.
- * Source intake is deliberately excluded so an approval never waits behind a
- * source poll or an extraction call. The periodic cycle still runs these same
- * phases, so a lost or failed publication request is recovered by the next
- * tick rather than by any retry logic here.
+ * Source intake is deliberately excluded, and runs outside the gate, so an
+ * approval never waits behind a source poll or an extraction call; it waits
+ * only for other gated turns (recovery, publication, a card presentation).
+ * The periodic cycle still runs these same phases, so a lost or failed
+ * publication request is recovered by the next tick rather than by any retry
+ * logic here.
  */
 export async function runOrganizationAuthorityApprovalPublicationV1(
   processing: OrganizationAuthorityProcessingCycleV1,
@@ -235,10 +246,14 @@ export async function startOrganizationAuthorityServiceLifecycle(
     let presentationTail: Promise<void> = Promise.resolve();
     let completePresentation: (() => void) | undefined;
     let requestApprovalPresentation!: () => void;
+    // The running cycle, so drain also waits for its ungated intake.
+    let cycleTail: Promise<void> = Promise.resolve();
     const worker = new SerializedMeetingProcessingWorker({
       ...(dependencies.core_runtime_observation === undefined ? {} : { observation: dependencies.core_runtime_observation }),
       intervalMs: config.worker_interval_ms,
-      runCycle: async (signal) => {
+      runCycle: async (signal, exclusive) => {
+        let finished!: () => void;
+        cycleTail = new Promise((resolve) => { finished = resolve; });
         lifecycle.startCycle();
         try {
           await runOrganizationAuthorityProcessingCycleV1(
@@ -246,12 +261,13 @@ export async function startOrganizationAuthorityServiceLifecycle(
             signal,
             lifecycle,
             dependencies.additional_processing ?? startedApi.processing,
+            exclusive,
           );
           lifecycle.succeedCycle();
         } catch (error) {
           lifecycle.failCycle(error, signal.aborted);
           throw error;
-        }
+        } finally { finished(); }
       },
       onCycleComplete: () => {
         // Search is durable-derived work and must be requested even when the
@@ -383,10 +399,12 @@ export async function startOrganizationAuthorityServiceLifecycle(
           await Promise.race([cancelled, (async () => {
             let observedPublication: Promise<void>;
             let observedPresentation: Promise<void>;
+            let observedCycle: Promise<void>;
             do {
               observedPublication = publicationTail;
               observedPresentation = presentationTail;
-              await Promise.all([observedPublication, observedPresentation]);
+              observedCycle = cycleTail;
+              await Promise.all([observedPublication, observedPresentation, observedCycle]);
               signal.throwIfAborted();
               await worker.runExclusive(async () => undefined);
               signal.throwIfAborted();
@@ -394,7 +412,8 @@ export async function startOrganizationAuthorityServiceLifecycle(
               signal.throwIfAborted();
             } while (
               publicationTail !== observedPublication ||
-              presentationTail !== observedPresentation
+              presentationTail !== observedPresentation ||
+              cycleTail !== observedCycle
             );
           })()]);
         } finally { signal.removeEventListener("abort", abort); }

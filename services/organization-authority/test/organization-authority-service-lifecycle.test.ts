@@ -219,6 +219,25 @@ describe("Organization Authority service lifecycle", () => {
     expect(telemetry).toContainEqual(expect.objectContaining({ cycle_phase: "search_reconciliation", event: "failed", failure_class: "cancelled", retryable: false }));
   });
 
+  it("closes database handles only after an abort-ignoring source pass outside the gate settles", async () => {
+    vi.useFakeTimers();
+    const pass = deferred();
+    const events: string[] = [];
+    const runtime = await startLifecycle(1_000, {
+      processing: processing([]),
+      additional_processing: { ...processing([]), pollAndStageAdmittedMeetings: async () => { events.push("pass"); await pass.promise; events.push("pass-settled"); } },
+      clear_readable_search_handle: () => { events.push("handle-clear"); },
+    }, events);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(events.at(-1)).toBe("pass");
+    const closing = runtime.close();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(events).not.toContain("api-close");
+    pass.resolve();
+    await closing;
+    expect(events.slice(-3)).toEqual(["pass-settled", "api-close", "handle-clear"]);
+  });
+
   it("keeps operator mutations exclusive from search and writer work", async () => {
     vi.useFakeTimers();
     const blockedSearch = deferred();
@@ -859,45 +878,30 @@ describe("Organization Authority service lifecycle", () => {
     }
   });
 
-  it("coalesces requests that arrive while one is waiting for the gate", async () => {
+  it("publishes coalesced requests within one tick, with no gate wait, while source intake waits on a provider", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
-    let releaseStage: (() => void) | undefined;
-    const slow = processing(events);
+    const gateWaits: unknown[] = [];
     const runtime = await startLifecycle(60_000, {
-      processing: {
-        ...slow,
-        pollAndStageAdmittedMeetings: async () => {
-          events.push("stage");
-          await new Promise<void>((resolve) => {
-            releaseStage = resolve;
-          });
-        },
-      },
+      processing: processing(events),
+      additional_processing: { ...processing([]), pollAndStageAdmittedMeetings: (signal) => new Promise<void>((_resolve, reject) => {
+        events.push("intake");
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }) },
+      core_runtime_observation: { observer: (event) => { if (event.phase === "worker_request" && event.event === "succeeded") gateWaits.push(event.counts.gate_wait_ms); } },
     }, events);
-    await vi.advanceTimersByTimeAsync(0);
-    // The first periodic cycle is now parked inside source intake.
-    expect(events.at(-1)).toBe("stage");
-    events.length = 0;
-
-    runtime.requestApprovalPublication();
-    runtime.requestApprovalPublication();
-    runtime.requestApprovalPublication();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(events).toEqual([]);
-
-    releaseStage?.();
-    await vi.advanceTimersByTimeAsync(0);
-
-    // The cycle finishes its own phases first, then exactly one publication.
-    expect(events).toEqual([
-      "finalize",
-      "append",
-      "finalize",
-      "append",
-      "reconcile",
-    ]);
-    await runtime.close();
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      // The first periodic cycle never leaves source intake.
+      expect(events.at(-1)).toBe("intake");
+      events.length = 0;
+      gateWaits.length = 0;
+      runtime.requestApprovalPublication();
+      runtime.requestApprovalPublication();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(events).toEqual(["finalize", "append", "reconcile"]);
+      expect(gateWaits).toEqual([0]);
+    } finally { await runtime.close(); }
   });
 
   it("schedules exactly one follow-up for a request made mid-publication", async () => {

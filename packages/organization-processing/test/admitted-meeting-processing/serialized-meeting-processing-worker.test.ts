@@ -52,17 +52,17 @@ describe('serialized meeting-processing worker', () => {
     await worker.close();
   });
 
-  it("serializes bounded operator work with the processing cycle", async () => {
+  it("serializes bounded operator work with the cycle's gated part", async () => {
     vi.useFakeTimers();
     const cycle = deferred();
     const events: string[] = [];
     const worker = new SerializedMeetingProcessingWorker({
       intervalMs: 1_000,
-      runCycle: async () => {
+      runCycle: (_signal, exclusive) => exclusive(async () => {
         events.push("cycle:start");
         await cycle.promise;
         events.push("cycle:end");
-      },
+      }),
     });
 
     const operation = worker.runExclusive(async () => {
