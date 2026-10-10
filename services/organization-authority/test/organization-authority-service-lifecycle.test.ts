@@ -625,6 +625,22 @@ describe("Organization Authority service lifecycle", () => {
     await runtime.close();
   });
 
+  it("reports a notes enrichment failure and still runs the cycle's personal intake and publication", async () => {
+    vi.useFakeTimers();
+    const personal: string[] = [];
+    const errors: string[] = [];
+    const runtime = await startLifecycle(60_000, {
+      processing: { ...processing([]), pollAndStageAdmittedMeetings: async () => { throw new Error("notes item failed"); } },
+      additional_processing: processing(personal),
+      on_worker_error: (error) => errors.push(error.message),
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(personal).toEqual(["recover", "recover", "stage", "finalize", "append"]);
+      expect(errors).toEqual(["notes item failed"]);
+    } finally { await runtime.close(); }
+  });
+
   it("does not reconcile after append observes cancellation", async () => {
     const events: string[] = [];
     const controller = new AbortController();

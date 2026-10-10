@@ -30,7 +30,7 @@ export class PersonUpdateProcessingV1 {
     signal.throwIfAborted();
     const v2 = this.v2.claim();
     if (v2 === undefined) return;
-    // V2 source bytes are authoritative, never model input until verified. An integrity failure fails one cycle and is never retried.
+    // V2 source bytes are authoritative, never model input until verified. An integrity failure is reported once and never retried.
     try { this.v2.validate(v2); }
     catch (error) { this.v2.defer(v2, false); throw error; }
     try { await this.runV2(v2, signal); }

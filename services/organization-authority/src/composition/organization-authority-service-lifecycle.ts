@@ -115,7 +115,9 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
  * is awaited in order. Only recovery and publication, which append to the record
  * log, hold the writer gate (`exclusive`); notes enrichment and source intake wait
  * on providers and models outside it, kept correct by durable fences (leases,
- * cursor compare-and-swap). Direct callers run everything in place.
+ * cursor compare-and-swap). Direct callers run everything in place. Given
+ * `report`, a failed primary intake (the Authority's notes enrichment, which
+ * defers its item for a later cycle) is reported and the cycle goes on.
  */
 export async function runOrganizationAuthorityProcessingCycleV1(
   processing: OrganizationAuthorityProcessingCycleV1,
@@ -123,6 +125,7 @@ export async function runOrganizationAuthorityProcessingCycleV1(
   lifecycle?: MeetingProcessingWorkerPhaseRunnerV1,
   additional?: OrganizationAuthorityProcessingCycleV1,
   exclusive: MeetingProcessingExclusiveV1 = (operation) => operation(signal),
+  report?: (failure: unknown) => void,
 ): Promise<void> {
   const phase = <T>(
     name: Parameters<MeetingProcessingWorkerPhaseRunnerV1["runPhase"]>[0],
@@ -130,12 +133,12 @@ export async function runOrganizationAuthorityProcessingCycleV1(
   ): Promise<T> => lifecycle?.runPhase(name, operation, signal) ?? operation();
   await exclusive(() => phase("recovery", async () => { await processing.recoverV4Appends(signal); await additional?.recoverV4Appends(signal); }));
   signal.throwIfAborted();
-  if (processing.hasFineGrainedSourceLifecycle === true) {
-    await processing.pollAndStageAdmittedMeetings(signal);
-  } else {
-    await phase("source_intake", () =>
-      processing.pollAndStageAdmittedMeetings(signal),
-    );
+  try {
+    if (processing.hasFineGrainedSourceLifecycle === true) await processing.pollAndStageAdmittedMeetings(signal);
+    else await phase("source_intake", () => processing.pollAndStageAdmittedMeetings(signal));
+  } catch (failure) {
+    if (report === undefined || signal.aborted) throw failure;
+    report(failure);
   }
   signal.throwIfAborted();
   await additional?.pollAndStageAdmittedMeetings(signal);
@@ -262,6 +265,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
             lifecycle,
             dependencies.additional_processing ?? startedApi.processing,
             exclusive,
+            reportError,
           );
           lifecycle.succeedCycle();
         } catch (error) {
