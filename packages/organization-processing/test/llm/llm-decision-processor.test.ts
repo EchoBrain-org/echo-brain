@@ -221,7 +221,7 @@ describe('llm decision processor extraction', () => {
 
     const bare: MeetingDocument = {
       ...meeting, title: ' ', participants: [], time: undefined,
-      content: [{ id: 'transcript-1', kind: 'transcript', text: 'Bo: Ship it.' }],
+      content: [{ id: 'transcript-1', kind: 'transcript', text: 'Bo\u0085Li: Ship it.' }],
     };
     await instance.extract(bare, extractionContext(instance));
     expect(client.requests[1]!.userPrompt).toBe([
@@ -230,7 +230,7 @@ describe('llm decision processor extraction', () => {
       'Speaker labels are participant names when known; otherwise a recording label, which may cover several people.',
       '',
       '### Transcript',
-      '[T1] Bo: Ship it.',
+      '[T1] Bo Li: Ship it.',
     ].join('\n'));
   });
 
@@ -304,6 +304,40 @@ describe('llm decision processor extraction', () => {
     const echoed: MeetingDocument = { ...meeting, content: [{ id: 'transcript-1', kind: 'transcript', text: 'Ada: Yes.\nBo: Yes.' }] };
     const repeated = await extractWith(modelOutput([modelSignal({ evidence_units: ['T1'] }), modelSignal({ evidence_units: ['T2'] })]), echoed);
     expect(repeated.signals).toHaveLength(1);
+  });
+
+  it('links a rationale citing a dropped duplicate decision to the kept one', async () => {
+    const result = await extractWith(modelOutput([
+      modelSignal({ evidence_units: ['N1'] }),
+      modelSignal({ text: 'use vendor X for hosting', evidence_units: ['N1'] }),
+      modelSignal({ kind: 'rationale', text: 'Vendor X was cheaper and faster', evidence_units: ['S1'], supports_decision_indexes: [1] }),
+    ]));
+    expect(result.signals.map((signal) => signal.kind)).toEqual(['decision', 'rationale']);
+    expect(result.signals[1]).toMatchObject({ supports_signal_ids: [result.signals[0]!.id] });
+  });
+
+  // Units: N1–N8, then one long Ada turn split into T1.1 (sentences 1–8) and T1.2 (9–14).
+  const manyUnits: MeetingDocument = { ...meeting, content: [
+    { id: 'notes-1', kind: 'note', text: Array.from({ length: 8 }, (_, n) => `Point ${n + 1}`).join('\n') },
+    { id: 'transcript-1', kind: 'transcript', speaker_participant_id: 'participant-ada',
+      text: Array.from({ length: 14 }, (_, n) => `Sentence ${n + 1} covers one launch risk in detail.`).join(' ') },
+  ] };
+  const citedQuotes = (signal: { evidence: readonly { quote?: string }[] }) => signal.evidence.map((span) => span.quote?.split(' covers')[0]);
+
+  it('keeps the first six cited units of an item in citation order', async () => {
+    const result = await extractWith(modelOutput([modelSignal({ evidence_units: ['N8', 'N7', 'N6', 'N5', 'N4', 'N3', 'N2', 'N1'] })]), manyUnits);
+    expect(result.signals.map(citedQuotes)).toEqual([['Point 8', 'Point 7', 'Point 6', 'Point 5', 'Point 4', 'Point 3']]);
+  });
+
+  it('reads cited IDs in any case and a split turn\'s parent ID as its parts', async () => {
+    const result = await extractWith(modelOutput([
+      modelSignal({ evidence_units: ['n1', 't1', 'T9'] }),
+      modelSignal({ text: 'Ship the launch', evidence_units: ['N1', 'N2', 'N3', 'N4', 'N5', 'T1'] }),
+    ]), manyUnits);
+    expect(result.signals.map(citedQuotes)).toEqual([
+      ['Point 1', 'Sentence 1', 'Sentence 9'],
+      ['Point 1', 'Point 2', 'Point 3', 'Point 4', 'Point 5', 'Sentence 1'],
+    ]);
   });
 
   it('downgrades a decided decision that cites only questions', async () => {

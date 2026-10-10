@@ -35,6 +35,8 @@ export const LLM_DECISION_PROCESSOR_SCHEMA_VERSION =
   'decision-extraction-schema-v8';
 /** Longest proposed action owner kept, in characters. */
 export const LLM_DECISION_PROCESSOR_OWNER_MAX_CHARACTERS = 120;
+/** Most cited units kept per item, which bounds the approved record's size. */
+const MAX_EVIDENCE_UNITS = 6;
 
 /** JSON schema handed to the provider as a structured-output constraint. */
 const EXTRACTION_FORMAT: JsonObject = {
@@ -107,7 +109,7 @@ interface CheckedSignal {
   readonly owner: string | null;
   readonly dueAt: string | null;
   readonly confidence: number | null;
-  /** Known cited units, de-duplicated, in citation order. */
+  /** Known cited units, de-duplicated, in citation order, at most MAX_EVIDENCE_UNITS. */
   readonly units: readonly MeetingEvidenceUnitV1[];
   /** The model's raw decision indexes; only those of surviving decisions are kept. */
   readonly supports: readonly unknown[];
@@ -134,9 +136,9 @@ const UNIT_SECTIONS: readonly (readonly [MeetingEvidenceUnitV1['kind'], string])
   ['transcript', '### Transcript'],
 ];
 
-/** Every rendered value stays on one line, so meeting text cannot fake a header or unit line. */
+/** Every rendered value stays on one line, so meeting text cannot fake a header or unit line. U+0085 is outside `\s`. */
 function oneLine(value: string): string {
-  return value.replace(/\s+/gu, ' ');
+  return value.replace(/[\s\u0085]+/gu, ' ');
 }
 
 /** Plain text: the header, then one `[ID] text` line per unit under its section. */
@@ -431,16 +433,31 @@ function outputItems(content: string): readonly unknown[] {
   return items;
 }
 
-/** "[T12]" and " T12 " cite T12. */
+/** "[T12]", " t12 " and "T12" cite T12. */
 function citedUnitId(value: string): string {
-  return value.trim().replace(/^\[(.*)\]$/u, '$1').trim();
+  return value.trim().replace(/^\[(.*)\]$/u, '$1').trim().toUpperCase();
+}
+
+/** Each unit's ID cites that unit; the parent ID of a split turn or line ("T12") cites its parts in order. */
+function citationTargets(units: readonly MeetingEvidenceUnitV1[]): Map<string, MeetingEvidenceUnitV1[]> {
+  const targets = new Map<string, MeetingEvidenceUnitV1[]>();
+  for (const unit of units) {
+    targets.set(unit.id, [unit]);
+    const dot = unit.id.indexOf('.');
+    if (dot === -1) continue;
+    const parent = unit.id.slice(0, dot);
+    const parts = targets.get(parent);
+    if (parts === undefined) targets.set(parent, [unit]);
+    else parts.push(unit);
+  }
+  return targets;
 }
 
 /** One item on its own: its reason for being set aside, or the item with corrections applied. */
 function checkedSignal(
   item: unknown,
   index: number,
-  unitsById: ReadonlyMap<string, MeetingEvidenceUnitV1>,
+  targets: ReadonlyMap<string, readonly MeetingEvidenceUnitV1[]>,
   header: MeetingEvidenceHeaderV1,
   meeting: MeetingDocument,
 ): CheckedSignal | SetAsideReason {
@@ -464,7 +481,7 @@ function checkedSignal(
   if (!Array.isArray(cited) || !cited.every((id): id is string => typeof id === 'string')) {
     return 'evidence_shape';
   }
-  const units = [...new Set(cited.map(citedUnitId))].flatMap((id) => unitsById.get(id) ?? []);
+  const units = [...new Set(cited.flatMap((id) => targets.get(citedUnitId(id)) ?? []))].slice(0, MAX_EVIDENCE_UNITS);
   if (units.length === 0) return 'evidence_id';
   const supports = record['supports_decision_indexes'];
   return {
@@ -554,18 +571,19 @@ function groundedSignals(
   evidence: MeetingEvidenceV1,
   meeting: MeetingDocument,
 ): ExtractedSignal[] {
-  const unitsById = new Map(evidence.units.map((unit) => [unit.id, unit]));
+  const targets = citationTargets(evidence.units);
   const blocks = new Map(meeting.content.map((block) => [block.id, block]));
   const setAside: { index: number; reason: SetAsideReason }[] = [];
   const candidates: CheckedSignal[] = [];
   items.forEach((item, index) => {
-    const checked = checkedSignal(item, index, unitsById, evidence.header, meeting);
+    const checked = checkedSignal(item, index, targets, evidence.header, meeting);
     if (typeof checked === 'string') setAside.push({ index, reason: checked });
     else candidates.push(checked);
   });
   // Decisions and actions first, so a rationale can link to any surviving decision.
   candidates.sort((left, right) => Number(left.kind === 'rationale') - Number(right.kind === 'rationale'));
-  const seen = new Set<string>();
+  /** Dedupe key or signal id of each kept item → that item's id. */
+  const keptIds = new Map<string, string>();
   const decisionIds = new Map<unknown, string>();
   const kept: { signal: CheckedSignal; id: string; spans: EvidenceSpan[]; supports: string[] }[] = [];
   for (const signal of candidates) {
@@ -582,13 +600,18 @@ function groundedSignals(
     const id = stableSignalId(meeting, signal, spans);
     const key = JSON.stringify([signal.kind, comparable(signal.text), signal.units.map((unit) => unit.id).sort()]);
     // A repeat of a kept item. A repeated id (same text citing identical quotes) would also break the decision set.
-    if (seen.has(key) || seen.has(id)) continue;
+    // A rationale that links to a dropped decision links to its kept twin.
+    const twin = keptIds.get(key) ?? keptIds.get(id);
+    if (twin !== undefined) {
+      if (signal.kind === 'decision') decisionIds.set(signal.index, twin);
+      continue;
+    }
     const supports = [...new Set(signal.supports)].flatMap((index) => decisionIds.get(index) ?? []);
     if (signal.kind === 'rationale' && supports.length === 0) {
       setAside.push({ index: signal.index, reason: 'rationale_supports' });
       continue;
     }
-    seen.add(key).add(id);
+    keptIds.set(key, id).set(id, id);
     if (signal.kind === 'decision') decisionIds.set(signal.index, id);
     kept.push({ signal, id, spans, supports });
   }
