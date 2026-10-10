@@ -115,8 +115,7 @@ describe('V2 project upload enrichment in the serialized Person worker', () => {
     for (const number of [6, 7]) submit(f, projectId, number, `Customer notes ${number}`);
     const work = new SqlitePersonUpdateEnrichmentWorkV2(f.database, new SqliteProjectUploadEnrichmentAuthorizationV1(f.database), () => PROJECT_CONTEXT_NOW);
     const first = work.claim()!;
-    f.database.prepare("UPDATE authority_person_update_work_v2 SET retry_at = '2027-01-01T00:00:00.000Z' WHERE context_id = ?").run(first.context_id);
-    const second = work.claim()!;
+    const second = work.claim()!; // The first is leased.
     const firstEligibility = work.captureEligibility(first)!;
     const secondEligibility = work.captureEligibility(second)!;
 
@@ -124,5 +123,21 @@ describe('V2 project upload enrichment in the serialized Person worker', () => {
     expect(() => work.enriched(first, secondEligibility, 'customer', canonicalSha256('fixture')))
       .toThrow(expect.objectContaining({ code: 'unauthorized' }));
     expect(workState(f.database, first.context_id)).toEqual({ state: 'processing', search_hints: '' });
+  });
+
+  it('leases a claim: no reclaim until it ends, and a stale completion or deferral is a no-op', () => {
+    const f = fixture(); const projectId = setupProject(f);
+    const receipt = submit(f, projectId, 8);
+    let now = PROJECT_CONTEXT_NOW;
+    const work = new SqlitePersonUpdateEnrichmentWorkV2(f.database, new SqliteProjectUploadEnrichmentAuthorizationV1(f.database), () => now);
+    const stale = work.claim()!;
+    expect(work.claim()).toBeUndefined();
+    now = new Date(Date.parse(now) + 120_000).toISOString();
+    const current = work.claim()!;
+    work.enriched(stale, work.captureEligibility(stale)!, 'stale', canonicalSha256('fixture'));
+    work.defer(stale, false);
+    expect(workState(f.database, receipt.context_id)).toEqual({ state: 'processing', search_hints: '' });
+    work.enriched(current, work.captureEligibility(current)!, 'current', canonicalSha256('fixture'));
+    expect(workState(f.database, receipt.context_id)).toEqual({ state: 'ready', search_hints: 'current' });
   });
 });

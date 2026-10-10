@@ -278,10 +278,13 @@ describe("Organization Authority API runtime", () => {
       expect(application.uploadStatus('fixture', request.request_id).metadata).toBe('processing');
       expect(events).toEqual(['upload']);
       runtime = await openOrganizationAuthorityRuntime(config, dependencies);
-      await vi.waitFor(() => expect(application.uploadStatus('fixture', request.request_id).metadata).toBe('ready'));
+      // The interrupted claim's lease outlives the restart; the item is reclaimed once it ends.
       await vi.waitFor(() => expect(events).toContain('meeting'));
+      expect(application.uploadStatus('fixture', request.request_id).metadata).toBe('processing');
+      database.prepare('UPDATE authority_person_update_work_v2 SET retry_at = ? WHERE context_id = ?').run(new Date(Date.now() - 1).toISOString(), receipt.context_id);
+      await vi.waitFor(() => expect(application.uploadStatus('fixture', request.request_id).metadata).toBe('ready'));
       await runtime.close(); runtime = undefined;
-      expect(events.slice(0, 3)).toEqual(['upload', 'upload', 'meeting']);
+      expect([events[0], events.filter(event => event === 'upload').length]).toEqual(['upload', 2]);
       expect(generationCalls).toBe(2); expect(maximumActive).toBe(1); expect(errors).toEqual([]);
       expect(application.searchUploads('fixture', { query: 'telephone' }).results[0]?.context_id).toBe(receipt.context_id);
       expect(application.readUpload('fixture', receipt.context_id).text).toBe(request.text);

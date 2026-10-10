@@ -8,7 +8,7 @@ import type { ProjectUploadEnrichmentAuthorizationV1, ProjectUploadEnrichmentSna
 const SELECT = `SELECT submission.organization_id, submission.principal_id, submission.membership_id, submission.membership_type,
   submission.context_id, submission.request_id, submission.request_version, submission.payload_sha256, submission.title, submission.text,
   submission.audience_kind, submission.audience_project_id, submission.audience_project_ids_json, submission.submitted_association_project_ids_json, submission.project_id, submission.received_at,
-  work.state, work.search_hints, work.enrichment_sha256, work.attempts
+  work.state, work.search_hints, work.enrichment_sha256, work.attempts, work.retry_at
   FROM authority_person_updates_v2 AS submission JOIN authority_person_update_work_v2 AS work USING (context_id)`;
 
 function sourceContextId(item: PersonUpdateEnrichmentWorkItemV2): string {
@@ -49,6 +49,8 @@ function hasEligibilityBinding(item: PersonUpdateEnrichmentWorkItemV2, eligibili
     uploader.membership_type === item.membership_type;
 }
 function denied(): never { throw new AuthorityOperationError('unauthorized', 'request failed'); }
+/** Outlasts one enrichment call (30 s once admitted). A claim taken over after its lease finds its own writes fenced off. */
+const CLAIM_LEASE_MS = 120_000;
 
 /** SQLite bridge for V7's existing V2 work rows. It schedules nothing itself. */
 export class SqlitePersonUpdateEnrichmentWorkV2 implements PersonUpdateEnrichmentWorkV2 {
@@ -62,14 +64,17 @@ export class SqlitePersonUpdateEnrichmentWorkV2 implements PersonUpdateEnrichmen
     }
   }
 
+  /** A claim is a lease: its item is reclaimable only once retry_at passes, and that retry_at fences the claimant's later writes. */
   claim(): PersonUpdateEnrichmentWorkItemV2 | undefined {
     return this.database.transaction(() => {
+      const now = this.now();
       const item = this.database.prepare(`${SELECT} WHERE work.state IN ('pending', 'processing') AND work.retry_at <= ? ORDER BY work.retry_at, submission.context_id LIMIT 1`)
-        .get(this.now()) as PersonUpdateEnrichmentWorkItemV2 | undefined;
+        .get(now) as PersonUpdateEnrichmentWorkItemV2 | undefined;
       if (item === undefined) return undefined;
-      const result = this.database.prepare("UPDATE authority_person_update_work_v2 SET state = 'processing' WHERE context_id = ?").run(item.context_id);
+      const lease = new Date(Date.parse(now) + CLAIM_LEASE_MS).toISOString();
+      const result = this.database.prepare("UPDATE authority_person_update_work_v2 SET state = 'processing', retry_at = ? WHERE context_id = ?").run(lease, item.context_id);
       if (result.changes !== 1) throw new Error('V2 Person upload work disappeared');
-      return item;
+      return { ...item, state: 'processing' as const, retry_at: lease };
     }).immediate();
   }
 
@@ -116,23 +121,25 @@ export class SqlitePersonUpdateEnrichmentWorkV2 implements PersonUpdateEnrichmen
   enriched(item: PersonUpdateEnrichmentWorkItemV2, eligibility: ProjectUploadEnrichmentSnapshotV1, searchHints: string, release: Sha256Digest): void {
     this.database.transaction(() => {
       const current = this.database.prepare(`${SELECT} WHERE submission.context_id = ?`).get(item.context_id) as PersonUpdateEnrichmentWorkItemV2 | undefined;
-      if (current === undefined || current.payload_sha256 !== item.payload_sha256 || current.state !== 'processing') throw new Error('V2 Person upload changed during enrichment');
+      if (current === undefined || current.payload_sha256 !== item.payload_sha256) throw new Error('V2 Person upload changed during enrichment');
+      // A claim whose lease another claimant took over (or that already finished) writes nothing.
+      if (current.state !== 'processing' || current.retry_at !== item.retry_at) return;
       this.validate(current);
       if (!hasEligibilityBinding(current, eligibility)) denied();
       // Capture and final authorization check share the same custody DB
       // transaction as hint persistence, so revocation cannot race completion.
       this.authorization.assertCurrent(eligibility);
-      const result = this.database.prepare("UPDATE authority_person_update_work_v2 SET state = 'ready', search_hints = ?, enrichment_sha256 = ? WHERE context_id = ? AND state = 'processing'")
-        .run(searchHints, release, current.context_id);
+      const result = this.database.prepare("UPDATE authority_person_update_work_v2 SET state = 'ready', search_hints = ?, enrichment_sha256 = ? WHERE context_id = ? AND state = 'processing' AND retry_at = ?")
+        .run(searchHints, release, current.context_id, item.retry_at);
       if (result.changes !== 1) throw new Error('V2 Person upload work disappeared');
     }).immediate();
   }
 
+  /** Fenced by the claim's lease like completion: a stale deferral writes nothing. */
   defer(item: PersonUpdateEnrichmentWorkItemV2, retry = true): void {
     const state = retry && item.attempts < 4 ? 'pending' : 'unavailable';
     const retryAt = new Date(Date.parse(this.now()) + 1000 * 2 ** Math.min(item.attempts, 8)).toISOString();
-    const result = this.database.prepare("UPDATE authority_person_update_work_v2 SET state = ?, attempts = attempts + 1, retry_at = ? WHERE context_id = ? AND state = 'processing'")
-      .run(state, retryAt, item.context_id);
-    if (result.changes !== 1) throw new Error('V2 Person upload work disappeared');
+    this.database.prepare("UPDATE authority_person_update_work_v2 SET state = ?, attempts = attempts + 1, retry_at = ? WHERE context_id = ? AND state = 'processing' AND retry_at = ?")
+      .run(state, retryAt, item.context_id, item.retry_at);
   }
 }

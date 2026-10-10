@@ -93,7 +93,7 @@ describe('V2 enrichment lifecycle and revocation', () => {
     expect(f.application.searchUploads('member', { query: 'telephone' }).results).toHaveLength(1);
   });
 
-  it('leaves interrupted V2 work reclaimable and never commits hints after cancellation', async () => {
+  it('leaves interrupted V2 work reclaimable once its claim lease ends and never commits hints after cancellation', async () => {
     const f = fixture();
     const receipt = f.submit();
     const aborted = new AbortController();
@@ -104,6 +104,9 @@ describe('V2 enrichment lifecycle and revocation', () => {
     await expect(f.worker().runOnce(aborted.signal)).rejects.toThrow('fixture shutdown');
     expect(workState(f.database, receipt.context_id)).toMatchObject({ state: 'processing', search_hints: '' });
     expect(f.application.readUpload('member', receipt.context_id).text).toBe('The customer prefers calls.');
+    await f.run(); // Refused during the lease.
+    expect(f.generate).toHaveBeenCalledTimes(1);
+    f.later();
     await f.run();
     expect(workState(f.database, receipt.context_id)).toMatchObject({ state: 'ready', search_hints: 'telephone' });
     expect(f.generate).toHaveBeenCalledTimes(2);

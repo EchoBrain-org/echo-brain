@@ -30,16 +30,18 @@ export class PersonUpdateProcessingV1 {
     signal.throwIfAborted();
     const v2 = this.v2.claim();
     if (v2 === undefined) return;
+    // V2 source bytes are authoritative, never model input until verified. An integrity failure fails one cycle and is never retried.
+    try { this.v2.validate(v2); }
+    catch (error) { this.v2.defer(v2, false); throw error; }
     try { await this.runV2(v2, signal); }
     catch (error) {
-      if (signal.aborted) throw error; // Shutdown leaves the item reclaimable.
-      // An integrity failure or a stale completion fails one cycle; the item never stays claimable as 'processing'.
-      try { this.v2.defer(v2, false); } catch { /* it already left 'processing' */ }
+      if (signal.aborted) throw error; // Shutdown leaves the item reclaimable once its lease ends.
+      // Any later failure retries, bounded by attempts; a claim whose lease was taken over defers nothing.
+      this.v2.defer(v2);
       throw error;
     }
   }
   private async runV2(v2: PersonUpdateEnrichmentWorkItemV2, signal: AbortSignal): Promise<void> {
-    this.v2.validate(v2); // V2 source bytes are authoritative, never model input until verified.
     const eligibility = this.v2.captureEligibility(v2);
     if (eligibility === undefined) { this.v2.defer(v2, false); return; }
     let searchHints: string;

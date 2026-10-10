@@ -24,11 +24,14 @@ export interface PersonUpdateEnrichmentWorkItemV2 {
   readonly search_hints: string;
   readonly enrichment_sha256: Sha256Digest | null;
   readonly attempts: number;
+  /** For a claimed item, its lease end; it fences that claimant's completion and deferral. */
+  readonly retry_at: string;
 }
 
 /**
  * V2/V3 use the existing serialized Person-upload worker. The adapter owns
  * durable claim/retry and the atomic final eligibility check plus hint write.
+ * A claim is a lease; completion and deferral after it was taken over are no-ops.
  */
 export interface PersonUpdateEnrichmentWorkV2 {
   claim(): PersonUpdateEnrichmentWorkItemV2 | undefined;
