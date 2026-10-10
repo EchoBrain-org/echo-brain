@@ -147,23 +147,23 @@ export function createPersonMeetingRuntimeV1(options: {
       transition => providerIntake.rebase(transition));
     return { source, state };
   }
-  /** Parked meetings (of one source, or all), oldest first, with whether an operator authorized one more attempt. IDs and allowlisted stages only. */
-  function held(sourceKey?: string) {
-    return (db.prepare(`SELECT source_key, external_id, attempt, failure_stage, extraction_admission_sha256, review_lineage_id, review_input_sha256
-      FROM authority_live_source_held_extractions_v1 ${sourceKey === undefined ? '' : 'WHERE source_key = ?'} ORDER BY held_at, review_lineage_id`)
-      .all(...(sourceKey === undefined ? [] : [sourceKey])) as {
-      source_key: string; external_id: string; attempt: number; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string }[])
-      .map(row => ({ source_key: row.source_key, external_id: row.external_id, attempt: row.attempt, failure_stage: row.failure_stage,
-        authorized: options.extraction_attempts.inspect({ admission_sha256: row.extraction_admission_sha256, review_lineage_id: row.review_lineage_id, review_input_sha256: row.review_input_sha256 })?.retry_authorized === true }));
+  type HeldRowV1 = { external_id: string; attempt: number; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string };
+  /** One source's parked meetings, oldest first. IDs and allowlisted stages only. */
+  function held(sourceKey: string): HeldRowV1[] {
+    return db.prepare(`SELECT external_id, attempt, failure_stage, extraction_admission_sha256, review_lineage_id, review_input_sha256
+      FROM authority_live_source_held_extractions_v1 WHERE source_key = ? ORDER BY held_at, review_lineage_id`).all(sourceKey) as HeldRowV1[];
   }
+  /** Whether an operator authorized one more attempt for a parked meeting: one ledger read. */
+  const authorized = (row: HeldRowV1) => options.extraction_attempts.inspect({
+    admission_sha256: row.extraction_admission_sha256, review_lineage_id: row.review_lineage_id, review_input_sha256: row.review_input_sha256 })?.retry_authorized === true;
   // After a retry poll, a source's next retry waits a minute, so a retry that cannot reserve never blocks its intake.
   const retryAfter = new Map<string, number>();
-  const retryReady = () => new Set(held().filter(row => row.authorized && (retryAfter.get(row.source_key) ?? 0) <= Date.now()).map(row => row.source_key));
+  const retryReady = (sourceKey: string) => (retryAfter.get(sourceKey) ?? 0) <= Date.now() && held(sourceKey).some(authorized);
   /** The owner's status for a source: its oldest authorized held meeting, else its oldest held one, then any connection or access error. */
   function sourceError(sourceKey: string): string | null {
-    const rows = held(sourceKey), first = rows.find(row => row.authorized) ?? rows[0];
+    const rows = held(sourceKey), granted = rows.find(authorized), first = granted ?? rows[0];
     const parts = [first && `Meeting ${first.external_id} is held after extraction attempt ${first.attempt} failed at ${first.failure_stage}. Later meetings continue. ${
-      first.authorized ? 'A retry is authorized and runs on the next check.' : 'An operator can authorize one more attempt.'}`, observed.get(sourceKey)?.error];
+      granted ? 'A retry is authorized and runs on the next check.' : 'An operator can authorize one more attempt.'}`, observed.get(sourceKey)?.error];
     const text = parts.filter(part => part !== undefined && part !== null).join(' ');
     return text === '' ? null : text.slice(0, 512);
   }
@@ -177,7 +177,7 @@ export function createPersonMeetingRuntimeV1(options: {
   /** One pass over one source: an authorized retry from custody, a freeze retry, or its next meeting. */
   async function runSource(setting: MeetingIntakeSettingV1, signal: AbortSignal): Promise<void> {
     // An authorized retry re-runs one parked meeting from custody, before this source's next intake.
-    const retry = retryReady().has(setting.source_key);
+    const retry = retryReady(setting.source_key);
     if (retry) retryAfter.set(setting.source_key, Date.now() + 60_000);
     try {
       intake.requireCurrent(setting);
@@ -214,7 +214,7 @@ export function createPersonMeetingRuntimeV1(options: {
       const remaining = ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key);
       // Nothing left to retry: the import queue is empty, every proposal of this source is frozen, and no granted retry is due.
       if (remaining.folder === null && remaining.manual.length === 0 && !workflowState.listPendingApprovalSourceKeys().includes(setting.source_key)
-        && !retryReady().has(setting.source_key)) { observed.delete(setting.source_key); return; }
+        && !retryReady(setting.source_key)) { observed.delete(setting.source_key); return; }
       // Fixed, content-free status; one broken grant cannot starve another person's work. A failed retry is already
       // deferred, so the source's intake goes next.
       observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: 'Meeting intake needs attention. Check the connection, folder access, and project access.', next: Date.now() + (retry ? 0 : 60_000) });
@@ -229,9 +229,10 @@ export function createPersonMeetingRuntimeV1(options: {
   function due(): MeetingIntakeSettingV1[] {
     // A source with an unfrozen proposal stays eligible until its freeze succeeds, even with nothing left to import.
     // So does a source with a parked meeting whose retry an operator authorized. A source already in flight is skipped.
-    const unfrozen = new Set(workflowState.listPendingApprovalSourceKeys()), ready = retryReady();
-    const eligible = intake.list().filter(s => !inFlight.has(s.source_key) && owners.has(s.source_adapter_id) && (s.folder_id !== null || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0
-      || unfrozen.has(s.source_key) || ready.has(s.source_key)) && (observed.get(s.source_key)?.next ?? 0) <= Date.now());
+    // Cheap checks first: a source's held rows are read, and its grants inspected, only when it is otherwise due.
+    const unfrozen = new Set(workflowState.listPendingApprovalSourceKeys());
+    const eligible = intake.list().filter(s => !inFlight.has(s.source_key) && owners.has(s.source_adapter_id) && (observed.get(s.source_key)?.next ?? 0) <= Date.now()
+      && (s.folder_id !== null || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0 || unfrozen.has(s.source_key) || retryReady(s.source_key)));
     return [...eligible.filter(s => s.source_key > after), ...eligible.filter(s => s.source_key <= after)];
   }
   /**
