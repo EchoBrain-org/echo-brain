@@ -4,6 +4,9 @@ import { createPersonListRouteV1 } from '../src/composition/person-list-v1-route
 import { SqlitePersonListDirectoryV1 } from '../src/adapters/persistence/sqlite/person-list-directory-v1.js';
 import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createStagingSyntheticPersonalMeetingProviderV1, StagingSyntheticMeetingStoreV1 } from '@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1';
 const refusal = vi.hoisted(() => ({ next: 0 }));
 vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (importOriginal) => {
@@ -33,8 +36,8 @@ const project = 'prj_00000000-0000-4000-8000-000000000003';
 const projectB = 'prj_00000000-0000-4000-8000-000000000013';
 const foreignProject = 'prj_00000000-0000-4000-8000-000000000023';
 /** `actions` adds that many unowned actions (act-2, act-3, …) to what the extractor finds. */
-async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly actions?: number; readonly started?: string } = {}) {
-  const f = await approvalContextFixture();
+async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly actions?: number; readonly started?: string; readonly path?: string } = {}) {
+  const f = await approvalContextFixture(options.path === undefined ? {} : { path: options.path });
   f.db.prepare('INSERT INTO authority_project_authorization_state_v1 VALUES (?,0,?)').run(f.actor.organization_id, new Date().toISOString());
   const person = { organization_id: f.actor.organization_id, principal_id: f.actor.principal_id, membership_id: f.actor.membership_id };
   const other = { ...person, principal_id: 'prn_00000000-0000-4000-8000-000000000011', membership_id: 'mem_00000000-0000-4000-8000-000000000012' };
@@ -94,8 +97,8 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   });
   const provider = fakeProvider('granola', GRANOLA_FOLDER_CURSOR_POLICY_V1.source_adapter_id);
   const sessions = { authenticateAccess: ({ access_token }: { access_token: string }) => authorization({ ...(actors[access_token as keyof typeof actors] ?? other), membership_type: access_token === 'owner' ? 'owner' : 'employee' }) };
-  const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append } = {}) =>
-    createPersonMeetingRuntimeV1({ database: f.db, approval: seams.record_append === undefined ? f.context : { ...f.context, record_append: seams.record_append }, providers,
+  const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append; readonly database?: Database.Database } = {}) =>
+    createPersonMeetingRuntimeV1({ database: seams.database ?? f.db, approval: seams.record_append === undefined ? f.context : { ...f.context, record_append: seams.record_append }, providers,
     sessions, ...(seams.approval_core === undefined ? {} : { approval_core: seams.approval_core }),
     processor: { processor_adapter_id: 'llm', current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }), assert_admission_commitments() {},
       create_processor(admission) { const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
@@ -538,6 +541,44 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.intake.checkpoint(queued!.source_key).manual).toEqual([]);
     expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
     expect(f.extracted()).toBe(1);
+  });
+  it('runs one pass per source at a time: a poll skips a source in flight and a targeted pass waits for it', async () => {
+    const f = await fixture(), runtime = f.create(), signal = new AbortController().signal;
+    const advances = vi.spyOn(SqliteAuthorityMeetingProcessingStateV1.prototype, 'advanceCursor');
+    try {
+      await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+      const [setting] = f.intake.list();
+      let release!: () => void, targeted = false;
+      f.duringExtract(() => { f.duringExtract(undefined); return new Promise<void>(resolve => { release = resolve; }); });
+      const periodic = runtime.processing.pollAndStageAdmittedMeetings(signal);
+      await vi.waitFor(() => expect(f.extracted()).toBe(1));
+      const pass = runtime.pollAndStageSource(setting!.source_key, signal).then(() => { targeted = true; });
+      await runtime.processing.pollAndStageAdmittedMeetings(signal);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect([f.pulls(), targeted]).toEqual([1, false]);
+      release(); await Promise.all([periodic, pass]);
+      expect([f.extracted(), f.pulls(), f.proposals(setting!.source_key), advances.mock.calls.length]).toEqual([1, 1, 1, 1]);
+    } finally { advances.mockRestore(); }
+  });
+  it('lets a second runtime on another handle find the extraction in flight: no error, park or cursor move', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'person-runtime-'));
+    try {
+      const f = await fixture({ path: join(directory, 'authority.sqlite') }), first = f.create();
+      const handle = new Database(join(directory, 'authority.sqlite')); handle.pragma('foreign_keys=ON'); handle.pragma('busy_timeout=5000');
+      try {
+        const second = f.create(undefined, { database: handle });
+        await f.call(first, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+        let release!: () => void;
+        f.duringExtract(() => { f.duringExtract(undefined); return new Promise<void>(resolve => { release = resolve; }); });
+        const running = first.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+        await vi.waitFor(() => expect(f.extracted()).toBe(1));
+        await second.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+        const [source] = (await f.call(second, { operation: 'home' })).sources;
+        expect([source!.error, source!.pending_imports, f.held(), f.extracted()]).toEqual([null, [id], [], 1]);
+        release(); await running;
+        expect(f.proposals(source!.source_key)).toBe(1);
+      } finally { handle.close(); }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
   });
   it('consumes an import whose extraction failed and records its project choice, as for a staged one', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');

@@ -157,6 +157,58 @@ export function createPersonMeetingRuntimeV1(options: {
     const text = parts.filter(part => part !== undefined && part !== null).join(' ');
     return text === '' ? null : text.slice(0, 512);
   }
+  // One pass per source at a time in this process saves wasted pulls; the attempt ledger's lease and the cursor
+  // compare-and-swap keep passes in another process or after a restart correct.
+  const inFlight = new Map<string, Promise<void>>();
+  function track(setting: MeetingIntakeSettingV1, signal: AbortSignal): Promise<void> {
+    const run = runSource(setting, signal);
+    inFlight.set(setting.source_key, run.then(() => undefined, () => undefined).finally(() => inFlight.delete(setting.source_key)));
+    return run;
+  }
+  /** One pass over one source: an authorized retry from custody, a freeze retry, or its next meeting. */
+  async function runSource(setting: MeetingIntakeSettingV1, signal: AbortSignal): Promise<void> {
+    // An authorized retry re-runs one parked meeting from custody, before this source's next intake.
+    const retry = retryReady().has(setting.source_key);
+    if (retry) retryAfter.set(setting.source_key, Date.now() + 60_000);
+    try {
+      intake.requireCurrent(setting);
+      if (!retry && setting.folder_id === null && ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key).manual.length === 0) {
+        // Only a failed freeze is left: retry it from the stored extraction, without the provider.
+        await (await approvals()).stagerForSource(setting.source_key).reconcilePendingDeliveries({ signal });
+        // More than one reconcile page left keeps the source eligible at once; a frozen source drops out.
+        observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() });
+        return;
+      }
+      processor.assert_admission_commitments(readAdmittedMeetingProcessingCommitmentsV1(db, setting.source_key));
+      const { source, state } = await lane(setting, retry);
+      const stager = (await approvals()).stagerForSource(setting.source_key);
+      const admission = await state.readAdmission();
+      const { provider, intake: sourceIntake } = ownerOf(setting.source_adapter_id);
+      const cycle = new AdmittedMeetingProcessingCycleV1({ source, state, processor: processor.create_processor(admission), extraction_attempts: options.extraction_attempts,
+        source_cursor_policy: provider.cursor.policy, stager,
+        source_ingestion: { store: new SqliteSourceAdmissionStoreV1(db, delivered => {
+          source.requireCurrent(); state.assertCurrentSourceAdmission(source.identity);
+          if (provider.cursor.write(sourceIntake.checkpoint(setting.source_key)) !== admission.source.cursor) throw new AuthorityOperationError('stale_access_state', 'Meeting intake changed during acquisition');
+          // Same transaction as the admission: a folder delivery's project becomes the meeting's suggestion.
+          sourceIntake.recordAdmission(setting, delivered.item.external_id);
+        }),
+          scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
+      });
+      const outcome = await (retry ? cycle.retryHeldOnce(signal) : cycle.runOnce(signal));
+      const queued = retry || sourceIntake.checkpoint(setting.source_key).manual.length > 0 || (outcome.cursor_advanced && !outcome.kind.startsWith('empty'));
+      observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() + (queued ? 0 : 300_000) });
+    } catch (error) {
+      signal.throwIfAborted();
+      const remaining = ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key);
+      // Nothing left to retry: the import queue is empty, every proposal of this source is frozen, and no granted retry is due.
+      if (remaining.folder === null && remaining.manual.length === 0 && !workflowState.listPendingApprovalSourceKeys().includes(setting.source_key)
+        && !retryReady().has(setting.source_key)) { observed.delete(setting.source_key); return; }
+      // Fixed, content-free status; one broken grant cannot starve another person's work. A failed retry is already
+      // deferred, so the source's intake goes next.
+      observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: 'Meeting intake needs attention. Check the connection, folder access, and project access.', next: Date.now() + (retry ? 0 : 60_000) });
+      if (!(error instanceof AuthorityOperationError) && !(error instanceof Error)) throw error;
+    }
+  }
   // Decisions survive disconnect/restart and need no provider access. A source whose provider is not selected in
   // this runtime keeps its decisions until it is (the core's state does not route to it).
   // Recovery keeps going past a row that cannot publish; append reports it. Both throw when the core cannot be created.
@@ -168,56 +220,23 @@ export function createPersonMeetingRuntimeV1(options: {
     async reconcileApprovalPresentations(signal) { return (await approvals()).processing.reconcileApprovalPresentations?.(signal); },
     async pollAndStageAdmittedMeetings(signal) {
       // A source with an unfrozen proposal stays eligible until its freeze succeeds, even with nothing left to import.
-      // So does a source with a parked meeting whose retry an operator authorized.
+      // So does a source with a parked meeting whose retry an operator authorized. A source already in flight is skipped.
       const unfrozen = new Set(workflowState.listPendingApprovalSourceKeys()), ready = retryReady();
-      const eligible = intake.list().filter(s => owners.has(s.source_adapter_id) && (s.folder_id !== null || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0
+      const eligible = intake.list().filter(s => !inFlight.has(s.source_key) && owners.has(s.source_adapter_id) && (s.folder_id !== null || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0
         || unfrozen.has(s.source_key) || ready.has(s.source_key)) && (observed.get(s.source_key)?.next ?? 0) <= Date.now());
       const setting = eligible.find(s => s.source_key > after) ?? eligible[0];
       if (!setting) return;
       after = setting.source_key;
-      // An authorized retry re-runs one parked meeting from custody, before this source's next intake.
-      const retry = ready.has(setting.source_key);
-      if (retry) retryAfter.set(setting.source_key, Date.now() + 60_000);
-      try {
-        intake.requireCurrent(setting);
-        if (!retry && setting.folder_id === null && ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key).manual.length === 0) {
-          // Only a failed freeze is left: retry it from the stored extraction, without the provider.
-          await (await approvals()).stagerForSource(setting.source_key).reconcilePendingDeliveries({ signal });
-          // More than one reconcile page left keeps the source eligible at once; a frozen source drops out.
-          observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() });
-          return;
-        }
-        processor.assert_admission_commitments(readAdmittedMeetingProcessingCommitmentsV1(db, setting.source_key));
-        const { source, state } = await lane(setting, retry);
-        const stager = (await approvals()).stagerForSource(setting.source_key);
-        const admission = await state.readAdmission();
-        const { provider, intake: sourceIntake } = ownerOf(setting.source_adapter_id);
-        const cycle = new AdmittedMeetingProcessingCycleV1({ source, state, processor: processor.create_processor(admission), extraction_attempts: options.extraction_attempts,
-          source_cursor_policy: provider.cursor.policy, stager,
-          source_ingestion: { store: new SqliteSourceAdmissionStoreV1(db, delivered => {
-            source.requireCurrent(); state.assertCurrentSourceAdmission(source.identity);
-            if (provider.cursor.write(sourceIntake.checkpoint(setting.source_key)) !== admission.source.cursor) throw new AuthorityOperationError('stale_access_state', 'Meeting intake changed during acquisition');
-            // Same transaction as the admission: a folder delivery's project becomes the meeting's suggestion.
-            sourceIntake.recordAdmission(setting, delivered.item.external_id);
-          }),
-            scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
-        });
-        const outcome = await (retry ? cycle.retryHeldOnce(signal) : cycle.runOnce(signal));
-        const queued = retry || sourceIntake.checkpoint(setting.source_key).manual.length > 0 || (outcome.cursor_advanced && !outcome.kind.startsWith('empty'));
-        observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() + (queued ? 0 : 300_000) });
-      } catch (error) {
-        signal.throwIfAborted();
-        const remaining = ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key);
-        // Nothing left to retry: the import queue is empty, every proposal of this source is frozen, and no granted retry is due.
-        if (remaining.folder === null && remaining.manual.length === 0 && !workflowState.listPendingApprovalSourceKeys().includes(setting.source_key)
-          && !retryReady().has(setting.source_key)) { observed.delete(setting.source_key); return; }
-        // Fixed, content-free status; one broken grant cannot starve another person's work. A failed retry is already
-        // deferred, so the source's intake goes next.
-        observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: 'Meeting intake needs attention. Check the connection, folder access, and project access.', next: Date.now() + (retry ? 0 : 60_000) });
-        if (!(error instanceof AuthorityOperationError) && !(error instanceof Error)) throw error;
-      }
+      await track(setting, signal);
     },
   };
+  /** Waits for any pass already running on this source, then runs one more whether or not its next poll is due. */
+  async function pollAndStageSource(sourceKey: string, signal: AbortSignal): Promise<void> {
+    for (let running = inFlight.get(sourceKey); running !== undefined; running = inFlight.get(sourceKey)) await running;
+    const setting = intake.list().find(s => s.source_key === sourceKey && owners.has(s.source_adapter_id));
+    if (!setting) throw new AuthorityOperationError('not_found', 'Meeting source unavailable');
+    return track(setting, signal);
+  }
   /** True when the access check passes, false when it refuses; any other failure is rethrown. */
   function allowed(check: () => unknown): boolean {
     try { check(); return true; }
@@ -338,6 +357,6 @@ export function createPersonMeetingRuntimeV1(options: {
     observed.delete(setting.source_key);
     return setting;
   }
-  return { applications: [...providers.map(p => p.connection_http), ...(options.provider_applications ?? []), application], processing, queue,
+  return { applications: [...providers.map(p => p.connection_http), ...(options.provider_applications ?? []), application], processing, queue, pollAndStageSource,
     tools: async (token: string) => providers.map(p => p.tool(token)), approvals, close() {} };
 }
