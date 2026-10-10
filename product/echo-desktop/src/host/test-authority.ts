@@ -57,7 +57,7 @@ interface Contract {
 /** A runs request, as the contract's validator returns it. */
 interface RunsRequest {
   operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; summary_only?: true; open_only?: true;
-  item_id?: string; command_id?: string; state?: 'open' | 'done' | 'not_relevant'; owner_membership_id?: string;
+  item_id?: string; command_id?: string; state?: 'open' | 'done' | 'not_relevant';
   items?: { item_id: string; include: boolean; owner_membership_id?: string }[];
 }
 
@@ -84,7 +84,7 @@ interface OpenItem {
   /** Null for a row the check did not assess: it has no expected phrase either (ruling 12). */
   relation: 'conflicts' | 'needs_updating' | null; expected: string | null;
   approver: { membership_id: string; name: string };
-  owner: { membership_id: string; name: string; match: 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned' };
+  owner: { membership_id: string; name: string; match: 'jira_account' | 'name' | 'picked' | 'approver' };
   state: 'unsent' | 'open' | 'done' | 'not_relevant';
   created_at: string; sent_at: string | null; state_set_at: string | null;
   check: Check | null;
@@ -938,10 +938,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             }),
           } });
         }
-        case 'item': {
-          const item = shown.find(entry => entry.item_id === request.item_id);
-          return item ? result('item', { item: itemView(item) }) : failure('not_found', 404);
-        }
         // Send: once per command; a card drawn before the items changed is refused, and nothing is written.
         case 'send': {
           if (run?.state !== 'done' || request.run_id !== runId) return failure('not_found', 404);
@@ -970,14 +966,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           if (item.state === 'unsent') return failure('invalid_request', 400);
           Object.assign(item, { state: request.state, state_set_at: now() });
           return result('set_state', { state: request.state });
-        }
-        case 'assign': {
-          const item = shown.find(entry => entry.item_id === request.item_id && involved(entry));
-          const person = desktop.people.find(entry => entry.membership_id === request.owner_membership_id);
-          if (!item) return failure('not_found', 404);
-          if (!person) return failure('invalid_request', 400);
-          item.owner = { membership_id: person.membership_id, name: person.display_name, match: 'reassigned' };
-          return result('assign', { owner: { membership_id: person.membership_id, name: person.display_name, active: true } });
         }
         // A sweep of the open items Ari can see in a scope (mine: those Ari sent or owns), queued; with
         // none open, nothing to check. Asked for again while that scope's sweep waits, it is that one.
@@ -1049,20 +1037,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       return new Response(null, { status: 204 });
     }
 
-    if (method === 'GET' && path === '/v1/person/projects') {
-      const response = fixture('projects-list');
-      const all = listed();
-      // Ten at a time in the modes with many: from the second page, then the third.
-      const paged = LIST_PAGES.has(mode);
-      const from = !paged ? 0 : url.searchParams.get('cursor') === 'cGFnZTM' ? 20 : url.searchParams.get('cursor') === 'cGFnZTI' ? 10 : 0;
-      const page = paged ? all.slice(from, from + 10) : all;
-      projectLists += 1;
-      // A lead made a member since the first list.
-      const demoted = (index: number) => mode === 'role-changes' && projectLists > 1 && index === 0 ? { role: 'member' } : {};
-      response.items = page.map((project, index) => ({ ...(fixture('projects-read')), ...project, ...demoted(index) }));
-      response.next_cursor = paged && from + 10 < all.length ? (from === 0 ? 'cGFnZTI' : 'cGFnZTM') : null;
-      return json(response);
-    }
     if (method === 'GET' && path === '/v2/person/projects') {
       const status = url.searchParams.get('status') === 'archived' ? 'archived' : 'active';
       // Synthetic list modes generate projects after the state map is made;
@@ -1194,14 +1168,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       return json({ schema_version: 3, kind: 'echo-person-upload-search-v3', results });
     }
 
-    // A project: your role in it, its members, and the people a lead can add.
-    const project = /^\/v1\/person\/projects\/(prj_[0-9a-f-]+)$/.exec(path);
-    if (method === 'GET' && project) {
-      const known = projects.find(entry => entry.project_id === project[1]);
-      const role = roleOf(project[1]!, session.membership_id);
-      if (!known || !role) return failure('not_found', 404);
-      return json({ ...fixture('projects-read'), project_id: known.project_id, name: known.name, role });
-    }
     // New project: made once per request id, with you as its lead.
     if (method === 'POST' && path === '/v1/person/projects') {
       const name = body?.name;
