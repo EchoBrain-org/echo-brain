@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { afterEach, expect, it } from "vitest";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
-import { authorityBaselineSha256V13 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { authorityBaselineSha256V14 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { organizationControlBaselineSha256V4 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { organizationRecordLogBaselineSha256V4 } from "@echo-brain/organization-record/organization-record-api-v1";
 
@@ -13,7 +13,7 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 it("pins the current baseline bytes", () => {
-  expect(authorityBaselineSha256V13()).toBe("sha256:9e3726b7b559664979e08ee32380fad94537e1633ae8a537fce758d526927049");
+  expect(authorityBaselineSha256V14()).toBe("sha256:77c824e9cbbb2dbdbb079fe84edb9677807a56f11087bbd7f4889e008c2d3d84");
   expect(organizationControlBaselineSha256V4()).toBe("sha256:ba84d1a7e605db91f0aca1319fca9db17fb3f62b004b22a943f89897a2a64825");
   expect(organizationRecordLogBaselineSha256V4()).toBe("sha256:b98091c9073ca1d1146d9f2b6d6b0cb7c950e829dbf26c7c431485370c76e52a");
 });
@@ -30,7 +30,7 @@ it("initializes only the active storage roles and tables", () => {
   expect(verification.root.schema_version).toBe(2);
   expect(verification.root.databases).toHaveLength(6);
   expect(existsSync(join(state, "record-derived.sqlite"))).toBe(false);
-  for (const [file, count, version] of [["authority.sqlite", 53, 13], ["integrations.sqlite", 7, 4], ["record-log.sqlite", 9, 4]] as const) {
+  for (const [file, count, version] of [["authority.sqlite", 54, 14], ["integrations.sqlite", 7, 4], ["record-log.sqlite", 9, 4]] as const) {
     const db = new Database(join(state, file), { readonly: true, fileMustExist: true });
     try {
       expect(db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'echo_state_lineage_manifest'").get()).toEqual({ n: count });
@@ -46,7 +46,7 @@ it("initializes only the active storage roles and tables", () => {
   }
 });
 
-it("refuses an Authority database whose schema header predates V13", () => {
+it("refuses an Authority database whose schema header predates V14", () => {
   const root = mkdtempSync(join(tmpdir(), "echo-current-storage-"));
   chmodSync(root, 0o700);
   roots.push(root);

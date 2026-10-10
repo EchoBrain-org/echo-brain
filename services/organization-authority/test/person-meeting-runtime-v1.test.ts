@@ -4,6 +4,9 @@ import { createPersonListRouteV1 } from '../src/composition/person-list-v1-route
 import { SqlitePersonListDirectoryV1 } from '../src/adapters/persistence/sqlite/person-list-directory-v1.js';
 import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createStagingSyntheticPersonalMeetingProviderV1, StagingSyntheticMeetingStoreV1 } from '@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1';
 const refusal = vi.hoisted(() => ({ next: 0 }));
 vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (importOriginal) => {
@@ -14,11 +17,16 @@ vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (impo
   } };
 });
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { captureCoreRuntimeContentV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { ApprovedMeetingTranscriptGrantReaderV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256 } from '@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1';
 import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
 import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_FOLDER_CURSOR_POLICY_V1 } from '@echo-brain/provider-granola/granola-folder-source-v1';
+import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
+import { AdapterError } from '@echo-brain/organization-processing/core/contracts/adapter';
+import { providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
+import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
@@ -31,8 +39,8 @@ const project = 'prj_00000000-0000-4000-8000-000000000003';
 const projectB = 'prj_00000000-0000-4000-8000-000000000013';
 const foreignProject = 'prj_00000000-0000-4000-8000-000000000023';
 /** `actions` adds that many unowned actions (act-2, act-3, …) to what the extractor finds. */
-async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly actions?: number; readonly started?: string } = {}) {
-  const f = await approvalContextFixture();
+async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly actions?: number; readonly started?: string; readonly path?: string } = {}) {
+  const f = await approvalContextFixture(options.path === undefined ? {} : { path: options.path });
   f.db.prepare('INSERT INTO authority_project_authorization_state_v1 VALUES (?,0,?)').run(f.actor.organization_id, new Date().toISOString());
   const person = { organization_id: f.actor.organization_id, principal_id: f.actor.principal_id, membership_id: f.actor.membership_id };
   const other = { ...person, principal_id: 'prn_00000000-0000-4000-8000-000000000011', membership_id: 'mem_00000000-0000-4000-8000-000000000012' };
@@ -43,7 +51,9 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   addMembership(f.db, { ...readerA, membership_type: 'employee' }, 'Reader A', 'reader-a@example.test');
   addMembership(f.db, { ...readerB, membership_type: 'employee' }, 'Reader B', 'reader-b@example.test');
   const actors = { owner: person, other, 'reader-a': readerA, 'reader-b': readerB } as const;
-  let active = true, extracted = 0, duringPull: (() => void | Promise<void>) | undefined, duringExtract: (() => void | Promise<void>) | undefined, failExtraction = false;
+  let active = true, extracted = 0, duringPull: (() => void | Promise<void>) | undefined, duringExtract: (() => void | Promise<void>) | undefined, failExtraction: unknown, edition = '', pulls = 0;
+  // One durable attempt ledger per Authority, shared by every runtime the test creates.
+  const ledger = new SqliteExtractionAttemptStoreV1(new Database(':memory:'), { authority_id: 'aut_runtime', organization_id: 'org_runtime', state_lineage_id: 'lineage-runtime' });
   // Meetings the watched folder delivers on its next scans after the baseline.
   const folderDeliveries: string[] = [];
   const current = () => { if (!active) throw new Error('Disconnected'); };
@@ -67,10 +77,10 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
       return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
         requireCurrent() { guard(); current(); },
         async pull(input) {
-          guard(); current(); const cursor = readGranolaCheckpointV1(input.cursor!);
+          pulls++; guard(); current(); const cursor = readGranolaCheckpointV1(input.cursor!);
           const transcript = { id: 'private-transcript', kind: 'transcript' as const, text: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' };
           // A real provider names the meeting by its source instance, so two tool accounts never share a meeting id.
-          const build = (external: string): MeetingDocument => ({ ...original, id: `${identity.instance_id}:${external}`, content: options.transcriptOnly ? [transcript] : [...original.content, transcript], title: 'Test meeting', provenance: { ...original.provenance, source: identity, external_id: external, canonical_revision: canonicalSha256('meeting version') },
+          const build = (external: string): MeetingDocument => ({ ...original, id: `${identity.instance_id}:${external}`, content: options.transcriptOnly ? [transcript] : [...original.content, transcript], title: `Test meeting${edition}`, provenance: { ...original.provenance, source: identity, external_id: external, canonical_revision: canonicalSha256(`meeting version${edition}`) },
             ...(options.started === undefined ? {} : { time: { actual_start_at: options.started } }) });
           if (!cursor.manual[0]) {
             if (cursor.folder !== null && cursor.baseline && folderDeliveries[0] !== undefined) {
@@ -90,15 +100,16 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   });
   const provider = fakeProvider('granola', GRANOLA_FOLDER_CURSOR_POLICY_V1.source_adapter_id);
   const sessions = { authenticateAccess: ({ access_token }: { access_token: string }) => authorization({ ...(actors[access_token as keyof typeof actors] ?? other), membership_type: access_token === 'owner' ? 'owner' : 'employee' }) };
-  const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append } = {}) =>
-    createPersonMeetingRuntimeV1({ database: f.db, approval: seams.record_append === undefined ? f.context : { ...f.context, record_append: seams.record_append }, providers,
-    sessions, ...(seams.approval_core === undefined ? {} : { approval_core: seams.approval_core }),
+  const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append; readonly database?: Database.Database; readonly meeting_lanes?: number; readonly observation?: CoreRuntimeObservationScopeV1 } = {}) =>
+    createPersonMeetingRuntimeV1({ database: seams.database ?? f.db, approval: seams.record_append === undefined ? f.context : { ...f.context, record_append: seams.record_append }, providers,
+    sessions, ...(seams.approval_core === undefined ? {} : { approval_core: seams.approval_core }), ...(seams.meeting_lanes === undefined ? {} : { meeting_lanes: seams.meeting_lanes }),
+    ...(seams.observation === undefined ? {} : { observation: seams.observation }),
     processor: { processor_adapter_id: 'llm', current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }), assert_admission_commitments() {},
       create_processor(admission) { const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
         return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
           async extract(meeting) {
             extracted++; await duringExtract?.();
-            if (failExtraction) { failExtraction = false; throw new Error('extraction failed'); }
+            if (failExtraction !== undefined) { const failure = failExtraction; failExtraction = undefined; throw failure; }
             return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
             signals: [...decisions.signals, ...(options.ownedAction ? [{ id: 'act-1', kind: 'action' as const, text: 'Send the pilot plan.', subject: null, confidence: 1, owner: 'Rafael Moreno', due_at: null,
               evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }] : []),
@@ -107,7 +118,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
                   ...(toolIsSynthetic(meeting) ? { block_id: meeting.content[0]!.id } : {}) })) })) }; } };
       },
     },
-    extraction_attempts: { reserve: () => ({ status: 'reserved', attempt: 1, claim_id: 'claim' }), complete() {} },
+    extraction_attempts: ledger,
   });
   const call = async <K extends PersonMeetingOperationV2['operation']>(runtime: ReturnType<typeof create>, op: PersonMeetingOperationV2 & { operation: K }, token = 'owner', tool_id = 'granola') => {
     const meetings = runtime.applications.find(application => application.routes.some(route => route.route_id === 'personal-meetings'))!;
@@ -167,9 +178,14 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
     JOIN authority_live_source_candidates_v2 c ON c.candidate_id=o.candidate_id
     JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256 WHERE a.source_key=? ORDER BY c.created_at, o.approval_id`).all(sourceKey) as { approval_id: string; state: string; suggested_projects_json: string | null }[];
   return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, fakeProvider, sources, intake, processUntilIdle, pendingReview, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
-    duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: () => { failExtraction = true; } };
+    duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: (error: unknown = new Error('extraction failed')) => { failExtraction = error; },
+    ledger, pulls: () => pulls, revise: (value: string) => { edition = value; },
+    held: () => f.db.prepare('SELECT * FROM authority_live_source_held_extractions_v1').all() as { external_id: string; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string }[] };
 }
 function toolIsSynthetic(meeting: MeetingDocument) { return meeting.provenance.source.adapter_id === 'staging-synthetic-meeting'; }
+/** The owner's held status: IDs and the allowlisted stage only. */
+const heldError = (external: string, stage = 'unknown', next = 'An operator can authorize one more attempt.') =>
+  `Meeting ${external} is held after extraction attempt 1 failed at ${stage}. Later meetings continue. ${next}`;
 describe('personal meeting intake uses the shared processing path', () => {
   it('submits a custom synthetic meeting through extraction, one human review and one after-record trigger, surviving retries', async () => {
     const f = await fixture(), storage = new Database(':memory:');
@@ -465,10 +481,11 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(await f.readers()).toEqual(['owner', 'reader-b']);
   });
-  it('grants nothing when the import is cancelled while its admitted meeting is being extracted', async () => {
+  it.each([false, true])('grants, stages and parks nothing when the import is cancelled while its admitted meeting is being extracted (extraction fails: %s)', async (fails) => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     const [queued] = (await f.call(runtime, { operation: 'home' })).sources;
+    if (fails) f.failNextExtraction();
     f.duringExtract(async () => {
       // The meeting is already admitted; the cancel lands before the cursor advance.
       expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(1);
@@ -479,21 +496,325 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.intake.checkpoint(queued!.source_key).manual).toEqual([]);
     expect(f.count('authority_person_meeting_suggestions_v1')).toBe(0);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([]);
+    expect(f.held()).toEqual([]);
     expect(await f.readers()).toEqual(['owner']);
   });
-  it('grants nothing when a cycle fails after admission and the import is then cancelled', async () => {
+  it.each([false, true])('keeps the paid result and an import queued during its extraction (extraction fails: %s)', async (fails) => {
+    const f = await fixture(), runtime = f.create(), b = '00000000-0000-4000-8000-000000000004'; f.grantProject(); f.grantProject(projectB);
+    const poll = async () => { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); return (await f.call(runtime, { operation: 'home' })).sources[0]!; };
+    const reviews = async () => (await f.call(runtime, { operation: 'reviews' })).reviews.length;
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    if (fails) f.failNextExtraction();
+    f.duringExtract(async () => { f.duringExtract(undefined); await f.call(runtime, { operation: 'import', meeting_id: b, project_id: projectB, retain: true }); });
+    const source = await poll();
+    expect(source.pending_imports).toEqual([b]);
+    expect(f.extracted()).toBe(1);
+    expect(await reviews()).toBe(fails ? 0 : 1);
+    expect(f.held()).toEqual(fails ? [expect.objectContaining({ external_id: id, failure_stage: 'unknown' })] : []);
+    // The advance consumed A's import only: B's project choice waits for B.
+    expect(f.intake.suggestions(source.source_key, id)).toEqual([project]);
+    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(1);
+    expect((await poll()).pending_imports).toEqual([]);
+    expect(f.extracted()).toBe(2);
+    expect(await reviews()).toBe(fails ? 1 : 2);
+  });
+  it.each([false, true])('keeps the paid result when another queued import is cancelled during its extraction (extraction fails: %s)', async (fails) => {
+    const f = await fixture(), runtime = f.create(), x = '00000000-0000-4000-8000-000000000004';
+    for (const meeting_id of [id, x]) await f.call(runtime, { operation: 'import', meeting_id, project_id: null, retain: true });
+    const [queued] = (await f.call(runtime, { operation: 'home' })).sources;
+    if (fails) f.failNextExtraction();
+    f.duringExtract(async () => { f.duringExtract(undefined); await f.call(runtime, { operation: 'cancel_import', source_key: queued!.source_key, meeting_id: x }); });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    expect(f.intake.checkpoint(queued!.source_key).manual).toEqual([]);
+    expect(f.extracted()).toBe(1);
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(fails ? 0 : 1);
+    // A failure parks with its own stage, not the blocked path's not_recorded.
+    expect(f.held()).toEqual(fails ? [expect.objectContaining({ external_id: id, failure_stage: 'unknown' })] : []);
+  });
+  it('advances past a re-staged meeting whose first advance never ran, after another import is cancelled', async () => {
+    const f = await fixture(), runtime = f.create(), x = '00000000-0000-4000-8000-000000000004', stopping = new AbortController();
+    for (const meeting_id of [id, x]) await f.call(runtime, { operation: 'import', meeting_id, project_id: null, retain: true });
+    const [queued] = (await f.call(runtime, { operation: 'home' })).sources;
+    // The freeze fails while the poll is stopping: the candidate stays queued and nothing advances.
+    refusal.next = 1; f.duringExtract(() => { f.duringExtract(undefined); stopping.abort(); });
+    await expect(runtime.processing.pollAndStageAdmittedMeetings(stopping.signal)).rejects.toThrow();
+    expect(f.intake.checkpoint(queued!.source_key).manual).toEqual([id, x]);
+    await f.call(runtime, { operation: 'cancel_import', source_key: queued!.source_key, meeting_id: x });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    expect(f.intake.checkpoint(queued!.source_key).manual).toEqual([]);
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
+    expect(f.extracted()).toBe(1);
+  });
+  it('runs one pass per source at a time: a poll skips a source in flight and a targeted pass waits for it', async () => {
+    const f = await fixture(), runtime = f.create(), signal = new AbortController().signal;
+    const advances = vi.spyOn(SqliteAuthorityMeetingProcessingStateV1.prototype, 'advanceCursor');
+    try {
+      await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+      const [setting] = f.intake.list();
+      let release!: () => void, targeted = false;
+      f.duringExtract(() => { f.duringExtract(undefined); return new Promise<void>(resolve => { release = resolve; }); });
+      const periodic = runtime.processing.pollAndStageAdmittedMeetings(signal);
+      await vi.waitFor(() => expect(f.extracted()).toBe(1));
+      const pass = runtime.pollAndStageSource(setting!.source_key, signal).then(() => { targeted = true; });
+      await runtime.processing.pollAndStageAdmittedMeetings(signal);
+      // A waiter whose caller gives up leaves without registering a pass.
+      const stop = new AbortController(), abandoned = runtime.pollAndStageSource(setting!.source_key, stop.signal);
+      stop.abort(); await expect(abandoned).rejects.toThrow();
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect([f.pulls(), targeted]).toEqual([1, false]);
+      release(); await Promise.all([periodic, pass]);
+      expect([f.extracted(), f.pulls(), f.proposals(setting!.source_key), advances.mock.calls.length]).toEqual([1, 1, 1, 1]);
+    } finally { advances.mockRestore(); }
+  });
+  it('lets a second runtime on another handle find the extraction in flight: no error, park or cursor move', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'person-runtime-'));
+    try {
+      const f = await fixture({ path: join(directory, 'authority.sqlite') }), first = f.create();
+      const handle = new Database(join(directory, 'authority.sqlite')); handle.pragma('foreign_keys=ON'); handle.pragma('busy_timeout=5000');
+      try {
+        const second = f.create(undefined, { database: handle });
+        await f.call(first, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+        let release!: () => void;
+        f.duringExtract(() => { f.duringExtract(undefined); return new Promise<void>(resolve => { release = resolve; }); });
+        const running = first.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+        await vi.waitFor(() => expect(f.extracted()).toBe(1));
+        await second.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+        const [source] = (await f.call(second, { operation: 'home' })).sources;
+        expect([source!.error, source!.pending_imports, f.held(), f.extracted()]).toEqual([null, [id], [], 1]);
+        // The head in flight elsewhere backs its source off instead of being pulled again at once.
+        const pulls = f.pulls(); await second.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+        expect(f.pulls()).toBe(pulls);
+        release(); await running;
+        expect(f.proposals(source!.source_key)).toBe(1);
+      } finally { handle.close(); }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+  it('runs sources in detached lanes, never one source twice, and reports a failing lane without stalling the others', async () => {
+    const f = await fixture(), b = '00000000-0000-4000-8000-000000000004', failures: unknown[] = [];
+    let settles = 0;
+    // The notes tool's source throws a non-Error before any pull.
+    const runtime = f.create([f.fakeProvider('granola', 'granola-person-mcp'), { ...f.fakeProvider('notes', 'notes-person-mcp'), source() { throw 'boom'; } }]);
+    for (const [meeting_id, token, tool] of [[id, 'owner', 'granola'], [b, 'owner', 'granola'], [id, 'other', 'granola'], [id, 'owner', 'notes']] as const) {
+      await f.call(runtime, { operation: 'import', meeting_id, project_id: null, retain: true }, token, tool);
+    }
+    let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+    f.duringExtract(() => gate);
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, failure => { failures.push(failure); }, () => { settles++; });
+    await vi.waitFor(() => expect(f.extracted()).toBe(2));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    // Two sources extract at once; the failed lane's free slot never starts the owner's second import beside its first.
+    expect([f.extracted(), f.pulls(), failures, settles]).toEqual([2, 2, ['boom'], 1]);
+    release(); await runtime.processing.settle?.();
+    // The owner's lane topped up with its second import as it settled; every settled lane said so.
+    expect([f.extracted(), failures, settles]).toEqual([3, ['boom'], 4]);
+  });
+  it('starts no more passes than the lane count and tops up as one settles', async () => {
+    const f = await fixture(), runtime = f.create(undefined, { meeting_lanes: 2 });
+    for (const token of ['owner', 'other', 'reader-a']) await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true }, token);
+    let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+    f.duringExtract(() => gate);
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined);
+    await vi.waitFor(() => expect(f.extracted()).toBe(2));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect([f.extracted(), f.pulls()]).toEqual([2, 2]);
+    release(); await runtime.processing.settle?.();
+    expect(f.extracted()).toBe(3);
+  });
+  it('captures a lane pass\'s model content under the observation scope it was given', async () => {
+    const f = await fixture(), content: string[] = [];
+    const runtime = f.create(undefined, { observation: { observer: () => undefined, content_observer: event => { content.push(event.content_kind); } } });
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    f.duringExtract(() => { f.duringExtract(undefined); captureCoreRuntimeContentV1('model_response', { body: 'model output' }); });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined);
+    await runtime.processing.settle?.();
+    expect([f.extracted(), content]).toEqual([1, ['model_response']]);
+  });
+  it('starts no lane once shutdown has asked it to stop', async () => {
+    const f = await fixture(), runtime = f.create();
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await runtime.processing.settle?.(true);
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined);
+    await runtime.processing.settle?.();
+    expect(f.extracted()).toBe(0);
+  });
+  it('settles only after the top-up a settling lane starts', async () => {
+    const f = await fixture(), runtime = f.create(), b = '00000000-0000-4000-8000-000000000004';
+    for (const meeting_id of [id, b]) await f.call(runtime, { operation: 'import', meeting_id, project_id: null, retain: true });
+    // `settled` runs after the lane has left the in-flight set and before its top-up starts the next import.
+    let settling: Promise<unknown> | undefined;
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined,
+      () => { settling ??= runtime.processing.settle!().then(() => f.count('authority_live_approval_outbox_v2')); });
+    await vi.waitFor(() => expect(settling).toBeDefined());
+    expect(await settling).toBe(2);
+  });
+  it('starts no lane for a minute after a transient provider failure, then resumes', async () => {
+    const f = await fixture(), runtime = f.create(undefined, { meeting_lanes: 1 });
+    for (const token of ['owner', 'other']) await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true }, token);
+    const cycle = async () => { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined); await runtime.processing.settle?.(); };
+    f.failNextExtraction(new AdapterError('timeout', 'provider timed out', true));
+    // Neither the failed lane's top-up nor the next cycle starts the other person's import.
+    await cycle(); await cycle();
+    expect([f.extracted(), f.held()]).toEqual([1, [expect.objectContaining({ failure_stage: 'timeout' })]]);
+    const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+    try { await cycle(); expect(f.extracted()).toBe(2); } finally { later.mockRestore(); }
+  });
+  it.each([false, true])('retries an unbilled first failure once, automatically, from the head of its queue (the retry fails: %s)', async (failsAgain) => {
+    const f = await fixture(), runtime = f.create();
+    const poll = async () => { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); return (await f.call(runtime, { operation: 'home' })).sources[0]!; };
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    f.failNextExtraction(providerStatusError('OpenRouter', 429));
+    // Not parked, still queued, no operator wording: one grant for the exact key.
+    expect(await poll()).toMatchObject({ pending_imports: [id], error: null });
+    const [attempt] = f.ledger.listLatest();
+    expect([f.held(), attempt]).toEqual([[], expect.objectContaining({ attempt: 1, outcome: 'failed', failure_code: 'rate_limited', retry_authorized: true })]);
+    await poll();
+    expect(f.extracted()).toBe(1);
+    const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+    try {
+      if (failsAgain) f.failNextExtraction(providerStatusError('OpenRouter', 503));
+      // The next poll re-runs it and consumes the grant; a second unbilled failure parks it.
+      expect((await poll()).pending_imports).toEqual([]);
+      expect(f.extracted()).toBe(2);
+      expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(failsAgain ? 0 : 1);
+      expect(f.held()).toEqual(failsAgain ? [expect.objectContaining({ external_id: id, failure_stage: 'temporarily_unavailable' })] : []);
+      expect(f.ledger.inspect(attempt!)).toMatchObject({ attempt: 2, outcome: failsAgain ? 'failed' : 'succeeded', retry_authorized: false });
+    } finally { later.mockRestore(); }
+  });
+  it('consumes an import whose extraction failed and records its project choice, as for a staged one', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     f.failNextExtraction();
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-    const [failed] = (await f.call(runtime, { operation: 'home' })).sources;
-    expect(failed).toMatchObject({ pending_imports: [id], error: expect.any(String) });
-    expect(await f.readers()).toEqual(['owner']);
-    await f.call(runtime, { operation: 'cancel_import', source_key: failed!.source_key, meeting_id: id });
-    await f.processUntilIdle(f.create());
-    expect(f.count('authority_person_meeting_suggestions_v1')).toBe(0);
+    const [held] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect(held).toMatchObject({ pending_imports: [], error: heldError(id) });
+    expect(f.intake.suggestions(held!.source_key, id)).toEqual([project]);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
-    expect(await f.readers()).toEqual(['owner']);
+    expect(await f.readers()).toEqual(['owner', 'reader-a']);
+  });
+  it.each(['granola', 'synthetic'] as const)('parks a failed meeting and stages the next one in its %s source on the next poll', async (tool) => {
+    const f = await fixture(), storage = new Database(':memory:');
+    try {
+      const runtime = tool === 'granola' ? f.create() : f.create([createStagingSyntheticPersonalMeetingProviderV1({ custom_store: new StagingSyntheticMeetingStoreV1(storage) })]);
+      const [a, b] = tool === 'granola' ? [id, '00000000-0000-4000-8000-000000000004'] : ['synthetic-custom-held-a', 'synthetic-custom-next-b'];
+      for (const meeting_id of [a, b]) {
+        await f.call(runtime, tool === 'granola' ? { operation: 'import', meeting_id, project_id: null, retain: true }
+          : { operation: 'submit', meeting: { id: meeting_id, title: meeting_id, notes: 'Ship the cohort onboarding.', transcript: '' }, project_id: null, retain: true }, 'owner', tool);
+      }
+      const poll = async () => { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); return (await f.call(runtime, { operation: 'home' }, 'owner', tool)).sources[0]; };
+      f.failNextExtraction();
+      // No backoff: the held meeting's source stays eligible for the next queued meeting.
+      expect(await poll()).toMatchObject({ pending_imports: [b], error: heldError(a) });
+      expect(f.held()).toEqual([expect.objectContaining({ external_id: a, failure_stage: 'unknown' })]);
+      expect(await poll()).toMatchObject({ pending_imports: [], error: heldError(a) });
+      expect((await f.call(runtime, { operation: 'reviews' }, 'owner', tool)).reviews).toHaveLength(1);
+      expect(f.extracted()).toBe(2);
+    } finally { storage.close(); }
+  });
+  it('keeps a held meeting parked across a restart with no model call, and parks a legacy blocked head as not_recorded', async () => {
+    const f = await fixture();
+    const importAndPoll = async () => {
+      const runtime = f.create();
+      await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+      return (await f.call(runtime, { operation: 'home' })).sources[0];
+    };
+    f.failNextExtraction();
+    const source = await importAndPoll();
+    const [row] = f.held();
+    const key = { admission_sha256: row!.extraction_admission_sha256, review_lineage_id: row!.review_lineage_id, review_input_sha256: row!.review_input_sha256 };
+    // The parked revision is rebuilt from source custody, as an operator retry reads it.
+    const state = new SqliteAuthorityMeetingProcessingStateV1(f.db, GRANOLA_FOLDER_CURSOR_POLICY_V1, 'llm', undefined, source!.source_key);
+    const [listed] = await state.listHeldExtractions();
+    expect(listed).toMatchObject({ external_id: id, key, attempt: 1, failure_stage: 'unknown' });
+    expect((await state.readHeldMeeting(listed!)).provenance).toMatchObject({ external_id: id, canonical_revision: listed!.revision_id });
+    // A new runtime on the same Authority and ledger: importing the meeting again spends nothing.
+    expect(await importAndPoll()).toMatchObject({ pending_imports: [], error: heldError(id) });
+    expect(f.held()).toEqual([expect.objectContaining({ external_id: id, failure_stage: 'unknown' })]);
+    expect(f.ledger.history(key)).toHaveLength(1);
+    expect(f.ledger.inspect(key)).toEqual({ attempt: 1, outcome: 'failed', failure_code: 'unknown', reserved_at: expect.any(String), retry_authorized: false });
+    // Before parking existed, a failed head had a ledger attempt and no held row.
+    f.db.prepare('DELETE FROM authority_live_source_held_extractions_v1').run();
+    expect(await importAndPoll()).toMatchObject({ pending_imports: [], error: heldError(id, 'not_recorded') });
+    expect(f.held()).toEqual([expect.objectContaining({ external_id: id, failure_stage: 'not_recorded' })]);
+    expect(f.extracted()).toBe(1);
+  });
+  it('drops the held row when a newer revision of the meeting becomes a candidate', async () => {
+    const f = await fixture(), runtime = f.create();
+    const importAndPoll = async () => {
+      await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    };
+    f.failNextExtraction();
+    await importAndPoll();
+    expect(f.held()).toHaveLength(1);
+    f.revise(' (edited)');
+    await importAndPoll();
+    expect(f.held()).toEqual([]);
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
+    expect(f.extracted()).toBe(2);
+  });
+  it('re-runs from custody only the held meeting whose exact key an operator authorized, once', async () => {
+    const f = await fixture(), runtime = f.create(), b = '00000000-0000-4000-8000-000000000004';
+    const poll = () => runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    // A fresh runtime reads the status from durable rows alone.
+    const error = async () => (await f.call(f.create(), { operation: 'home' })).sources[0]!.error;
+    for (const meeting_id of [id, b]) await f.call(runtime, { operation: 'import', meeting_id, project_id: null, retain: true });
+    f.failNextExtraction(); await poll();
+    f.failNextExtraction(); await poll();
+    const row = (external: string) => f.held().find(held => held.external_id === external)!;
+    const key = { admission_sha256: row(id).extraction_admission_sha256, review_lineage_id: row(id).review_lineage_id, review_input_sha256: row(id).review_input_sha256 };
+    const heldB = row(b);
+    expect(await error()).toBe(heldError(id));
+    // A grant for another key of A's lineage does not trigger A.
+    const other = { ...key, review_input_sha256: `sha256:${'f'.repeat(64)}` }, claim = f.ledger.reserve(other);
+    if (claim.status !== 'reserved') throw new Error('test reservation failed');
+    f.ledger.complete({ key: other, ...claim, outcome: 'failed', failure_code: 'unknown' });
+    expect(f.ledger.authorizeRetry({ key: other, expected_attempt: 1, expected_outcome: 'failed' })).toBe('authorized');
+    await poll();
+    expect(f.extracted()).toBe(2);
+    expect(f.ledger.authorizeRetry({ key, expected_attempt: 1, expected_outcome: 'failed' })).toBe('authorized');
+    expect(await error()).toBe(heldError(id, 'unknown', 'A retry is authorized and runs on the next check.'));
+    const pulls = f.pulls();
+    // An import queued during the retry's model call does not discard its paid result.
+    f.duringExtract(async () => { f.duringExtract(undefined); await f.call(runtime, { operation: 'import', meeting_id: b, project_id: null, retain: true }); });
+    await poll();
+    expect(f.pulls()).toBe(pulls); expect(f.extracted()).toBe(3);
+    expect(f.held()).toEqual([heldB]);
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
+    expect(await error()).toBe(heldError(b));
+    // The grant is spent.
+    expect(f.ledger.inspect(key)).toMatchObject({ attempt: 2, outcome: 'succeeded', retry_authorized: false });
+    await poll();
+    expect(f.extracted()).toBe(3);
+  });
+  it('lets a queued import stage when an authorized retry cannot reserve', async () => {
+    const f = await fixture(), runtime = f.create(), b = '00000000-0000-4000-8000-000000000004';
+    const poll = () => runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    f.failNextExtraction(); await poll();
+    // A granted held key that no longer matches custody: the retry refuses before reserving.
+    const [row] = f.held(), key = { admission_sha256: row!.extraction_admission_sha256, review_lineage_id: row!.review_lineage_id, review_input_sha256: `sha256:${'f'.repeat(64)}` };
+    f.db.prepare('UPDATE authority_live_source_held_extractions_v1 SET review_input_sha256 = ?').run(key.review_input_sha256);
+    const claim = f.ledger.reserve(key);
+    if (claim.status !== 'reserved') throw new Error('test reservation failed');
+    f.ledger.complete({ key, ...claim, outcome: 'failed', failure_code: 'unknown' });
+    f.ledger.authorizeRetry({ key, expected_attempt: 1, expected_outcome: 'failed' });
+    await f.call(runtime, { operation: 'import', meeting_id: b, project_id: null, retain: true });
+    await poll(); await poll();
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
+    expect(f.extracted()).toBe(2);
+    expect(f.held()).toEqual([expect.objectContaining({ external_id: id })]);
+  });
+  it('forgets a held meeting the person cancels', async () => {
+    const f = await fixture(), runtime = f.create();
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    f.failNextExtraction();
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
+    await f.call(runtime, { operation: 'cancel_import', source_key: source!.source_key, meeting_id: id });
+    expect(f.held()).toEqual([]);
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]!.error).toBeNull();
   });
   it('records and freezes an in-flight re-import\'s project when the cursor advance drops the meeting', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
@@ -708,7 +1029,8 @@ describe('personal meeting intake uses the shared processing path', () => {
     const crashing = f.create(undefined, { approval_core: { after_record }, record_append: { async append(input) { await f.context.record_append.append(input); throw new Error('crash after append'); } } });
     const { pending, opened } = await f.pendingReview(crashing);
     await f.call(crashing, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-crash', action: 'approve', project_ids: [], share_transcript: false, owners: [] });
-    await expect(crashing.processing.recoverV4Appends(new AbortController().signal)).rejects.toThrow('crash after append');
+    // A row failure does not fail recovery; the row stays unpublished for the next pass.
+    await crashing.processing.recoverV4Appends(new AbortController().signal);
     expect(calls).toEqual([]);
     crashing.close();
     const restarted = f.create(undefined, { approval_core: { after_record } });

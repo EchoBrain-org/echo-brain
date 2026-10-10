@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { chooseFromAccountMenu, emit, launch, type Launched } from './launch.js';
+import { chooseFromAccountMenu, drop, emit, launch, type Launched } from './launch.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
@@ -64,6 +64,21 @@ test('an expired access token is refreshed once, before the calls that need it',
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('answer')).toBeVisible();
   expect(refreshes()).toHaveLength(1);
+});
+
+test('ten minutes of sign-in serve the reads as they are, and an upload that may take twelve refreshes first', async () => {
+  // The fixture's token has ten minutes left: a read needs 45 s plus a minute, an upload 12 minutes plus one.
+  run = await launch();
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  expect(refreshes()).toHaveLength(0);
+  writeFileSync(join(run.userData, 'Brief.md'), 'Annual pricing.');
+  await drop(page, page.getByTestId('sidebar-project').nth(1), join(run.userData, 'Brief.md'));
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon · Extracting text');
+  const paths = run.calls().map(call => call.path);
+  expect(refreshes()).toHaveLength(1);
+  expect(paths.indexOf('/v2/session/refresh')).toBeLessThan(paths.findIndex(path => path.startsWith('/v2/person/documents/')));
 });
 
 test('a refresh that never left the machine keeps you signed in, status alone never refreshes, and a note written then is not sent but refreshes again', async () => {

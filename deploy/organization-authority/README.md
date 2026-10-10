@@ -351,7 +351,7 @@ update the app. The compatibility DM-code challenge
 available as the fallback for a machine without a browser.
 
 After that setup, the ordinary release updater only replaces artifacts within
-the current lineage: Authority V13, control-plane V4,
+the current lineage: Authority V14, control-plane V4,
 record-log V4, retrieval facts V3, retrieval content/lexical V2, and a six-role
 V2 root. It refuses older or mixed persisted state before runtime,
 configuration, or state mutation. Use `replace-rehearsal --confirm-no-live-users`
@@ -415,9 +415,11 @@ organization.
 
 ### Replace unreleased rehearsal state
 
-The current release requires fresh Authority V13 state. It cannot start over
-an earlier rehearsal lineage. For disposable rehearsal state with no live users,
-retire it through the explicit initial-owner attestation:
+The current release requires fresh Authority V14 state. It cannot start over
+an earlier rehearsal lineage. V14 adds the held-extraction table, so a V13 host
+needs this reset and then initial-owner onboarding again. For disposable
+rehearsal state with no live users, retire it through the explicit
+initial-owner attestation:
 
 ```sh
 ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
@@ -461,7 +463,7 @@ re-stage it under a new operation ID, and delete any leftover captured
 On an onboarded staging Authority, the owner can submit a custom meeting through
 the installed Person CLI. Deploy a reviewed server and matching CLI that support
 this operation through the existing current-host release lane. It is additive to
-V13; no reset, Granola connection, host file copy, or source-profile change is
+V14; no reset, Granola connection, host file copy, or source-profile change is
 needed. Production does not mount the synthetic provider.
 
 Create a UTF-8 JSON file with exactly these four fields (48 KiB maximum):
@@ -700,14 +702,34 @@ restarts. Observation timestamps, moving source cursors, and provider revision
 changes alone do not grant another attempt. Frozen candidates continue to reuse
 their existing output.
 
-The hold preserves the source cursor. Pending approvals, publication, and
-Person reads continue, but later source items behind that cursor can wait until
-the held input is resolved. This is a per-input spend bound, not an account-wide
-budget; changed review content or processor configuration can require a new
-extraction.
+A hold parks the meeting instead of stopping its source. Authority records it
+in `authority_live_source_held_extractions_v1` with an allowlisted failure stage
+and moves the cursor past it, so the source's later meetings continue. A parked
+import counts as consumed: its "Save to" projects are recorded as for a staged
+meeting. Cancelling an import forgets its held row. An attempt still pending
+for less than 11 minutes is treated as running elsewhere and left in place; an
+older one parks as `interrupted`. The owner's meetings status names the held
+meeting's ID, attempt and stage, and whether a retry is authorized. This is a
+per-input spend bound, not an account-wide budget; changed review content or
+processor configuration can require a new extraction.
+
+An unbilled refusal needs no operator. OpenRouter bills no non-2xx reply, so a
+first attempt refused with a 429 or 5xx before any model output is not
+held: the runtime grants that exact key one automatic retry (status shows
+`retry_authorized: true` with no `held`), keeps the meeting at the head of its
+queue and re-runs it about a minute later. A second failure, a timeout, a
+cancel or any failure after model output holds as above. Any extraction that
+fails at `rate_limited`, `temporarily_unavailable` or `timeout` also pauses all
+meeting intake for 60 s, and the model limiter pauses background calls.
+
+A stop lets running extractions finish for up to 20 s, then cancels the rest;
+each cancelled one holds as `cancelled` and needs its own grant. A deploy and
+`retry-extraction` both stop the Authority, so before granting, check the
+status for `pending` attempts and wait for them to finish.
 
 On the exact host, the human operator inspects bounded, content-free attempt
-status through the installed wrapper:
+status through the installed wrapper. A held key also shows `held: true` and
+its `failure_stage`:
 
 ```sh
 ./onboard-clean-v1.sh extraction-attempts --limit 100
@@ -735,12 +757,15 @@ refuses stale attempts, duplicate grants, lineage mismatch, and any input with
 a frozen candidate. A successful grant restarts the accepted runtime. A refusal
 or uncertain grant leaves it stopped: inspect status before resuming, and do
 not repeat the grant to recover a restart failure. Each grant permits exactly
-one reservation and preserves the previous history.
+one reservation and preserves the previous history. On the source's next check,
+the runtime re-runs only that held meeting from retained custody, without a
+provider pull or a cursor move. Success stages it for review; another failure
+holds it again at the new attempt.
 
 The private `state/extraction-attempts.sqlite` file is durable spend history.
 Keep it with the retained Authority state and backups; never delete it to clear
 a hold. Its schema and Authority lineage are checked on open. It is a separate
-versioned sidecar and does not migrate the V13 databases or require onboarding
+versioned sidecar and does not migrate the V14 databases or require onboarding
 to be repeated. Releases predating this guard do not enforce it; rolling back
 to those releases can resume repeated extraction calls.
 

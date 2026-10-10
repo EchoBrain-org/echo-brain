@@ -127,8 +127,8 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
     private readonly organizationId: string,
   ) {
     this.imported = new SqlitePersonImportedMeetingsV1(database);
-    if (database.pragma("user_version", { simple: true }) !== 13 || database.pragma("foreign_keys", { simple: true }) !== 1) {
-      throw new Error("Person items require Authority V13 with foreign keys enabled");
+    if (database.pragma("user_version", { simple: true }) !== 14 || database.pragma("foreign_keys", { simple: true }) !== 1) {
+      throw new Error("Person items require Authority V14 with foreign keys enabled");
     }
   }
 

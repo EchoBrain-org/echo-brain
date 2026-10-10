@@ -133,7 +133,7 @@ describe("private Slack interaction handler", () => {
     await handler.accept(request(body("https://example.test/actions/nope")));
     expect(feedback).toHaveBeenCalledTimes(1);
   });
-  it("acknowledges after a durable outcome when provider feedback fails or times out", async () => {
+  it("acknowledges after a durable outcome without waiting for failed or unsettled feedback", async () => {
     const signed = request(
       body("https://hooks.slack.com/actions/T000/B000/fake"),
     );
@@ -146,14 +146,13 @@ describe("private Slack interaction handler", () => {
     await expect(failure.accept(signed)).resolves.toEqual({
       kind: "acknowledged",
     });
-    const timeout = handlerWith({
-      click: () => ({ outcome: "refused" }),
-      feedback: async () => new Promise<void>(() => {}),
-      feedback_timeout_ms: 1,
-    });
-    await expect(timeout.accept(signed)).resolves.toEqual({
+    const feedback = vi.fn(() => new Promise<void>(() => {}));
+    const unsettled = handlerWith({ click: () => ({ outcome: "refused" }), feedback });
+    const turn = new Promise((resolve) => setImmediate(resolve, "still waiting"));
+    await expect(Promise.race([unsettled.accept(signed), turn])).resolves.toEqual({
       kind: "acknowledged",
     });
+    expect(feedback).toHaveBeenCalledOnce();
   });
   it("never calls the decision or feedback transport for an invalid HMAC", async () => {
     const click = vi.fn(),

@@ -359,6 +359,7 @@ export const EXTRACTION_GROUNDING_FAILURE_STAGES = [
 export type ExtractionGroundingFailureStage =
   (typeof EXTRACTION_GROUNDING_FAILURE_STAGES)[number];
 
+export const EXTRACTION_OUTPUT_JSON_FAILURE_MESSAGE = 'LLM output was not valid JSON';
 const EXTRACTION_SCHEMA_FAILURE_PREFIX =
   'LLM output did not match the extraction schema at stage: ';
 const EXTRACTION_SCHEMA_FAILURE_STAGE_SET = new Set<string>(
@@ -467,7 +468,7 @@ function rawSignals(
   } catch {
     throw new AdapterError(
       'temporarily_unavailable',
-      'LLM output was not valid JSON',
+      EXTRACTION_OUTPUT_JSON_FAILURE_MESSAGE,
       true,
     );
   }

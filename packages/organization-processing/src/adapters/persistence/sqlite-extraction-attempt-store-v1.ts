@@ -7,6 +7,7 @@ import {
   EXTRACTION_ATTEMPT_FAILURE_CODES_V1,
   type ExtractionAttemptBindingV1,
   type ExtractionAttemptCompletionV1,
+  type ExtractionAttemptInspectionV1,
   type ExtractionAttemptKeyV1,
   type ExtractionAttemptLatestV1,
   type ExtractionAttemptOutcomeV1,
@@ -131,14 +132,26 @@ export class SqliteExtractionAttemptStoreV1 implements ExtractionAttemptStoreV1 
     return row === undefined ? undefined : snapshot(row);
   }
 
+  private permitted(key: ExtractionAttemptKeyV1, attempt: number): boolean {
+    return this.database.prepare(`SELECT 1 FROM extraction_retry_permissions_v1 WHERE ${KEY_WHERE} AND after_attempt = ?`).get(...keyValues(key), attempt) !== undefined;
+  }
+
+  inspect(key: ExtractionAttemptKeyV1): ExtractionAttemptInspectionV1 | undefined {
+    return this.database.transaction(() => {
+      const latest = this.latest(key);
+      if (latest === undefined) return undefined;
+      const { completed_at: _completedAt, ...inspection } = latest;
+      return Object.freeze({ ...inspection, retry_authorized: this.permitted(key, latest.attempt) });
+    })();
+  }
+
   reserve(key: ExtractionAttemptKeyV1): ExtractionAttemptReservationV1 {
     const values = keyValues(key);
     if (this.database.inTransaction) invalid();
     return this.database.transaction((): ExtractionAttemptReservationV1 => {
       const previous = this.latest(key);
       if (previous !== undefined) {
-        const permission = this.database.prepare(`SELECT 1 FROM extraction_retry_permissions_v1 WHERE ${KEY_WHERE} AND after_attempt = ?`).get(...values, previous.attempt);
-        if (permission === undefined || previous.attempt === MAX_ATTEMPT) return { status: 'blocked', attempt: previous.attempt, outcome: previous.outcome, failure_code: previous.failure_code };
+        if (!this.permitted(key, previous.attempt) || previous.attempt === MAX_ATTEMPT) return { status: 'blocked', attempt: previous.attempt, outcome: previous.outcome, failure_code: previous.failure_code, reserved_at: previous.reserved_at };
       }
       const attempt = (previous?.attempt ?? 0) + 1;
       const claim_id = randomUUID();
@@ -158,8 +171,7 @@ export class SqliteExtractionAttemptStoreV1 implements ExtractionAttemptStoreV1 
     this.database.transaction(() => {
       const latest = this.latest(input.key);
       if (latest?.attempt !== input.attempt || latest.outcome !== 'pending') invalid();
-      const permitted = this.database.prepare(`SELECT 1 FROM extraction_retry_permissions_v1 WHERE ${KEY_WHERE} AND after_attempt = ?`).get(...values, input.attempt);
-      if (permitted !== undefined) invalid();
+      if (this.permitted(input.key, input.attempt)) invalid();
       const result = this.database.prepare(`UPDATE extraction_attempts_v1 SET outcome = ?, failure_code = ?, completed_at = ?
         WHERE ${KEY_WHERE} AND attempt = ? AND claim_id = ? AND outcome = 'pending'`).run(
         input.outcome, input.outcome === 'failed' ? input.failure_code : null, new Date().toISOString(), ...values, input.attempt, input.claim_id,
@@ -191,7 +203,8 @@ export class SqliteExtractionAttemptStoreV1 implements ExtractionAttemptStoreV1 
   }
 
   /**
-   * Caller must hold the stopped/exclusive worker lane and verify no frozen candidate already exists.
+   * An operator grant must hold the stopped/exclusive worker lane and verify no frozen candidate already exists.
+   * The cycle grants only its own just-failed, unbilled first attempt, after both frozen-result checks.
    * `recover_pending` acknowledges interrupted provider work whose billing outcome is unknown; it never proves the old worker stopped.
    * A permission authorizes exactly one subsequent reservation and is retained as immutable recovery history.
    */

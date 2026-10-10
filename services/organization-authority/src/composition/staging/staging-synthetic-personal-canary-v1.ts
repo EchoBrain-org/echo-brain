@@ -36,7 +36,8 @@ function queued(database: Database.Database, sourceKey: string, entry: string): 
 
 /**
  * Ensures the owner's synthetic source, queues this release's canary meeting,
- * runs processing passes, and reports the proposal for this release's revision.
+ * runs passes over that source only, and reports the proposal for this
+ * release's revision.
  */
 export async function runStagingSyntheticPersonalCanaryV1(input: {
   readonly database: Database.Database;
@@ -49,9 +50,9 @@ export async function runStagingSyntheticPersonalCanaryV1(input: {
   const entry = stagingSyntheticCanaryEntryV1(input.release_id);
   const revision = stagingSyntheticCanaryMeetingV1(input.release_id).provenance.canonical_revision;
   const setting = await runtime.queue({ person: stagingSyntheticOwnerV1(database), tool_id: STAGING_SYNTHETIC_TOOL_ID_V1, meeting_ids: [entry], signal });
-  // Passes are shared with other people's sources and earlier fixture imports, so allow a few.
+  // Each pass waits for one already running on this source; earlier fixture imports may be ahead, so allow a few.
   for (let pass = 0; pass < MAXIMUM_PASSES && queued(database, setting.source_key, entry); pass++) {
-    await runtime.processing.pollAndStageAdmittedMeetings(signal);
+    await runtime.pollAndStageSource(setting.source_key, signal);
   }
   signal.throwIfAborted();
   if (queued(database, setting.source_key, entry)) throw new Error('The staging synthetic canary meeting is still queued');
@@ -63,7 +64,11 @@ export async function runStagingSyntheticPersonalCanaryV1(input: {
      WHERE admission.source_key = ? AND json_extract(candidate.meeting_json, '$.id') = ?
        AND json_extract(candidate.meeting_json, '$.provenance.canonical_revision') = ?`).get(setting.source_key, STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, revision) as
     { readonly disposition: string; readonly approval_id: string | null; readonly state: string | null } | undefined;
-  if (proposal === undefined) throw new Error('The staging synthetic canary meeting was not processed');
+  if (proposal === undefined) {
+    const held = database.prepare('SELECT failure_stage FROM authority_live_source_held_extractions_v1 WHERE source_key = ? AND external_id = ? AND revision_id = ?')
+      .pluck().get(setting.source_key, STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, revision) as string | undefined;
+    throw new Error(`The staging synthetic canary meeting was not processed${held === undefined ? '' : `; it is held at ${held}`}`);
+  }
   if (proposal.disposition !== 'actionable') return { kind: 'not_actionable', approval_id: null };
   return { kind: proposal.state === 'staged' ? 'staged' : 'not_staged', approval_id: proposal.approval_id };
 }

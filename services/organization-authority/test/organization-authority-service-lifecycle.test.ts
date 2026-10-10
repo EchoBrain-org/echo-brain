@@ -13,6 +13,7 @@ import type {
   OrganizationAuthorityApiRuntimeConfig,
   RunningOrganizationAuthorityApiRuntime,
 } from "../src/composition/organization-authority-api-runtime.js";
+import { approvalCoreFixture } from "./fixtures/approval-core.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -115,6 +116,19 @@ describe("Organization Authority service lifecycle", () => {
     expect(search).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
   });
+  it("binds after a recovery pass in which one approval row cannot publish", async () => {
+    const f = await approvalCoreFixture();
+    f.core.decide("desktop", f.approve(), () => f.session);
+    const poisoned = f.withAppend(async () => { throw new Error("row cannot publish"); }).processing;
+    const runtime = await startLifecycle(60_000, {
+      processing: processing([]),
+      additional_processing: { ...processing([]), recoverV4Appends: poisoned.recoverV4Appends },
+    });
+    try {
+      expect(runtime.address.port).toBe(14_000);
+      expect(f.core.proposal(f.approvalId)!.status).toBe("publishing");
+    } finally { await runtime.close(); }
+  });
   it("coalesces search wakes at completion and failure boundaries without self-retrying failures", async () => {
     vi.useFakeTimers();
     const blocked = deferred();
@@ -205,6 +219,92 @@ describe("Organization Authority service lifecycle", () => {
     expect(telemetry).toContainEqual(expect.objectContaining({ cycle_phase: "search_reconciliation", event: "failed", failure_class: "cancelled", retryable: false }));
   });
 
+  it("closes database handles only after an abort-ignoring source pass outside the gate settles", async () => {
+    vi.useFakeTimers();
+    const pass = deferred();
+    const events: string[] = [];
+    const runtime = await startLifecycle(1_000, {
+      processing: processing([]),
+      additional_processing: { ...processing([]), pollAndStageAdmittedMeetings: async () => { events.push("pass"); await pass.promise; events.push("pass-settled"); } },
+      clear_readable_search_handle: () => { events.push("handle-clear"); },
+    }, events);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(events.at(-1)).toBe("pass");
+    const closing = runtime.close();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(events).not.toContain("api-close");
+    pass.resolve();
+    await closing;
+    expect(events.slice(-3)).toEqual(["pass-settled", "api-close", "handle-clear"]);
+  });
+
+  it("gives the personal intake a reporter, and drains and closes handles only after its detached lanes settle", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    let lanes = deferred(), cycle: AbortSignal | undefined;
+    const runtime = await startLifecycle(1_000, {
+      processing: processing([]),
+      additional_processing: { ...processing([]),
+        pollAndStageAdmittedMeetings: async (signal, report) => { cycle = signal; events.push(report === undefined ? "in-place" : "lanes"); },
+        settle: async () => { await lanes.promise; events.push(cycle?.aborted ? "settled-after-stop" : "settled"); } },
+      clear_readable_search_handle: () => { events.push("handle-clear"); },
+    }, events);
+    await vi.advanceTimersByTimeAsync(1);
+    let drained = false;
+    const draining = runtime.drain(new AbortController().signal).then(() => { drained = true; });
+    await vi.advanceTimersByTimeAsync(1);
+    expect([events, drained]).toEqual([["handle-clear", "lanes"], false]);
+    lanes.resolve(); await draining;
+    lanes = deferred();
+    const closing = runtime.close();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(events).not.toContain("api-close");
+    lanes.resolve(); await closing;
+    // Close settles the lanes first within its grace, then again once the worker has stopped.
+    expect(events).toEqual(["handle-clear", "lanes", "settled", "settled", "settled-after-stop", "api-close", "handle-clear"]);
+  });
+
+  it.each([[19_000, "staged"], [30_000, "cancelled"]] as const)("lets a meeting lane that needs %i ms finish within close's 20 s grace (%s), and starts no cycle meanwhile", async (needs, outcome) => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    let lane: Promise<void> | undefined, cycles = 0;
+    const runtime = await startLifecycle(1_000, {
+      processing: processing([]),
+      additional_processing: { ...processing([]),
+        pollAndStageAdmittedMeetings: async (signal) => {
+          cycles++;
+          lane ??= new Promise<void>((resolve) => {
+            const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); events.push(signal.aborted ? "cancelled" : "staged"); resolve(); };
+            const timer = setTimeout(done, needs);
+            signal.addEventListener("abort", done, { once: true });
+          });
+        },
+        settle: async (stop) => { if (stop === true) events.push("stop"); await lane; } },
+    }, events);
+    await vi.advanceTimersByTimeAsync(1);
+    const closing = runtime.close(), started = cycles;
+    await vi.advanceTimersByTimeAsync(30_000); await closing;
+    expect([events, cycles]).toEqual([["stop", outcome, "api-close"], started]);
+  });
+
+  it("requests card presentation when a detached lane settles after its cycle returned, before the next cycle", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    let laneSettled: (() => void) | undefined;
+    const runtime = await startLifecycle(1_000, {
+      processing: processing([]),
+      additional_processing: { ...processing([]), pollAndStageAdmittedMeetings: async (_signal, _report, settled) => { laneSettled ??= settled; },
+        reconcileApprovalPresentations: async () => { events.push("present"); } },
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(events).toEqual(["present"]);
+      laneSettled?.();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(events).toEqual(["present", "present"]);
+    } finally { await runtime.close(); }
+  });
+
   it("keeps operator mutations exclusive from search and writer work", async () => {
     vi.useFakeTimers();
     const blockedSearch = deferred();
@@ -228,6 +328,26 @@ describe("Organization Authority service lifecycle", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(events.slice(-4)).toEqual(["operator-end", "finalize", "append", "reconcile"]);
     } finally { blockedSearch.resolve(); blockedOperator.resolve(); await runtime.close(); }
+  });
+
+  it("runs ungated operator work beside publication and search, and closes handles only after it settles", async () => {
+    vi.useFakeTimers();
+    const work = deferred();
+    const events: string[] = [];
+    const runtime = await startLifecycle(60_000, { processing: processing(events) }, events);
+    await vi.advanceTimersByTimeAsync(1);
+    events.length = 0;
+    const canary = runtime.runUngated(async (signal) => { events.push("canary"); await work.promise; return signal.aborted; });
+    runtime.requestApprovalPublication();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(events).toEqual(["canary", "finalize", "append", "reconcile"]);
+    const closing = runtime.close();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(events).not.toContain("api-close");
+    work.resolve();
+    await expect(canary).resolves.toBe(true);
+    await closing;
+    expect(events.at(-1)).toBe("api-close");
   });
 
   it("bounds drain waiting without cancelling shared search", async () => {
@@ -289,6 +409,7 @@ describe("Organization Authority service lifecycle", () => {
     expect(runtime.address.port).toBe(14_000);
     expect(events).toEqual([
       "recover",
+      "handle-clear", // Startup fully validates even a warm generation.
       "reconcile",
       "api-start",
       "recover",
@@ -299,19 +420,22 @@ describe("Organization Authority service lifecycle", () => {
     ]);
 
     await runtime.close();
-    expect(events.slice(8)).toEqual(["api-close", "handle-clear"]);
+    expect(events.slice(9)).toEqual(["api-close", "handle-clear"]);
   });
 
-  it("retries after an interrupted V4 append with recovery before another source poll", async () => {
+  it("retries after an interrupted V4 append with recovery before another source poll, still waking search and presentation", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
     let attempts = 0;
     const errors: string[] = [];
     const runtime = await startLifecycle(100, {
-      processing: processing(events, async () => {
-        attempts += 1;
-        if (attempts === 1) throw new Error("append interrupted");
-      }),
+      processing: {
+        ...processing(events, async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("append interrupted");
+        }),
+        reconcileApprovalPresentations: async () => { events.push("presentation"); },
+      },
       on_worker_error: (error) => {
         errors.push(error.message);
       },
@@ -324,11 +448,13 @@ describe("Organization Authority service lifecycle", () => {
       "stage",
       "finalize",
       "append",
+      "reconcile",
+      "presentation",
     ]);
     expect(errors).toEqual(["append interrupted"]);
 
     await vi.advanceTimersByTimeAsync(101);
-    expect(events.slice(6)).toEqual(["recover", "stage", "finalize", "append", "reconcile"]);
+    expect(events.slice(8)).toEqual(["recover", "stage", "finalize", "append", "reconcile", "presentation"]);
     expect(errors).toEqual(["append interrupted"]);
 
     await runtime.close();
@@ -442,7 +568,7 @@ describe("Organization Authority service lifecycle", () => {
       }),
     ).rejects.toThrow("generation reconciliation interrupted");
     expect(startApi).not.toHaveBeenCalled();
-    expect(events).toEqual(["recover", "reconcile", "handle-clear"]);
+    expect(events).toEqual(["recover", "handle-clear", "reconcile", "handle-clear"]);
     expect(telemetry).toMatchObject([
       { event: "started", cycle_phase: "recovery" },
       { event: "succeeded", cycle_phase: "recovery" },
@@ -584,6 +710,22 @@ describe("Organization Authority service lifecycle", () => {
       }),
     );
     await runtime.close();
+  });
+
+  it("reports a notes enrichment failure and still runs the cycle's personal intake and publication", async () => {
+    vi.useFakeTimers();
+    const personal: string[] = [];
+    const errors: string[] = [];
+    const runtime = await startLifecycle(60_000, {
+      processing: { ...processing([]), pollAndStageAdmittedMeetings: async () => { throw new Error("notes item failed"); } },
+      additional_processing: processing(personal),
+      on_worker_error: (error) => errors.push(error.message),
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(personal).toEqual(["recover", "recover", "stage", "finalize", "append"]);
+      expect(errors).toEqual(["notes item failed"]);
+    } finally { await runtime.close(); }
   });
 
   it("does not reconcile after append observes cancellation", async () => {
@@ -744,13 +886,14 @@ describe("Organization Authority service lifecycle", () => {
     }
   });
 
-  it("retains an approval-card wake that arrives during an active presentation", async () => {
+  it("publishes while a card presentation is blocked and retains the wake that publication sends", async () => {
     vi.useFakeTimers();
     const active = deferred();
+    const events: string[] = [];
     let presentationCalls = 0;
     const runtime = await startLifecycle(30_000, {
       processing: {
-        ...processing([]),
+        ...processing(events),
         reconcileApprovalPresentations: async () => {
           presentationCalls += 1;
           if (presentationCalls === 1) await active.promise;
@@ -761,8 +904,11 @@ describe("Organization Authority service lifecycle", () => {
     try {
       await vi.advanceTimersByTimeAsync(1);
       expect(presentationCalls).toBe(1);
+      events.length = 0;
 
       runtime.requestApprovalPublication();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(events).toEqual(["finalize", "append", "reconcile"]);
       active.resolve();
       await vi.advanceTimersByTimeAsync(10);
       await runtime.drain(new AbortController().signal);
@@ -816,9 +962,10 @@ describe("Organization Authority service lifecycle", () => {
     const runtime = await startLifecycle(30_000, {
       processing: {
         ...processing(events),
-        reconcileApprovalPresentations: async () => {
+        reconcileApprovalPresentations: async (signal) => {
           presentationCalls += 1;
-          await active.promise;
+          await active.promise; // Deliberately ignores abort until it settles.
+          events.push(signal.aborted ? "presentation-cancelled" : "presentation-settled");
           return "idle";
         },
       },
@@ -828,56 +975,42 @@ describe("Organization Authority service lifecycle", () => {
       expect(presentationCalls).toBe(1);
 
       const closing = runtime.close();
+      await vi.advanceTimersByTimeAsync(1);
       expect(events).not.toContain("api-close");
       active.resolve();
       await closing;
 
-      expect(events.at(-1)).toBe("api-close");
+      expect(events.slice(-2)).toEqual(["presentation-cancelled", "api-close"]);
     } finally {
       active.resolve();
       await runtime.close();
     }
   });
 
-  it("coalesces requests that arrive while one is waiting for the gate", async () => {
+  it("publishes coalesced requests within one tick, with no gate wait, while source intake waits on a provider", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
-    let releaseStage: (() => void) | undefined;
-    const slow = processing(events);
+    const gateWaits: unknown[] = [];
     const runtime = await startLifecycle(60_000, {
-      processing: {
-        ...slow,
-        pollAndStageAdmittedMeetings: async () => {
-          events.push("stage");
-          await new Promise<void>((resolve) => {
-            releaseStage = resolve;
-          });
-        },
-      },
+      processing: processing(events),
+      additional_processing: { ...processing([]), pollAndStageAdmittedMeetings: (signal) => new Promise<void>((_resolve, reject) => {
+        events.push("intake");
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }) },
+      core_runtime_observation: { observer: (event) => { if (event.phase === "worker_request" && event.event === "succeeded") gateWaits.push(event.counts.gate_wait_ms); } },
     }, events);
-    await vi.advanceTimersByTimeAsync(0);
-    // The first periodic cycle is now parked inside source intake.
-    expect(events.at(-1)).toBe("stage");
-    events.length = 0;
-
-    runtime.requestApprovalPublication();
-    runtime.requestApprovalPublication();
-    runtime.requestApprovalPublication();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(events).toEqual([]);
-
-    releaseStage?.();
-    await vi.advanceTimersByTimeAsync(0);
-
-    // The cycle finishes its own phases first, then exactly one publication.
-    expect(events).toEqual([
-      "finalize",
-      "append",
-      "finalize",
-      "append",
-      "reconcile",
-    ]);
-    await runtime.close();
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      // The first periodic cycle never leaves source intake.
+      expect(events.at(-1)).toBe("intake");
+      events.length = 0;
+      gateWaits.length = 0;
+      runtime.requestApprovalPublication();
+      runtime.requestApprovalPublication();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(events).toEqual(["finalize", "append", "reconcile"]);
+      expect(gateWaits).toEqual([0]);
+    } finally { await runtime.close(); }
   });
 
   it("schedules exactly one follow-up for a request made mid-publication", async () => {
@@ -937,12 +1070,13 @@ describe("Organization Authority service lifecycle", () => {
 
     failNext = true;
     runtime.requestApprovalPublication();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(events).toEqual(["finalize", "append"]);
+    await vi.advanceTimersByTimeAsync(1);
+    // A failed wake still requests search: it derives only from the record log.
+    expect(events).toEqual(["finalize", "append", "reconcile"]);
     expect(errors.map((error) => error.message)).toEqual(["append unavailable"]);
 
     await vi.advanceTimersByTimeAsync(1_001);
-    expect(events.slice(2)).toEqual([
+    expect(events.slice(3)).toEqual([
       "recover",
       "stage",
       "finalize",

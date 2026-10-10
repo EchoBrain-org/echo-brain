@@ -1,7 +1,7 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyAuthorityBaselineV13 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV14 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import {
   ReadableSearchGenerationReconcilerV1,
   type ReadableSearchGenerationReconcilerV1Options,
@@ -20,7 +20,7 @@ const databases: Database.Database[] = [];
 function database(): Database.Database {
   const value = new Database(":memory:");
   databases.push(value);
-  applyAuthorityBaselineV13(value);
+  applyAuthorityBaselineV14(value);
   value
     .prepare(
       `INSERT INTO authority_metadata (
@@ -133,6 +133,23 @@ describe("readable-search generation reconciliation", () => {
     ).resolves.toEqual({ status: "current", record_head: current });
     expect(capture).toHaveBeenCalledTimes(1);
     expect(build).toHaveBeenCalledTimes(1);
+  });
+
+  it("validates every build but skips an unchanged head whose generation is still warm", async () => {
+    const current = head(2);
+    let warm = true;
+    const prepare = vi.fn();
+    const isWarm = vi.fn(() => warm);
+    const value = reconciler(database(), current, { prepare_generation: prepare, is_generation_warm: isWarm });
+    await expect(value.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "published" });
+    expect(isWarm).not.toHaveBeenCalled();
+    expect(prepare).toHaveBeenCalledOnce();
+    await expect(value.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "current" });
+    expect(isWarm).toHaveBeenCalledWith(generation(current));
+    expect(prepare).toHaveBeenCalledOnce();
+    warm = false; // The handle was cleared.
+    await expect(value.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "current" });
+    expect(prepare).toHaveBeenCalledTimes(2);
   });
 
   it("rebuilds when only the immutable retrieval contract changes at an unchanged head", async () => {

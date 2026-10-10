@@ -28,40 +28,27 @@ export interface PrivateSlackApprovalInteractionHandlerInputV1 {
     | Promise<{
         readonly outcome: "decided" | "already_decided" | "stale" | "refused";
       }>;
+  /** Never awaited and never changes an already durable decision; the transport bounds its own POST. */
   readonly feedback?: (input: {
     readonly response_url: string;
     readonly text: string;
   }) => Promise<void>;
-  /** Bounded provider feedback never changes an already durable decision. */
-  readonly feedback_timeout_ms?: number;
   readonly now_unix_seconds?: () => number;
   readonly on_rejection?: (event: {
     readonly stage: PrivateSlackApprovalInteractionRejectionStageV1;
   }) => void;
 }
-async function sendFeedbackBestEffort(input: {
-  readonly feedback: (value: {
-    readonly response_url: string;
-    readonly text: string;
-  }) => Promise<void>;
-  readonly value: { readonly response_url: string; readonly text: string };
-  readonly timeout_ms: number;
-}): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+async function sendFeedbackBestEffort(
+  feedback: NonNullable<PrivateSlackApprovalInteractionHandlerInputV1["feedback"]>,
+  value: { readonly response_url: string; readonly text: string },
+): Promise<void> {
   try {
-    await Promise.race([
-      input.feedback(input.value),
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, input.timeout_ms);
-      }),
-    ]);
+    await feedback(value);
   } catch {
     // Slack feedback is best effort after the core's durable outcome.
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
   }
 }
-/** Verifies, parses and durably decides before acknowledgement. Provider feedback only uses a validated response URL. */
+/** Verifies, parses and durably decides before acknowledgement. Provider feedback only uses a validated response URL and never delays the acknowledgement. */
 export function createPrivateSlackApprovalInteractionHandlerV1(
   input: PrivateSlackApprovalInteractionHandlerInputV1,
 ): PrivateSlackApprovalInteractionHttpPortV1 {
@@ -138,13 +125,8 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
         text !== undefined &&
         response_url !== undefined &&
         input.feedback !== undefined
-      ) {
-        await sendFeedbackBestEffort({
-          feedback: input.feedback,
-          value: { response_url, text },
-          timeout_ms: input.feedback_timeout_ms ?? 5_000,
-        });
-      }
+      )
+        void sendFeedbackBestEffort(input.feedback, { response_url, text });
       return ACKNOWLEDGED;
     },
   });

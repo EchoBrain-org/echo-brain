@@ -51,6 +51,7 @@ import {
 } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { join } from "node:path";
+import { createModelCallLimiterV1 } from "./model-call-limiter-v1.js";
 import { openStagingSyntheticPersonalProviderV1 } from "./staging/staging-synthetic-personal-provider-v1.js";
 import { runStagingSyntheticPersonalCanaryV1 } from "./staging/staging-synthetic-personal-canary-v1.js";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
@@ -75,6 +76,7 @@ import type { DecisionProcessorBundleV1 } from "@echo-brain/organization-process
 export interface OrganizationAuthorityServiceConfig extends Omit<
   OrganizationAuthorityRuntimeConfig,
   | "answer_composition_generation_bundle"
+  | "model_call_limiter"
   | "record_policy_fact_projectors"
   | "record_input_codecs"
   | "run_staging_synthetic_canary"
@@ -178,8 +180,11 @@ export async function openOrganizationAuthorityService(
     { ...sharedConfig, slack_nango },
     dependencies.slack,
   );
+  // One limiter for every call on the OpenRouter credential: extraction here, Ask and the rest in the runtime.
+  const modelCalls = createModelCallLimiterV1();
   const decisionProcessor = createOpenRouterDecisionProcessorBundleV1({
     credential_file: openrouter_credential_file,
+    limit: (signal, op) => modelCalls.run("background", signal, op),
   });
   // One instance for the personal appender and the Authority's readers.
   const policyProjectors = authorityRecordPolicyProjectorsV1();
@@ -365,6 +370,7 @@ export async function openOrganizationAuthorityService(
           projectors: policyProjectors,
           nango_authorization: () => slack_nango.secret_key,
           provider_applications: [interaction],
+          ...(sharedConfig.core_runtime_observation === undefined ? {} : { observation: sharedConfig.core_runtime_observation }),
           approval_core: {
             after_record: [
               enqueueApprovedRecordRunV1(
@@ -552,6 +558,7 @@ export async function openOrganizationAuthorityService(
         createOpenRouterAnswerCompositionGenerationBundleV1({
           credential_file: openrouter_credential_file,
         }),
+      model_call_limiter: modelCalls,
       record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1,
       record_policy_fact_projectors: policyProjectors,
       ...(!stagingSelected

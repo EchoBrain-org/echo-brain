@@ -12,12 +12,12 @@ Staging alone does not finish that workflow or make a client available to
 The runtime-profile field is current-only. A pre-beta Authority prepared with
 an older release record has no compatibility bridge. `clean-v1` describes an
 artifact replacement loop, not a database migration: it accepts only the
-current Authority V13, control-plane V4, record-log V4,
+current Authority V14, control-plane V4, record-log V4,
 retrieval facts V3, retrieval content/lexical V2, and six-role V2 root lineage.
 For populated state, `stage` pulls the immutable
 candidate and runs its state-lineage and admitted-processor verifiers in an
 isolated read-only container before any runtime, configuration, or state
-mutation. V13 is fresh-state only: the founder confirmed that existing
+mutation. V14 is fresh-state only: the founder confirmed that existing
 development data is disposable and there are no live users, so the earlier
 pre-V10 staging conversions and offline copiers were removed (git history keeps
 them). The historical project-context sprint used fresh V7 state and PC-06 reset/reseed,
@@ -444,7 +444,7 @@ recovery as unconfirmed.
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
 does not query SQLite or print credentials. No state migration operation
 exists; a schema change requires fresh state.
-If persisted state lacks the candidate's exact V13/V3/V4 databases, current retrieval schemas, and
+If persisted state lacks the candidate's exact V14/V3/V4 databases, current retrieval schemas, and
 V2 root lineage, `stage` refuses before activating or recording the candidate. It does
 not attempt to repair, infer, or migrate the state.
 

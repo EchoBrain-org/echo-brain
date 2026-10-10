@@ -20,7 +20,8 @@ import type {
   MeetingProcessingWorkerPhaseV1,
 } from "./meeting-processing-worker-lifecycle.js";
 import type { AdmittedMeetingSourceCursorPolicyV1 } from "./admitted-meeting-source-cursor-policy-v1.js";
-import type { ExtractionAttemptStoreV1 } from "./extraction-attempt-store-v1.js";
+import type { ExtractionAttemptKeyV1, ExtractionAttemptReservationV1, ExtractionAttemptStoreV1 } from "./extraction-attempt-store-v1.js";
+import { classifyExtractionFailureStageV1, unbilledExtractionFailureV1, type ExtractionFailureStageV1 } from "./extraction-failure-stage-v1.js";
 import {
   reviewInputSha256V1,
   reviewLineageIdV1,
@@ -29,6 +30,13 @@ import {
 } from "./review-lineage-semantics.js";
 
 const MAXIMUM_PULL_LIMIT = 1;
+/**
+ * A pending attempt younger than this may still be running elsewhere; it outlasts the 600 s extraction timeout.
+ * It assumes the model-call limiter's queue wait, which that timeout does not count, fits in the margin. A longer
+ * wait during a two-process overlap can park a live extraction as interrupted: never a second spend, but its late
+ * result may not stage.
+ */
+const EXTRACTION_IN_FLIGHT_MS = 660_000;
 
 export interface AdmittedMeetingProcessingAdmissionV1 {
   readonly source: {
@@ -51,7 +59,9 @@ export interface AdmittedMeetingProcessingAdmissionV1 {
 /**
  * The Authority-owned persistence boundary. `advanceCursor` must compare the
  * supplied cursor with the durable current cursor, so a stale runner can never
- * overwrite a newer checkpoint.
+ * overwrite a newer checkpoint. Staging, parking and advancing may accept a
+ * checkpoint whose queue changed since the pull only by other imports, while
+ * the pulled one is still queued; the advance keeps those changes.
  */
 export interface AuthorityMeetingProcessingStateV1 {
   readAdmission(): Promise<AdmittedMeetingProcessingAdmissionV1>;
@@ -72,6 +82,40 @@ export interface AuthorityMeetingProcessingStateV1 {
     readonly expected_cursor: string;
     readonly next_cursor: string;
   }): Promise<"advanced" | "state_drift" | "revoked">;
+  /**
+   * Durably parks a retained revision whose extraction failed, under its exact
+   * attempt-ledger key, and returns the stage it holds: the stored stage is kept
+   * while the key and attempt are unchanged. Never moves the cursor; parks
+   * nothing when the pull no longer applies (its import was cancelled).
+   */
+  holdExtraction(input: HoldExtractionInputV1): Promise<ExtractionFailureStageV1>;
+  /** This source's parked revisions, oldest first. */
+  listHeldExtractions(): Promise<readonly HeldExtractionV1[]>;
+  /** Rebuilds a parked revision from retained source custody, digests verified. */
+  readHeldMeeting(held: HeldExtractionV1): Promise<MeetingDocument>;
+  /** Drops a parked revision whose exact revision already has a frozen candidate. */
+  releaseHeldExtraction(held: HeldExtractionV1): Promise<void>;
+}
+
+export interface HoldExtractionInputV1 {
+  readonly meeting: MeetingDocument;
+  readonly key: ExtractionAttemptKeyV1;
+  readonly attempt: number;
+  readonly failure_stage: ExtractionFailureStageV1;
+  /** The cursor the revision was pulled at and the pull's next one; nothing is parked once that pull no longer applies. */
+  readonly expected_cursor?: string;
+  readonly next_cursor?: string;
+}
+
+/** A parked revision: identifiers and an allowlisted stage only, never meeting text. */
+export interface HeldExtractionV1 {
+  readonly external_id: string;
+  readonly source_id: string;
+  readonly revision_id: string;
+  readonly key: ExtractionAttemptKeyV1;
+  readonly attempt: number;
+  readonly failure_stage: ExtractionFailureStageV1;
+  readonly held_at: string;
 }
 
 export interface MeetingProcessingCandidateSnapshotInputV1 {
@@ -79,6 +123,8 @@ export interface MeetingProcessingCandidateSnapshotInputV1 {
   readonly meeting: MeetingDocument;
   readonly decisions: DecisionSet;
   readonly review_policy: ReviewPolicySnapshotV1;
+  /** The pull's next cursor; with it, a queue changed since the pull only by other imports still stages. */
+  readonly next_cursor?: string;
 }
 
 interface MeetingProcessingCandidateBaseV1 {
@@ -146,10 +192,13 @@ export interface ApprovalWorkflowStagerV1 {
     input: ApprovalWorkflowStageInputV1,
     context?: { readonly signal: AbortSignal },
   ): Promise<ApprovalWorkflowStageResultV1>;
-  /** Freezes queued proposals independently of source intake. */
+  /**
+   * Freezes queued proposals independently of source intake. It may resolve
+   * true when it froze one or read a full page, so more may be left now.
+   */
   reconcilePendingDeliveries(
     context?: { readonly signal: AbortSignal },
-  ): Promise<void>;
+  ): Promise<boolean | void>;
   /** Reconciles obsolete presentations; may be a no-op when presenters redraw from the proposal. */
   reconcileSuperseded(
     context?: { readonly signal: AbortSignal },
@@ -206,6 +255,23 @@ export type AdmittedMeetingProcessingCycleResultV1 =
   | {
       readonly kind: "already_processed_cursor_not_advanced";
       readonly reason: "revoked" | "state_drift";
+      readonly cursor_advanced: false;
+    }
+  | {
+      /** The revision is durably parked; later meetings no longer wait behind it. */
+      readonly kind: "held";
+      readonly stage: ExtractionFailureStageV1;
+      readonly cursor_advanced: boolean;
+    }
+  | {
+      /** Another runner's attempt on this revision is still within its lease: nothing parks or moves. */
+      readonly kind: "in_flight";
+      readonly cursor_advanced: false;
+    }
+  | {
+      /** An unbilled first failure: its exact key has one automatic retry, and the revision stays at the head. */
+      readonly kind: "retry_scheduled";
+      readonly stage: ExtractionFailureStageV1;
       readonly cursor_advanced: false;
     };
 
@@ -286,6 +352,53 @@ function inputFingerprint(
   ])}`;
 }
 
+/** The attempt-ledger key: one paid attempt per admitted source/processor and bounded review input. */
+function extractionAttemptKeyV1(
+  admission: AdmittedMeetingProcessingAdmissionV1,
+  meeting: MeetingDocument,
+): ExtractionAttemptKeyV1 {
+  return {
+    admission_sha256: canonicalSha256({
+      schema_version: 1,
+      kind: "echo-meeting-extraction-admission-v1",
+      source: {
+        adapter_id: admission.source.adapter_id,
+        instance_id: admission.source.instance_id,
+        version: admission.source.version,
+        cutoff_at: admission.source.cutoff_at,
+      },
+      processor: { ...admission.processor },
+    }),
+    review_lineage_id: reviewLineageIdV1({
+      adapter_id: meeting.provenance.source.adapter_id,
+      instance_id: meeting.provenance.source.instance_id,
+      external_id: meeting.provenance.external_id,
+    }),
+    review_input_sha256: reviewInputSha256V1({
+      meeting,
+      processor: {
+        adapter_id: admission.processor.adapter_id,
+        instance_id: admission.processor.instance_id,
+        version: admission.processor.version,
+        configuration_sha256: admission.processor.configuration_sha256,
+      },
+    }),
+  };
+}
+
+/**
+ * The stage a blocked reservation parks with when no held row already names one.
+ * A pending reservation reaches here only once it is older than the in-flight
+ * lease (the blocked branch returns in_flight first), so it parks as interrupted.
+ */
+function blockedExtractionStageV1(
+  blocked: Extract<ExtractionAttemptReservationV1, { readonly status: "blocked" }>,
+): ExtractionFailureStageV1 {
+  if (blocked.outcome === "pending") return "interrupted";
+  if (blocked.outcome === "succeeded") return "output_not_saved";
+  return blocked.failure_code === "cancelled" ? "cancelled" : "not_recorded";
+}
+
 function operationContext(
   signal: AbortSignal | undefined,
 ): { readonly signal: AbortSignal } | undefined {
@@ -355,9 +468,19 @@ function rebindDecisionsToRevision(
 /**
  * Performs exactly one serialized source poll. It never imports history: its
  * only cursor comes from a previously admitted source, and
- * it advances that cursor only after either a verified empty provider page or
+ * it advances that cursor only after a verified empty provider page, after
  * the candidate and approval outbox are durably recorded for independent
- * delivery.
+ * delivery, or after a revision whose extraction failed is durably parked
+ * (only with an attempt ledger). An aborted run parks nothing itself; the next
+ * poll parks its revision as `cancelled`. A parked
+ * revision stays in source custody for an operator-authorized retry
+ * (`retryHeldOnce`). A revision whose pending attempt is still within its lease
+ * is left in place (`in_flight`) for a later poll. A first attempt the provider
+ * refused unbilled (a 429 or 5xx reply, no output) is not parked: its exact key
+ * gets one automatic retry and the revision stays at the head
+ * (`retry_scheduled`); any later failure parks. Advancing past a queued
+ * import consumes it, so its "Save to" projects are recorded as suggestions
+ * whether its revision was staged or parked.
  */
 export class AdmittedMeetingProcessingCycleV1 {
   private running: Promise<AdmittedMeetingProcessingCycleResultV1> | undefined;
@@ -370,8 +493,24 @@ export class AdmittedMeetingProcessingCycleV1 {
   }
 
   runOnce(signal?: AbortSignal): Promise<AdmittedMeetingProcessingCycleResultV1> {
+    return this.once(() => this.run(() => this.processSource(signal), signal));
+  }
+
+  /**
+   * Re-runs the oldest parked revision whose exact attempt key an operator
+   * authorized, from source custody. It never pulls from the provider and
+   * never moves the cursor; the reservation consumes the grant, and without
+   * one it blocks before any model call. Shares runOnce's single flight.
+   */
+  retryHeldOnce(signal?: AbortSignal): Promise<AdmittedMeetingProcessingCycleResultV1> {
+    return this.once(() => this.run(() => this.retryHeld(signal), signal));
+  }
+
+  private once(
+    start: () => Promise<AdmittedMeetingProcessingCycleResultV1>,
+  ): Promise<AdmittedMeetingProcessingCycleResultV1> {
     if (this.running !== undefined) return this.running;
-    const run = this.run(signal);
+    const run = start();
     this.running = run;
     const release = (): void => {
       if (this.running === run) this.running = undefined;
@@ -381,10 +520,11 @@ export class AdmittedMeetingProcessingCycleV1 {
   }
 
   private async run(
+    work: () => Promise<AdmittedMeetingProcessingCycleResultV1>,
     signal: AbortSignal | undefined,
   ): Promise<AdmittedMeetingProcessingCycleResultV1> {
     let result: AdmittedMeetingProcessingCycleResultV1;
-    try { result = await this.processSource(signal); }
+    try { result = await work(); }
     catch (error) {
       if (error instanceof AdapterError && signal?.aborted !== true) {
         await this.options.stager.reconcilePendingDeliveries(operationContext(signal));
@@ -400,6 +540,41 @@ export class AdmittedMeetingProcessingCycleV1 {
       signal,
     );
     return result;
+  }
+
+  private async retryHeld(
+    signal: AbortSignal | undefined,
+  ): Promise<AdmittedMeetingProcessingCycleResultV1> {
+    signal?.throwIfAborted();
+    const admission = await this.options.state.readAdmission();
+    assertAdmissionMatchesAdapters(
+      admission,
+      this.options.source,
+      this.options.processor,
+      this.options.source_cursor_policy,
+    );
+    const attempts = this.options.extraction_attempts;
+    const held = attempts === undefined ? undefined
+      : (await this.options.state.listHeldExtractions()).find((row) => attempts.inspect(row.key)?.retry_authorized === true);
+    if (held === undefined) return { kind: "empty", cursor_advanced: false };
+    const meeting = await this.options.state.readHeldMeeting(held);
+    assertCanonicalMeetingDocument(meeting, this.options.source.identity);
+    const key = extractionAttemptKeyV1(admission, meeting);
+    if (
+      key.admission_sha256 !== held.key.admission_sha256 ||
+      key.review_lineage_id !== held.key.review_lineage_id ||
+      key.review_input_sha256 !== held.key.review_input_sha256
+    ) {
+      throw new Error("held extraction key differs from its custody");
+    }
+    const frozen = await this.options.state.readFrozenCandidateForSourceRevision({
+      external_id: meeting.provenance.external_id,
+      canonical_revision: meeting.provenance.canonical_revision,
+    });
+    // Already processed: the revision is no longer held, and its grant is never spent.
+    if (frozen !== undefined) await this.options.state.releaseHeldExtraction(held);
+    // No next cursor: a retry from custody never advances intake.
+    return this.processMeeting(admission, meeting, frozen, undefined, signal, true);
   }
 
   private async processSource(
@@ -459,7 +634,6 @@ export class AdmittedMeetingProcessingCycleV1 {
             };
       }
       assertCanonicalMeetingDocument(meeting, this.options.source.identity);
-      const reviewPolicy = legacyRestrictedReviewerReviewPolicySnapshotV1;
       const frozen =
         await this.options.state.readFrozenCandidateForSourceRevision({
         external_id: meeting.provenance.external_id,
@@ -470,12 +644,29 @@ export class AdmittedMeetingProcessingCycleV1 {
         admission,
         batch,
         meeting,
-        reviewPolicy,
         frozen,
       };
     }, signal);
     if (intake.kind === "complete") return intake.result;
-    const { admission, batch, meeting, reviewPolicy, frozen } = intake;
+    const { admission, batch, meeting, frozen } = intake;
+    return this.processMeeting(admission, meeting, frozen, batch.next_cursor, signal);
+  }
+
+  /**
+   * One admitted revision: frozen-result reuse, at most one reserved
+   * extraction, then the candidate and its proposal. `fromCustody` marks an
+   * operator retry, which stages against the current admission because it
+   * never moves the cursor.
+   */
+  private async processMeeting(
+    admission: AdmittedMeetingProcessingAdmissionV1,
+    meeting: MeetingDocument,
+    frozen: FrozenMeetingProcessingCandidateSnapshotV1 | undefined,
+    nextCursor: string | undefined,
+    signal: AbortSignal | undefined,
+    fromCustody = false,
+  ): Promise<AdmittedMeetingProcessingCycleResultV1> {
+    const reviewPolicy = legacyRestrictedReviewerReviewPolicySnapshotV1;
     annotateCoreRuntimeV1({ source_revision: coreRuntimeIdentityV1("source_revision", JSON.stringify([meeting.provenance.external_id, meeting.provenance.canonical_revision])) });
     if (frozen !== undefined) {
       return this.phase(
@@ -485,12 +676,14 @@ export class AdmittedMeetingProcessingCycleV1 {
             frozen.disposition === "actionable" &&
             frozen.state === "queued"
           ) {
+            // Advance from this poll's cursor, the one its next cursor was
+            // computed from; the snapshot's own cursor may be older.
             return this.stageAndAdvance(
               frozen,
-              frozen.admission,
+              admission,
               frozen.meeting,
               frozen.decisions,
-              batch.next_cursor,
+              nextCursor,
               signal,
             );
           }
@@ -500,31 +693,20 @@ export class AdmittedMeetingProcessingCycleV1 {
           return this.finishWithoutStage(
             "already_processed",
             admission,
-            batch.next_cursor,
+            nextCursor,
           );
         },
         signal,
       );
     }
-    const decisions = await this.phase("extraction", async () => {
-      const reviewInputSha256 = reviewInputSha256V1({
-        meeting,
-        processor: {
-          adapter_id: admission.processor.adapter_id,
-          instance_id: admission.processor.instance_id,
-          version: admission.processor.version,
-          configuration_sha256: admission.processor.configuration_sha256,
-        },
-      });
-      const reviewLineageId = reviewLineageIdV1({
-        adapter_id: meeting.provenance.source.adapter_id,
-        instance_id: meeting.provenance.source.instance_id,
-        external_id: meeting.provenance.external_id,
-      });
+    const extraction = await this.phase("extraction", async (): Promise<
+      { readonly decisions: DecisionSet } | { readonly done: AdmittedMeetingProcessingCycleResultV1 }
+    > => {
+      const extractionKey = extractionAttemptKeyV1(admission, meeting);
       const reusable =
         await this.options.state.readFrozenCandidateForReviewInput({
-          review_lineage_id: reviewLineageId,
-          review_input_sha256: reviewInputSha256,
+          review_lineage_id: extractionKey.review_lineage_id,
+          review_input_sha256: extractionKey.review_input_sha256,
         });
       if (reusable !== undefined) {
         const rebound = rebindDecisionsToRevision(
@@ -537,32 +719,29 @@ export class AdmittedMeetingProcessingCycleV1 {
           meeting,
           this.options.processor.identity,
         );
-        return rebound;
+        return { decisions: rebound };
       }
 
       signal?.throwIfAborted();
       // Provider revisions, observation times and moving cursors cannot grant
       // another paid attempt for the same actual review input. Reserve only
       // after source custody and both frozen-result reuse paths have run.
-      const extractionKey = {
-        admission_sha256: canonicalSha256({
-          schema_version: 1,
-          kind: "echo-meeting-extraction-admission-v1",
-          source: {
-            adapter_id: admission.source.adapter_id,
-            instance_id: admission.source.instance_id,
-            version: admission.source.version,
-            cutoff_at: admission.source.cutoff_at,
-          },
-          processor: { ...admission.processor },
-        }),
-        review_lineage_id: reviewLineageId,
-        review_input_sha256: reviewInputSha256,
-      };
       const attempts = this.options.extraction_attempts;
+      // A retry from custody parks whatever the cursor did, since it never moves it.
+      const pulled = fromCustody ? {} : { expected_cursor: admission.source.cursor, next_cursor: nextCursor };
       const claim = attempts?.reserve(extractionKey);
       if (claim?.status === "blocked") {
-        throw new AdapterError("permanently_rejected", "extraction_on_hold", false);
+        // A fresh pending attempt may still be running in another process: no
+        // error, no park, no cursor move, so its paid result is never raced.
+        if (claim.outcome === "pending" && Date.now() - Date.parse(claim.reserved_at) < EXTRACTION_IN_FLIGHT_MS) {
+          return { done: { kind: "in_flight", cursor_advanced: false } };
+        }
+        // No model call: a crash or failure after an earlier attempt converges
+        // here and parks the revision again; a poll also moves intake past it.
+        const stage = await this.options.state.holdExtraction({
+          meeting, key: extractionKey, attempt: claim.attempt, failure_stage: blockedExtractionStageV1(claim), ...pulled,
+        });
+        return { done: await this.finishHeld(stage, admission, nextCursor) };
       }
       let receivedOutput = false;
       let extracted: DecisionSet;
@@ -582,16 +761,44 @@ export class AdmittedMeetingProcessingCycleV1 {
           this.options.processor.identity,
         );
       } catch (error) {
-        if (claim !== undefined) attempts!.complete({
+        if (claim === undefined) throw error;
+        const aborted = signal?.aborted === true;
+        const complete = () => attempts!.complete({
           key: extractionKey,
           attempt: claim.attempt,
           claim_id: claim.claim_id,
           outcome: "failed",
-          failure_code: signal?.aborted === true ? "cancelled"
+          failure_code: aborted ? "cancelled"
             : receivedOutput ? "invalid_output"
             : error instanceof AdapterError ? error.code : "unknown",
         });
-        throw error;
+        if (aborted) { complete(); throw error; }
+        const failure = { aborted, received_output: receivedOutput };
+        const failureStage = classifyExtractionFailureStageV1(error, failure);
+        // One free retry for an unbilled first failure of a pulled revision: no
+        // park and no cursor move, so the next poll re-runs it and its
+        // reservation consumes this grant. A crash before the grant leaves a
+        // failed attempt that the next poll parks as not_recorded.
+        if (!fromCustody && claim.attempt === 1 && attempts?.authorizeRetry !== undefined && unbilledExtractionFailureV1(error, failure)) {
+          complete();
+          attempts.authorizeRetry({ key: extractionKey, expected_attempt: claim.attempt, expected_outcome: "failed" });
+          return { done: { kind: "retry_scheduled", stage: failureStage, cursor_advanced: false } };
+        }
+        // Park before closing the attempt, so every crash window leaves a
+        // blocked reservation that parks again without a model call.
+        let stage: ExtractionFailureStageV1;
+        try {
+          stage = await this.options.state.holdExtraction({
+            meeting, key: extractionKey, attempt: claim.attempt, ...pulled, failure_stage: failureStage,
+          });
+        } catch (holdError) {
+          complete();
+          // The extraction failure stays the error; why it could not park rides along.
+          if (error instanceof Error) error.cause ??= holdError;
+          throw error;
+        }
+        complete();
+        return { done: await this.finishHeld(stage, admission, nextCursor) };
       }
       // A failure after this point (including candidate persistence) must not
       // make the successful provider call eligible for automatic repetition.
@@ -601,16 +808,20 @@ export class AdmittedMeetingProcessingCycleV1 {
         claim_id: claim.claim_id,
         outcome: "succeeded",
       });
-      return extracted;
+      return { decisions: extracted };
     }, signal);
+    if ("done" in extraction) return extraction.done;
+    const { decisions } = extraction;
     return this.phase(
       "approval_staging",
       async () => {
         const candidate: MeetingProcessingCandidateV1 = await this.options.state.stageCandidate({
-          admission,
+          // A retry never moves the cursor, so an import queued during its extraction must not discard the paid result.
+          admission: fromCustody ? await this.options.state.readAdmission() : admission,
           meeting,
           decisions,
           review_policy: reviewPolicy,
+          next_cursor: nextCursor,
         });
         if (candidate.disposition !== "actionable") {
           await this.options.stager.reconcileSuperseded(operationContext(signal));
@@ -618,12 +829,12 @@ export class AdmittedMeetingProcessingCycleV1 {
             ? this.finishWithoutStage(
                 "no_signals",
                 admission,
-                batch.next_cursor,
+                nextCursor,
               )
             : this.finishWithoutStage(
                 "already_processed",
                 admission,
-                batch.next_cursor,
+                nextCursor,
               );
         }
         return this.stageAndAdvance(
@@ -631,7 +842,7 @@ export class AdmittedMeetingProcessingCycleV1 {
           admission,
           meeting,
           decisions,
-          batch.next_cursor,
+          nextCursor,
           signal,
         );
       },
@@ -705,6 +916,24 @@ export class AdmittedMeetingProcessingCycleV1 {
       expected_cursor: admission.source.cursor,
       next_cursor: nextCursor,
     });
+  }
+
+  private async finishHeld(
+    stage: ExtractionFailureStageV1,
+    admission: AdmittedMeetingProcessingAdmissionV1,
+    nextCursor: string | undefined,
+  ): Promise<AdmittedMeetingProcessingCycleResultV1> {
+    if (nextCursor === undefined || nextCursor === admission.source.cursor) {
+      return { kind: "held", stage, cursor_advanced: false };
+    }
+    // The advance keeps other imports queued or cancelled during extraction.
+    // It refuses when this revision's import was cancelled (the hold parked
+    // nothing, or the cancel removed the row) or access was revoked.
+    const advanced = await this.advanceCursor({
+      expected_cursor: admission.source.cursor,
+      next_cursor: nextCursor,
+    });
+    return { kind: "held", stage, cursor_advanced: advanced === "advanced" };
   }
 
   private async finishWithoutStage(

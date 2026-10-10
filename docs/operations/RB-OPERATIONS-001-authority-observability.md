@@ -217,11 +217,12 @@ cycle. `cancelled` with `retryable: false` means shutdown stopped the in-flight
 work; startup failures are also non-retryable because no worker cycle exists.
 
 A later worker cycle does not authorize another model call for unchanged
-meeting input. The live runtime durably reserves one automatic extraction
+meeting input, except one automatic retry after an unbilled 429 or 5xx on the
+first attempt. The live runtime durably reserves one automatic extraction
 attempt before contacting the provider. Failed grounding, provider failures,
-and interrupted attempts remain on hold across polls and restarts. A cycle can
-still succeed while extraction is held because existing approvals, record
-publication, and reads continue. Use the content-free
+and interrupted attempts park that meeting across polls and restarts while
+intake moves on to the source's later meetings, so a cycle that parks one still
+succeeds. Use the content-free
 [extraction status and explicit retry procedure](../../deploy/organization-authority/README.md#inspect-and-retry-a-held-extraction)
 to inspect the hold; a successful HTTP response alone does not prove that its
 output passed grounding or became an approval candidate.
@@ -633,7 +634,7 @@ Select a slow meeting or Ask, then use **Linked core operations**:
 
 | Evidence | Interpretation |
 | --- | --- |
-| Gate wait and child worker execution | Separates queue admission from execution. Queued work owns a trace after its scheduling HTTP request ends. |
+| Gate wait and child worker execution | Separates queue admission from execution. Queued work owns a trace after its scheduling HTTP request ends. Only gated writer turns (recovery, publication, operator work) report `gate_wait_ms`; periodic cycles, card presentation turns, staging canary runs and each meeting lane are their own `worker_execution` roots. |
 | Timer delay, lateness, reason and cancellation | Distinguishes the existing 30-second poll/failure timer from gate waits; coalesced approval wakes appear on the requesting operation. |
 | Search snapshot, enrichment, model, build, validation and publication | Heads/generation identify availability or supersession. Atom/record/byte/group and selected/excluded counts identify work. |
 | Changed/unchanged/new projection groups; `reused_count: 0` | Compares with the previous observed input in this process, not persisted history or a cache. Restart loses that comparison. |

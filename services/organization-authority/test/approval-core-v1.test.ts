@@ -322,9 +322,10 @@ describe('approval core: freeze', () => {
   });
   it('reconciles queued proposals of one source only', async () => {
     const f = await approvalCoreFixture({ stage: false });
-    await f.core.stagerForSource('pms_another').reconcilePendingDeliveries();
+    // It says whether it froze anything, so a pass that froze nothing backs off.
+    await expect(f.core.stagerForSource('pms_another').reconcilePendingDeliveries()).resolves.toBe(false);
     expect(outbox(f, f.approvalId).state).toBe('queued');
-    await f.core.stagerForSource(f.sourceKey).reconcilePendingDeliveries();
+    await expect(f.core.stagerForSource(f.sourceKey).reconcilePendingDeliveries()).resolves.toBe(true);
     expect(outbox(f, f.approvalId).state).toBe('staged');
   });
   it('reconcile freezes the rest and rethrows the first failure', async () => {

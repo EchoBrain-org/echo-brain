@@ -1,7 +1,7 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
 import { OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1, openRouterDecisionProcessorConfigurationSha256V1, openRouterDecisionProcessorCredentialReferenceSha256V1 } from "../src/openrouter-decision-processor-config-v1.js";
 import { createOpenRouterDecisionProcessorBundleV1 } from "../src/openrouter-decision-processor-bundle-v1.js";
@@ -81,6 +81,18 @@ describe("OpenRouter decision processor bundle", () => {
       instance_id: "fixed-processor",
       version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
     });
+  });
+
+  it("admits each extraction call through the provider-neutral limit", async () => {
+    const credential_file = credentialFile();
+    const limit = vi.fn(async () => { throw new Error("limited"); });
+    const bundle = createOpenRouterDecisionProcessorBundleV1({ credential_file, limit });
+    bundle.assert_admission_commitments(commitment(`file:${credential_file}`));
+    const processor = bundle.create_processor(admission());
+    const signal = new AbortController().signal;
+    await expect(processor.extract({ participants: [], content: [] } as never,
+      { processor_version: processor.identity.version, input_fingerprint: "sha256:fixture" }, { signal })).rejects.toThrow("limited");
+    expect(limit).toHaveBeenCalledWith(signal, expect.any(Function));
   });
 
   it("rejects an uncommitted processor credential reference before it reads the credential", () => {

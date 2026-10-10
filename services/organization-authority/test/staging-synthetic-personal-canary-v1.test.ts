@@ -1,9 +1,10 @@
+import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { applyAuthorityBaselineV13 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { applyAuthorityBaselineV14 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { applyOrganizationRecordLogBaselineV4, OrganizationRecordAppenderV4 } from '@echo-brain/organization-record/organization-record-api-v1';
-import { createStagingSyntheticPersonalMeetingProviderV1 } from '@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1';
+import { createStagingSyntheticPersonalMeetingProviderV1, STAGING_SYNTHETIC_CANARY_MEETING_ID_V1 } from '@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1';
 import { testAuthority } from '../../../packages/organization-protocol/test/fixtures/record-v4-fixture.js';
 import { createPersonMeetingRuntimeV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { authorityRecordPolicyProjectorsV1 } from '../src/composition/authority-record-protocols-v1.js';
@@ -11,20 +12,22 @@ import { runStagingSyntheticPersonalCanaryV1 } from '../src/composition/staging/
 
 const NOW = '2026-10-07T00:00:00.000Z';
 const OWNER = { principal_id: 'prn_00000000-0000-4000-8000-000000000003', membership_id: 'mem_00000000-0000-4000-8000-000000000004' };
+const DEMO_MEETINGS = fileURLToPath(new URL('../../../demo/meetings', import.meta.url));
 const opened: Database.Database[] = [];
 afterEach(() => { for (const db of opened.splice(0)) db.close(); });
 
-function addOwner(db: Database.Database, organization_id: string, owner: typeof OWNER): void {
+/** An owner, or an employee when given an email. */
+function addOwner(db: Database.Database, organization_id: string, owner: typeof OWNER, employee_email: string | null = null): void {
   db.prepare("INSERT INTO authority_principals VALUES (?, ?, 'Founder', ?)").run(owner.principal_id, organization_id, NOW);
-  db.prepare(`INSERT INTO authority_memberships (membership_id, organization_id, principal_id, membership_type, status, provisioned_at, revoked_at, revocation_reason, employee_email_sha256)
-    VALUES (?, ?, ?, 'owner', 'active', ?, NULL, NULL, NULL)`).run(owner.membership_id, organization_id, owner.principal_id, NOW);
+  db.prepare(`INSERT INTO authority_memberships (membership_id, organization_id, principal_id, membership_type, status, provisioned_at, revoked_at, revocation_reason, employee_email, employee_email_sha256)
+    VALUES (?, ?, ?, ?, 'active', ?, NULL, NULL, ?, ?)`).run(owner.membership_id, organization_id, owner.principal_id, employee_email === null ? 'owner' : 'employee', NOW, employee_email, employee_email && canonicalSha256(employee_email));
 }
 
-/** Fresh V13 state, one active owner membership, and the synthetic provider as the only personal provider. */
-async function syntheticWorld(options: { readonly signals?: boolean } = {}) {
+/** Fresh V14 state, one active owner membership, and the synthetic provider as the only personal provider. */
+async function syntheticWorld(options: { readonly signals?: boolean; readonly hold?: Promise<void> } = {}) {
   const authority = testAuthority();
   const organization_id = authority.descriptor.organization_id;
-  const db = new Database(':memory:'); opened.push(db); db.pragma('foreign_keys = ON'); applyAuthorityBaselineV13(db);
+  const db = new Database(':memory:'); opened.push(db); db.pragma('foreign_keys = ON'); applyAuthorityBaselineV14(db);
   db.prepare("INSERT INTO authority_metadata VALUES (1, ?, ?, 'Test', '{}', ?, ?)").run(authority.descriptor.authority_id, organization_id, NOW, NOW);
   addOwner(db, organization_id, OWNER);
   const record = new Database(':memory:'); opened.push(record); record.pragma('foreign_keys = ON'); applyOrganizationRecordLogBaselineV4(record);
@@ -33,7 +36,7 @@ async function syntheticWorld(options: { readonly signals?: boolean } = {}) {
   let extracted = 0, envelopes = 0;
   const runtime = createPersonMeetingRuntimeV1({
     database: db, sessions: { authenticateAccess() { throw new Error('The canary runs without a person session'); } },
-    providers: [createStagingSyntheticPersonalMeetingProviderV1({})],
+    providers: [createStagingSyntheticPersonalMeetingProviderV1({ fixtures_directory: DEMO_MEETINGS })],
     processor: {
       processor_adapter_id: 'llm',
       current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('reference') }),
@@ -43,6 +46,7 @@ async function syntheticWorld(options: { readonly signals?: boolean } = {}) {
         return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy' as const, checked_at: NOW }),
           async extract(meeting) {
             extracted++;
+            if (meeting.id !== STAGING_SYNTHETIC_CANARY_MEETING_ID_V1) await options.hold;
             return { schema_version: 1, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity, generated_at: NOW,
               signals: options.signals === false ? [] : [{ id: 'canary-decision', kind: 'decision', status: 'decided', text: 'Verify owner approval of a staged meeting.',
                 subject: null, confidence: 1, evidence: [{ meeting_id: meeting.id, block_id: 'synthetic-decision' }] }] };
@@ -52,7 +56,7 @@ async function syntheticWorld(options: { readonly signals?: boolean } = {}) {
     approval: { coordinates, signer: { inspect: async () => authority.descriptor, sign: authority.sign },
       record_append: new OrganizationRecordAppenderV4(record, coordinates, authorityRecordPolicyProjectorsV1()),
       next_envelope_id: () => `env_canary_${++envelopes}` },
-    extraction_attempts: { reserve: () => ({ status: 'reserved', attempt: 1, claim_id: 'claim' }), complete() {} },
+    extraction_attempts: { reserve: () => ({ status: 'reserved', attempt: 1, claim_id: 'claim' }), complete() {}, inspect: () => undefined },
   });
   return { db, organization_id, runtime, extracted: () => extracted };
 }
@@ -101,6 +105,32 @@ describe('staging synthetic personal canary', () => {
     // A rerun of the earlier release reports its stale proposal, not the current one.
     await expect(run(world)).resolves.toEqual({ kind: 'not_staged', approval_id: first.approval_id });
     expect(world.extracted()).toBe(2);
+  });
+
+  it('stages a canary queued behind a held fixture within its passes', async () => {
+    const world = await syntheticWorld();
+    // The extractor's canary evidence does not resolve in a demo fixture, so the fixture is held.
+    await world.runtime.queue({ person: { organization_id: world.organization_id, ...OWNER }, tool_id: 'synthetic', meeting_ids: ['synthetic-demo-northstar-revenue-signal-calibration-2026-08-24'] });
+    await expect(run(world)).resolves.toMatchObject({ kind: 'staged' });
+    expect(world.db.prepare('SELECT external_id, failure_stage FROM authority_live_source_held_extractions_v1').all())
+      .toEqual([{ external_id: 'demo-northstar-rollout-01', failure_stage: 'output_contract' }]);
+    expect(world.extracted()).toBe(2);
+  });
+
+  it('completes on its own source while another source\'s extraction is blocked', async () => {
+    let release!: () => void;
+    const world = await syntheticWorld({ hold: new Promise<void>(resolve => { release = resolve; }) });
+    const member = { principal_id: 'prn_00000000-0000-4000-8000-000000000013', membership_id: 'mem_00000000-0000-4000-8000-000000000014' };
+    addOwner(world.db, world.organization_id, member, 'member@example.com');
+    const other = await world.runtime.queue({ person: { organization_id: world.organization_id, ...member }, tool_id: 'synthetic', meeting_ids: ['synthetic-demo-northstar-revenue-signal-calibration-2026-08-24'] });
+    const periodic = world.runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    await vi.waitFor(() => expect(world.extracted()).toBe(1));
+    const cursor = world.db.prepare('SELECT cursor FROM authority_live_source_progress_v2 WHERE source_key = ?').pluck(), before = cursor.get(other.source_key);
+    const roundRobin = vi.spyOn(world.runtime.processing, 'pollAndStageAdmittedMeetings');
+    await expect(run(world)).resolves.toMatchObject({ kind: 'staged' });
+    // The other source is untouched, and the canary never ran a round-robin pass that could pick it.
+    expect([cursor.get(other.source_key), roundRobin.mock.calls.length, world.extracted()]).toEqual([before, 0, 2]);
+    release(); await periodic;
   });
 
   it('refuses a release id outside the deploy shape before queueing anything', async () => {

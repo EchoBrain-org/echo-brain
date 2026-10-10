@@ -5,6 +5,7 @@ import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-aut
 import type { AddressInfo } from "node:net";
 import {
   SerializedMeetingProcessingWorker,
+  type MeetingProcessingExclusiveV1,
   type SerializedMeetingProcessingWorkerOptions,
 } from "@echo-brain/organization-processing/admitted-meeting-processing/serialized-meeting-processing-worker";
 import {
@@ -31,8 +32,17 @@ import { clearReadableSearchActiveGenerationV1 } from "@echo-brain/organization-
 export interface OrganizationAuthorityProcessingCycleV1 {
   /** Replays finalized control-plane actions that were not appended to V4. */
   recoverV4Appends(signal: AbortSignal): Promise<void>;
-  /** Polls the admitted source cursor and durably stages one card. */
-  pollAndStageAdmittedMeetings(signal: AbortSignal): Promise<void>;
+  /**
+   * Polls admitted sources and durably stages their meetings for approval. Given `report`, it may leave passes
+   * running after it returns, send their failures there and call `settled` as each one settles (neither throws);
+   * `settle` waits for them.
+   */
+  pollAndStageAdmittedMeetings(signal: AbortSignal, report?: (failure: unknown) => void, settled?: () => void): Promise<void>;
+  /**
+   * Resolves once no meeting pass is running: detached lanes, their top-ups and targeted passes (the staging canary).
+   * With `stop` (shutdown), no new lane starts from then on.
+   */
+  settle?(stop?: boolean): Promise<void>;
   /** Observes one staged approval and commits its approve or reject result. */
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void>;
   /** Appends finalized actions to V4; rejected actions produce no readable fact. */
@@ -82,66 +92,97 @@ export interface OrganizationAuthorityServiceLifecycleDependencies {
 
 export interface RunningOrganizationAuthorityServiceLifecycle {
   readonly address: AddressInfo;
-  /** Excludes both writer and search work for bounded operator mutations. */
+  /**
+   * Excludes search and every gated writer turn (recovery, publication) for
+   * bounded operator mutations. Source intake, notes enrichment, card
+   * presentation and `runUngated` work run outside the gate and are not excluded.
+   */
   runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
-  /** Waits for queued writer/search work; callers must supply a bounded signal.
-   * This is a readiness barrier, not operator exclusion or a retry trigger. */
+  /**
+   * Runs bounded operator work that appends no records (the staging canary)
+   * outside the writer gate, one at a time, on the shutdown signal. Search and
+   * the worker keep running; drain and close wait for it.
+   */
+  runUngated<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
+  /** Waits for the running cycle, meeting lanes, card presentation, ungated work and queued writer/search work; callers
+   * must supply a bounded signal. This is a readiness barrier, not operator exclusion or a retry trigger. */
   drain(signal: AbortSignal): Promise<void>;
   /**
    * Asks the worker to publish queued approval actions now instead of at the
    * next periodic cycle. It runs only the approval phases (finalize, append,
    * then requests search and card presentation) through the same writer gate
-   * as the periodic cycle.
+   * as the periodic cycle's recovery and publication, never behind its source
+   * intake.
    * Requests made while one is still waiting for
    * the gate coalesce into that one run; a request made while a publication is
    * already executing schedules exactly one follow-up run. It never throws and
    * never blocks the caller; failures go to `on_worker_error`.
    */
   requestApprovalPublication(): void;
-  /** Stops the worker before closing the Authority API database handles. */
+  /**
+   * Starts no new meeting lane and gives running ones up to 20 s to finish, then stops the worker (cancelling any
+   * still running) and waits for meeting lanes, card presentation and ungated work before closing the Authority API
+   * database handles.
+   */
   close(): Promise<void>;
 }
 
+/** How long close() lets running meeting lanes finish before cancelling them; under the retry wrapper's 30 s stop. */
+const MEETING_LANE_GRACE_MS = 20_000;
+
 /**
  * Runs exactly one Organization Authority processing cycle. Recovery leads so
- * a restart completes an
- * already-finalized action before consuming new source input. Every operation
- * is awaited in order; `SerializedMeetingProcessingWorker` supplies the single
- * in-process serialization guarantee.
+ * a restart completes every recoverable finalized action before consuming new
+ * source input; a row that cannot publish waits for a later pass. Every operation
+ * is awaited in order. Only recovery and publication, which append to the record
+ * log, hold the writer gate (`exclusive`); notes enrichment and source intake wait
+ * on providers and models outside it, kept correct by durable fences (leases,
+ * cursor compare-and-swap). Direct callers run everything in place. Given
+ * `report`, a failed primary intake (the Authority's notes enrichment, which
+ * marks a corrupt item unavailable and defers any other failure to a later
+ * cycle) is reported and the cycle goes on, and the
+ * personal intake may leave detached meeting lanes running, reporting their
+ * failures there and calling `settled` as each one settles.
  */
 export async function runOrganizationAuthorityProcessingCycleV1(
   processing: OrganizationAuthorityProcessingCycleV1,
   signal: AbortSignal,
   lifecycle?: MeetingProcessingWorkerPhaseRunnerV1,
   additional?: OrganizationAuthorityProcessingCycleV1,
+  exclusive: MeetingProcessingExclusiveV1 = (operation) => operation(signal),
+  report?: (failure: unknown) => void,
+  settled?: () => void,
 ): Promise<void> {
   const phase = <T>(
     name: Parameters<MeetingProcessingWorkerPhaseRunnerV1["runPhase"]>[0],
     operation: () => Promise<T>,
   ): Promise<T> => lifecycle?.runPhase(name, operation, signal) ?? operation();
-  await phase("recovery", async () => { await processing.recoverV4Appends(signal); await additional?.recoverV4Appends(signal); });
+  await exclusive(() => phase("recovery", async () => { await processing.recoverV4Appends(signal); await additional?.recoverV4Appends(signal); }));
   signal.throwIfAborted();
-  if (processing.hasFineGrainedSourceLifecycle === true) {
-    await processing.pollAndStageAdmittedMeetings(signal);
-  } else {
-    await phase("source_intake", () =>
-      processing.pollAndStageAdmittedMeetings(signal),
-    );
+  try {
+    if (processing.hasFineGrainedSourceLifecycle === true) await processing.pollAndStageAdmittedMeetings(signal);
+    else await phase("source_intake", () => processing.pollAndStageAdmittedMeetings(signal));
+  } catch (failure) {
+    if (report === undefined || signal.aborted) throw failure;
+    report(failure);
   }
   signal.throwIfAborted();
-  await additional?.pollAndStageAdmittedMeetings(signal);
+  await additional?.pollAndStageAdmittedMeetings(signal, report, settled);
   signal.throwIfAborted();
-  await runOrganizationAuthorityApprovalPublicationV1(processing, signal, lifecycle, additional);
+  await exclusive(() => runOrganizationAuthorityApprovalPublicationV1(processing, signal, lifecycle, additional));
 }
 
 /**
  * Runs only the approval-publication phases of the cycle: finalize queued
  * actions and append approved ones to V4. The lifecycle requests search after
  * releasing the writer gate.
- * Source intake is deliberately excluded so an approval never waits behind a
- * source poll or an extraction call. The periodic cycle still runs these same
- * phases, so a lost or failed publication request is recovered by the next
- * tick rather than by any retry logic here.
+ * Source intake and card presentation are deliberately excluded, and run
+ * outside the gate, so an approval never waits behind a source poll, an
+ * extraction call or a Slack post; it waits only for other gated turns
+ * (recovery, publication, operator work).
+ * The periodic cycle still runs these same phases, so a lost or failed
+ * publication request is recovered by the next tick rather than by any retry
+ * logic here.
  */
 export async function runOrganizationAuthorityApprovalPublicationV1(
   processing: OrganizationAuthorityProcessingCycleV1,
@@ -197,7 +238,9 @@ export async function startOrganizationAuthorityServiceLifecycle(
     startup.signal.throwIfAborted();
     // A persisted pointer is not ready until its immutable generation has been
     // validated into the sole process-local handle. Never bind the API
-    // listener before that startup boundary succeeds.
+    // listener before that startup boundary succeeds. Clearing first makes
+    // startup fully validate even a generation an earlier run left warm.
+    clearHandle();
     await lifecycle.runPhase(
       "search_reconciliation",
       () => dependencies.processing.reconcileReadableSearchGeneration(startup.signal),
@@ -227,16 +270,31 @@ export async function startOrganizationAuthorityServiceLifecycle(
       reportError,
     );
     let closing = false;
+    const shutdown = new AbortController();
+    // Work outside the writer gate runs on the shutdown signal in its own trace; close and drain wait for it.
+    const ungated = <T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> => observeCoreRuntimeRootV1("worker_execution", async () => {
+      shutdown.signal.throwIfAborted();
+      return operation(shutdown.signal);
+    }, dependencies.core_runtime_observation);
+    let ungatedTail: Promise<void> = Promise.resolve();
     let presentationPending = false;
     let presentationActive = false;
     let presentationImmediate: ReturnType<typeof setImmediate> | undefined;
     let presentationTail: Promise<void> = Promise.resolve();
     let completePresentation: (() => void) | undefined;
     let requestApprovalPresentation!: () => void;
+    // The running cycle, so drain also waits for its ungated intake.
+    let cycleTail: Promise<void> = Promise.resolve();
+    // The personal intake's meeting lanes outlive the cycle that started them, on the worker's signal.
+    const meetingLanes = async (stop?: boolean): Promise<void> => { await (dependencies.additional_processing ?? startedApi.processing)?.settle?.(stop); };
     const worker = new SerializedMeetingProcessingWorker({
       ...(dependencies.core_runtime_observation === undefined ? {} : { observation: dependencies.core_runtime_observation }),
       intervalMs: config.worker_interval_ms,
-      runCycle: async (signal) => {
+      runCycle: async (signal, exclusive) => {
+        // While close() lets running lanes finish, no new cycle starts.
+        if (closing) return;
+        let finished!: () => void;
+        cycleTail = new Promise((resolve) => { finished = resolve; });
         lifecycle.startCycle();
         try {
           await runOrganizationAuthorityProcessingCycleV1(
@@ -244,12 +302,16 @@ export async function startOrganizationAuthorityServiceLifecycle(
             signal,
             lifecycle,
             dependencies.additional_processing ?? startedApi.processing,
+            exclusive,
+            reportError,
+            // A lane that staged after its cycle returned gets its card now, not at the next cycle's wake.
+            () => requestApprovalPresentation(),
           );
           lifecycle.succeedCycle();
         } catch (error) {
           lifecycle.failCycle(error, signal.aborted);
           throw error;
-        }
+        } finally { finished(); }
       },
       onCycleComplete: () => {
         // Search is durable-derived work and must be requested even when the
@@ -265,22 +327,23 @@ export async function startOrganizationAuthorityServiceLifecycle(
     };
     const schedulePresentation = (): void => {
       if (closing || !presentationPending || presentationActive || presentationImmediate !== undefined) return;
-      // Yield between cards so a healthy burst cannot monopolize the writer
-      // gate or event loop. Each turn still attempts at most one pending card.
+      // Yield between turns so a healthy burst cannot monopolize the event
+      // loop. A turn handles one bounded page of cards outside the writer gate
+      // (its transitions are compare-and-swap guarded), one turn at a time so
+      // a card's backoff is never counted twice.
       presentationImmediate = setImmediate(() => {
         presentationImmediate = undefined;
         presentationActive = true;
-        void worker
-          .runExclusive(async (signal) => {
-            // Coalesce wakes while queued, but preserve one that arrives
-            // after this attempt starts, including if the provider fails.
-            presentationPending = false;
-            const primary = dependencies.processing.reconcileApprovalPresentations;
-            const additional = dependencies.additional_processing?.reconcileApprovalPresentations;
-            const first = primary === undefined ? 'idle' : await primary(signal);
-            const second = additional === undefined ? 'idle' : await additional(signal);
-            return first === 'uncertain' || second === 'uncertain' ? 'uncertain' : first === 'rendered' || second === 'rendered' ? 'rendered' : 'idle';
-          })
+        void ungated(async (signal) => {
+          // Coalesce wakes while queued, but preserve one that arrives
+          // after this attempt starts, including if the provider fails.
+          presentationPending = false;
+          const primary = dependencies.processing.reconcileApprovalPresentations;
+          const additional = dependencies.additional_processing?.reconcileApprovalPresentations;
+          const first = primary === undefined ? 'idle' : await primary(signal);
+          const second = additional === undefined ? 'idle' : await additional(signal);
+          return first === 'uncertain' || second === 'uncertain' ? 'uncertain' : first === 'rendered' || second === 'rendered' ? 'rendered' : 'idle';
+        })
           .then((result) => {
             if (result === "rendered") presentationPending = true;
           })
@@ -305,7 +368,6 @@ export async function startOrganizationAuthorityServiceLifecycle(
       }
       schedulePresentation();
     };
-    const shutdown = new AbortController();
     let publicationPending = false;
     let publicationImmediate: ReturnType<typeof setImmediate> | undefined;
     let publicationTail: Promise<void> = Promise.resolve();
@@ -335,17 +397,18 @@ export async function startOrganizationAuthorityServiceLifecycle(
               dependencies.additional_processing ?? startedApi.processing,
             );
           })
+          .catch((failure: unknown) => {
+            // `publicationPending` was already cleared when the run started;
+            // the only pre-start failure is the closed worker's aborted signal.
+            if (!closing) reportError(failure);
+          })
           .then(() => {
+            // Search and cards derive from durable state, so a failed run
+            // still wakes them.
             if (!closing) {
               search.request();
               requestApprovalPresentation();
             }
-          })
-          .catch((failure: unknown) => {
-            // `publicationPending` was already cleared when the run started;
-            // the only pre-start failure is the closed worker's aborted signal.
-            if (closing) return;
-            reportError(failure);
           })
           .finally(complete);
       });
@@ -354,6 +417,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
     return {
       address: startedApi.address,
       runExclusive: async (operation) => {
+        shutdown.signal.throwIfAborted();
         search.suspend();
         try {
           return await worker.runExclusive(async (signal) => {
@@ -365,6 +429,11 @@ export async function startOrganizationAuthorityServiceLifecycle(
           search.resume();
           if (!closing) search.request();
         }
+      },
+      runUngated: (operation) => {
+        const run = ungatedTail.then(() => ungated(operation));
+        ungatedTail = run.then(() => undefined, () => undefined);
+        return run;
       },
       drain: async (deadline) => {
         const signal = AbortSignal.any([deadline, shutdown.signal]);
@@ -380,10 +449,14 @@ export async function startOrganizationAuthorityServiceLifecycle(
           await Promise.race([cancelled, (async () => {
             let observedPublication: Promise<void>;
             let observedPresentation: Promise<void>;
+            let observedCycle: Promise<void>;
+            let observedUngated: Promise<void>;
             do {
               observedPublication = publicationTail;
               observedPresentation = presentationTail;
-              await Promise.all([observedPublication, observedPresentation]);
+              observedCycle = cycleTail;
+              observedUngated = ungatedTail;
+              await Promise.all([observedPublication, observedPresentation, observedCycle, observedUngated, meetingLanes()]);
               signal.throwIfAborted();
               await worker.runExclusive(async () => undefined);
               signal.throwIfAborted();
@@ -391,7 +464,9 @@ export async function startOrganizationAuthorityServiceLifecycle(
               signal.throwIfAborted();
             } while (
               publicationTail !== observedPublication ||
-              presentationTail !== observedPresentation
+              presentationTail !== observedPresentation ||
+              cycleTail !== observedCycle ||
+              ungatedTail !== observedUngated
             );
           })()]);
         } finally { signal.removeEventListener("abort", abort); }
@@ -416,11 +491,19 @@ export async function startOrganizationAuthorityServiceLifecycle(
         }
         startedApi.stopAcceptingRequests?.();
         const searchClosed = search.close();
-        const workerClosed = worker.close();
+        // No lane starts from now on. Running ones get the grace before the worker's signal cancels them, so a deploy
+        // or an operator grant cancels (and leaves for an operator) only extractions that run past it.
+        let grace: ReturnType<typeof setTimeout> | undefined;
+        const lanesFinished = Promise.race([meetingLanes(true), new Promise<void>((resolve) => { grace = setTimeout(resolve, MEETING_LANE_GRACE_MS); })])
+          .finally(() => clearTimeout(grace));
+        // Once the worker has stopped no cycle can start a meeting lane, so its aborted lanes are the last to wait for.
+        const workerClosed = lanesFinished.then(() => worker.close(), () => worker.close()).finally(() => meetingLanes());
+        // The other lanes outside the gate settle on the aborted shutdown signal.
+        const lanesSettled = Promise.all([presentationTail, ungatedTail]);
         closed = (async () => {
           try {
             try {
-              await Promise.all([workerClosed, searchClosed]);
+              await Promise.all([workerClosed, searchClosed, lanesSettled]);
             } finally {
               await startedApi.close();
             }

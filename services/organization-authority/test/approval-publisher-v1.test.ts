@@ -71,7 +71,7 @@ describe('approval publisher: the brief', () => {
     const f = await approvalCoreFixture({ after_record: [(tx, event) => { expect(tx.inTransaction).toBe(true); calls.push(event); }] });
     f.core.decide('desktop', f.approve(), () => f.session);
     const interrupted = await f.withAppend(async (input, append) => { await append(input); throw new Error('crash after append'); });
-    await expect(interrupted.processing.recoverV4Appends(new AbortController().signal)).rejects.toThrow('crash');
+    await expect(interrupted.processing.appendFinalizedApprovalsToV4(new AbortController().signal)).rejects.toThrow('crash');
     expect(f.receipt()).toBeNull();
     expect(calls).toHaveLength(0);
     await f.core.processing.recoverV4Appends(new AbortController().signal);
@@ -251,7 +251,7 @@ describe('approval publisher: R30(d) two publishers', () => {
     const peer = await f.peer();
     f.core.decide('desktop', f.approve(), () => f.session);
     const interrupted = f.withAppend(async (input, append) => { await append(input); throw new Error('interrupted after signed append'); });
-    await expect(interrupted.processing.recoverV4Appends(signal())).rejects.toThrow('interrupted');
+    await expect(interrupted.processing.appendFinalizedApprovalsToV4(signal())).rejects.toThrow('interrupted');
     expect(f.receipt()).toBeNull();
     await peer.core.processing.recoverV4Appends(signal());
     expect(f.recordCount()).toBe(1);
@@ -382,13 +382,17 @@ describe('approval publisher: records', () => {
 });
 
 describe('approval publisher: failures', () => {
-  it('isolates a failing approval and keeps publishing the rest', async () => {
+  it('isolates a failing approval: recovery publishes the rest, append still rejects, and each pass retries the row', async () => {
     const f = await approvalCoreFixture();
     const other = await f.otherProposal();
     f.core.decide('desktop', f.approve(), () => f.session);
     f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: 'desk-other' }), () => f.session);
-    const failing = f.withAppend((input, append) => { if (input.approval_id === f.approvalId) throw new Error('first approval cannot publish'); return append(input); });
+    let attempts = 0;
+    const failing = f.withAppend((input, append) => { if (input.approval_id === f.approvalId) { attempts++; throw new Error('first approval cannot publish'); } return append(input); });
+    await failing.processing.recoverV4Appends(signal());
+    expect(publishedCount(f)).toBe(1);
     await expect(failing.processing.appendFinalizedApprovalsToV4(signal())).rejects.toThrow('first approval cannot publish');
+    expect(attempts).toBe(2);
     expect(f.recordCount()).toBe(1);
     expect(f.core.proposal(other.approvalId)!.status).toBe('approved');
     expect(f.core.proposal(f.approvalId)!.status).toBe('publishing');

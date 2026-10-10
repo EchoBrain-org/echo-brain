@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV13,
+  applyAuthorityBaselineV14,
   AUTHORITY_BASELINE_APPLICATION_ID_V1,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V13,
-  authorityBaselineSha256V13,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V14,
+  authorityBaselineSha256V14,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
-const AUTHORITY_BASELINE_SHA256_V13 =
-  "sha256:9e3726b7b559664979e08ee32380fad94537e1633ae8a537fce758d526927049";
+const AUTHORITY_BASELINE_SHA256_V14 =
+  "sha256:77c824e9cbbb2dbdbb079fe84edb9677807a56f11087bbd7f4889e008c2d3d84";
 
 function digest(character: string): string {
   return `sha256:${character.repeat(64)}`;
@@ -16,7 +16,7 @@ function digest(character: string): string {
 
 function appliedAuthorityDatabase() {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV13(database);
+  applyAuthorityBaselineV14(database);
   return database;
 }
 
@@ -24,12 +24,12 @@ describe("Authority person read-decision audit schema", () => {
   it("freezes the Authority baseline and stamps its genesis headers", () => {
     const database = appliedAuthorityDatabase();
     try {
-      expect(authorityBaselineSha256V13()).toBe(AUTHORITY_BASELINE_SHA256_V13);
+      expect(authorityBaselineSha256V14()).toBe(AUTHORITY_BASELINE_SHA256_V14);
       expect(database.pragma("application_id", { simple: true })).toBe(
         AUTHORITY_BASELINE_APPLICATION_ID_V1,
       );
       expect(database.pragma("user_version", { simple: true })).toBe(
-        AUTHORITY_BASELINE_SCHEMA_VERSION_V13,
+        AUTHORITY_BASELINE_SCHEMA_VERSION_V14,
       );
     } finally {
       database.close();
@@ -149,8 +149,8 @@ describe("Authority person read-decision audit schema", () => {
   it("applies only to an empty database", () => {
     const fresh = openAuthorityDatabase(":memory:");
     try {
-      applyAuthorityBaselineV13(fresh);
-      expect(() => applyAuthorityBaselineV13(fresh)).toThrow(
+      applyAuthorityBaselineV14(fresh);
+      expect(() => applyAuthorityBaselineV14(fresh)).toThrow(
         /completely empty database/,
       );
     } finally {
@@ -160,7 +160,7 @@ describe("Authority person read-decision audit schema", () => {
     const nonempty = openAuthorityDatabase(":memory:");
     try {
       nonempty.exec("CREATE TABLE preexisting (id INTEGER PRIMARY KEY) STRICT");
-      expect(() => applyAuthorityBaselineV13(nonempty)).toThrow(
+      expect(() => applyAuthorityBaselineV14(nonempty)).toThrow(
         /completely empty database/,
       );
     } finally {

@@ -1,11 +1,15 @@
 import { annotateCoreRuntimeV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 export const DEFAULT_MEETING_PROCESSING_WORKER_INTERVAL_MS = 30_000;
 
+/** Runs one operation through the worker's single-file writer gate. */
+export type MeetingProcessingExclusiveV1 = <T>(operation: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+
 export interface SerializedMeetingProcessingWorkerOptions {
   readonly observation?: CoreRuntimeObservationScopeV1;
-  readonly runCycle: (signal: AbortSignal) => Promise<void>;
+  /** A cycle holds the gate only for the parts it runs through `exclusive`; its slow waits stay outside it. */
+  readonly runCycle: (signal: AbortSignal, exclusive: MeetingProcessingExclusiveV1) => Promise<void>;
   readonly intervalMs?: number;
-  /** Requests derived work only after the cycle releases the writer gate. */
+  /** Requests derived work after every cycle that was not aborted, failed or not. */
   readonly onCycleComplete?: () => void;
   /** A cycle failure notification; callback failures never stop the worker. */
   readonly onError?: (error: Error) => void;
@@ -38,9 +42,10 @@ export class SerializedMeetingProcessingWorker {
   private readonly intervalMs: number;
   private readonly loop: Promise<void>;
   /**
-   * The worker is also the one in-process exclusion boundary for bounded
-   * operator work. This prevents a rehearsal from racing source polling or
-   * approval observation without creating a second runtime or database owner.
+   * The one in-process writer gate: short durable transitions (the cycle's
+   * recovery and publication, publication requests, operator work) run through
+   * it one at a time, without a second runtime or database owner. Source polls
+   * and model calls never hold it.
    */
   private tail: Promise<void> = Promise.resolve();
   private exclusiveActive = false;
@@ -110,15 +115,20 @@ export class SerializedMeetingProcessingWorker {
     while (!signal.aborted) {
       let failed = false;
       try {
-        await this.runExclusive((exclusiveSignal) =>
-          this.options.runCycle(exclusiveSignal),
-        );
-        if (!signal.aborted) this.options.onCycleComplete?.();
+        await observeCoreRuntimeRootV1("worker_execution", () =>
+          this.options.runCycle(signal, (operation) => this.runExclusive(operation)), this.options.observation);
       } catch (failure) {
         failed = true;
         if (!signal.aborted) this.report(failure);
       }
       if (signal.aborted) return;
+      // Derived work reads only durable state, so a failed cycle still requests it.
+      try {
+        this.options.onCycleComplete?.();
+      } catch (failure) {
+        failed = true;
+        this.report(failure);
+      }
       await observeCoreRuntimeRootV1("worker_timer", async () => {
         const scheduled = performance.now();
         annotateCoreRuntimeV1({ result: failed ? "cycle_failure" : "periodic", counts: { scheduled_delay_ms: this.intervalMs } });

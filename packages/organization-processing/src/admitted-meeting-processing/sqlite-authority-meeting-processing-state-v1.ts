@@ -10,8 +10,10 @@ import {
   type AdapterIdentity,
   type DecisionSet,
   type MeetingDocument,
-  meetingSourceEnvelopeV1, sourceContentSha256V1,
+  type MeetingSourceContentV1,
+  canonicalSourceContentV1, meetingSourceEnvelopeV1, sourceContentSha256V1,
 } from "../core/index.js";
+import type { ExtractionFailureStageV1 } from "./extraction-failure-stage-v1.js";
 
 /** Exact retained revision commitment shared by every approval surface's transcript choice. */
 export function retainedMeetingSourceCoordinateV1(database: Database.Database, organizationId: string, meeting: MeetingDocument) {
@@ -33,12 +35,15 @@ import {
 import type {
   AdmittedMeetingProcessingAdmissionV1,
   FrozenMeetingProcessingCandidateSnapshotV1,
+  HeldExtractionV1,
+  HoldExtractionInputV1,
   MeetingProcessingCandidateSnapshotInputV1,
   MeetingProcessingCandidateV1,
   AuthorityMeetingProcessingStateV1,
 } from "./meeting-processing-cycle-v1.js";
 
 interface AdmissionRow {
+  readonly organization_id: string;
   readonly source_adapter_id: string;
   readonly source_instance_id: string;
   readonly source_adapter_version: string;
@@ -144,7 +149,8 @@ function admissionFrom(
  * The concrete Authority cursor store for the the admitted meeting source. Its first read
  * materializes a one-row progress checkpoint from the already immutable
  * admission. Subsequent advances compare the expected persisted cursor inside
- * one SQLite transaction, so no runner can overwrite a newer checkpoint.
+ * one SQLite transaction, so no runner can overwrite a newer checkpoint; one
+ * whose queue changed only by other imports is rebased through the source's port.
  */
 export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeetingProcessingStateV1, ApprovalWorkflowStateV1 {
   constructor(
@@ -165,6 +171,14 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
      * settle what the advance consumed atomically with it. A throw rolls the advance back.
      */
     private readonly afterCursorAdvance: (transition: { readonly expected_cursor: string; readonly next_cursor: string }) => void = () => {},
+    /**
+     * The source's opaque cursor rebase: where a pull from `expected_cursor` that produced `next_cursor` advances from
+     * `current_cursor` when other imports were queued or cancelled since, or undefined when what the pull consumed is
+     * no longer queued or anything else changed. Stage, park and advance all pass the pull's real next cursor: a
+     * transition that consumes nothing (`next_cursor` equal to `expected_cursor`) accepts any queue change.
+     * Without it, any change since the pull refuses.
+     */
+    private readonly rebaseCursor: (transition: { readonly expected_cursor: string; readonly next_cursor: string; readonly current_cursor: string }) => string | undefined = () => undefined,
   ) {
     if (expectedProcessorAdapterId.trim().length === 0) {
       throw new Error(
@@ -250,7 +264,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       );
       if (
         input.admission.source.adapter_id !== current.source.adapter_id ||
-        input.admission.source.cursor !== current.source.cursor ||
+        !this.pullStillApplies(input.admission.source.cursor, input.next_cursor, current.source.cursor) ||
         input.admission.source.instance_id !== current.source.instance_id ||
         input.admission.source.version !== current.source.version ||
         input.admission.processor.adapter_id !==
@@ -385,6 +399,10 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           )
           .run(candidateId, approvalId, stageCommandId, now);
       }
+      // A candidate for the lineage supersedes any revision of it that was parked.
+      this.database
+        .prepare("DELETE FROM authority_live_source_held_extractions_v1 WHERE source_key = ? AND review_lineage_id = ?")
+        .run(this.sourceKey, reviewLineageId);
       if (semanticChanged) {
         this.database
           .prepare(
@@ -556,6 +574,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     const updatedAt = this.canonicalNow();
     return this.database.transaction(() => {
       this.requireSourceCurrent();
+      // Other imports queued or cancelled since the pull are kept: the advance moves from the current cursor to the rebased one.
+      const at = (this.database.prepare("SELECT cursor FROM authority_live_source_progress_v2 WHERE source_key = ?").pluck().get(this.sourceKey) as string | undefined) ?? input.expected_cursor;
+      const rebased = at === input.expected_cursor ? undefined : this.rebaseCursor({ ...input, current_cursor: at });
+      if (rebased !== undefined) this.sourceCursorPolicy.assert_live_cursor(rebased);
+      const transition = rebased === undefined || rebased === at ? input : { expected_cursor: at, next_cursor: rebased };
       const update = this.database
         .prepare(
           `UPDATE authority_live_source_progress_v2
@@ -575,9 +598,9 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
                    AND membership.status = 'active'
               )`,
         )
-        .run(input.next_cursor, updatedAt, this.sourceKey, input.expected_cursor);
+        .run(transition.next_cursor, updatedAt, this.sourceKey, transition.expected_cursor);
       if (update.changes === 1) {
-        this.afterCursorAdvance({ expected_cursor: input.expected_cursor, next_cursor: input.next_cursor });
+        this.afterCursorAdvance({ expected_cursor: transition.expected_cursor, next_cursor: transition.next_cursor });
         return "advanced" as const;
       }
 
@@ -585,7 +608,97 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       return admission.membership_status === "active"
         ? "state_drift"
         : "revoked";
+    }).immediate();
+  }
+
+  /**
+   * Never moves the cursor. Given the cursor its revision was pulled at, it parks nothing when that pull no longer
+   * applies, so an import cancelled during its extraction leaves no parked revision.
+   */
+  async holdExtraction(input: HoldExtractionInputV1): Promise<ExtractionFailureStageV1> {
+    return this.database.transaction(() => {
+      this.requireSourceCurrent();
+      const admission = this.activeAdmission();
+      const current = admissionFrom(admission, this.progress(admission.semantic_input_sha256), this.sourceCursorPolicy, this.expectedProcessorAdapterId);
+      assertCanonicalMeetingDocument(input.meeting, { kind: "meeting-source", adapter_id: current.source.adapter_id, instance_id: current.source.instance_id, version: current.source.version });
+      const { item, revision } = meetingSourceEnvelopeV1(input.meeting);
+      if (input.key.review_lineage_id !== reviewLineageIdV1({ adapter_id: item.adapter.adapter_id, instance_id: item.adapter.instance_id, external_id: item.external_id }) ||
+        input.key.review_input_sha256 !== reviewInputSha256V1({ meeting: input.meeting, processor: current.processor })) {
+        throw new Error("held extraction key differs from its meeting");
+      }
+      if (input.expected_cursor !== undefined && !this.pullStillApplies(input.expected_cursor, input.next_cursor, current.source.cursor)) return input.failure_stage;
+      const stored = this.database
+        .prepare("SELECT extraction_admission_sha256, review_input_sha256, attempt, failure_stage FROM authority_live_source_held_extractions_v1 WHERE source_key = ? AND review_lineage_id = ?")
+        .get(this.sourceKey, input.key.review_lineage_id) as { extraction_admission_sha256: string; review_input_sha256: string; attempt: number; failure_stage: ExtractionFailureStageV1 } | undefined;
+      const stage = stored?.extraction_admission_sha256 === input.key.admission_sha256 && stored.review_input_sha256 === input.key.review_input_sha256 &&
+        stored.attempt === input.attempt ? stored.failure_stage : input.failure_stage;
+      const now = this.canonicalNow();
+      this.database
+        .prepare(
+          `INSERT INTO authority_live_source_held_extractions_v1 (
+             source_key, external_id, organization_id, source_id, revision_id, extraction_admission_sha256,
+             review_lineage_id, review_input_sha256, attempt, failure_stage, held_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (source_key, review_lineage_id) DO UPDATE SET
+             source_id = excluded.source_id, revision_id = excluded.revision_id,
+             extraction_admission_sha256 = excluded.extraction_admission_sha256, review_input_sha256 = excluded.review_input_sha256,
+             attempt = excluded.attempt, failure_stage = excluded.failure_stage, updated_at = excluded.updated_at`,
+        )
+        .run(this.sourceKey, item.external_id, admission.organization_id, item.source_id, revision.revision_id, input.key.admission_sha256,
+          input.key.review_lineage_id, input.key.review_input_sha256, input.attempt, stage, now, now);
+      return stage;
+    }).immediate();
+  }
+
+  async listHeldExtractions(): Promise<readonly HeldExtractionV1[]> {
+    const rows = this.database
+      .prepare(
+        `SELECT external_id, source_id, revision_id, extraction_admission_sha256, review_lineage_id, review_input_sha256, attempt, failure_stage, held_at
+           FROM authority_live_source_held_extractions_v1 WHERE source_key = ? ORDER BY held_at, review_lineage_id`,
+      )
+      .all(this.sourceKey) as (Omit<HeldExtractionV1, "key"> & { extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string })[];
+    return rows.map(({ extraction_admission_sha256, review_lineage_id, review_input_sha256, ...held }) =>
+      Object.freeze({ ...held, key: { admission_sha256: extraction_admission_sha256, review_lineage_id, review_input_sha256 } }));
+  }
+
+  /** Verifies custody as the imported-meeting reader does: content, manifest and source identity digests. */
+  async readHeldMeeting(held: HeldExtractionV1): Promise<MeetingDocument> {
+    return this.database.transaction(() => {
+      const admission = this.activeAdmission();
+      assertAdmissionAdapterIdentity(admission, this.sourceCursorPolicy, this.expectedProcessorAdapterId);
+      const row = this.database
+        .prepare(
+          `SELECT revision.captured_at, revision.content_sha256, revision.revision_sha256, revision.manifest_json, content.content_json
+             FROM authority_live_source_held_extractions_v1 AS held
+             JOIN authority_source_revisions_v1 AS revision ON revision.organization_id = held.organization_id
+              AND revision.source_id = held.source_id AND revision.revision_id = held.revision_id
+             JOIN authority_source_contents_v1 AS content ON content.organization_id = revision.organization_id
+              AND content.source_id = revision.source_id AND content.revision_id = revision.revision_id
+            WHERE held.source_key = ? AND held.review_lineage_id = ? AND held.organization_id = ? AND held.source_id = ? AND held.revision_id = ?`,
+        )
+        .get(this.sourceKey, held.key.review_lineage_id, admission.organization_id, held.source_id, held.revision_id) as
+        { captured_at: string; content_sha256: string; revision_sha256: string; manifest_json: string; content_json: string } | undefined;
+      if (row === undefined) throw new Error("held meeting is absent from source custody");
+      const content = JSON.parse(row.content_json) as MeetingSourceContentV1;
+      const manifest = JSON.parse(row.manifest_json) as Record<string, unknown>;
+      const { captured_at: _capturedAt, ...immutable } = manifest;
+      if (canonicalSourceContentV1(content) !== row.content_json || sourceContentSha256V1(content) !== row.content_sha256 || sourceContentSha256V1(immutable) !== row.revision_sha256 ||
+        manifest.source_id !== held.source_id || manifest.revision_id !== held.revision_id || manifest.content_sha256 !== row.content_sha256) {
+        throw new Error("held meeting custody digest is invalid");
+      }
+      const meeting: MeetingDocument = { ...content, provenance: { ...content.provenance, observed_at: row.captured_at } };
+      assertCanonicalMeetingDocument(meeting, { kind: "meeting-source", adapter_id: admission.source_adapter_id, instance_id: admission.source_instance_id, version: admission.source_adapter_version });
+      const { item } = meetingSourceEnvelopeV1(meeting);
+      if (item.source_id !== held.source_id || item.external_id !== held.external_id || meeting.provenance.canonical_revision !== held.revision_id) {
+        throw new Error("held meeting differs from its custody");
+      }
+      return meeting;
     })();
+  }
+
+  async releaseHeldExtraction(held: HeldExtractionV1): Promise<void> {
+    this.database.prepare("DELETE FROM authority_live_source_held_extractions_v1 WHERE source_key = ? AND review_lineage_id = ? AND revision_id = ?")
+      .run(this.sourceKey, held.key.review_lineage_id, held.revision_id);
   }
 
   readCandidateByApprovalId(
@@ -720,7 +833,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
   private admission(): AdmissionRow {
     const admission = this.database
       .prepare(
-        `SELECT source_adapter_id,
+        `SELECT admission.organization_id, source_adapter_id,
                 source_adapter_instance_id AS source_instance_id,
                 source_adapter_version, initial_cursor AS cursor, cutoff_at,
                 processor_adapter_id, processor_instance_id,
@@ -741,6 +854,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       throw new Error("admitted meeting-processing has not been admitted");
     }
     return admission;
+  }
+
+  /** Whether a pull's transition still applies: the cursor is unchanged, or the source rebases it onto the current one. */
+  private pullStillApplies(expected: string, next: string | undefined, current: string): boolean {
+    return expected === current || (next !== undefined && this.rebaseCursor({ expected_cursor: expected, next_cursor: next, current_cursor: current }) !== undefined);
   }
 
   private activeAdmission(): AdmissionRow {

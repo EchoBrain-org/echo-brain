@@ -76,24 +76,29 @@ export function runOrganizationAuthorityExtractionAttemptCli(arguments_: readonl
     write({ action: "retry", outcome: "ledger_missing" }); return 1;
   }
   const store = openExtractionAttemptStoreV1(ledger, root);
+  const authority = <T>(read: (database: Database.Database) => T): T => {
+    const database = new Database(join(command.state, "authority.sqlite"), { readonly: true, fileMustExist: true });
+    try { return read(database); } finally { database.close(); }
+  };
   try {
     if (command.action === "status") {
-      const attempts = store.listLatest(command.limit).map(row => ({
-        admission_sha256: row.admission_sha256, review_lineage_id: row.review_lineage_id,
-        review_input_sha256: row.review_input_sha256, attempt: row.attempt, outcome: row.outcome,
-        failure_code: row.failure_code, retry_authorized: row.retry_authorized,
-      }));
+      // A key whose meeting is parked shows its allowlisted stage, never meeting content.
+      const held = new Map(authority(database => database.prepare(`SELECT extraction_admission_sha256, review_lineage_id, review_input_sha256, failure_stage
+        FROM authority_live_source_held_extractions_v1`).raw().all() as string[][]).map(([admission, lineage, input, stage]) => [`${admission} ${lineage} ${input}`, stage!]));
+      const attempts = store.listLatest(command.limit).map(row => {
+        const stage = held.get(`${row.admission_sha256} ${row.review_lineage_id} ${row.review_input_sha256}`);
+        return { admission_sha256: row.admission_sha256, review_lineage_id: row.review_lineage_id,
+          review_input_sha256: row.review_input_sha256, attempt: row.attempt, outcome: row.outcome,
+          failure_code: row.failure_code, retry_authorized: row.retry_authorized,
+          ...(stage === undefined ? {} : { held: true, failure_stage: stage }) };
+      });
       write({ action: "status", ledger_present: true, attempts }); return 0;
     }
     // Reuse is keyed by review input even across admission revisions. Never grant
     // another paid extraction while any frozen candidate already owns that input.
-    const authority = new Database(join(command.state, "authority.sqlite"), { readonly: true, fileMustExist: true });
-    let frozen: boolean;
-    try {
-      frozen = authority.prepare(`SELECT 1 FROM authority_live_source_candidates_v2
-        WHERE review_lineage_id = ? AND review_input_sha256 = ? LIMIT 1`)
-        .get(command.key.review_lineage_id, command.key.review_input_sha256) !== undefined;
-    } finally { authority.close(); }
+    const frozen = authority(database => database.prepare(`SELECT 1 FROM authority_live_source_candidates_v2
+      WHERE review_lineage_id = ? AND review_input_sha256 = ? LIMIT 1`)
+      .get(command.key.review_lineage_id, command.key.review_input_sha256) !== undefined);
     if (frozen) { write({ action: "retry", outcome: "frozen_candidate_exists" }); return 1; }
     const outcome = store.authorizeRetry({ key: command.key, expected_attempt: command.attempt,
       expected_outcome: command.outcome, ...(command.recoverPending ? { recover_pending: true } : {}) });

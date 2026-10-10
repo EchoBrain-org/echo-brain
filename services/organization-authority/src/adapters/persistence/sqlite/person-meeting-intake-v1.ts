@@ -115,13 +115,14 @@ export class SqlitePersonMeetingIntakeV1 {
       current();
     }).immediate();
   }
-  /** Cancelling a queued import also forgets the projects it was saved to. */
+  /** Cancelling an import also forgets the projects it was saved to and any parked extraction of it, which is then never retried. */
   cancelImport(setting: MeetingIntakeSettingV1, meetingId: string, current: () => void): void {
     this.db.transaction(() => {
       current(); this.currentPerson(setting);
       const checkpoint = this.checkpoint(setting.source_key);
       this.write(setting.source_key, { ...checkpoint, manual: checkpoint.manual.filter(id => id !== meetingId) });
       this.db.prepare('DELETE FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=?').run(setting.source_key, meetingId);
+      this.db.prepare('DELETE FROM authority_live_source_held_extractions_v1 WHERE source_key=? AND external_id=?').run(setting.source_key, meetingId);
       current();
     }).immediate();
   }
@@ -158,9 +159,10 @@ export class SqlitePersonMeetingIntakeV1 {
   }
   /**
    * Called inside the processing cursor-advance transaction, after its compare-and-set succeeded. Each
-   * import the advance drops from the queue has been processed: its pending projects become suggestions,
-   * except any project the person has since left. A cancelled import changed the cursor first, so its
-   * advance never succeeds and its (already deleted) pending projects are never recorded.
+   * import the advance drops from the queue was consumed, whether its meeting was staged or parked after a
+   * failed extraction: its pending projects become suggestions, except any project the person has since
+   * left. A cancelled import changed the cursor first, so its advance never succeeds and its (already
+   * deleted) pending projects are never recorded.
    */
   promoteConsumedImports(setting: MeetingIntakeSettingV1, expectedCursor: string, nextCursor: string): void {
     const next = new Set(this.cursor.read(nextCursor).manual);
@@ -172,6 +174,17 @@ export class SqlitePersonMeetingIntakeV1 {
       }
       this.db.prepare('DELETE FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=?').run(setting.source_key, externalId);
     }
+  }
+  /**
+   * The checkpoint a processing advance moves to when other imports were queued or cancelled after its pull: the pull's
+   * next checkpoint with the current queue, in order, minus what that pull consumed. Undefined when the consumed import
+   * was cancelled or anything but the queue changed (a folder or baseline), so those still refuse the advance.
+   */
+  rebase(transition: { readonly expected_cursor: string; readonly next_cursor: string; readonly current_cursor: string }): string | undefined {
+    const pulled = this.cursor.read(transition.expected_cursor), next = this.cursor.read(transition.next_cursor), now = this.cursor.read(transition.current_cursor);
+    const consumed = pulled.manual.filter(id => !next.manual.includes(id));
+    if (this.cursor.write({ ...pulled, manual: [] }) !== this.cursor.write({ ...now, manual: [] }) || consumed.some(id => !now.manual.includes(id))) return undefined;
+    return this.cursor.write({ ...next, manual: now.manual.filter(id => !consumed.includes(id)) });
   }
   private isMember(person: MeetingIntakePersonV1, projectId: string): boolean {
     try { this.currentPerson(person, projectId); return true; }

@@ -139,6 +139,8 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly external_identity_runtime_bundle?: PersonExternalIdentityRuntimeBundleV1;
   /** Present only after source admission; omitted during organization setup. */
   readonly answer_composition_generation?: AnswerCompositionGenerationBindingV1;
+  /** Background-priority model port for trigger and sweep research; they use the Ask port when absent. */
+  readonly answer_composition_background?: AnswerCompositionGenerationBindingV1["structured_output"];
   /** Bound by the active rebuild runtime so serving accepts the same model profile. */
   readonly readable_search_retrieval_contract_sha256?: import("@echo-brain/federation-protocol").Sha256Digest;
   /** Present only when the signed private-approval surface is active. */
@@ -366,7 +368,7 @@ export async function startOrganizationAuthorityApiRuntime(
       return Object.freeze({
         ...createPersonTriggerRunsV1({
           runs, sessions, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, audit: answerOptions.audit, bind_options: answerOptions, live_sources: liveSources,
-          research: ({ desk, context }) => createAgenticResearchV1({ desk, model: answerOptions.model, generation: answerOptions.generation, audit: answerOptions.audit.forRequest(context),
+          research: ({ desk, context }) => createAgenticResearchV1({ desk, model: dependencies.answer_composition_background ?? answerOptions.model, generation: answerOptions.generation, audit: answerOptions.audit.forRequest(context),
             ...(answerOptions.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}) }),
           items, people, ...(jiraOwners === undefined ? {} : { jira_owners: jiraOwners }),
         }),

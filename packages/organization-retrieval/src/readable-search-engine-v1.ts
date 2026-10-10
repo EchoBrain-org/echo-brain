@@ -1573,6 +1573,13 @@ function activeGenerationHandle(
   return handle;
 }
 
+/** True when the sole process-local handle already holds these validated rows. */
+export function isReadableSearchActiveGenerationWarmV1(
+  active: ReadableSearchActiveGenerationV1,
+): boolean {
+  return validatedActiveGenerationHandleV1?.key === activeGenerationKey(active);
+}
+
 /** Drops the sole process-local handle, primarily for shutdown and tests. */
 export function clearReadableSearchActiveGenerationV1(): void {
   validatedActiveGenerationHandleV1 = null;

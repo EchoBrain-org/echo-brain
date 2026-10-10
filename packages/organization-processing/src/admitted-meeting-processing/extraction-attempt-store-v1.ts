@@ -26,9 +26,13 @@ export interface ExtractionAttemptSnapshotV1 {
 export type ExtractionAttemptLatestV1 = ExtractionAttemptKeyV1 & ExtractionAttemptSnapshotV1 & {
   readonly retry_authorized: boolean;
 };
+export type ExtractionAttemptInspectionV1 = Omit<ExtractionAttemptSnapshotV1, 'completed_at'> & {
+  readonly retry_authorized: boolean;
+};
 export type ExtractionAttemptReservationV1 =
   | { readonly status: 'reserved'; readonly attempt: number; readonly claim_id: string }
-  | { readonly status: 'blocked'; readonly attempt: number; readonly outcome: ExtractionAttemptOutcomeV1; readonly failure_code: ExtractionAttemptFailureCodeV1 | null };
+  /** `reserved_at` lets a caller treat a fresh pending attempt as one still in flight. */
+  | { readonly status: 'blocked'; readonly attempt: number; readonly outcome: ExtractionAttemptOutcomeV1; readonly failure_code: ExtractionAttemptFailureCodeV1 | null; readonly reserved_at: string };
 export type ExtractionAttemptCompletionV1 = {
   readonly key: ExtractionAttemptKeyV1;
   readonly attempt: number;
@@ -41,4 +45,16 @@ export interface ExtractionAttemptStoreV1 {
   /** The reservation commits durably before this method returns. */
   reserve(key: ExtractionAttemptKeyV1): ExtractionAttemptReservationV1;
   complete(input: ExtractionAttemptCompletionV1): void;
+  /** Read-only: the latest attempt for one exact key, or undefined before its first reservation. */
+  inspect(key: ExtractionAttemptKeyV1): ExtractionAttemptInspectionV1 | undefined;
+  /**
+   * Permits exactly one more reservation after the expected latest attempt. Operators grant through the
+   * recovery CLI; the cycle grants only its own unbilled first failure. Without it the cycle parks that too.
+   */
+  authorizeRetry?(input: {
+    readonly key: ExtractionAttemptKeyV1;
+    readonly expected_attempt: number;
+    readonly expected_outcome: ExtractionAttemptOutcomeV1;
+    readonly recover_pending?: boolean;
+  }): 'authorized' | 'conflict';
 }
