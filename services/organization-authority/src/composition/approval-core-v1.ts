@@ -110,7 +110,7 @@ export interface ApprovalPresenterV1 {
 export type ApprovalPresenterFactoryV1 = (core: Pick<ApprovalCoreV1, 'proposal' | 'ownerProposals'>) => ApprovalPresenterV1;
 export interface ApprovalCoreV1 {
   /** Runtime-wide stager: stage = freeze; reconcilePendingDeliveries re-freezes queued heads of every configured source
-   *  (limit 25); reconcileSuperseded is a no-op (presenters redraw from proposal()). */
+   *  (limit 25). */
   readonly stager: ApprovalWorkflowStagerV1;
   /** Same stager, but its reconcilePendingDeliveries only touches one source, so one person's broken proposal never fails
    *  another person's intake cycle. The runtime's lanes use this. */
@@ -304,7 +304,7 @@ export async function createApprovalCoreV1(database: Database.Database, context:
     return frozen || items.length === 25;
   }
   const stagerFor = (sourceKey: string | undefined): ApprovalWorkflowStagerV1 => Object.freeze({
-    stage, reconcilePendingDeliveries: (ctx?: { readonly signal: AbortSignal }) => reconcile(ctx, sourceKey), async reconcileSuperseded() {},
+    stage, reconcilePendingDeliveries: (ctx?: { readonly signal: AbortSignal }) => reconcile(ctx, sourceKey),
   });
 
   // ---- decide ----

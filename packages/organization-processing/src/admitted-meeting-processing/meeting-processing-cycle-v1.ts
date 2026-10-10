@@ -199,10 +199,6 @@ export interface ApprovalWorkflowStagerV1 {
   reconcilePendingDeliveries(
     context?: { readonly signal: AbortSignal },
   ): Promise<boolean | void>;
-  /** Reconciles obsolete presentations; may be a no-op when presenters redraw from the proposal. */
-  reconcileSuperseded(
-    context?: { readonly signal: AbortSignal },
-  ): Promise<void>;
 }
 
 export type AdmittedMeetingProcessingCycleResultV1 =
@@ -687,9 +683,6 @@ export class AdmittedMeetingProcessingCycleV1 {
               signal,
             );
           }
-          if (frozen.disposition === "no_signals") {
-            await this.options.stager.reconcileSuperseded(operationContext(signal));
-          }
           return this.finishWithoutStage(
             "already_processed",
             admission,
@@ -824,7 +817,6 @@ export class AdmittedMeetingProcessingCycleV1 {
           next_cursor: nextCursor,
         });
         if (candidate.disposition !== "actionable") {
-          await this.options.stager.reconcileSuperseded(operationContext(signal));
           return candidate.disposition === "no_signals"
             ? this.finishWithoutStage(
                 "no_signals",
