@@ -127,7 +127,7 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
   close(): Promise<void>;
 }
 
-/** How long close() lets running meeting lanes finish before cancelling them; well under the 30 s container stop. */
+/** How long close() lets running meeting lanes finish before cancelling them; under the retry wrapper's 30 s stop. */
 const MEETING_LANE_GRACE_MS = 20_000;
 
 /**
@@ -497,7 +497,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
         const lanesFinished = Promise.race([meetingLanes(true), new Promise<void>((resolve) => { grace = setTimeout(resolve, MEETING_LANE_GRACE_MS); })])
           .finally(() => clearTimeout(grace));
         // Once the worker has stopped no cycle can start a meeting lane, so its aborted lanes are the last to wait for.
-        const workerClosed = lanesFinished.then(() => worker.close()).finally(() => meetingLanes());
+        const workerClosed = lanesFinished.then(() => worker.close(), () => worker.close()).finally(() => meetingLanes());
         // The other lanes outside the gate settle on the aborted shutdown signal.
         const lanesSettled = Promise.all([presentationTail, ungatedTail]);
         closed = (async () => {

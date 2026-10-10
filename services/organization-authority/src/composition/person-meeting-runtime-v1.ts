@@ -234,7 +234,7 @@ export function createPersonMeetingRuntimeV1(options: {
   let after = '';
   /** Sources due a pass and not running one, round-robin from the last one started. */
   function due(): MeetingIntakeSettingV1[] {
-    // The breaker pauses every source; a targeted pass (the staging canary) still runs.
+    // Shutdown and the breaker start no pass on any source; a targeted pass (the staging canary) still runs.
     if (stopped || Date.now() < pausedUntil) return [];
     // A source with an unfrozen proposal stays eligible until its freeze succeeds, even with nothing left to import.
     // So does a source with a parked meeting whose retry an operator authorized. A source already in flight is skipped.
