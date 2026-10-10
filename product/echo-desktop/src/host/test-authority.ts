@@ -101,7 +101,7 @@ interface SweepRun {
 }
 
 /** The granola modes whose projects are the meeting's: Thermostat redesign (Ari leads it) and Supplier review. */
-const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-owner-outage', 'granola-home-fails-once', 'granola-all', 'granola-checked', 'granola-review',
+const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-owner-outage', 'granola-home-fails-once', 'granola-checked', 'granola-review',
   'granola-sweep', 'granola-sweep-requeued', 'granola-alike']);
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
@@ -109,11 +109,6 @@ const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
 const MINA = { membership_id: 'mem_77777777-7777-4777-8777-777777777777', name: 'Mina Patel' };
 const RAFAEL = { membership_id: 'mem_88888888-8888-4888-8888-888888888888', name: 'Rafael Moreno' };
 const OKAFOR = { membership_id: 'mem_99999999-9999-4999-8999-999999999999', name: 'S. Okafor' };
-/** Another meeting waiting for Ari's approval, beside Pilot planning: granola-all's whole Home. */
-const SUPPLIER_SYNC = {
-  approval_id: 'apr_' + 'b'.repeat(64), title: 'Supplier sync', project_ids: [SUPPLIER], status: 'pending', decided_on: null,
-  first_line: 'Lead time stays six weeks.', action_count: 1, meeting_at: '2026-10-02T15:00:00.000Z',
-};
 
 /**
  * A fake-only list page: ten rows, so the desktop's More is exercised
@@ -126,7 +121,7 @@ const OPEN_ATOMS_BYTES = 32 * 1024;
 const ATOM_PART_BYTES = 3 * 1024;
 
 /** The modes where Ari has added notes, uploads and approved meetings of their own; `mine-empty` has none yet. */
-const MINE_MODES = new Set(['mine', 'owner-mine', 'mine-empty', 'mine-fails-once', 'mine-meetings-held', 'mine-unauthorized', 'mine-live-missing', 'mine-live-unavailable']);
+const MINE_MODES = new Set(['mine', 'owner-mine', 'mine-empty', 'mine-fails-once', 'mine-meetings-held', 'mine-unauthorized']);
 const PRICING_REVIEW = `sha256:${'7'.repeat(64)}`;
 const BEACON_KICKOFF = `sha256:${'8'.repeat(64)}`;
 const PRICING_MEMO = `doc_${'9'.repeat(64)}`;
@@ -561,16 +556,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       created_at: '2026-10-05T15:05:00.000Z', sent_at: sentToAri ? '2026-10-05T16:00:00.000Z' : null,
     }));
   }
-  if (mode === 'granola-all') {
-    openItems.push(minaSent({
-      item_id: 'itm_00000000-0000-4000-8000-000000000043', run_id: 'run_00000000-0000-4000-8000-000000000043', kind: 'ticket',
-      decision: { approval_id: 'apr_' + 'e'.repeat(64), record_sha256: sha('record:Kickoff review'), title: 'Kickoff review',
-        first_line: 'Freeze the firmware after the pilot.', approved_at: '2026-10-03T15:00:00.000Z', project_ids: [THERMOSTAT] },
-      readable: true, opens: true, live: { citation: ticket('ECHO-7', 'Firmware freeze', '10007'), says_now: 'The firmware freezes before the pilot.',
-        assignee: 'Ari', status: 'To Do', due_at: '2026-11-04' },
-      relation: 'conflicts', expected: 'freeze after the pilot', owner: { ...ARI, match: 'name' }, created_at: '2026-10-03T15:05:00.000Z', sent_at: '2026-10-03T16:00:00.000Z',
-    }));
-  }
   // granola-checked: Mina approved Kickoff review into Thermostat redesign and sent its three items to herself, Rafael and S.
   // Okafor; none is checked yet. Ari reads the decision, and none of its items involves Ari (canvas 9.7: "3 open" on its row).
   if (mode === 'granola-checked') {
@@ -689,7 +674,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   /** Ari's sweeps, newest first. */
   const sweepRuns: SweepRun[] = [];
   let homeReads = 0;
-  let supplierSync: 'pending' | 'approved' | 'rejected' = 'pending';
 
   // Your connections to the organization's tools, as Tools changes them.
   let slackLinked = true;
@@ -762,24 +746,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         case 'open': return json({ id: meetingId, title: 'Pilot planning', notes: 'Launch the pilot next week.', summary: 'Decision: launch.', truncated: false });
         case 'watch': granolaWatch = true; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
-        case 'reviews': return json({ reviews: [
-          ...(granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' ? [review] : []),
-          ...(mode === 'granola-all' ? [{ ...SUPPLIER_SYNC, status: supplierSync, decided_on: supplierSync === 'pending' ? null : 'desktop' }] : []),
-        ] });
-        case 'review_open':
-          if (body?.approval_id === SUPPLIER_SYNC.approval_id) {
-            return json({ review: { ...SUPPLIER_SYNC, status: supplierSync, decided_on: supplierSync === 'pending' ? null : 'desktop' }, snapshot_sha256: 'sha256:' + 'c'.repeat(64),
-              content: 'Supplier sync\nDecisions\nLead time stays six weeks.', owners: [{ signal_id: 'act-1', action: 'Update the supplier contract', proposed: 'Rafael Moreno' }],
-              suggested_projects: [{ project_id: SUPPLIER, name: 'Supplier review' }] });
-          }
-          return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.',
+        case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' ? [review] : [] });
+        case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.',
           owners: [{ signal_id: 'act-1', action: 'Send the revised quote', proposed: 'Rafael Moreno' }, { signal_id: 'act-2', action: 'Confirm the trace', proposed: 'Mina Patel' }],
           suggested_projects: [{ project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign' }] });
         case 'review':
-          if (body?.approval_id === SUPPLIER_SYNC.approval_id) {
-            supplierSync = body?.action === 'approve' ? 'approved' : 'rejected';
-            return json({ status: supplierSync, decided_on: 'desktop' });
-          }
           granolaReview = body; granolaApproved = true;
           if (body?.action === 'approve' && granolaRun === null && mode !== 'granola-publishing') granolaRun = { state: 'pending', error_code: null, lists: 0, retried: false };
           // The approved meeting: in the projects it was approved into, where its record opens.
@@ -1457,12 +1428,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       });
     }
     if (method === 'POST' && (path === '/v3/person/ask' || path === '/v4/person/ask' || path === '/v5/person/ask')) {
-      // Older accepted servers and unconfigured live connectors must not
-      // prevent Mine from reading the ordinary retained-context Ask route.
-      if (path !== '/v3/person/ask') {
-        if (mode === 'mine-live-missing') return failure('not_found', 404);
-        if (mode === 'mine-live-unavailable') return failure('unavailable', 503);
-      }
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
         request = (await contract()).validatePersonAnswerRequestV3(body);
