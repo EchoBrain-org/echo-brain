@@ -84,13 +84,19 @@ export interface OrganizationAuthorityServiceLifecycleDependencies {
 export interface RunningOrganizationAuthorityServiceLifecycle {
   readonly address: AddressInfo;
   /**
-   * Excludes search and every gated writer turn (recovery, publication, card
-   * presentation) for bounded operator mutations. Source intake and notes
-   * enrichment run outside the gate and are not excluded.
+   * Excludes search and every gated writer turn (recovery, publication) for
+   * bounded operator mutations. Source intake, notes enrichment, card
+   * presentation and `runUngated` work run outside the gate and are not excluded.
    */
   runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
-  /** Waits for the running cycle and queued writer/search work; callers must supply a bounded signal.
-   * This is a readiness barrier, not operator exclusion or a retry trigger. */
+  /**
+   * Runs bounded operator work that appends no records (the staging canary)
+   * outside the writer gate, one at a time, on the shutdown signal. Search and
+   * the worker keep running; drain and close wait for it.
+   */
+  runUngated<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
+  /** Waits for the running cycle, card presentation, ungated work and queued writer/search work; callers must supply a
+   * bounded signal. This is a readiness barrier, not operator exclusion or a retry trigger. */
   drain(signal: AbortSignal): Promise<void>;
   /**
    * Asks the worker to publish queued approval actions now instead of at the
@@ -104,7 +110,7 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
    * never blocks the caller; failures go to `on_worker_error`.
    */
   requestApprovalPublication(): void;
-  /** Stops the worker before closing the Authority API database handles. */
+  /** Stops the worker and waits for card presentation and ungated work before closing the Authority API database handles. */
   close(): Promise<void>;
 }
 
@@ -150,9 +156,10 @@ export async function runOrganizationAuthorityProcessingCycleV1(
  * Runs only the approval-publication phases of the cycle: finalize queued
  * actions and append approved ones to V4. The lifecycle requests search after
  * releasing the writer gate.
- * Source intake is deliberately excluded, and runs outside the gate, so an
- * approval never waits behind a source poll or an extraction call; it waits
- * only for other gated turns (recovery, publication, a card presentation).
+ * Source intake and card presentation are deliberately excluded, and run
+ * outside the gate, so an approval never waits behind a source poll, an
+ * extraction call or a Slack post; it waits only for other gated turns
+ * (recovery, publication, operator work).
  * The periodic cycle still runs these same phases, so a lost or failed
  * publication request is recovered by the next tick rather than by any retry
  * logic here.
@@ -243,6 +250,13 @@ export async function startOrganizationAuthorityServiceLifecycle(
       reportError,
     );
     let closing = false;
+    const shutdown = new AbortController();
+    // Work outside the writer gate runs on the shutdown signal in its own trace; close and drain wait for it.
+    const ungated = <T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> => observeCoreRuntimeRootV1("worker_execution", async () => {
+      shutdown.signal.throwIfAborted();
+      return operation(shutdown.signal);
+    }, dependencies.core_runtime_observation);
+    let ungatedTail: Promise<void> = Promise.resolve();
     let presentationPending = false;
     let presentationActive = false;
     let presentationImmediate: ReturnType<typeof setImmediate> | undefined;
@@ -287,13 +301,14 @@ export async function startOrganizationAuthorityServiceLifecycle(
     };
     const schedulePresentation = (): void => {
       if (closing || !presentationPending || presentationActive || presentationImmediate !== undefined) return;
-      // Yield between cards so a healthy burst cannot monopolize the writer
-      // gate or event loop. Each turn still attempts at most one pending card.
+      // Yield between turns so a healthy burst cannot monopolize the event
+      // loop. A turn handles one bounded page of cards outside the writer gate
+      // (its transitions are compare-and-swap guarded), one turn at a time so
+      // a card's backoff is never counted twice.
       presentationImmediate = setImmediate(() => {
         presentationImmediate = undefined;
         presentationActive = true;
-        void worker
-          .runExclusive(async (signal) => {
+        void ungated(async (signal) => {
             // Coalesce wakes while queued, but preserve one that arrives
             // after this attempt starts, including if the provider fails.
             presentationPending = false;
@@ -327,7 +342,6 @@ export async function startOrganizationAuthorityServiceLifecycle(
       }
       schedulePresentation();
     };
-    const shutdown = new AbortController();
     let publicationPending = false;
     let publicationImmediate: ReturnType<typeof setImmediate> | undefined;
     let publicationTail: Promise<void> = Promise.resolve();
@@ -389,6 +403,11 @@ export async function startOrganizationAuthorityServiceLifecycle(
           if (!closing) search.request();
         }
       },
+      runUngated: (operation) => {
+        const run = ungatedTail.then(() => ungated(operation));
+        ungatedTail = run.then(() => undefined, () => undefined);
+        return run;
+      },
       drain: async (deadline) => {
         const signal = AbortSignal.any([deadline, shutdown.signal]);
         signal.throwIfAborted();
@@ -404,11 +423,13 @@ export async function startOrganizationAuthorityServiceLifecycle(
             let observedPublication: Promise<void>;
             let observedPresentation: Promise<void>;
             let observedCycle: Promise<void>;
+            let observedUngated: Promise<void>;
             do {
               observedPublication = publicationTail;
               observedPresentation = presentationTail;
               observedCycle = cycleTail;
-              await Promise.all([observedPublication, observedPresentation, observedCycle]);
+              observedUngated = ungatedTail;
+              await Promise.all([observedPublication, observedPresentation, observedCycle, observedUngated]);
               signal.throwIfAborted();
               await worker.runExclusive(async () => undefined);
               signal.throwIfAborted();
@@ -417,7 +438,8 @@ export async function startOrganizationAuthorityServiceLifecycle(
             } while (
               publicationTail !== observedPublication ||
               presentationTail !== observedPresentation ||
-              cycleTail !== observedCycle
+              cycleTail !== observedCycle ||
+              ungatedTail !== observedUngated
             );
           })()]);
         } finally { signal.removeEventListener("abort", abort); }
@@ -443,10 +465,12 @@ export async function startOrganizationAuthorityServiceLifecycle(
         startedApi.stopAcceptingRequests?.();
         const searchClosed = search.close();
         const workerClosed = worker.close();
+        // The worker covers its cycle's passes; the lanes outside the gate settle on the aborted shutdown signal.
+        const lanesSettled = Promise.all([presentationTail, ungatedTail]);
         closed = (async () => {
           try {
             try {
-              await Promise.all([workerClosed, searchClosed]);
+              await Promise.all([workerClosed, searchClosed, lanesSettled]);
             } finally {
               await startedApi.close();
             }

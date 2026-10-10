@@ -263,6 +263,26 @@ describe("Organization Authority service lifecycle", () => {
     } finally { blockedSearch.resolve(); blockedOperator.resolve(); await runtime.close(); }
   });
 
+  it("runs ungated operator work beside publication and search, and closes handles only after it settles", async () => {
+    vi.useFakeTimers();
+    const work = deferred();
+    const events: string[] = [];
+    const runtime = await startLifecycle(60_000, { processing: processing(events) }, events);
+    await vi.advanceTimersByTimeAsync(1);
+    events.length = 0;
+    const canary = runtime.runUngated(async (signal) => { events.push("canary"); await work.promise; return signal.aborted; });
+    runtime.requestApprovalPublication();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(events).toEqual(["canary", "finalize", "append", "reconcile"]);
+    const closing = runtime.close();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(events).not.toContain("api-close");
+    work.resolve();
+    await expect(canary).resolves.toBe(true);
+    await closing;
+    expect(events.at(-1)).toBe("api-close");
+  });
+
   it("bounds drain waiting without cancelling shared search", async () => {
     vi.useFakeTimers();
     const blocked = deferred();
@@ -799,13 +819,14 @@ describe("Organization Authority service lifecycle", () => {
     }
   });
 
-  it("retains an approval-card wake that arrives during an active presentation", async () => {
+  it("publishes while a card presentation is blocked and retains the wake that publication sends", async () => {
     vi.useFakeTimers();
     const active = deferred();
+    const events: string[] = [];
     let presentationCalls = 0;
     const runtime = await startLifecycle(30_000, {
       processing: {
-        ...processing([]),
+        ...processing(events),
         reconcileApprovalPresentations: async () => {
           presentationCalls += 1;
           if (presentationCalls === 1) await active.promise;
@@ -816,8 +837,11 @@ describe("Organization Authority service lifecycle", () => {
     try {
       await vi.advanceTimersByTimeAsync(1);
       expect(presentationCalls).toBe(1);
+      events.length = 0;
 
       runtime.requestApprovalPublication();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(events).toEqual(["finalize", "append", "reconcile"]);
       active.resolve();
       await vi.advanceTimersByTimeAsync(10);
       await runtime.drain(new AbortController().signal);
@@ -871,9 +895,10 @@ describe("Organization Authority service lifecycle", () => {
     const runtime = await startLifecycle(30_000, {
       processing: {
         ...processing(events),
-        reconcileApprovalPresentations: async () => {
+        reconcileApprovalPresentations: async (signal) => {
           presentationCalls += 1;
-          await active.promise;
+          await active.promise; // Deliberately ignores abort until it settles.
+          events.push(signal.aborted ? "presentation-cancelled" : "presentation-settled");
           return "idle";
         },
       },
@@ -883,11 +908,12 @@ describe("Organization Authority service lifecycle", () => {
       expect(presentationCalls).toBe(1);
 
       const closing = runtime.close();
+      await vi.advanceTimersByTimeAsync(1);
       expect(events).not.toContain("api-close");
       active.resolve();
       await closing;
 
-      expect(events.at(-1)).toBe("api-close");
+      expect(events.slice(-2)).toEqual(["presentation-cancelled", "api-close"]);
     } finally {
       active.resolve();
       await runtime.close();
