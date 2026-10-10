@@ -192,10 +192,13 @@ export interface ApprovalWorkflowStagerV1 {
     input: ApprovalWorkflowStageInputV1,
     context?: { readonly signal: AbortSignal },
   ): Promise<ApprovalWorkflowStageResultV1>;
-  /** Freezes queued proposals independently of source intake. */
+  /**
+   * Freezes queued proposals independently of source intake. It may resolve
+   * true when it froze one or read a full page, so more may be left now.
+   */
   reconcilePendingDeliveries(
     context?: { readonly signal: AbortSignal },
-  ): Promise<void>;
+  ): Promise<boolean | void>;
   /** Reconciles obsolete presentations; may be a no-op when presenters redraw from the proposal. */
   reconcileSuperseded(
     context?: { readonly signal: AbortSignal },

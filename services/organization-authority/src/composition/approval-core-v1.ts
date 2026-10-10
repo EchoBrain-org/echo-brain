@@ -291,15 +291,17 @@ export async function createApprovalCoreV1(database: Database.Database, context:
       suggested_project_ids: suggested.sort().slice(0, APPROVAL_PROJECTS_MAX_V1) });
     return outbox.state === 'staged' ? { kind: 'staged', stage_id: approval_id } : { kind: 'state_drift' };
   }
-  async function reconcile(ctx: { readonly signal: AbortSignal } | undefined, sourceKey: string | undefined) {
+  /** Freezes up to a page of queued proposals; true when one froze or the page was full, so more may be left now. */
+  async function reconcile(ctx: { readonly signal: AbortSignal } | undefined, sourceKey: string | undefined): Promise<boolean> {
     const items = context.state.listPendingApprovalDeliveries({ limit: 25, ...(sourceKey === undefined ? {} : { source_key: sourceKey }) });
-    let first: unknown;
+    let first: unknown, frozen = false;
     for (const item of items) {
       ctx?.signal.throwIfAborted();
-      try { await stage({ admission: item.admission, candidate: item, meeting: item.meeting, decisions: item.decisions }); }
+      try { frozen = (await stage({ admission: item.admission, candidate: item, meeting: item.meeting, decisions: item.decisions })).kind === 'staged' || frozen; }
       catch (error) { first ??= error; }
     }
     if (first !== undefined) throw first;
+    return frozen || items.length === 25;
   }
   const stagerFor = (sourceKey: string | undefined): ApprovalWorkflowStagerV1 => Object.freeze({
     stage, reconcilePendingDeliveries: (ctx?: { readonly signal: AbortSignal }) => reconcile(ctx, sourceKey), async reconcileSuperseded() {},

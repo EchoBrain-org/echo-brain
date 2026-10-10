@@ -183,9 +183,9 @@ export function createPersonMeetingRuntimeV1(options: {
       intake.requireCurrent(setting);
       if (!retry && setting.folder_id === null && ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key).manual.length === 0) {
         // Only a failed freeze is left: retry it from the stored extraction, without the provider.
-        await (await approvals()).stagerForSource(setting.source_key).reconcilePendingDeliveries({ signal });
-        // More than one reconcile page left keeps the source eligible at once; a frozen source drops out.
-        observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() });
+        const progressed = await (await approvals()).stagerForSource(setting.source_key).reconcilePendingDeliveries({ signal });
+        // A full page or a freeze looks again at once (a frozen source drops out); a pass that froze nothing waits.
+        observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() + (progressed === true ? 0 : 30_000) });
         return;
       }
       processor.assert_admission_commitments(readAdmittedMeetingProcessingCommitmentsV1(db, setting.source_key));
