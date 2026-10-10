@@ -370,6 +370,7 @@ export async function openOrganizationAuthorityService(
           projectors: policyProjectors,
           nango_authorization: () => slack_nango.secret_key,
           provider_applications: [interaction],
+          ...(sharedConfig.core_runtime_observation === undefined ? {} : { observation: sharedConfig.core_runtime_observation }),
           approval_core: {
             after_record: [
               enqueueApprovedRecordRunV1(

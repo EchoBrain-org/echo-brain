@@ -20,6 +20,7 @@ import type { PersonHttpRuntimeResourcesV1 } from './organization-authority-api-
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { ApprovalCoreOptionsV1 } from './approval-core-v1.js';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
+import type { CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 
 /** Only this selecting bootstrap knows Granola or Nango; the processing/review runtime is shared. */
 export function openGranolaPersonLiveRuntimeV1(options: {
@@ -31,6 +32,8 @@ export function openGranolaPersonLiveRuntimeV1(options: {
   /** After-record hooks of the shared approval core (Task 13 registers its runs trigger here). */
   readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'after_record' | 'presenters'>;
   readonly provider_applications?: readonly ProviderHttpApplicationV1[];
+  /** The service's observation scope, for the meeting lanes' roots. */
+  readonly observation?: CoreRuntimeObservationScopeV1;
   readonly seams?: { readonly database?: Database.Database; readonly nango?: NangoPersonConnectionV1; readonly fetch?: typeof fetch };
 }) {
   const path = join(options.state_directory, 'granola-person-connections.sqlite'), owned = options.seams?.database === undefined;
@@ -51,6 +54,7 @@ export function openGranolaPersonLiveRuntimeV1(options: {
     const runtime = createPersonMeetingRuntimeV1({ database, sessions: options.sessions, processor: options.processor, extraction_attempts: attempts,
       ...(options.approval_core === undefined ? {} : { approval_core: options.approval_core }),
       ...(options.provider_applications === undefined ? {} : { provider_applications: options.provider_applications }),
+      ...(options.observation === undefined ? {} : { observation: options.observation }),
       approval: { coordinates, signer, on_terminal_action_queued: options.resources.on_processing_queued, record_append: new OrganizationRecordAppenderV4(record, coordinates, options.projectors), next_envelope_id: () => `env_${randomUUID()}` },
       providers: [{
         id: 'granola', normalizer_version: GRANOLA_MEETING_NORMALIZER_VERSION_V1,

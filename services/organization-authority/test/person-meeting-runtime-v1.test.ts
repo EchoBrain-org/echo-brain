@@ -17,6 +17,7 @@ vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (impo
   } };
 });
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { captureCoreRuntimeContentV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { ApprovedMeetingTranscriptGrantReaderV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256 } from '@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1';
 import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
@@ -97,9 +98,10 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   });
   const provider = fakeProvider('granola', GRANOLA_FOLDER_CURSOR_POLICY_V1.source_adapter_id);
   const sessions = { authenticateAccess: ({ access_token }: { access_token: string }) => authorization({ ...(actors[access_token as keyof typeof actors] ?? other), membership_type: access_token === 'owner' ? 'owner' : 'employee' }) };
-  const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append; readonly database?: Database.Database; readonly meeting_lanes?: number } = {}) =>
+  const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append; readonly database?: Database.Database; readonly meeting_lanes?: number; readonly observation?: CoreRuntimeObservationScopeV1 } = {}) =>
     createPersonMeetingRuntimeV1({ database: seams.database ?? f.db, approval: seams.record_append === undefined ? f.context : { ...f.context, record_append: seams.record_append }, providers,
     sessions, ...(seams.approval_core === undefined ? {} : { approval_core: seams.approval_core }), ...(seams.meeting_lanes === undefined ? {} : { meeting_lanes: seams.meeting_lanes }),
+    ...(seams.observation === undefined ? {} : { observation: seams.observation }),
     processor: { processor_adapter_id: 'llm', current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }), assert_admission_commitments() {},
       create_processor(admission) { const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
         return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
@@ -616,6 +618,15 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect([f.extracted(), f.pulls()]).toEqual([2, 2]);
     release(); await runtime.processing.settle?.();
     expect(f.extracted()).toBe(3);
+  });
+  it('captures a lane pass\'s model content under the observation scope it was given', async () => {
+    const f = await fixture(), content: string[] = [];
+    const runtime = f.create(undefined, { observation: { observer: () => undefined, content_observer: event => { content.push(event.content_kind); } } });
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    f.duringExtract(() => { f.duringExtract(undefined); captureCoreRuntimeContentV1('model_response', { body: 'model output' }); });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined);
+    await runtime.processing.settle?.();
+    expect([f.extracted(), content]).toEqual([1, ['model_response']]);
   });
   it('settles only after the top-up a settling lane starts', async () => {
     const f = await fixture(), runtime = f.create(), b = '00000000-0000-4000-8000-000000000004';

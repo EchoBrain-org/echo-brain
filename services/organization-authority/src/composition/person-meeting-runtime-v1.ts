@@ -4,7 +4,7 @@ import { PERSON_MEETINGS_PATH_V2, validatePersonMeetingRequestV2, validatePerson
   type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonSyntheticMeetingV1 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { observeCoreRuntimeRootV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { observeCoreRuntimeRootV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
 import type { AdmittedMeetingSourceCursorPolicyV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1';
 import type { DecisionProcessorBundleV1 } from '@echo-brain/organization-processing/ports/decision-processor-bundle-v1';
@@ -93,6 +93,8 @@ export function createPersonMeetingRuntimeV1(options: {
   readonly provider_applications?: readonly ProviderHttpApplicationV1[];
   /** Test seam for MEETING_LANES. */
   readonly meeting_lanes?: number;
+  /** The lifecycle's observation scope; each lane pass is a root under it, so staging content capture covers lanes. */
+  readonly observation?: CoreRuntimeObservationScopeV1;
 }) {
   const { database: db, providers, processor } = options, lanes = options.meeting_lanes ?? MEETING_LANES;
   if (providers.length === 0 || new Set(providers.map(p => p.id)).size !== providers.length || new Set(providers.map(p => p.cursor.policy.source_adapter_id)).size !== providers.length) {
@@ -241,7 +243,7 @@ export function createPersonMeetingRuntimeV1(options: {
       if (inFlight.size >= lanes) return;
       after = setting.source_key;
       // Each lane pass is its own trace, so concurrent lanes never annotate one another's spans.
-      track(setting, observeCoreRuntimeRootV1('worker_execution', () => runSource(setting, signal)))
+      track(setting, observeCoreRuntimeRootV1('worker_execution', () => runSource(setting, signal), options.observation))
         .catch((failure: unknown) => { if (!signal.aborted) report(failure); });
       // The entry settles after it is removed, so the top-up sees the freed lane. It waits a macrotask first, so a run
       // of quick passes never starves timers or requests.
