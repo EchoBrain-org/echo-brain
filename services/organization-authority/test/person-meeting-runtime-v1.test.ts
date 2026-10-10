@@ -617,6 +617,16 @@ describe('personal meeting intake uses the shared processing path', () => {
     release(); await runtime.processing.settle?.();
     expect(f.extracted()).toBe(3);
   });
+  it('settles only after the top-up a settling lane starts', async () => {
+    const f = await fixture(), runtime = f.create(), b = '00000000-0000-4000-8000-000000000004';
+    for (const meeting_id of [id, b]) await f.call(runtime, { operation: 'import', meeting_id, project_id: null, retain: true });
+    // `settled` runs after the lane has left the in-flight set and before its top-up starts the next import.
+    let settling: Promise<unknown> | undefined;
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined,
+      () => { settling ??= runtime.processing.settle!().then(() => f.count('authority_live_approval_outbox_v2')); });
+    await vi.waitFor(() => expect(settling).toBeDefined());
+    expect(await settling).toBe(2);
+  });
   it('consumes an import whose extraction failed and records its project choice, as for a staged one', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });

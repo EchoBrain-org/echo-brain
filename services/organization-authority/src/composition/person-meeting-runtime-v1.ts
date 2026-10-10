@@ -262,8 +262,10 @@ export function createPersonMeetingRuntimeV1(options: {
       after = setting.source_key;
       await track(setting, runSource(setting, signal));
     },
-    // A settled lane tops up after a macrotask, so look again after one.
-    async settle() { while (inFlight.size > 0) { await Promise.all(inFlight.values()); await new Promise(resolve => setImmediate(resolve)); } },
+    // A settled lane tops up after a macrotask, so always look again after one, even when nothing is in flight now.
+    async settle() {
+      do { await Promise.all(inFlight.values()); await new Promise(resolve => setImmediate(resolve)); } while (inFlight.size > 0);
+    },
   };
   /** Waits for any pass already running on this source, then runs one more whether or not its next poll is due. */
   async function pollAndStageSource(sourceKey: string, signal: AbortSignal): Promise<void> {
