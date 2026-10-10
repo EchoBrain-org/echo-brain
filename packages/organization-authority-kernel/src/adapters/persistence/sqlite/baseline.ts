@@ -18,6 +18,15 @@ export function authorityBaselineSha256V14(): Sha256Digest {
   return sha256Digest(authorityBaselineSqlV14());
 }
 
+/**
+ * Whether `database` holds current-baseline Authority state with foreign keys
+ * enabled. Authority table adapters refuse any other database when opened.
+ */
+export function isCurrentAuthorityState(database: Database.Database): boolean {
+  return database.pragma("user_version", { simple: true }) === AUTHORITY_BASELINE_SCHEMA_VERSION_V14 &&
+    database.pragma("foreign_keys", { simple: true }) === 1;
+}
+
 /** V14 applies only to a completely empty fresh Authority database. */
 export function applyAuthorityBaselineV14(database: Database.Database): void {
   applyEmptyAuthorityBaseline(database, authorityBaselineSqlV14(), AUTHORITY_BASELINE_SCHEMA_VERSION_V14);

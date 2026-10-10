@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import { AUTHORITY_BASELINE_SCHEMA_VERSION_V14, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { canonicalJson, canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { assertPersonDocumentOriginalV1, PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES, PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentIdV1, type PersonDocumentSavedV1, type PersonDocumentSavedV2, type PersonDocumentUploadResultV1, type PersonDocumentUploadResultV2, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1, type PersonDocumentAssociationReceiptV1, type PersonDocumentUploadMetadataV1, type PersonDocumentUploadMetadataV2, type PersonDocumentReceiptV1, type PersonDocumentReceiptV2, type PersonDocumentMetadataV1, type PersonDocumentMetadataV2, type PersonDocumentMediaTypeV1, type PersonDocumentExtractionStateV1, type PersonDocumentTextChunkV1, type PersonDocumentTextV1, type PersonDocumentSearchV1, type PersonDocumentSearchV2, type PersonDocumentSearchResultV1, type PersonDocumentSearchResultV2, type PersonDocumentStatusV2, type ProjectIdV1, type PersonUploadAudienceV3 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
@@ -63,7 +64,7 @@ function metadataV2(row: Row, association_project_ids: readonly ProjectIdV1[], p
 export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositoryV1 {
   readonly sourceAdmission: SqliteSourceAdmissionStoreV1;
   constructor(private readonly database: Database.Database, private readonly now: () => string = () => new Date().toISOString()) {
-    if (database.pragma('user_version', { simple: true }) !== 14 || database.pragma('foreign_keys', { simple: true }) !== 1) throw new Error('Documents require Authority V14 and foreign keys');
+    if (!isCurrentAuthorityState(database)) throw new Error(`Documents require Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION_V14} and foreign keys`);
     // SQLite lower() only folds ASCII. Keep title filtering inside the paged,
     // authorized query while applying the same Unicode rules as request input.
     database.function('echo_document_title_contains_v1', { deterministic: true }, (title, query) =>

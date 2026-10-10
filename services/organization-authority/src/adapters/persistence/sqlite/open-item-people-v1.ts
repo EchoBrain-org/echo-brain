@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { AUTHORITY_BASELINE_SCHEMA_VERSION_V14, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 
 /** A display name compared whole: NFC, case ignored, runs of whitespace as one space. */
 function comparableName(value: string): string {
@@ -12,8 +13,8 @@ function comparableName(value: string): string {
  */
 export class SqliteOpenItemPeopleV1 {
   constructor(private readonly database: Database.Database) {
-    if (database.pragma('user_version', { simple: true }) !== 14 || database.pragma('foreign_keys', { simple: true }) !== 1) {
-      throw new Error('Open item people require Authority V14 state with foreign keys enabled');
+    if (!isCurrentAuthorityState(database)) {
+      throw new Error(`Open item people require Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION_V14} state with foreign keys enabled`);
     }
   }
 
