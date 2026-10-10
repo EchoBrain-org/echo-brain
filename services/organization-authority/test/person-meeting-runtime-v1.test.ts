@@ -24,6 +24,7 @@ import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-bra
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
 import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_FOLDER_CURSOR_POLICY_V1 } from '@echo-brain/provider-granola/granola-folder-source-v1';
 import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
+import { AdapterError } from '@echo-brain/organization-processing/core/contracts/adapter';
 import { providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
 import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
@@ -638,6 +639,17 @@ describe('personal meeting intake uses the shared processing path', () => {
       () => { settling ??= runtime.processing.settle!().then(() => f.count('authority_live_approval_outbox_v2')); });
     await vi.waitFor(() => expect(settling).toBeDefined());
     expect(await settling).toBe(2);
+  });
+  it('starts no lane for a minute after a transient provider failure, then resumes', async () => {
+    const f = await fixture(), runtime = f.create(undefined, { meeting_lanes: 1 });
+    for (const token of ['owner', 'other']) await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true }, token);
+    const cycle = async () => { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined); await runtime.processing.settle?.(); };
+    f.failNextExtraction(new AdapterError('timeout', 'provider timed out', true));
+    // Neither the failed lane's top-up nor the next cycle starts the other person's import.
+    await cycle(); await cycle();
+    expect([f.extracted(), f.held()]).toEqual([1, [expect.objectContaining({ failure_stage: 'timeout' })]]);
+    const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+    try { await cycle(); expect(f.extracted()).toBe(2); } finally { later.mockRestore(); }
   });
   it.each([false, true])('retries an unbilled first failure once, automatically, from the head of its queue (the retry fails: %s)', async (failsAgain) => {
     const f = await fixture(), runtime = f.create();

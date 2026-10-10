@@ -81,6 +81,8 @@ export async function queuePersonMeetingsV1(input: {
  * backpressure; a lane mostly waits on the provider and the model.
  */
 const MEETING_LANES = 3;
+/** Extraction stages that mean the provider is refusing or struggling; one trips the runtime-wide breaker. */
+const TRANSIENT_STAGES = new Set<string>(['rate_limited', 'temporarily_unavailable', 'timeout']);
 /** Meeting lanes over shared custody/candidates/append, and one approval core for every proposal. */
 export function createPersonMeetingRuntimeV1(options: {
   readonly database: Database.Database; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
@@ -167,6 +169,8 @@ export function createPersonMeetingRuntimeV1(options: {
     const text = parts.filter(part => part !== undefined && part !== null).join(' ');
     return text === '' ? null : text.slice(0, 512);
   }
+  // The breaker: after a transient provider failure no source starts a pass until this time; running ones finish.
+  let pausedUntil = 0;
   // One pass per source at a time in this process saves wasted pulls; the attempt ledger's lease and the cursor
   // compare-and-swap keep passes in another process or after a restart correct.
   const inFlight = new Map<string, Promise<void>>();
@@ -204,6 +208,7 @@ export function createPersonMeetingRuntimeV1(options: {
           scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
       });
       const outcome = await (retry ? cycle.retryHeldOnce(signal) : cycle.runOnce(signal));
+      if ((outcome.kind === 'held' || outcome.kind === 'retry_scheduled') && TRANSIENT_STAGES.has(outcome.stage)) pausedUntil = Date.now() + 60_000;
       const queued = retry || sourceIntake.checkpoint(setting.source_key).manual.length > 0 || (outcome.cursor_advanced && !outcome.kind.startsWith('empty'));
       // A pull that left its queue where it was never re-pulls at once: an automatic retry, or a head in flight elsewhere
       // (another process, or a crash's unexpired lease), waits a minute; anything else (a lost compare-and-swap) about
@@ -228,6 +233,8 @@ export function createPersonMeetingRuntimeV1(options: {
   let after = '';
   /** Sources due a pass and not running one, round-robin from the last one started. */
   function due(): MeetingIntakeSettingV1[] {
+    // The breaker pauses every source; a targeted pass (the staging canary) still runs.
+    if (Date.now() < pausedUntil) return [];
     // A source with an unfrozen proposal stays eligible until its freeze succeeds, even with nothing left to import.
     // So does a source with a parked meeting whose retry an operator authorized. A source already in flight is skipped.
     // Cheap checks first: a source's held rows are read, and its grants inspected, only when it is otherwise due.
