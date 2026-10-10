@@ -72,6 +72,17 @@ describe('model call limiter', () => {
     expect(f.started.at(-1)).toBe('b5');
   });
 
+  it.each([{ diagnostic: { http_status: 503 } }, { code: 'temporarily_unavailable' }, { code: 'timeout' }])('pauses background calls after a provider outage: %o', async (outage) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const f = held();
+    void f.call('b1', 'background').catch(() => undefined); await flush();
+    await f.release('b1', outage);
+    void f.call('b2', 'background'); void f.call('i1', 'interactive'); await flush();
+    expect(f.started).toEqual(['b1', 'i1']);
+    await vi.advanceTimersByTimeAsync(5_000); await flush();
+    expect(f.started).toEqual(['b1', 'i1', 'b2']);
+  });
+
   it('pauses once for concurrent 429s, ignores calls admitted before the pause, and doubles on the next episode', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const f = held();

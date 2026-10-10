@@ -12,18 +12,23 @@ const MAX_BACKGROUND = 4;
 const COOLDOWN_MIN_MS = 5_000;
 const COOLDOWN_MAX_MS = 60_000;
 
-function rateLimited(error: unknown): boolean {
-  const value = error as { readonly diagnostic?: { readonly http_status?: unknown }; readonly code?: unknown } | null;
-  return typeof value === "object" && value !== null && (value.diagnostic?.http_status === 429 || value.code === "rate_limited");
+/** The provider refused or is struggling: a 408, 429 or 5xx reply, a rate limit, a temporary failure or a timeout. */
+function transient(error: unknown): boolean {
+  const value = error as { readonly diagnostic?: { readonly http_status?: unknown; readonly failure_class?: unknown }; readonly code?: unknown } | null;
+  if (typeof value !== "object" || value === null) return false;
+  const status = value.diagnostic?.http_status;
+  return status === 408 || status === 429 || (typeof status === "number" && status >= 500) || value.diagnostic?.failure_class === "adapter_timeout"
+    || value.code === "rate_limited" || value.code === "temporarily_unavailable" || value.code === "timeout";
 }
 
 /**
  * One process-wide gate for the Authority's model calls, which share one
  * OpenRouter credential. Interactive calls (Ask) are served first and may use
  * every slot; background calls (extraction, notes, search, trigger research)
- * use at most four. It never retries: a 429 only pauses background admission,
- * once per episode, 5 s doubling to 60 s until a call succeeds. Callers wrap
- * the call itself, so time spent queued never counts against its own timeout.
+ * use at most four. It never retries: a 429, a 5xx, a temporary failure or a
+ * timeout only pauses background admission, once per episode, 5 s doubling to
+ * 60 s until a call succeeds. Callers wrap the call itself, so time spent
+ * queued never counts against its own timeout.
  */
 export function createModelCallLimiterV1(): ModelCallLimiterV1 {
   let active = 0;
@@ -68,7 +73,7 @@ export function createModelCallLimiterV1(): ModelCallLimiterV1 {
         if (current()) cooldownMs = 0;
         return value;
       } catch (error) {
-        if (rateLimited(error) && current()) {
+        if (transient(error) && current()) {
           cooldownMs = Math.min(cooldownMs === 0 ? COOLDOWN_MIN_MS : cooldownMs * 2, COOLDOWN_MAX_MS);
           pausedUntil = Date.now() + cooldownMs;
           pauses++;
