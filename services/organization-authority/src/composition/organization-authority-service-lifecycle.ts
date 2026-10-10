@@ -93,12 +93,6 @@ export interface OrganizationAuthorityServiceLifecycleDependencies {
 export interface RunningOrganizationAuthorityServiceLifecycle {
   readonly address: AddressInfo;
   /**
-   * Excludes search and every gated writer turn (recovery, publication) for
-   * bounded operator mutations. Source intake, notes enrichment, card
-   * presentation and `runUngated` work run outside the gate and are not excluded.
-   */
-  runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
-  /**
    * Runs bounded operator work that appends no records (the staging canary)
    * outside the writer gate, one at a time, on the shutdown signal. Search and
    * the worker keep running; drain and close wait for it.
@@ -416,20 +410,6 @@ export async function startOrganizationAuthorityServiceLifecycle(
     let closed: Promise<void> | undefined;
     return {
       address: startedApi.address,
-      runExclusive: async (operation) => {
-        shutdown.signal.throwIfAborted();
-        search.suspend();
-        try {
-          return await worker.runExclusive(async (signal) => {
-            await search.waitForActive();
-            signal.throwIfAborted();
-            return operation(signal);
-          });
-        } finally {
-          search.resume();
-          if (!closing) search.request();
-        }
-      },
       runUngated: (operation) => {
         const run = ungatedTail.then(() => ungated(operation));
         ungatedTail = run.then(() => undefined, () => undefined);

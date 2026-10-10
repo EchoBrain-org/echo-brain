@@ -2,7 +2,6 @@
 export class ReadableSearchReconciliationTask {
   private readonly controller = new AbortController();
   private pending = false;
-  private suspended = 0;
   private immediate: ReturnType<typeof setImmediate> | undefined;
   private active: Promise<void> | undefined;
   private idle: Promise<void> = Promise.resolve();
@@ -24,7 +23,7 @@ export class ReadableSearchReconciliationTask {
 
   private schedule(): void {
     if (!this.pending || this.active !== undefined || this.immediate !== undefined ||
-        this.suspended > 0 || this.controller.signal.aborted) return;
+        this.controller.signal.aborted) return;
     // Snapshot and synchronous build work must never start on the writer stack.
     this.immediate = setImmediate(() => {
       this.immediate = undefined;
@@ -49,19 +48,6 @@ export class ReadableSearchReconciliationTask {
       else this.finishIdle();
     }
   }
-
-  /** Operator work keeps its original exclusion from both writers and search. */
-  suspend(): void {
-    this.suspended++;
-    this.cancelImmediate();
-  }
-
-  resume(): void {
-    this.suspended--;
-    this.schedule();
-  }
-
-  async waitForActive(): Promise<void> { await this.active; }
 
   async drain(): Promise<void> {
     // A completion callback may enqueue the next wake before this continuation.
