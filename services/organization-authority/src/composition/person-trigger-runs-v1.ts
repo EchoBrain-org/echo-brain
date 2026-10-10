@@ -141,6 +141,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     // The items are written in the transaction that stores the card, so a run is never done without them.
     return { result: value, ...(drafts.length === 0 ? {} : { writes: () => (transaction: Database.Database) => options.items.insertForRun(transaction, row, drafts) }) };
   };
+  const authenticates = (token: string) => { try { options.sessions.authenticateAccess({ access_token: token }); return true; } catch { return false; } };
   const launch = (row: TriggerRunRowV1, token: string, authorization: PersonAccessAuthorization, lease_token: string, capture?: PersonDiagnosticCaptureHandleV1) => {
     const controller = new AbortController(); controllers.add(controller);
     const attemptId = randomUUID();
@@ -169,9 +170,11 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
         if (!persisted) throw new AuthorityOperationError('conflict', 'The research attempt no longer owns its run');
       } catch (error) {
         if (closing && controller.signal.aborted) throw error;
-        // The desktop's access token rotates every 12 h, revoking the old one: while the membership is active no attempt is spent.
-        // This relies on `start` checking access again before any model call, so a lasting `unauthorized` cannot loop paid calls.
-        const rotated = error instanceof AuthorityOperationError && error.code === 'unauthorized' && options.people.isActiveMember(row.actor.organization_id, row.actor.membership_id);
+        // The desktop's access token rotates every 12 h, revoking the old one: a run whose token no longer authenticates while
+        // its membership is active spends no attempt. Any other `unauthorized` fails as no_access. This relies on `start`
+        // checking access again before any model call, so a lasting `unauthorized` cannot loop paid calls.
+        const rotated = error instanceof AuthorityOperationError && error.code === 'unauthorized' && !authenticates(token)
+          && options.people.isActiveMember(row.actor.organization_id, row.actor.membership_id);
         if (error instanceof PersonRecordSearchIndexLagV1 || rotated) options.runs.release(row.run_id, lease_token, { counted: false });
         else if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'stale_access_state' || error.code === 'not_found')) options.runs.fail(row.run_id, lease_token, 'no_access');
         else if (controller.signal.aborted || error instanceof AgenticAskDeadlineErrorV1) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'timed_out' });

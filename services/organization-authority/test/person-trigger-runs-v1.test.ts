@@ -24,13 +24,13 @@ const ticket = { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: 'c
 const card = { decided: [{ text: 'Approved display decision.', citation_index: 0 }], affected: [{ citation_index: 1, says_now: 'ignored', relation: 'conflicts' as const }], unconfirmed: [], people: [], status: 'assessed' as const,
   citations: [{ citation: record, kind: 'decision' as const, label: 'Approved display', visibility: 'team' as const }, { citation: ticket, kind: 'ticket' as const, label: 'Kestrel cooling fan drift 0xC0FFEE', visibility: 'only_me' as const }] };
 
-async function fixture(options: { readonly anchor?: () => typeof record; readonly render?: (input: { readonly signal?: AbortSignal }) => Promise<unknown> } = {}) {
+async function fixture(options: { readonly anchor?: () => typeof record; readonly render?: (input: { readonly signal?: AbortSignal }) => Promise<unknown>; readonly rotated?: () => boolean } = {}) {
   let now = new Date('2026-10-07T10:00:00.000Z');
   const f = await approvalCoreFixture(); const runs = new SqliteTriggerRunsV1(f.db, () => now);
   f.core.decide('desktop', f.approve(), () => f.session);
   await f.publisher([enqueueApprovedRecordRunV1(runs)]).appendFinalizedApprovalsToV4(new AbortController().signal);
   const row = runs.list(f.person, 1)[0]!;
-  const auth = (token: string) => token === 'approver' ? { ...f.person, session_family_id: 'family', checked_at: now.toISOString() } :
+  const auth = (token: string) => token === 'approver' && options.rotated?.() !== true ? { ...f.person, session_family_id: 'family', checked_at: now.toISOString() } :
     token === 'other' ? { ...f.person, principal_id: 'prn_00000000-0000-4000-8000-0000000000f1', membership_id: 'mem_00000000-0000-4000-8000-0000000000f2', session_family_id: 'other', checked_at: now.toISOString() } : (() => { throw new AuthorityOperationError('unauthorized', 'bad token'); })();
   const openCitation = vi.fn(async ({ citation }: { readonly citation: unknown }) => ({ items: [{ citation: (citation as { kind: string }).kind === 'approved_record' ? record : ticket, kind: (citation as { kind: string }).kind === 'approved_record' ? 'decision' : 'ticket', label: 'Current title', visibility: 'team', text: 'Current live ticket text', receipt_sha256: canonicalSha256('receipt') }], truncated: false, receipt_digests: [] }));
   const desk = { openCitation, revalidate: vi.fn(async () => ({ checked_at: now.toISOString() })) };
@@ -163,9 +163,14 @@ describe('durable approved-record trigger runs', () => {
     const lag = await fixture({ anchor: () => { throw new PersonRecordSearchIndexLagV1(); } });
     await lag.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: lag.row.run_id } }); await lag.settled();
     expect(lag.runs.read(lag.person, lag.row.run_id)).toMatchObject({ state: 'pending', attempts: 0 });
-    const rotated = await fixture({ anchor: () => { throw new AuthorityOperationError('unauthorized', 'access token was rotated'); } });
+    let revoked = false;
+    const rotated = await fixture({ anchor: () => { revoked = true; throw new AuthorityOperationError('unauthorized', 'access token was rotated'); }, rotated: () => revoked });
     await rotated.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: rotated.row.run_id } }); await rotated.settled();
     expect(rotated.runs.read(rotated.person, rotated.row.run_id)).toMatchObject({ state: 'pending', attempts: 0, error_code: null });
+    // `unauthorized` while the run's token still authenticates is not a rotation.
+    const refused = await fixture({ anchor: () => { throw new AuthorityOperationError('unauthorized', 'not allowed'); } });
+    await refused.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: refused.row.run_id } }); await refused.settled();
+    expect(refused.runs.readUnfenced(refused.row.run_id)).toMatchObject({ state: 'failed', error_code: 'no_access' });
     const timeout = await fixture({ render: async () => { throw new AgenticAskDeadlineErrorV1(); } });
     for (let at = 0; at < 3; at++) { await timeout.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: timeout.row.run_id } }); await timeout.settled(); }
     expect(timeout.runs.read(timeout.person, timeout.row.run_id)).toMatchObject({ state: 'failed', error_code: 'timed_out', attempts: 3 });
