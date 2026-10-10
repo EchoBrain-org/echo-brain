@@ -112,7 +112,8 @@ It is pure, reads only `MeetingDocument`, and never branches on the source.
 |---|---|
 | A cited ID differs only in case, or names a split unit's parent (`T12` for `T12.1`, `T12.2`) | Read it in upper case; a parent ID cites all its parts. |
 | An item cites at least one unknown ID but also valid ones | Drop the unknown IDs and keep the item. |
-| An item's cited units hold more than 3,000 characters of text | Keep cited units in citation order until the next one would pass the 3,000-character evidence budget; the first is always kept. This bounds the approved record, which is limited to 256 KiB. A six-unit count cap hid real support: on the 12-meeting run, 41 of 93 delivered items hit it, and judged with their full citations 77 were supported instead of 66. |
+| An item's cited units hold more than 3,000 characters of text | Keep cited units in citation order until the next one would pass the 3,000-character evidence budget; the first is always kept. A six-unit count cap hid real support: on the 12-meeting run, 41 of 93 delivered items hit it, and judged with their full citations 77 were supported instead of 66. |
+| The meeting's evidence is over 160,000 bytes, counted as each span's JSON in UTF-8 | Drop the last span of the item with the most evidence bytes that still has more than one span (the earlier item on a tie), until it fits or every item has one span. This runs before ids are computed. An item trimmed into a repeat of an earlier one is dropped, and rationale links follow the earlier one. The per-item budget alone does not bound the approved record (256 KiB, checked only at Approve): each span carries up to about 200 bytes of fields, and CJK text is 3 bytes per character. |
 | An item cites no valid unit | Set aside (`evidence_id`). |
 | A rationale links to no surviving decision | Set aside (`rationale_supports`). |
 | Two items have the same kind, text and units | Keep the first. A rationale linked to the dropped copy links to the kept one. |
@@ -143,7 +144,9 @@ operational metadata.
   the record are unchanged, with one Slack presenter fix: a card that cannot
   be built marks only its own row unrepresentable (or backs it off once
   posted) instead of stalling every later card. Real meetings now yield 10–25
-  items, which made that stall reachable.
+  items, which made that stall reachable. `unrepresentable` therefore means
+  the Slack card for that approval could not be built (too large for Slack, or
+  a build error), not only that it exceeds Slack's limits.
 
 ## Deploy consequence
 
