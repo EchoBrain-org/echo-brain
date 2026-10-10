@@ -150,7 +150,7 @@ function admissionFrom(
  * materializes a one-row progress checkpoint from the already immutable
  * admission. Subsequent advances compare the expected persisted cursor inside
  * one SQLite transaction, so no runner can overwrite a newer checkpoint; one
- * that has only gained appended imports is rebased through the source's port.
+ * whose queue changed only by other imports is rebased through the source's port.
  */
 export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeetingProcessingStateV1, ApprovalWorkflowStateV1 {
   constructor(
@@ -173,8 +173,10 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     private readonly afterCursorAdvance: (transition: { readonly expected_cursor: string; readonly next_cursor: string }) => void = () => {},
     /**
      * The source's opaque cursor rebase: where a pull from `expected_cursor` that produced `next_cursor` advances from
-     * `current_cursor`, or undefined unless the only change since the pull is appended imports. Without it, any change
-     * since the pull refuses.
+     * `current_cursor` when other imports were queued or cancelled since, or undefined when what the pull consumed is
+     * no longer queued or anything else changed. Stage, park and advance all pass the pull's real next cursor: a
+     * transition that consumes nothing (`next_cursor` equal to `expected_cursor`) accepts any queue change.
+     * Without it, any change since the pull refuses.
      */
     private readonly rebaseCursor: (transition: { readonly expected_cursor: string; readonly next_cursor: string; readonly current_cursor: string }) => string | undefined = () => undefined,
   ) {
@@ -262,7 +264,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       );
       if (
         input.admission.source.adapter_id !== current.source.adapter_id ||
-        !this.onlyAppendedSince(input.admission.source.cursor, current.source.cursor) ||
+        !this.pullStillApplies(input.admission.source.cursor, input.next_cursor, current.source.cursor) ||
         input.admission.source.instance_id !== current.source.instance_id ||
         input.admission.source.version !== current.source.version ||
         input.admission.processor.adapter_id !==
@@ -572,11 +574,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     const updatedAt = this.canonicalNow();
     return this.database.transaction(() => {
       this.requireSourceCurrent();
-      // Imports queued since the pull stay queued: the advance moves from the current cursor to the rebased one.
-      const at = this.database.prepare("SELECT cursor FROM authority_live_source_progress_v2 WHERE source_key = ?").pluck().get(this.sourceKey) as string | undefined;
-      const rebased = at === undefined || at === input.expected_cursor ? undefined : this.rebaseCursor({ ...input, current_cursor: at });
+      // Other imports queued or cancelled since the pull are kept: the advance moves from the current cursor to the rebased one.
+      const at = (this.database.prepare("SELECT cursor FROM authority_live_source_progress_v2 WHERE source_key = ?").pluck().get(this.sourceKey) as string | undefined) ?? input.expected_cursor;
+      const rebased = at === input.expected_cursor ? undefined : this.rebaseCursor({ ...input, current_cursor: at });
       if (rebased !== undefined) this.sourceCursorPolicy.assert_live_cursor(rebased);
-      const transition = rebased === undefined || rebased === at ? input : { expected_cursor: at as string, next_cursor: rebased };
+      const transition = rebased === undefined || rebased === at ? input : { expected_cursor: at, next_cursor: rebased };
       const update = this.database
         .prepare(
           `UPDATE authority_live_source_progress_v2
@@ -606,12 +608,12 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       return admission.membership_status === "active"
         ? "state_drift"
         : "revoked";
-    })();
+    }).immediate();
   }
 
   /**
-   * Never moves the cursor. Given the cursor its revision was pulled at, it parks nothing unless the cursor has since
-   * only gained appended imports, so an import cancelled during extraction leaves no parked revision.
+   * Never moves the cursor. Given the cursor its revision was pulled at, it parks nothing when that pull no longer
+   * applies, so an import cancelled during its extraction leaves no parked revision.
    */
   async holdExtraction(input: HoldExtractionInputV1): Promise<ExtractionFailureStageV1> {
     return this.database.transaction(() => {
@@ -624,7 +626,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
         input.key.review_input_sha256 !== reviewInputSha256V1({ meeting: input.meeting, processor: current.processor })) {
         throw new Error("held extraction key differs from its meeting");
       }
-      if (input.expected_cursor !== undefined && !this.onlyAppendedSince(input.expected_cursor, current.source.cursor)) return input.failure_stage;
+      if (input.expected_cursor !== undefined && !this.pullStillApplies(input.expected_cursor, input.next_cursor, current.source.cursor)) return input.failure_stage;
       const stored = this.database
         .prepare("SELECT extraction_admission_sha256, review_input_sha256, attempt, failure_stage FROM authority_live_source_held_extractions_v1 WHERE source_key = ? AND review_lineage_id = ?")
         .get(this.sourceKey, input.key.review_lineage_id) as { extraction_admission_sha256: string; review_input_sha256: string; attempt: number; failure_stage: ExtractionFailureStageV1 } | undefined;
@@ -854,9 +856,9 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     return admission;
   }
 
-  /** Whether the cursor a revision was pulled at is current or has since only gained appended imports (a rebase that consumes nothing answers it). */
-  private onlyAppendedSince(expected: string, current: string): boolean {
-    return expected === current || this.rebaseCursor({ expected_cursor: expected, next_cursor: expected, current_cursor: current }) !== undefined;
+  /** Whether a pull's transition still applies: the cursor is unchanged, or the source rebases it onto the current one. */
+  private pullStillApplies(expected: string, next: string | undefined, current: string): boolean {
+    return expected === current || (next !== undefined && this.rebaseCursor({ expected_cursor: expected, next_cursor: next, current_cursor: current }) !== undefined);
   }
 
   private activeAdmission(): AdmissionRow {

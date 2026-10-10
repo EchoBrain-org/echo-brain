@@ -175,14 +175,15 @@ export class SqlitePersonMeetingIntakeV1 {
     }
   }
   /**
-   * The checkpoint a processing advance moves to when imports were queued after its pull: the pull's next checkpoint with
-   * the current queue minus what that pull consumed. Undefined unless the only change since the pull is appended imports,
-   * so a cancel, a folder change or any other edit still refuses the advance.
+   * The checkpoint a processing advance moves to when other imports were queued or cancelled after its pull: the pull's
+   * next checkpoint with the current queue, in order, minus what that pull consumed. Undefined when the consumed import
+   * was cancelled or anything but the queue changed (a folder or baseline), so those still refuse the advance.
    */
   rebase(transition: { readonly expected_cursor: string; readonly next_cursor: string; readonly current_cursor: string }): string | undefined {
     const pulled = this.cursor.read(transition.expected_cursor), next = this.cursor.read(transition.next_cursor), now = this.cursor.read(transition.current_cursor);
-    if (this.cursor.write({ ...pulled, manual: [] }) !== this.cursor.write({ ...now, manual: [] }) || pulled.manual.some((id, index) => now.manual[index] !== id)) return undefined;
-    return this.cursor.write({ ...next, manual: now.manual.filter(id => next.manual.includes(id) || !pulled.manual.includes(id)) });
+    const consumed = pulled.manual.filter(id => !next.manual.includes(id));
+    if (this.cursor.write({ ...pulled, manual: [] }) !== this.cursor.write({ ...now, manual: [] }) || consumed.some(id => !now.manual.includes(id))) return undefined;
+    return this.cursor.write({ ...next, manual: now.manual.filter(id => !consumed.includes(id)) });
   }
   private isMember(person: MeetingIntakePersonV1, projectId: string): boolean {
     try { this.currentPerson(person, projectId); return true; }

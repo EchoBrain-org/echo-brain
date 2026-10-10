@@ -130,7 +130,7 @@ export function createPersonMeetingRuntimeV1(options: {
     const providerIntake = ownerOf(setting.source_adapter_id).intake;
     // The advance that drops a processed import from the queue records its project choices in the same transaction.
     // A retry from custody never pulls, so it is fenced by membership and settings, not by a provider observation.
-    // An import queued during an extraction stays queued behind its advance, so it never discards the paid result.
+    // Another import queued or cancelled during an extraction never discards its paid result: the advance is rebased.
     const state = new SqliteAuthorityMeetingProcessingStateV1(db, provider.cursor.policy, processor.processor_adapter_id, undefined, setting.source_key,
       fromCustody ? current : () => source.requireCurrent(),
       ({ expected_cursor, next_cursor }) => providerIntake.promoteConsumedImports(setting, expected_cursor, next_cursor),
