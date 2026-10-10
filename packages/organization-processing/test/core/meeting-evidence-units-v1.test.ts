@@ -40,7 +40,7 @@ const mixed = meeting([
   block("t1", "transcript", "(recording started)\nAlice: Ship Friday.\n  more detail  \nBob: Agreed.\n\nBob: I will tell support.\n"),
   block("t2", "transcript", `  ${chineseTurn}  `, { speaker_participant_id: "p1" }),
   block("t3", "transcript", `Alice: ${englishTurn}`),
-  block("n1", "note", "# Decisions\n- Ship **beta** Friday\n\n   1) Tell support   \n"),
+  block("n1", "note", "# Decisions\n- Ship **beta**\u0085Friday\n\n   1) Tell support   \n"),
   block("s1", "summary", "## Summary\nThe team agreed to ship. Any concerns?\n"),
 ], { participants: [{ id: "p1", display_name: "Alice" }] });
 
@@ -53,7 +53,7 @@ describe("buildMeetingEvidenceV1", () => {
       expect(unit.text).toBe(blocks.get(unit.block_id)?.slice(unit.start, unit.end));
       expect(unit.text.length).toBeGreaterThan(0);
       expect(unit.text).toBe(unit.text.trim());
-      expect(unit.display).not.toMatch(/\s{2}|\n/);
+      expect(unit.display).not.toMatch(/\s{2}|\n|\u0085/);
     }
     expect(buildMeetingEvidenceV1(mixed)).toEqual(evidence);
   });
@@ -112,7 +112,6 @@ describe("buildMeetingEvidenceV1", () => {
     const result = units([
       block("t1", "transcript", `Alice: ${englishTurn}\nBob: Short.`),
       block("t2", "transcript", chineseTurn, { speaker_participant_id: "p1" }),
-      block("t3", "transcript", "x".repeat(700)),
     ], { participants: [{ id: "p1", display_name: "Wei" }] });
     const english = result.filter((unit) => unit.id.startsWith("T1."));
     const chinese = result.filter((unit) => unit.id.startsWith("T3."));
@@ -122,7 +121,29 @@ describe("buildMeetingEvidenceV1", () => {
     expect(result.find((unit) => unit.id === "T2")?.display).toBe("Short.");
     expect(chinese.map((unit) => [unit.id, unit.text.length, unit.speaker])).toEqual([["T3.1", 400, "Wei"], ["T3.2", 300, "Wei"]]);
     expect(chinese.every((unit) => unit.text.endsWith("。"))).toBe(true);
-    expect(result.at(-1)).toMatchObject({ id: "T4", start: 0, end: 700 });
+  });
+
+  it("caps every unit at 600 characters, splitting at whitespace, else between code points", () => {
+    const words = `Alice: ${"word ".repeat(400).trim()}`;
+    const unbroken = `${"x".repeat(399)}${"🚀".repeat(800)}`;
+    const result = units([
+      block("t1", "transcript", words),
+      block("t2", "transcript", unbroken),
+      block("t3", "transcript", `Dana: a${" ".repeat(700)}\nDana: b`),
+      block("n1", "note", `- Short line\n- ${"note ".repeat(140).trim()}`),
+    ]);
+    expect(result.every((unit) => unit.text.length <= 600 && !/\p{Cs}/u.test(unit.text))).toBe(true);
+    expect(result.filter((unit) => unit.block_id === "t1").every((unit) => /^(?:word ?)+$/u.test(unit.text) && unit.text.endsWith("word"))).toBe(true);
+    expect(result.filter((unit) => unit.block_id === "t1")).toHaveLength(5);
+    expect(result.filter((unit) => unit.block_id === "t2").map((unit) => unit.text.length)).toEqual([399, 400, 400, 400, 400]);
+    expect(result.filter((unit) => unit.kind === "note").map((unit) => unit.id)).toEqual(["N1", "N2.1", "N2.2"]);
+  });
+
+  it("splits a long run of periods in linear time", () => {
+    const startedAt = performance.now();
+    const result = units([block("n1", "note", `${".".repeat(40_000)}a`)]);
+    expect(performance.now() - startedAt).toBeLessThan(100);
+    expect(result.map((unit) => unit.text).join("")).toBe(`${".".repeat(40_000)}a`);
   });
 
   it("splits notes into lines with heading sections and without bullet markers", () => {

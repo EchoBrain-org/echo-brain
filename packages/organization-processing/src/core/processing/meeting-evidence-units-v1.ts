@@ -53,8 +53,8 @@ const PART_TARGET = 400;
 const SPEAKER_LABEL = /^([^:\n]{1,40}):[ \t]+(?=\S)/u;
 const HEADING = /^\s{0,3}#{1,6}\s+(\S.*)$/u;
 const LIST_MARKER = /^(?:[-*+•]|\d{1,3}[.)])(?:\s+|$)/u;
-/** ASCII terminators need following whitespace or the end; full-width ones end a sentence on their own. */
-const SENTENCE_END = /[.!?]+(?=\s|$)|[。！？]+/gu;
+/** ASCII terminators need following whitespace or the end; full-width ones end a sentence on their own. One ASCII character per match keeps long runs linear. */
+const SENTENCE_END = /[.!?](?=\s|$)|[。！？]+/gu;
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 export function buildMeetingEvidenceV1(meeting: MeetingDocument): MeetingEvidenceV1 {
@@ -175,7 +175,7 @@ function transcriptEntries(text: string, attributed: string | null): Entry[] {
     const display = collapse(text.slice(turn.start, turn.end));
     const previous = merged.at(-1);
     if (previous !== undefined && turn.speaker !== null && previous.entry.speaker === turn.speaker
-      && previous.display.length + 1 + display.length <= MERGE_MAX) {
+      && previous.display.length + 1 + display.length <= MERGE_MAX && turn.end - previous.entry.start <= SPLIT_OVER) {
       previous.entry.end = turn.end;
       previous.display += ` ${display}`;
       previous.count += 1;
@@ -217,7 +217,10 @@ function lines(text: string): (Span & { lineStart: number })[] {
   return result;
 }
 
-/** Once a span exceeds SPLIT_OVER, greedily packs whole sentences into parts of at most PART_TARGET characters. */
+/**
+ * Once a span exceeds SPLIT_OVER, greedily packs whole sentences into parts of
+ * at most PART_TARGET characters; a part still over SPLIT_OVER is then cut.
+ */
 function sentenceParts(text: string, span: Span): Span[] {
   if (span.end - span.start <= SPLIT_OVER) return [{ start: span.start, end: span.end }];
   const sentences: Span[] = [];
@@ -236,6 +239,25 @@ function sentenceParts(text: string, span: Span): Span[] {
     if (part !== undefined && sentence.end - part.start <= PART_TARGET) part.end = sentence.end;
     else parts.push({ ...sentence });
   }
+  return parts.flatMap((part) => cappedParts(text, part));
+}
+
+/** Cuts a trimmed span over SPLIT_OVER at its last whitespace before PART_TARGET, else at PART_TARGET between code points. */
+function cappedParts(text: string, span: Span): Span[] {
+  const parts: Span[] = [];
+  let rest = span;
+  while (rest.end - rest.start > SPLIT_OVER) {
+    let cut = rest.start + PART_TARGET - 1;
+    while (cut > rest.start && !/\s/u.test(text.charAt(cut))) cut -= 1;
+    if (cut === rest.start) {
+      cut = rest.start + PART_TARGET;
+      if (/[\uD800-\uDBFF]/u.test(text.charAt(cut - 1)) && /[\uDC00-\uDFFF]/u.test(text.charAt(cut))) cut -= 1;
+    }
+    // Both sides keep a non-whitespace end, so neither trim can come back empty.
+    parts.push(trimSpan(text, rest.start, cut)!);
+    rest = trimSpan(text, cut, rest.end)!;
+  }
+  parts.push(rest);
   return parts;
 }
 
@@ -247,8 +269,9 @@ function trimSpan(text: string, start: number, end: number): Span | null {
   return from < to ? { start: from, end: to } : null;
 }
 
+/** U+0085 (next line) is outside `\s` but breaks lines in some renderers. */
 function collapse(text: string): string {
-  return text.replace(/\s+/gu, ' ');
+  return text.replace(/[\s\u0085]+/gu, ' ');
 }
 
 /**
