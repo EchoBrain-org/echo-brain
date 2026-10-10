@@ -263,6 +263,24 @@ describe("Organization Authority service lifecycle", () => {
     expect(events).toEqual(["handle-clear", "lanes", "settled", "settled-after-stop", "api-close", "handle-clear"]);
   });
 
+  it("requests card presentation when a detached lane settles after its cycle returned, before the next cycle", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    let laneSettled: (() => void) | undefined;
+    const runtime = await startLifecycle(1_000, {
+      processing: processing([]),
+      additional_processing: { ...processing([]), pollAndStageAdmittedMeetings: async (_signal, _report, settled) => { laneSettled ??= settled; },
+        reconcileApprovalPresentations: async () => { events.push("present"); } },
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(events).toEqual(["present"]);
+      laneSettled?.();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(events).toEqual(["present", "present"]);
+    } finally { await runtime.close(); }
+  });
+
   it("keeps operator mutations exclusive from search and writer work", async () => {
     vi.useFakeTimers();
     const blockedSearch = deferred();

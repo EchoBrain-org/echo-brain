@@ -588,6 +588,7 @@ describe('personal meeting intake uses the shared processing path', () => {
   });
   it('runs sources in detached lanes, never one source twice, and reports a failing lane without stalling the others', async () => {
     const f = await fixture(), b = '00000000-0000-4000-8000-000000000004', failures: unknown[] = [];
+    let settles = 0;
     // The notes tool's source throws a non-Error before any pull.
     const runtime = f.create([f.fakeProvider('granola', 'granola-person-mcp'), { ...f.fakeProvider('notes', 'notes-person-mcp'), source() { throw 'boom'; } }]);
     for (const [meeting_id, token, tool] of [[id, 'owner', 'granola'], [b, 'owner', 'granola'], [id, 'other', 'granola'], [id, 'owner', 'notes']] as const) {
@@ -595,14 +596,14 @@ describe('personal meeting intake uses the shared processing path', () => {
     }
     let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
     f.duringExtract(() => gate);
-    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, failure => { failures.push(failure); });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, failure => { failures.push(failure); }, () => { settles++; });
     await vi.waitFor(() => expect(f.extracted()).toBe(2));
     await new Promise(resolve => setTimeout(resolve, 20));
     // Two sources extract at once; the failed lane's free slot never starts the owner's second import beside its first.
-    expect([f.extracted(), f.pulls(), failures]).toEqual([2, 2, ['boom']]);
+    expect([f.extracted(), f.pulls(), failures, settles]).toEqual([2, 2, ['boom'], 1]);
     release(); await runtime.processing.settle?.();
-    // The owner's lane topped up with its second import as it settled.
-    expect([f.extracted(), failures]).toEqual([3, ['boom']]);
+    // The owner's lane topped up with its second import as it settled; every settled lane said so.
+    expect([f.extracted(), failures, settles]).toEqual([3, ['boom'], 4]);
   });
   it('starts no more passes than the lane count and tops up as one settles', async () => {
     const f = await fixture(), runtime = f.create(undefined, { meeting_lanes: 2 });

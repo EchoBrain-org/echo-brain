@@ -4,6 +4,7 @@ import { PERSON_MEETINGS_PATH_V2, validatePersonMeetingRequestV2, validatePerson
   type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonSyntheticMeetingV1 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { observeCoreRuntimeRootV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
 import type { AdmittedMeetingSourceCursorPolicyV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1';
 import type { DecisionProcessorBundleV1 } from '@echo-brain/organization-processing/ports/decision-processor-bundle-v1';
@@ -167,8 +168,7 @@ export function createPersonMeetingRuntimeV1(options: {
   // One pass per source at a time in this process saves wasted pulls; the attempt ledger's lease and the cursor
   // compare-and-swap keep passes in another process or after a restart correct.
   const inFlight = new Map<string, Promise<void>>();
-  function track(setting: MeetingIntakeSettingV1, signal: AbortSignal): Promise<void> {
-    const run = runSource(setting, signal);
+  function track(setting: MeetingIntakeSettingV1, run: Promise<void>): Promise<void> {
     inFlight.set(setting.source_key, run.then(() => undefined, () => undefined).finally(() => inFlight.delete(setting.source_key)));
     return run;
   }
@@ -202,10 +202,11 @@ export function createPersonMeetingRuntimeV1(options: {
           scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
       });
       const outcome = await (retry ? cycle.retryHeldOnce(signal) : cycle.runOnce(signal));
-      // A head still in flight elsewhere (another process, or a crash's unexpired lease) waits a minute, not a tight re-pull.
-      const waiting = !retry && outcome.kind === 'in_flight';
       const queued = retry || sourceIntake.checkpoint(setting.source_key).manual.length > 0 || (outcome.cursor_advanced && !outcome.kind.startsWith('empty'));
-      observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() + (waiting ? 60_000 : queued ? 0 : 300_000) });
+      // A pull that left its queue where it was never re-pulls at once: a head in flight elsewhere (another process, or a
+      // crash's unexpired lease) waits a minute, anything else (a lost compare-and-swap) about one former cycle.
+      const floor = retry || outcome.cursor_advanced ? 0 : outcome.kind === 'in_flight' ? 60_000 : 30_000;
+      observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() + (queued ? floor : 300_000) });
     } catch (error) {
       signal.throwIfAborted();
       const remaining = ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key);
@@ -232,16 +233,20 @@ export function createPersonMeetingRuntimeV1(options: {
     return [...eligible.filter(s => s.source_key > after), ...eligible.filter(s => s.source_key <= after)];
   }
   /**
-   * Starts detached passes on due sources until `lanes` run; each lane tops up again once it settles. Nothing awaits
-   * between the in-flight check and `track`, so a lane and a targeted pass never double-start a source.
+   * Starts detached passes on due sources until `lanes` run; each lane calls `settled`, then tops up again. Nothing
+   * awaits between the in-flight check and `track`, so a lane and a targeted pass never double-start a source.
    */
-  function topUp(signal: AbortSignal, report: (failure: unknown) => void): void {
+  function topUp(signal: AbortSignal, report: (failure: unknown) => void, settled?: () => void): void {
     for (const setting of signal.aborted ? [] : due()) {
       if (inFlight.size >= lanes) return;
       after = setting.source_key;
-      track(setting, signal).catch((failure: unknown) => { if (!signal.aborted) report(failure); });
-      // The in-flight entry settles after it is removed, so the top-up sees the freed lane.
-      void inFlight.get(setting.source_key)!.then(() => topUp(signal, report)).catch(report);
+      // Each lane pass is its own trace, so concurrent lanes never annotate one another's spans.
+      track(setting, observeCoreRuntimeRootV1('worker_execution', () => runSource(setting, signal)))
+        .catch((failure: unknown) => { if (!signal.aborted) report(failure); });
+      // The entry settles after it is removed, so the top-up sees the freed lane. It waits a macrotask first, so a run
+      // of quick passes never starves timers or requests.
+      void inFlight.get(setting.source_key)!.then(() => new Promise<void>(resolve => { settled?.(); setImmediate(resolve); }))
+        .then(() => topUp(signal, report, settled)).catch(report);
     }
   }
   const processing: OrganizationAuthorityProcessingCycleV1 = {
@@ -249,15 +254,16 @@ export function createPersonMeetingRuntimeV1(options: {
     async appendFinalizedApprovalsToV4(signal) { await (await approvals()).processing.appendFinalizedApprovalsToV4(signal); },
     async observeAndFinalizePendingApprovals() {}, async reconcileReadableSearchGeneration() {},
     async reconcileApprovalPresentations(signal) { return (await approvals()).processing.reconcileApprovalPresentations?.(signal); },
-    async pollAndStageAdmittedMeetings(signal, report) {
+    async pollAndStageAdmittedMeetings(signal, report, settled) {
       // Given a reporter, keep up to `lanes` sources running in detached lanes; a direct caller runs one pass in place.
-      if (report !== undefined) return topUp(signal, report);
+      if (report !== undefined) return topUp(signal, report, settled);
       const [setting] = due();
       if (!setting) return;
       after = setting.source_key;
-      await track(setting, signal);
+      await track(setting, runSource(setting, signal));
     },
-    async settle() { while (inFlight.size > 0) await Promise.all(inFlight.values()); },
+    // A settled lane tops up after a macrotask, so look again after one.
+    async settle() { while (inFlight.size > 0) { await Promise.all(inFlight.values()); await new Promise(resolve => setImmediate(resolve)); } },
   };
   /** Waits for any pass already running on this source, then runs one more whether or not its next poll is due. */
   async function pollAndStageSource(sourceKey: string, signal: AbortSignal): Promise<void> {
@@ -269,7 +275,7 @@ export function createPersonMeetingRuntimeV1(options: {
     signal.throwIfAborted();
     const setting = intake.list().find(s => s.source_key === sourceKey && owners.has(s.source_adapter_id));
     if (!setting) throw new AuthorityOperationError('not_found', 'Meeting source unavailable');
-    return track(setting, signal);
+    return track(setting, runSource(setting, signal));
   }
   /** True when the access check passes, false when it refuses; any other failure is rethrown. */
   function allowed(check: () => unknown): boolean {

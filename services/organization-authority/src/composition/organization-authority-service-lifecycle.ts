@@ -33,11 +33,12 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   /** Replays finalized control-plane actions that were not appended to V4. */
   recoverV4Appends(signal: AbortSignal): Promise<void>;
   /**
-   * Polls the admitted source cursor and durably stages one card. Given `report` (which never throws), it may
-   * leave passes running after it returns and send their failures there; `settle` waits for them.
+   * Polls admitted sources and durably stages their meetings for approval. Given `report`, it may leave passes
+   * running after it returns, send their failures there and call `settled` as each one settles (neither throws);
+   * `settle` waits for them.
    */
-  pollAndStageAdmittedMeetings(signal: AbortSignal, report?: (failure: unknown) => void): Promise<void>;
-  /** Resolves once no pass started by `pollAndStageAdmittedMeetings` is still running. */
+  pollAndStageAdmittedMeetings(signal: AbortSignal, report?: (failure: unknown) => void, settled?: () => void): Promise<void>;
+  /** Resolves once no meeting pass is running: detached lanes, their top-ups and targeted passes (the staging canary). */
   settle?(): Promise<void>;
   /** Observes one staged approval and commits its approve or reject result. */
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void>;
@@ -130,7 +131,7 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
  * `report`, a failed primary intake (the Authority's notes enrichment, which
  * defers its item for a later cycle) is reported and the cycle goes on, and the
  * personal intake may leave detached meeting lanes running, reporting their
- * failures there.
+ * failures there and calling `settled` as each one settles.
  */
 export async function runOrganizationAuthorityProcessingCycleV1(
   processing: OrganizationAuthorityProcessingCycleV1,
@@ -139,6 +140,7 @@ export async function runOrganizationAuthorityProcessingCycleV1(
   additional?: OrganizationAuthorityProcessingCycleV1,
   exclusive: MeetingProcessingExclusiveV1 = (operation) => operation(signal),
   report?: (failure: unknown) => void,
+  settled?: () => void,
 ): Promise<void> {
   const phase = <T>(
     name: Parameters<MeetingProcessingWorkerPhaseRunnerV1["runPhase"]>[0],
@@ -154,7 +156,7 @@ export async function runOrganizationAuthorityProcessingCycleV1(
     report(failure);
   }
   signal.throwIfAborted();
-  await additional?.pollAndStageAdmittedMeetings(signal, report);
+  await additional?.pollAndStageAdmittedMeetings(signal, report, settled);
   signal.throwIfAborted();
   await exclusive(() => runOrganizationAuthorityApprovalPublicationV1(processing, signal, lifecycle, additional));
 }
@@ -289,6 +291,8 @@ export async function startOrganizationAuthorityServiceLifecycle(
             dependencies.additional_processing ?? startedApi.processing,
             exclusive,
             reportError,
+            // A lane that staged after its cycle returned gets its card now, not at the next cycle's wake.
+            () => requestApprovalPresentation(),
           );
           lifecycle.succeedCycle();
         } catch (error) {
