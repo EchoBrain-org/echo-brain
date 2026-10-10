@@ -1,7 +1,7 @@
 import { assertPersonDocumentCapacityV1 } from './document-quota-v1.js';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { AUTHORITY_BASELINE_SCHEMA_VERSION_V14, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   validatePersonUpdateReceiptV2, validatePersonUpdateStatusV2, validatePersonUpdateSubmitV2,
@@ -133,7 +133,7 @@ export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositor
   private readonly issued = new WeakMap<ProjectAuthorizationSnapshotV1, Issued>();
   constructor(private readonly database: Database.Database, private readonly now: () => string = () => new Date().toISOString()) {
     if (!isCurrentAuthorityState(database)) {
-      throw new Error(`Project context requires Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION_V14} with foreign keys enabled`);
+      throw new Error(`Project context requires Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION} with foreign keys enabled`);
     }
   }
 

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { AUTHORITY_BASELINE_SCHEMA_VERSION_V14, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
 
 /** Kept structural so this persistence adapter does not depend on approval composition. */
@@ -73,7 +73,7 @@ export function triggerRunStateAtV1(row: Pick<TriggerRunRowV1, 'state' | 'lease_
 export class SqliteTriggerRunsV1 {
   constructor(private readonly database: Database.Database, private readonly now: () => Date = () => new Date()) {
     if (!isCurrentAuthorityState(database)) {
-      throw new Error(`Trigger runs require Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION_V14} state with foreign keys enabled`);
+      throw new Error(`Trigger runs require Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION} state with foreign keys enabled`);
     }
   }
 

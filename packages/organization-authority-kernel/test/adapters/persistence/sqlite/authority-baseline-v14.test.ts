@@ -1,10 +1,10 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV14,
+  applyAuthorityBaseline,
   AUTHORITY_BASELINE_APPLICATION_ID_V1,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V14,
-  authorityBaselineSha256V14,
+  AUTHORITY_BASELINE_SCHEMA_VERSION,
+  authorityBaselineSha256,
 } from "../../../../src/adapters/persistence/sqlite/baseline.js";
 
 const databases: Database.Database[] = [];
@@ -39,7 +39,7 @@ function seedProject(database: Database.Database, projectID: string, name: strin
 
 function seeded(): Database.Database {
   const database = opened();
-  applyAuthorityBaselineV14(database);
+  applyAuthorityBaseline(database);
   database.prepare("INSERT INTO authority_metadata VALUES (1, ?, ?, 'Fixture', '{}', ?, ?)").run(AUTHORITY, ORG, NOW, NOW);
   database.prepare("INSERT INTO authority_principals VALUES (?, ?, 'PM', ?)").run(PRINCIPAL, ORG, NOW);
   database.prepare("INSERT INTO authority_memberships(membership_id, organization_id, principal_id, membership_type, status, provisioned_at) VALUES (?, ?, ?, 'owner', 'active', ?)").run(MEMBERSHIP, ORG, PRINCIPAL, NOW);
@@ -70,11 +70,11 @@ function seededWithSources(): Database.Database {
 
 describe("Authority baseline V14", () => {
   it("is fresh-only and stamps the Authority application id", () => {
-    expect(authorityBaselineSha256V14()).toBe("sha256:77c824e9cbbb2dbdbb079fe84edb9677807a56f11087bbd7f4889e008c2d3d84");
+    expect(authorityBaselineSha256()).toBe("sha256:77c824e9cbbb2dbdbb079fe84edb9677807a56f11087bbd7f4889e008c2d3d84");
     const database = seeded();
-    expect(() => applyAuthorityBaselineV14(database)).toThrow("completely empty");
+    expect(() => applyAuthorityBaseline(database)).toThrow("completely empty");
     expect(database.pragma("application_id", { simple: true })).toBe(AUTHORITY_BASELINE_APPLICATION_ID_V1);
-    expect(database.pragma("user_version", { simple: true })).toBe(AUTHORITY_BASELINE_SCHEMA_VERSION_V14);
+    expect(database.pragma("user_version", { simple: true })).toBe(AUTHORITY_BASELINE_SCHEMA_VERSION);
     expect(database.prepare("SELECT status FROM authority_projects_v1 WHERE project_id = ?").pluck().get(PROJECT)).toBe("active");
     expect(database.pragma("foreign_key_check")).toEqual([]);
   });
@@ -82,15 +82,15 @@ describe("Authority baseline V14", () => {
   it("stamps user_version 14 on a fresh database", () => {
     const database = new Database(":memory:");
     databases.push(database);
-    applyAuthorityBaselineV14(database);
+    applyAuthorityBaseline(database);
     expect(database.pragma("user_version", { simple: true })).toBe(14);
-    expect(AUTHORITY_BASELINE_SCHEMA_VERSION_V14).toBe(14);
+    expect(AUTHORITY_BASELINE_SCHEMA_VERSION).toBe(14);
   });
 
   it("refuses a nonempty database without mutating it", () => {
     const database = opened();
     database.exec("CREATE TABLE prior_state (id INTEGER PRIMARY KEY)");
-    expect(() => applyAuthorityBaselineV14(database)).toThrow("authority baseline requires a completely empty database");
+    expect(() => applyAuthorityBaseline(database)).toThrow("authority baseline requires a completely empty database");
     expect(database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'prior_state'").get()).toEqual({ name: "prior_state" });
   });
 
@@ -143,8 +143,8 @@ describe("Authority baseline V14", () => {
   it("freezes the approved snapshot and suggestions once and keeps them through supersession", () => {
     const database = opened();
     database.pragma("foreign_keys = OFF");
-    applyAuthorityBaselineV14(database);
-    expect(database.pragma("user_version", { simple: true })).toBe(AUTHORITY_BASELINE_SCHEMA_VERSION_V14);
+    applyAuthorityBaseline(database);
+    expect(database.pragma("user_version", { simple: true })).toBe(AUTHORITY_BASELINE_SCHEMA_VERSION);
     const columns = (database.prepare("PRAGMA table_info(authority_live_approval_outbox_v2)").all() as { name: string }[]).map(row => row.name);
     expect(columns).toContain("suggested_projects_json");
     expect(columns).not.toContain("private_approval_card_v2_json");

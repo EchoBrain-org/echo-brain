@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { AUTHORITY_BASELINE_SCHEMA_VERSION_V14, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { canonicalJson, type Sha256Digest } from '@echo-brain/federation-protocol';
 import type { TriggerRunRowV1 } from './trigger-runs-v1.js';
 
@@ -79,7 +79,7 @@ function limitOf(limit: number): number {
 export class SqliteImpactItemsV1 {
   constructor(private readonly database: Database.Database, private readonly now: () => Date = () => new Date()) {
     if (!isCurrentAuthorityState(database)) {
-      throw new Error(`Open items require Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION_V14} state with foreign keys enabled`);
+      throw new Error(`Open items require Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION} state with foreign keys enabled`);
     }
   }
 

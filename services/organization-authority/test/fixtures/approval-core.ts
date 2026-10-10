@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach } from 'vitest';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { applyAuthorityBaselineV14 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { applyAuthorityBaseline } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { SqliteApprovalWorkflowStateV1, SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { bindApprovalWorkflowStateV1, type ApprovalWorkflowStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1';
 import type { ActionSignal, DecisionSet, MeetingDocument } from '@echo-brain/organization-processing/core';
@@ -60,7 +60,7 @@ export async function approvalContextFixture(options: { readonly path?: string }
   const db = new Database(path ?? ':memory:'); opened.push(db);
   db.pragma('foreign_keys=ON');
   if (path !== undefined) { db.pragma('journal_mode=DELETE'); db.pragma('busy_timeout=5000'); db.pragma('trusted_schema=OFF'); }
-  applyAuthorityBaselineV14(db);
+  applyAuthorityBaseline(db);
   const old = sourceFixture();
   const actor = { organization_id: authority.descriptor.organization_id, principal_id: 'prn_00000000-0000-4000-8000-000000000003', membership_id: 'mem_00000000-0000-4000-8000-000000000004', authorization_sha256: canonicalSha256('session proof') };
   const substitutions: Record<string, string> = { org_test: actor.organization_id, oau_test: authority.descriptor.authority_id, prn_test: actor.principal_id, mem_test: actor.membership_id };

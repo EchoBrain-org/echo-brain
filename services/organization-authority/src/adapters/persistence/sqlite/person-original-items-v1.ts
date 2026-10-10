@@ -13,7 +13,7 @@ import {
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type Database from "better-sqlite3";
-import { AUTHORITY_BASELINE_SCHEMA_VERSION_V14, isCurrentAuthorityState } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import type {
   PersonItemPositionV1,
   PersonOriginalItemsPortV1,
@@ -129,7 +129,7 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
   ) {
     this.imported = new SqlitePersonImportedMeetingsV1(database);
     if (!isCurrentAuthorityState(database)) {
-      throw new Error(`Person items require Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION_V14} with foreign keys enabled`);
+      throw new Error(`Person items require Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION} with foreign keys enabled`);
     }
   }
 

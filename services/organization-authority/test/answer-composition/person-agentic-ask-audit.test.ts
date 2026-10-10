@@ -2,7 +2,7 @@ import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-proto
 import { afterEach, describe, expect, it } from "vitest";
 import { SqlitePersonAgenticAskAuditV1 } from "../../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { AGENTIC_TRIGGER_NAMES_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
-import { applyAuthorityBaselineV14 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaseline } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
@@ -21,7 +21,7 @@ afterEach(() => { for (const database of databases.splice(0)) database.close(); 
 function openedDatabase() {
   const database = openAuthorityDatabase(":memory:");
   databases.push(database);
-  applyAuthorityBaselineV14(database);
+  applyAuthorityBaseline(database);
   return database;
 }
 
