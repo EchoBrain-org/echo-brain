@@ -4,8 +4,8 @@ import { PERSON_MEETINGS_PATH_V2, validatePersonMeetingRequestV2, validatePerson
   type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonSyntheticMeetingV1 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { observeCoreRuntimeRootV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import type { MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
+import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, coreRuntimeDiagnosticErrorKindV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeSyncV1, observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, observeCoreRuntimeRootV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import type { DecisionProcessorAdapter, MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
 import type { AdmittedMeetingSourceCursorPolicyV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1';
 import type { DecisionProcessorBundleV1 } from '@echo-brain/organization-processing/ports/decision-processor-bundle-v1';
 import type { AdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments';
@@ -22,6 +22,7 @@ import { approvalProposalSummaryV1, approvalProposalTextV1, createApprovalCoreV1
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { OrganizationAuthorityProcessingCycleV1 } from './organization-authority-service-lifecycle.js';
+import type { PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
 
 export interface PersonMeetingProviderV1 {
   readonly id: string; readonly normalizer_version: string;
@@ -98,6 +99,7 @@ export function createPersonMeetingRuntimeV1(options: {
   /** The lifecycle's observation scope; each lane pass is a root under it, so staging content capture covers lanes. */
   readonly observation?: CoreRuntimeObservationScopeV1;
 }) {
+  let diagnostics: PersonDiagnosticsV1 | undefined;
   const { database: db, providers, processor } = options, lanes = options.meeting_lanes ?? MEETING_LANES;
   if (providers.length === 0 || new Set(providers.map(p => p.id)).size !== providers.length || new Set(providers.map(p => p.cursor.policy.source_adapter_id)).size !== providers.length) {
     throw new Error('Personal meeting providers need distinct tools and source adapters');
@@ -147,7 +149,7 @@ export function createPersonMeetingRuntimeV1(options: {
       fromCustody ? current : () => source.requireCurrent(),
       ({ expected_cursor, next_cursor }) => providerIntake.promoteConsumedImports(setting, expected_cursor, next_cursor),
       transition => providerIntake.rebase(transition));
-    return { source, state };
+    return { source, state, current };
   }
   type HeldRowV1 = { external_id: string; attempt: number; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string };
   /** One source's parked meetings, oldest first. IDs and allowlisted stages only. */
@@ -194,11 +196,36 @@ export function createPersonMeetingRuntimeV1(options: {
         return;
       }
       processor.assert_admission_commitments(readAdmittedMeetingProcessingCommitmentsV1(db, setting.source_key));
-      const { source, state } = await lane(setting, retry);
+      const { source, state, current } = await lane(setting, retry);
       const stager = (await approvals()).stagerForSource(setting.source_key);
       const admission = await state.readAdmission();
       const { provider, intake: sourceIntake } = ownerOf(setting.source_adapter_id);
-      const cycle = new AdmittedMeetingProcessingCycleV1({ source, state, processor: processor.create_processor(admission), extraction_attempts: options.extraction_attempts,
+      const base = processor.create_processor(admission);
+      const observedProcessor: DecisionProcessorAdapter = {
+        identity: base.identity, validateConfig: config => base.validateConfig(config), healthCheck: context => base.healthCheck(context),
+        async extract(meeting, context, operation) {
+          // Selection is consumed only by a real, already-authorized model attempt, never a poll or frozen replay.
+          const capture = diagnostics?.claimMeeting({ actor: meetingIntakePersonV1(setting),
+            target: { kind: 'meeting_extraction', source_key: setting.source_key, meeting_id: meeting.provenance.external_id },
+            fence: async signal => { signal?.throwIfAborted(); current(); },
+          });
+          return withCoreRuntimeDiagnosticsV1(capture?.record, () => observeCoreRuntimeV1('extraction', async () => {
+            observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'extraction', event: 'started' });
+            try {
+              const result = await base.extract(meeting, context, operation);
+              annotateCoreRuntimeV1({ result: result.signals.length === 0 ? 'empty' : 'completed' });
+              observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'extraction', event: 'succeeded' });
+              capture?.complete();
+              return result;
+            } catch (error) {
+              observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'extraction', event: 'failed', error_kind: coreRuntimeDiagnosticErrorKindV1(error) });
+              capture?.fail(error);
+              throw error;
+            }
+          }));
+        },
+      };
+      const cycle = new AdmittedMeetingProcessingCycleV1({ source, state, processor: observedProcessor, extraction_attempts: options.extraction_attempts,
         source_cursor_policy: provider.cursor.policy, stager,
         source_ingestion: { store: new SqliteSourceAdmissionStoreV1(db, delivered => {
           source.requireCurrent(); state.assertCurrentSourceAdmission(source.identity);
@@ -209,6 +236,7 @@ export function createPersonMeetingRuntimeV1(options: {
           scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
       });
       const outcome = await (retry ? cycle.retryHeldOnce(signal) : cycle.runOnce(signal));
+      if (outcome.kind === 'held' || outcome.kind === 'retry_scheduled') annotateCoreRuntimeV1({ result: outcome.kind === 'held' ? 'held' : 'retry_pending' });
       if ((outcome.kind === 'held' || outcome.kind === 'retry_scheduled') && TRANSIENT_STAGES.has(outcome.stage)) pausedUntil = Date.now() + 60_000;
       const queued = retry || sourceIntake.checkpoint(setting.source_key).manual.length > 0 || (outcome.cursor_advanced && !outcome.kind.startsWith('empty'));
       // A pull that left its queue where it was never re-pulls at once: an automatic retry, or a head in flight elsewhere
@@ -323,14 +351,17 @@ export function createPersonMeetingRuntimeV1(options: {
           const view = approvalCore.proposal(input.approval_id);
           if (!view || view.reviewer.organization_id !== person.organization_id || view.reviewer.principal_id !== person.principal_id
             || view.reviewer.membership_id !== person.membership_id) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
-          if (input.operation === 'review_open') {
+          if (input.operation === 'review_open') return observeCoreRuntimeSyncV1('approval_review', () => {
+            annotateCoreRuntimeV1({ approval_id: coreRuntimeIdentityV1('approval', input.approval_id), approval_surface: 'desktop' });
             const projects = new SqlitePersonListDirectoryV1(db).joinedProjects(options.sessions.authenticateAccess({ access_token: token })).projects;
             const names = new Map(projects.filter(project => project.status === 'active').map(project => [project.project_id, project.name]));
-            return { review: reviewView(view), snapshot_sha256: view.snapshot_sha256, content: approvalProposalTextV1(view.snapshot_json),
+            const opened = { review: reviewView(view), snapshot_sha256: view.snapshot_sha256, content: approvalProposalTextV1(view.snapshot_json),
               owners: approvalCore.ownerProposals(input.approval_id), suggested_projects: view.project_ids.flatMap(project_id => {
                 const name = names.get(project_id as `prj_${string}`); return name === undefined ? [] : [{ project_id: project_id as `prj_${string}`, name }];
               }) };
-          }
+            annotateCoreRuntimeV1({ result: 'returned' });
+            return opened;
+          });
           const action = input;
           const decided = approvalCore.decide('desktop', { approval_id: action.approval_id, command_id: action.command_id, snapshot_sha256: action.snapshot_sha256 as `sha256:${string}`,
             action: action.action, project_ids: action.project_ids, share_transcript: action.share_transcript, owners: action.owners }, () => {
@@ -413,5 +444,6 @@ export function createPersonMeetingRuntimeV1(options: {
     return setting;
   }
   return { applications: [...providers.map(p => p.connection_http), ...(options.provider_applications ?? []), application], processing, queue, pollAndStageSource,
+    attachDiagnostics(value: PersonDiagnosticsV1) { diagnostics = value; },
     tools: async (token: string) => providers.map(p => p.tool(token)), approvals, close() {} };
 }

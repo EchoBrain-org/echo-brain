@@ -17,7 +17,7 @@ vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (impo
   } };
 });
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { captureCoreRuntimeContentV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, captureCoreRuntimeContentV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { ApprovedMeetingTranscriptGrantReaderV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256 } from '@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1';
 import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
@@ -27,6 +27,7 @@ import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-process
 import { AdapterError } from '@echo-brain/organization-processing/core/contracts/adapter';
 import { providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
 import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
+import { createPersonDiagnosticsV1 } from '../src/composition/person-diagnostics-v1.js';
 import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
@@ -187,6 +188,57 @@ function toolIsSynthetic(meeting: MeetingDocument) { return meeting.provenance.s
 const heldError = (external: string, stage = 'unknown', next = 'An operator can authorize one more attempt.') =>
   `Meeting ${external} is held after extraction attempt 1 failed at ${stage}. Later meetings continue. ${next}`;
 describe('personal meeting intake uses the shared processing path', () => {
+  it.each([false, true])('captures one authorized extraction, keeps normal traces private, and joins its approval (failed=%s)', async failed => {
+    const f = await fixture(), events: CoreRuntimeObservationV1[] = [];
+    const observation = { observer: (event: CoreRuntimeObservationV1) => { events.push(event); } };
+    const runtime = f.create(undefined, { observation });
+    const diagnostics = createPersonDiagnosticsV1({ sessions: f.sessions });
+    runtime.attachDiagnostics(diagnostics);
+    const failures: unknown[] = [];
+    const process = async () => {
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, failure => { failures.push(failure); });
+      await runtime.processing.settle!();
+      expect(failures).toEqual([]);
+    };
+    try {
+      await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+      const source = f.intake.list(f.person)[0]!;
+      const capture = await diagnostics.prepare({ access_token: 'owner', request: { schema_version: 1, operation: 'prepare', target: {
+        kind: 'meeting_extraction', source_key: source.source_key, meeting_id: id,
+      } } });
+      f.duringExtract(() => { observeCoreRuntimeDiagnosticV1({ kind: 'model_response', role: 'extraction', call_id: 1, value: 'PRIVATE EXTRACTION' }); });
+      if (failed) f.failNextExtraction(new AdapterError('temporarily_unavailable', 'LLM output contained invalid or unsupported signal grounding at stage: evidence_quote', true));
+      await process();
+      const read = () => diagnostics.read({ access_token: 'owner', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } });
+      expect(await read()).toMatchObject({ status: failed ? 'failed' : 'completed', trace: { complete: true, events: [
+        { stage: 'extraction', event: 'started' }, { kind: 'model_response', value: 'PRIVATE EXTRACTION' },
+        { stage: 'extraction', event: failed ? 'failed' : 'succeeded' },
+      ] } });
+      expect(f.extracted()).toBe(1);
+      const extraction = events.find(event => event.phase === 'extraction' && event.event !== 'started')!;
+      expect(extraction).toMatchObject({ attempt: 1, meeting_id: expect.stringMatching(/^[a-f0-9]{64}$/), event: failed ? 'failed' : 'succeeded' });
+      if (failed) {
+        expect(f.held()).toHaveLength(1);
+        expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'worker_execution', result: 'held' })]));
+        expect(events.some(event => event.phase === 'approval_staging')).toBe(false);
+      } else {
+        const [review] = (await f.call(runtime, { operation: 'reviews' })).reviews;
+        const approval_id = coreRuntimeIdentityV1('approval', review!.approval_id);
+        expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'approval_staging', event: 'succeeded', meeting_id: extraction.meeting_id, approval_id, result: 'published' })]));
+        await observeCoreRuntimeV1('http_request', () => f.call(runtime, { operation: 'review_open', approval_id: review!.approval_id }), observation);
+        expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'approval_review', event: 'succeeded', approval_id, approval_surface: 'desktop', result: 'returned' })]));
+      }
+      await f.call(runtime, { operation: 'import', meeting_id: folder, project_id: null, retain: true });
+      await process();
+      expect(f.extracted()).toBe(2);
+      expect((await read()).trace!.events).toHaveLength(3);
+      for (const text of ['PRIVATE EXTRACTION', 'TRANSCRIPT_SECRET_DO_NOT_SHARE', id, source.source_key]) expect(JSON.stringify(events)).not.toContain(text);
+      // Source settings are revalidated when exporting the private payload, even after success/failure.
+      f.db.prepare('UPDATE authority_person_meeting_sources_v2 SET settings_revision=settings_revision+1 WHERE source_key=?').run(source.source_key);
+      expect(await read()).not.toHaveProperty('trace');
+    } finally { diagnostics.close(); runtime.close(); f.db.close(); }
+  });
+
   it('submits a custom synthetic meeting through extraction, one human review and one after-record trigger, surviving retries', async () => {
     const f = await fixture(), storage = new Database(':memory:');
     try {

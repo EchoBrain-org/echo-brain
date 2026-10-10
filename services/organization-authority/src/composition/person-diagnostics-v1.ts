@@ -42,6 +42,8 @@ export interface CreatePersonDiagnosticsOptionsV1 {
 export interface PersonDiagnosticsV1 extends PersonDiagnosticsHttpApplicationV1 {
   /** Claim before model or source work. Reuse, mismatched targets, and foreign actors fail closed. */
   claim(input: { readonly access_token: string; readonly capture_id: string; readonly target: Target }): PersonDiagnosticCaptureHandleV1;
+  /** Only the trusted meeting worker can claim a prepared selection. Never queues work or grants a retry. */
+  claimMeeting(input: { readonly actor: Actor; readonly target: Extract<Target, { kind: 'meeting_extraction' }>; readonly fence: Fence }): PersonDiagnosticCaptureHandleV1 | undefined;
 }
 
 interface Capture {
@@ -124,6 +126,28 @@ export function createPersonDiagnosticsV1(options: CreatePersonDiagnosticsOption
     catch { if (captures.get(id) === capture) remove(id, capture); }
   };
 
+  const matches = (left: Target, right: Target) => left.kind === right.kind &&
+    (left.kind === 'ask' || (left.kind === 'trigger_run' && right.kind === 'trigger_run' && left.run_id === right.run_id) ||
+      (left.kind === 'meeting_extraction' && right.kind === 'meeting_extraction' && left.source_key === right.source_key && left.meeting_id === right.meeting_id));
+  const startCapture = (id: string, capture: Capture): PersonDiagnosticCaptureHandleV1 => {
+    capture.status = 'running';
+    capture.expires_at = timestamp() + ttl;
+    const settle = (error?: unknown) => observe(id, capture, () => {
+      if (capture.status !== 'running') return;
+      capture.status = error === undefined ? 'completed' : 'failed';
+      if (error !== undefined) capture.error = failure(error);
+      if (capture.error?.code === 'unauthorized' || capture.error?.code === 'stale_access_state') erase(capture);
+      capture.collector.seal();
+      capture.expires_at = timestamp() + ttl;
+    });
+    return Object.freeze<PersonDiagnosticCaptureHandleV1>({
+      record(event) { observe(id, capture, () => { if (capture.status === 'running') capture.collector.record(event); }); },
+      bindFence(fence) { observe(id, capture, () => { if (capture.status === 'running') capture.fence = fence; }); },
+      complete() { settle(); },
+      fail(error) { settle(error ?? new Error('Captured operation failed')); },
+    });
+  };
+
   return Object.freeze({
     async prepare(input) {
       input.signal?.throwIfAborted();
@@ -133,8 +157,11 @@ export function createPersonDiagnosticsV1(options: CreatePersonDiagnosticsOption
       }
       const id = validatePersonDiagnosticCaptureIdV1(`cap_${randomUUID()}`);
       const expires = timestamp() + ttl;
-      const target: Target = input.request.target.kind === 'ask' ? Object.freeze({ kind: 'ask' as const })
-        : Object.freeze({ kind: 'trigger_run' as const, run_id: input.request.target.run_id });
+      const target: Target = Object.freeze({ ...input.request.target });
+      if (target.kind === 'meeting_extraction' && [...captures.values()].some(capture => capture.owner === owner &&
+          (capture.status === 'prepared' || capture.status === 'running') && matches(capture.target, target))) {
+        throw new AuthorityOperationError('conflict', 'An extraction capture is already selected for this meeting');
+      }
       captures.set(id, { owner, target, collector: createPersonDiagnosticTraceV1(now), status: 'prepared', expires_at: expires, erased: false });
       return Object.freeze({ schema_version: 1 as const, kind: 'echo-person-diagnostic-capture-v1' as const, capture_id: id, status: 'prepared' as const, expires_at: new Date(expires).toISOString() });
     },
@@ -142,26 +169,24 @@ export function createPersonDiagnosticsV1(options: CreatePersonDiagnosticsOption
       const owner = authenticate(input.access_token);
       const capture = find(owner, input.capture_id);
       const target = input.target;
-      if (capture.target.kind !== target.kind || (target.kind === 'trigger_run' && (capture.target as Extract<Target, { kind: 'trigger_run' }>).run_id !== target.run_id)) {
+      if (!matches(capture.target, target)) {
         throw new AuthorityOperationError('invalid_request', 'Diagnostic capture target does not match');
       }
       if (capture.status !== 'prepared') throw new AuthorityOperationError('conflict', 'Diagnostic capture was already claimed');
-      capture.status = 'running';
-      capture.expires_at = timestamp() + ttl;
-      const settle = (error?: unknown) => observe(input.capture_id, capture, () => {
-        if (capture.status !== 'running') return;
-        capture.status = error === undefined ? 'completed' : 'failed';
-        if (error !== undefined) capture.error = failure(error);
-        if (capture.error?.code === 'unauthorized' || capture.error?.code === 'stale_access_state') erase(capture);
-        capture.collector.seal();
-        capture.expires_at = timestamp() + ttl;
-      });
-      return Object.freeze<PersonDiagnosticCaptureHandleV1>({
-        record(event) { observe(input.capture_id, capture, () => { if (capture.status === 'running') capture.collector.record(event); }); },
-        bindFence(fence) { observe(input.capture_id, capture, () => { if (capture.status === 'running') capture.fence = fence; }); },
-        complete() { settle(); },
-        fail(error) { settle(error ?? new Error('Captured operation failed')); },
-      });
+      return startCapture(input.capture_id, capture);
+    },
+    claimMeeting(input) {
+      // Diagnostic selection cannot fail or change an ordinary extraction.
+      try {
+        if (closed) return undefined;
+        purge();
+        const owner = ownerOf(input.actor);
+        const selected = [...captures.entries()].find(([, capture]) => capture.owner === owner && capture.status === 'prepared' && matches(capture.target, input.target));
+        if (selected === undefined) return undefined;
+        const handle = startCapture(...selected);
+        handle.bindFence(input.fence);
+        return handle;
+      } catch { return undefined; }
     },
     async read(input) {
       input.signal?.throwIfAborted();

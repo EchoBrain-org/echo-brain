@@ -1,6 +1,6 @@
 /** Payloads are delivered only to a selected run's private sink, never to operational metadata. */
 export type CoreRuntimeDiagnosticErrorKindV1 = 'aborted' | 'deadline' | 'invalid_output' | 'unavailable' | 'unauthorized' | 'not_found' | 'stale_access_state' | 'rate_limited' | 'other';
-type ModelIdentity = { readonly call_id: number; readonly role: 'step' | 'answer' };
+type ModelIdentity = { readonly call_id: number; readonly role: 'step' | 'answer' | 'extraction' };
 type ToolIdentity = { readonly tool_call_id: number; readonly round: number; readonly tool: 'search' | 'open' | 'list' | 'finish' };
 /** Shared diagnostic projections remain independent of any particular model port or workflow. */
 export interface CoreRuntimeDiagnosticModelInputV1 {
@@ -27,7 +27,7 @@ export type CoreRuntimeDiagnosticEventV1 =
   | (ToolIdentity & { readonly kind: 'tool_request'; readonly args: Readonly<Record<string, string>> })
   | (ToolIdentity & { readonly kind: 'tool_response'; readonly result: Readonly<Record<string, unknown>> })
   | (ToolIdentity & { readonly kind: 'tool_error'; readonly error_kind: CoreRuntimeDiagnosticErrorKindV1 })
-  | { readonly kind: 'lifecycle'; readonly stage: 'trigger' | 'application' | 'persistence' | 'output_view' | 'run' | 'brief' | 'starting_read' | 'preload' | 'research' | 'renderer' | 'revalidation' | 'audit' | 'release'; readonly event: 'started' | 'succeeded' | 'failed' | 'skipped'; readonly data?: Readonly<Record<string, unknown>>; readonly error_kind?: CoreRuntimeDiagnosticErrorKindV1 }
+  | { readonly kind: 'lifecycle'; readonly stage: 'trigger' | 'application' | 'persistence' | 'output_view' | 'run' | 'brief' | 'starting_read' | 'preload' | 'research' | 'renderer' | 'revalidation' | 'audit' | 'release' | 'extraction' | 'grounding'; readonly event: 'started' | 'succeeded' | 'failed' | 'skipped'; readonly data?: Readonly<Record<string, unknown>>; readonly error_kind?: CoreRuntimeDiagnosticErrorKindV1 }
   | { readonly kind: 'capture_error'; readonly error_kind: 'snapshot_failed' };
 
 /** The shared async scope supplies correlation, so every sink uses the same operation/span identity. */

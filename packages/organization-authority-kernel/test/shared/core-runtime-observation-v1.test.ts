@@ -1,5 +1,6 @@
 import {
   annotateCoreRuntimeV1,
+  coreRuntimeIdentityV1,
   normalizeCoreRuntimeDetailV1,
   observeCoreRuntimeSyncV1,
   observeCoreRuntimeV1,
@@ -11,6 +12,25 @@ const linked = "11111111-1111-4111-8111-111111111111";
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 
 describe("core runtime observations", () => {
+  it('links meeting and approval spans using hashes and rejects raw identities or delivery labels', async () => {
+    const events: CoreRuntimeObservationV1[] = [];
+    const meeting_id = coreRuntimeIdentityV1('meeting', 'PRIVATE-MEETING'), approval_id = coreRuntimeIdentityV1('approval', 'PRIVATE-APPROVAL');
+    await observeCoreRuntimeV1('extraction', async () => {
+      annotateCoreRuntimeV1({ meeting_id, approval_id, attempt: 2 });
+      await observeCoreRuntimeV1('approval_delivery', async () => {
+        annotateCoreRuntimeV1({ approval_surface: 'slack', delivery_step: 'publish_card', result: 'done' });
+      });
+    }, { observer: event => { events.push(event); } });
+    const delivery = events.find(event => event.phase === 'approval_delivery' && event.event === 'succeeded')!;
+    expect(delivery).toMatchObject({ meeting_id, approval_id, attempt: 2, approval_surface: 'slack', delivery_step: 'publish_card', result: 'done' });
+    expect(JSON.stringify(events)).not.toContain('PRIVATE');
+    expect(() => normalizeCoreRuntimeDetailV1({ ...delivery, grounding_stage: 'PRIVATE QUOTE' as 'evidence_quote' })).toThrow();
+    expect(() => normalizeCoreRuntimeDetailV1({ ...delivery, meeting_id: 'PRIVATE-MEETING' })).toThrow();
+    expect(() => normalizeCoreRuntimeDetailV1({ ...delivery, approval_id: 'PRIVATE-APPROVAL' })).toThrow();
+    expect(() => normalizeCoreRuntimeDetailV1({ ...delivery, delivery_step: 'PRIVATE' as 'publish_card' })).toThrow();
+    expect(() => normalizeCoreRuntimeDetailV1({ ...delivery, approval_surface: 'PRIVATE' as 'slack' })).toThrow();
+  });
+
   it.each([
     [Object.assign(new Error("PRIVATE"), { name: "AgenticAskDeadlineErrorV1" }), "timeout"],
     [Object.assign(new Error("PRIVATE"), { name: "AbortError" }), "cancelled"],

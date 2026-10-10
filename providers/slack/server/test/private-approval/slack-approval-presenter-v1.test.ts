@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { coreRuntimeIdentityV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createSlackApprovalPresenterV1, createTargetBoundSlackApprovalPosterV1, type ApprovalProposalViewV1 } from '../../src/private-approval/slack-approval-presenter-v1.js';
 
@@ -46,6 +47,25 @@ function markInFlight(f: ReturnType<typeof fixture>) { f.db.prepare("UPDATE auth
 function row(f: ReturnType<typeof fixture>, id = 'apr_live') { return f.db.prepare('SELECT * FROM authority_approval_presentations_v1 WHERE approval_id=?').get(id) as { delivery: string; attempts: number; retry_at: string | null; dm_channel_id: string | null; shows: string; message_ts: string | null }; }
 
 describe('Slack approval presenter V1', () => {
+  it('distinguishes a posted marker from a delivered card, links retries, and emits nothing on idle polls', async () => {
+    const f = fixture(), id = f.stage(), events: CoreRuntimeObservationV1[] = [];
+    const check = () => observeCoreRuntimeV1('worker_execution', () => f.presenter.reconcile(signal()), { observer: event => { events.push(event); } });
+    f.outcomes.publish = ['uncertain', 'done'];
+    await check(); await check();
+    const finished = () => events.filter(event => event.phase === 'approval_delivery' && event.event !== 'started');
+    expect(finished()).toMatchObject([
+      { delivery_step: 'open_dm', result: 'completed' }, { delivery_step: 'post_marker', result: 'completed' },
+      { delivery_step: 'publish_card', result: 'uncertain' }, { result: 'retry_pending' },
+    ]);
+    const before = finished().length; await check(); expect(finished()).toHaveLength(before);
+    f.advance(2_001); await check();
+    expect(finished().at(-1)).toMatchObject({ delivery_step: 'publish_card', result: 'done', approval_id: coreRuntimeIdentityV1('approval', id), approval_surface: 'slack', attempt: 2 });
+    expect(finished().every(event => event.approval_id === coreRuntimeIdentityV1('approval', id))).toBe(true);
+    const after = finished().length; await check(); expect(finished()).toHaveLength(after);
+    const serialized = JSON.stringify(events);
+    for (const privateText of [id, 'Roadmap', 'Send draft', 'D1', 'con_1', '1.000001']) expect(serialized).not.toContain(privateText);
+  });
+
   it('refuses a token selected across an active-connection switch before Slack receives a request', async () => {
     const connection = (connection_id: string) => ({ connection: { connection_id, provider_tenant_id: 'T1', provider_app_id: 'A1' }, state_sha256: `sha256:${connection_id.padEnd(64, 'x')}` });
     let active = connection('con_1');

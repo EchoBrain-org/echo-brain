@@ -1,3 +1,4 @@
+import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeObservationV1, type CoreRuntimeDiagnosticObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { describe, expect, it, vi } from 'vitest';
 import { adapterConformance } from '../../../../tests/support/adapter-conformance.js';
 import {
@@ -471,6 +472,27 @@ describe('llm decision processor extraction', () => {
           evidence: [{ evidence_id: 'e5', quote }],
         }),
       ]);
+
+    it('captures the exact rejected quote and source only through a selected private sink, preserving rejection', async () => {
+      const instance = processor(new FakeLlmClient(output(elidedQuote)));
+      const metadata: CoreRuntimeObservationV1[] = [], payload: CoreRuntimeDiagnosticObservationV1[] = [];
+      const extract = () => observeCoreRuntimeV1('extraction', () => instance.extract(quoteMeeting, extractionContext(instance)), {
+        observer: event => { metadata.push(event); },
+      });
+      await expect(extract()).rejects.toMatchObject({ code: 'temporarily_unavailable' });
+      expect(payload).toHaveLength(0);
+      await expect(withCoreRuntimeDiagnosticsV1(event => { payload.push(event); }, extract)).rejects.toMatchObject({ code: 'temporarily_unavailable' });
+      expect(payload).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'model_request', role: 'extraction', input: expect.objectContaining({ user_prompt: expect.stringContaining(sourceText) }) }),
+        expect.objectContaining({ kind: 'model_response', value: output(elidedQuote) }),
+        expect.objectContaining({ kind: 'lifecycle', stage: 'grounding', event: 'failed', data: {
+          failure_stage: 'evidence_quote', signal_index: 0, evidence_id: 'e5', block_id: 'transcript-04', block_kind: 'transcript', quote: elidedQuote, source_text: sourceText,
+        } }),
+      ]));
+      expect(metadata).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'model_grounding', grounding_stage: 'evidence_quote', result: 'grounding_failure', event: 'failed' })]));
+      for (const text of [sourceText, elidedQuote, quoteMeeting.title!, 'transcript-04']) expect(JSON.stringify(metadata)).not.toContain(text);
+      await expect(withCoreRuntimeDiagnosticsV1(() => { throw new Error('diagnostic failure'); }, extract)).rejects.toMatchObject({ code: 'temporarily_unavailable' });
+    });
 
     it('exposes the captured grounding failure and accepts only a corrected caller retry', async () => {
       const client = new FakeLlmClient(output(sourceText));
