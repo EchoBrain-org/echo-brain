@@ -42,8 +42,12 @@ The Granola MCP mapping fills fields it currently drops:
   abbreviations and UTC/GMT are supported. An unknown abbreviation leaves the
   time empty rather than guessing.
 - **Participants.** Built from `known_participants` ("Name (note creator) from
-  Org <email>, …") into structured participants. That text no longer appears
-  as quotable meeting content.
+  Org <email>, …") into structured participants with no role: Granola's list
+  proves neither identity nor attendance. Each entry ends at its `<email>`, so
+  commas inside names or organizations do not split it. An email is kept only
+  when it is a canonical person email. The raw text is kept as
+  `provider_fields.mcp_known_participants` and no longer appears as quotable
+  meeting content.
 - **Separate blocks with the right origin.** The person's private notes become
   their own block (`note`, origin `human`). Granola's AI summary becomes its
   own block (`summary`, origin `source_ai`).
@@ -75,6 +79,10 @@ It is pure, reads only `MeetingDocument`, and never branches on the source.
       are not units themselves.
     - Bullet markers are left out of the unit span.
     - Long lines split at sentence ends.
+  - **Hard cap.** No unit is longer than 600 characters. A part still over 600
+    after sentence splitting is cut at its last whitespace before 400
+    characters, else at 400 characters without splitting a surrogate pair.
+    Same-speaker turns stop merging before the merged span passes 600.
 - **ID prefixes.** `T` for transcript turns, `N` for notes written by people
   (including documents), `S` for anything written by a tool's AI (`summary`,
   origin `source_ai`, `chapter`, `provider_action_item`, `provider_decision`).
@@ -102,10 +110,12 @@ It is pure, reads only `MeetingDocument`, and never branches on the source.
 
 | Check | Result |
 |---|---|
+| A cited ID differs only in case, or names a split unit's parent (`T12` for `T12.1`, `T12.2`) | Read it in upper case; a parent ID cites all its parts. |
 | An item cites at least one unknown ID but also valid ones | Drop the unknown IDs and keep the item. |
+| An item cites more than six units | Keep the first six in citation order. This bounds the approved record, which is limited to 256 KiB. |
 | An item cites no valid unit | Set aside (`evidence_id`). |
 | A rationale links to no surviving decision | Set aside (`rationale_supports`). |
-| Two items have the same kind, text and units | Keep the first. |
+| Two items have the same kind, text and units | Keep the first. A rationale linked to the dropped copy links to the kept one. |
 | A decision marked decided cites only questions | Downgrade it to proposed. |
 | A due date is unparsable or falls before the meeting date | Clear the due date and keep the item. |
 | An owner is not grounded | Clear the owner, as today. The owner is kept when a cited unit names them, or when the cited speaker label is that person committing in the first person. |
@@ -123,21 +133,31 @@ operational metadata.
 
 - **Attempt ledger, parking and cursor.** One paid attempt per input; parking
   and cursor behavior are unchanged.
-- **Failure-stage allowlist.** `evidence_quote` and `evidence_duplicate`
-  become unreachable but stay listed, because the V14 table's CHECK constraint
-  and the pre-Slack evaluator depend on the list.
+- **Failure-stage allowlist.** These stages are no longer produced but stay
+  listed, because the V14 table's CHECK constraint and the pre-Slack evaluator
+  depend on the list: `evidence_quote`, `evidence_duplicate`,
+  `due_before_meeting`, `decided_question_only`, `schema_due_at`,
+  `schema_confidence`, `schema_supports`, `schema_evidence_item` and
+  `schema_owner`.
 - **Downstream.** The approval core, snapshots, Slack and desktop surfaces, and
-  the record are unchanged.
+  the record are unchanged, with one Slack presenter fix: a card that cannot
+  be built marks only its own row unrepresentable (or backs it off once
+  posted) instead of stalling every later card. Real meetings now yield 10–25
+  items, which made that stall reachable.
 
 ## Deploy consequence
 
-- **Existing sources stop working.** The extractor version and the Granola
-  normalizer version are part of each source's immutable admission. Sources
-  admitted under the old versions fail their per-pass commitment check until
-  staging is reset.
+- **Every LLM-processed source stops until reset.** The extractor's processing
+  version is part of each source's admitted processor commitment, and the
+  per-pass check compares processor commitments only. Every source admitted
+  under the old extractor fails that check. That includes the synthetic
+  staging source, so the release canary fails until the reset, and any
+  non-staging Authority with admitted sources, such as founder-live.
+- **Every Granola meeting gets a new revision.** The normalizer bump changes
+  each meeting's canonical revision.
 - **Staging needs the fresh-state reset.** This is the same human-lane reset
-  as V14: `replace-rehearsal`, then onboarding. The canary still produces a
-  staged card, because its one-sentence blocks become units N1–N3 and T1.
+  as V14: `replace-rehearsal`, then onboarding. After it the canary produces a
+  staged card again, because its one-sentence blocks become units N1–N3 and T1.
 - **Reset before any watched folder runs.** The new Granola revision would
   otherwise make every folder meeting look changed and get extracted again.
 
@@ -151,7 +171,6 @@ These were observed or found, but are out of this change:
   `permanently_rejected` with no free retry. This was observed on Oct 3 and
   again today. It needs a provider-unavailable rule that spends no attempts.
 - **Folder scan.** One bad note fails the whole folder scan.
-- **Slack presenter.** It catches only one card-build error message.
 - **Model refusals.** One defense-topic meeting was refused outright.
 - **Processor changes.** A processor change needs a reset instead of
   re-admission.
@@ -161,10 +180,11 @@ These were observed or found, but are out of this change:
 
 - **Focused tests** for each part, then `npm run check` on the final
   candidate.
-- **Side-by-side rerun.** The 12 real meetings run through today's extractor
-  and the shipped new path: production Granola mapping, preparation step and
-  extractor, plus the support judge. This needs OpenRouter credit, which ran
-  out on 2026-10-10.
+- **Real-meeting rerun.** One run of the shipped new path (production Granola
+  mapping, preparation step and extractor, plus the support judge) on all 12
+  real meetings. It is compared with the earlier measurement of today's path
+  on 9 of them. OpenRouter credit, which ran out on 2026-10-10, allows only
+  this one run.
 - **Draft PR** with results, line-count deltas, and the reset note.
 
 ## Tasks

@@ -318,7 +318,7 @@ The staging event links that meeting to a hashed `approval_id`, which later
 worker passes and review requests reuse. `attempt` on extraction is the durable
 attempt ledger ordinal. A parked meeting ends its worker pass with `result=held`;
 a scheduled extraction retry reports `retry_pending`. Grounding failures carry
-an allowlisted `grounding_stage`, such as `evidence_quote`, without the quote.
+an allowlisted `grounding_stage`, such as `evidence_id`, without the cited IDs.
 The attempt ledger remains authoritative for holds and retry authorization.
 
 | Evidence | What it proves |
