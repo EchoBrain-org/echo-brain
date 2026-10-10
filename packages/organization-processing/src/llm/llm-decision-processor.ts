@@ -35,8 +35,10 @@ export const LLM_DECISION_PROCESSOR_SCHEMA_VERSION =
   'decision-extraction-schema-v8';
 /** Longest proposed action owner kept, in characters. */
 export const LLM_DECISION_PROCESSOR_OWNER_MAX_CHARACTERS = 120;
-/** Most cited unit text kept per item, in characters, which bounds the approved record's size. */
+/** Most cited unit text kept per item, in characters. */
 const EVIDENCE_CHARACTERS_PER_SIGNAL = 3_000;
+/** Most evidence per meeting, as the UTF-8 bytes of each span's JSON, which keeps the approved record under 256 KiB. */
+const EVIDENCE_BYTES_PER_MEETING = 160_000;
 
 /** JSON schema handed to the provider as a structured-output constraint. */
 const EXTRACTION_FORMAT: JsonObject = {
@@ -573,6 +575,38 @@ function stableSignalId(
   return `${raw.kind}:sha256:${digest}`;
 }
 
+/** A surviving item, its evidence, and the kept decisions it supports. */
+interface KeptSignal {
+  readonly signal: CheckedSignal;
+  readonly spans: EvidenceSpan[];
+  readonly supports: readonly KeptSignal[];
+}
+
+/**
+ * While the meeting's evidence is over EVIDENCE_BYTES_PER_MEETING, drops the
+ * last span of the item with the most evidence bytes that still has more than
+ * one span (the lower model index on a tie). Every item keeps one span.
+ */
+function fitEvidenceCeiling(kept: readonly KeptSignal[]): void {
+  const sized = kept.map((item) => {
+    const sizes = item.spans.map((span) => Buffer.byteLength(JSON.stringify(span)));
+    return { item, sizes, bytes: sizes.reduce((sum, size) => sum + size, 0) };
+  });
+  let total = sized.reduce((sum, { bytes }) => sum + bytes, 0);
+  while (total > EVIDENCE_BYTES_PER_MEETING) {
+    let largest: (typeof sized)[number] | undefined;
+    for (const entry of sized) {
+      if (entry.sizes.length > 1 && (largest === undefined || entry.bytes > largest.bytes
+        || (entry.bytes === largest.bytes && entry.item.signal.index < largest.item.signal.index))) largest = entry;
+    }
+    if (largest === undefined) return;
+    const removed = largest.sizes.pop()!;
+    largest.item.spans.pop();
+    largest.bytes -= removed;
+    total -= removed;
+  }
+}
+
 /**
  * Checks each item on its own: a bad item is set aside, never the whole answer.
  * The meeting fails only when the model returned items and none survived, with
@@ -594,10 +628,10 @@ function groundedSignals(
   });
   // Decisions and actions first, so a rationale can link to any surviving decision.
   candidates.sort((left, right) => Number(left.kind === 'rationale') - Number(right.kind === 'rationale'));
-  /** Dedupe key or signal id of each kept item → that item's id. */
-  const keptIds = new Map<string, string>();
-  const decisionIds = new Map<unknown, string>();
-  const kept: { signal: CheckedSignal; id: string; spans: EvidenceSpan[]; supports: string[] }[] = [];
+  /** Dedupe key or untrimmed signal id of each kept item → that item. */
+  const keptBy = new Map<string, KeptSignal>();
+  const decisions = new Map<unknown, KeptSignal>();
+  const kept: KeptSignal[] = [];
   for (const signal of candidates) {
     const spans = signal.units.map((unit): EvidenceSpan => {
       const block = blocks.get(unit.block_id);
@@ -609,23 +643,24 @@ function groundedSignals(
         ...(block?.ended_at === undefined ? {} : { ended_at: block.ended_at }),
       };
     });
-    const id = stableSignalId(meeting, signal, spans);
+    const untrimmedId = stableSignalId(meeting, signal, spans);
     const key = JSON.stringify([signal.kind, comparable(signal.text), signal.units.map((unit) => unit.id).sort()]);
     // A repeat of a kept item. A repeated id (same text citing identical quotes) would also break the decision set.
     // A rationale that links to a dropped decision links to its kept twin.
-    const twin = keptIds.get(key) ?? keptIds.get(id);
+    const twin = keptBy.get(key) ?? keptBy.get(untrimmedId);
     if (twin !== undefined) {
-      if (signal.kind === 'decision') decisionIds.set(signal.index, twin);
+      if (signal.kind === 'decision') decisions.set(signal.index, twin);
       continue;
     }
-    const supports = [...new Set(signal.supports)].flatMap((index) => decisionIds.get(index) ?? []);
+    const supports = [...new Set(signal.supports)].flatMap((index) => decisions.get(index) ?? []);
     if (signal.kind === 'rationale' && supports.length === 0) {
       setAside.push({ index: signal.index, reason: 'rationale_supports' });
       continue;
     }
-    keptIds.set(key, id).set(id, id);
-    if (signal.kind === 'decision') decisionIds.set(signal.index, id);
-    kept.push({ signal, id, spans, supports });
+    const entry = { signal, spans, supports };
+    keptBy.set(key, entry).set(untrimmedId, entry);
+    if (signal.kind === 'decision') decisions.set(signal.index, entry);
+    kept.push(entry);
   }
   setAside.sort((left, right) => left.index - right.index);
   for (const { index, reason } of setAside) {
@@ -640,17 +675,29 @@ function groundedSignals(
     if (isGroundingStage(first.reason)) extractionGroundingFailure(first.reason, { signal_index: first.index });
     extractionSchemaFailure(first.reason);
   }
+  fitEvidenceCeiling(kept);
+  // Ids hash the final evidence. An item trimmed into a repeat of an earlier one
+  // shares its id, so it is dropped and links to it follow the earlier one.
+  const ids = new Map(kept.map((entry) => [entry, stableSignalId(meeting, entry.signal, entry.spans)]));
+  const seen = new Set<string>();
   return kept
+    .filter((entry) => {
+      const id = ids.get(entry)!;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
     .sort((left, right) => left.signal.index - right.signal.index)
-    .map(({ signal, id, spans, supports }): ExtractedSignal => {
-      const base = { id, text: signal.text, subject: null, confidence: signal.confidence, evidence: spans };
+    .map((entry): ExtractedSignal => {
+      const { signal, spans, supports } = entry;
+      const base = { id: ids.get(entry)!, text: signal.text, subject: null, confidence: signal.confidence, evidence: spans };
       switch (signal.kind) {
         case 'decision':
           return { ...base, kind: 'decision', status: signal.status };
         case 'action':
           return { ...base, kind: 'action', owner: signal.owner, due_at: signal.dueAt };
         case 'rationale':
-          return { ...base, kind: 'rationale', supports_signal_ids: supports };
+          return { ...base, kind: 'rationale', supports_signal_ids: [...new Set(supports.map((decision) => ids.get(decision)!))] };
       }
     });
 }

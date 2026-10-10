@@ -330,16 +330,56 @@ describe('llm decision processor extraction', () => {
       ['Point 10', 'Point 9', 'Point 8', 'Point 7', 'Point 6', 'Point 5', 'Point 4', 'Point 3', 'Point 2', 'Point 1'],
     ]);
 
-    // Seven note lines of exactly 600 characters: five fit the budget, a sixth would exceed it.
+    // N1–N7 are note lines of exactly 600 characters; N8 and N9 are short.
     const longUnits: MeetingDocument = { ...meeting, content: [
-      { id: 'notes-1', kind: 'note', text: Array.from({ length: 7 }, (_, n) => `Long point ${n + 1}: `.padEnd(600, 'z')).join('\n') },
+      { id: 'notes-1', kind: 'note', text: [
+        ...Array.from({ length: 7 }, (_, n) => `Long point ${n + 1}: `.padEnd(600, 'z')), 'Short point 8', 'Short point 9',
+      ].join('\n') },
     ] };
-    const long = await extractWith(modelOutput([modelSignal({ evidence_units: ['N7', 'N6', 'N5', 'N4', 'N3', 'N2', 'N1'] })]), longUnits);
-    const evidence = long.signals[0]!.evidence;
-    expect(evidence.map((span) => span.quote?.length)).toEqual([600, 600, 600, 600, 600]);
-    expect(evidence.map((span) => span.quote?.slice(0, 12))).toEqual(
+    const heads = (signal: { evidence: readonly { quote?: string }[] }) => signal.evidence.map((span) => span.quote?.split(':')[0]);
+    const long = await extractWith(modelOutput([
+      // Five fit the budget exactly; a sixth would exceed it.
+      modelSignal({ evidence_units: ['N7', 'N6', 'N5', 'N4', 'N3', 'N2', 'N1'] }),
+      // 13 + 4 × 600 characters leaves room for N9, but N3 does not fit: the budget stops there instead of skipping ahead.
+      modelSignal({ text: 'Ship the launch', evidence_units: ['N8', 'N7', 'N6', 'N5', 'N4', 'N3', 'N9'] }),
+    ]), longUnits);
+    expect(long.signals[0]!.evidence.map((span) => span.quote?.length)).toEqual([600, 600, 600, 600, 600]);
+    expect(long.signals.map(heads)).toEqual([
       ['Long point 7', 'Long point 6', 'Long point 5', 'Long point 4', 'Long point 3'],
-    );
+      ['Short point 8', 'Long point 7', 'Long point 6', 'Long point 5', 'Long point 4'],
+    ]);
+  });
+
+  it('trims the largest evidence lists, last span first, until the meeting fits 160,000 evidence bytes', async () => {
+    // N1–N5 are 600 CJK characters each, so every span is 1,862 bytes of JSON and at most 85 spans fit.
+    const wide: MeetingDocument = { ...meeting, content: [
+      { id: 'notes-1', kind: 'note', text: ['一', '二', '三', '四', '五'].map((character) => character.repeat(600)).join('\n') },
+    ] };
+    const all = ['N1', 'N2', 'N3', 'N4', 'N5'];
+    const output = modelOutput([
+      modelSignal({ text: 'Item 0', evidence_units: ['N1'] }),
+      modelSignal({ text: 'Item 1', evidence_units: ['N1', 'N2', 'N3'] }),
+      modelSignal({ text: 'Repeat', evidence_units: all }),
+      // Differs from item 2 until item 2 loses its last span, then repeats it.
+      modelSignal({ text: 'Repeat', evidence_units: ['N1', 'N2', 'N3', 'N4'] }),
+      modelSignal({ kind: 'rationale', text: 'Because', evidence_units: ['N2'], supports_decision_indexes: [3] }),
+      ...Array.from({ length: 16 }, (_, n) => modelSignal({ text: `Item ${n + 5}`, evidence_units: all })),
+    ]);
+    const instance = processor(new FakeLlmClient(output));
+    const result = await instance.extract(wide, extractionContext(instance));
+
+    const bytes = result.signals.flatMap((signal) => signal.evidence).reduce((sum, span) => sum + Buffer.byteLength(JSON.stringify(span)), 0);
+    expect(bytes).toBeLessThanOrEqual(160_000);
+    // 94 spans before: the nine five-span lists with the lowest indexes (items 2, 5–12) each lost one; items 0, 1 and the rationale kept theirs.
+    expect(result.signals.map((signal) => [signal.text, signal.evidence.length])).toEqual([
+      ['Item 0', 1], ['Item 1', 3], ['Repeat', 4], ['Because', 1],
+      ...Array.from({ length: 8 }, (_, n) => [`Item ${n + 5}`, 4]),
+      ...Array.from({ length: 8 }, (_, n) => [`Item ${n + 13}`, 5]),
+    ]);
+    expect(result.signals[2]!.evidence.map((span) => span.quote?.charAt(0))).toEqual(['一', '二', '三', '四']);
+    // Item 3 now repeats item 2 and is dropped; the rationale linked to it follows item 2.
+    expect(result.signals[3]).toMatchObject({ kind: 'rationale', supports_signal_ids: [result.signals[2]!.id] });
+    expect(() => assertCanonicalDecisionSet(result, wide, instance.identity)).not.toThrow();
   });
 
   it('reads cited IDs in any case and a split turn\'s parent ID as its parts', async () => {
