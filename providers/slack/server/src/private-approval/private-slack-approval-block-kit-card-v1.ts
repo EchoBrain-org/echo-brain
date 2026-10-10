@@ -1,25 +1,4 @@
 import { createHash } from "node:crypto";
-import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-  type PersonApprovalPolicyId,
-} from "../organization-control-plane/slack-approval-integration-v1.js";
-
-/** Longest approval note a card accepts, in UTF-16 code units. */
-export const PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS = 1000;
-
-export const PRIVATE_SLACK_APPROVAL_BLOCK_KIT_CARD_KIND =
-  "echo-private-approval-block-kit-card-v1" as const;
-
-export const PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1 = Object.freeze({
-  policy: "policy",
-  comment: "comment",
-  approve: "approve",
-  reject: "reject",
-} as const);
-
-export type PrivateSlackApprovalBlockKitActionV1 =
-  (typeof PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1)[keyof typeof PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1];
 
 export interface PrivateSlackApprovalReviewItemV1 {
   readonly text: string;
@@ -62,29 +41,23 @@ interface MrkdwnTextV1 {
   readonly verbatim: true;
 }
 
-interface PolicyOptionV1 {
-  readonly text: PlainTextV1;
-  readonly value: PersonApprovalPolicyId;
-  readonly description: PlainTextV1;
-}
-
-export interface PrivateSlackApprovalBlockKitCardV1 {
-  readonly schema_version: 1;
-  readonly kind: typeof PRIVATE_SLACK_APPROVAL_BLOCK_KIT_CARD_KIND;
-  readonly approval_id: string;
-  /** Complete plain-text alternative for notifications and assistive tools. */
+export interface PrivateSlackApprovalReviewV1 {
+  /**
+   * Plain-text review for the card's notification and assistive-tool
+   * alternative; the card appends its own control instructions.
+   */
   readonly text: string;
   readonly blocks: readonly Readonly<Record<string, unknown>>[];
-  readonly transport: {
-    readonly mrkdwn: false;
-    readonly unfurl_links: false;
-    readonly unfurl_media: false;
-  };
 }
 
 const MAX_TITLE = 150;
 const MAX_SECTION = 3_000;
-const MAX_MESSAGE = 40_000;
+/**
+ * Slack's 40,000-character message limit once covered this review plus the
+ * 96 characters of the original card's closing instructions. The review keeps
+ * that bound, so exactly the same reviews fail closed.
+ */
+const MAX_REVIEW_TEXT = 40_000 - 96;
 const MAX_APPROVAL_ID = 256;
 const MAX_BLOCKS = 50;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
@@ -216,6 +189,7 @@ function validateInput(input: PrivateSlackApprovalBlockKitCardInputV1): void {
     );
   }
 
+  // Header and context, plus the card's five control blocks.
   const blockCount =
     7 +
     input.decision_groups.length +
@@ -246,14 +220,6 @@ function cardKey(approvalId: string): string {
     .update(`echo-private-approval-v1\u0000${approvalId}`)
     .digest("hex")
     .slice(0, 32);
-}
-
-export function privateSlackApprovalBlockKitActionIdV1(
-  input: Pick<PrivateSlackApprovalBlockKitCardInputV1, "approval_id">,
-  action: PrivateSlackApprovalBlockKitActionV1,
-): string {
-  identifier(input.approval_id, "approval_id");
-  return `echo-private-approval-v1-${cardKey(input.approval_id)}-${action}-v1`;
 }
 
 function blockId(
@@ -421,18 +387,10 @@ function fallback(input: PrivateSlackApprovalBlockKitCardInputV1): string {
       `Evidence: ${rationale.evidence_reference}`,
     );
   }
-  lines.push(
-    NON_RELEASE_TEXT,
-    "Visibility: Only me (default) or Team.",
-    "Optionally add a comment, then choose Approve or Reject.",
-  );
+  lines.push(NON_RELEASE_TEXT);
   const text = lines.join("\n");
-  if (text.length > MAX_MESSAGE) invalid("fallback exceeds Slack's text limit");
+  if (text.length > MAX_REVIEW_TEXT) invalid("fallback exceeds Slack's text limit");
   return text;
-}
-
-function actionValue(approvalId: string): string {
-  return JSON.stringify({ schema_version: 1, approval_id: approvalId });
 }
 
 function deepFreeze<T>(value: T): T {
@@ -445,21 +403,11 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-/** Builds one complete review before the unchanged V1 approval controls. */
-export function buildPrivateSlackApprovalBlockKitCardV1(
+/** Builds the complete review a card shows above its approval controls. */
+export function buildPrivateSlackApprovalReviewV1(
   input: PrivateSlackApprovalBlockKitCardInputV1,
-): PrivateSlackApprovalBlockKitCardV1 {
+): PrivateSlackApprovalReviewV1 {
   validateInput(input);
-  const onlyMe: PolicyOptionV1 = {
-    text: plainText("Only me"),
-    value: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-    description: plainText("Only you can read this record"),
-  };
-  const team: PolicyOptionV1 = {
-    text: plainText("Team"),
-    value: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-    description: plainText("Current organization members can read it"),
-  };
   const blocks: Readonly<Record<string, unknown>>[] = [
     {
       type: "header",
@@ -481,80 +429,5 @@ export function buildPrivateSlackApprovalBlockKitCardV1(
   ];
   const followUp = meetingFollowUp(input);
   if (followUp !== undefined) blocks.push(followUp);
-  blocks.push(
-    { type: "divider", block_id: blockId(input, "divider") },
-    {
-      type: "input",
-      block_id: blockId(input, "policy"),
-      optional: false,
-      label: plainText("Who should be able to read this record?"),
-      element: {
-        type: "static_select",
-        action_id: privateSlackApprovalBlockKitActionIdV1(
-          input,
-          PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.policy,
-        ),
-        placeholder: plainText("Choose who can read this record"),
-        options: [onlyMe, team],
-        initial_option: onlyMe,
-      },
-    },
-    {
-      type: "input",
-      block_id: blockId(input, "comment"),
-      optional: true,
-      label: plainText("Note for the record (optional)"),
-      element: {
-        type: "plain_text_input",
-        action_id: privateSlackApprovalBlockKitActionIdV1(
-          input,
-          PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.comment,
-        ),
-        multiline: false,
-        max_length: PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,
-        placeholder: plainText("Add context for this approval"),
-      },
-    },
-    {
-      type: "actions",
-      block_id: blockId(input, "actions"),
-      elements: [
-        {
-          type: "button",
-          action_id: privateSlackApprovalBlockKitActionIdV1(
-            input,
-            PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.approve,
-          ),
-          style: "primary",
-          text: plainText("Approve meeting"),
-          value: actionValue(input.approval_id),
-        },
-        {
-          type: "button",
-          action_id: privateSlackApprovalBlockKitActionIdV1(
-            input,
-            PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.reject,
-          ),
-          style: "danger",
-          text: plainText("Reject"),
-          value: actionValue(input.approval_id),
-        },
-      ],
-    },
-    {
-      type: "context",
-      block_id: blockId(input, "footer"),
-      elements: [
-        plainText("One visibility policy applies to the entire meeting record."),
-      ],
-    },
-  );
-  return deepFreeze({
-    schema_version: 1,
-    kind: PRIVATE_SLACK_APPROVAL_BLOCK_KIT_CARD_KIND,
-    approval_id: input.approval_id,
-    text: fallback(input),
-    blocks,
-    transport: { mrkdwn: false, unfurl_links: false, unfurl_media: false },
-  });
+  return deepFreeze({ text: fallback(input), blocks });
 }
