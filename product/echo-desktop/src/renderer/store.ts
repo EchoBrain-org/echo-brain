@@ -765,6 +765,11 @@ function failureOf(error: unknown): Failure {
   return error instanceof CommandFailed ? error.failure : { code: 'failed', retryable: true };
 }
 
+/** Only the Authority's answer settles a write whose outcome is unknown: a failed resend leaves it unknown. */
+function outcomeUnknown(failure: Failure, resend: boolean): boolean {
+  return resend || failure.mutation_outcome === 'unknown';
+}
+
 /** Account-fenced command for the personal meeting sheet. No provider token enters the renderer. */
 export async function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }): Promise<PersonMeetingResultsV2[K]> {
   const account = expect();
@@ -1294,8 +1299,7 @@ async function sendChange(
   const current = state.change;
   if (current?.seq !== mine) return;
   if (!result.ok) {
-    // Only the Authority's answer settles an unknown change: a failed resend leaves it unknown.
-    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    const unknown = outcomeUnknown(result.failure, retrying);
     setChange({ ...current, status: unknown ? 'unknown' : 'failed', failure: result.failure });
     accountLost(result.failure);
     return;
@@ -1573,7 +1577,7 @@ async function sendProjectSetting(project: ProjectSummary, operation: 'rename' |
   const current = state.projectSettings;
   if (current?.write?.requestId !== requestId) return;
   if (!result.ok) {
-    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    const unknown = outcomeUnknown(result.failure, retrying);
     set({ projectSettings: { ...current, write: { ...current.write, status: unknown ? 'unknown' : 'failed', failure: result.failure } } });
     unresolvedChanged();
     accountLost(result.failure);
@@ -1925,8 +1929,7 @@ export async function createProject(): Promise<void> {
   const current = newProjectSheet(mine);
   if (!current) return;
   if (!result.ok) {
-    // Only the Authority's answer settles an unknown create: a failed resend leaves it unknown.
-    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    const unknown = outcomeUnknown(result.failure, retrying);
     setNewProject({ create: { ...current.create, status: unknown ? 'unknown' : 'failed', failure: result.failure } }, mine);
     accountLost(result.failure);
     return;
@@ -2101,8 +2104,7 @@ async function addPick(mine: number, id: number, retrying: boolean): Promise<voi
   });
   if (!newProjectSheet(mine)?.picks.some(entry => entry.id === id)) return;
   if (!result.ok) {
-    // Only the Authority's answer settles an unknown add: a failed resend leaves it unknown.
-    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    const unknown = outcomeUnknown(result.failure, retrying);
     patchPick(mine, id, { status: unknown ? 'unknown' : 'failed', failure: result.failure });
     accountLost(result.failure);
     // Refused, the rest carry on; unknown, they wait, and the project opens meanwhile.
@@ -2183,8 +2185,7 @@ async function saveFile(mine: number, id: number, retrying: boolean): Promise<vo
   const current = newProjectSheet(mine)?.files.find(entry => entry.id === id);
   if (!current) return;
   if (!result.ok) {
-    // Only the Authority's answer settles an unknown save: a failed resend leaves it unknown.
-    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    const unknown = outcomeUnknown(result.failure, retrying);
     patchFile(mine, id, { status: unknown ? 'unknown' : 'failed', failure: result.failure, kept: current.kept || unknown });
     accountLost(result.failure);
     // Refused, the rest carry on; unknown, they wait, and the project opens meanwhile.
@@ -3109,8 +3110,7 @@ export async function sendCompose(): Promise<void> {
   const current = state.compose;
   if (current?.seq !== compose.seq) return;
   if (!result.ok) {
-    // Only the Authority's answer settles an unknown save: a failed retry leaves it unknown.
-    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    const unknown = outcomeUnknown(result.failure, retrying);
     setCompose({ ...current, status: unknown ? 'unknown' : 'error', failure: result.failure, hidden: false,
       kept: current.kept || (unknown && current.file !== null) });
     accountLost(result.failure);
