@@ -35,8 +35,8 @@ export const LLM_DECISION_PROCESSOR_SCHEMA_VERSION =
   'decision-extraction-schema-v8';
 /** Longest proposed action owner kept, in characters. */
 export const LLM_DECISION_PROCESSOR_OWNER_MAX_CHARACTERS = 120;
-/** Most cited units kept per item, which bounds the approved record's size. */
-const MAX_EVIDENCE_UNITS = 6;
+/** Most cited unit text kept per item, in characters, which bounds the approved record's size. */
+const EVIDENCE_CHARACTERS_PER_SIGNAL = 3_000;
 
 /** JSON schema handed to the provider as a structured-output constraint. */
 const EXTRACTION_FORMAT: JsonObject = {
@@ -109,7 +109,7 @@ interface CheckedSignal {
   readonly owner: string | null;
   readonly dueAt: string | null;
   readonly confidence: number | null;
-  /** Known cited units, de-duplicated, in citation order, at most MAX_EVIDENCE_UNITS. */
+  /** Known cited units, de-duplicated, in citation order, within EVIDENCE_CHARACTERS_PER_SIGNAL. */
   readonly units: readonly MeetingEvidenceUnitV1[];
   /** The model's raw decision indexes; only those of surviving decisions are kept. */
   readonly supports: readonly unknown[];
@@ -453,6 +453,18 @@ function citationTargets(units: readonly MeetingEvidenceUnitV1[]): Map<string, M
   return targets;
 }
 
+/** Units in order until the next would take their text past the budget; the first is always kept (units are at most 600 characters). */
+function withinEvidenceBudget(units: readonly MeetingEvidenceUnitV1[]): MeetingEvidenceUnitV1[] {
+  const kept: MeetingEvidenceUnitV1[] = [];
+  let characters = 0;
+  for (const unit of units) {
+    characters += unit.text.length;
+    if (kept.length > 0 && characters > EVIDENCE_CHARACTERS_PER_SIGNAL) break;
+    kept.push(unit);
+  }
+  return kept;
+}
+
 /** One item on its own: its reason for being set aside, or the item with corrections applied. */
 function checkedSignal(
   item: unknown,
@@ -481,7 +493,7 @@ function checkedSignal(
   if (!Array.isArray(cited) || !cited.every((id): id is string => typeof id === 'string')) {
     return 'evidence_shape';
   }
-  const units = [...new Set(cited.flatMap((id) => targets.get(citedUnitId(id)) ?? []))].slice(0, MAX_EVIDENCE_UNITS);
+  const units = withinEvidenceBudget([...new Set(cited.flatMap((id) => targets.get(citedUnitId(id)) ?? []))]);
   if (units.length === 0) return 'evidence_id';
   const supports = record['supports_decision_indexes'];
   return {

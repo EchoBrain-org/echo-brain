@@ -316,17 +316,30 @@ describe('llm decision processor extraction', () => {
     expect(result.signals[1]).toMatchObject({ supports_signal_ids: [result.signals[0]!.id] });
   });
 
-  // Units: N1–N8, then one long Ada turn split into T1.1 (sentences 1–8) and T1.2 (9–14).
+  // Units: N1–N10, then one long Ada turn split into T1.1 (sentences 1–8) and T1.2 (9–14).
   const manyUnits: MeetingDocument = { ...meeting, content: [
-    { id: 'notes-1', kind: 'note', text: Array.from({ length: 8 }, (_, n) => `Point ${n + 1}`).join('\n') },
+    { id: 'notes-1', kind: 'note', text: Array.from({ length: 10 }, (_, n) => `Point ${n + 1}`).join('\n') },
     { id: 'transcript-1', kind: 'transcript', speaker_participant_id: 'participant-ada',
       text: Array.from({ length: 14 }, (_, n) => `Sentence ${n + 1} covers one launch risk in detail.`).join(' ') },
   ] };
   const citedQuotes = (signal: { evidence: readonly { quote?: string }[] }) => signal.evidence.map((span) => span.quote?.split(' covers')[0]);
 
-  it('keeps the first six cited units of an item in citation order', async () => {
-    const result = await extractWith(modelOutput([modelSignal({ evidence_units: ['N8', 'N7', 'N6', 'N5', 'N4', 'N3', 'N2', 'N1'] })]), manyUnits);
-    expect(result.signals.map(citedQuotes)).toEqual([['Point 8', 'Point 7', 'Point 6', 'Point 5', 'Point 4', 'Point 3']]);
+  it('keeps cited units in citation order until their text would exceed 3,000 characters', async () => {
+    const short = await extractWith(modelOutput([modelSignal({ evidence_units: ['N10', 'N9', 'N8', 'N7', 'N6', 'N5', 'N4', 'N3', 'N2', 'N1'] })]), manyUnits);
+    expect(short.signals.map(citedQuotes)).toEqual([
+      ['Point 10', 'Point 9', 'Point 8', 'Point 7', 'Point 6', 'Point 5', 'Point 4', 'Point 3', 'Point 2', 'Point 1'],
+    ]);
+
+    // Seven note lines of exactly 600 characters: five fit the budget, a sixth would exceed it.
+    const longUnits: MeetingDocument = { ...meeting, content: [
+      { id: 'notes-1', kind: 'note', text: Array.from({ length: 7 }, (_, n) => `Long point ${n + 1}: `.padEnd(600, 'z')).join('\n') },
+    ] };
+    const long = await extractWith(modelOutput([modelSignal({ evidence_units: ['N7', 'N6', 'N5', 'N4', 'N3', 'N2', 'N1'] })]), longUnits);
+    const evidence = long.signals[0]!.evidence;
+    expect(evidence.map((span) => span.quote?.length)).toEqual([600, 600, 600, 600, 600]);
+    expect(evidence.map((span) => span.quote?.slice(0, 12))).toEqual(
+      ['Long point 7', 'Long point 6', 'Long point 5', 'Long point 4', 'Long point 3'],
+    );
   });
 
   it('reads cited IDs in any case and a split turn\'s parent ID as its parts', async () => {
@@ -336,7 +349,7 @@ describe('llm decision processor extraction', () => {
     ]), manyUnits);
     expect(result.signals.map(citedQuotes)).toEqual([
       ['Point 1', 'Sentence 1', 'Sentence 9'],
-      ['Point 1', 'Point 2', 'Point 3', 'Point 4', 'Point 5', 'Sentence 1'],
+      ['Point 1', 'Point 2', 'Point 3', 'Point 4', 'Point 5', 'Sentence 1', 'Sentence 9'],
     ]);
   });
 
