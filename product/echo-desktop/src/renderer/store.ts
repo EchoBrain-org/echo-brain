@@ -771,23 +771,23 @@ function outcomeUnknown(failure: Failure, resend: boolean): boolean {
 }
 
 /** Account-fenced command for the personal meeting sheet. No provider token enters the renderer. */
-export async function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }): Promise<PersonMeetingResultsV2[K]> {
-  const account = expect();
-  if (!account || state.concealed) throw new Error('Sign in to use meetings.');
-  const result = await rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id: 'granola' } });
-  if (JSON.stringify(expect()) !== JSON.stringify(account) || state.concealed) throw new Error('Account or screen changed.');
-  if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure); }
-  return result.value as PersonMeetingResultsV2[K];
+export function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }): Promise<PersonMeetingResultsV2[K]> {
+  return fencedCommand<PersonMeetingResultsV2[K]>(account => rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id: 'granola' } }));
 }
 
 /** Account-fenced runs request: your own approvals' checks, and the open items you can see. */
-export async function runsCommand<K extends PersonRunsRequestV1['operation']>(request: PersonRunsRequestV1 & { readonly operation: K }): Promise<RunsResults[K]> {
+export function runsCommand<K extends PersonRunsRequestV1['operation']>(request: PersonRunsRequestV1 & { readonly operation: K }): Promise<RunsResults[K]> {
+  return fencedCommand<RunsResults[K]>(account => rpc('runs', { expect: account, request }));
+}
+
+/** Sends for the account shown; a reply once the account or the screen changed is refused, and a failure is thrown. */
+async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknown>>): Promise<T> {
   const account = expect();
   if (!account || state.concealed) throw new Error('Sign in to use meetings.');
-  const result = await rpc('runs', { expect: account, request });
+  const result = await send(account);
   if (JSON.stringify(expect()) !== JSON.stringify(account) || state.concealed) throw new Error('Account or screen changed.');
   if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure); }
-  return result.value as RunsResults[K];
+  return result.value as T;
 }
 
 /** Open in Jira, Confluence or Slack, from an impact card: the tool checks your access when it opens. */
