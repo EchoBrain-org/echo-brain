@@ -798,7 +798,7 @@ function managed(path) {
   return RECORD_DIRECTORIES.has(directory) && !path.endsWith("/README.md");
 }
 
-export function checkDocumentation() {
+function checkDocumentation() {
   const git = createGitCheckCache();
   const errors = [];
   const files = markdownFiles(DOCS);

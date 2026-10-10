@@ -153,7 +153,7 @@ async function requiredCheck(api, repository, commit, tree) {
 // plan's timeout.
 const BASE_CHECK_DELAYS = [0, 15_000, 15_000, 30_000, 30_000, 30_000, 30_000];
 
-export async function selectPullRequestJobs({ event, sha, repository, git, api, sleep }) {
+async function selectPullRequestJobs({ event, sha, repository, git, api, sleep }) {
   const pullRequest = event?.pull_request;
   // Stacked pull requests are tested against a branch whose jobs may not
   // have run.
@@ -184,7 +184,7 @@ export async function selectPullRequestJobs({ event, sha, repository, git, api, 
   return { mode: 'pull-request', reason, jobs };
 }
 
-export function githubApi(apiUrl, token) {
+function githubApi(apiUrl, token) {
   return async (path) => {
     const response = await fetch(`${apiUrl}${path}`, {
       headers: {
