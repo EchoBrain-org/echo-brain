@@ -578,6 +578,9 @@ describe('personal meeting intake uses the shared processing path', () => {
         await second.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
         const [source] = (await f.call(second, { operation: 'home' })).sources;
         expect([source!.error, source!.pending_imports, f.held(), f.extracted()]).toEqual([null, [id], [], 1]);
+        // The head in flight elsewhere backs its source off instead of being pulled again at once.
+        const pulls = f.pulls(); await second.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+        expect(f.pulls()).toBe(pulls);
         release(); await running;
         expect(f.proposals(source!.source_key)).toBe(1);
       } finally { handle.close(); }

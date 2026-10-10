@@ -195,8 +195,10 @@ export function createPersonMeetingRuntimeV1(options: {
           scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
       });
       const outcome = await (retry ? cycle.retryHeldOnce(signal) : cycle.runOnce(signal));
+      // A head still in flight elsewhere (another process, or a crash's unexpired lease) waits a minute, not a tight re-pull.
+      const waiting = !retry && outcome.kind === 'in_flight';
       const queued = retry || sourceIntake.checkpoint(setting.source_key).manual.length > 0 || (outcome.cursor_advanced && !outcome.kind.startsWith('empty'));
-      observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() + (queued ? 0 : 300_000) });
+      observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() + (waiting ? 60_000 : queued ? 0 : 300_000) });
     } catch (error) {
       signal.throwIfAborted();
       const remaining = ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key);
