@@ -119,23 +119,33 @@ server adapters remain outside its dependency closure.
 
 **Held meetings.** The attempt ledger reserves one paid extraction per review
 input before the provider call. When an extraction fails (grounding or schema
-rejection, unusable output, a provider error, an interrupted attempt, or a paid
-result that was not saved), the cycle parks the meeting in
-`authority_live_source_held_extractions_v1` with an allowlisted failure stage
-(IDs and the stage only, never meeting text) and advances the cursor past it,
-so the source's later meetings continue. A parked import is consumed like a
-staged one: its "Save to" projects become suggestions, so current members of
-those projects can read its notes. Cancelling an import deletes its held row.
-A run cut off by shutdown is not parked by that run; the next poll parks it as
-`cancelled`. The owner's meetings status reads "Meeting `<id>` is held after
-extraction attempt `<n>` failed at `<stage>`…", and the operator extraction
-CLI's status marks the held key with its stage.
+rejection, unusable output, a provider error other than the free retry below,
+an interrupted attempt, or a paid result that was not saved), the cycle parks
+the meeting in `authority_live_source_held_extractions_v1` with an allowlisted
+failure stage (IDs and the stage only, never meeting text) and advances the
+cursor past it, so the source's later meetings continue. A parked import is
+consumed like a staged one: its "Save to" projects become suggestions, so
+current members of those projects can read its notes. Cancelling an import
+deletes its held row. A run cut off by shutdown is not parked by that run; the
+next poll parks it as `cancelled`. The owner's meetings status reads "Meeting
+`<id>` is held after extraction attempt `<n>` failed at `<stage>`…", and the
+operator extraction CLI's status marks the held key with its stage.
 
 **Retry.** Only an operator `retry-extraction` grant for the exact attempt key
 retries a held meeting, one paid attempt per grant. The source's next poll
 re-runs only that meeting from retained custody: no provider pull and no cursor
 move. Success stages it and drops the held row; another failure holds it at the
 new attempt and stage.
+
+**Free retry.** OpenRouter bills no non-2xx reply. A first attempt that the
+provider refuses with a 429 or 5xx, before any model output, is not parked:
+the cycle records the failed attempt, grants that exact key one retry through
+the ledger's existing `authorizeRetry`, and leaves the meeting at the head of
+its queue (`retry_scheduled`). The source waits 60 s, then its next poll
+re-runs the meeting and the reservation consumes the grant. A failure on a
+later attempt, any failure after model output, a timeout and a shutdown cancel
+all park as above, so a meeting gets at most one automatic retry. While it
+waits there is no held row, so the owner's status names no operator step.
 
 **Imports during an extraction.** Another import that lands, or an unrelated
 import cancelled, while a meeting is being extracted does not discard the paid
@@ -144,11 +154,12 @@ and the cursor advance rebases onto the current queue at the intake boundary
 (the person intake's `rebase`), keeping those changes. A cancel of the
 meeting's own import, or a folder or baseline change, still refuses.
 
-**Writer gate.** The worker's single-file gate covers only recovery and approval
-publication: record-log appends and their after-record hooks. An approval
-therefore never waits behind a source poll, an extraction call or a Slack post.
-Notes enrichment, personal meeting intake, Slack card presentation and the
-staging canary run outside it. Durable fences keep that safe:
+**Writer gate.** The worker's single-file gate covers only recovery, approval
+publication and bounded operator mutations: record-log appends, their
+after-record hooks, and operator work. An approval therefore never waits
+behind a source poll, an extraction call or a Slack post. Notes enrichment,
+personal meeting intake, Slack card presentation and the staging canary run
+outside it. Durable fences keep that safe:
 
 - the attempt reservation is also a 660 s in-flight lease: a younger pending
   attempt is left `in_flight` (no park, no cursor move), an older one parks as
@@ -158,29 +169,44 @@ staging canary run outside it. Durable fences keep that safe:
 - compare-and-swap on each presenter row, with one presenter turn at a time.
 
 One approval row that cannot publish does not block startup, intake or the
-other rows; it shows as a failed record append and is retried on later passes. A failing notes item is
-reported without aborting the cycle's intake and publication. Failed cycles and
-publication wakes still request search and card presentation.
+other rows; it shows as a failed record append and is retried on later passes.
+A failing notes item is reported without aborting the cycle's intake and
+publication. Failed cycles and publication wakes still request search and card
+presentation.
 
 **Meeting lanes.** Up to three personal sources (`MEETING_LANES`) run a meeting
-pass at once, each source single-file. Lanes outlive the cycle that started
-them, top up as each one settles and wake card presentation as they settle;
-drain and close wait for them. A source whose queued head is still in flight
-elsewhere (another process, or a crashed attempt's unexpired lease) waits 60 s
-before its next pull.
+pass at once, each source single-file; the staging canary's targeted pass can
+briefly make a fourth. Lanes outlive the cycle that started them, top up as
+each one settles and wake card presentation as they settle; drain waits for
+them. A source whose queued head is still in flight elsewhere (another
+process, or a crashed attempt's unexpired lease) waits 60 s before its next
+pull; a folder source with no queued import waits its 5-minute idle poll
+instead.
+
+**Breaker.** An extraction that ends held or retried at `rate_limited`,
+`temporarily_unavailable` or `timeout` starts no new lane for any source for
+60 s. Running lanes finish, and the staging canary's targeted pass still runs.
+
+**Shutdown.** On close no new lane or cycle starts, and running lanes get up to
+20 s to finish before the worker's signal cancels them, inside the 30 s that
+the `retry-extraction` wrapper's stop allows (compose allows 45 s). A deploy
+or a grant, whose wrapper stops the Authority, therefore still cancels an
+extraction that runs past the grace, and that meeting then needs its own
+grant: check `extraction-attempts` for `pending` attempts before granting.
 
 **Model calls.** One process-wide limiter admits the Authority's OpenRouter
-generation calls: at most six at once, at most four of them background (extraction, notes, search
-projection, impact research). Interactive Ask is served first and may use every
-slot. A 429 pauses background admission once per episode, 5 s doubling to 60 s
+generation calls: at most six at once, at most four of them background
+(extraction, notes, search projection, impact research). Interactive Ask is
+served first and may use every slot. A 429, a 5xx, a temporary failure or a
+timeout pauses background admission once per episode, 5 s doubling to 60 s
 until a call succeeds; the limiter never retries. Time spent queued does not
 count against a call's own timeout.
 
 The 660 s lease (`EXTRACTION_IN_FLIGHT_MS`) assumes an extraction's limiter
 wait plus its 600 s request timeout fit inside it. When two processes overlap,
-as in a rolling deploy, a longer wait lets the second process park a live
-extraction as `interrupted`. That never spends twice, but the late result may
-not stage, and the meeting then waits for an operator retry.
+a longer wait lets the second process park a live extraction as `interrupted`.
+That never spends twice, but the late result may not stage, and the meeting
+then waits for an operator retry.
 
 ## Typed capabilities
 

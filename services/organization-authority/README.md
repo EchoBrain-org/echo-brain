@@ -355,10 +355,11 @@ startup, the runtime reconciles the search index once, then each cycle recovers
 decided approvals whose record was not appended, polls the personal meeting
 sources and freezes one proposal per meeting, publishes the decisions made since
 (one V4 record per approval, then the after-record hooks), and reconciles the
-search index again. Only recovery and publication hold the writer gate. Up to
-three personal sources run their meeting pass at once, in lanes that outlive
-the cycle; a meeting whose extraction fails is parked and its source moves on
-(see the [meeting processing architecture](../../docs/architecture/meeting-processing-core-and-adapters.md#held-meetings-lanes-and-the-writer-gate)).
+search index again. Only recovery, approval publication and bounded operator
+mutations hold the writer gate. Up to three personal sources run their meeting
+pass at once, in lanes that outlive the cycle; a meeting whose extraction fails
+is parked and its source moves on, except for one free retry after an unbilled
+429 or 5xx (see the [meeting processing architecture](../../docs/architecture/meeting-processing-core-and-adapters.md#held-meetings-lanes-and-the-writer-gate)).
 
 The deployment wrapper's `resume` output is the single source for staging's
 actor-scoped host, Slack, and release-matched Person-client actions. A staging

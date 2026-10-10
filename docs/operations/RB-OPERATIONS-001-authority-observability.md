@@ -217,7 +217,8 @@ cycle. `cancelled` with `retryable: false` means shutdown stopped the in-flight
 work; startup failures are also non-retryable because no worker cycle exists.
 
 A later worker cycle does not authorize another model call for unchanged
-meeting input. The live runtime durably reserves one automatic extraction
+meeting input, except one automatic retry after an unbilled 429 or 5xx on the
+first attempt. The live runtime durably reserves one automatic extraction
 attempt before contacting the provider. Failed grounding, provider failures,
 and interrupted attempts park that meeting across polls and restarts while
 intake moves on to the source's later meetings, so a cycle that parks one still

@@ -713,6 +713,20 @@ meeting's ID, attempt and stage, and whether a retry is authorized. This is a
 per-input spend bound, not an account-wide budget; changed review content or
 processor configuration can require a new extraction.
 
+An unbilled refusal needs no operator. OpenRouter bills no non-2xx reply, so a
+first attempt refused with a 429 or 5xx before any model output is not
+held: the runtime grants that exact key one automatic retry (status shows
+`retry_authorized: true` with no `held`), keeps the meeting at the head of its
+queue and re-runs it about a minute later. A second failure, a timeout, a
+cancel or any failure after model output holds as above. Any extraction that
+fails at `rate_limited`, `temporarily_unavailable` or `timeout` also pauses all
+meeting intake for 60 s, and the model limiter pauses background calls.
+
+A stop lets running extractions finish for up to 20 s, then cancels the rest;
+each cancelled one holds as `cancelled` and needs its own grant. A deploy and
+`retry-extraction` both stop the Authority, so before granting, check the
+status for `pending` attempts and wait for them to finish.
+
 On the exact host, the human operator inspects bounded, content-free attempt
 status through the installed wrapper. A held key also shows `held: true` and
 its `failure_stage`:
