@@ -872,36 +872,28 @@ function appendPage<T>(shown: readonly T[], page: readonly T[], key: (row: T) =>
 }
 
 /** The first page again, or the next page appended (More projects). */
-export async function loadProjects(more = false): Promise<void> {
-  const account = expect();
-  if (!account || (more && !state.projects.next)) return;
-  const cursor = more ? state.projects.next ?? undefined : undefined;
-  set({ projects: { ...state.projects, loading: true, failure: undefined } });
-  const result = await rpc('projects.list', { expect: account, status: 'active', ...(cursor ? { cursor } : {}) });
-  if (!result.ok) {
-    accountLost(result.failure);
-    set({ projects: { ...state.projects, loading: false, failure: result.failure } });
-    return;
-  }
-  if (rolesChanged(result.value.items)) emptyBar();
-  const items = appendPage(more ? state.projects.items : [], result.value.items, project => project.project_id);
-  set({ projects: { items, next: result.value.next_cursor, loading: false } });
-}
+export function loadProjects(more = false): Promise<void> { return loadProjectList('active', more); }
 
 /** Archived projects live in their own list: they can be opened, but never picked for new material. */
-export async function loadArchivedProjects(more = false): Promise<void> {
+export function loadArchivedProjects(more = false): Promise<void> { return loadProjectList('archived', more); }
+
+/** Your active or archived projects: the first page again, or the next page appended. */
+async function loadProjectList(status: 'active' | 'archived', more: boolean): Promise<void> {
+  const key = status === 'active' ? 'projects' : 'archivedProjects';
+  const show = (list: State['projects']) => set(key === 'projects' ? { projects: list } : { archivedProjects: list });
   const account = expect();
-  if (!account || (more && !state.archivedProjects.next)) return;
-  const cursor = more ? state.archivedProjects.next ?? undefined : undefined;
-  set({ archivedProjects: { ...state.archivedProjects, loading: true, failure: undefined } });
-  const result = await rpc('projects.list', { expect: account, status: 'archived', ...(cursor ? { cursor } : {}) });
+  if (!account || (more && !state[key].next)) return;
+  const cursor = more ? state[key].next ?? undefined : undefined;
+  show({ ...state[key], loading: true, failure: undefined });
+  const result = await rpc('projects.list', { expect: account, status, ...(cursor ? { cursor } : {}) });
   if (!result.ok) {
     accountLost(result.failure);
-    set({ archivedProjects: { ...state.archivedProjects, loading: false, failure: result.failure } });
+    show({ ...state[key], loading: false, failure: result.failure });
     return;
   }
-  const items = appendPage(more ? state.archivedProjects.items : [], result.value.items, project => project.project_id);
-  set({ archivedProjects: { items, next: result.value.next_cursor, loading: false } });
+  if (status === 'active' && rolesChanged(result.value.items)) emptyBar();
+  const items = appendPage(more ? state[key].items : [], result.value.items, project => project.project_id);
+  show({ items, next: result.value.next_cursor, loading: false });
 }
 
 /** A project you were lead of is now one you are a member of, or the other way: a change of access. */
