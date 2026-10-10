@@ -525,6 +525,20 @@ describe('personal meeting intake uses the shared processing path', () => {
     // A failure parks with its own stage, not the blocked path's not_recorded.
     expect(f.held()).toEqual(fails ? [expect.objectContaining({ external_id: id, failure_stage: 'unknown' })] : []);
   });
+  it('advances past a re-staged meeting whose first advance never ran, after another import is cancelled', async () => {
+    const f = await fixture(), runtime = f.create(), x = '00000000-0000-4000-8000-000000000004', stopping = new AbortController();
+    for (const meeting_id of [id, x]) await f.call(runtime, { operation: 'import', meeting_id, project_id: null, retain: true });
+    const [queued] = (await f.call(runtime, { operation: 'home' })).sources;
+    // The freeze fails while the poll is stopping: the candidate stays queued and nothing advances.
+    refusal.next = 1; f.duringExtract(() => { f.duringExtract(undefined); stopping.abort(); });
+    await expect(runtime.processing.pollAndStageAdmittedMeetings(stopping.signal)).rejects.toThrow();
+    expect(f.intake.checkpoint(queued!.source_key).manual).toEqual([id, x]);
+    await f.call(runtime, { operation: 'cancel_import', source_key: queued!.source_key, meeting_id: x });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    expect(f.intake.checkpoint(queued!.source_key).manual).toEqual([]);
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
+    expect(f.extracted()).toBe(1);
+  });
   it('consumes an import whose extraction failed and records its project choice, as for a staged one', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });

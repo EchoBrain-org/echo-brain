@@ -650,9 +650,11 @@ export class AdmittedMeetingProcessingCycleV1 {
             frozen.disposition === "actionable" &&
             frozen.state === "queued"
           ) {
+            // Advance from this poll's cursor, the one its next cursor was
+            // computed from; the snapshot's own cursor may be older.
             return this.stageAndAdvance(
               frozen,
-              frozen.admission,
+              admission,
               frozen.meeting,
               frozen.decisions,
               nextCursor,
