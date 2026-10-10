@@ -323,15 +323,15 @@ export async function startOrganizationAuthorityServiceLifecycle(
         presentationImmediate = undefined;
         presentationActive = true;
         void ungated(async (signal) => {
-            // Coalesce wakes while queued, but preserve one that arrives
-            // after this attempt starts, including if the provider fails.
-            presentationPending = false;
-            const primary = dependencies.processing.reconcileApprovalPresentations;
-            const additional = dependencies.additional_processing?.reconcileApprovalPresentations;
-            const first = primary === undefined ? 'idle' : await primary(signal);
-            const second = additional === undefined ? 'idle' : await additional(signal);
-            return first === 'uncertain' || second === 'uncertain' ? 'uncertain' : first === 'rendered' || second === 'rendered' ? 'rendered' : 'idle';
-          })
+          // Coalesce wakes while queued, but preserve one that arrives
+          // after this attempt starts, including if the provider fails.
+          presentationPending = false;
+          const primary = dependencies.processing.reconcileApprovalPresentations;
+          const additional = dependencies.additional_processing?.reconcileApprovalPresentations;
+          const first = primary === undefined ? 'idle' : await primary(signal);
+          const second = additional === undefined ? 'idle' : await additional(signal);
+          return first === 'uncertain' || second === 'uncertain' ? 'uncertain' : first === 'rendered' || second === 'rendered' ? 'rendered' : 'idle';
+        })
           .then((result) => {
             if (result === "rendered") presentationPending = true;
           })
