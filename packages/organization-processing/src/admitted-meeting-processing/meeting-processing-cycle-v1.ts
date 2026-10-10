@@ -791,7 +791,12 @@ export class AdmittedMeetingProcessingCycleV1 {
           stage = await this.options.state.holdExtraction({
             meeting, key: extractionKey, attempt: claim.attempt, ...pulled, failure_stage: failureStage,
           });
-        } catch { complete(); throw error; }
+        } catch (holdError) {
+          complete();
+          // The extraction failure stays the error; why it could not park rides along.
+          if (error instanceof Error) error.cause ??= holdError;
+          throw error;
+        }
         complete();
         return { done: await this.finishHeld(stage, admission, nextCursor) };
       }

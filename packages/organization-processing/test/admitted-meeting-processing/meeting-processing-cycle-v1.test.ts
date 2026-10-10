@@ -478,6 +478,17 @@ describe("admitted meeting-processing cycle", () => {
     expect(extraction_attempts.completed).toMatchObject([{ outcome: "failed", failure_code: held.stage }]);
   });
 
+  it("closes the attempt and keeps why it could not park when the hold fails", async () => {
+    const extraction_attempts = new RecordingExtractionAttempts();
+    const state = new FakeState(admission());
+    const holdFailure = new Error("held row unavailable");
+    state.holdExtraction = async () => { throw holdFailure; };
+    const run = liveCycle({ source: source({ meetings: [meeting()] }), state, extraction_attempts,
+      processor: processor(() => { throw new Error("generation failed"); }) }).runOnce();
+    await expect(run).rejects.toMatchObject({ message: "generation failed", cause: holdFailure });
+    expect(extraction_attempts.completed).toMatchObject([{ outcome: "failed", failure_code: "unknown" }]);
+  });
+
   it("does not regenerate a successful model response rejected by the real grounding validator", async () => {
     let generations = 0;
     const extraction = new LlmDecisionProcessor({
