@@ -85,10 +85,6 @@
       "types": "./dist/ports/decision-processor-bundle-v1.d.ts",
       "import": "./dist/ports/decision-processor-bundle-v1.js"
     },
-    "./ports/meeting-source-bundle-v1": {
-      "types": "./dist/ports/meeting-source-bundle-v1.d.ts",
-      "import": "./dist/ports/meeting-source-bundle-v1.js"
-    },
     "./admitted-meeting-processing/decision-processor-admission-commitment": {
       "types": "./dist/admitted-meeting-processing/decision-processor-admission-commitment.d.ts",
       "import": "./dist/admitted-meeting-processing/decision-processor-admission-commitment.js"
