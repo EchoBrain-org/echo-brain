@@ -121,12 +121,51 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
   });
 }
 
-/** Preserve raw participant/audio labels as text; they do not prove identity or attendance. */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** Zones Granola labels are known to carry; any other zone yields no time rather than a guess. */
+const DATE_ZONES: Partial<Record<string, readonly [timezone: string, offset: string]>> = {
+  PDT: ['America/Los_Angeles', '-07:00'], PST: ['America/Los_Angeles', '-08:00'],
+  MDT: ['America/Denver', '-06:00'], MST: ['America/Denver', '-07:00'],
+  CDT: ['America/Chicago', '-05:00'], CST: ['America/Chicago', '-06:00'],
+  EDT: ['America/New_York', '-04:00'], EST: ['America/New_York', '-05:00'],
+  AKDT: ['America/Anchorage', '-08:00'], AKST: ['America/Anchorage', '-09:00'],
+  HST: ['Pacific/Honolulu', '-10:00'], UTC: ['UTC', 'Z'], GMT: ['UTC', 'Z'],
+};
+const pad = (value: number) => String(value).padStart(2, '0');
+
+/** `Oct 2, 2026 8:08 PM PDT` → ISO start with the zone's offset plus the IANA zone. */
+function meetingStart(label: string): { started_at: string; timezone: string } | undefined {
+  const match = /^([A-Z][a-z]{2}) (\d{1,2}), (\d{4}) (\d{1,2}):(\d{2}) ([AP]M) ([A-Z]{3,4})$/.exec(label);
+  if (match === null) return undefined;
+  const [, monthName, dayText, yearText, hourText, minuteText, meridiem, zoneName] = match;
+  const [day, year, hour, minute] = [dayText, yearText, hourText, minuteText].map(Number);
+  const month = MONTHS.indexOf(monthName), zone = DATE_ZONES[zoneName];
+  if (zone === undefined || month < 0 || hour < 1 || hour > 12 || minute > 59 || new Date(Date.UTC(year, month, day)).getUTCDate() !== day) return undefined;
+  const hour24 = (hour % 12) + (meridiem === 'PM' ? 12 : 0);
+  return { started_at: `${year}-${pad(month + 1)}-${pad(day)}T${pad(hour24)}:${pad(minute)}:00${zone[1]}`, timezone: zone[0] };
+}
+
+type GranolaAttendeeV1 = string | { name: string; email: string };
+
+/** `Name (note creator) from Org <email>, Name` → attendee inputs; commas inside `<…>` do not split. */
+function knownParticipants(value: string): GranolaAttendeeV1[] {
+  return (value.match(/(?:[^,<]|<[^>]*>?)+/g) ?? []).flatMap((entry): GranolaAttendeeV1[] => {
+    const match = /^(.*?)\s*<([^<>\s@]+@[^<>\s@]+)>\s*$/s.exec(entry);
+    const name = (match?.[1] ?? entry).replace(/\(note creator\)/gi, '').replace(/\s+from\s+.*$/s, '').trim();
+    const email = match?.[2];
+    if (email === undefined) return name === '' ? [] : [name];
+    return [{ name, email }];
+  });
+}
+
+/** Map one MCP meeting into the shared format. Transcript audio labels stay verbatim; they prove no identity. */
 export function granolaMcpMeetingContentV1(meeting: GranolaMeetingV1, transcript?: Readonly<{ text: string; created_at: string }>): GranolaMeetingContentInputV1 {
   return {
     id: meeting.id, title: meeting.title, web_url: meeting.url,
-    summary_markdown: [meeting.known_participants && `Known participants reported by Granola:\n${meeting.known_participants}`,
-      meeting.private_notes && `Private notes:\n${meeting.private_notes}`, meeting.summary && `Granola summary:\n${meeting.summary}`].filter(Boolean).join('\n\n'),
+    ...meetingStart(meeting.date),
+    attendees: knownParticipants(meeting.known_participants),
+    ...(meeting.private_notes === undefined ? {} : { private_notes_markdown: meeting.private_notes }),
+    ...(meeting.summary === undefined ? {} : { summary_markdown: meeting.summary }),
     provider_fields: { mcp_date_label: meeting.date },
     ...(transcript === undefined ? {} : { created_at: transcript.created_at, transcript: [{ text: transcript.text }] }),
   };

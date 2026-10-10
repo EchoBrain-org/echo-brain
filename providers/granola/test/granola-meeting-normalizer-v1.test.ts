@@ -112,7 +112,7 @@ describe("Retained Granola content normalization", () => {
         },
         external_id: "note-1",
         observed_at: "2026-07-16T00:00:00.000Z",
-        normalizer_version: "2.2.0",
+        normalizer_version: "2.3.0",
         source_created_at: "2026-07-15T16:00:00.000Z",
         source_updated_at: "2026-07-15T17:00:00.000Z",
         source_url: "https://app.granola.ai/notes/note-1",
@@ -251,6 +251,7 @@ describe("Retained Granola content normalization", () => {
       scheduled_start_at: "2026-07-15T16:30:00.000Z",
       scheduled_end_at: "2026-07-15T17:15:00.000Z",
     });
+    expect(normalize({ ...liveCalendarShapeDetail, started_at: "2026-07-15T09:31:00-07:00", timezone: "America/Denver" }).time).toEqual(meeting.time);
     expect(meeting.context).toEqual({
       owner_participant_id: "email:founder@example.com",
       calendar: {
@@ -404,6 +405,10 @@ describe("Retained Granola content normalization", () => {
       { ...original, summary_markdown: "An edited summary." },
       { ...original, transcript: [{ text: "An edited transcript.", speaker: { source: "microphone" } }] },
       { ...original, provider_fields: { a: true, b: { x: 1, y: 3 } } },
+      { ...original, private_notes_markdown: "Edited private notes." },
+      { ...original, started_at: "2026-07-15T15:31:00-07:00" },
+      { ...original, timezone: "America/Denver" },
+      { ...original, attendees: [{ name: "Alice", email: "alice@example.com" }] },
     ]) {
       const revision = normalize(changed, "2026-07-17T00:00:00.000Z");
       expect(revision.id).toBe(first.id);

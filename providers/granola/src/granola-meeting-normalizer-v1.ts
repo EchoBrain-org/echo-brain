@@ -6,7 +6,7 @@ import type {
 } from "@echo-brain/organization-processing/core";
 
 /** Content mapping version retained so existing semantic revisions stay stable. */
-export const GRANOLA_MEETING_NORMALIZER_VERSION_V1 = "2.2.0";
+export const GRANOLA_MEETING_NORMALIZER_VERSION_V1 = "2.3.0";
 
 /**
  * Transport-independent input for the retained content transforms. This is not
@@ -48,7 +48,14 @@ export interface GranolaTranscriptItem {
 export interface GranolaMeetingContentInputV1 extends GranolaNoteMetadataV1 {
   summary_markdown?: string | null;
   summary_text?: string | null;
+  /** The person's own notes; kept apart from Granola's AI summary. */
+  private_notes_markdown?: string | null;
+  /** Actual start, ISO with offset; used only when no calendar time exists. */
+  started_at?: string | null;
+  /** IANA zone of `started_at`. */
+  timezone?: string | null;
   transcript?: GranolaTranscriptItem[] | null;
+  /** Names, emails, or `{ id?, name?, email? }` objects reported for the meeting. */
   attendees?: unknown;
   calendar_event?: unknown;
   folder_membership?: unknown;
@@ -116,6 +123,9 @@ function sourceRevision(note: GranolaMeetingContentInputV1): string {
     updated_at: note.updated_at,
     summary_markdown: note.summary_markdown,
     summary_text: note.summary_text,
+    private_notes_markdown: note.private_notes_markdown,
+    started_at: note.started_at,
+    timezone: note.timezone,
     transcript: note.transcript,
     attendees: note.attendees,
     calendar_event: note.calendar_event,
@@ -184,7 +194,15 @@ function meetingTime(note: GranolaMeetingContentInputV1): MeetingDocument["time"
     ...(timezone === undefined ? {} : { timezone: timezone.trim() }),
     ...(allDay ? { all_day: true } : {}),
   };
-  return Object.keys(time).length === 0 ? undefined : time;
+  if (Object.keys(time).length > 0) return time;
+  // Without calendar times, fall back to the note's own reported start.
+  const startedAt = normalizedIso(note.started_at);
+  return startedAt === null
+    ? undefined
+    : {
+        actual_start_at: startedAt,
+        ...(isNonEmptyString(note.timezone) ? { timezone: note.timezone.trim() } : {}),
+      };
 }
 
 function nameParticipantId(displayName: string): string {
@@ -551,6 +569,15 @@ function noteContent(
   participants: readonly MeetingParticipant[],
 ): MeetingContentBlock[] {
   const blocks: MeetingContentBlock[] = [];
+  if (isNonEmptyString(note.private_notes_markdown)) {
+    blocks.push({
+      id: `${note.id}:notes`,
+      kind: "note",
+      text: note.private_notes_markdown.trim(),
+      origin: "human",
+      metadata: { format: "markdown" },
+    });
+  }
   const markdownSummary = isNonEmptyString(note.summary_markdown)
     ? note.summary_markdown
     : null;
@@ -668,6 +695,12 @@ function captureState(
       : transcriptAvailable
         ? "available"
         : "empty";
+  const notesState =
+    note.private_notes_markdown === undefined
+      ? "not_provided"
+      : content.some((block) => block.kind === "note")
+        ? "available"
+        : "empty";
   const speakerModes = new Set(
     (note.transcript ?? [])
       .filter((turn) => isNonEmptyString(turn.text))
@@ -708,7 +741,7 @@ function captureState(
         state: transcriptState,
       },
       { kind: "agenda", state: "not_provided" },
-      { kind: "notes", state: "not_provided" },
+      { kind: "notes", state: notesState },
       { kind: "chat", state: "not_provided" },
       { kind: "recording", state: "not_provided" },
       { kind: "attachments", state: "not_provided" },
