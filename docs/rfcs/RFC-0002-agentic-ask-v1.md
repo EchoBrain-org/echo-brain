@@ -24,9 +24,9 @@ Acceptance is separate from deployment and live qualification.
 ### Problem
 
 Ask answers from one literal query, at most five original passages plus, in
-scope, at most five approved records, and one answer model call
-(`services/organization-authority/src/composition/person-answer-v2-route.ts`,
-`packages/organization-authority-kernel/src/answer-composition/retrieval-grounded-answer-composition.ts`).
+scope, at most five approved records, and one answer model call (the V2 Ask
+route and the retrieval-grounded answer composition, removed 2026-09-28; see
+git history).
 Multi-part questions, questions without keyword overlap, and vocabulary
 mismatch lose evidence. Release strips owner, due date, decision status and
 meeting title. One malformed answer (for example a schema-valid duplicate
@@ -300,7 +300,8 @@ orders evidence and never hides it.
 
 The A1 measurement was stopped after 93 of 450 attempts: both A1 variants
 failed 15–19 of about 30 attempts, almost all at the 60-second request
-deadline. Causes (Answer Lab `docs/v3-port-a1-timeout-diagnosis.md`):
+deadline. Causes (Answer Lab's local `docs/v3-port-a1-timeout-diagnosis.md`,
+not in this repository):
 - Prompts never showed the JSON shape; 19 of 91 finished replies had the
   wrong root keys, and repairs did not say what was wrong.
 - The schema allowed values the parser rejected (trailing spaces, an empty
@@ -385,8 +386,8 @@ JSON and supports interrupt to cancel.
 Desk calls reuse the existing release audits. The answer audit adds a
 versioned row kind with no content: ordered receipt digests, rounds, model
 calls, repairs, fallbacks, outcome, and citation count. The citation bound is
-the number of released items, not a fixed 16
-(`person-answer-composition-audit-v1.ts`). Existing rows are unchanged.
+the number of released items, not a fixed 16 (the V2 answer audit, removed
+2026-09-28; see git history). Existing rows are unchanged.
 The terminal audit describes the authorized result at the release decision,
 not a guarantee that the client received it. A disconnect after that immutable
 audit suppresses delivery without writing a second terminal outcome. Earlier
