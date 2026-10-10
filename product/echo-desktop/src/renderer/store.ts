@@ -865,6 +865,12 @@ export function signinPhase(browserOpened: boolean | undefined): void {
 
 // ---- home and projects -------------------------------------------------------
 
+/** The rows shown, then the rows of a page they do not have yet. */
+function appendPage<T>(shown: readonly T[], page: readonly T[], key: (row: T) => string): T[] {
+  const seen = new Set(shown.map(key));
+  return [...shown, ...page.filter(row => !seen.has(key(row)))];
+}
+
 /** The first page again, or the next page appended (More projects). */
 export async function loadProjects(more = false): Promise<void> {
   const account = expect();
@@ -878,8 +884,7 @@ export async function loadProjects(more = false): Promise<void> {
     return;
   }
   if (rolesChanged(result.value.items)) emptyBar();
-  const seen = new Set(more ? state.projects.items.map(project => project.project_id) : []);
-  const items = [...(more ? state.projects.items : []), ...result.value.items.filter(project => !seen.has(project.project_id))];
+  const items = appendPage(more ? state.projects.items : [], result.value.items, project => project.project_id);
   set({ projects: { items, next: result.value.next_cursor, loading: false } });
 }
 
@@ -895,8 +900,7 @@ export async function loadArchivedProjects(more = false): Promise<void> {
     set({ archivedProjects: { ...state.archivedProjects, loading: false, failure: result.failure } });
     return;
   }
-  const seen = new Set(more ? state.archivedProjects.items.map(project => project.project_id) : []);
-  const items = [...(more ? state.archivedProjects.items : []), ...result.value.items.filter(project => !seen.has(project.project_id))];
+  const items = appendPage(more ? state.archivedProjects.items : [], result.value.items, project => project.project_id);
   set({ archivedProjects: { items, next: result.value.next_cursor, loading: false } });
 }
 
@@ -1015,8 +1019,7 @@ async function loadList(how: 'first' | 'more' | 'quiet'): Promise<void> {
   }
   const page = result.value;
   if (how === 'first') { set({ list: { ...current, loading: false, items: [...page.items], next: page.next_cursor } }); return; }
-  const seen = new Set(current.items.map(refKey));
-  set({ list: { ...current, loading: false, items: [...current.items, ...page.items.filter(item => !seen.has(refKey(item)))], next: page.next_cursor } });
+  set({ list: { ...current, loading: false, items: appendPage(current.items, page.items, refKey), next: page.next_cursor } });
 }
 
 function refKey(item: ListItem): string { return `${item.ref.kind}:${item.ref.id}`; }
@@ -1055,8 +1058,7 @@ async function loadRoster(projectId: string, more = false): Promise<void> {
     accountLost(result.failure);
     return;
   }
-  const seen = new Set(more ? current.items.map(person => person.membership_id) : []);
-  const items = [...(more ? current.items : []), ...result.value.items.filter(person => !seen.has(person.membership_id))];
+  const items = appendPage(more ? current.items : [], result.value.items, person => person.membership_id);
   set({ roster: { projectId, items, next: result.value.next_cursor, loading: false } });
 }
 
@@ -1511,7 +1513,7 @@ export async function moreProjectConfluenceSpaces(): Promise<void> {
   const current = mappingAt('confluence', account, setting.seq);
   if (!current) return;
   setMapping(current.settings, 'confluence', result.ok
-    ? { ...current.setting, spaces: [...current.setting.spaces, ...result.value.items.filter(space => !current.setting.spaces.some(old => old.id === space.id))], next: result.value.next_cursor, loadingMore: false }
+    ? { ...current.setting, spaces: appendPage(current.setting.spaces, result.value.items, space => space.id), next: result.value.next_cursor, loadingMore: false }
     : { ...current.setting, loadingMore: false, failure: result.failure });
   if (!result.ok) accountLost(result.failure);
 }
@@ -1781,9 +1783,8 @@ export async function findPeople(more = false): Promise<void> {
     accountLost(result.failure);
     return;
   }
-  const seen = new Set(shown.map(person => person.membership_id));
   patch({ directory: {
-    seq: mine, items: [...shown, ...result.value.items.filter(person => !seen.has(person.membership_id))], next: result.value.next_cursor, loading: false,
+    seq: mine, items: appendPage(shown, result.value.items, person => person.membership_id), next: result.value.next_cursor, loading: false,
   } });
 }
 
@@ -4182,8 +4183,7 @@ async function loadItemsPage<View extends ItemsPage>(shown: () => View | null, s
   if (current?.seq !== mine) return;
   if (!result.ok) { show({ ...current, loading: false, failure: result.failure }); accountLost(result.failure); return; }
   const read = result.value as OpenItemsView;
-  const seen = new Set(more ? current.items.map(item => item.item_id) : []);
-  show(withRead({ ...current, loading: false, items: [...(more ? current.items : []), ...read.items.filter(item => keep(item) && !seen.has(item.item_id))],
+  show(withRead({ ...current, loading: false, items: appendPage(more ? current.items : [], read.items.filter(keep), item => item.item_id),
     next: read.next_cursor }, read));
 }
 
