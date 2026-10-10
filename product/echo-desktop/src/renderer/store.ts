@@ -18,7 +18,7 @@ import { message } from './messages.js';
 import { closable } from './needs.js';
 
 /** Mine: only what you added, to see and to ask about. Send: Tell the owners?, for one check's run. */
-type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision'; approval_id: string }
+type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision' }
   | { page: 'send'; run_id: string };
 
 /** A question, in the scope it was asked in. */
@@ -3228,7 +3228,7 @@ export function conceal(): void {
   stopRunPolling();
   // The source pane closes and forgets what it read; the records are read again on return.
   const reading = state.sources !== null;
-  // People closes, as Home's and the sidebar's rows must take a drop; unless a change in it is on its way.
+  // People closes, as the sidebar's rows must take a drop; unless a change in it is on its way.
   const people = state.sheet?.kind === 'people' && !memberChangeSending();
   // New project stays: files are dropped on it from other apps.
   // People & invites closes what is open in it, and an invitation just saved is no longer offered back (its Undo ends).
@@ -3274,7 +3274,6 @@ export async function windowShown(): Promise<void> {
  * changed, and still does not match, since you sent it. `failed`: the impact
  * check did not finish. `checking`: it is on its way.
  */
-export type NeedKind = 'approve' | 'send' | 'update' | 'review' | 'checking' | 'failed';
 export type NeedRow =
   | { kind: 'approve'; review: PersonMeetingReviewV2 }
   | { kind: 'checking'; review: PersonMeetingReviewV2; run?: PersonRunV1 }
@@ -3684,7 +3683,7 @@ export async function openDecision(approval_id: string, run: PersonRunV1 | null 
   readSeq += 1;
   const mine = ++seq;
   set({
-    route: { page: 'decision', approval_id }, reader: null, ask: null, sources: null, toast: null, organization: null, list: null, roster: null,
+    route: { page: 'decision' }, reader: null, ask: null, sources: null, toast: null, organization: null, list: null, roster: null,
     barScope: { kind: 'global' },
     decision: { approval_id, seq: mine, loading: true, open: null, command: crypto.randomUUID(), audience: 'only-me', project_ids: [], share: false,
       owners: [], busy: false, run, impact: undefined, ...(back === undefined ? {} : { back }) },
