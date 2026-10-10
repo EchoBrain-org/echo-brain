@@ -30,6 +30,8 @@ import {
 } from "./review-lineage-semantics.js";
 
 const MAXIMUM_PULL_LIMIT = 1;
+/** A pending attempt younger than this may still be running elsewhere; it outlasts the 600 s extraction timeout. */
+const EXTRACTION_IN_FLIGHT_MS = 660_000;
 
 export interface AdmittedMeetingProcessingAdmissionV1 {
   readonly source: {
@@ -252,6 +254,11 @@ export type AdmittedMeetingProcessingCycleResultV1 =
       readonly kind: "held";
       readonly stage: ExtractionFailureStageV1;
       readonly cursor_advanced: boolean;
+    }
+  | {
+      /** Another runner's attempt on this revision is still within its lease: nothing parks or moves. */
+      readonly kind: "in_flight";
+      readonly cursor_advanced: false;
     };
 
 export interface AdmittedMeetingProcessingCycleV1Options {
@@ -367,8 +374,8 @@ function extractionAttemptKeyV1(
 
 /**
  * The stage a blocked reservation parks with when no held row already names one.
- * A pending reservation parks as interrupted whatever its age; a lease check for
- * an attempt still in flight elsewhere belongs here.
+ * A pending reservation reaches here only once it is older than the in-flight
+ * lease (the blocked branch returns in_flight first), so it parks as interrupted.
  */
 function blockedExtractionStageV1(
   blocked: Extract<ExtractionAttemptReservationV1, { readonly status: "blocked" }>,
@@ -452,9 +459,10 @@ function rebindDecisionsToRevision(
  * delivery, or after a revision whose extraction failed is durably parked
  * (only with an attempt ledger; an aborted run is never parked). A parked
  * revision stays in source custody for an operator-authorized retry
- * (`retryHeldOnce`). Advancing past a queued import consumes it, so its "Save
- * to" projects are recorded as suggestions whether its revision was staged or
- * parked.
+ * (`retryHeldOnce`). A revision whose pending attempt is still within its lease
+ * is left in place (`in_flight`) for a later poll. Advancing past a queued
+ * import consumes it, so its "Save to" projects are recorded as suggestions
+ * whether its revision was staged or parked.
  */
 export class AdmittedMeetingProcessingCycleV1 {
   private running: Promise<AdmittedMeetingProcessingCycleResultV1> | undefined;
@@ -674,7 +682,7 @@ export class AdmittedMeetingProcessingCycleV1 {
       );
     }
     const extraction = await this.phase("extraction", async (): Promise<
-      { readonly decisions: DecisionSet } | { readonly held: AdmittedMeetingProcessingCycleResultV1 }
+      { readonly decisions: DecisionSet } | { readonly done: AdmittedMeetingProcessingCycleResultV1 }
     > => {
       const extractionKey = extractionAttemptKeyV1(admission, meeting);
       const reusable =
@@ -705,12 +713,17 @@ export class AdmittedMeetingProcessingCycleV1 {
       const pulled = fromCustody ? {} : { expected_cursor: admission.source.cursor, next_cursor: nextCursor };
       const claim = attempts?.reserve(extractionKey);
       if (claim?.status === "blocked") {
+        // A fresh pending attempt may still be running in another process: no
+        // error, no park, no cursor move, so its paid result is never raced.
+        if (claim.outcome === "pending" && Date.now() - Date.parse(claim.reserved_at) < EXTRACTION_IN_FLIGHT_MS) {
+          return { done: { kind: "in_flight", cursor_advanced: false } };
+        }
         // No model call: a crash or failure after an earlier attempt converges
         // here and parks the revision again; a poll also moves intake past it.
         const stage = await this.options.state.holdExtraction({
           meeting, key: extractionKey, attempt: claim.attempt, failure_stage: blockedExtractionStageV1(claim), ...pulled,
         });
-        return { held: await this.finishHeld(stage, admission, nextCursor) };
+        return { done: await this.finishHeld(stage, admission, nextCursor) };
       }
       let receivedOutput = false;
       let extracted: DecisionSet;
@@ -752,7 +765,7 @@ export class AdmittedMeetingProcessingCycleV1 {
           });
         } catch { complete(); throw error; }
         complete();
-        return { held: await this.finishHeld(stage, admission, nextCursor) };
+        return { done: await this.finishHeld(stage, admission, nextCursor) };
       }
       // A failure after this point (including candidate persistence) must not
       // make the successful provider call eligible for automatic repetition.
@@ -764,7 +777,7 @@ export class AdmittedMeetingProcessingCycleV1 {
       });
       return { decisions: extracted };
     }, signal);
-    if ("held" in extraction) return extraction.held;
+    if ("done" in extraction) return extraction.done;
     const { decisions } = extraction;
     return this.phase(
       "approval_staging",

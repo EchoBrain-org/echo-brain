@@ -151,7 +151,7 @@ export class SqliteExtractionAttemptStoreV1 implements ExtractionAttemptStoreV1 
     return this.database.transaction((): ExtractionAttemptReservationV1 => {
       const previous = this.latest(key);
       if (previous !== undefined) {
-        if (!this.permitted(key, previous.attempt) || previous.attempt === MAX_ATTEMPT) return { status: 'blocked', attempt: previous.attempt, outcome: previous.outcome, failure_code: previous.failure_code };
+        if (!this.permitted(key, previous.attempt) || previous.attempt === MAX_ATTEMPT) return { status: 'blocked', attempt: previous.attempt, outcome: previous.outcome, failure_code: previous.failure_code, reserved_at: previous.reserved_at };
       }
       const attempt = (previous?.attempt ?? 0) + 1;
       const claim_id = randomUUID();

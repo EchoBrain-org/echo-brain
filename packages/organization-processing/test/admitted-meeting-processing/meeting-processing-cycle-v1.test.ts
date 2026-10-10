@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   ExtractionAttemptKeyV1,
   ExtractionAttemptStoreV1,
@@ -268,7 +268,7 @@ class FailingCursorAdvanceState extends FakeState {
 class RecordingExtractionAttempts implements ExtractionAttemptStoreV1 {
   readonly keys: ExtractionAttemptKeyV1[] = [];
   readonly completed: Parameters<ExtractionAttemptStoreV1["complete"]>[0][] = [];
-  private readonly claims = new Map<string, { attempt: number; claim_id: string }>();
+  private readonly claims = new Map<string, { attempt: number; claim_id: string; reserved_at: string }>();
 
   reserve(key: ExtractionAttemptKeyV1): ReturnType<ExtractionAttemptStoreV1["reserve"]> {
     this.keys.push(key);
@@ -279,12 +279,12 @@ class RecordingExtractionAttempts implements ExtractionAttemptStoreV1 {
       return {
         status: "blocked", attempt: previous.attempt,
         outcome: complete?.outcome ?? "pending",
-        failure_code: complete?.outcome === "failed" ? complete.failure_code : null,
+        failure_code: complete?.outcome === "failed" ? complete.failure_code : null, reserved_at: previous.reserved_at,
       };
     }
-    const claim = { attempt: 1, claim_id: `claim-${this.claims.size + 1}` };
+    const claim = { attempt: 1, claim_id: `claim-${this.claims.size + 1}`, reserved_at: new Date().toISOString() };
     this.claims.set(id, claim);
-    return { status: "reserved", ...claim };
+    return { status: "reserved", attempt: claim.attempt, claim_id: claim.claim_id };
   }
 
   complete(input: Parameters<ExtractionAttemptStoreV1["complete"]>[0]): void {
@@ -569,20 +569,27 @@ describe("admitted meeting-processing cycle", () => {
     expect(extraction_attempts.keys).toHaveLength(1);
   });
 
-  it("keeps the parked stage when completion persistence fails, and parks an unrecorded pending attempt as interrupted", async () => {
-    const extraction_attempts = new RecordingExtractionAttempts();
-    extraction_attempts.complete = () => { throw new Error("attempt completion unavailable"); };
-    let calls = 0;
-    const options = {
-      source: source({ meetings: [meeting()] }), state: new FakeState(admission()), extraction_attempts,
-      processor: processor(() => { calls += 1; throw new Error("provider outcome unknown"); }),
-    };
-    await expect(liveCycle(options).runOnce()).rejects.toThrow("attempt completion unavailable");
-    await expect(liveCycle(options).runOnce()).resolves.toMatchObject({ kind: "held", stage: "unknown" });
-    // A crash between reservation and park leaves a pending attempt and no held row.
-    await expect(liveCycle({ ...options, state: new FakeState(admission()) }).runOnce()).resolves.toMatchObject({ kind: "held", stage: "interrupted" });
-    expect(calls).toBe(1);
-    expect(extraction_attempts.completed).toHaveLength(0);
+  it("treats a fresh pending attempt as in flight, then parks it with its kept stage or as interrupted", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const extraction_attempts = new RecordingExtractionAttempts();
+      extraction_attempts.complete = () => { throw new Error("attempt completion unavailable"); };
+      let calls = 0;
+      const options = {
+        source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }), state: new FakeState(admission()), extraction_attempts,
+        processor: processor(() => { calls += 1; throw new Error("provider outcome unknown"); }),
+      };
+      await expect(liveCycle(options).runOnce()).rejects.toThrow("attempt completion unavailable");
+      // A crash mid-extraction leaves a pending attempt and no held row; within its lease it may still be running elsewhere.
+      const crashed = new FakeState(admission());
+      await expect(liveCycle({ ...options, state: crashed }).runOnce()).resolves.toEqual({ kind: "in_flight", cursor_advanced: false });
+      expect([crashed.held.size, crashed.advances.length]).toEqual([0, 0]);
+      vi.setSystemTime(Date.now() + 660_000);
+      await expect(liveCycle(options).runOnce()).resolves.toMatchObject({ kind: "held", stage: "unknown" });
+      await expect(liveCycle({ ...options, state: crashed }).runOnce()).resolves.toEqual({ kind: "held", stage: "interrupted", cursor_advanced: true });
+      expect(calls).toBe(1);
+      expect(extraction_attempts.completed).toHaveLength(0);
+    } finally { vi.useRealTimers(); }
   });
 
   it("does not park an aborted run; the next poll parks it as cancelled", async () => {

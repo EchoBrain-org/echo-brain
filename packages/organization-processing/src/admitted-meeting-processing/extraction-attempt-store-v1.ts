@@ -31,7 +31,8 @@ export type ExtractionAttemptInspectionV1 = Omit<ExtractionAttemptSnapshotV1, 'c
 };
 export type ExtractionAttemptReservationV1 =
   | { readonly status: 'reserved'; readonly attempt: number; readonly claim_id: string }
-  | { readonly status: 'blocked'; readonly attempt: number; readonly outcome: ExtractionAttemptOutcomeV1; readonly failure_code: ExtractionAttemptFailureCodeV1 | null };
+  /** `reserved_at` lets a caller treat a fresh pending attempt as one still in flight. */
+  | { readonly status: 'blocked'; readonly attempt: number; readonly outcome: ExtractionAttemptOutcomeV1; readonly failure_code: ExtractionAttemptFailureCodeV1 | null; readonly reserved_at: string };
 export type ExtractionAttemptCompletionV1 = {
   readonly key: ExtractionAttemptKeyV1;
   readonly attempt: number;
