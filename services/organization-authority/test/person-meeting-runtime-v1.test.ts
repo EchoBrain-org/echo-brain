@@ -24,6 +24,7 @@ import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-bra
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
 import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_FOLDER_CURSOR_POLICY_V1 } from '@echo-brain/provider-granola/granola-folder-source-v1';
 import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
+import { providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
 import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
@@ -49,7 +50,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   addMembership(f.db, { ...readerA, membership_type: 'employee' }, 'Reader A', 'reader-a@example.test');
   addMembership(f.db, { ...readerB, membership_type: 'employee' }, 'Reader B', 'reader-b@example.test');
   const actors = { owner: person, other, 'reader-a': readerA, 'reader-b': readerB } as const;
-  let active = true, extracted = 0, duringPull: (() => void | Promise<void>) | undefined, duringExtract: (() => void | Promise<void>) | undefined, failExtraction = false, edition = '', pulls = 0;
+  let active = true, extracted = 0, duringPull: (() => void | Promise<void>) | undefined, duringExtract: (() => void | Promise<void>) | undefined, failExtraction: unknown, edition = '', pulls = 0;
   // One durable attempt ledger per Authority, shared by every runtime the test creates.
   const ledger = new SqliteExtractionAttemptStoreV1(new Database(':memory:'), { authority_id: 'aut_runtime', organization_id: 'org_runtime', state_lineage_id: 'lineage-runtime' });
   // Meetings the watched folder delivers on its next scans after the baseline.
@@ -107,7 +108,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
         return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
           async extract(meeting) {
             extracted++; await duringExtract?.();
-            if (failExtraction) { failExtraction = false; throw new Error('extraction failed'); }
+            if (failExtraction !== undefined) { const failure = failExtraction; failExtraction = undefined; throw failure; }
             return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
             signals: [...decisions.signals, ...(options.ownedAction ? [{ id: 'act-1', kind: 'action' as const, text: 'Send the pilot plan.', subject: null, confidence: 1, owner: 'Rafael Moreno', due_at: null,
               evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }] : []),
@@ -176,7 +177,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
     JOIN authority_live_source_candidates_v2 c ON c.candidate_id=o.candidate_id
     JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256 WHERE a.source_key=? ORDER BY c.created_at, o.approval_id`).all(sourceKey) as { approval_id: string; state: string; suggested_projects_json: string | null }[];
   return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, fakeProvider, sources, intake, processUntilIdle, pendingReview, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
-    duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: () => { failExtraction = true; },
+    duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: (error: unknown = new Error('extraction failed')) => { failExtraction = error; },
     ledger, pulls: () => pulls, revise: (value: string) => { edition = value; },
     held: () => f.db.prepare('SELECT * FROM authority_live_source_held_extractions_v1').all() as { external_id: string; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string }[] };
 }
@@ -637,6 +638,28 @@ describe('personal meeting intake uses the shared processing path', () => {
       () => { settling ??= runtime.processing.settle!().then(() => f.count('authority_live_approval_outbox_v2')); });
     await vi.waitFor(() => expect(settling).toBeDefined());
     expect(await settling).toBe(2);
+  });
+  it.each([false, true])('retries an unbilled first failure once, automatically, from the head of its queue (the retry fails: %s)', async (failsAgain) => {
+    const f = await fixture(), runtime = f.create();
+    const poll = async () => { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); return (await f.call(runtime, { operation: 'home' })).sources[0]!; };
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    f.failNextExtraction(providerStatusError('OpenRouter', 429));
+    // Not parked, still queued, no operator wording: one grant for the exact key.
+    expect(await poll()).toMatchObject({ pending_imports: [id], error: null });
+    const [attempt] = f.ledger.listLatest();
+    expect([f.held(), attempt]).toEqual([[], expect.objectContaining({ attempt: 1, outcome: 'failed', failure_code: 'rate_limited', retry_authorized: true })]);
+    await poll();
+    expect(f.extracted()).toBe(1);
+    const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+    try {
+      if (failsAgain) f.failNextExtraction(providerStatusError('OpenRouter', 503));
+      // The next poll re-runs it and consumes the grant; a second unbilled failure parks it.
+      expect((await poll()).pending_imports).toEqual([]);
+      expect(f.extracted()).toBe(2);
+      expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(failsAgain ? 0 : 1);
+      expect(f.held()).toEqual(failsAgain ? [expect.objectContaining({ external_id: id, failure_stage: 'temporarily_unavailable' })] : []);
+      expect(f.ledger.inspect(attempt!)).toMatchObject({ attempt: 2, outcome: failsAgain ? 'failed' : 'succeeded', retry_authorized: false });
+    } finally { later.mockRestore(); }
   });
   it('consumes an import whose extraction failed and records its project choice, as for a staged one', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');

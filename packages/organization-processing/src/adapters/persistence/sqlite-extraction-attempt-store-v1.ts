@@ -203,7 +203,8 @@ export class SqliteExtractionAttemptStoreV1 implements ExtractionAttemptStoreV1 
   }
 
   /**
-   * Caller must hold the stopped/exclusive worker lane and verify no frozen candidate already exists.
+   * An operator grant must hold the stopped/exclusive worker lane and verify no frozen candidate already exists.
+   * The cycle grants only its own just-failed, unbilled first attempt, after both frozen-result checks.
    * `recover_pending` acknowledges interrupted provider work whose billing outcome is unknown; it never proves the old worker stopped.
    * A permission authorizes exactly one subsequent reservation and is retained as immutable recovery history.
    */

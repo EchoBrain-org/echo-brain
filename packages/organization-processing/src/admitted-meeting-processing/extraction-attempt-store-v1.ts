@@ -47,4 +47,14 @@ export interface ExtractionAttemptStoreV1 {
   complete(input: ExtractionAttemptCompletionV1): void;
   /** Read-only: the latest attempt for one exact key, or undefined before its first reservation. */
   inspect(key: ExtractionAttemptKeyV1): ExtractionAttemptInspectionV1 | undefined;
+  /**
+   * Permits exactly one more reservation after the expected latest attempt. Operators grant through the
+   * recovery CLI; the cycle grants only its own unbilled first failure. Without it the cycle parks that too.
+   */
+  authorizeRetry?(input: {
+    readonly key: ExtractionAttemptKeyV1;
+    readonly expected_attempt: number;
+    readonly expected_outcome: ExtractionAttemptOutcomeV1;
+    readonly recover_pending?: boolean;
+  }): 'authorized' | 'conflict';
 }

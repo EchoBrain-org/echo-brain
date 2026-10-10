@@ -21,7 +21,7 @@ import type {
 } from "./meeting-processing-worker-lifecycle.js";
 import type { AdmittedMeetingSourceCursorPolicyV1 } from "./admitted-meeting-source-cursor-policy-v1.js";
 import type { ExtractionAttemptKeyV1, ExtractionAttemptReservationV1, ExtractionAttemptStoreV1 } from "./extraction-attempt-store-v1.js";
-import { classifyExtractionFailureStageV1, type ExtractionFailureStageV1 } from "./extraction-failure-stage-v1.js";
+import { classifyExtractionFailureStageV1, unbilledExtractionFailureV1, type ExtractionFailureStageV1 } from "./extraction-failure-stage-v1.js";
 import {
   reviewInputSha256V1,
   reviewLineageIdV1,
@@ -267,6 +267,12 @@ export type AdmittedMeetingProcessingCycleResultV1 =
       /** Another runner's attempt on this revision is still within its lease: nothing parks or moves. */
       readonly kind: "in_flight";
       readonly cursor_advanced: false;
+    }
+  | {
+      /** An unbilled first failure: its exact key has one automatic retry, and the revision stays at the head. */
+      readonly kind: "retry_scheduled";
+      readonly stage: ExtractionFailureStageV1;
+      readonly cursor_advanced: false;
     };
 
 export interface AdmittedMeetingProcessingCycleV1Options {
@@ -469,7 +475,10 @@ function rebindDecisionsToRevision(
  * poll parks its revision as `cancelled`. A parked
  * revision stays in source custody for an operator-authorized retry
  * (`retryHeldOnce`). A revision whose pending attempt is still within its lease
- * is left in place (`in_flight`) for a later poll. Advancing past a queued
+ * is left in place (`in_flight`) for a later poll. A first attempt the provider
+ * refused unbilled (a 429 or 5xx reply, no output) is not parked: its exact key
+ * gets one automatic retry and the revision stays at the head
+ * (`retry_scheduled`); any later failure parks. Advancing past a queued
  * import consumes it, so its "Save to" projects are recorded as suggestions
  * whether its revision was staged or parked.
  */
@@ -764,13 +773,23 @@ export class AdmittedMeetingProcessingCycleV1 {
             : error instanceof AdapterError ? error.code : "unknown",
         });
         if (aborted) { complete(); throw error; }
+        const failure = { aborted, received_output: receivedOutput };
+        const failureStage = classifyExtractionFailureStageV1(error, failure);
+        // One free retry for an unbilled first failure of a pulled revision: no
+        // park and no cursor move, so the next poll re-runs it and its
+        // reservation consumes this grant. A crash before the grant leaves a
+        // failed attempt that the next poll parks as not_recorded.
+        if (!fromCustody && claim.attempt === 1 && attempts?.authorizeRetry !== undefined && unbilledExtractionFailureV1(error, failure)) {
+          complete();
+          attempts.authorizeRetry({ key: extractionKey, expected_attempt: claim.attempt, expected_outcome: "failed" });
+          return { done: { kind: "retry_scheduled", stage: failureStage, cursor_advanced: false } };
+        }
         // Park before closing the attempt, so every crash window leaves a
         // blocked reservation that parks again without a model call.
         let stage: ExtractionFailureStageV1;
         try {
           stage = await this.options.state.holdExtraction({
-            meeting, key: extractionKey, attempt: claim.attempt, ...pulled,
-            failure_stage: classifyExtractionFailureStageV1(error, { aborted, received_output: receivedOutput }),
+            meeting, key: extractionKey, attempt: claim.attempt, ...pulled, failure_stage: failureStage,
           });
         } catch { complete(); throw error; }
         complete();

@@ -192,16 +192,22 @@ function statusTaxonomy(status: number): {
   return { code: 'permanently_rejected', retryable: false };
 }
 
+/** A non-2xx reply: the provider refused the request before generating anything. */
+export class ProviderStatusError extends AdapterError {
+  constructor(provider: string, readonly http_status: number) {
+    super(
+      statusTaxonomy(http_status).code,
+      `${provider} rejected the request with status ${http_status}`,
+      statusTaxonomy(http_status).retryable,
+    );
+  }
+}
+
 export function providerStatusError(
   provider: string,
   status: number,
 ): AdapterError {
-  const taxonomy = statusTaxonomy(status);
-  return new AdapterError(
-    taxonomy.code,
-    `${provider} rejected the request with status ${status}`,
-    taxonomy.retryable,
-  );
+  return new ProviderStatusError(provider, status);
 }
 
 async function requestProviderJson(

@@ -205,10 +205,11 @@ export function createPersonMeetingRuntimeV1(options: {
       });
       const outcome = await (retry ? cycle.retryHeldOnce(signal) : cycle.runOnce(signal));
       const queued = retry || sourceIntake.checkpoint(setting.source_key).manual.length > 0 || (outcome.cursor_advanced && !outcome.kind.startsWith('empty'));
-      // A pull that left its queue where it was never re-pulls at once: a head in flight elsewhere (another process, or a
-      // crash's unexpired lease) waits a minute, anything else (a lost compare-and-swap) about one former cycle.
-      const floor = retry || outcome.cursor_advanced ? 0 : outcome.kind === 'in_flight' ? 60_000 : 30_000;
-      observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() + (queued ? floor : 300_000) });
+      // A pull that left its queue where it was never re-pulls at once: an automatic retry, or a head in flight elsewhere
+      // (another process, or a crash's unexpired lease), waits a minute; anything else (a lost compare-and-swap) about
+      // one former cycle.
+      const floor = retry || outcome.cursor_advanced ? 0 : outcome.kind === 'in_flight' || outcome.kind === 'retry_scheduled' ? 60_000 : 30_000;
+      observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() + (queued || outcome.kind === 'retry_scheduled' ? floor : 300_000) });
     } catch (error) {
       signal.throwIfAborted();
       const remaining = ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key);
