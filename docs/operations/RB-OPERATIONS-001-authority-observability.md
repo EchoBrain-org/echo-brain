@@ -309,6 +309,74 @@ with the saved capture ID after a lost response; do not repeat the Ask to
 recover its trace. The staging evaluator uses the same operational spans;
 payload capture has one API and collector, on ordinary product requests.
 
+#### Follow a meeting from intake to approval delivery
+
+Personal Granola and synthetic intake use the same core-runtime channel. Join
+`source_poll` and extraction within the worker operation; follow the hashed
+`meeting_id` through `extraction`, `candidate_persist` and `approval_staging`.
+The staging event links that meeting to a hashed `approval_id`, which later
+worker passes and review requests reuse. `attempt` on extraction is the durable
+attempt ledger ordinal. A parked meeting ends its worker pass with `result=held`;
+a scheduled extraction retry reports `retry_pending`. Grounding failures carry
+an allowlisted `grounding_stage`, such as `evidence_quote`, without the quote.
+The attempt ledger remains authoritative for holds and retry authorization.
+
+| Evidence | What it proves |
+| --- | --- |
+| `approval_staging`, `published` | A frozen proposal is available for review. |
+| `approval_review`, desktop, `returned` | The authenticated review-open handler produced the review; it does not prove screen rendering or human viewing. |
+| `approval_delivery`, Slack, `post_marker` / `reconcile_marker`, `completed` | Slack returned the placeholder's message reference; the approval card still needs publishing. |
+| `approval_delivery`, Slack, `publish_card`, `done` | Slack accepted the card update, not that the person read it. |
+| `approval_delivery`, `retry_pending` / `failed` / `unrepresentable` | Delivery was deferred, exhausted/invalidated, or the card exceeded Slack's limits. |
+| `approval_action`, `done` | The shared approval core committed the human's decision. |
+
+Delivery spans cover actual provider attempts and state transitions. Idle
+reconciliation, unchanged cards, and review-list polls add no new events.
+An unlinked Slack reviewer has no delivery attempt; inspect the existing tool
+and identity-link status in that case. Human wait is not an open machine span.
+These fields are available in Journey Explorer's operation evidence and the
+existing CloudWatch `diagnostic` JSON; no separate log stream is introduced.
+
+For one meeting's exact extraction evidence, use the existing Person client
+`diagnostics()` method to prepare this request **before** the next extraction:
+
+```json
+{
+  "schema_version": 1,
+  "operation": "prepare",
+  "target": {
+    "kind": "meeting_extraction",
+    "source_key": "pms_<64 lowercase hex characters>",
+    "meeting_id": "<external meeting ID in this person's source>"
+  }
+}
+```
+
+Use the existing source key from the person's meeting settings. Save the returned
+`capture_id`; then import the meeting normally or let its watched source run.
+The worker claims the selection only for that person's exact source/meeting
+and only when an already-authorized extraction actually runs. Preparation does
+not import, retry, approve, spend on a model, or consume a frozen-result replay.
+There is at most one active selection for that owner/source/meeting.
+
+Export it with the existing read-only trace command (matching built client):
+
+```sh
+npm run eval:research-loop -- trace --capture-id cap_… --out ~/.local/state/echo-meeting-diagnostic-<run>
+```
+
+The private trace includes the actual rendered evidence blocks, model request
+and raw structured reply. A quote rejection also identifies the signal index,
+evidence alias, source block ID/type, rejected quote and exact source text.
+The grounding rule and retry policy are unchanged. Capture uses the same
+bounded memory, expiry and owner-only read protocol described above; each read
+checks the retained source's current intake settings and pinned membership.
+Routine metadata contains none of these payloads.
+
+Prepare after any Authority restart: an existing host retry wrapper that
+restarts Authority discards an earlier in-memory selection. This change does
+not add persistent payload storage or retrofit evidence for past attempts.
+
 #### Follow sweep runs and failed open-item reads
 
 A sweep run (a re-check of open items,

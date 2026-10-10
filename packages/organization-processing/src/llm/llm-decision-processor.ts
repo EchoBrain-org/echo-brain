@@ -1,4 +1,4 @@
-import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, captureCoreRuntimeContentV1, coreRuntimeDiagnosticErrorKindV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { createHash } from 'node:crypto';
 import {
   AdapterError,
@@ -17,6 +17,7 @@ import {
 } from "../core/index.js";
 import {
   DEFAULT_MAX_OUTPUT_TOKENS,
+  DEFAULT_LLM_REQUEST_TIMEOUT_MS,
   MAX_LLM_REQUEST_TIMEOUT_MS,
   MAX_OUTPUT_TOKENS,
   type LlmProviderClient,
@@ -392,7 +393,10 @@ function extractionSchemaFailure(stage: ExtractionSchemaFailureStage): never {
 
 function extractionGroundingFailure(
   stage: ExtractionGroundingFailureStage,
+  detail?: Readonly<Record<string, unknown>>,
 ): never {
+  annotateCoreRuntimeV1({ grounding_stage: stage });
+  observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'grounding', event: 'failed', error_kind: 'invalid_output', data: { failure_stage: stage, ...detail } });
   throw new AdapterError(
     'temporarily_unavailable',
     `${EXTRACTION_GROUNDING_FAILURE_PREFIX}${stage}`,
@@ -876,6 +880,11 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
     const startedAt = this.providerClockMs();
     const response = await observeCoreRuntimeV1("model_call", async () => {
       observeCoreModelMetadataV1({ provider: this.client.provider, model: this.model });
+      observeCoreRuntimeDiagnosticV1({ kind: 'model_request', call_id: 1, role: 'extraction', recovery: false, input: {
+        model: this.model, system_prompt: SYSTEM_PROMPT, user_prompt: renderedMeeting.prompt, schema: EXTRACTION_FORMAT,
+        max_output_tokens: configuredMaxOutputTokens(this.config),
+        timeout_ms: typeof this.config.settings['request_timeout_ms'] === 'number' ? this.config.settings['request_timeout_ms'] : DEFAULT_LLM_REQUEST_TIMEOUT_MS,
+      } });
       annotateCoreRuntimeV1({ counts: { input_bytes: Buffer.byteLength(SYSTEM_PROMPT + renderedMeeting.prompt), input_tokens: null, output_tokens: null, total_tokens: null } });
       const value = await this.client.generateStructured({
         model: this.model,
@@ -886,8 +895,12 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         ...(operation?.signal === undefined
           ? {}
           : { signal: operation.signal }),
+      }).catch((error: unknown) => {
+        observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: 1, role: 'extraction', error_kind: coreRuntimeDiagnosticErrorKindV1(error) });
+        throw error;
       });
       observeCoreModelMetadataV1({ provider: this.client.provider, model: this.model, ...(value.requestId === undefined ? {} : { request_id: value.requestId }), ...(value.stopReason === undefined ? {} : { finish_reason: value.stopReason }) });
+      observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: 1, role: 'extraction', value: value.content });
       annotateCoreRuntimeV1({ counts: { output_bytes: Buffer.byteLength(value.content), input_tokens: value.inputTokens ?? null, output_tokens: value.outputTokens ?? null, total_tokens: value.totalTokens ?? null, provider_latency_ms: this.providerElapsedMs(startedAt) } });
       return value;
     });
@@ -914,7 +927,7 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
           extractionGroundingFailure('evidence_duplicate');
         }
         if (!block.text.includes(citation.quote)) {
-          extractionGroundingFailure('evidence_quote');
+          extractionGroundingFailure('evidence_quote', { signal_index: raw.index, evidence_id: citation.evidenceId, block_id: block.id, block_kind: block.kind, quote: citation.quote, source_text: block.text });
         }
         seenEvidenceIds.add(citation.evidenceId);
         cited.push({ quote: citation.quote, block });

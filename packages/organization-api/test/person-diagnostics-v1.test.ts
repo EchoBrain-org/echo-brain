@@ -18,6 +18,14 @@ const prepared = { schema_version: 1, kind: 'echo-person-diagnostic-capture-v1',
 const read = { ...prepared, kind: 'echo-person-diagnostic-result-v1' };
 
 describe('ordinary request diagnostic captures', () => {
+  it('selects one meeting extraction without accepting payload, actor or retry authorization', () => {
+    const target = { kind: 'meeting_extraction', source_key: `pms_${'a'.repeat(64)}`, meeting_id: 'synthetic-custom-thermo' };
+    const request = { schema_version: 1, operation: 'prepare', target };
+    expect(validatePersonDiagnosticsRequestV1(request)).toEqual(request);
+    for (const change of [{ source_key: 'unknown' }, { meeting_id: '' }, { meeting_id: 'x'.repeat(257) }, { actor: 'someone' }, { retry: true }, { transcript: 'private' }]) {
+      expect(() => validatePersonDiagnosticsRequestV1({ ...request, target: { ...target, ...change } })).toThrow();
+    }
+  });
   it('prepares only a target and reads only a capture id, without accepting source payload or actor selectors', () => {
     expect(PERSON_DIAGNOSTICS_PATH_V1).toBe('/v1/person/diagnostics');
     for (const request of [

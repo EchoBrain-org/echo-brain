@@ -112,6 +112,7 @@ export interface PersonHttpRuntimeV1 {
   readonly applications: readonly ProviderHttpApplicationV1[];
   readonly processing?: import('./organization-authority-service-lifecycle.js').OrganizationAuthorityProcessingCycleV1;
   tools?(token: string): Promise<readonly import('@echo-brain/organization-api').OrganizationPersonToolV4[]>;
+  attachDiagnostics?(diagnostics: PersonDiagnosticsV1): void;
   close(): void;
 }
 export interface OrganizationAuthorityApiRuntimeDependencies {
@@ -345,7 +346,8 @@ export async function startOrganizationAuthorityApiRuntime(
     documentWorker = startPersonDocumentProcessingV1(documents,new SqlitePersonTextSourceInboxV1(database),{
       on_failure: event => console.error(JSON.stringify(event)),
     });
-    diagnostics = dependencies.answer_composition_generation === undefined ? undefined : createPersonDiagnosticsV1({ sessions });
+    diagnostics = dependencies.answer_composition_generation === undefined && personHttp?.attachDiagnostics === undefined ? undefined : createPersonDiagnosticsV1({ sessions });
+    if (diagnostics !== undefined) personHttp?.attachDiagnostics?.(diagnostics);
     const answerOptions = dependencies.answer_composition_generation === undefined ? undefined : {
       authority_id: metadata.authority_id, organization_id: metadata.organization_id, state_lineage_id: lineage.root.state_lineage_id,
       sessions, originals, records: recordSearch,

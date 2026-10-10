@@ -25,10 +25,10 @@ const MAX_RENDERED_BYTES = 1024 * 1024;
 const MAX_MACHINE_DURATION = 31 * 24 * HOUR;
 const MAX_ATTEMPT = 100;
 
-const CORE_PHASES = new Set(["person_tools_status", "person_tool_delivery", "person_tool_completion", "worker_request", "worker_gate", "worker_execution", "worker_timer", "source_poll", "source_cursor", "source_intake", "extraction", "candidate_persist", "approval_staging", "recovery", "approval_observation", "record_append", "approval_action", "approval_terminal_update", "search_reconciliation", "search_snapshot", "search_enrichment", "search_build", "search_validation", "search_publication", "related_projection", "model_call", "model_parse", "model_schema", "model_grounding", "ask_request", "http_request", "ask_planner", "ask_answer", "research_render", "research_run", "research_brief", "research_starting_read", "research_preload", "research_loop", "research_output", "research_output_view", "research_revalidation", "research_audit", "research_release", "evidence_search", "evidence_open", "evidence_list", "evidence_revalidate", "evidence_connection"]);
+const CORE_PHASES = new Set(["person_tools_status", "person_tool_delivery", "person_tool_completion", "worker_request", "worker_gate", "worker_execution", "worker_timer", "source_poll", "source_cursor", "source_intake", "extraction", "candidate_persist", "approval_staging", "recovery", "approval_delivery", "approval_review", "approval_observation", "record_append", "approval_action", "approval_terminal_update", "search_reconciliation", "search_snapshot", "search_enrichment", "search_build", "search_validation", "search_publication", "related_projection", "model_call", "model_parse", "model_schema", "model_grounding", "ask_request", "http_request", "ask_planner", "ask_answer", "research_render", "research_run", "research_brief", "research_starting_read", "research_preload", "research_loop", "research_output", "research_output_view", "research_revalidation", "research_audit", "research_release", "evidence_search", "evidence_open", "evidence_list", "evidence_revalidate", "evidence_connection"]);
 for (const phase of legacy_phases) CORE_PHASES.add(phase);
 const CORE_COUNTS = ["event_loop_delay_max_us", "active_models", "gate_wait_ms", "pending_depth", "oldest_age_ms", "scheduled_delay_ms", "wake_lateness_ms", "unchanged_group_count", "changed_group_count", "newly_observed_group_count", "input_bytes", "output_bytes", "record_count", "atom_count", "visibility_groups", "included_count", "excluded_count", "recomputed_count", "reused_count", "captured_head", "current_head", "published_head", "http_status", "active_http", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens", "planned_query_count", "query_hit_count", "released_atom_count", "context_atom_count", "citation_count", "provider_latency_ms", "rss_bytes", "heap_used_bytes", "cpu_user_us", "cpu_system_us", "fs_read_count", "fs_write_count", "meeting_items", "document_items", "transcript_items", "slack_items", "ticket_retrieved_items", "ticket_context_items", "ticket_citations", "upstream_retry_after_seconds", "upstream_rate_limit", "upstream_rate_remaining", "upstream_rate_reset_unix_seconds"];
-const CORE_RESULTS = new Set(["current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "invalid_request", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure", "verified", "unlinked", "not_configured", "out_of_scope", "empty", "returned", "answered", "partial", "not_found", "off_scope"]);
+const CORE_RESULTS = new Set(["held", "unrepresentable", "current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "invalid_request", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure", "verified", "unlinked", "not_configured", "out_of_scope", "empty", "returned", "answered", "partial", "not_found", "off_scope"]);
 const CORE_UPSTREAM_SERVICES = new Set(["nango", "jira", "confluence", "granola", "other"]);
 const CORE_UPSTREAM_OPERATIONS = new Set(["connection_read", "connection_list", "connect_session", "connection_delete", "provider_read"]);
 const CORE_UPSTREAM_RATE_LIMIT_REASONS = new Set(["burst", "global_quota", "tenant_quota", "per_issue_write", "other"]);
@@ -418,13 +418,18 @@ function diagnosticDetail(value) {
     if (!uuid(input.operation_id) || !uuid(input.span_id) || (input.parent_span_id !== null && !uuid(input.parent_span_id)) ||
       !CORE_PHASES.has(input.phase) || !CORE_PHASES.has(input.purpose) || typeof input.root !== "boolean" ||
       !Array.isArray(input.linked_journey_ids) || input.linked_journey_ids.length > 1000 || input.linked_journey_ids.some((id) => !uuid(id)) ||
+      ([
+        ["grounding_stage", ["evidence_id", "evidence_duplicate", "evidence_quote", "due_before_meeting", "decided_question_only", "rationale_supports"]],
+        ["approval_surface", ["desktop", "slack"]],
+        ["delivery_step", ["open_dm", "post_marker", "reconcile_marker", "publish_card"]],
+      ].some(([key, values]) => input[key] !== undefined && !values.includes(input[key]))) ||
       (input.evidence_source !== undefined && input.evidence_source !== "ticket" && input.evidence_source !== "slack" && input.evidence_source !== "page") ||
       (input.upstream_service !== undefined && !CORE_UPSTREAM_SERVICES.has(input.upstream_service)) ||
       (input.upstream_operation !== undefined && !CORE_UPSTREAM_OPERATIONS.has(input.upstream_operation)) ||
       (input.upstream_rate_limit_reason !== undefined && !CORE_UPSTREAM_RATE_LIMIT_REASONS.has(input.upstream_rate_limit_reason)) ||
       (input.trigger !== undefined && !TRIGGERS.has(input.trigger)) ||
       (input.parent_operation_id !== undefined && !uuid(input.parent_operation_id)) ||
-      (["run_id", "event_id", "output_id", "attempt_id"].some(key => input[key] !== undefined && digestOrNull(input[key]) === null)) ||
+      (["meeting_id", "approval_id", "run_id", "event_id", "output_id", "attempt_id"].some(key => input[key] !== undefined && digestOrNull(input[key]) === null)) ||
       (input.attempt !== undefined && uint(input.attempt, 1, 1000000) === null) ||
       (input.research_stop_reason !== undefined && !RESEARCH_STOP_REASONS.has(input.research_stop_reason)) ||
       (input.research_admission !== undefined && !RESEARCH_ADMISSIONS.has(input.research_admission)) ||
@@ -439,7 +444,7 @@ function diagnosticDetail(value) {
     return { operation_id: input.operation_id, span_id: input.span_id, parent_span_id: input.parent_span_id,
       phase: input.phase, purpose: input.purpose, root: input.root, linked_journey_ids: input.linked_journey_ids, counts,
       result: input.result, generation: input.generation,
-      ...Object.fromEntries(["trigger", "parent_operation_id", "run_id", "event_id", "output_id", "attempt_id", "attempt", "research_stop_reason", "research_admission"].filter(key => input[key] !== undefined).map(key => [key, input[key]])),
+      ...Object.fromEntries(["meeting_id", "approval_id", "grounding_stage", "approval_surface", "delivery_step", "trigger", "parent_operation_id", "run_id", "event_id", "output_id", "attempt_id", "attempt", "research_stop_reason", "research_admission"].filter(key => input[key] !== undefined).map(key => [key, input[key]])),
       ...(input.evidence_source === undefined ? {} : { evidence_source: input.evidence_source }),
       ...(input.upstream_service === undefined ? {} : { upstream_service: input.upstream_service }),
       ...(input.upstream_operation === undefined ? {} : { upstream_operation: input.upstream_operation }),

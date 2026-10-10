@@ -9,7 +9,7 @@ export const CORE_RUNTIME_PHASES_V1 = [
   "person_tools_status", "person_tool_delivery", "person_tool_completion",
   "worker_request", "worker_gate", "worker_execution", "worker_timer", "source_poll", "source_cursor",
   "source_intake", "extraction", "candidate_persist", "approval_staging", "recovery",
-  "approval_observation", "record_append", "approval_action", "approval_terminal_update",
+  "approval_delivery", "approval_review", "approval_observation", "record_append", "approval_action", "approval_terminal_update",
   "search_reconciliation", "search_snapshot", "search_enrichment", "search_build",
   "search_validation", "search_publication", "related_projection", "model_call",
   "model_parse", "model_schema", "model_grounding", "ask_request", "http_request", "ask_planner", "ask_answer",
@@ -35,7 +35,8 @@ export const CORE_RUNTIME_COUNT_KEYS_V1 = [
   "upstream_retry_after_seconds", "upstream_rate_limit", "upstream_rate_remaining", "upstream_rate_reset_unix_seconds",
 ] as const;
 export type CoreRuntimeCountsV1 = Partial<Record<(typeof CORE_RUNTIME_COUNT_KEYS_V1)[number], number | null>>;
-export const CORE_RUNTIME_RESULTS_V1 = ["current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "invalid_request", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure", "verified", "unlinked", "not_configured", "out_of_scope", "empty", "returned", "answered", "partial", "not_found", "off_scope"] as const;
+export const CORE_RUNTIME_RESULTS_V1 = ["held", "unrepresentable", "current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "invalid_request", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure", "verified", "unlinked", "not_configured", "out_of_scope", "empty", "returned", "answered", "partial", "not_found", "off_scope"] as const;
+export const CORE_RUNTIME_GROUNDING_STAGES_V1 = ["evidence_id", "evidence_duplicate", "evidence_quote", "due_before_meeting", "decided_question_only", "rationale_supports"] as const;
 export const CORE_RUNTIME_UPSTREAM_SERVICES_V1 = ["nango", "jira", "confluence", "granola", "other"] as const;
 export const CORE_RUNTIME_UPSTREAM_OPERATIONS_V1 = ["connection_read", "connection_list", "connect_session", "connection_delete", "provider_read"] as const;
 export const CORE_RUNTIME_UPSTREAM_RATE_LIMIT_REASONS_V1 = ["burst", "global_quota", "tenant_quota", "per_issue_write", "other"] as const;
@@ -43,6 +44,8 @@ export const CORE_RUNTIME_RESEARCH_STOP_REASONS_V1 = Object.freeze(['finished', 
 export const CORE_RUNTIME_RESEARCH_ADMISSIONS_V1 = Object.freeze(['post_revalidation_no_time'] as const);
 /** Only registered labels and explicit opaque hashes may correlate business entities in metadata. */
 export interface CoreRuntimeCorrelationV1 {
+  readonly meeting_id?: string;
+  readonly approval_id?: string;
   readonly trigger?: string;
   readonly run_id?: string;
   readonly event_id?: string;
@@ -64,6 +67,9 @@ export interface CoreRuntimeDetailV1 extends CoreRuntimeCorrelationV1 {
   readonly result: (typeof CORE_RUNTIME_RESULTS_V1)[number] | null;
   readonly research_stop_reason?: (typeof CORE_RUNTIME_RESEARCH_STOP_REASONS_V1)[number];
   readonly research_admission?: (typeof CORE_RUNTIME_RESEARCH_ADMISSIONS_V1)[number];
+  readonly grounding_stage?: (typeof CORE_RUNTIME_GROUNDING_STAGES_V1)[number];
+  readonly approval_surface?: "desktop" | "slack";
+  readonly delivery_step?: "open_dm" | "post_marker" | "reconcile_marker" | "publish_card";
   readonly evidence_source?: "ticket" | "slack" | "page";
   /** Optional finite attribution for an upstream connector request. */
   readonly upstream_service?: (typeof CORE_RUNTIME_UPSTREAM_SERVICES_V1)[number];
@@ -140,13 +146,13 @@ function failureResult(error: unknown, detail: CoreRuntimeDetailV1): CoreRuntime
   } catch { /* A hostile error must not suppress the terminal observation. */ }
   return detail.result ?? "failed";
 }
-export function annotateCoreRuntimeV1(input: { counts?: CoreRuntimeCountsV1; result?: CoreRuntimeDetailV1["result"]; generation?: string; linked_journey_ids?: readonly string[] } & CoreRuntimeCorrelationV1 & Partial<Pick<CoreRuntimeDetailV1, "source_revision" | "cursor" | "action" | "provider" | "model" | "finish_reason" | "provider_request" | "evidence_source" | "upstream_service" | "upstream_operation" | "upstream_rate_limit_reason" | "research_stop_reason" | "research_admission">>): void {
+export function annotateCoreRuntimeV1(input: { counts?: CoreRuntimeCountsV1; result?: CoreRuntimeDetailV1["result"]; generation?: string; linked_journey_ids?: readonly string[] } & CoreRuntimeCorrelationV1 & Partial<Pick<CoreRuntimeDetailV1, "grounding_stage" | "approval_surface" | "delivery_step" | "source_revision" | "cursor" | "action" | "provider" | "model" | "finish_reason" | "provider_request" | "evidence_source" | "upstream_service" | "upstream_operation" | "upstream_rate_limit_reason" | "research_stop_reason" | "research_admission">>): void {
   const current = context.getStore();
   const detail = current?.detail;
   if (!detail) return;
   safe(() => {
     Object.assign(detail.counts, input.counts);
-    for (const key of ["source_revision", "cursor", "action", "provider", "model", "finish_reason", "provider_request", "evidence_source", "upstream_service", "upstream_operation", "upstream_rate_limit_reason", "research_stop_reason", "research_admission"] as const) { if (input[key] !== undefined) Object.assign(detail, { [key]: input[key] }); }
+    for (const key of ["grounding_stage", "approval_surface", "delivery_step", "source_revision", "cursor", "action", "provider", "model", "finish_reason", "provider_request", "evidence_source", "upstream_service", "upstream_operation", "upstream_rate_limit_reason", "research_stop_reason", "research_admission"] as const) { if (input[key] !== undefined) Object.assign(detail, { [key]: input[key] }); }
     Object.assign(detail, correlation(input, current?.vocabulary));
     if (input.result !== undefined) Object.assign(detail, { result: input.result });
     if (input.generation !== undefined) Object.assign(detail, { generation: input.generation });
@@ -261,6 +267,9 @@ export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1, vocabul
       (input.result !== null && !CORE_RUNTIME_RESULTS_V1.includes(input.result)) ||
       (input.research_stop_reason !== undefined && !CORE_RUNTIME_RESEARCH_STOP_REASONS_V1.includes(input.research_stop_reason)) ||
       (input.research_admission !== undefined && !CORE_RUNTIME_RESEARCH_ADMISSIONS_V1.includes(input.research_admission)) ||
+      (input.grounding_stage !== undefined && !CORE_RUNTIME_GROUNDING_STAGES_V1.includes(input.grounding_stage)) ||
+      (input.approval_surface !== undefined && !["desktop", "slack"].includes(input.approval_surface)) ||
+      (input.delivery_step !== undefined && !["open_dm", "post_marker", "reconcile_marker", "publish_card"].includes(input.delivery_step)) ||
       (input.evidence_source !== undefined && input.evidence_source !== "ticket" && input.evidence_source !== "slack" && input.evidence_source !== "page") ||
       (input.upstream_service !== undefined && !CORE_RUNTIME_UPSTREAM_SERVICES_V1.includes(input.upstream_service)) ||
       (input.upstream_operation !== undefined && !CORE_RUNTIME_UPSTREAM_OPERATIONS_V1.includes(input.upstream_operation)) ||
@@ -280,6 +289,9 @@ export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1, vocabul
     result: input.result, generation: input.generation,
     ...(input.research_stop_reason === undefined ? {} : { research_stop_reason: input.research_stop_reason }),
     ...(input.research_admission === undefined ? {} : { research_admission: input.research_admission }),
+    ...(input.grounding_stage === undefined ? {} : { grounding_stage: input.grounding_stage }),
+    ...(input.approval_surface === undefined ? {} : { approval_surface: input.approval_surface }),
+    ...(input.delivery_step === undefined ? {} : { delivery_step: input.delivery_step }),
     ...(input.evidence_source === undefined ? {} : { evidence_source: input.evidence_source }),
     ...(input.upstream_service === undefined ? {} : { upstream_service: input.upstream_service }),
     ...(input.upstream_operation === undefined ? {} : { upstream_operation: input.upstream_operation }),
@@ -290,9 +302,9 @@ export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1, vocabul
 }
 
 function correlation(input: CoreRuntimeCorrelationV1, vocabulary: TelemetryVocabularyV1 = EMPTY_TELEMETRY_VOCABULARY_V1): CoreRuntimeCorrelationV1 {
-  const value: { trigger?: string; run_id?: string; event_id?: string; output_id?: string; attempt_id?: string; attempt?: number } = {};
+  const value: { meeting_id?: string; approval_id?: string; trigger?: string; run_id?: string; event_id?: string; output_id?: string; attempt_id?: string; attempt?: number } = {};
   if (input.trigger !== undefined) value.trigger = telemetryLabelV1(input.trigger, vocabulary.triggers ?? ['other']);
-  for (const key of ['run_id', 'event_id', 'output_id', 'attempt_id'] as const) {
+  for (const key of ['meeting_id', 'approval_id', 'run_id', 'event_id', 'output_id', 'attempt_id'] as const) {
     if (input[key] !== undefined) {
       const id = opaque(input[key]);
       if (id === null) throw new TypeError('invalid core runtime correlation');

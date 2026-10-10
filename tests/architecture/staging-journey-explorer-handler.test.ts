@@ -1607,7 +1607,7 @@ describe("research admission Explorer round trip", () => {
 
 describe("core observation Explorer round trip", () => {
   it.each(AGENTIC_TRIGGER_DEFINITIONS_V1.map(definition => definition.name))("reads %s correlation from the registered trigger vocabulary in a production log group", async (trigger) => {
-    const correlation = { trigger, parent_operation_id: "33333333-3333-4333-8333-333333333333", run_id: "a".repeat(64), event_id: "b".repeat(64), output_id: "c".repeat(64), attempt_id: "d".repeat(64), attempt: 2, research_stop_reason: "budget", research_admission: "post_revalidation_no_time" };
+    const correlation = { grounding_stage: "evidence_quote", meeting_id: "e".repeat(64), approval_id: "f".repeat(64), approval_surface: "slack", delivery_step: "publish_card", trigger, parent_operation_id: "33333333-3333-4333-8333-333333333333", run_id: "a".repeat(64), event_id: "b".repeat(64), output_id: "c".repeat(64), attempt_id: "d".repeat(64), attempt: 2, research_stop_reason: "budget", research_admission: "post_revalidation_no_time" };
     const diagnostic = JSON.stringify({ operation_id: id, span_id: "22222222-2222-4222-8222-222222222222", parent_span_id: null, phase: "research_run", purpose: "research_run", root: true, linked_journey_ids: [], counts: {}, result: null, generation: null, ...correlation });
     const stageEvent = event({ environment: "production", schema_version: 2, workflow: "core_runtime", stage: "core_operation", event: "started", outcome: null, elapsed_ms: 0, diagnostic_json: diagnostic });
     const productionGroup = "/echo-brain/authority/authority.example.org";

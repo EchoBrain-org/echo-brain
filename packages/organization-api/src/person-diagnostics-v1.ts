@@ -3,7 +3,8 @@ import { asEnumerableRecord, asRecord, assertExactKeys, assertString, assertTime
 /** Explicit, actor-bound captures of an ordinary product request. Capture ids are correlation, never authorization. */
 export const PERSON_DIAGNOSTICS_PATH_V1 = '/v1/person/diagnostics';
 export type PersonDiagnosticCaptureIdV1 = `cap_${string}`;
-export type PersonDiagnosticTargetV1 = { readonly kind: 'ask' } | { readonly kind: 'trigger_run'; readonly run_id: string };
+export type PersonDiagnosticTargetV1 = { readonly kind: 'ask' } | { readonly kind: 'trigger_run'; readonly run_id: string }
+  | { readonly kind: 'meeting_extraction'; readonly source_key: string; readonly meeting_id: string };
 export interface PersonDiagnosticPrepareRequestV1 { readonly schema_version: 1; readonly operation: 'prepare'; readonly target: PersonDiagnosticTargetV1 }
 export interface PersonDiagnosticReadRequestV1 { readonly schema_version: 1; readonly operation: 'read'; readonly capture_id: PersonDiagnosticCaptureIdV1 }
 export type PersonDiagnosticsRequestV1 = PersonDiagnosticPrepareRequestV1 | PersonDiagnosticReadRequestV1;
@@ -42,7 +43,7 @@ const CAPTURE_ID = /^cap_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-
 // Same durable-run id contract as person-runs-v1; captures do not create or approve a run.
 const RUN_ID = /^run_[A-Za-z0-9-]{4,60}$/;
 const TRACE_EVENT_KINDS = new Set(['model_request', 'model_response', 'model_error', 'tool_request', 'tool_response', 'tool_error', 'lifecycle']);
-const LIFECYCLE_STAGES = new Set(['run', 'trigger', 'application', 'brief', 'starting_read', 'preload', 'research', 'renderer', 'revalidation', 'audit', 'persistence', 'release', 'output_view']);
+const LIFECYCLE_STAGES = new Set(['run', 'trigger', 'application', 'brief', 'starting_read', 'preload', 'research', 'renderer', 'revalidation', 'audit', 'persistence', 'release', 'output_view', 'extraction', 'grounding']);
 const LIFECYCLE_EVENTS = new Set(['started', 'succeeded', 'failed', 'skipped']);
 const LIFECYCLE_ERROR_KINDS = new Set(['aborted', 'deadline', 'invalid_output', 'unavailable', 'unauthorized', 'not_found', 'stale_access_state', 'rate_limited', 'other']);
 const ERROR_CODES = new Set(['conflict', 'invalid_request', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable', 'timed_out']);
@@ -108,6 +109,12 @@ export function validatePersonDiagnosticsRequestV1(value: unknown): PersonDiagno
   if (target.kind === 'ask') {
     assertExactKeys(target, ['kind'], 'Diagnostics Ask target');
     return Object.freeze({ schema_version: 1, operation: 'prepare', target: Object.freeze({ kind: 'ask' }) });
+  }
+  if (target.kind === 'meeting_extraction') {
+    assertExactKeys(target, ['kind', 'source_key', 'meeting_id'], 'Diagnostics meeting target');
+    if (typeof target.source_key !== 'string' || !/^pms_[a-f0-9]{64}$/.test(target.source_key)) fail('Diagnostics source is invalid');
+    assertString(target.meeting_id, 'Diagnostics meeting id', 256);
+    return Object.freeze({ schema_version: 1, operation: 'prepare', target: Object.freeze({ kind: 'meeting_extraction', source_key: target.source_key, meeting_id: target.meeting_id }) });
   }
   if (target.kind !== 'trigger_run' || typeof target.run_id !== 'string' || !RUN_ID.test(target.run_id)) fail('Diagnostics target is invalid');
   assertExactKeys(target, ['kind', 'run_id'], 'Diagnostics run target');

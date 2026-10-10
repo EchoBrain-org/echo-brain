@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeSyncV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { canonicalJson, canonicalSha256, type JsonValue, type Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   APPROVAL_DECISION_SNAPSHOT_SURFACE_V1, isApprovalOwnerTextV1, isApprovalSignalIdV1, APPROVAL_OWNERS_MAX_V1, type MeetingApprovalTranscriptSourceV2,
@@ -273,23 +274,27 @@ export async function createApprovalCoreV1(database: Database.Database, context:
     if (row.membership_status !== 'active') return { kind: 'revoked' };
     if (row.state === 'staged') return { kind: 'staged', stage_id: approval_id };
     if (row.state === 'superseded') return { kind: 'state_drift' };
-    const frozen = context.state.readFrozenCandidateForApproval(approval_id);
-    if (frozen === undefined) throw new Error('approval proposal source is not configured in this runtime');
-    // Built from the stored extraction, so stage and reconcile produce the same bytes.
-    const { meeting, decisions } = frozen;
-    const brief = withoutProposedOwnersV1(compileDecisionBrief(`brief:${approval_id}`, meeting, decisions));
-    const payload = { brief, source: { adapter_id: meeting.provenance.source.adapter_id, instance_id: meeting.provenance.source.instance_id, external_id: meeting.provenance.external_id },
-      alternatives: [], links: null, reviewed_at: decisions.generated_at, surface: APPROVAL_SNAPSHOT_SURFACE_V1 };
-    const snapshot = { schema_version: 2, kind: 'echo-approved-decision-snapshot-v2', approval_id,
-      staged_content_sha256: canonicalSha256({ meeting, decisions } as unknown as JsonValue), final_content_sha256: canonicalSha256(payload as unknown as JsonValue),
-      payload_contract_id: 'organization-record-approval-payload-v1', approved_payload: payload };
-    // A snapshot the record codec would refuse never reaches a person.
-    validateApprovedDecisionSnapshotV2(snapshot);
-    const suggested = [...new Set(options.suggestions(row.source_key, meeting.provenance.external_id))];
-    for (const id of suggested) validateProjectIdV1(id);
-    const outbox = context.state.freezeProposal({ candidate_id: frozen.candidate_id, approved_snapshot: snapshot,
-      suggested_project_ids: suggested.sort().slice(0, APPROVAL_PROJECTS_MAX_V1) });
-    return outbox.state === 'staged' ? { kind: 'staged', stage_id: approval_id } : { kind: 'state_drift' };
+    return observeCoreRuntimeSyncV1('approval_staging', () => {
+      annotateCoreRuntimeV1({ approval_id: coreRuntimeIdentityV1('approval', approval_id), meeting_id: coreRuntimeIdentityV1('meeting', input.meeting.id) });
+      const frozen = context.state.readFrozenCandidateForApproval(approval_id);
+      if (frozen === undefined) throw new Error('approval proposal source is not configured in this runtime');
+      // Built from the stored extraction, so stage and reconcile produce the same bytes.
+      const { meeting, decisions } = frozen;
+      const brief = withoutProposedOwnersV1(compileDecisionBrief(`brief:${approval_id}`, meeting, decisions));
+      const payload = { brief, source: { adapter_id: meeting.provenance.source.adapter_id, instance_id: meeting.provenance.source.instance_id, external_id: meeting.provenance.external_id },
+        alternatives: [], links: null, reviewed_at: decisions.generated_at, surface: APPROVAL_SNAPSHOT_SURFACE_V1 };
+      const snapshot = { schema_version: 2, kind: 'echo-approved-decision-snapshot-v2', approval_id,
+        staged_content_sha256: canonicalSha256({ meeting, decisions } as unknown as JsonValue), final_content_sha256: canonicalSha256(payload as unknown as JsonValue),
+        payload_contract_id: 'organization-record-approval-payload-v1', approved_payload: payload };
+      // A snapshot the record codec would refuse never reaches a person.
+      validateApprovedDecisionSnapshotV2(snapshot);
+      const suggested = [...new Set(options.suggestions(row.source_key, meeting.provenance.external_id))];
+      for (const id of suggested) validateProjectIdV1(id);
+      const outbox = context.state.freezeProposal({ candidate_id: frozen.candidate_id, approved_snapshot: snapshot,
+        suggested_project_ids: suggested.sort().slice(0, APPROVAL_PROJECTS_MAX_V1) });
+      annotateCoreRuntimeV1({ result: outbox.state === 'staged' ? 'published' : 'superseded' });
+      return outbox.state === 'staged' ? { kind: 'staged', stage_id: approval_id } : { kind: 'state_drift' };
+    });
   }
   /** Freezes up to a page of queued proposals; true when one froze or the page was full, so more may be left now. */
   async function reconcile(ctx: { readonly signal: AbortSignal } | undefined, sourceKey: string | undefined): Promise<boolean> {
@@ -323,9 +328,7 @@ export async function createApprovalCoreV1(database: Database.Database, context:
     if (rows.length > 0) invalid('Command id was already used for another meeting review');
     return undefined;
   }
-  function decide(surface: ApprovalSurfaceV1, request: ApprovalDecisionRequestV1, authorize: () => ApprovalAuthorizationV1): ApprovalDecideResultV1 {
-    if (surface !== 'desktop' && surface !== 'slack') invalid();
-    const req = validateApprovalDecisionRequestV1(surface, request);
+  function decide(surface: ApprovalSurfaceV1, req: ApprovalDecisionRequestV1, authorize: () => ApprovalAuthorizationV1): ApprovalDecideResultV1 {
     // A nested .immediate() would degrade to a savepoint and lose both the write lock and the after-commit wake.
     if (database.inTransaction) throw new Error('Approval decisions need an idle Authority transaction');
     let result: ApprovalDecideResultV1;
@@ -459,5 +462,14 @@ export async function createApprovalCoreV1(database: Database.Database, context:
       return rendered ? 'rendered' : 'idle';
     },
   });
-  return Object.freeze({ stager: stagerFor(undefined), stagerForSource: (sourceKey: string) => stagerFor(sourceKey), processing: withPresentations, decide, proposal, proposals, ownerProposals });
+  return Object.freeze({ stager: stagerFor(undefined), stagerForSource: (sourceKey: string) => stagerFor(sourceKey), processing: withPresentations,
+    decide: (surface: ApprovalSurfaceV1, request: ApprovalDecisionRequestV1, authorize: () => ApprovalAuthorizationV1) => {
+      const req = validateApprovalDecisionRequestV1(surface, request);
+      return observeCoreRuntimeSyncV1('approval_action', () => {
+        annotateCoreRuntimeV1({ approval_id: coreRuntimeIdentityV1('approval', req.approval_id), approval_surface: surface });
+        const result = decide(surface, req, authorize);
+        annotateCoreRuntimeV1({ result: result.kind === 'decided' ? 'done' : result.kind === 'replayed' ? 'coalesced' : result.kind === 'stale' ? 'superseded' : 'competing_action' });
+        return result;
+      });
+    }, proposal, proposals, ownerProposals });
 }
