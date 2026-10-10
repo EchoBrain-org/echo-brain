@@ -667,7 +667,7 @@ export class AdmittedMeetingProcessingCycleV1 {
     fromCustody = false,
   ): Promise<AdmittedMeetingProcessingCycleResultV1> {
     const reviewPolicy = legacyRestrictedReviewerReviewPolicySnapshotV1;
-    annotateCoreRuntimeV1({ source_revision: coreRuntimeIdentityV1("source_revision", JSON.stringify([meeting.provenance.external_id, meeting.provenance.canonical_revision])) });
+    annotateCoreRuntimeV1({ meeting_id: coreRuntimeIdentityV1("meeting", meeting.id), source_revision: coreRuntimeIdentityV1("source_revision", JSON.stringify([meeting.provenance.external_id, meeting.provenance.canonical_revision])) });
     if (frozen !== undefined) {
       return this.phase(
         "approval_staging",
@@ -730,6 +730,7 @@ export class AdmittedMeetingProcessingCycleV1 {
       // A retry from custody parks whatever the cursor did, since it never moves it.
       const pulled = fromCustody ? {} : { expected_cursor: admission.source.cursor, next_cursor: nextCursor };
       const claim = attempts?.reserve(extractionKey);
+      if (claim !== undefined) annotateCoreRuntimeV1({ attempt: claim.attempt });
       if (claim?.status === "blocked") {
         // A fresh pending attempt may still be running in another process: no
         // error, no park, no cursor move, so its paid result is never raced.
@@ -815,13 +816,18 @@ export class AdmittedMeetingProcessingCycleV1 {
     return this.phase(
       "approval_staging",
       async () => {
-        const candidate: MeetingProcessingCandidateV1 = await this.options.state.stageCandidate({
-          // A retry never moves the cursor, so an import queued during its extraction must not discard the paid result.
-          admission: fromCustody ? await this.options.state.readAdmission() : admission,
-          meeting,
-          decisions,
-          review_policy: reviewPolicy,
-          next_cursor: nextCursor,
+        const candidate: MeetingProcessingCandidateV1 = await observeCoreRuntimeV1("candidate_persist", async () => {
+          const saved = await this.options.state.stageCandidate({
+            // A retry never moves the cursor, so an import queued during its extraction must not discard the paid result.
+            admission: fromCustody ? await this.options.state.readAdmission() : admission,
+            meeting,
+            decisions,
+            review_policy: reviewPolicy,
+            next_cursor: nextCursor,
+          });
+          annotateCoreRuntimeV1({ result: saved.disposition === 'no_signals' ? 'empty' : 'published',
+            ...(saved.disposition === 'actionable' ? { approval_id: coreRuntimeIdentityV1('approval', saved.approval_id) } : {}) });
+          return saved;
         });
         if (candidate.disposition !== "actionable") {
           await this.options.stager.reconcileSuperseded(operationContext(signal));
@@ -858,6 +864,7 @@ export class AdmittedMeetingProcessingCycleV1 {
     nextCursor: string | undefined,
     signal: AbortSignal | undefined,
   ): Promise<AdmittedMeetingProcessingCycleResultV1> {
+    annotateCoreRuntimeV1({ approval_id: coreRuntimeIdentityV1("approval", candidate.approval_id) });
     let staged: Awaited<ReturnType<ApprovalWorkflowStagerV1["stage"]>>;
     try {
       staged = await this.options.stager.stage(

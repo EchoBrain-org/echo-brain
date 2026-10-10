@@ -45,6 +45,41 @@ function fixture(limits?: CreatePersonDiagnosticsOptionsV1['limits']) {
 }
 
 describe('private diagnostics for product requests', () => {
+  it('selects only the exact owner/source/meeting once and keeps failed grounding private behind the read fence', async () => {
+    const f = fixture();
+    const target = { kind: 'meeting_extraction' as const, source_key: `pms_${'a'.repeat(64)}`, meeting_id: 'meeting-1' };
+    const receipt = await f.prepare(target);
+    await expect(f.prepare(target)).rejects.toMatchObject({ code: 'conflict' });
+    const fence = vi.fn(async () => undefined);
+    for (const actor of [actors.other, actors.rejoined, actors.organization]) {
+      expect(f.application.claimMeeting({ actor, target, fence })).toBeUndefined();
+      await expect(f.read(receipt.capture_id, actor === actors.other ? 'other' : actor === actors.rejoined ? 'rejoined' : 'organization')).rejects.toMatchObject({ code: 'not_found' });
+    }
+    for (const wrong of [{ ...target, meeting_id: 'meeting-2' }, { ...target, source_key: `pms_${'b'.repeat(64)}` }]) {
+      expect(f.application.claimMeeting({ actor: actors.owner, target: wrong, fence })).toBeUndefined();
+    }
+    expect(await f.read(receipt.capture_id)).toMatchObject({ status: 'prepared' });
+    const handle = f.application.claimMeeting({ actor: actors.owner, target, fence })!;
+    expect(f.application.claimMeeting({ actor: actors.owner, target, fence })).toBeUndefined();
+    handle.record({ kind: 'lifecycle', stage: 'grounding', event: 'failed', data: { quote: 'PRIVATE QUOTE', source_text: 'PRIVATE SOURCE' } });
+    handle.fail(new Error('provider private error'));
+    expect(await f.read(receipt.capture_id, 'renewed')).toMatchObject({ status: 'failed', trace: { events: [{ data: { quote: 'PRIVATE QUOTE', source_text: 'PRIVATE SOURCE' } }] } });
+    fence.mockRejectedValueOnce(new AuthorityOperationError('stale_access_state', 'Access changed'));
+    const revoked = await f.read(receipt.capture_id);
+    expect(revoked).not.toHaveProperty('trace');
+    await expect(f.read(receipt.capture_id)).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('does not claim expired or closed meeting selections, including a broken observation clock', async () => {
+    const f = fixture({ ttl_ms: 20 });
+    const target = { kind: 'meeting_extraction' as const, source_key: `pms_${'a'.repeat(64)}`, meeting_id: 'meeting-1' };
+    const input = { actor: actors.owner, target, fence: async () => undefined };
+    await f.prepare(target);
+    f.breakClock(); expect(f.application.claimMeeting(input)).toBeUndefined(); f.repairClock();
+    f.advance(21); expect(f.application.claimMeeting(input)).toBeUndefined();
+    await f.prepare(target); f.application.close(); expect(f.application.claimMeeting(input)).toBeUndefined();
+  });
+
   it('prepares without work, hides running content, and releases exact snapshots only after a fresh fence on every read', async () => {
     const f = fixture();
     const receipt = await f.prepare();

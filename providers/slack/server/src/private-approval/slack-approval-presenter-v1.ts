@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeSyncV1, observeCoreRuntimeV1, type CoreRuntimeDetailV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { canonicalJson, canonicalSha256, type JsonValue } from "@echo-brain/federation-protocol";
 import type { SlackBotTokenSourceV1 } from "../organization-control-plane/application/slack-bot-token-source-v1.js";
 import type { StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
@@ -227,8 +228,15 @@ export function createSlackApprovalPresenterV1(options: {
   const backoff = (row: PresentationRow, terminal = false) => {
     const attempts = terminal ? MAX_ATTEMPTS : row.attempts + 1;
     const at = now();
-    backoffUpdate.run(attempts, MAX_ATTEMPTS, attempts, attempts >= MAX_ATTEMPTS ? null : nextRetryAt(at, attempts), asIso(at), row.approval_id);
+    observeCoreRuntimeSyncV1("approval_delivery", () => {
+      backoffUpdate.run(attempts, MAX_ATTEMPTS, attempts, attempts >= MAX_ATTEMPTS ? null : nextRetryAt(at, attempts), asIso(at), row.approval_id);
+      annotateCoreRuntimeV1({ approval_surface: "slack", attempt: attempts, result: attempts >= MAX_ATTEMPTS ? "failed" : "retry_pending" });
+    }, { correlation: { approval_id: coreRuntimeIdentityV1("approval", row.approval_id) } });
   };
+  const cannotRepresent = (row: PresentationRow) => observeCoreRuntimeSyncV1("approval_delivery", () => {
+    unrepresentable.run(asIso(now()), row.approval_id);
+    annotateCoreRuntimeV1({ approval_surface: "slack", result: "unrepresentable" });
+  }, { correlation: { approval_id: coreRuntimeIdentityV1("approval", row.approval_id) } });
   const card = (proposal: ApprovalProposalViewV1): SlackApprovalCardV4 => buildSlackApprovalCardV4({
     approval_id: proposal.approval_id,
     snapshot_sha256: proposal.snapshot_sha256,
@@ -245,6 +253,16 @@ export function createSlackApprovalPresenterV1(options: {
   const pendingActive = (proposal: ApprovalProposalViewV1 | undefined): proposal is ApprovalProposalViewV1 => proposal !== undefined && proposal.reviewer_active && proposal.status === "pending";
   const isAborted = (signal: AbortSignal) => signal.aborted;
   const provider = (target: SlackApprovalTargetV1): SlackApprovalPosterV1 => options.poster(target);
+
+  // Only actual delivery attempts emit spans; idle reconciliation and polling stay quiet.
+  const deliver = <T extends { kind: string }>(row: PresentationRow,
+    step: NonNullable<CoreRuntimeDetailV1["delivery_step"]>, call: () => Promise<T>): Promise<T> => observeCoreRuntimeV1("approval_delivery", async () => {
+      annotateCoreRuntimeV1({ approval_surface: "slack", delivery_step: step, attempt: row.attempts + 1 });
+      const result = await call();
+      annotateCoreRuntimeV1({ result: result.kind === "uncertain" ? "uncertain"
+        : result.kind === "retry_allowed" ? "retry_pending" : result.kind === "done" ? "done" : "completed" });
+      return result;
+    }, { correlation: { approval_id: coreRuntimeIdentityV1("approval", row.approval_id) } });
 
   return Object.freeze({
     async reconcile(signal: AbortSignal): Promise<"rendered" | "idle" | "uncertain"> {
@@ -268,10 +286,10 @@ export function createSlackApprovalPresenterV1(options: {
           if (!pendingActive(proposal)) { unrepresentable.run(asIso(now()), row.approval_id); changed = true; continue; }
           try { card(proposal); } catch (error) {
             if (!(error instanceof Error) || !error.message.includes("exceeds Slack limits")) throw error;
-            unrepresentable.run(asIso(now()), row.approval_id); changed = true; continue;
+            cannotRepresent(row); changed = true; continue;
           }
           try {
-            const opened = await provider(target).openDirectMessage(target.slack_subject_id, signal);
+            const opened = await deliver(row, "open_dm", () => provider(target).openDirectMessage(target.slack_subject_id, signal));
             if (!options.targetCurrent(target) || opened.kind !== "opened") { backoff(row); continue; }
             if (!pendingActive(options.core.proposal(row.approval_id))) {
               if (finishUnposted.run(opened.channel_id, asIso(now()), row.approval_id).changes === 1) changed = true;
@@ -297,7 +315,7 @@ export function createSlackApprovalPresenterV1(options: {
             if (beginMarker.run(markerStartedAt, markerStartedAt, row.approval_id).changes !== 1) continue;
             const inFlight = { ...row, marker_state: "in_flight" as const, marker_started_at: markerStartedAt };
             try {
-              const posted = await provider(target).postMarker({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id }, signal);
+              const posted = await deliver(row, "post_marker", () => provider(target).postMarker({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id! }, signal));
               if (!options.targetCurrent(target)) { backoff(inFlight); uncertain = true; continue; }
               if (posted.kind === "posted") {
                 if (persistMarker.run(posted.provider_message_ts, asIso(now()), row.approval_id).changes !== 1) { uncertain = true; continue; }
@@ -312,7 +330,7 @@ export function createSlackApprovalPresenterV1(options: {
           } else {
             try {
               if (row.marker_started_at === null) throw new Error("in-flight marker has no durable start time");
-              const reconciled = await provider(target).reconcileMarker({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id, post_started_at: row.marker_started_at, reconciliation_started_at: asIso(now()) }, signal);
+              const reconciled = await deliver(row, "reconcile_marker", () => provider(target).reconcileMarker({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id!, post_started_at: row.marker_started_at!, reconciliation_started_at: asIso(now()) }, signal));
               if (!options.targetCurrent(target)) { backoff(row); uncertain = true; continue; }
               if (reconciled.kind === "posted") {
                 if (persistMarker.run(reconciled.provider_message_ts, asIso(now()), row.approval_id).changes !== 1) { uncertain = true; continue; }
@@ -330,7 +348,7 @@ export function createSlackApprovalPresenterV1(options: {
           const publishedCard = shows === "open" ? card(liveProposal!) : buildClosedApprovalCardV4({ title: liveProposal?.title ?? "Meeting", outcome: shows, surface: liveProposal?.decided_on ?? "desktop", audience_label: liveProposal?.project_ids.length ? "Projects" : "Only me" });
           const message = database.prepare("SELECT dm_channel_id,message_ts FROM authority_approval_presentations_v1 WHERE approval_id=? AND surface='slack'").get(row.approval_id) as { dm_channel_id: string; message_ts: string };
           try {
-            const published = await provider(target).publish({ approval_id: row.approval_id, dm_channel_id: message.dm_channel_id, provider_message_ts: message.message_ts, card: publishedCard }, signal);
+            const published = await deliver(row, "publish_card", () => provider(target).publish({ approval_id: row.approval_id, dm_channel_id: message.dm_channel_id, provider_message_ts: message.message_ts, card: publishedCard }, signal));
             if (!options.targetCurrent(target) || published.kind !== "done") { backoff(row); uncertain = true; continue; }
             persistCard.run(shows, canonicalSha256(publishedCard as unknown as JsonValue), asIso(now()), row.approval_id); changed = true;
           } catch (error) {
@@ -344,7 +362,7 @@ export function createSlackApprovalPresenterV1(options: {
         if (shows === row.shows && row.card_sha256 !== null) continue;
         const redraw = shows === "open" ? card(proposal) : buildClosedApprovalCardV4({ title: proposal.title, outcome: shows, surface: proposal.decided_on ?? "desktop", audience_label: proposal.project_ids.length ? "Projects" : "Only me" });
         try {
-          const published = await provider(target).publish({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id, provider_message_ts: row.message_ts, card: redraw }, signal);
+          const published = await deliver(row, "publish_card", () => provider(target).publish({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id!, provider_message_ts: row.message_ts!, card: redraw }, signal));
           if (!options.targetCurrent(target) || published.kind !== "done") { backoff(row); uncertain = true; continue; }
           persistCard.run(shows, canonicalSha256(redraw as unknown as JsonValue), asIso(now()), row.approval_id); changed = true;
         } catch (error) {
