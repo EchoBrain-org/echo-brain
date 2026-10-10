@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { LlmDecisionProcessor } from '@echo-brain/organization-processing/llm/llm-decision-processor';
+import type { LlmProviderClient, StructuredGenerationRequest } from '@echo-brain/organization-processing/llm/llm-provider';
 import { createGranolaMcpV1, granolaMcpMeetingContentV1, parseGranolaMeetingsV1, type GranolaMeetingV1 } from '../src/granola-mcp-v1.js';
 import { normalizeGranolaMeetingV1 } from '../src/granola-meeting-normalizer-v1.js';
 
@@ -35,7 +37,7 @@ describe('verified Granola MCP contract', () => {
     const transcript = { text: 'Microphone: agree. System audio: ship.', created_at: '2026-10-05T20:00:00.000Z' };
     const content = granolaMcpMeetingContentV1(detail, transcript);
     const normalized = normalizeGranolaMeetingV1(content, source, '2026-10-06T00:00:00.000Z');
-    expect(normalized.participants).toEqual([{ id: expect.stringMatching(/^name:sha256:/), display_name: 'Pat', roles: ['attendee'] }]);
+    expect(normalized.participants).toEqual([{ id: expect.stringMatching(/^name:sha256:/), display_name: 'Pat' }]);
     expect(normalized.content.map(block => [block.id, block.kind, block.origin, block.text])).toEqual([
       [`${id}:notes`, 'note', 'human', 'Owner notes'],
       [`${id}:summary`, 'summary', 'source_ai', 'Ship <pilot>.'],
@@ -61,16 +63,46 @@ describe('verified Granola MCP contract', () => {
   ])('reads the meeting start from the date label %s without guessing', (date, time) => {
     expect(normalizeMcp({ ...listed, date }).time).toEqual(time);
   });
-  it('structures known participants without leaving their text in meeting content', () => {
-    const normalized = normalizeMcp({ ...listed, summary: 'Ship it.',
-      known_participants: 'Zhen Ye (note creator) from EchoBrain <Zhen@EchoBrain.org>, Pat, Daniel Borcherding <daniel.b@gmail.com>, Ops <ops,eng@example.test>' });
-    expect(normalized.participants.map(person => [person.display_name, person.identities ?? []])).toEqual([
-      ['Zhen Ye', [{ kind: 'email', value: 'zhen@echobrain.org' }]],
-      ['Pat', []],
-      ['Daniel Borcherding', [{ kind: 'email', value: 'daniel.b@gmail.com' }]],
-      ['Ops', [{ kind: 'email', value: 'ops,eng@example.test' }]],
+  it('structures known participants per <email> entry, with no role and no meeting content', () => {
+    const known = 'Zhen Ye (note creator) from Acme, Inc. <Zhen@Acme.com>, Smith, John <john@x.com>, Pat Lee <pat@y.com>, Ops <not an email>, Dana';
+    const normalized = normalizeMcp({ ...listed, summary: 'Ship it.', known_participants: known });
+    expect(normalized.participants.map(person => [person.display_name, person.identities ?? [], person.roles])).toEqual([
+      ['Zhen Ye', [{ kind: 'email', value: 'zhen@acme.com' }], undefined],
+      ['Smith, John', [{ kind: 'email', value: 'john@x.com' }], undefined],
+      ['Pat Lee', [{ kind: 'email', value: 'pat@y.com' }], undefined],
+      ['Ops', [], undefined],
+      ['Dana', [], undefined],
     ]);
     expect(normalized.content).toEqual([expect.objectContaining({ kind: 'summary', text: 'Ship it.' })]);
+    expect(normalized.extensions?.['granola']).toMatchObject({ provider_fields: { mcp_known_participants: known } });
+  });
+  it('prepares a real-shaped meeting for extraction with its date, participants, and N/S/T units', async () => {
+    const detail: GranolaMeetingV1 = { ...listed, title: 'Beta launch', known_participants: 'Zhen Ye (note creator) from Acme <zhen@acme.com>, Pat Lee <pat@y.com>',
+      private_notes: '- Ship beta Friday\n- Pat owns the FAQ', summary: '### Decisions\n- Ship the beta on Friday\n\n### Next steps\n- Pat drafts the FAQ' };
+    const transcript = { text: "Microphone: We ship Friday.\n\nSystem audio: Agreed, I'll draft the FAQ.\n\nMicrophone: Great.", created_at: '2026-10-03T03:40:00.000Z' };
+    const normalized = normalizeGranolaMeetingV1(granolaMcpMeetingContentV1(detail, transcript), source, '2026-10-06T00:00:00.000Z');
+    const requests: StructuredGenerationRequest[] = [];
+    const client: LlmProviderClient = { provider: 'fixture', verifyModel: async () => undefined,
+      generateStructured: async (request) => { requests.push(request); return { content: '{"signals":[]}' }; } };
+    const processor = new LlmDecisionProcessor({ adapter_id: 'llm', instance_id: 'local', settings: { model: 'fixture-model' } }, { client, validateProviderConfig: () => [], identityEndpoint: null });
+    await processor.extract(normalized, { processor_version: processor.identity.version, input_fingerprint: normalized.provenance.canonical_revision });
+    expect(requests[0]?.userPrompt.split('\n')).toEqual([
+      'Meeting: Beta launch',
+      'Meeting date: 2026-10-02 (Friday), time zone America/Los_Angeles. Resolve relative dates from this date.',
+      'Participants (may be incomplete): Zhen Ye; Pat Lee',
+      'Speaker labels are participant names when known; otherwise a recording label, which may cover several people.',
+      '',
+      '### Notes written by people',
+      '[N1] Ship beta Friday',
+      '[N2] Pat owns the FAQ',
+      "### Summary written by a tool's AI (cite only when nothing else supports a signal)",
+      '[S1] (Decisions) Ship the beta on Friday',
+      '[S2] (Next steps) Pat drafts the FAQ',
+      '### Transcript',
+      '[T1] Microphone: We ship Friday.',
+      "[T2] System audio: Agreed, I'll draft the FAQ.",
+      '[T3] Microphone: Great.',
+    ]);
   });
   it('pins the requested meeting ID and refuses incomplete, over-limit, duplicated, or redirected identities', async () => {
     await expect(fixture(meeting()).adapter.meeting(other)).rejects.toMatchObject({ code: 'not_found' });

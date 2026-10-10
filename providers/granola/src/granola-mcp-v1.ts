@@ -1,4 +1,5 @@
 import { XMLParser } from 'fast-xml-parser';
+import { isCanonicalPersonEmail } from '@echo-brain/organization-authority-kernel/shared/person-email-rules';
 import { createPersonProviderValidationV1, type PersonProviderV1 } from '@echo-brain/provider-runtime/person-provider-v1';
 import { createPersonProviderMcpTransportV1 } from '@echo-brain/provider-runtime/person-provider-mcp-transport-v1';
 import type { PersonProviderAuthenticatedFetchV1 } from '@echo-brain/provider-runtime/person-provider-json-transport-v1';
@@ -145,28 +146,47 @@ function meetingStart(label: string): { started_at: string; timezone: string } |
   return { started_at: `${year}-${pad(month + 1)}-${pad(day)}T${pad(hour24)}:${pad(minute)}:00${zone[1]}`, timezone: zone[0] };
 }
 
-type GranolaAttendeeV1 = string | { name: string; email: string };
-
-/** `Name (note creator) from Org <email>, Name` → attendee inputs; commas inside `<…>` do not split. */
-function knownParticipants(value: string): GranolaAttendeeV1[] {
-  return (value.match(/(?:[^,<]|<[^>]*>?)+/g) ?? []).flatMap((entry): GranolaAttendeeV1[] => {
-    const match = /^(.*?)\s*<([^<>\s@]+@[^<>\s@]+)>\s*$/s.exec(entry);
-    const name = (match?.[1] ?? entry).replace(/\(note creator\)/gi, '').replace(/\s+from\s+.*$/s, '').trim();
-    const email = match?.[2];
-    if (email === undefined) return name === '' ? [] : [name];
-    return [{ name, email }];
-  });
+/** A name without Granola's `(note creator)` marker or a trailing ` from <Org>`. */
+function participantName(value: string): string {
+  return value.replace(/\(note creator\)/gi, '').replace(/\s+from\s+.*$/s, '').trim();
 }
 
-/** Map one MCP meeting into the shared format. Transcript audio labels stay verbatim; they prove no identity. */
+/**
+ * `Name (note creator) from Org <email>, Name <email>, Name` → reported people.
+ * Each entry ends at its `>`, so commas inside names or organizations do not
+ * split it; names after the last `>` are split on commas. An email is kept only
+ * when it is a canonical person email, so a malformed one never becomes an identity.
+ */
+function knownParticipants(value: string): { name: string; email?: string }[] {
+  const people: { name: string; email?: string }[] = [];
+  let from = 0;
+  for (const match of value.matchAll(/<([^<>]*)>/g)) {
+    const name = participantName(value.slice(from, match.index).replace(/^\s*,/, ''));
+    const email = (match[1] ?? '').trim().toLowerCase();
+    if (isCanonicalPersonEmail(email)) people.push({ name, email });
+    else if (name !== '') people.push({ name });
+    from = match.index + match[0].length;
+  }
+  for (const entry of value.slice(from).split(',')) {
+    const name = participantName(entry);
+    if (name !== '') people.push({ name });
+  }
+  return people;
+}
+
+/**
+ * Map one MCP meeting into the shared format. Known participants and transcript
+ * audio labels prove neither identity nor attendance: the people get no role,
+ * and the labels stay verbatim text.
+ */
 export function granolaMcpMeetingContentV1(meeting: GranolaMeetingV1, transcript?: Readonly<{ text: string; created_at: string }>): GranolaMeetingContentInputV1 {
   return {
     id: meeting.id, title: meeting.title, web_url: meeting.url,
     ...meetingStart(meeting.date),
-    attendees: knownParticipants(meeting.known_participants),
+    reported_participants: knownParticipants(meeting.known_participants),
     ...(meeting.private_notes === undefined ? {} : { private_notes_markdown: meeting.private_notes }),
     ...(meeting.summary === undefined ? {} : { summary_markdown: meeting.summary }),
-    provider_fields: { mcp_date_label: meeting.date },
+    provider_fields: { mcp_date_label: meeting.date, mcp_known_participants: meeting.known_participants },
     ...(transcript === undefined ? {} : { created_at: transcript.created_at, transcript: [{ text: transcript.text }] }),
   };
 }

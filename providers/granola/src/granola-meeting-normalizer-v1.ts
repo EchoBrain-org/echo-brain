@@ -55,8 +55,12 @@ export interface GranolaMeetingContentInputV1 extends GranolaNoteMetadataV1 {
   /** IANA zone of `started_at`. */
   timezone?: string | null;
   transcript?: GranolaTranscriptItem[] | null;
-  /** Names, emails, or `{ id?, name?, email? }` objects reported for the meeting. */
   attendees?: unknown;
+  /**
+   * `{ name?, email? }` people Granola reports for the meeting. They prove
+   * neither identity nor attendance, so they become participants with no role.
+   */
+  reported_participants?: unknown;
   calendar_event?: unknown;
   folder_membership?: unknown;
   web_url?: string | null;
@@ -128,6 +132,7 @@ function sourceRevision(note: GranolaMeetingContentInputV1): string {
     timezone: note.timezone,
     transcript: note.transcript,
     attendees: note.attendees,
+    reported_participants: note.reported_participants,
     calendar_event: note.calendar_event,
     folder_membership: note.folder_membership,
     provider_fields: note.provider_fields,
@@ -378,6 +383,9 @@ function noteParticipants(note: GranolaMeetingContentInputV1): MeetingParticipan
 
   if (Array.isArray(note.attendees)) {
     for (const attendee of note.attendees) addCandidate(attendee, "attendee");
+  }
+  if (Array.isArray(note.reported_participants)) {
+    for (const person of note.reported_participants) addCandidate(person);
   }
   if (isPlainObject(note.calendar_event)) {
     for (const field of ["attendees", "invitees"] as const) {
