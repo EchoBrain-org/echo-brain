@@ -174,6 +174,16 @@ export class SqlitePersonMeetingIntakeV1 {
       this.db.prepare('DELETE FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=?').run(setting.source_key, externalId);
     }
   }
+  /**
+   * The checkpoint a processing advance moves to when imports were queued after its pull: the pull's next checkpoint with
+   * the current queue minus what that pull consumed. Undefined unless the only change since the pull is appended imports,
+   * so a cancel, a folder change or any other edit still refuses the advance.
+   */
+  rebase(transition: { readonly expected_cursor: string; readonly next_cursor: string; readonly current_cursor: string }): string | undefined {
+    const pulled = this.cursor.read(transition.expected_cursor), next = this.cursor.read(transition.next_cursor), now = this.cursor.read(transition.current_cursor);
+    if (this.cursor.write({ ...pulled, manual: [] }) !== this.cursor.write({ ...now, manual: [] }) || pulled.manual.some((id, index) => now.manual[index] !== id)) return undefined;
+    return this.cursor.write({ ...next, manual: now.manual.filter(id => next.manual.includes(id) || !pulled.manual.includes(id)) });
+  }
   private isMember(person: MeetingIntakePersonV1, projectId: string): boolean {
     try { this.currentPerson(person, projectId); return true; }
     catch (error) { if (error instanceof AuthorityOperationError && error.code === 'unauthorized') return false; throw error; }

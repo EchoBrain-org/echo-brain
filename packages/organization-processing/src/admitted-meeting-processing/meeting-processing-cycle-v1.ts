@@ -52,7 +52,8 @@ export interface AdmittedMeetingProcessingAdmissionV1 {
 /**
  * The Authority-owned persistence boundary. `advanceCursor` must compare the
  * supplied cursor with the durable current cursor, so a stale runner can never
- * overwrite a newer checkpoint.
+ * overwrite a newer checkpoint. Staging and advancing may accept a checkpoint
+ * that has only gained appended imports since the pull, keeping them queued.
  */
 export interface AuthorityMeetingProcessingStateV1 {
   readAdmission(): Promise<AdmittedMeetingProcessingAdmissionV1>;
@@ -76,7 +77,8 @@ export interface AuthorityMeetingProcessingStateV1 {
   /**
    * Durably parks a retained revision whose extraction failed, under its exact
    * attempt-ledger key, and returns the stage it holds: the stored stage is kept
-   * while the key and attempt are unchanged. Never moves the cursor.
+   * while the key and attempt are unchanged. Never moves the cursor; parks
+   * nothing when the cursor changed since the pull by more than appended imports.
    */
   holdExtraction(input: HoldExtractionInputV1): Promise<ExtractionFailureStageV1>;
   /** This source's parked revisions, oldest first. */
@@ -92,6 +94,8 @@ export interface HoldExtractionInputV1 {
   readonly key: ExtractionAttemptKeyV1;
   readonly attempt: number;
   readonly failure_stage: ExtractionFailureStageV1;
+  /** The cursor the revision was pulled at; nothing is parked if it has since changed by more than appended imports. */
+  readonly expected_cursor?: string;
 }
 
 /** A parked revision: identifiers and an allowlisted stage only, never meeting text. */
@@ -691,12 +695,14 @@ export class AdmittedMeetingProcessingCycleV1 {
       // another paid attempt for the same actual review input. Reserve only
       // after source custody and both frozen-result reuse paths have run.
       const attempts = this.options.extraction_attempts;
+      // A retry from custody parks whatever the cursor did, since it never moves it.
+      const pulledAt = fromCustody ? undefined : admission.source.cursor;
       const claim = attempts?.reserve(extractionKey);
       if (claim?.status === "blocked") {
         // No model call: a crash or failure after an earlier attempt converges
         // here and parks the revision again; a poll also moves intake past it.
         const stage = await this.options.state.holdExtraction({
-          meeting, key: extractionKey, attempt: claim.attempt, failure_stage: blockedExtractionStageV1(claim),
+          meeting, key: extractionKey, attempt: claim.attempt, failure_stage: blockedExtractionStageV1(claim), expected_cursor: pulledAt,
         });
         return { held: await this.finishHeld(stage, admission, nextCursor) };
       }
@@ -735,7 +741,7 @@ export class AdmittedMeetingProcessingCycleV1 {
         let stage: ExtractionFailureStageV1;
         try {
           stage = await this.options.state.holdExtraction({
-            meeting, key: extractionKey, attempt: claim.attempt,
+            meeting, key: extractionKey, attempt: claim.attempt, expected_cursor: pulledAt,
             failure_stage: classifyExtractionFailureStageV1(error, { aborted, received_output: receivedOutput }),
           });
         } catch { complete(); throw error; }
@@ -867,8 +873,9 @@ export class AdmittedMeetingProcessingCycleV1 {
     if (nextCursor === undefined || nextCursor === admission.source.cursor) {
       return { kind: "held", stage, cursor_advanced: false };
     }
-    // A cursor that changed during extraction (another import was queued)
-    // leaves the parked revision at the head; the next poll parks it again.
+    // Imports queued during extraction stay queued behind the advance. Any
+    // other cursor change leaves the revision at the head and the next poll
+    // parks it again, unless its import was cancelled (then nothing is parked).
     const advanced = await this.advanceCursor({
       expected_cursor: admission.source.cursor,
       next_cursor: nextCursor,

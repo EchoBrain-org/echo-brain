@@ -474,10 +474,11 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(await f.readers()).toEqual(['owner', 'reader-b']);
   });
-  it('grants nothing when the import is cancelled while its admitted meeting is being extracted', async () => {
+  it.each([false, true])('grants, stages and parks nothing when the import is cancelled while its admitted meeting is being extracted (extraction fails: %s)', async (fails) => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     const [queued] = (await f.call(runtime, { operation: 'home' })).sources;
+    if (fails) f.failNextExtraction();
     f.duringExtract(async () => {
       // The meeting is already admitted; the cancel lands before the cursor advance.
       expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(1);
@@ -488,7 +489,28 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.intake.checkpoint(queued!.source_key).manual).toEqual([]);
     expect(f.count('authority_person_meeting_suggestions_v1')).toBe(0);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([]);
+    expect(f.held()).toEqual([]);
     expect(await f.readers()).toEqual(['owner']);
+  });
+  it.each([false, true])('keeps the paid result and an import queued during its extraction (extraction fails: %s)', async (fails) => {
+    const f = await fixture(), runtime = f.create(), b = '00000000-0000-4000-8000-000000000004'; f.grantProject(); f.grantProject(projectB);
+    const poll = async () => { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); return (await f.call(runtime, { operation: 'home' })).sources[0]!; };
+    const reviews = async () => (await f.call(runtime, { operation: 'reviews' })).reviews.length;
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    if (fails) f.failNextExtraction();
+    f.duringExtract(async () => { f.duringExtract(undefined); await f.call(runtime, { operation: 'import', meeting_id: b, project_id: projectB, retain: true }); });
+    const source = await poll();
+    expect(source.pending_imports).toEqual([b]);
+    expect(f.extracted()).toBe(1);
+    expect(await reviews()).toBe(fails ? 0 : 1);
+    expect(f.held()).toEqual(fails ? [expect.objectContaining({ external_id: id, failure_stage: 'unknown' })] : []);
+    // The advance consumed A's import only: B's project choice waits for B.
+    expect(f.intake.suggestions(source.source_key, id)).toEqual([project]);
+    expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(1);
+    expect((await poll()).pending_imports).toEqual([]);
+    expect(f.extracted()).toBe(2);
+    expect(await reviews()).toBe(fails ? 1 : 2);
   });
   it('consumes an import whose extraction failed and records its project choice, as for a staged one', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
@@ -585,6 +607,8 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.ledger.authorizeRetry({ key, expected_attempt: 1, expected_outcome: 'failed' })).toBe('authorized');
     expect(await error()).toBe(heldError(id, 'unknown', 'A retry is authorized and runs on the next check.'));
     const pulls = f.pulls();
+    // An import queued during the retry's model call does not discard its paid result.
+    f.duringExtract(async () => { f.duringExtract(undefined); await f.call(runtime, { operation: 'import', meeting_id: b, project_id: null, retain: true }); });
     await poll();
     expect(f.pulls()).toBe(pulls); expect(f.extracted()).toBe(3);
     expect(f.held()).toEqual([heldB]);
