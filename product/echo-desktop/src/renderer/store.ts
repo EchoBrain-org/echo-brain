@@ -2168,6 +2168,17 @@ function patchFile(mine: number, id: number, patch: Partial<ProjectFile>): void 
   if (sheet) setNewProject({ files: sheet.files.map(file => file.id === id ? { ...file, ...patch } : file), confirmClose: false }, mine);
 }
 
+/**
+ * Uploads a document, or with no upload resends the original the client kept
+ * of it under the same request (Try again), not whatever its path holds now.
+ */
+function sendDocument(account: Expect, request_id: string, audience: Audience,
+  upload: { file: FileHandle; title: string; project_ids: readonly string[] } | null): Promise<Result<Receipt>> {
+  return upload
+    ? rpc('documents.upload', { expect: account, request_id, file_handle: upload.file.handle, title: upload.title, audience, project_ids: upload.project_ids })
+    : rpc('documents.retry', { expect: account, request_id, audience });
+}
+
 /** Saves a file for the project's members, or resends the copy the client kept of one (Try again). */
 async function saveFile(mine: number, id: number, retrying: boolean): Promise<void> {
   const account = expect();
@@ -2177,11 +2188,7 @@ async function saveFile(mine: number, id: number, retrying: boolean): Promise<vo
   const project_id = sheet.project.project_id;
   const audience: Audience = { kind: 'project', project_id };
   patchFile(mine, id, { status: 'saving', failure: undefined });
-  const result = retrying
-    ? await rpc('documents.retry', { expect: account, request_id: file.requestId, audience })
-    : await rpc('documents.upload', {
-      expect: account, request_id: file.requestId, file_handle: file.handle!.handle, title: file.name, audience, project_ids: [project_id],
-    });
+  const result = await sendDocument(account, file.requestId, audience, retrying ? null : { file: file.handle!, title: file.name, project_ids: [project_id] });
   const current = newProjectSheet(mine)?.files.find(entry => entry.id === id);
   if (!current) return;
   if (!result.ok) {
@@ -3096,17 +3103,9 @@ export async function sendCompose(): Promise<void> {
   setCompose({ ...compose, status: 'sending', picking: null, failure: undefined, confirmNew: false, notice: undefined });
   const audience = audienceOf(compose);
   const project_ids = filedIn(compose);
-  let result: Result<Receipt>;
-  if (compose.file && retrying) {
-    // The client kept the original: resend it, not whatever the path holds now.
-    result = await rpc('documents.retry', { expect: account, request_id: compose.requestId, audience });
-  } else if (compose.file) {
-    result = await rpc('documents.upload', {
-      expect: account, request_id: compose.requestId, file_handle: compose.file.handle, title: compose.file.name, audience, project_ids,
-    });
-  } else {
-    result = await rpc('notes.submit', { expect: account, request_id: compose.requestId, text: compose.text, audience, project_ids });
-  }
+  const result = compose.file
+    ? await sendDocument(account, compose.requestId, audience, retrying ? null : { file: compose.file, title: compose.file.name, project_ids })
+    : await rpc('notes.submit', { expect: account, request_id: compose.requestId, text: compose.text, audience, project_ids });
   const current = state.compose;
   if (current?.seq !== compose.seq) return;
   if (!result.ok) {
