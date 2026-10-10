@@ -3,18 +3,20 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, posix, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   JOB_INPUTS,
+  JOB_OUTPUTS,
   REQUIRED_CHECK,
+  TESTED_TREE,
   gitIn,
   selectJobs,
-  selectPullRequestJobs,
   verifyMainPush,
 } from "../../tools/ci-select-jobs.mjs";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const WORKFLOW = readFileSync(resolve(REPO, ".github/workflows/ci.yml"), "utf8");
+const REPOSITORY = "EchoBrain-org/echo-brain";
 const EVERY_JOB = {
   check: true,
   docs: false,
@@ -33,9 +35,50 @@ const GIT_ENV = {
 };
 
 const repositories: string[] = [];
-afterEach(() => {
+afterAll(() => {
   for (const repository of repositories.splice(0)) rmSync(repository, { recursive: true, force: true });
 });
+
+type Fixture = Record<string, any>;
+
+const checksPath = (commit: string) =>
+  `/repos/${REPOSITORY}/commits/${commit}/check-runs?check_name=CI%20required%20checks&filter=latest&per_page=100`;
+const annotationsPath = (id: number) => `/repos/${REPOSITORY}/check-runs/${id}/annotations?per_page=100`;
+
+// A green `CI required checks` on `commit` that recorded testing `tree`.
+function greenCheck(commit: string, tree: string, id = 7): Fixture {
+  return {
+    [checksPath(commit)]: {
+      total_count: 1,
+      check_runs: [{
+        id, name: REQUIRED_CHECK, head_sha: commit, app: { id: 15368, slug: "github-actions" },
+        status: "completed", conclusion: "success",
+      }],
+    },
+    [annotationsPath(id)]: [
+      { annotation_level: "notice", title: "", message: "Runner image notice" },
+      { annotation_level: "notice", title: TESTED_TREE, message: tree },
+    ],
+  };
+}
+
+// Serves each fixture path, which may be a value, an Error, or a function.
+function githubFixture(fixture: Fixture) {
+  const requested: string[] = [];
+  const delays: number[] = [];
+  return {
+    requested,
+    delays,
+    api: async (path: string) => {
+      requested.push(path);
+      const value = fixture[path];
+      if (value instanceof Error) throw value;
+      if (value === undefined) throw new Error(`unexpected ${path}`);
+      return typeof value === "function" ? value() : structuredClone(value);
+    },
+    sleep: async (ms: number) => { delays.push(ms); },
+  };
+}
 
 function write(root: string, path: string, content: string) {
   mkdirSync(dirname(join(root, path)), { recursive: true });
@@ -67,22 +110,43 @@ function pullRequestMerge(changed: string[], options: { renameFrom?: string } = 
   git("commit", "--quiet", "--message", "main");
   git("merge", "--quiet", "--no-ff", "--no-edit", "feature");
   const sha = git("rev-parse", "HEAD");
+  const base = git("rev-parse", "HEAD^1");
   return {
     sha,
     head,
+    base,
+    baseTree: git("rev-parse", "HEAD^1^{tree}"),
     git: gitIn(root),
     event: { pull_request: { base: { ref: "main" }, head: { sha: head } } },
   };
 }
 
-function selectPaths(changed: string[]) {
-  const merge = pullRequestMerge(changed);
-  return selectPullRequestJobs({ event: merge.event, sha: merge.sha, git: merge.git });
+type Merge = ReturnType<typeof pullRequestMerge>;
+
+// An Authority-only change deselects both jobs; the cases below share one.
+let authorityMerge: Merge | undefined;
+const authorityOnly = () => (authorityMerge ??= pullRequestMerge(["services/organization-authority/src/index.ts"]));
+
+// Selects for a merge whose main base passed, unless `change` alters that.
+async function selectFor(merge: Merge, change: (fixture: Fixture) => void = () => {}, input: Record<string, unknown> = {}) {
+  const fixture = greenCheck(merge.base, merge.baseTree);
+  change(fixture);
+  const github = githubFixture(fixture);
+  const selection = await selectJobs({
+    eventName: "pull_request",
+    event: merge.event, sha: merge.sha, repository: REPOSITORY, git: merge.git, api: github.api, sleep: github.sleep,
+    ...input,
+  });
+  return { selection, requested: github.requested, delays: github.delays };
+}
+
+async function selectPaths(changed: string[]) {
+  return (await selectFor(pullRequestMerge(changed))).selection;
 }
 
 describe("pull-request job selection", () => {
-  it("skips the desktop and Person-client package jobs for an Authority-only change (#277)", () => {
-    const selection = selectPaths([
+  it("skips the desktop and Person-client package jobs for an Authority-only change (#277)", async () => {
+    const selection = await selectPaths([
       "docs/architecture/connector-contracts.md",
       "services/organization-authority/src/application/ports/person-slack-reader-v1.ts",
       "services/organization-authority/src/composition/person-answer-v3-route.ts",
@@ -98,8 +162,8 @@ describe("pull-request job selection", () => {
     });
   });
 
-  it("selects the desktop app alone for a desktop-only change (#299)", () => {
-    const selection = selectPaths([
+  it("selects the desktop app alone for a desktop-only change (#299)", async () => {
+    const selection = await selectPaths([
       "product/echo-desktop/README.md",
       "product/echo-desktop/src/renderer/screens/home.tsx",
       "product/echo-desktop/test/e2e/projects.spec.ts",
@@ -148,47 +212,99 @@ describe("pull-request job selection", () => {
     }
   });
 
-  it("selects the desktop app when a file moves out of its inputs", () => {
+  it("selects the desktop app when a file moves out of its inputs", async () => {
     const merge = pullRequestMerge(["services/organization-authority/src/moved.ts"], {
       renameFrom: "product/echo-desktop/src/moved.ts",
     });
-    expect(selectPullRequestJobs({ event: merge.event, sha: merge.sha, git: merge.git }).jobs.desktop_app)
-      .toBe(true);
+    expect((await selectFor(merge)).selection.jobs.desktop_app).toBe(true);
   });
 
-  it("selects every job unless the checkout is the tested merge of a pull request into main", () => {
-    const merge = pullRequestMerge(["services/organization-authority/src/index.ts"]);
+  it("selects every job unless the checkout is the tested merge of a pull request into main", async () => {
+    const merge = authorityOnly();
     const event = merge.event;
     for (const [reason, input] of [
-      ["stacked", { event: { pull_request: { ...event.pull_request, base: { ref: "feat/base" } } }, sha: merge.sha }],
-      ["no pull request", { event: {}, sha: merge.sha }],
-      ["head moved", { event: { pull_request: { ...event.pull_request, head: { sha: "f".repeat(40) } } }, sha: merge.sha }],
-      ["not the checkout", { event, sha: merge.head }],
-      ["short sha", { event, sha: merge.sha.slice(0, 12) }],
+      ["stacked", { event: { pull_request: { ...event.pull_request, base: { ref: "feat/base" } } } }],
+      ["no pull request", { event: {} }],
+      ["head moved", { event: { pull_request: { ...event.pull_request, head: { sha: "f".repeat(40) } } } }],
+      ["not the checkout", { sha: merge.head }],
+      ["short sha", { sha: merge.sha.slice(0, 12) }],
     ] as const) {
-      expect(selectPullRequestJobs({ ...input, git: merge.git }), reason)
-        .toMatchObject({ mode: "full", jobs: EVERY_JOB });
+      const { selection, requested } = await selectFor(merge, undefined, input);
+      expect(selection, reason).toMatchObject({ mode: "full", jobs: EVERY_JOB });
+      expect(requested, reason).toEqual([]);
     }
   });
 
   it("selects every job for a single-parent commit or a git failure", async () => {
-    const merge = pullRequestMerge(["services/organization-authority/src/index.ts"]);
-    const first = merge.git(["rev-parse", "HEAD^1"]).stdout;
-    expect(selectPullRequestJobs({
-      event: { pull_request: { base: { ref: "main" }, head: { sha: first } } },
-      sha: merge.sha,
-      git: (args) => args[0] === "rev-list" ? { status: 0, stdout: `${merge.sha} ${first}` } : merge.git(args),
-    })).toMatchObject({ mode: "full", jobs: EVERY_JOB });
+    const merge = authorityOnly();
+    expect((await selectFor(merge, undefined, {
+      event: { pull_request: { base: { ref: "main" }, head: { sha: merge.base } } },
+      git: (args: readonly string[]) => args[0] === "rev-list" ? { status: 0, stdout: `${merge.sha} ${merge.base}` } : merge.git(args),
+    })).selection).toMatchObject({ mode: "full", jobs: EVERY_JOB });
     const failing = await selectJobs({
       eventName: "pull_request",
       event: merge.event,
       sha: merge.sha,
-      repository: "EchoBrain-org/echo-brain",
+      repository: REPOSITORY,
       git: (args) => args[0] === "diff" ? { status: 128, stdout: "" } : merge.git(args),
       api: async () => { throw new Error("unused"); },
     });
     expect(failing).toMatchObject({ mode: "full", jobs: EVERY_JOB });
     expect(failing.reason).toContain("selection failed");
+  });
+
+  it("deselects a job only when main's required check passed on the base tree", async () => {
+    const merge = authorityOnly();
+    const { selection, requested, delays } = await selectFor(merge);
+    expect(selection).toMatchObject({ mode: "pull-request", jobs: { desktop_app: false, person_client_package: false } });
+    expect(requested.sort()).toEqual(Object.keys(greenCheck(merge.base, merge.baseTree)).sort());
+    expect(delays).toEqual([]);
+  });
+
+  it("reads nothing from GitHub when the change selects every job anyway", async () => {
+    const { selection, requested } = await selectFor(pullRequestMerge(["src/product/person-client/main.ts"]));
+    expect(selection).toMatchObject({ mode: "pull-request", jobs: EVERY_JOB });
+    expect(requested).toEqual([]);
+  });
+
+  it("waits for main's required check to finish, then selects every job if it never does", async () => {
+    const merge = authorityOnly();
+    let reads = 0;
+    const finishing = await selectFor(merge, (fixture) => {
+      const green = fixture[checksPath(merge.base)];
+      const running = structuredClone(green);
+      running.check_runs[0].status = "in_progress";
+      running.check_runs[0].conclusion = null;
+      // GitHub reports the aggregate only once its dependencies finish.
+      fixture[checksPath(merge.base)] = () => [{ total_count: 0, check_runs: [] }, running][reads++] ?? green;
+    });
+    expect(finishing.selection).toMatchObject({ mode: "pull-request", jobs: { desktop_app: false } });
+    expect(finishing.delays).toEqual([15_000, 15_000]);
+    const running = await selectFor(merge, (fixture) => {
+      const run = fixture[checksPath(merge.base)].check_runs[0];
+      run.status = "in_progress";
+      run.conclusion = null;
+    });
+    expect(running.selection).toMatchObject({ mode: "full", jobs: EVERY_JOB });
+    expect(running.delays).toEqual([15_000, 15_000, 30_000, 30_000, 30_000, 30_000]);
+    expect(running.delays.reduce((total, delay) => total + delay, 0)).toBe(150_000);
+  });
+
+  type BaseCase = [string, (fixture: Fixture, merge: Merge) => void, number];
+  const unverifiedBases: BaseCase[] = [
+    ["a red base", (fixture, merge) => { fixture[checksPath(merge.base)].check_runs[0].conclusion = "failure"; }, 0],
+    ["a cancelled base", (fixture, merge) => { fixture[checksPath(merge.base)].check_runs[0].conclusion = "cancelled"; }, 0],
+    ["a base with no check", (fixture, merge) => { fixture[checksPath(merge.base)] = { total_count: 0, check_runs: [] }; }, 6],
+    ["an API error", (fixture, merge) => { fixture[checksPath(merge.base)] = new Error("GitHub API returned 502"); }, 0],
+    ["a base check from another app", (fixture, merge) => { fixture[checksPath(merge.base)].check_runs[0].app.id = 1; }, 0],
+    ["a base check that tested another tree", (fixture) => { fixture[annotationsPath(7)][1].message = "f".repeat(40); }, 0],
+    ["a base check that recorded no tree", (fixture) => { fixture[annotationsPath(7)].pop(); }, 0],
+  ];
+  it.each(unverifiedBases)("selects every job for %s", async (_name, change, waits) => {
+    const merge = authorityOnly();
+    const { selection, delays } = await selectFor(merge, (fixture) => change(fixture, merge));
+    expect(selection).toMatchObject({ mode: "full", jobs: EVERY_JOB });
+    expect(delays).toHaveLength(waits);
   });
 
   it("selects every job for a manual dispatch or any other event", async () => {
@@ -206,55 +322,68 @@ describe("pull-request job selection", () => {
   });
 });
 
+describe("plan outputs", () => {
+  it("writes every job output and the tree that every job checks out", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-ci-select-output-"));
+    repositories.push(root);
+    writeFileSync(join(root, "event.json"), "{}");
+    const revision = (spec: string) => execFileSync("git", ["rev-parse", spec], { cwd: REPO, encoding: "utf8" }).trim();
+    execFileSync(process.execPath, [join(REPO, "tools/ci-select-jobs.mjs")], {
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        GITHUB_EVENT_NAME: "workflow_dispatch",
+        GITHUB_EVENT_PATH: join(root, "event.json"),
+        GITHUB_SHA: revision("HEAD"),
+        GITHUB_REPOSITORY: REPOSITORY,
+        GITHUB_OUTPUT: join(root, "output"),
+        GITHUB_API_URL: "http://127.0.0.1:9",
+        GITHUB_TOKEN: "unused",
+      },
+    });
+    expect(readFileSync(join(root, "output"), "utf8").split("\n")).toEqual([
+      "mode=full",
+      `tree=${revision("HEAD^{tree}")}`,
+      ...JOB_OUTPUTS.map((job) => `${job}=${EVERY_JOB[job]}`),
+      "",
+    ]);
+  });
+});
+
 describe("verified main push", () => {
-  const repository = "EchoBrain-org/echo-brain";
+  const repository = REPOSITORY;
   const before = "b".repeat(40);
   const sha = "c".repeat(40);
   const head = "d".repeat(40);
   const tree = "e".repeat(40);
   const event = { ref: "refs/heads/main", before, after: sha, forced: false };
-  const checksPath = `/repos/${repository}/commits/${head}/check-runs?check_name=CI%20required%20checks&filter=latest&per_page=100`;
 
-  function responses(): Record<string, any> {
+  function responses(): Fixture {
     return {
       [`/repos/${repository}/commits/${sha}/pulls?per_page=100`]: [
         { number: 301, merged_at: "2026-10-09T00:00:00Z", merge_commit_sha: sha, base: { ref: "main" }, head: { sha: head } },
       ],
       [`/repos/${repository}/git/commits/${sha}`]: { sha, tree: { sha: tree } },
       [`/repos/${repository}/git/commits/${head}`]: { sha: head, tree: { sha: tree } },
-      [`/repos/${repository}/compare/${before}...${head}?per_page=1`]: { status: "ahead" },
-      [checksPath]: {
-        total_count: 1,
-        check_runs: [{
-          name: REQUIRED_CHECK, head_sha: head, app: { id: 15368, slug: "github-actions" },
-          status: "completed", conclusion: "success",
-        }],
-      },
+      ...greenCheck(head, tree),
     };
   }
 
-  async function verify(change: (fixture: Record<string, any>) => void = () => {}, input: Record<string, unknown> = {}) {
+  async function verify(change: (fixture: Fixture) => void = () => {}, input: Record<string, unknown> = {}) {
     const fixture = responses();
     change(fixture);
-    const requested: string[] = [];
-    const delays: number[] = [];
+    const github = githubFixture(fixture);
     const selection = await selectJobs({
       eventName: "push",
       event,
       sha,
       repository,
       git: () => { throw new Error("unused"); },
-      api: async (path) => {
-        requested.push(path);
-        const value = fixture[path];
-        if (value instanceof Error) throw value;
-        if (value === undefined) throw new Error(`unexpected ${path}`);
-        return typeof value === "function" ? value() : structuredClone(value);
-      },
-      sleep: async (ms) => { delays.push(ms); },
+      api: github.api,
+      sleep: github.sleep,
       ...input,
     });
-    return { selection, requested, delays };
+    return { selection, requested: github.requested, delays: github.delays };
   }
 
   it("runs only the docs proof for a tree already green on its merged pull-request head", async () => {
@@ -287,9 +416,10 @@ describe("verified main push", () => {
     expect(missing.delays).toEqual([5_000, 15_000]);
   });
 
-  type Fixture = Record<string, any>;
   const pull = (fixture: Fixture) => fixture[`/repos/${repository}/commits/${sha}/pulls?per_page=100`][0];
-  const run = (fixture: Fixture) => fixture[checksPath].check_runs[0];
+  const checks = (fixture: Fixture) => fixture[checksPath(head)];
+  const run = (fixture: Fixture) => checks(fixture).check_runs[0];
+  const tested = (fixture: Fixture) => fixture[annotationsPath(7)];
   const unverifiable: Array<[string, (fixture: Fixture) => void]> = [
     ["an unmerged pull request", (fixture: Fixture) => { pull(fixture).merged_at = null; }],
     ["another merge commit", (fixture: Fixture) => { pull(fixture).merge_commit_sha = head; }],
@@ -302,22 +432,32 @@ describe("verified main push", () => {
     ["a different tree", (fixture: Fixture) => {
       fixture[`/repos/${repository}/git/commits/${head}`].tree.sha = "f".repeat(40);
     }],
-    ["a head behind the previous main", (fixture: Fixture) => {
-      fixture[`/repos/${repository}/compare/${before}...${head}?per_page=1`].status = "diverged";
+    // A stacked pull request's run tested a merge with its other base.
+    ["a green run that tested a merge with another base", (fixture: Fixture) => {
+      tested(fixture)[1].message = "f".repeat(40);
     }],
+    ["a green run that recorded no tested tree", (fixture: Fixture) => { tested(fixture).pop(); }],
+    ["a green run that recorded two trees", (fixture: Fixture) => { tested(fixture).push(tested(fixture)[1]); }],
+    ["a tested tree recorded as a warning", (fixture: Fixture) => { tested(fixture)[1].annotation_level = "warning"; }],
     ["a failed required check", (fixture: Fixture) => { run(fixture).conclusion = "failure"; }],
     ["a running required check", (fixture: Fixture) => {
       run(fixture).status = "in_progress";
       run(fixture).conclusion = null;
     }],
     ["a required check from another app", (fixture: Fixture) => { run(fixture).app.id = 1; }],
-    ["no required check", (fixture: Fixture) => { fixture[checksPath] = { total_count: 0, check_runs: [] }; }],
+    ["no required check", (fixture: Fixture) => { fixture[checksPath(head)] = { total_count: 0, check_runs: [] }; }],
     ["a second failed required check", (fixture: Fixture) => {
-      fixture[checksPath].check_runs.push({ ...run(fixture), conclusion: "failure" });
-      fixture[checksPath].total_count = 2;
+      checks(fixture).check_runs.push({ ...run(fixture), id: 8, conclusion: "failure" });
+      checks(fixture).total_count = 2;
     }],
-    ["an unread page of checks", (fixture: Fixture) => { fixture[checksPath].total_count = 101; }],
-    ["an API error", (fixture: Fixture) => { fixture[checksPath] = new Error("GitHub API returned 502"); }],
+    ["a second green run on another tree", (fixture: Fixture) => {
+      checks(fixture).check_runs.push({ ...run(fixture), id: 8 });
+      checks(fixture).total_count = 2;
+      fixture[annotationsPath(8)] = [{ annotation_level: "notice", title: TESTED_TREE, message: "f".repeat(40) }];
+    }],
+    ["an unread page of checks", (fixture: Fixture) => { checks(fixture).total_count = 101; }],
+    ["an API error", (fixture: Fixture) => { fixture[checksPath(head)] = new Error("GitHub API returned 502"); }],
+    ["an annotations API error", (fixture: Fixture) => { fixture[annotationsPath(7)] = new Error("GitHub API returned 502"); }],
   ];
   it.each(unverifiable)("selects every job for %s", async (_name, change) => {
     const { selection } = await verify(change);
@@ -337,7 +477,7 @@ describe("verified main push", () => {
     expect(requested).toEqual([]);
   });
 
-  it("reads the pull request, both trees, the head ancestry, and the head's required check", async () => {
+  it("reads the pull request, both trees, and the head's required check with the tree it tested", async () => {
     const fixture = responses();
     const requested: string[] = [];
     const selection = await verifyMainPush({

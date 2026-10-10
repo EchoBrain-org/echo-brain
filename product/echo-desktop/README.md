@@ -142,15 +142,17 @@ Linux uses Xvfb and additionally installs the deb, validates its desktop entry,
 and smokes the installed executable. macOS verifies the app's code signature.
 A pull request into `main` selects the matrix when its tested merge changes the
 desktop inputs listed in
-[`tools/ci-select-jobs.mjs`](../../tools/ci-select-jobs.mjs); a manual dispatch
-or an unverified push to `main` always does.
+[`tools/ci-select-jobs.mjs`](../../tools/ci-select-jobs.mjs) or `main`'s own
+required check has not passed; a manual dispatch or an unverified push to
+`main` always does.
 
 CI caches npm downloads and Electron/packaging-tool downloads separately by
-OS, architecture and lockfile. It rebuilds the application from the current
-commit on every run that selects it. Packaging already compiles and checks the
-release bundles, so CI does not repeat that build before packaging. All
-repository, CLI and Authority checks keep their independent jobs;
-`CI required checks` gates them and both desktop targets.
+OS, architecture and lockfile. After a lockfile change, a pull request starts
+from the newest Electron/packaging-tool entry saved on `main`. CI rebuilds the
+application from the current commit on every run that selects it. Packaging
+already compiles and checks the release bundles, so CI does not repeat that
+build before packaging. All repository, CLI and Authority checks keep their
+independent jobs; `CI required checks` gates them and both desktop targets.
 
 Xvfb exercises X11, not a complete GNOME/KDE desktop. Before claiming support
 for a particular Wayland desktop, check portal consent, global capture shortcuts,

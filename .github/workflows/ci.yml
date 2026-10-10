@@ -24,7 +24,8 @@ jobs:
     name: Select CI jobs
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    # Main pushes read the merged pull request and its required check.
+    # Pull requests read main's required check; main pushes read the merged
+    # pull request and its head's required check.
     permissions:
       contents: read
       pull-requests: read
@@ -35,6 +36,7 @@ jobs:
       person_client_package: ${{ steps.select.outputs.person_client_package }}
       desktop_app: ${{ steps.select.outputs.desktop_app }}
       authority_recovery_infrastructure: ${{ steps.select.outputs.authority_recovery_infrastructure }}
+      tree: ${{ steps.select.outputs.tree }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -287,6 +289,10 @@ jobs:
             ${{ matrix.cache-root }}/electron
             ${{ matrix.cache-root }}/electron-builder
           key: desktop-downloads-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('product/echo-desktop/package-lock.json') }}
+          # A verified light run on main skips this job, so main rarely saves
+          # a new key; a pull request after a lockfile change starts from
+          # main's newest entry instead of an empty cache.
+          restore-keys: desktop-downloads-v1-${{ runner.os }}-${{ runner.arch }}-
       - name: Prepare Linux for sandboxed Electron
         if: runner.os == 'Linux'
         run: |
@@ -593,6 +599,7 @@ jobs:
           AUTHORITY_CONTAINER_RESULT: ${{ needs.authority-container.result }}
           AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT: ${{ needs.authority-recovery-infrastructure.result }}
           AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED: ${{ needs.plan.outputs.authority_recovery_infrastructure }}
+          TESTED_TREE: ${{ needs.plan.outputs.tree }}
         run: |
           set -euo pipefail
           # A job may be skipped only when the plan deselected it.
@@ -610,3 +617,5 @@ jobs:
           selected "$DESKTOP_APP_RESULT" "$DESKTOP_APP_SELECTED"
           test "$AUTHORITY_CONTAINER_RESULT" = success
           selected "$AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT" "$AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED"
+          # Later plans trust this success only for the tree it tested.
+          echo "::notice title=CI tested tree::$TESTED_TREE"

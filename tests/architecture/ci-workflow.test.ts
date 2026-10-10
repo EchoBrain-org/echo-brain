@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { JOB_OUTPUTS } from "../../tools/ci-select-jobs.mjs";
+import { JOB_OUTPUTS, TESTED_TREE } from "../../tools/ci-select-jobs.mjs";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const DOCKERFILE = resolve(REPO, "deploy/organization-authority/Dockerfile");
@@ -33,7 +33,7 @@ function gate(id: string) {
 
 function aggregate(env: Record<string, string>) {
   const script = job("required-checks").split("        run: |\n")[1]!.replace(/^ {10}/gm, "");
-  return spawnSync("bash", ["-c", script], { env: { PATH: process.env.PATH!, ...env }, encoding: "utf8" }).status;
+  return spawnSync("bash", ["-c", script], { env: { PATH: process.env.PATH!, ...env }, encoding: "utf8" });
 }
 
 function dependencyInputs(dockerfile: string) {
@@ -137,6 +137,11 @@ describe("CI workflow", () => {
     expect(required).toContain(
       'selected "$AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT" "$AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED"',
     );
+    expect(required).toContain("          TESTED_TREE: ${{ needs.plan.outputs.tree }}\n");
+    // The tested tree is recorded last, after every result passed.
+    expect(required.trimEnd().split("\n").at(-1)).toBe(
+      `          echo "::notice title=${TESTED_TREE}::$TESTED_TREE"`,
+    );
     expect(required).toContain(
       '            case "$2" in\n              true) test "$1" = success ;;\n              false) test "$1" = skipped ;;\n              *) return 1 ;;\n            esac\n',
     );
@@ -156,6 +161,7 @@ describe("CI workflow", () => {
       DESKTOP_APP_RESULT: "success", DESKTOP_APP_SELECTED: "true",
       AUTHORITY_CONTAINER_RESULT: "success",
       AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT: "success", AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED: "true",
+      TESTED_TREE: "e".repeat(40),
     };
     const verifiedMain = {
       ...pullRequest,
@@ -164,8 +170,11 @@ describe("CI workflow", () => {
       DESKTOP_APP_RESULT: "skipped", DESKTOP_APP_SELECTED: "false",
       AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT: "skipped", AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED: "false",
     };
-    expect(aggregate(pullRequest)).toBe(0);
-    expect(aggregate(verifiedMain)).toBe(0);
+    for (const passing of [pullRequest, verifiedMain]) {
+      const { status, stdout } = aggregate(passing);
+      expect(status).toBe(0);
+      expect(stdout).toBe(`::notice title=${TESTED_TREE}::${"e".repeat(40)}\n`);
+    }
     for (const failing of [
       { PLAN_RESULT: "failure" },
       { PLAN_RESULT: "cancelled" },
@@ -181,7 +190,9 @@ describe("CI workflow", () => {
       { AUTHORITY_CONTAINER_RESULT: "skipped" },
       { AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT: "skipped" },
     ]) {
-      expect(aggregate({ ...pullRequest, ...failing }), JSON.stringify(failing)).not.toBe(0);
+      const { status, stdout } = aggregate({ ...pullRequest, ...failing });
+      expect(status, JSON.stringify(failing)).not.toBe(0);
+      expect(stdout, JSON.stringify(failing)).not.toContain(TESTED_TREE);
     }
     for (const failing of [
       { DOCS_RESULT: "skipped" },
@@ -190,21 +201,23 @@ describe("CI workflow", () => {
       { CHECK_RESULT: "failure" },
       { AUTHORITY_CONTAINER_RESULT: "failure" },
     ]) {
-      expect(aggregate({ ...verifiedMain, ...failing }), JSON.stringify(failing)).not.toBe(0);
+      expect(aggregate({ ...verifiedMain, ...failing }).status, JSON.stringify(failing)).not.toBe(0);
     }
   });
 
   it("plans job selection in one dependency-free job with read-only access", () => {
     const plan = job("plan");
     expect(plan).toContain("    name: Select CI jobs\n");
+    // Leaves room for the selector's 150-second wait on a running main.
+    expect(plan).toContain("    timeout-minutes: 5\n");
     expect(gate("plan")).toEqual([]);
     expect(plan).toContain(
       "    permissions:\n      contents: read\n      pull-requests: read\n      checks: read\n    outputs:\n",
     );
-    for (const output of JOB_OUTPUTS) {
+    for (const output of [...JOB_OUTPUTS, "tree"]) {
       expect(plan).toContain(`      ${output}: \${{ steps.select.outputs.${output} }}\n`);
     }
-    expect(plan.match(/^      [a-z_]+: \$\{\{ steps\.select\.outputs\.[a-z_]+ \}\}$/gm)).toHaveLength(JOB_OUTPUTS.length);
+    expect(plan.match(/^      [a-z_]+: \$\{\{ steps\.select\.outputs\.[a-z_]+ \}\}$/gm)).toHaveLength(JOB_OUTPUTS.length + 1);
     expect(plan).toContain("          fetch-depth: 2\n          persist-credentials: false\n");
     expect(plan).toContain(
       "        id: select\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: node tools/ci-select-jobs.mjs\n",
@@ -414,6 +427,13 @@ describe("CI workflow", () => {
         expect.stringContaining(`- name: ${name}\n        if: runner.os == '${os}'`),
       );
     }
+    // Pull requests read only caches main saved, and a light run on main
+    // skips this job: after a lockfile change, start from main's newest entry.
+    const downloads = desktopJob.split(/(?=^      - )/m)
+      .find((step) => step.includes("- name: Cache Electron and packaging-tool downloads"))!;
+    const prefix = "desktop-downloads-v1-${{ runner.os }}-${{ runner.arch }}-";
+    expect(downloads).toContain(`          key: ${prefix}\${{ hashFiles('product/echo-desktop/package-lock.json') }}\n`);
+    expect(downloads).toContain(`          restore-keys: ${prefix}\n`);
     // The plan alone gates the whole matrix; no leg is excluded or optional.
     expect(desktopJob.match(/^    if:.*$/gm)).toEqual([
       "    if: ${{ needs.plan.outputs.desktop_app == 'true' }}",

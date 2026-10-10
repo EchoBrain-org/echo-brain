@@ -4,10 +4,11 @@
 // selects every job.
 //
 // - A pull request into main skips the desktop and macOS Person-client jobs
-//   when the tested merge commit leaves their inputs identical to main.
-// - A push to main whose tree is byte-identical to the head of the merged pull
-//   request, already green in `CI required checks`, runs the history-dependent
-//   docs check and the Authority image (SHA provenance) instead of re-testing.
+//   when the tested merge commit leaves their inputs identical to main and
+//   main's own `CI required checks` passed on that tree.
+// - A push to main whose exact tree the merged pull request's head passed in
+//   `CI required checks` runs the history-dependent docs check and the
+//   Authority image (SHA provenance) instead of re-testing.
 
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
@@ -16,6 +17,9 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 export const REQUIRED_CHECK = 'CI required checks';
+// `CI required checks` records the tree its run tested as a notice with this
+// title, so a green result counts only for that tree.
+export const TESTED_TREE = 'CI tested tree';
 // The ruleset expects `CI required checks` from this GitHub App.
 const GITHUB_ACTIONS_APP_ID = 15368;
 const FULL_SHA = /^[0-9a-f]{40}$/;
@@ -120,10 +124,39 @@ function inputsChanged(git, base, head, paths) {
   throw new Error('git diff failed');
 }
 
-export function selectPullRequestJobs({ event, sha, git }) {
+// The latest `CI required checks` on a commit: 'passed' only when every run
+// succeeded and recorded `tree` as the tree it tested. A pull-request run
+// tests a merge with its base, whose tree a stacked base can make differ from
+// the head's.
+async function requiredCheck(api, repository, commit, tree) {
+  const checks = await api(`/repos/${repository}/commits/${commit}/check-runs?check_name=${encodeURIComponent(REQUIRED_CHECK)}&filter=latest&per_page=100`);
+  const runs = checks.check_runs ?? [];
+  if (checks.total_count !== runs.length || !runs.every((run) =>
+    run.name === REQUIRED_CHECK && run.head_sha === commit && run.app?.id === GITHUB_ACTIONS_APP_ID &&
+    Number.isSafeInteger(run.id))) {
+    return 'unverifiable';
+  }
+  if (runs.some((run) => run.status === 'completed' && run.conclusion !== 'success')) return 'failed';
+  if (runs.length === 0 || runs.some((run) => run.status !== 'completed')) return 'unfinished';
+  for (const run of runs) {
+    const annotations = await api(`/repos/${repository}/check-runs/${run.id}/annotations?per_page=100`);
+    const tested = annotations.filter((annotation) => annotation.title === TESTED_TREE);
+    if (tested.length !== 1 || tested[0].annotation_level !== 'notice' || tested[0].message !== tree) {
+      return 'another tree';
+    }
+  }
+  return 'passed';
+}
+
+// A fresh main run may still be running, or not yet report its required
+// check. Wait about as long as a verified light run takes, well within the
+// plan's timeout.
+const BASE_CHECK_DELAYS = [0, 15_000, 15_000, 30_000, 30_000, 30_000, 30_000];
+
+export async function selectPullRequestJobs({ event, sha, repository, git, api, sleep }) {
   const pullRequest = event?.pull_request;
   // Stacked pull requests are tested against a branch whose jobs may not
-  // have run; only main is known to have passed every job.
+  // have run.
   if (pullRequest?.base?.ref !== 'main') return everything('pull request base is not main');
   if (!FULL_SHA.test(sha ?? '') || gitOutput(git, ['rev-parse', '--verify', 'HEAD']) !== sha) {
     return everything('checkout is not the tested merge commit');
@@ -136,7 +169,19 @@ export function selectPullRequestJobs({ event, sha, git }) {
   for (const [job, paths] of Object.entries(JOB_INPUTS)) {
     jobs[job] = inputsChanged(git, base, sha, paths);
   }
-  return { mode: 'pull-request', reason: `inputs compared with main ${base}`, jobs };
+  const reason = `inputs compared with main ${base}`;
+  if (Object.keys(JOB_INPUTS).every((job) => jobs[job])) return { mode: 'pull-request', reason, jobs };
+  // A skipped job is vouched for only by main. Skip it only when main passed
+  // on this tree, so a failure there keeps every later pull request red.
+  const tree = gitOutput(git, ['rev-parse', '--verify', `${base}^{tree}`]);
+  let check;
+  for (const delay of BASE_CHECK_DELAYS) {
+    if (delay) await sleep(delay);
+    check = await requiredCheck(api, repository, base, tree);
+    if (check !== 'unfinished') break;
+  }
+  if (check !== 'passed') return everything(`main ${base} has no green ${REQUIRED_CHECK} (${check})`);
+  return { mode: 'pull-request', reason, jobs };
 }
 
 export function githubApi(apiUrl, token) {
@@ -185,18 +230,10 @@ export async function verifyMainPush({ event, sha, repository, api, sleep }) {
   if (!FULL_SHA.test(pushed.tree?.sha ?? '') || pushed.tree.sha !== tested.tree?.sha) {
     return everything(`tree differs from pull request #${pullRequest.number} head`);
   }
-  // The head contained the previous main, so its pull-request run tested this
-  // exact tree rather than a merge with an older main.
-  const comparison = await api(`/repos/${repository}/compare/${before}...${head}?per_page=1`);
-  if (!['ahead', 'identical'].includes(comparison.status)) {
-    return everything(`pull request #${pullRequest.number} head did not contain the previous main`);
+  const check = await requiredCheck(api, repository, head, pushed.tree.sha);
+  if (check !== 'passed') {
+    return everything(`pull request #${pullRequest.number} head has no green ${REQUIRED_CHECK} on this tree (${check})`);
   }
-  const checks = await api(`/repos/${repository}/commits/${head}/check-runs?check_name=${encodeURIComponent(REQUIRED_CHECK)}&filter=latest&per_page=100`);
-  const runs = checks.check_runs ?? [];
-  const green = runs.length !== 0 && checks.total_count === runs.length && runs.every((run) =>
-    run.name === REQUIRED_CHECK && run.head_sha === head && run.app?.id === GITHUB_ACTIONS_APP_ID &&
-    run.status === 'completed' && run.conclusion === 'success');
-  if (!green) return everything(`pull request #${pullRequest.number} head has no green ${REQUIRED_CHECK}`);
   return {
     mode: 'verified-main',
     reason: `tree of pull request #${pullRequest.number} head ${head}`,
@@ -206,7 +243,7 @@ export async function verifyMainPush({ event, sha, repository, api, sleep }) {
 
 export async function selectJobs({ eventName, event, sha, repository, git, api, sleep = (ms) => new Promise((done) => setTimeout(done, ms)) }) {
   try {
-    if (eventName === 'pull_request') return selectPullRequestJobs({ event, sha, git });
+    if (eventName === 'pull_request') return await selectPullRequestJobs({ event, sha, repository, git, api, sleep });
     if (eventName === 'push') return await verifyMainPush({ event, sha, repository, api, sleep });
     return everything(`${eventName} runs every job`);
   } catch (error) {
@@ -216,6 +253,7 @@ export async function selectJobs({ eventName, event, sha, repository, git, api, 
 
 async function main() {
   const env = process.env;
+  const git = gitIn(resolve(import.meta.dirname, '..'));
   let selection;
   try {
     selection = await selectJobs({
@@ -223,13 +261,19 @@ async function main() {
       event: JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, 'utf8')),
       sha: env.GITHUB_SHA,
       repository: env.GITHUB_REPOSITORY,
-      git: gitIn(resolve(import.meta.dirname, '..')),
+      git,
       api: githubApi(env.GITHUB_API_URL, env.GITHUB_TOKEN),
     });
   } catch (error) {
     selection = everything(`selection failed: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const lines = [`mode=${selection.mode}`, ...JOB_OUTPUTS.map((job) => `${job}=${selection.jobs[job]}`)];
+  // Every job checks out GITHUB_SHA, so its tree is the tree this run tests.
+  const tree = FULL_SHA.test(env.GITHUB_SHA ?? '') ? git(['rev-parse', '--verify', `${env.GITHUB_SHA}^{tree}`]) : undefined;
+  const lines = [
+    `mode=${selection.mode}`,
+    `tree=${tree?.status === 0 && FULL_SHA.test(tree.stdout) ? tree.stdout : ''}`,
+    ...JOB_OUTPUTS.map((job) => `${job}=${selection.jobs[job]}`),
+  ];
   appendFileSync(env.GITHUB_OUTPUT, `${lines.join('\n')}\n`);
   if (env.GITHUB_STEP_SUMMARY) {
     appendFileSync(env.GITHUB_STEP_SUMMARY, `CI job selection: ${selection.mode} (${selection.reason})\n`);

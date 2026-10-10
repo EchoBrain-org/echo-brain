@@ -92,18 +92,27 @@ Authority recovery infrastructure
 and publishes which jobs the run needs:
 
 - A pull request into `main` always runs `check`, the Authority container, and
-  the recovery infrastructure. It runs the desktop matrix and the macOS
-  Person-client package only when its tested merge commit changes their traced
-  inputs relative to `main`.
+  the recovery infrastructure. It skips the desktop matrix or the macOS
+  Person-client package only when its tested merge commit leaves that job's
+  traced inputs identical to `main` and the latest `CI required checks` on
+  that `main` commit passed on its tree. The plan waits up to 150 seconds for
+  a `main` run still in progress. Pull-request skips are therefore anchored to
+  a green `main` base: after a red `main`, every later pull request runs every
+  job until a fix lands.
 - A push to `main` is a verified light run when its tree is byte-identical to
-  the head of the merged pull request, that head contained the previous
-  `main`, and the head's latest `CI required checks` from app `15368`
-  succeeded. It runs only `Documentation history` (the history-dependent
-  `check:docs`) and the Authority container, which binds this exact SHA and
-  run ID into the image.
+  the head of the merged pull request and the head's latest
+  `CI required checks` from app `15368` succeeded on that same tree. It runs
+  only `Documentation history` (the history-dependent `check:docs`) and the
+  Authority container, which binds this exact SHA and run ID into the image.
 - Every other run selects every job: a stacked pull request, a manual
   dispatch, a push without a single verified pull request (including a bypass),
   or any lookup failure.
+
+Every successful `CI required checks` run records the tree its jobs checked
+out as a `CI tested tree` notice annotation, and the plan trusts a green
+result only for that tree. A pull-request run tests a merge with its base, so
+a stacked pull request's green run against another branch never vouches for
+its head's own tree.
 
 The aggregate uses `if: always()` and succeeds only when the plan succeeded,
 every selected job's result equals `success`, and every deselected job's
@@ -244,10 +253,14 @@ After issue #25 is closed and before the first beta is published:
    also produces that green result. It certifies that the commit's tree is
    byte-identical to a pull-request head whose selected proofs passed on that
    tree, that `check:docs` passed against the merged history, and that the
-   Authority image was built and exercised from this exact SHA. The run's
-   `Select CI jobs` summary names the pull request. To re-prove every job on
-   that SHA with current runner images, dispatch the CI workflow on it; a
-   manual dispatch runs every job.
+   Authority image was built and exercised from this exact SHA. The desktop
+   and Person-client proofs that pull request deselected last ran on an
+   earlier `main` tree with the same inputs. The run's `Select CI jobs`
+   summary names the pull request. A manual dispatch runs every job but takes
+   a branch or tag, not a SHA. To re-prove every job on that SHA with current
+   runner images, dispatch the CI workflow on `main` while it still points at
+   that SHA, or on a tag created at that SHA, and confirm the dispatched run's
+   SHA before relying on it.
 2. Build and validate the release record, Person-client artifact and onboarding
    kit, Authority image digest, and runtime profile from that exact commit.
 3. Create a draft release with a new semantic-version tag pointing
