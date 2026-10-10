@@ -15,12 +15,14 @@ import {
   createOnboardingInputArchive,
   cleanupOnboardingTransfer,
   executeOnboardingTransfer,
-  awsCliArguments,
   onboardingTransferSsmCommands,
   planOnboardingTransfer,
   preflightOnboardingInput,
-  sanitizedAwsEnvironment,
 } from "../../tools/authority-staging-onboarding-transfer.mjs";
+import {
+  awsCliArguments,
+  sanitizedAwsEnvironment,
+} from "../../tools/lib/operator-io.mjs";
 import { spawnSync } from "node:child_process";
 import { gunzipSync } from "node:zlib";
 
