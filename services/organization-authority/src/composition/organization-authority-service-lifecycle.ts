@@ -38,8 +38,11 @@ export interface OrganizationAuthorityProcessingCycleV1 {
    * `settle` waits for them.
    */
   pollAndStageAdmittedMeetings(signal: AbortSignal, report?: (failure: unknown) => void, settled?: () => void): Promise<void>;
-  /** Resolves once no meeting pass is running: detached lanes, their top-ups and targeted passes (the staging canary). */
-  settle?(): Promise<void>;
+  /**
+   * Resolves once no meeting pass is running: detached lanes, their top-ups and targeted passes (the staging canary).
+   * With `stop` (shutdown), no new lane starts from then on.
+   */
+  settle?(stop?: boolean): Promise<void>;
   /** Observes one staged approval and commits its approve or reject result. */
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void>;
   /** Appends finalized actions to V4; rejected actions produce no readable fact. */
@@ -116,9 +119,16 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
    * never blocks the caller; failures go to `on_worker_error`.
    */
   requestApprovalPublication(): void;
-  /** Stops the worker and waits for meeting lanes, card presentation and ungated work before closing the Authority API database handles. */
+  /**
+   * Starts no new meeting lane and gives running ones up to 20 s to finish, then stops the worker (cancelling any
+   * still running) and waits for meeting lanes, card presentation and ungated work before closing the Authority API
+   * database handles.
+   */
   close(): Promise<void>;
 }
+
+/** How long close() lets running meeting lanes finish before cancelling them; well under the 30 s container stop. */
+const MEETING_LANE_GRACE_MS = 20_000;
 
 /**
  * Runs exactly one Organization Authority processing cycle. Recovery leads so
@@ -276,11 +286,13 @@ export async function startOrganizationAuthorityServiceLifecycle(
     // The running cycle, so drain also waits for its ungated intake.
     let cycleTail: Promise<void> = Promise.resolve();
     // The personal intake's meeting lanes outlive the cycle that started them, on the worker's signal.
-    const meetingLanes = async (): Promise<void> => { await (dependencies.additional_processing ?? startedApi.processing)?.settle?.(); };
+    const meetingLanes = async (stop?: boolean): Promise<void> => { await (dependencies.additional_processing ?? startedApi.processing)?.settle?.(stop); };
     const worker = new SerializedMeetingProcessingWorker({
       ...(dependencies.core_runtime_observation === undefined ? {} : { observation: dependencies.core_runtime_observation }),
       intervalMs: config.worker_interval_ms,
       runCycle: async (signal, exclusive) => {
+        // While close() lets running lanes finish, no new cycle starts.
+        if (closing) return;
         let finished!: () => void;
         cycleTail = new Promise((resolve) => { finished = resolve; });
         lifecycle.startCycle();
@@ -405,6 +417,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
     return {
       address: startedApi.address,
       runExclusive: async (operation) => {
+        shutdown.signal.throwIfAborted();
         search.suspend();
         try {
           return await worker.runExclusive(async (signal) => {
@@ -478,8 +491,13 @@ export async function startOrganizationAuthorityServiceLifecycle(
         }
         startedApi.stopAcceptingRequests?.();
         const searchClosed = search.close();
+        // No lane starts from now on. Running ones get the grace before the worker's signal cancels them, so a deploy
+        // or an operator grant cancels (and leaves for an operator) only extractions that run past it.
+        let grace: ReturnType<typeof setTimeout> | undefined;
+        const lanesFinished = Promise.race([meetingLanes(true), new Promise<void>((resolve) => { grace = setTimeout(resolve, MEETING_LANE_GRACE_MS); })])
+          .finally(() => clearTimeout(grace));
         // Once the worker has stopped no cycle can start a meeting lane, so its aborted lanes are the last to wait for.
-        const workerClosed = worker.close().finally(meetingLanes);
+        const workerClosed = lanesFinished.then(() => worker.close()).finally(() => meetingLanes());
         // The other lanes outside the gate settle on the aborted shutdown signal.
         const lanesSettled = Promise.all([presentationTail, ungatedTail]);
         closed = (async () => {

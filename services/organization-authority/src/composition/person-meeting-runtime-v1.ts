@@ -170,7 +170,8 @@ export function createPersonMeetingRuntimeV1(options: {
     return text === '' ? null : text.slice(0, 512);
   }
   // The breaker: after a transient provider failure no source starts a pass until this time; running ones finish.
-  let pausedUntil = 0;
+  // Shutdown (settle with stop) starts none again.
+  let pausedUntil = 0, stopped = false;
   // One pass per source at a time in this process saves wasted pulls; the attempt ledger's lease and the cursor
   // compare-and-swap keep passes in another process or after a restart correct.
   const inFlight = new Map<string, Promise<void>>();
@@ -234,7 +235,7 @@ export function createPersonMeetingRuntimeV1(options: {
   /** Sources due a pass and not running one, round-robin from the last one started. */
   function due(): MeetingIntakeSettingV1[] {
     // The breaker pauses every source; a targeted pass (the staging canary) still runs.
-    if (Date.now() < pausedUntil) return [];
+    if (stopped || Date.now() < pausedUntil) return [];
     // A source with an unfrozen proposal stays eligible until its freeze succeeds, even with nothing left to import.
     // So does a source with a parked meeting whose retry an operator authorized. A source already in flight is skipped.
     // Cheap checks first: a source's held rows are read, and its grants inspected, only when it is otherwise due.
@@ -274,7 +275,8 @@ export function createPersonMeetingRuntimeV1(options: {
       await track(setting, runSource(setting, signal));
     },
     // A settled lane tops up after a macrotask, so always look again after one, even when nothing is in flight now.
-    async settle() {
+    async settle(stop) {
+      if (stop === true) stopped = true;
       do { await Promise.all(inFlight.values()); await new Promise(resolve => setImmediate(resolve)); } while (inFlight.size > 0);
     },
   };

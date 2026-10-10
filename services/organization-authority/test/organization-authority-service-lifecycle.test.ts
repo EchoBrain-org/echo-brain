@@ -260,7 +260,31 @@ describe("Organization Authority service lifecycle", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(events).not.toContain("api-close");
     lanes.resolve(); await closing;
-    expect(events).toEqual(["handle-clear", "lanes", "settled", "settled-after-stop", "api-close", "handle-clear"]);
+    // Close settles the lanes first within its grace, then again once the worker has stopped.
+    expect(events).toEqual(["handle-clear", "lanes", "settled", "settled", "settled-after-stop", "api-close", "handle-clear"]);
+  });
+
+  it.each([[19_000, "staged"], [30_000, "cancelled"]] as const)("lets a meeting lane that needs %i ms finish within close's 20 s grace (%s), and starts no cycle meanwhile", async (needs, outcome) => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    let lane: Promise<void> | undefined, cycles = 0;
+    const runtime = await startLifecycle(1_000, {
+      processing: processing([]),
+      additional_processing: { ...processing([]),
+        pollAndStageAdmittedMeetings: async (signal) => {
+          cycles++;
+          lane ??= new Promise<void>((resolve) => {
+            const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); events.push(signal.aborted ? "cancelled" : "staged"); resolve(); };
+            const timer = setTimeout(done, needs);
+            signal.addEventListener("abort", done, { once: true });
+          });
+        },
+        settle: async (stop) => { if (stop === true) events.push("stop"); await lane; } },
+    }, events);
+    await vi.advanceTimersByTimeAsync(1);
+    const closing = runtime.close(), started = cycles;
+    await vi.advanceTimersByTimeAsync(30_000); await closing;
+    expect([events, cycles]).toEqual([["stop", outcome, "api-close"], started]);
   });
 
   it("requests card presentation when a detached lane settles after its cycle returned, before the next cycle", async () => {

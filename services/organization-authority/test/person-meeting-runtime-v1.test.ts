@@ -630,6 +630,14 @@ describe('personal meeting intake uses the shared processing path', () => {
     await runtime.processing.settle?.();
     expect([f.extracted(), content]).toEqual([1, ['model_response']]);
   });
+  it('starts no lane once shutdown has asked it to stop', async () => {
+    const f = await fixture(), runtime = f.create();
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await runtime.processing.settle?.(true);
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined);
+    await runtime.processing.settle?.();
+    expect(f.extracted()).toBe(0);
+  });
   it('settles only after the top-up a settling lane starts', async () => {
     const f = await fixture(), runtime = f.create(), b = '00000000-0000-4000-8000-000000000004';
     for (const meeting_id of [id, b]) await f.call(runtime, { operation: 'import', meeting_id, project_id: null, retain: true });
