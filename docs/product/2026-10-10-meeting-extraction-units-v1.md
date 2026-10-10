@@ -112,7 +112,7 @@ It is pure, reads only `MeetingDocument`, and never branches on the source.
 |---|---|
 | A cited ID differs only in case, or names a split unit's parent (`T12` for `T12.1`, `T12.2`) | Read it in upper case; a parent ID cites all its parts. |
 | An item cites at least one unknown ID but also valid ones | Drop the unknown IDs and keep the item. |
-| An item cites more than six units | Keep the first six in citation order. This bounds the approved record, which is limited to 256 KiB. |
+| An item's cited units hold more than 3,000 characters of text | Keep cited units in citation order until the next one would pass the 3,000-character evidence budget; the first is always kept. This bounds the approved record, which is limited to 256 KiB. A six-unit count cap hid real support: on the 12-meeting run, 41 of 93 delivered items hit it, and judged with their full citations 77 were supported instead of 66. |
 | An item cites no valid unit | Set aside (`evidence_id`). |
 | A rationale links to no surviving decision | Set aside (`rationale_supports`). |
 | Two items have the same kind, text and units | Keep the first. A rationale linked to the dropped copy links to the kept one. |

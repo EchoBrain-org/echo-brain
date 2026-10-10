@@ -55,6 +55,7 @@ export interface GranolaMeetingContentInputV1 extends GranolaNoteMetadataV1 {
   /** IANA zone of `started_at`. */
   timezone?: string | null;
   transcript?: GranolaTranscriptItem[] | null;
+  /** Names, emails, or `{ id?, name?, email? }` objects of attendees; they get the attendee role. */
   attendees?: unknown;
   /**
    * `{ name?, email? }` people Granola reports for the meeting. They prove

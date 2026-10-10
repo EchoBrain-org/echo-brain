@@ -327,7 +327,7 @@ The attempt ledger remains authoritative for holds and retry authorization.
 | `approval_review`, desktop, `returned` | The authenticated review-open handler produced the review; it does not prove screen rendering or human viewing. |
 | `approval_delivery`, Slack, `post_marker` / `reconcile_marker`, `completed` | Slack returned the placeholder's message reference; the approval card still needs publishing. |
 | `approval_delivery`, Slack, `publish_card`, `done` | Slack accepted the card update, not that the person read it. |
-| `approval_delivery`, `retry_pending` / `failed` / `unrepresentable` | Delivery was deferred, exhausted/invalidated, or the card exceeded Slack's limits. |
+| `approval_delivery`, `retry_pending` / `failed` / `unrepresentable` | Delivery was deferred, exhausted/invalidated, or the Slack card for that approval could not be built (too large for Slack, or a build error). |
 | `approval_action`, `done` | The shared approval core committed the human's decision. |
 
 Delivery spans cover actual provider attempts and state transitions. Idle

@@ -253,8 +253,8 @@ publishing):
   has an active link on the active Slack connection, post the card to the
   reviewer's DM (today's poster, with its marker and retry rules). A person
   who links Slack later gets their open proposals on the next pass.
-- Unrepresentable: a card that cannot fit Slack's limits is marked so and not
-  retried. The desktop still has it.
+- Unrepresentable: a card that cannot be built (too large for Slack, or a
+  build error) is marked so and not retried. The desktop still has it.
 - Redraw: when a posted card's proposal is decided (either surface) or
   superseded, replace it with a closed card: "Approved in the ECHO desktop" /
   "Rejected in Slack" / "Replaced by a newer version of this meeting", plus
