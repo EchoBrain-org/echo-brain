@@ -502,7 +502,7 @@ describe("admitted meeting-processing cycle", () => {
           return { content: JSON.stringify({ signals: [{
             kind: "decision", text: "Keep the live source lean.", status: "decided",
             owner: null, due_at: null, confidence: 1, supports_decision_indexes: [],
-            evidence: [{ evidence_id: "e1", quote: "This quote does not occur in the source." }],
+            evidence_units: ["T999"],
           }] }), inputTokens: 100, outputTokens: 20, totalTokens: 120, stopReason: "stop" };
         },
       },
@@ -513,8 +513,8 @@ describe("admitted meeting-processing cycle", () => {
       state: new FakeState({ ...admission(), processor: { ...admission().processor, version: extraction.identity.version } }),
       extraction_attempts: new RecordingExtractionAttempts(),
     };
-    await expect(liveCycle(options).runOnce()).resolves.toMatchObject({ kind: "held", stage: "evidence_quote" });
-    await expect(liveCycle(options).runOnce()).resolves.toMatchObject({ kind: "held", stage: "evidence_quote" });
+    await expect(liveCycle(options).runOnce()).resolves.toMatchObject({ kind: "held", stage: "evidence_id" });
+    await expect(liveCycle(options).runOnce()).resolves.toMatchObject({ kind: "held", stage: "evidence_id" });
     expect(generations).toBe(1);
   });
 

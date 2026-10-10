@@ -90,7 +90,7 @@ describe("OpenRouter decision processor bundle", () => {
     bundle.assert_admission_commitments(commitment(`file:${credential_file}`));
     const processor = bundle.create_processor(admission());
     const signal = new AbortController().signal;
-    await expect(processor.extract({ participants: [], content: [] } as never,
+    await expect(processor.extract({ participants: [], content: [{ id: "block-1", kind: "note", text: "Ship it." }] } as never,
       { processor_version: processor.identity.version, input_fingerprint: "sha256:fixture" }, { signal })).rejects.toThrow("limited");
     expect(limit).toHaveBeenCalledWith(signal, expect.any(Function));
   });

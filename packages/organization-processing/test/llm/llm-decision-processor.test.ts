@@ -8,6 +8,7 @@ import {
   type MeetingDocument,
 } from "../../src/core/index.js";
 import {
+  EXTRACTION_OUTPUT_JSON_FAILURE_MESSAGE,
   extractionGroundingFailureStage,
   extractionSchemaFailureStage,
   LlmDecisionProcessor,
@@ -22,6 +23,8 @@ import {
 import { classifyExtractionFailureStageV1 } from "../../src/admitted-meeting-processing/extraction-failure-stage-v1.js";
 
 const modelFailure = { aborted: false, received_output: false };
+const GROUNDING = 'LLM output contained invalid or unsupported signal grounding at stage: ';
+const SCHEMA = 'LLM output did not match the extraction schema at stage: ';
 
 const processorConfig: AdapterConfig = {
   adapter_id: 'llm',
@@ -29,6 +32,7 @@ const processorConfig: AdapterConfig = {
   settings: { model: 'fixture-model' },
 };
 
+// Units: N1, N2 (notes, section "Vendor selection"), S1 (AI summary), T1 (Ada, a question), T2 (Zhen).
 const meeting: MeetingDocument = {
   schema_version: 1,
   id: 'meeting-llm-1',
@@ -40,26 +44,30 @@ const meeting: MeetingDocument = {
       { kind: 'transcript', state: 'available' },
     ],
   },
-  participants: [{ id: 'participant-zhen', display_name: 'Zhen' }],
+  participants: [
+    { id: 'participant-zhen', display_name: 'Zhen' },
+    { id: 'participant-ada', display_name: 'Ada' },
+  ],
   time: {
     actual_start_at: '2026-07-17T17:00:00.000Z',
     timezone: 'America/Los_Angeles',
   },
   content: [
     {
-      id: 'summary-1',
-      kind: 'summary',
-      text: [
-        '### Vendor selection',
-        '- The team agreed to use vendor X for hosting',
-        '- Zhen will send the contract by Friday',
-      ].join('\n'),
+      id: 'notes-1',
+      kind: 'note',
+      text: '### Vendor selection\n- The team agreed to use vendor X for hosting\n- Zhen will send the contract by Friday',
     },
+    { id: 'summary-1', kind: 'summary', text: 'Vendor X was cheaper and faster.' },
     {
       id: 'transcript-1',
       kind: 'transcript',
-      text: 'Let us just go with vendor X, they were cheaper and faster.',
+      text: 'Should we use vendor X for hosting?',
+      speaker_participant_id: 'participant-ada',
+      started_at: '2026-07-17T17:01:00.000Z',
+      ended_at: '2026-07-17T17:01:04.000Z',
     },
+    { id: 'transcript-2', kind: 'transcript', text: "I'll send the signed copy tonight.", speaker_participant_id: 'participant-zhen' },
   ],
   artifacts: [],
   provenance: {
@@ -84,7 +92,6 @@ class FakeLlmClient implements LlmProviderClient {
     private readonly models: readonly string[] = ['fixture-model'],
     private readonly failure?: Error,
     readonly provider: LlmProviderId = 'fixture-local',
-    private readonly result?: StructuredGenerationResult,
   ) {}
 
   async generateStructured(
@@ -92,7 +99,7 @@ class FakeLlmClient implements LlmProviderClient {
   ): Promise<StructuredGenerationResult> {
     if (this.failure !== undefined) throw this.failure;
     this.requests.push(request);
-    return this.result ?? { content: this.content };
+    return { content: this.content };
   }
 
   async verifyModel(model: string): Promise<void> {
@@ -140,59 +147,25 @@ function testProcessingVersion(config: AdapterConfig): string {
 function modelSignal(overrides: Record<string, unknown>) {
   return {
     kind: 'decision',
-    text: 'Signal',
+    text: 'Use vendor X for hosting',
     status: 'unresolved',
     owner: null,
     due_at: null,
     confidence: null,
-    evidence: [{ evidence_id: 'e1', quote: 'Vendor selection' }],
+    evidence_units: ['N1'],
     supports_decision_indexes: [],
     ...overrides,
   };
 }
 
-function modelOutput(signals: readonly Record<string, unknown>[]) {
+function modelOutput(signals: readonly unknown[]) {
   return JSON.stringify({ signals });
 }
 
-const CONTRACT_EVIDENCE = [{ evidence_id: 'e1', quote: 'Zhen will send the contract by Friday' }];
-
 const validModelOutput = modelOutput([
-  modelSignal({
-    kind: 'decision',
-    text: 'Use vendor X for hosting',
-    status: 'decided',
-    confidence: 0.9,
-    evidence: [
-      {
-        evidence_id: 'e1',
-        quote: 'The team agreed to use vendor X for hosting',
-      },
-      {
-        evidence_id: 'e2',
-        quote: 'Let us just go with vendor X',
-      },
-    ],
-  }),
-  modelSignal({
-    kind: 'action',
-    text: 'Send the contract',
-    due_at: '2026-07-24T00:00:00.000Z',
-    confidence: 0.8,
-    evidence: CONTRACT_EVIDENCE,
-  }),
-  modelSignal({
-    kind: 'rationale',
-    text: 'Vendor X was cheaper and faster',
-    confidence: 0.7,
-    evidence: [
-      {
-        evidence_id: 'e2',
-        quote: 'they were cheaper and faster',
-      },
-    ],
-    supports_decision_indexes: [0],
-  }),
+  modelSignal({ status: 'decided', confidence: 0.9, evidence_units: ['N1', 'T1'] }),
+  modelSignal({ kind: 'action', text: 'Send the contract', owner: 'Zhen', due_at: '2026-07-24', confidence: 0.8, evidence_units: ['N2'] }),
+  modelSignal({ kind: 'rationale', text: 'Vendor X was cheaper and faster', confidence: 0.7, evidence_units: ['S1'], supports_decision_indexes: [0] }),
 ]);
 
 adapterConformance({
@@ -209,49 +182,59 @@ adapterConformance({
 });
 
 describe('llm decision processor extraction', () => {
-  it('renders participant ids and meeting time in stable order without requesting attribution', async () => {
+  it('renders the meeting as a header and numbered units per section', async () => {
     const client = new FakeLlmClient(validModelOutput);
     const instance = processor(client);
+    await instance.extract(meeting, extractionContext(instance));
 
-    await instance.extract(
-      {
-        ...meeting,
-        participants: [
-          { id: 'participant-z', display_name: 'Zed' },
-          { id: 'participant-a', display_name: 'Ada' },
-          { id: 'participant-zhen', display_name: 'Zhen' },
-        ],
-      },
-      extractionContext(instance),
-    );
+    const request = client.requests[0]!;
+    expect(request.userPrompt).toBe([
+      'Meeting: Vendor selection sync',
+      'Meeting date: 2026-07-17 (Friday), time zone America/Los_Angeles. Resolve relative dates from this date.',
+      'Participants (may be incomplete): Zhen; Ada',
+      'Speaker labels are participant names when known; otherwise a recording label, which may cover several people.',
+      '',
+      '### Notes written by people',
+      '[N1] (Vendor selection) The team agreed to use vendor X for hosting',
+      '[N2] (Vendor selection) Zhen will send the contract by Friday',
+      "### Summary written by a tool's AI (cite only when nothing else supports a signal)",
+      '[S1] Vendor X was cheaper and faster.',
+      '### Transcript',
+      '[T1] Ada: Should we use vendor X for hosting?',
+      "[T2] Zhen: I'll send the signed copy tonight.",
+    ].join('\n'));
+    expect(request.model).toBe('fixture-model');
+    expect(request.systemPrompt).toContain('For each signal, list in evidence_units the IDs of every unit that supports it');
+    expect(request.systemPrompt).toContain('Never infer an owner from who spoke');
+    expect(request.schema).toMatchObject({
+      additionalProperties: false,
+      properties: { signals: { items: {
+        additionalProperties: false,
+        required: ['kind', 'text', 'status', 'owner', 'due_at', 'confidence', 'evidence_units', 'supports_decision_indexes'],
+        properties: { evidence_units: { type: 'array', items: { type: 'string' } } },
+      } } },
+    });
+    const schemaJson = JSON.stringify(request.schema);
+    for (const absent of ['"evidence"', 'quote', 'owner_participant_id', 'minItems', 'minimum', 'maximum']) {
+      expect(schemaJson).not.toContain(absent);
+    }
 
-    expect(client.requests[0]!.userPrompt).toContain(
-      '"participants":[{"participant_id":"participant-a","display_name":"Ada"},{"participant_id":"participant-z","display_name":"Zed"},{"participant_id":"participant-zhen","display_name":"Zhen"}]',
-    );
-    expect(client.requests[0]!.userPrompt).toContain(
-      '"meeting_time":{"actual_start_at":"2026-07-17T17:00:00.000Z","actual_end_at":null,"scheduled_start_at":null,"scheduled_end_at":null,"timezone":"America/Los_Angeles","date_reference_at":"2026-07-17T17:00:00.000Z","date_reference_local_date":"2026-07-17"}',
-    );
-  });
-
-  it('falls back safely to the UTC calendar date when the source timezone is invalid', async () => {
-    const client = new FakeLlmClient(validModelOutput);
-    const instance = processor(client);
-    const invalidTimezoneMeeting: MeetingDocument = {
-      ...meeting,
-      time: {
-        actual_start_at: '2026-07-17T01:00:00.000Z',
-        timezone: 'not-a-timezone',
-      },
+    const bare: MeetingDocument = {
+      ...meeting, title: ' ', participants: [], time: undefined,
+      content: [{ id: 'transcript-1', kind: 'transcript', text: 'Bo: Ship it.' }],
     };
-
-    await instance.extract(invalidTimezoneMeeting, extractionContext(instance));
-
-    expect(client.requests[0]!.userPrompt).toContain(
-      '"date_reference_local_date":"2026-07-17"',
-    );
+    await instance.extract(bare, extractionContext(instance));
+    expect(client.requests[1]!.userPrompt).toBe([
+      'Meeting: (untitled)',
+      'Meeting date: unknown. Set a due date only when the meeting states an absolute date.',
+      'Speaker labels are participant names when known; otherwise a recording label, which may cover several people.',
+      '',
+      '### Transcript',
+      '[T1] Bo: Ship it.',
+    ].join('\n'));
   });
 
-  it('accepts paraphrased signals grounded to source aliases', async () => {
+  it('builds evidence from the cited units as exact block slices', async () => {
     const client = new FakeLlmClient(validModelOutput);
     const instance = processor(client);
     const first = await instance.extract(meeting, extractionContext(instance));
@@ -261,566 +244,216 @@ describe('llm decision processor extraction', () => {
       schema_version: 1,
       meeting_id: 'meeting-llm-1',
       meeting_revision: 'sha256:llm-fixture-revision',
-      processor: {
-        kind: 'decision-processor',
-        adapter_id: 'llm',
-        instance_id: 'local',
-      },
+      processor: instance.identity,
       generated_at: '2026-07-17T18:00:00.000Z',
     });
-    expect(first.signals).toHaveLength(3);
-    expect(first.signals[0]).not.toHaveProperty('decision_maker_participant_id');
-
     const [decision, action, rationale] = first.signals;
-    expect(decision).toMatchObject({
-      kind: 'decision',
-      status: 'decided',
-      text: 'Use vendor X for hosting',
-      confidence: 0.9,
-    });
     expect(decision!.id).toMatch(/^decision:sha256:[a-f0-9]{64}$/);
-    expect(decision).toMatchObject({
+    expect(decision).toEqual({
+      id: decision!.id, kind: 'decision', text: 'Use vendor X for hosting', subject: null, status: 'decided', confidence: 0.9,
       evidence: [
+        { meeting_id: meeting.id, block_id: 'notes-1', quote: 'The team agreed to use vendor X for hosting' },
         {
-          block_id: 'summary-1',
-          quote: 'The team agreed to use vendor X for hosting',
+          meeting_id: meeting.id, block_id: 'transcript-1', quote: 'Should we use vendor X for hosting?',
+          started_at: '2026-07-17T17:01:00.000Z', ended_at: '2026-07-17T17:01:04.000Z',
         },
-        { block_id: 'transcript-1', quote: 'Let us just go with vendor X' },
       ],
     });
     expect(action).toMatchObject({
-      kind: 'action',
-      owner: null,
-      due_at: '2026-07-24T00:00:00.000Z',
-      evidence: [{ block_id: 'summary-1' }],
+      kind: 'action', owner: 'Zhen', due_at: '2026-07-24T19:00:00.000Z', confidence: 0.8,
+      evidence: [{ meeting_id: meeting.id, block_id: 'notes-1', quote: 'Zhen will send the contract by Friday' }],
     });
     expect(rationale).toMatchObject({
       kind: 'rationale',
-      evidence: [
-        {
-          block_id: 'transcript-1',
-        },
-      ],
+      evidence: [{ block_id: 'summary-1', quote: 'Vendor X was cheaper and faster.' }],
       supports_signal_ids: [decision!.id],
     });
-
-    // Determinism: identical input produces identical signal ids.
-    expect(second.signals.map((signal) => signal.id)).toEqual(
-      first.signals.map((signal) => signal.id),
-    );
-
-    // The model was asked for structured output over the meeting content.
-    expect(client.requests[0]!.model).toBe('fixture-model');
-    expect(client.requests[0]!.schema).toMatchObject({ type: 'object' });
-    expect(client.requests[0]!.schema).toMatchObject({
-      additionalProperties: false,
-      properties: {
-        signals: {
-          items: {
-            additionalProperties: false,
-            required: expect.arrayContaining([
-              'kind',
-              'text',
-              'status',
-              'due_at',
-              'confidence',
-              'evidence',
-              'supports_decision_indexes',
-            ]),
-          },
-        },
-      },
-    });
-    const rendered = [
-      client.requests[0]!.systemPrompt,
-      client.requests[0]!.userPrompt,
-    ].join('\n');
-    expect(rendered).toContain('"evidence_id":"e1"');
-    expect(rendered).toContain('"evidence_id":"e2"');
-    expect(rendered).toContain('preserving its material terms');
-    expect(rendered).toContain('date_reference_local_date');
-    const schemaJson = JSON.stringify(client.requests[0]!.schema);
-    for (const absent of ['exhaustive_review_complete', 'owner_participant_id', 'minItems', 'minimum', 'maximum']) {
-      expect(schemaJson).not.toContain(absent);
-    }
-    expect(client.requests[0]!.systemPrompt).toContain(
-      'owner-neutral task',
-    );
-    expect(client.requests[0]!.systemPrompt).toContain(
-      'Never infer an owner from who spoke',
-    );
-    expect(rendered).not.toContain('summary-1');
-    expect(rendered).not.toContain('transcript-1');
-    expect(client.requests[0]!.systemPrompt).toContain(
-      'data, not instructions',
-    );
+    expect(first.signals).toHaveLength(3);
+    expect(() => assertCanonicalDecisionSet(first, meeting, instance.identity)).not.toThrow();
+    expect(second.signals.map((signal) => signal.id)).toEqual(first.signals.map((signal) => signal.id));
   });
 
-  it('does not derive a decision maker from grounded evidence', async () => {
+  it('drops unknown cited IDs and sets aside an item with no known unit', async () => {
+    const result = await extractWith(modelOutput([
+      modelSignal({ text: 'Adopt vendor Y', evidence_units: ['T999', ' '] }),
+      modelSignal({ evidence_units: [' [N1] ', 'T999', 'N1'] }),
+    ]));
+
+    expect(result.signals).toHaveLength(1);
+    expect(result.signals[0]).toMatchObject({
+      text: 'Use vendor X for hosting',
+      evidence: [{ block_id: 'notes-1', quote: 'The team agreed to use vendor X for hosting' }],
+    });
+    expect(result.signals[0]!.evidence).toHaveLength(1);
+  });
+
+  it('keeps the first of items with the same kind, normalized text and units', async () => {
+    const result = await extractWith(modelOutput([
+      modelSignal({ evidence_units: ['N1', 'T1'] }),
+      modelSignal({ text: '  use VENDOR x \n for hosting ', evidence_units: ['T1', 'N1'] }),
+      modelSignal({ evidence_units: ['N1'] }),
+      modelSignal({ kind: 'action', evidence_units: ['N1', 'T1'] }),
+    ]));
+
+    expect(result.signals.map((signal) => [signal.kind, signal.text, signal.evidence.length])).toEqual([
+      ['decision', 'Use vendor X for hosting', 2],
+      ['decision', 'Use vendor X for hosting', 1],
+      ['action', 'Use vendor X for hosting', 2],
+    ]);
+    // Distinct units with identical quotes would repeat the signal id.
+    const echoed: MeetingDocument = { ...meeting, content: [{ id: 'transcript-1', kind: 'transcript', text: 'Ada: Yes.\nBo: Yes.' }] };
+    const repeated = await extractWith(modelOutput([modelSignal({ evidence_units: ['T1'] }), modelSignal({ evidence_units: ['T2'] })]), echoed);
+    expect(repeated.signals).toHaveLength(1);
+  });
+
+  it('downgrades a decided decision that cites only questions', async () => {
+    const result = await extractWith(modelOutput([
+      modelSignal({ status: 'decided', evidence_units: ['T1'] }),
+      modelSignal({ status: 'decided', evidence_units: ['T1', 'N1'] }),
+    ]));
+    expect(result.signals).toMatchObject([{ status: 'proposed' }, { status: 'decided' }]);
+  });
+
+  it('clears an unusable or pre-meeting due date and keeps the action', async () => {
+    const dueDates = ['2026-07-24T00:00:00-07:00', '2026-07-24', '2026-07-17', 'not-a-date', '2026-02-30', 7,
+      '2026-07-16', '2026-07-16T23:45:00-07:00', '2026-07-17T02:00:00Z'];
+    const result = await extractWith(modelOutput(dueDates.map((due_at) => modelSignal({
+      kind: 'action', text: `Send the contract (${String(due_at)})`, due_at, evidence_units: ['N2'],
+    }))));
+
+    expect(result.signals.map((signal) => signal.kind === 'action' ? signal.due_at : undefined)).toEqual([
+      '2026-07-24T07:00:00.000Z', '2026-07-24T19:00:00.000Z', '2026-07-17T19:00:00.000Z', null, null, null, null, null, null,
+    ]);
+  });
+
+  it.each([
+    ['2026-03-08', '2026-03-08T19:00:00.000Z'],
+    ['2026-11-01', '2026-11-01T20:00:00.000Z'],
+  ])('normalizes date-only deadline %s at local noon across daylight-saving boundaries', async (localDate, dueAt) => {
+    const dstMeeting: MeetingDocument = { ...meeting, time: { actual_start_at: `${localDate}T10:30:00.000Z`, timezone: 'America/Los_Angeles' } };
+    const instance = processor(new FakeLlmClient(modelOutput([
+      modelSignal({ kind: 'action', text: 'Send the contract', due_at: localDate, evidence_units: ['N2'] }),
+    ])));
+    const result = await instance.extract(dstMeeting, extractionContext(instance));
+    expect(result.signals).toMatchObject([{ kind: 'action', due_at: dueAt }]);
+    expect(() => assertCanonicalDecisionSet(result, dstMeeting, instance.identity)).not.toThrow();
+  });
+
+  it('keeps a proposed owner only when a cited unit names them or they commit as its speaker', async () => {
+    const action = (text: string, owner: unknown, units: readonly string[]) =>
+      modelSignal({ kind: 'action', text, owner, evidence_units: units });
+    const result = await extractWith(modelOutput([
+      action('Send the contract', '  Zhen ', ['N2']),
+      action('Send the signed copy', 'Zhen', ['T2']),
+      action('Confirm the hosting choice', 'Ada', ['T1']),
+      action('Send the quote', 'Priya', ['N2']),
+      action('Send the draft', 'Zhe', ['N2']),
+      action('Send the memo', 7, ['N2']),
+      action('Send the deck', 'x'.repeat(121), ['N2']),
+      action('Send the notes', null, ['N2']),
+      modelSignal({ owner: 'Zhen', evidence_units: ['N2'] }),
+    ]));
+
+    expect(result.signals.map((signal) => signal.kind === 'action' ? signal.owner : 'no-owner-field')).toEqual([
+      'Zhen', 'Zhen', null, null, null, null, null, null, 'no-owner-field',
+    ]);
+    expect(result.signals[8]).not.toHaveProperty('owner');
+  });
+
+  it('links rationales only to surviving decisions and sets aside one with none left', async () => {
+    const instance = processor(new FakeLlmClient(modelOutput([
+      modelSignal({ kind: 'rationale', text: 'Vendor X was cheaper and faster', evidence_units: ['S1'], supports_decision_indexes: [2, 2, 1, 3, 99, -1, 0.5] }),
+      modelSignal({ text: 'Adopt vendor Y', evidence_units: ['T999'] }),
+      modelSignal({ evidence_units: ['N1'] }),
+      modelSignal({ kind: 'rationale', text: 'Vendor Y was cheaper', evidence_units: ['S1'], supports_decision_indexes: [1] }),
+      modelSignal({ kind: 'rationale', text: 'Vendor X was faster', evidence_units: ['S1'], supports_decision_indexes: 'all' }),
+    ])));
+    const result = await instance.extract(meeting, extractionContext(instance));
+
+    expect(result.signals.map((signal) => signal.text)).toEqual(['Vendor X was cheaper and faster', 'Use vendor X for hosting']);
+    expect(result.signals[0]).toMatchObject({ kind: 'rationale', supports_signal_ids: [result.signals[1]!.id] });
+    expect(() => assertCanonicalDecisionSet(result, meeting, instance.identity)).not.toThrow();
+  });
+
+  it('fails the meeting with the first set-aside reason when no item survives', async () => {
+    const instance = processor(new FakeLlmClient(modelOutput([
+      modelSignal({ evidence_units: ['T999'] }),
+      modelSignal({ kind: 'rationale', text: 'Vendor X was cheaper', evidence_units: ['S1'], supports_decision_indexes: [0] }),
+    ])));
+    const metadata: CoreRuntimeObservationV1[] = [];
+    const failure = await observeCoreRuntimeV1('extraction', () => instance.extract(meeting, extractionContext(instance)), {
+      observer: (event) => { metadata.push(event); },
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ name: 'AdapterError', code: 'temporarily_unavailable', retryable: true, message: `${GROUNDING}evidence_id` });
+    expect(extractionGroundingFailureStage(failure)).toBe('evidence_id');
+    expect(classifyExtractionFailureStageV1(failure, modelFailure)).toBe('evidence_id');
+    expect(metadata).toEqual(expect.arrayContaining([expect.objectContaining({
+      phase: 'model_grounding', grounding_stage: 'evidence_id', result: 'grounding_failure', event: 'failed',
+    })]));
+    await expect(extractWith(modelOutput([modelSignal({ kind: 'bogus' }), modelSignal({ evidence_units: ['T999'] })])))
+      .rejects.toMatchObject({ message: `${SCHEMA}kind` });
+    await expect(extractWith(modelOutput([
+      modelSignal({ kind: 'rationale', evidence_units: ['S1'], supports_decision_indexes: [1] }),
+      modelSignal({ evidence_units: ['T999'] }),
+    ]))).rejects.toMatchObject({ message: `${GROUNDING}rationale_supports` });
+  });
+
+  it('returns an empty set without calling the model when the meeting has no units', async () => {
     const client = new FakeLlmClient(validModelOutput);
     const instance = processor(client);
-    const attributedMeeting: MeetingDocument = {
-      ...meeting,
-      content: [
-        {
-          ...meeting.content[0]!,
-          speaker_participant_id: 'participant-zhen',
-        },
-        meeting.content[1]!,
-      ],
-    };
+    const blank: MeetingDocument = { ...meeting, content: [{ id: 'notes-1', kind: 'note', text: ' \n### Agenda\n' }] };
+    const payload: CoreRuntimeDiagnosticObservationV1[] = [];
+    const result = await withCoreRuntimeDiagnosticsV1((event) => { payload.push(event); },
+      () => observeCoreRuntimeV1('extraction', () => instance.extract(blank, extractionContext(instance))));
 
-    const result = await instance.extract(
-      attributedMeeting,
-      extractionContext(instance),
-    );
-
-    expect(result.signals[0]).toMatchObject({ kind: 'decision' });
-    expect(result.signals).toHaveLength(3);
-    for (const signal of result.signals) {
-      expect(signal).not.toHaveProperty('decision_maker_participant_id');
-    }
-    expect(client.requests[0]!.userPrompt).toContain(
-      '"speaker_participant_id":"participant-zhen"',
-    );
-    expect(JSON.stringify(client.requests[0]!.schema)).not.toContain(
-      'decision_maker_participant_id',
-    );
+    expect(result.signals).toEqual([]);
+    expect(() => assertCanonicalDecisionSet(result, blank, instance.identity)).not.toThrow();
+    expect(client.requests).toHaveLength(0);
+    expect(payload).toHaveLength(0);
+    await expect(extractWith(modelOutput([]))).resolves.toMatchObject({ signals: [] });
   });
 
-  const GROUNDING = 'LLM output contained invalid or unsupported signal grounding at stage: ';
-  const questionMeeting: MeetingDocument = {
-    ...meeting,
-    content: [{ ...meeting.content[0]!, text: 'Should we use vendor X for hosting?' }],
-  };
-  const rationaleSupports = (supports: readonly number[]) => {
-    const parsed = JSON.parse(validModelOutput) as { signals: Record<string, unknown>[] };
-    parsed.signals[2]!['supports_decision_indexes'] = [...supports];
-    return JSON.stringify(parsed);
-  };
-  it.each<[string, string, Record<string, unknown>, MeetingDocument?]>([
-    ['a declared signal with invalid grounding', modelOutput([
-      modelSignal({
-        kind: 'decision', text: 'Adopt vendor Y', status: 'decided', confidence: 0.9,
-        evidence: [{ evidence_id: 'e999', quote: 'Adopt vendor Y' }],
-      }),
-    ]), { name: 'AdapterError', code: 'temporarily_unavailable', retryable: true, message: `${GROUNDING}evidence_id` }],
-    ['the whole response when one alias is invalid', modelOutput([
-      modelSignal({
-        kind: 'decision', text: 'Use vendor X', status: 'decided',
-        evidence: [{ evidence_id: 'e1', quote: 'The team agreed to use vendor X' }],
-      }),
-      modelSignal({
-        kind: 'decision', text: 'Adopt vendor Y', status: 'decided',
-        evidence: [{ evidence_id: 'e999', quote: 'Adopt vendor Y' }],
-      }),
-    ]), { code: 'temporarily_unavailable', message: `${GROUNDING}evidence_id` }],
-    ['a signal when any cited quote is invalid', modelOutput([
-      modelSignal({
-        text: 'Use vendor X', status: 'decided',
-        evidence: [
-          { evidence_id: 'e1', quote: 'The team agreed to use vendor X' },
-          { evidence_id: 'e2', quote: 'Invented supporting sentence' },
-        ],
-      }),
-    ]), { code: 'temporarily_unavailable', message: `${GROUNDING}evidence_quote` }],
-    ['a signal when any cited alias is duplicated', modelOutput([
-      modelSignal({
-        text: 'Use vendor X', status: 'decided',
-        evidence: [
-          { evidence_id: 'e1', quote: 'The team agreed to use vendor X' },
-          { evidence_id: 'e1', quote: 'Zhen will send the contract by Friday' },
-        ],
-      }),
-    ]), { code: 'temporarily_unavailable', message: `${GROUNDING}evidence_duplicate` }],
-    ['a decided signal supported only by questions', modelOutput([
-      modelSignal({
-        text: 'Use vendor X for hosting', status: 'decided',
-        evidence: [{ evidence_id: 'e1', quote: 'Should we use vendor X for hosting?' }],
-      }),
-    ]), { code: 'temporarily_unavailable', message: `${GROUNDING}decided_question_only` }, questionMeeting],
-    ...[[], [1], [99], [0, 0]].map((supports): [string, string, Record<string, unknown>] => [
-      `a rationale supporting decision indexes [${supports.join(', ')}]`,
-      rationaleSupports(supports),
-      { code: 'temporarily_unavailable', message: `${GROUNDING}rationale_supports` },
-    ]),
-    ['malformed model output', 'not json at all', { name: 'AdapterError', code: 'temporarily_unavailable', retryable: true }],
-  ])('rejects %s with a retryable taxonomy error', async (_label, output, match, value = meeting) => {
-    await expect(extractWith(output, value)).rejects.toMatchObject(match);
-  });
-
-  describe('meeting e5 quote regression', () => {
-    // Sanitized synthetic staging case: the model omitted a material clause.
-    const sourceText =
-      'The signed data agreement and security-contact check are not complete yet, and the adoption threshold only tells us when we can expand later. We should not make the customer think those are formalities.';
-    const elidedQuote =
-      'The signed data agreement and security-contact check are not complete yet… We should not make the customer think those are formalities.';
-    const quoteMeeting: MeetingDocument = {
-      ...meeting,
-      title: 'Implementation capacity triage',
-      content: [
-        ...meeting.content,
-        { id: 'transcript-02', kind: 'transcript', text: 'Review capacity.' },
-        { id: 'transcript-03', kind: 'transcript', text: 'Review prerequisites.' },
-        { id: 'transcript-04', kind: 'transcript', text: sourceText },
-      ],
-    };
-    const output = (quote: string) =>
-      modelOutput([
-        modelSignal({
-          text: 'Customer prerequisites remain incomplete',
-          evidence: [{ evidence_id: 'e5', quote }],
-        }),
-      ]);
-
-    it('captures the exact rejected quote and source only through a selected private sink, preserving rejection', async () => {
-      const instance = processor(new FakeLlmClient(output(elidedQuote)));
-      const metadata: CoreRuntimeObservationV1[] = [], payload: CoreRuntimeDiagnosticObservationV1[] = [];
-      const extract = () => observeCoreRuntimeV1('extraction', () => instance.extract(quoteMeeting, extractionContext(instance)), {
-        observer: event => { metadata.push(event); },
-      });
-      await expect(extract()).rejects.toMatchObject({ code: 'temporarily_unavailable' });
-      expect(payload).toHaveLength(0);
-      await expect(withCoreRuntimeDiagnosticsV1(event => { payload.push(event); }, extract)).rejects.toMatchObject({ code: 'temporarily_unavailable' });
-      expect(payload).toEqual(expect.arrayContaining([
-        expect.objectContaining({ kind: 'model_request', role: 'extraction', input: expect.objectContaining({ user_prompt: expect.stringContaining(sourceText) }) }),
-        expect.objectContaining({ kind: 'model_response', value: output(elidedQuote) }),
-        expect.objectContaining({ kind: 'lifecycle', stage: 'grounding', event: 'failed', data: {
-          failure_stage: 'evidence_quote', signal_index: 0, evidence_id: 'e5', block_id: 'transcript-04', block_kind: 'transcript', quote: elidedQuote, source_text: sourceText,
-        } }),
-      ]));
-      expect(metadata).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'model_grounding', grounding_stage: 'evidence_quote', result: 'grounding_failure', event: 'failed' })]));
-      for (const text of [sourceText, elidedQuote, quoteMeeting.title!, 'transcript-04']) expect(JSON.stringify(metadata)).not.toContain(text);
-      await expect(withCoreRuntimeDiagnosticsV1(() => { throw new Error('diagnostic failure'); }, extract)).rejects.toMatchObject({ code: 'temporarily_unavailable' });
-    });
-
-    it('exposes the captured grounding failure and accepts only a corrected caller retry', async () => {
-      const client = new FakeLlmClient(output(sourceText));
-      const generate = vi.spyOn(client, 'generateStructured');
-      generate.mockResolvedValueOnce({ content: output(elidedQuote) });
-      const instance = processor(client);
-      const context = extractionContext(instance);
-
-      const attempt = instance.extract(quoteMeeting, context);
-      await expect(attempt).rejects.toMatchObject({
-        name: 'AdapterError',
-        code: 'temporarily_unavailable',
-        retryable: true,
-        message:
-          'LLM output contained invalid or unsupported signal grounding at stage: evidence_quote',
-      });
-      const failure = await attempt.catch((error: unknown) => error);
-      expect(extractionGroundingFailureStage(failure)).toBe('evidence_quote');
-      expect(classifyExtractionFailureStageV1(failure, modelFailure)).toBe('evidence_quote');
-      expect(generate).toHaveBeenCalledTimes(1);
-
-      const retried = await instance.extract(quoteMeeting, context);
-      expect(generate).toHaveBeenCalledTimes(2);
-      expect(retried.signals).toHaveLength(1);
-      expect(retried.signals[0]!.evidence).toEqual([
-        {
-          meeting_id: quoteMeeting.id,
-          block_id: 'transcript-04',
-          quote: sourceText,
-        },
-      ]);
-      assertCanonicalDecisionSet(retried, quoteMeeting, instance.identity);
-    });
-
-    it.each([
-      ['ASCII ellipsis', elidedQuote.replace('…', '...')],
-      ['stitched spans without an ellipsis', elidedQuote.replace('…', '.')],
-    ])('rejects %s on every attempt', async (_label, quote) => {
-      const client = new FakeLlmClient(output(quote));
-      const instance = processor(client);
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        await expect(
-          instance.extract(quoteMeeting, extractionContext(instance)),
-        ).rejects.toMatchObject({
-          retryable: true,
-          message:
-            'LLM output contained invalid or unsupported signal grounding at stage: evidence_quote',
-        });
-      }
-      expect(client.requests).toHaveLength(2);
-    });
-
-    it.each([
-      ['whole block', sourceText],
-      [
-        'short contiguous span',
-        'We should not make the customer think those are formalities.',
-      ],
-    ])('accepts a verbatim %s and requests contiguous evidence', async (_label, quote) => {
-      const client = new FakeLlmClient(output(quote));
-      const instance = processor(client);
-      const result = await instance.extract(
-        quoteMeeting,
-        extractionContext(instance),
-      );
-      expect(result.signals[0]!.evidence).toEqual([
-        { meeting_id: quoteMeeting.id, block_id: 'transcript-04', quote },
-      ]);
-      const request = client.requests[0]!;
-      expect(JSON.parse(request.userPrompt).content[4]).toMatchObject({
-        evidence_id: 'e5',
-        text: sourceText,
-      });
-      expect(request.systemPrompt).toMatch(/contiguous verbatim span/);
-    });
-  });
-
-  it('keeps an action unassigned when the model proposes no owner, even if the transcript names one', async () => {
+  it('sends set-aside items only to a selected private sink, keeping the survivors', async () => {
     const output = modelOutput([
-      modelSignal({
-        kind: 'action',
-        text: 'Send the contract',
-        evidence: CONTRACT_EVIDENCE,
-      }),
+      modelSignal({ kind: 'bogus', evidence_units: ['N1'] }),
+      modelSignal({ text: 'Adopt vendor Y', evidence_units: ['T999'] }),
+      modelSignal({ kind: 'action', text: 'Send the contract', evidence_units: ['N2'] }),
     ]);
     const instance = processor(new FakeLlmClient(output));
-    const result = await instance.extract(meeting, extractionContext(instance));
-
-    expect(result.signals).toMatchObject([{ kind: 'action', owner: null }]);
-  });
-
-  it('keeps a proposed owner only when the cited evidence names them', async () => {
-    const action = (owner: unknown, quote = 'Zhen will send the contract by Friday') => modelSignal({
-      kind: 'action', text: 'Send the contract', owner, evidence: [{ evidence_id: 'e1', quote }],
+    const metadata: CoreRuntimeObservationV1[] = [], payload: CoreRuntimeDiagnosticObservationV1[] = [];
+    const extract = () => observeCoreRuntimeV1('extraction', () => instance.extract(meeting, extractionContext(instance)), {
+      observer: (event) => { metadata.push(event); },
     });
-    const output = modelOutput([
-      action('  Zhen '),
-      action('Priya'),
-      action('Zhe'),
-      action(''),
-      action('x'.repeat(121)),
-      modelSignal({ kind: 'decision', text: 'Use vendor X for hosting', owner: 'Zhen', evidence: [{ evidence_id: 'e1', quote: 'The team agreed to use vendor X for hosting' }] }),
+    const kept = { signals: [{ kind: 'action', text: 'Send the contract' }] };
+    await expect(extract()).resolves.toMatchObject(kept);
+    expect(payload).toHaveLength(0);
+    await expect(withCoreRuntimeDiagnosticsV1((event) => { payload.push(event); }, extract)).resolves.toMatchObject(kept);
+    expect(payload).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'model_request', role: 'extraction', input: expect.objectContaining({ user_prompt: expect.stringContaining('[N2] (Vendor selection) Zhen will send the contract by Friday') }) }),
+      expect.objectContaining({ kind: 'model_response', value: output }),
+    ]));
+    expect(payload.filter((event) => event.kind === 'lifecycle')).toMatchObject([
+      { stage: 'grounding', event: 'skipped', data: { signal_index: 0, reason: 'kind', cited_units: ['N1'] } },
+      { stage: 'grounding', event: 'skipped', data: { signal_index: 1, reason: 'evidence_id', cited_units: ['T999'] } },
     ]);
-    const instance = processor(new FakeLlmClient(output));
-    const result = await instance.extract(meeting, extractionContext(instance));
-
-    expect(result.signals.map(signal => signal.kind === 'action' ? signal.owner : 'no-owner-field')).toEqual([
-      'Zhen', null, null, null, null, 'no-owner-field',
-    ]);
-    expect(result.signals[5]).not.toHaveProperty('owner');
+    for (const text of ['T999', 'Adopt vendor Y', meeting.title!, 'Zhen will send']) expect(JSON.stringify(metadata)).not.toContain(text);
+    await expect(withCoreRuntimeDiagnosticsV1(() => { throw new Error('diagnostic failure'); }, extract)).resolves.toMatchObject(kept);
   });
 
-  it('keeps a proposed owner who commits in the first person as the cited speaker', async () => {
-    const spoken = {
-      ...meeting,
-      content: [
-        ...meeting.content,
-        { id: 'transcript-2', kind: 'transcript' as const, text: "I'll send the signed copy tonight.", speaker_participant_id: 'participant-zhen' },
-        { id: 'transcript-3', kind: 'transcript' as const, text: 'Someone should send the signed copy.', speaker_participant_id: 'participant-zhen' },
-      ],
-    };
-    const output = modelOutput([
-      modelSignal({ kind: 'action', text: 'Send the signed copy', owner: 'Zhen', evidence: [{ evidence_id: 'e3', quote: "I'll send the signed copy tonight." }] }),
-      modelSignal({ kind: 'action', text: 'Send the signed copy', owner: 'Zhen', evidence: [{ evidence_id: 'e4', quote: 'Someone should send the signed copy.' }] }),
-    ]);
-    const instance = processor(new FakeLlmClient(output));
-    const result = await instance.extract(spoken, { ...extractionContext(instance), input_fingerprint: spoken.provenance.canonical_revision });
+  it('ignores values in fields irrelevant to a signal kind and drops an invalid confidence', async () => {
+    const noisy = JSON.parse(validModelOutput) as { signals: Record<string, unknown>[] };
+    Object.assign(noisy.signals[0]!, { owner: 'Zhen', due_at: 'not-used', supports_decision_indexes: [2] });
+    Object.assign(noisy.signals[1]!, { status: 'not-used', supports_decision_indexes: [0] });
+    Object.assign(noisy.signals[2]!, { status: 'proposed', owner: 'Zhen', due_at: 'not-used' });
+    const [clean, noisyResult] = await Promise.all([extractWith(validModelOutput), extractWith(JSON.stringify(noisy))]);
+    expect(noisyResult).toEqual(clean);
 
-    expect(result.signals.map(signal => signal.kind === 'action' ? signal.owner : undefined)).toEqual(['Zhen', null]);
-  });
-
-  it('rejects an owner that is not text or null', async () => {
-    const output = modelOutput([modelSignal({ kind: 'action', text: 'Send the contract', owner: 7, evidence: CONTRACT_EVIDENCE })]);
-    const instance = processor(new FakeLlmClient(output));
-    await expect(instance.extract(meeting, extractionContext(instance))).rejects.toMatchObject({
-      message: 'LLM output did not match the extraction schema at stage: owner',
-    });
-  });
-
-  it('rejects model-supplied action attribution as an unexpected field', async () => {
-    const output = modelOutput([
-      modelSignal({
-        kind: 'action',
-        text: 'Send the contract',
-        owner_participant_id: 'participant-zhen',
-        evidence: CONTRACT_EVIDENCE,
-      }),
-    ]);
-    const instance = processor(new FakeLlmClient(output));
-    await expect(
-      instance.extract(meeting, extractionContext(instance)),
-    ).rejects.toMatchObject({
-      name: 'AdapterError',
-      code: 'temporarily_unavailable',
-      retryable: true,
-      message:
-        'LLM output did not match the extraction schema at stage: irrelevant_fields',
-    });
-  });
-
-  it('normalizes grounded ISO and local calendar due dates and rejects malformed dates', async () => {
-    const dueDates = modelOutput([
-      modelSignal({
-        kind: 'action',
-        text: 'Send the contract',
-        due_at: '2026-07-24T00:00:00-07:00',
-        evidence: CONTRACT_EVIDENCE,
-      }),
-    ]);
-    const instance = processor(new FakeLlmClient(dueDates));
-    const result = await instance.extract(meeting, extractionContext(instance));
-
-    expect(result.signals).toMatchObject([
-      { kind: 'action', due_at: '2026-07-24T07:00:00.000Z' },
-    ]);
-    expect(() =>
-      assertCanonicalDecisionSet(result, meeting, instance.identity),
-    ).not.toThrow();
-
-    const dateOnly = modelOutput([
-      modelSignal({
-        kind: 'action',
-        text: 'Confirm the hosting choice',
-        due_at: '2026-07-24',
-      }),
-    ]);
-    const dateOnlyResult = await processor(
-      new FakeLlmClient(dateOnly),
-    ).extract(meeting, extractionContext(instance));
-    expect(dateOnlyResult.signals).toMatchObject([
-      { kind: 'action', due_at: '2026-07-24T19:00:00.000Z' },
-    ]);
-    expect(() =>
-      assertCanonicalDecisionSet(dateOnlyResult, meeting, instance.identity),
-    ).not.toThrow();
-
-    for (const due_at of ['not-a-date', '2026-02-30', '2024-07-24T00:00:00-07:00']) {
-      const malformed = modelOutput([
-        modelSignal({ kind: 'action', text: 'Confirm the hosting choice', due_at }),
-      ]);
-      await expect(
-        processor(new FakeLlmClient(malformed)).extract(
-          meeting,
-          extractionContext(instance),
-        ),
-      ).rejects.toMatchObject({ code: 'temporarily_unavailable' });
-    }
-  });
-
-  it('normalizes date-only deadlines at local noon across daylight-saving boundaries', async () => {
-    const cases = [
-      ['2026-03-08', '2026-03-08T19:00:00.000Z'],
-      ['2026-11-01', '2026-11-01T20:00:00.000Z'],
-    ] as const;
-
-    for (const [localDate, canonicalDueAt] of cases) {
-      const dstMeeting: MeetingDocument = {
-        ...meeting,
-        time: {
-          actual_start_at: `${localDate}T10:30:00.000Z`,
-          timezone: 'America/Los_Angeles',
-        },
-      };
-      const output = modelOutput([
-        modelSignal({
-          kind: 'action',
-          text: 'Send the contract',
-          due_at: localDate,
-          evidence: CONTRACT_EVIDENCE,
-        }),
-      ]);
-      const instance = processor(new FakeLlmClient(output));
-      const result = await instance.extract(
-        dstMeeting,
-        extractionContext(instance),
-      );
-
-      expect(result.signals).toMatchObject([
-        { kind: 'action', due_at: canonicalDueAt },
-      ]);
-      expect(() =>
-        assertCanonicalDecisionSet(result, dstMeeting, instance.identity),
-      ).not.toThrow();
-    }
-  });
-
-  it('ignores schema-valid values in fields irrelevant to a signal kind', async () => {
-    const noisy = JSON.parse(validModelOutput) as {
-      signals: Record<string, unknown>[];
-    };
-    Object.assign(noisy.signals[0]!, {
-      due_at: 'not-used',
-      supports_decision_indexes: [2],
-    });
-    Object.assign(noisy.signals[1]!, {
-      status: 'decided',
-      supports_decision_indexes: [0],
-    });
-    Object.assign(noisy.signals[2]!, {
-      status: 'proposed',
-      due_at: 'not-used',
-    });
-    const cleanInstance = processor(new FakeLlmClient(validModelOutput));
-    const noisyInstance = processor(
-      new FakeLlmClient(JSON.stringify(noisy)),
-    );
-
-    const [cleanResult, noisyResult] = await Promise.all([
-      cleanInstance.extract(meeting, extractionContext(cleanInstance)),
-      noisyInstance.extract(meeting, extractionContext(noisyInstance)),
-    ]);
-
-    expect(noisyResult).toEqual(cleanResult);
-  });
-
-  it('drops an out-of-range advisory confidence without dropping the signal', async () => {
-    const output = modelOutput([
-      modelSignal({
-        text: 'Use vendor X for hosting',
-        status: 'decided',
-        confidence: 95,
-        evidence: [
-          {
-            evidence_id: 'e1',
-            quote: 'The team agreed to use vendor X for hosting',
-          },
-        ],
-      }),
-    ]);
-    const instance = processor(new FakeLlmClient(output));
-    const result = await instance.extract(meeting, extractionContext(instance));
-
-    expect(result.signals).toMatchObject([{ confidence: null }]);
-
-    const wrongType = modelOutput([
-      modelSignal({ confidence: 'high' }),
-    ]);
-    await expect(
-      processor(new FakeLlmClient(wrongType)).extract(
-        meeting,
-        extractionContext(instance),
-      ),
-    ).rejects.toMatchObject({
-      code: 'temporarily_unavailable',
-      message: 'LLM output did not match the extraction schema at stage: confidence',
-    });
-  });
-
-  it.each<[string, string, string, string, Record<string, unknown>]>([
-    ['a near-midnight boundary', '2026-07-17T07:30:00.000Z', '2026-07-16T23:45:00-07:00', '2026-07-17', {
-      code: 'temporarily_unavailable',
-      message:
-        'LLM output contained invalid or unsupported signal grounding at stage: due_before_meeting',
-    }],
-    ['daylight-saving time', '2026-03-08T10:30:00.000Z', '2026-03-07T23:30:00-08:00', '2026-03-08', { code: 'temporarily_unavailable' }],
-  ])('compares due dates to the local meeting date across %s', async (_label, actual_start_at, due_at, localDate, match) => {
-    const output = modelOutput([
-      modelSignal({ kind: 'action', text: 'Send the contract', due_at, evidence: CONTRACT_EVIDENCE }),
-    ]);
-    const client = new FakeLlmClient(output);
-    const instance = processor(client);
-
-    await expect(
-      instance.extract({ ...meeting, time: { actual_start_at, timezone: 'America/Los_Angeles' } }, extractionContext(instance)),
-    ).rejects.toMatchObject(match);
-    expect(client.requests[0]!.userPrompt).toContain(
-      `"date_reference_local_date":"${localDate}"`,
-    );
+    const confidences = await extractWith(modelOutput([
+      modelSignal({ confidence: 95 }),
+      modelSignal({ kind: 'action', confidence: 'high' }),
+    ]));
+    expect(confidences.signals).toMatchObject([{ confidence: null }, { confidence: null }]);
   });
 
   it('applies identical extraction semantics for independently supplied clients', async () => {
@@ -831,111 +464,46 @@ describe('llm decision processor extraction', () => {
         settings: { provider: 'fixture-remote', model: 'another-model' },
       }],
     ];
-    const expectedSignals = (
-      await processor(new FakeLlmClient(validModelOutput)).extract(
-        meeting,
-        extractionContext(processor(new FakeLlmClient(validModelOutput))),
-      )
-    ).signals;
+    const expectedSignals = (await extractWith(validModelOutput)).signals;
 
     for (const [provider, config] of matrix) {
-      const client = new FakeLlmClient(
-        validModelOutput,
-        [String(config.settings['model'])],
-        undefined,
-        provider,
-      );
+      const client = new FakeLlmClient(validModelOutput, [String(config.settings['model'])], undefined, provider);
       const instance = processor(client, config);
-      const result = await instance.extract(
-        meeting,
-        extractionContext(instance),
-      );
-
+      const result = await instance.extract(meeting, extractionContext(instance));
       expect(result.signals).toEqual(expectedSignals);
-      expect(client.requests[0]!.schema).toEqual(
-        expect.objectContaining({ type: 'object' }),
-      );
-      expect(client.requests[0]!.systemPrompt).toContain(
-        'fill only the provided schema',
-      );
+      expect(client.requests[0]!.systemPrompt).toContain('fill only the provided schema');
     }
-  });
-
-  it('rejects a partially malformed signal instead of silently dropping it', async () => {
-    const partial = modelOutput([
-      modelSignal({ text: 'Use vendor X' }),
-      { kind: 'action', text: 'Missing the required fields' },
-    ]);
-    const instance = processor(new FakeLlmClient(partial));
-
-    await expect(
-      instance.extract(meeting, extractionContext(instance)),
-    ).rejects.toMatchObject({
-      name: 'AdapterError',
-      code: 'temporarily_unavailable',
-      retryable: true,
-    });
   });
 
   it('reports only allowlisted structural schema stages without model values', async () => {
     const modelValue = 'model-value-that-must-not-appear';
     const cases: readonly [string, string][] = [
       [JSON.stringify({ signals: [], unexpected: modelValue }), 'irrelevant_fields'],
-      [
-        modelOutput([
-          modelSignal({ kind: modelValue }),
-        ]),
-        'kind',
-      ],
-      [
-        modelOutput([
-          modelSignal({ evidence: [] }),
-        ]),
-        'evidence_shape',
-      ],
+      [JSON.stringify({ signals: modelValue }), 'top_level'],
+      [JSON.stringify([modelValue]), 'top_level'],
+      [modelOutput([modelValue]), 'signal_fields'],
+      [modelOutput([{ kind: 'action', text: modelValue }]), 'signal_fields'],
+      [modelOutput([modelSignal({ owner_participant_id: modelValue })]), 'irrelevant_fields'],
+      [modelOutput([modelSignal({ kind: modelValue })]), 'kind'],
+      [modelOutput([modelSignal({ text: ' ' })]), 'text'],
+      [modelOutput([modelSignal({ status: modelValue })]), 'status'],
+      [modelOutput([modelSignal({ evidence_units: modelValue })]), 'evidence_shape'],
+      [modelOutput([modelSignal({ evidence_units: ['N1', 7] })]), 'evidence_shape'],
     ];
 
     for (const [output, stage] of cases) {
-      try {
-        await processor(new FakeLlmClient(output)).extract(
-          meeting,
-          extractionContext(processor(new FakeLlmClient(output))),
-        );
-        throw new Error('expected extraction to fail');
-      } catch (error) {
-        expect(error).toMatchObject({
-          name: 'AdapterError',
-          code: 'temporarily_unavailable',
-          retryable: true,
-        });
-        expect(extractionSchemaFailureStage(error)).toBe(stage);
-        expect(classifyExtractionFailureStageV1(error, modelFailure)).toBe(`schema_${stage}`);
-        expect((error as Error).message).not.toContain(modelValue);
-      }
+      const error = await extractWith(output).catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ name: 'AdapterError', code: 'temporarily_unavailable', retryable: true });
+      expect(extractionSchemaFailureStage(error)).toBe(stage);
+      expect(classifyExtractionFailureStageV1(error, modelFailure)).toBe(`schema_${stage}`);
+      expect((error as Error).message).not.toContain(modelValue);
     }
 
-    expect(
-      extractionSchemaFailureStage(
-        new AdapterError(
-          'temporarily_unavailable',
-          'LLM output did not match the extraction schema at stage: untrusted-value',
-          true,
-        ),
-      ),
-    ).toBeUndefined();
-  });
-
-  it('reports only allowlisted grounding stages without rejected values', () => {
-    const rejectedValue = 'model-value-that-must-not-appear';
-    expect(
-      extractionGroundingFailureStage(
-        new AdapterError(
-          'temporarily_unavailable',
-          `LLM output contained invalid or unsupported signal grounding at stage: ${rejectedValue}`,
-          true,
-        ),
-      ),
-    ).toBeUndefined();
+    const notJson = await extractWith('not json at all').catch((caught: unknown) => caught);
+    expect(notJson).toMatchObject({ code: 'temporarily_unavailable', retryable: true, message: EXTRACTION_OUTPUT_JSON_FAILURE_MESSAGE });
+    expect(classifyExtractionFailureStageV1(notJson, modelFailure)).toBe('output_json');
+    expect(extractionSchemaFailureStage(new AdapterError('temporarily_unavailable', `${SCHEMA}untrusted-value`, true))).toBeUndefined();
+    expect(extractionGroundingFailureStage(new AdapterError('temporarily_unavailable', `${GROUNDING}${modelValue}`, true))).toBeUndefined();
   });
 
   it('fails closed on cancellation', async () => {
