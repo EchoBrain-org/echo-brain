@@ -32,8 +32,13 @@ import { clearReadableSearchActiveGenerationV1 } from "@echo-brain/organization-
 export interface OrganizationAuthorityProcessingCycleV1 {
   /** Replays finalized control-plane actions that were not appended to V4. */
   recoverV4Appends(signal: AbortSignal): Promise<void>;
-  /** Polls the admitted source cursor and durably stages one card. */
-  pollAndStageAdmittedMeetings(signal: AbortSignal): Promise<void>;
+  /**
+   * Polls the admitted source cursor and durably stages one card. Given `report` (which never throws), it may
+   * leave passes running after it returns and send their failures there; `settle` waits for them.
+   */
+  pollAndStageAdmittedMeetings(signal: AbortSignal, report?: (failure: unknown) => void): Promise<void>;
+  /** Resolves once no pass started by `pollAndStageAdmittedMeetings` is still running. */
+  settle?(): Promise<void>;
   /** Observes one staged approval and commits its approve or reject result. */
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void>;
   /** Appends finalized actions to V4; rejected actions produce no readable fact. */
@@ -95,8 +100,8 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
    * the worker keep running; drain and close wait for it.
    */
   runUngated<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
-  /** Waits for the running cycle, card presentation, ungated work and queued writer/search work; callers must supply a
-   * bounded signal. This is a readiness barrier, not operator exclusion or a retry trigger. */
+  /** Waits for the running cycle, meeting lanes, card presentation, ungated work and queued writer/search work; callers
+   * must supply a bounded signal. This is a readiness barrier, not operator exclusion or a retry trigger. */
   drain(signal: AbortSignal): Promise<void>;
   /**
    * Asks the worker to publish queued approval actions now instead of at the
@@ -110,7 +115,7 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
    * never blocks the caller; failures go to `on_worker_error`.
    */
   requestApprovalPublication(): void;
-  /** Stops the worker and waits for card presentation and ungated work before closing the Authority API database handles. */
+  /** Stops the worker and waits for meeting lanes, card presentation and ungated work before closing the Authority API database handles. */
   close(): Promise<void>;
 }
 
@@ -123,7 +128,9 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
  * on providers and models outside it, kept correct by durable fences (leases,
  * cursor compare-and-swap). Direct callers run everything in place. Given
  * `report`, a failed primary intake (the Authority's notes enrichment, which
- * defers its item for a later cycle) is reported and the cycle goes on.
+ * defers its item for a later cycle) is reported and the cycle goes on, and the
+ * personal intake may leave detached meeting lanes running, reporting their
+ * failures there.
  */
 export async function runOrganizationAuthorityProcessingCycleV1(
   processing: OrganizationAuthorityProcessingCycleV1,
@@ -147,7 +154,7 @@ export async function runOrganizationAuthorityProcessingCycleV1(
     report(failure);
   }
   signal.throwIfAborted();
-  await additional?.pollAndStageAdmittedMeetings(signal);
+  await additional?.pollAndStageAdmittedMeetings(signal, report);
   signal.throwIfAborted();
   await exclusive(() => runOrganizationAuthorityApprovalPublicationV1(processing, signal, lifecycle, additional));
 }
@@ -265,6 +272,8 @@ export async function startOrganizationAuthorityServiceLifecycle(
     let requestApprovalPresentation!: () => void;
     // The running cycle, so drain also waits for its ungated intake.
     let cycleTail: Promise<void> = Promise.resolve();
+    // The personal intake's meeting lanes outlive the cycle that started them, on the worker's signal.
+    const meetingLanes = async (): Promise<void> => { await (dependencies.additional_processing ?? startedApi.processing)?.settle?.(); };
     const worker = new SerializedMeetingProcessingWorker({
       ...(dependencies.core_runtime_observation === undefined ? {} : { observation: dependencies.core_runtime_observation }),
       intervalMs: config.worker_interval_ms,
@@ -429,7 +438,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
               observedPresentation = presentationTail;
               observedCycle = cycleTail;
               observedUngated = ungatedTail;
-              await Promise.all([observedPublication, observedPresentation, observedCycle, observedUngated]);
+              await Promise.all([observedPublication, observedPresentation, observedCycle, observedUngated, meetingLanes()]);
               signal.throwIfAborted();
               await worker.runExclusive(async () => undefined);
               signal.throwIfAborted();
@@ -464,8 +473,9 @@ export async function startOrganizationAuthorityServiceLifecycle(
         }
         startedApi.stopAcceptingRequests?.();
         const searchClosed = search.close();
-        const workerClosed = worker.close();
-        // The worker covers its cycle's passes; the lanes outside the gate settle on the aborted shutdown signal.
+        // Once the worker has stopped no cycle can start a meeting lane, so its aborted lanes are the last to wait for.
+        const workerClosed = worker.close().finally(meetingLanes);
+        // The other lanes outside the gate settle on the aborted shutdown signal.
         const lanesSettled = Promise.all([presentationTail, ungatedTail]);
         closed = (async () => {
           try {

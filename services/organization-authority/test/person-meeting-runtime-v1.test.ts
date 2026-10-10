@@ -97,9 +97,9 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   });
   const provider = fakeProvider('granola', GRANOLA_FOLDER_CURSOR_POLICY_V1.source_adapter_id);
   const sessions = { authenticateAccess: ({ access_token }: { access_token: string }) => authorization({ ...(actors[access_token as keyof typeof actors] ?? other), membership_type: access_token === 'owner' ? 'owner' : 'employee' }) };
-  const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append; readonly database?: Database.Database } = {}) =>
+  const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append; readonly database?: Database.Database; readonly meeting_lanes?: number } = {}) =>
     createPersonMeetingRuntimeV1({ database: seams.database ?? f.db, approval: seams.record_append === undefined ? f.context : { ...f.context, record_append: seams.record_append }, providers,
-    sessions, ...(seams.approval_core === undefined ? {} : { approval_core: seams.approval_core }),
+    sessions, ...(seams.approval_core === undefined ? {} : { approval_core: seams.approval_core }), ...(seams.meeting_lanes === undefined ? {} : { meeting_lanes: seams.meeting_lanes }),
     processor: { processor_adapter_id: 'llm', current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }), assert_admission_commitments() {},
       create_processor(admission) { const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
         return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
@@ -585,6 +585,36 @@ describe('personal meeting intake uses the shared processing path', () => {
         expect(f.proposals(source!.source_key)).toBe(1);
       } finally { handle.close(); }
     } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+  it('runs sources in detached lanes, never one source twice, and reports a failing lane without stalling the others', async () => {
+    const f = await fixture(), b = '00000000-0000-4000-8000-000000000004', failures: unknown[] = [];
+    // The notes tool's source throws a non-Error before any pull.
+    const runtime = f.create([f.fakeProvider('granola', 'granola-person-mcp'), { ...f.fakeProvider('notes', 'notes-person-mcp'), source() { throw 'boom'; } }]);
+    for (const [meeting_id, token, tool] of [[id, 'owner', 'granola'], [b, 'owner', 'granola'], [id, 'other', 'granola'], [id, 'owner', 'notes']] as const) {
+      await f.call(runtime, { operation: 'import', meeting_id, project_id: null, retain: true }, token, tool);
+    }
+    let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+    f.duringExtract(() => gate);
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, failure => { failures.push(failure); });
+    await vi.waitFor(() => expect(f.extracted()).toBe(2));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    // Two sources extract at once; the failed lane's free slot never starts the owner's second import beside its first.
+    expect([f.extracted(), f.pulls(), failures]).toEqual([2, 2, ['boom']]);
+    release(); await runtime.processing.settle?.();
+    // The owner's lane topped up with its second import as it settled.
+    expect([f.extracted(), failures]).toEqual([3, ['boom']]);
+  });
+  it('starts no more passes than the lane count and tops up as one settles', async () => {
+    const f = await fixture(), runtime = f.create(undefined, { meeting_lanes: 2 });
+    for (const token of ['owner', 'other', 'reader-a']) await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true }, token);
+    let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+    f.duringExtract(() => gate);
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined);
+    await vi.waitFor(() => expect(f.extracted()).toBe(2));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect([f.extracted(), f.pulls()]).toEqual([2, 2]);
+    release(); await runtime.processing.settle?.();
+    expect(f.extracted()).toBe(3);
   });
   it('consumes an import whose extraction failed and records its project choice, as for a staged one', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');

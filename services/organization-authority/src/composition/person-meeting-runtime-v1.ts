@@ -75,7 +75,12 @@ export async function queuePersonMeetingsV1(input: {
     return setting;
   }).immediate();
 }
-/** One processing lane, shared custody/candidates/append, and one approval core for every proposal. */
+/**
+ * Sources that run a meeting pass at once, one pass each. The shared model-call limiter, not this, is the real
+ * backpressure; a lane mostly waits on the provider and the model.
+ */
+const MEETING_LANES = 3;
+/** Meeting lanes over shared custody/candidates/append, and one approval core for every proposal. */
 export function createPersonMeetingRuntimeV1(options: {
   readonly database: Database.Database; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
   /** One provider per tool; a stored source belongs to the provider whose cursor policy names its source adapter. */
@@ -85,8 +90,10 @@ export function createPersonMeetingRuntimeV1(options: {
   readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'now' | 'after_record' | 'presenters'>;
   /** Provider routes composed around the shared personal Authority runtime. */
   readonly provider_applications?: readonly ProviderHttpApplicationV1[];
+  /** Test seam for MEETING_LANES. */
+  readonly meeting_lanes?: number;
 }) {
-  const { database: db, providers, processor } = options;
+  const { database: db, providers, processor } = options, lanes = options.meeting_lanes ?? MEETING_LANES;
   if (providers.length === 0 || new Set(providers.map(p => p.id)).size !== providers.length || new Set(providers.map(p => p.cursor.policy.source_adapter_id)).size !== providers.length) {
     throw new Error('Personal meeting providers need distinct tools and source adapters');
   }
@@ -215,22 +222,42 @@ export function createPersonMeetingRuntimeV1(options: {
   // this runtime keeps its decisions until it is (the core's state does not route to it).
   // Recovery keeps going past a row that cannot publish; append reports it. Both throw when the core cannot be created.
   let after = '';
+  /** Sources due a pass and not running one, round-robin from the last one started. */
+  function due(): MeetingIntakeSettingV1[] {
+    // A source with an unfrozen proposal stays eligible until its freeze succeeds, even with nothing left to import.
+    // So does a source with a parked meeting whose retry an operator authorized. A source already in flight is skipped.
+    const unfrozen = new Set(workflowState.listPendingApprovalSourceKeys()), ready = retryReady();
+    const eligible = intake.list().filter(s => !inFlight.has(s.source_key) && owners.has(s.source_adapter_id) && (s.folder_id !== null || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0
+      || unfrozen.has(s.source_key) || ready.has(s.source_key)) && (observed.get(s.source_key)?.next ?? 0) <= Date.now());
+    return [...eligible.filter(s => s.source_key > after), ...eligible.filter(s => s.source_key <= after)];
+  }
+  /**
+   * Starts detached passes on due sources until `lanes` run; each lane tops up again once it settles. Nothing awaits
+   * between the in-flight check and `track`, so a lane and a targeted pass never double-start a source.
+   */
+  function topUp(signal: AbortSignal, report: (failure: unknown) => void): void {
+    for (const setting of signal.aborted ? [] : due()) {
+      if (inFlight.size >= lanes) return;
+      after = setting.source_key;
+      track(setting, signal).catch((failure: unknown) => { if (!signal.aborted) report(failure); });
+      // The in-flight entry settles after it is removed, so the top-up sees the freed lane.
+      void inFlight.get(setting.source_key)!.then(() => topUp(signal, report)).catch(report);
+    }
+  }
   const processing: OrganizationAuthorityProcessingCycleV1 = {
     async recoverV4Appends(signal) { await (await approvals()).processing.recoverV4Appends(signal); },
     async appendFinalizedApprovalsToV4(signal) { await (await approvals()).processing.appendFinalizedApprovalsToV4(signal); },
     async observeAndFinalizePendingApprovals() {}, async reconcileReadableSearchGeneration() {},
     async reconcileApprovalPresentations(signal) { return (await approvals()).processing.reconcileApprovalPresentations?.(signal); },
-    async pollAndStageAdmittedMeetings(signal) {
-      // A source with an unfrozen proposal stays eligible until its freeze succeeds, even with nothing left to import.
-      // So does a source with a parked meeting whose retry an operator authorized. A source already in flight is skipped.
-      const unfrozen = new Set(workflowState.listPendingApprovalSourceKeys()), ready = retryReady();
-      const eligible = intake.list().filter(s => !inFlight.has(s.source_key) && owners.has(s.source_adapter_id) && (s.folder_id !== null || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0
-        || unfrozen.has(s.source_key) || ready.has(s.source_key)) && (observed.get(s.source_key)?.next ?? 0) <= Date.now());
-      const setting = eligible.find(s => s.source_key > after) ?? eligible[0];
+    async pollAndStageAdmittedMeetings(signal, report) {
+      // Given a reporter, keep up to `lanes` sources running in detached lanes; a direct caller runs one pass in place.
+      if (report !== undefined) return topUp(signal, report);
+      const [setting] = due();
       if (!setting) return;
       after = setting.source_key;
       await track(setting, signal);
     },
+    async settle() { while (inFlight.size > 0) await Promise.all(inFlight.values()); },
   };
   /** Waits for any pass already running on this source, then runs one more whether or not its next poll is due. */
   async function pollAndStageSource(sourceKey: string, signal: AbortSignal): Promise<void> {

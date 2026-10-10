@@ -238,6 +238,31 @@ describe("Organization Authority service lifecycle", () => {
     expect(events.slice(-3)).toEqual(["pass-settled", "api-close", "handle-clear"]);
   });
 
+  it("gives the personal intake a reporter, and drains and closes handles only after its detached lanes settle", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    let lanes = deferred(), cycle: AbortSignal | undefined;
+    const runtime = await startLifecycle(1_000, {
+      processing: processing([]),
+      additional_processing: { ...processing([]),
+        pollAndStageAdmittedMeetings: async (signal, report) => { cycle = signal; events.push(report === undefined ? "in-place" : "lanes"); },
+        settle: async () => { await lanes.promise; events.push(cycle?.aborted ? "settled-after-stop" : "settled"); } },
+      clear_readable_search_handle: () => { events.push("handle-clear"); },
+    }, events);
+    await vi.advanceTimersByTimeAsync(1);
+    let drained = false;
+    const draining = runtime.drain(new AbortController().signal).then(() => { drained = true; });
+    await vi.advanceTimersByTimeAsync(1);
+    expect([events, drained]).toEqual([["handle-clear", "lanes"], false]);
+    lanes.resolve(); await draining;
+    lanes = deferred();
+    const closing = runtime.close();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(events).not.toContain("api-close");
+    lanes.resolve(); await closing;
+    expect(events).toEqual(["handle-clear", "lanes", "settled", "settled-after-stop", "api-close", "handle-clear"]);
+  });
+
   it("keeps operator mutations exclusive from search and writer work", async () => {
     vi.useFakeTimers();
     const blockedSearch = deferred();
