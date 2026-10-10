@@ -232,7 +232,12 @@ export function createPersonMeetingRuntimeV1(options: {
   };
   /** Waits for any pass already running on this source, then runs one more whether or not its next poll is due. */
   async function pollAndStageSource(sourceKey: string, signal: AbortSignal): Promise<void> {
-    for (let running = inFlight.get(sourceKey); running !== undefined; running = inFlight.get(sourceKey)) await running;
+    for (let running = inFlight.get(sourceKey); running !== undefined && !signal.aborted; running = inFlight.get(sourceKey)) {
+      let wake!: () => void;
+      await Promise.race([running, new Promise<void>(resolve => { wake = resolve; signal.addEventListener('abort', wake, { once: true }); })]);
+      signal.removeEventListener('abort', wake);
+    }
+    signal.throwIfAborted();
     const setting = intake.list().find(s => s.source_key === sourceKey && owners.has(s.source_adapter_id));
     if (!setting) throw new AuthorityOperationError('not_found', 'Meeting source unavailable');
     return track(setting, signal);

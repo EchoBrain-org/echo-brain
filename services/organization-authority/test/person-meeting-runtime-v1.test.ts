@@ -554,6 +554,9 @@ describe('personal meeting intake uses the shared processing path', () => {
       await vi.waitFor(() => expect(f.extracted()).toBe(1));
       const pass = runtime.pollAndStageSource(setting!.source_key, signal).then(() => { targeted = true; });
       await runtime.processing.pollAndStageAdmittedMeetings(signal);
+      // A waiter whose caller gives up leaves without registering a pass.
+      const stop = new AbortController(), abandoned = runtime.pollAndStageSource(setting!.source_key, stop.signal);
+      stop.abort(); await expect(abandoned).rejects.toThrow();
       await new Promise(resolve => setTimeout(resolve, 20));
       expect([f.pulls(), targeted]).toEqual([1, false]);
       release(); await Promise.all([periodic, pass]);
