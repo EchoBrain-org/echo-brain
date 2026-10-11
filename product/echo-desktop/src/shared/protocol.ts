@@ -659,15 +659,14 @@ const MAX_PARAMS_DEPTH = 32;
  * About the UTF-8 bytes `value` takes as JSON, or null when it is not plain
  * JSON data or takes more than `limit`. Only plain objects, arrays, strings,
  * finite numbers, booleans and null count: a Map, Set, Date or typed array
- * crosses IPC intact, where JSON would write `{}`. Undefined counts as null;
- * escapes are not counted.
+ * crosses IPC intact, where JSON would write `{}`. Undefined counts as null.
  */
 export function plainJsonBytes(value: unknown, limit: number): number | null {
   const encoder = new TextEncoder();
   let total = 0;
   const add = (bytes: number): boolean => (total += bytes) <= limit;
   // Quotes, and at least a byte a UTF-16 unit before encoding it, so a long string is never encoded.
-  const text = (node: string): boolean => add(2 + node.length) && add(encoder.encode(node).length - node.length);
+  const text = (node: string): boolean => add(2 + node.length) && add(encoder.encode(JSON.stringify(node)).length - 2 - node.length);
   const walk = (node: unknown, depth: number): boolean => {
     if (node === null || node === undefined) return add(4);
     if (typeof node === 'string') return text(node);

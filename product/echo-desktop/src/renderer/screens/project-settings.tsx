@@ -138,8 +138,7 @@ function Connection({ settings, tool, name }: { settings: ProjectSettingsState; 
 
 /** A connection started in the row: waiting on the browser, or why it did not connect. */
 function Connecting({ settings, tool, name }: { settings: ProjectSettingsState; tool: MappingTool; name: string }) {
-  const connect = settings.tools!.connect;
-  if (connect?.tool.tool_id !== tool) return null;
+  const connect = settings.tools!.connect!;
   useMinuteTick();
   if (connect.phase === 'failed') {
     return (
@@ -246,7 +245,7 @@ function ToolSection({ state, tool, onSave }: { state: State; tool: MappingTool;
         )}
         <Connection settings={settings} tool={tool} name={name} />
       </div>
-      <Connecting settings={settings} tool={tool} name={name} />
+      {connecting && <Connecting settings={settings} tool={tool} name={name} />}
       {failure && (
         <div class="tool-body tool-trouble">
           <span class="error" data-testid={`project-${tool}-error`}>{failure}</span>

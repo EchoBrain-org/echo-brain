@@ -25,6 +25,15 @@ it('stops at the limit', () => {
   expect(plainJsonBytes({ text: 'a'.repeat(11) }, 21)).toBeNull();
 });
 
+it('counts JSON escapes in text and keys before admitting a request', () => {
+  for (const value of [{ text: '\n'.repeat(40_000) }, { text: '\u0000'.repeat(12_000) }, { ['"'.repeat(40_000)]: '' }]) {
+    expect(new TextEncoder().encode(JSON.stringify(value)).length).toBeGreaterThan(MAX_PARAMS_BYTES);
+    expect(plainJsonBytes(value, MAX_PARAMS_BYTES)).toBeNull();
+  }
+  const value = { '\t"': 'line\n\\\u0000\ud800€' };
+  expect(plainJsonBytes(value, MAX_PARAMS_BYTES)).toBe(new TextEncoder().encode(JSON.stringify(value)).length);
+});
+
 it('takes a __proto__ key JSON.parse made as plain data', () => {
   const value = JSON.parse('{"__proto__":{"admin":true},"name":"x"}') as object;
   expect(plainJsonBytes(value, MAX_PARAMS_BYTES)).toBe(new TextEncoder().encode(JSON.stringify(value)).length);

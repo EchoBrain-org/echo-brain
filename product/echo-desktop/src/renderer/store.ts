@@ -623,12 +623,13 @@ function applyStatus(status: AppStatus): void {
 
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
 function forgetAccount(): void {
-  // Copies the client kept to resend go: nothing here will resend them. A connection still waiting on the browser is
-  // cancelled, so a late approval binds nothing.
-  if (state.compose) release(state.compose);
-  if (state.sheet?.kind === 'new-project') for (const file of state.sheet.files) if (file.kept) releaseCopy(file.requestId);
-  if (state.sheet?.kind === 'tool-connect') cancelConnect();
-  if (state.projectSettings?.tools) clearProjectMappings(state.projectSettings);
+  // Cleanup belongs to the previous account, even after status has changed. The host may refuse it once that session
+  // is gone; never try an old request or connection with the newly signed-in account's authority.
+  const account = lastAccount;
+  if (state.compose) release(state.compose, account);
+  if (state.sheet?.kind === 'new-project') for (const file of state.sheet.files) if (file.kept) releaseCopy(file.requestId, account);
+  if (state.sheet?.kind === 'tool-connect') cancelWaitingConnection(state.sheet, account);
+  if (state.projectSettings?.tools) clearProjectMappings(state.projectSettings, account);
   stopRunPolling();
   runFailures = 0;
   openUnread = false;
@@ -838,8 +839,12 @@ export function cancelConnect(): void {
   if (sheet?.kind !== 'tool-connect') return;
   const account = expect();
   set({ sheet: null });
-  if (account && sheet.phase === 'waiting' && sheet.attempt) {
-    void rpc('tools.cancel', { expect: account, tool_id: sheet.tool.tool_id, attempt_id: sheet.attempt.attempt_id });
+  cancelWaitingConnection(sheet, account);
+}
+
+function cancelWaitingConnection(connect: Pick<ToolConnectSheet, 'tool' | 'phase' | 'attempt'> | undefined, account: Expect | null): void {
+  if (account && connect?.phase === 'waiting' && connect.attempt) {
+    void rpc('tools.cancel', { expect: account, tool_id: connect.tool.tool_id, attempt_id: connect.attempt.attempt_id });
   }
 }
 
@@ -1589,12 +1594,8 @@ export type MappingTool = typeof PROJECT_MAPPING_TOOLS[number];
 type MappingSetting<Tool extends MappingTool> = NonNullable<ProjectSettingsState[Tool]>;
 type MappingValue<Tool extends MappingTool> = NonNullable<MappingSetting<Tool>['value']>;
 /** Tools closes: a connection still waiting on the browser is cancelled, so a late approval binds nothing. */
-function clearProjectMappings(settings: ProjectSettingsState): ProjectSettingsState {
-  const connect = settings.tools?.connect;
-  const account = expect();
-  if (account && connect?.phase === 'waiting' && connect.attempt) {
-    void rpc('tools.cancel', { expect: account, tool_id: connect.tool.tool_id, attempt_id: connect.attempt.attempt_id });
-  }
+function clearProjectMappings(settings: ProjectSettingsState, account: Expect | null = expect()): ProjectSettingsState {
+  cancelWaitingConnection(settings.tools?.connect, account);
   const cleared = { ...settings };
   for (const tool of PROJECT_MAPPING_TOOLS) delete cleared[tool];
   delete cleared.tools;
@@ -2573,8 +2574,7 @@ function finishNewProject(sheet: NewProjectSheet, settled = false): void {
   if (state.roster?.projectId === sheet.project.project_id) void loadRoster(sheet.project.project_id);
 }
 
-function releaseCopy(requestId: string): void {
-  const account = expect();
+function releaseCopy(requestId: string, account: Expect | null = expect()): void {
   if (account) void rpc('documents.abandon', { expect: account, request_id: requestId });
 }
 
@@ -3435,8 +3435,7 @@ function fresh(project: ProjectSummary | null): ComposeState {
  * goes, so kept copies do not pile up (the client holds ten at most). Only
  * this computer's copy: a file that did arrive stays saved.
  */
-function release(compose: ComposeState): void {
-  const account = expect();
+function release(compose: ComposeState, account: Expect | null = expect()): void {
   if (compose.kept && account) void rpc('documents.abandon', { expect: account, request_id: compose.requestId });
 }
 
