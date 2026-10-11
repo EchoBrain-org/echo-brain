@@ -1,13 +1,12 @@
 // Private initial-owner handoff only. The remote command reads two fixed files
 // and returns authenticated ciphertext; login and all onboarding mutations stay human.
-import { constants, createDecipheriv, createHash, createPublicKey, generateKeyPairSync, privateDecrypt, randomUUID } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
-import { closeSync, constants as fsConstants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
+import { constants, createDecipheriv, createPublicKey, generateKeyPairSync, privateDecrypt, randomUUID } from 'node:crypto';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, rmSync, rmdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonicalJson, validateCleanV1Release } from './clean-v1-release.mjs';
 import { stagingReleaseTarget } from './authority-staging-release.mjs';
-import { awsCliArguments, sanitizedAwsEnvironment } from './authority-staging-onboarding-transfer.mjs';
+import { runAwsCliOnce, sha256 as hash, writePrivateFile } from './lib/operator-io.mjs';
 export { sealInvitationPayload } from './authority-staging-invitation-seal.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -18,7 +17,6 @@ const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const FILES = ['founder-person-invitation.json', 'current.clean-v1.json'];
 export class InvitationExportError extends Error { constructor(code) { super(code); this.code = code; } }
 const fail = code => { throw new InvitationExportError(code); };
-const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const same = (a, b) => canonicalJson(a) === canonicalJson(b);
 const json = value => Buffer.from(`${canonicalJson(value)}\n`);
 const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && same(Object.keys(value).sort(), keys.sort());
@@ -52,12 +50,7 @@ function privateFile(path, maximum = 32768) {
 function save(path, bytes, fresh = false) {
   privateDirectory(dirname(path));
   if (!fresh) privateFile(path);
-  const temporary = fresh ? path : `${path}.${randomUUID()}.tmp`;
-  const fd = openSync(temporary, 'wx', 0o600);
-  try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
-  if (!fresh) renameSync(temporary, path);
-  const directory = openSync(dirname(path), 'r');
-  try { fsyncSync(directory); } finally { closeSync(directory); }
+  writePrivateFile(path, bytes, fresh);
 }
 function exactOutput(path, bytes) {
   if (existsSync(path)) {
@@ -65,14 +58,11 @@ function exactOutput(path, bytes) {
   } else save(path, bytes, true);
 }
 function sourceHash() {
-  return hash(Buffer.concat(['authority-staging-invitation-export.mjs', 'authority-staging-invitation-seal.mjs', 'authority-staging-onboarding-transfer.mjs', 'authority-staging-release.mjs', 'clean-v1-release.mjs'].map(name => readFileSync(resolve(REPO, 'tools', name)))));
+  return hash(Buffer.concat(['authority-staging-invitation-export.mjs', 'authority-staging-invitation-seal.mjs', 'authority-staging-onboarding-transfer.mjs', 'authority-staging-release.mjs', 'clean-v1-release.mjs', 'lib/operator-io.mjs'].map(name => readFileSync(resolve(REPO, 'tools', name)))));
 }
 function awsJson(args) {
   try {
-    return JSON.parse(execFileSync('aws', awsCliArguments([...args, '--region', 'us-west-2', '--output', 'json']), {
-      env: { ...sanitizedAwsEnvironment(), AWS_MAX_ATTEMPTS: '1', AWS_RETRY_MODE: 'standard' },
-      stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 45000, maxBuffer: 65536,
-    }));
+    return JSON.parse(runAwsCliOnce([...args, '--region', 'us-west-2', '--output', 'json'], { timeout: 45000, maxBuffer: 65536 }));
   } catch { fail('export_aws_operation_unconfirmed'); }
 }
 function binding(request) {

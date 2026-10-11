@@ -334,7 +334,6 @@ describe('approval core: freeze', () => {
     refusal.next = 1;
     await expect(f.core.stager.reconcilePendingDeliveries()).rejects.toThrow('refused by the record codec');
     expect([outbox(f, f.approvalId).state, outbox(f, other.approvalId).state].sort()).toEqual(['queued', 'staged']);
-    await f.core.stager.reconcileSuperseded();
   });
 });
 

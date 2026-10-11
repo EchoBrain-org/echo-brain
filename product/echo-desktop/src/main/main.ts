@@ -303,13 +303,9 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       else shell.showItemInFolder(shown);
       return { ok: true, value: null };
     }
-    case 'source.openSlack':
-    case 'source.openTicket':
-    case 'source.openPage':
     case 'source.openExternal': {
-      const input = params as MainMethods['source.openExternal']['params'];
-      const kind = method === 'source.openSlack' ? 'slack' : method === 'source.openTicket' ? 'ticket' : method === 'source.openPage' ? 'page' : input.kind;
-      const url = externalSourcePermalink(kind, input.permalink);
+      const { kind, permalink } = params as MainMethods['source.openExternal']['params'];
+      const url = externalSourcePermalink(kind, permalink);
       if (url === null) return refused();
       try { await shell.openExternal(url); } catch { return refused('unavailable'); }
       return { ok: true, value: null };

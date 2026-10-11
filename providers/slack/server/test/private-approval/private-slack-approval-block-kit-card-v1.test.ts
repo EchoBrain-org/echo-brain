@@ -1,9 +1,5 @@
-import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-} from "../../src/organization-control-plane/slack-approval-integration-v1.js";
 import { describe, expect, it } from "vitest";
-import { buildPrivateSlackApprovalBlockKitCardV1, PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS } from "../../src/private-approval/private-slack-approval-block-kit-card-v1.js";
+import { buildPrivateSlackApprovalReviewV1 } from "../../src/private-approval/private-slack-approval-block-kit-card-v1.js";
 
 const INPUT = Object.freeze({
   schema_version: 1 as const,
@@ -36,7 +32,7 @@ const INPUT = Object.freeze({
   ],
 });
 
-type Card = ReturnType<typeof buildPrivateSlackApprovalBlockKitCardV1>;
+type Card = ReturnType<typeof buildPrivateSlackApprovalReviewV1>;
 type TextBlocks = readonly { readonly text: { readonly text: string } }[];
 
 function blockIndex(card: Card, suffix: string) {
@@ -68,9 +64,9 @@ function otherItems(card: Card) {
   };
 }
 
-describe("private approval Block Kit card v1", () => {
+describe("private approval review v1", () => {
   it("uses the meeting title as the primary card heading", () => {
-    const card = buildPrivateSlackApprovalBlockKitCardV1(INPUT);
+    const card = buildPrivateSlackApprovalReviewV1(INPUT);
     const title = blockById(card, "title") as {
       readonly text: { readonly text: string };
     };
@@ -86,7 +82,7 @@ describe("private approval Block Kit card v1", () => {
   });
 
   it("renders numbered collapsible decisions from exact decision text", () => {
-    const card = buildPrivateSlackApprovalBlockKitCardV1(INPUT);
+    const card = buildPrivateSlackApprovalReviewV1(INPUT);
     const decision = decisionBlock(card);
 
     expect(decision.title.text).toBe("1 · Ship the private beta.");
@@ -106,7 +102,7 @@ describe("private approval Block Kit card v1", () => {
   });
 
   it("labels owner-neutral next steps and unlinked context truthfully", () => {
-    const card = buildPrivateSlackApprovalBlockKitCardV1(INPUT);
+    const card = buildPrivateSlackApprovalReviewV1(INPUT);
     const other = otherItems(card);
     const rendered = other.child_blocks
       .map((block) => block.text.text)
@@ -128,7 +124,7 @@ describe("private approval Block Kit card v1", () => {
   });
 
   it("uses focused titles without rendering structured due-date rows", () => {
-    const nextSteps = buildPrivateSlackApprovalBlockKitCardV1({
+    const nextSteps = buildPrivateSlackApprovalReviewV1({
       ...INPUT,
       ungrouped_rationales: undefined,
     });
@@ -137,7 +133,7 @@ describe("private approval Block Kit card v1", () => {
     expect(JSON.stringify(nextStepsBlock)).not.toContain("Due:");
     expect(nextSteps.text).not.toContain("Due:");
 
-    const context = buildPrivateSlackApprovalBlockKitCardV1({
+    const context = buildPrivateSlackApprovalReviewV1({
       ...INPUT,
       ungrouped_actions: undefined,
     });
@@ -148,98 +144,17 @@ describe("private approval Block Kit card v1", () => {
     );
   });
 
-  it("renders the divider, final controls, and footer in the review contract", () => {
-    const card = buildPrivateSlackApprovalBlockKitCardV1(INPUT);
-    const dividerIndex = blockIndex(card, "divider");
-    const policyIndex = blockIndex(card, "policy");
-    const footer = blockById(card, "footer") as {
-      readonly elements: readonly { readonly text: string }[];
-    };
+  it("ends the review text with the non-release notice and no controls", () => {
+    const card = buildPrivateSlackApprovalReviewV1(INPUT);
 
-    expect(dividerIndex).toBeLessThan(policyIndex);
-    expect(footer.elements[0].text).toBe(
-      "One visibility policy applies to the entire meeting record.",
-    );
-    expect(card.text).toContain(
+    expect(card.text.split("\n").at(-1)).toBe(
       "Raw transcript and rejected suggestions are not released.",
     );
-  });
-
-  it("uses described static selection and real deterministic action controls", () => {
-    const card = buildPrivateSlackApprovalBlockKitCardV1(INPUT);
-    const policy = blockById(card, "policy") as {
-      readonly element: {
-        readonly type: string;
-        readonly action_id: string;
-        readonly placeholder: { readonly text: string };
-        readonly options: readonly {
-          readonly value: string;
-          readonly description: { readonly text: string };
-        }[];
-        readonly initial_option: { readonly value: string };
-      };
-    };
-    const comment = blockById(card, "comment") as {
-      readonly element: {
-        readonly action_id: string;
-        readonly max_length: number;
-        readonly multiline: boolean;
-        readonly placeholder: { readonly text: string };
-      };
-    };
-    const actions = blockById(card, "actions") as {
-      readonly elements: readonly {
-        readonly action_id: string;
-        readonly value: string;
-      }[];
-    };
-
-    expect(policy.element).toMatchObject({
-      type: "static_select",
-      action_id: expect.stringMatching(
-        /^echo-private-approval-v1-[0-9a-f]{32}-policy-v1$/,
-      ),
-      options: [
-        {
-          value: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-          description: { text: "Only you can read this record" },
-        },
-        {
-          value: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-          description: { text: "Current organization members can read it" },
-        },
-      ],
-      initial_option: { value: RESTRICTED_REVIEWER_PERSON_POLICY_ID },
-      placeholder: { text: "Choose who can read this record" },
-    });
-    expect(comment.element).toMatchObject({
-      action_id: expect.stringMatching(
-        /^echo-private-approval-v1-[0-9a-f]{32}-comment-v1$/,
-      ),
-      max_length: PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,
-      multiline: false,
-      placeholder: { text: "Add context for this approval" },
-    });
-    expect(actions.elements).toEqual([
-      expect.objectContaining({
-        action_id: expect.stringMatching(
-          /^echo-private-approval-v1-[0-9a-f]{32}-approve-v1$/,
-        ),
-        value: JSON.stringify({
-          schema_version: 1,
-          approval_id: INPUT.approval_id,
-        }),
-        text: expect.objectContaining({ text: "Approve meeting" }),
-      }),
-      expect.objectContaining({
-        action_id: expect.stringMatching(
-          /^echo-private-approval-v1-[0-9a-f]{32}-reject-v1$/,
-        ),
-        value: JSON.stringify({
-          schema_version: 1,
-          approval_id: INPUT.approval_id,
-        }),
-      }),
+    expect(card.blocks.map((block) => block.type)).toEqual([
+      "header",
+      "context",
+      "container",
+      "container",
     ]);
   });
 
@@ -257,8 +172,8 @@ describe("private approval Block Kit card v1", () => {
         },
       ],
     };
-    const first = buildPrivateSlackApprovalBlockKitCardV1(raw);
-    const replay = buildPrivateSlackApprovalBlockKitCardV1({ ...raw });
+    const first = buildPrivateSlackApprovalReviewV1(raw);
+    const replay = buildPrivateSlackApprovalReviewV1({ ...raw });
     const section = decisionBlock(first).child_blocks[0].text.text;
 
     expect(section).toContain("Ship &lt;beta&gt; &amp; review &gt; now");
@@ -276,7 +191,7 @@ describe("private approval Block Kit card v1", () => {
 
   it("truncates only the displayed decision title, never the frozen decision", () => {
     const decisionText = "A".repeat(200);
-    const card = buildPrivateSlackApprovalBlockKitCardV1({
+    const card = buildPrivateSlackApprovalReviewV1({
       ...INPUT,
       decision_groups: [
         {
@@ -297,13 +212,13 @@ describe("private approval Block Kit card v1", () => {
 
   it("fails closed on malformed shape, oversized sections, and more than 50 blocks", () => {
     expect(() =>
-      buildPrivateSlackApprovalBlockKitCardV1({
+      buildPrivateSlackApprovalReviewV1({
         ...INPUT,
         actor_id: "prn_attacker",
       } as never),
     ).toThrow(/unexpected shape/);
     expect(() =>
-      buildPrivateSlackApprovalBlockKitCardV1({
+      buildPrivateSlackApprovalReviewV1({
         ...INPUT,
         ungrouped_actions: [
           { ...INPUT.ungrouped_actions[0], text: "x".repeat(3_001) },
@@ -311,7 +226,7 @@ describe("private approval Block Kit card v1", () => {
       }),
     ).toThrow(/ungrouped_actions\[0\]\.text/);
     expect(() =>
-      buildPrivateSlackApprovalBlockKitCardV1({
+      buildPrivateSlackApprovalReviewV1({
         ...INPUT,
         decision_groups: Array.from({ length: 45 }, (_, index) => ({
           ...INPUT.decision_groups[0],
@@ -320,7 +235,7 @@ describe("private approval Block Kit card v1", () => {
       }),
     ).toThrow(/50-block/);
     expect(() =>
-      buildPrivateSlackApprovalBlockKitCardV1({
+      buildPrivateSlackApprovalReviewV1({
         ...INPUT,
         decision_groups: [
           {

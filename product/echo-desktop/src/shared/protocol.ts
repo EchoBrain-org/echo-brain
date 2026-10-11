@@ -532,12 +532,6 @@ export interface HostMethods {
 export interface MainMethods {
   /** Opens a validated external citation using its evidence kind's link policy. */
   'source.openExternal': { params: { kind: ExternalAnswerSource['kind']; permalink: string }; result: null };
-  /** Opens one cited Slack message in the system browser; only Slack message permalinks are allowed. */
-  'source.openSlack': { params: { permalink: string }; result: null };
-  /** Opens a validated ticket display link; the provider owns tenant validation. */
-  'source.openTicket': { params: { permalink: string }; result: null };
-  /** Compatibility adapter for a live page's validated provider link. */
-  'source.openPage': { params: { permalink: string }; result: null };
   'dialog.openDocument': { params: Record<string, never>; result: FileHandle | null };
   /** Add files…, in New project: up to 20 documents at once. */
   'dialog.openDocuments': { params: Record<string, never>; result: ChosenFiles };
@@ -574,7 +568,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'employees.reissue', 'employees.revoke', 'tools.meetings', 'runs', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet', 'projects.confluenceRead', 'projects.confluenceSet', 'projects.confluenceSpaces',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'source.openExternal', 'source.openSlack', 'source.openTicket', 'source.openPage', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
+  'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
   'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show',
 ];
 /** Host methods that change what the Authority stores. */

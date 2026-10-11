@@ -49,7 +49,7 @@ test('a file dropped on a sidebar project, with another app in front, is capture
   expect(log).not.toContain('echo-drop-');
 });
 
-test('Home rows take a drop while another app is in front, and a file dropped on the sheet keeps who can read it', async () => {
+test('Sidebar project rows take a drop while another app is in front, and a file dropped on the sheet keeps who can read it', async () => {
   run = await launch();
   const { page, app } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);

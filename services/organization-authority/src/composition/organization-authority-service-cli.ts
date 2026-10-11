@@ -9,6 +9,7 @@ import { openStagingSyntheticPrivateDmCanaryControlV1 } from "@echo-brain/provid
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 import { requestStagingSyntheticPrivateDmCanaryV1 } from "@echo-brain/provider-slack-server/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1";
 import { createJourneyTelemetryTransportFromEnvironmentV1 } from "./observability/journey-telemetry-transport-v1.js";
+import { createLangSmithRuntimeV1 } from './observability/langsmith-runtime-v1.js';
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 } from './jira-person-live-runtime-v1.js';
 import { CONFLUENCE_PERSON_LIVE_RELEASE_APPROVED_V1 } from './confluence-person-live-runtime-v1.js';
@@ -143,6 +144,7 @@ export async function runOrganizationAuthorityServiceCli(
   let journeyTelemetry: ReturnType<
     typeof createJourneyTelemetryTransportFromEnvironmentV1
   > | undefined;
+  let langSmith: ReturnType<typeof createLangSmithRuntimeV1> | undefined;
   try {
     if (argv[0] === "staging-private-dm-canary") {
       const receipt = await requestStagingSyntheticPrivateDmCanaryV1({
@@ -252,11 +254,17 @@ export async function runOrganizationAuthorityServiceCli(
     journeyTelemetry = createJourneyTelemetryTransportFromEnvironmentV1(telemetryEnvironment, process.env, {
       write: io.stderr,
     }, telemetryVocabulary);
+    langSmith = createLangSmithRuntimeV1({
+      path: process.env.ECHO_STAGING_LANGSMITH_TRACING_FILE,
+      authority_url: manifest.authority_url, release_sha: process.env.ECHO_SOURCE_SHA ?? 'unknown',
+      existing: journeyTelemetry.enabled ? journeyTelemetry.core_runtime : undefined, vocabulary: telemetryVocabulary,
+      write: io.stderr,
+    });
     const openService: typeof openOrganizationAuthorityService = connectorRehearsal === undefined
       ? openOrganizationAuthorityService
       : (config, dependencies) => openStagingConnectorRehearsalService(config, connectorRehearsal, dependencies);
     const runtime = await openService({
-      ...(journeyTelemetry.enabled ? { core_runtime_observation: journeyTelemetry.core_runtime } : {}),
+      ...(langSmith.scope === undefined ? {} : { core_runtime_observation: langSmith.scope }),
       state_directory: stateDirectory,
       host,
       port: positiveInteger(
@@ -341,18 +349,19 @@ export async function runOrganizationAuthorityServiceCli(
     // and the optional staging canary control have both completed successfully.
     // A failed or still-pending runtime open must not make staging look alive.
     journeyTelemetry.start();
+    langSmith.start();
     await new Promise<void>((resolve) => {
       let closing: Promise<void> | undefined;
       const close = (): void => {
         closing ??=
           stagingCanaryControl === undefined
-            ? runtime.close().finally(() => journeyTelemetry?.close())
+            ? runtime.close().finally(async () => { await langSmith?.close(); journeyTelemetry?.close(); })
             : Promise.all([
                 stagingCanaryControl.close().catch(() => undefined),
                 runtime.close(),
               ])
                 .then(() => undefined)
-                .finally(() => journeyTelemetry?.close());
+                .finally(async () => { await langSmith?.close(); journeyTelemetry?.close(); });
         void closing.finally(resolve);
       };
       process.once("SIGINT", close);
@@ -360,6 +369,7 @@ export async function runOrganizationAuthorityServiceCli(
     });
     return 0;
   } catch {
+    await langSmith?.close();
     journeyTelemetry?.close();
     io.stderr(`${LEGACY_CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1}\n`);
     return 1;

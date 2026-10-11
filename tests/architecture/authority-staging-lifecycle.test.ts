@@ -48,6 +48,9 @@ const TOKEN = "cf-management-token-not-a-real-secret";
 const CLI = fileURLToPath(
   new URL("../../tools/authority-staging.mjs", import.meta.url),
 );
+const OPERATOR_IO = fileURLToPath(
+  new URL("../../tools/lib/operator-io.mjs", import.meta.url),
+);
 const STAGING_TEMPLATE = fileURLToPath(
   new URL(
     "../../deploy/organization-authority/authority-staging-host-v1.template.json",
@@ -1642,6 +1645,10 @@ describe("Authority staging lifecycle", () => {
 
     const source = readFileSync(CLI, "utf8");
     expect(source).not.toMatch(/["'](?:batch-)?get-secret-value["']/);
+    // The CLI's AWS process environment and arguments come from this module.
+    expect(readFileSync(OPERATOR_IO, "utf8")).not.toMatch(
+      /["'](?:batch-)?get-secret-value["']/,
+    );
     expect(source).toContain(
       '"describe-events",\n      "--region",\n      region,',
     );

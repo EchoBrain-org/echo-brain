@@ -64,7 +64,7 @@ function fail(message) {
   throw new Error(`authority-local: ${message}`);
 }
 
-export function canonicalWorktreeId(repo = REPO) {
+function canonicalWorktreeId(repo = REPO) {
   return createHash("sha256").update(repo, "utf8").digest("hex").slice(0, 16);
 }
 

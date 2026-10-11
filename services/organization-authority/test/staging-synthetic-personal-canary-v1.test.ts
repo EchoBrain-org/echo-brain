@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { applyAuthorityBaselineV14 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { applyAuthorityBaseline } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { applyOrganizationRecordLogBaselineV4, OrganizationRecordAppenderV4 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { createStagingSyntheticPersonalMeetingProviderV1, STAGING_SYNTHETIC_CANARY_MEETING_ID_V1 } from '@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1';
 import { testAuthority } from '../../../packages/organization-protocol/test/fixtures/record-v4-fixture.js';
@@ -27,7 +27,7 @@ function addOwner(db: Database.Database, organization_id: string, owner: typeof 
 async function syntheticWorld(options: { readonly signals?: boolean; readonly hold?: Promise<void> } = {}) {
   const authority = testAuthority();
   const organization_id = authority.descriptor.organization_id;
-  const db = new Database(':memory:'); opened.push(db); db.pragma('foreign_keys = ON'); applyAuthorityBaselineV14(db);
+  const db = new Database(':memory:'); opened.push(db); db.pragma('foreign_keys = ON'); applyAuthorityBaseline(db);
   db.prepare("INSERT INTO authority_metadata VALUES (1, ?, ?, 'Test', '{}', ?, ?)").run(authority.descriptor.authority_id, organization_id, NOW, NOW);
   addOwner(db, organization_id, OWNER);
   const record = new Database(':memory:'); opened.push(record); record.pragma('foreign_keys = ON'); applyOrganizationRecordLogBaselineV4(record);

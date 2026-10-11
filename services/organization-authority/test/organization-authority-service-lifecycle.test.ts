@@ -209,11 +209,9 @@ describe("Organization Authority service lifecycle", () => {
     runtime.requestApprovalPublication();
     await vi.advanceTimersByTimeAsync(1);
     expect(events).not.toContain("api-close");
-    await expect(runtime.runExclusive(async () => { events.push("operator"); })).rejects.toThrow();
     blocked.resolve();
     await closing;
     expect(events.slice(-3)).toEqual(["search-settled", "api-close", "handle-clear"]);
-    expect(events).not.toContain("operator");
     expect(calls).toBe(2);
     expect(vi.getTimerCount()).toBe(0);
     expect(telemetry).toContainEqual(expect.objectContaining({ cycle_phase: "search_reconciliation", event: "failed", failure_class: "cancelled", retryable: false }));
@@ -303,31 +301,6 @@ describe("Organization Authority service lifecycle", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(events).toEqual(["present", "present"]);
     } finally { await runtime.close(); }
-  });
-
-  it("keeps operator mutations exclusive from search and writer work", async () => {
-    vi.useFakeTimers();
-    const blockedSearch = deferred();
-    const blockedOperator = deferred();
-    const events: string[] = [];
-    let calls = 0;
-    const runtime = await startLifecycle(1_000, {
-      processing: processing(events, undefined, async () => { if (++calls === 2) await blockedSearch.promise; }),
-    }, events);
-    try {
-      await vi.advanceTimersByTimeAsync(1);
-      const operator = runtime.runExclusive(async () => { events.push("operator-start"); await blockedOperator.promise; events.push("operator-end"); });
-      runtime.requestApprovalPublication();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(events).not.toContain("operator-start");
-      blockedSearch.resolve();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(events.at(-1)).toBe("operator-start");
-      blockedOperator.resolve();
-      await operator;
-      await vi.advanceTimersByTimeAsync(1);
-      expect(events.slice(-4)).toEqual(["operator-end", "finalize", "append", "reconcile"]);
-    } finally { blockedSearch.resolve(); blockedOperator.resolve(); await runtime.close(); }
   });
 
   it("runs ungated operator work beside publication and search, and closes handles only after it settles", async () => {

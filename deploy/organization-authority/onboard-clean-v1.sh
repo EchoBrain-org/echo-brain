@@ -124,6 +124,8 @@ usage:
   onboard-clean-v1.sh continue-staged-initial-onboarding
   onboard-clean-v1.sh status
   onboard-clean-v1.sh extraction-attempts [--limit <1..100>]
+  onboard-clean-v1.sh langsmith-tracing --project <project> --region <us|eu|apac|aws-us> --hours <1..24> [--workspace-id <uuid>]
+  onboard-clean-v1.sh langsmith-tracing --disable
   onboard-clean-v1.sh retry-extraction --admission-sha256 <sha256:digest> --review-lineage-id <rli_digest> --review-input-sha256 <sha256:digest> --expected-attempt <number> --expected-outcome <failed|succeeded|pending> --confirm-new-model-call [--recover-pending]
 EOF
   exit 2
@@ -2331,6 +2333,85 @@ retry_extraction() {
   start_runtime || fail 'one extraction retry was authorized but Authority restart failed; inspect extraction-attempts and use resume, never repeat the grant'
 }
 
+langsmith_tracing() {
+  local project='' region='' hours='' workspace='' disable=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project) [[ $# -ge 2 && -z "$project" ]] || usage; project="$2"; shift 2 ;;
+      --region) [[ $# -ge 2 && -z "$region" ]] || usage; region="$2"; shift 2 ;;
+      --hours) [[ $# -ge 2 && -z "$hours" ]] || usage; hours="$2"; shift 2 ;;
+      --workspace-id) [[ $# -ge 2 && -z "$workspace" ]] || usage; workspace="$2"; shift 2 ;;
+      --disable) [[ "$disable" == false ]] || usage; disable=true; shift ;;
+      *) usage ;;
+    esac
+  done
+  if [[ "$disable" == true ]]; then
+    [[ -z "$project$region$hours$workspace" ]] || usage
+  else
+    [[ "$project" =~ ^[A-Za-z0-9][A-Za-z0-9._\ -]{0,99}$ && "$region" =~ ^(us|eu|apac|aws-us)$ && "$hours" =~ ^([1-9]|1[0-9]|2[0-4])$ ]] || usage
+    [[ -z "$workspace" || "$workspace" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || usage
+  fi
+  acquire_operation_lock
+  trap 'release_operation_lock' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  require_host_prerequisites
+  [[ -f "$SETUP_FILE" && ! -L "$SETUP_FILE" && -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'run prepare first'
+  [[ "$(setup_value authority_url)" == https://authority-staging.echobrain.org ]] || fail 'LangSmith tracing is staging-only'
+  if staged_candidate_present; then
+    runtime_profile_matches_candidate_tuple || fail 'staged candidate runtime profile or environment is missing, noncanonical, or drifted'
+    require_candidate_image_present
+    running_authority || fail 'staged candidate is not running'
+    require_running_candidate_runtime
+  else
+    require_prepared
+    require_image_present
+    running_authority && healthy_authority && authority_uses_accepted_image && runtime_uses_accepted_runtime_profile || fail 'running Authority differs from its accepted image or runtime profile'
+  fi
+  select_runtime_identity "$(setup_value runtime_user)"
+  require_safe_directory_target "$PRIVATE_DIR" 'private directory'
+  # The key stays in a hidden terminal prompt and a runtime-owned private file.
+  # No secret in shell variables, argv, environment, output, or release artifacts.
+  python3 - "$PRIVATE_DIR" "$RUNTIME_UID" "$RUNTIME_GID" "$disable" "$project" "$region" "$hours" "$workspace" <<'PY'
+import datetime, getpass, json, os, re, stat, sys, tempfile, warnings
+directory, uid, gid, disable, project, region, hours, workspace = sys.argv[1:]
+target = os.path.join(directory, 'langsmith-tracing.json')
+if os.path.lexists(target):
+    state = os.lstat(target)
+    if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode):
+        raise SystemExit('LangSmith configuration destination is unsafe')
+if disable == 'true':
+    if os.path.exists(target): os.unlink(target)
+else:
+    warnings.simplefilter('error', getpass.GetPassWarning)
+    try:
+        key = getpass.getpass('Paste the LangSmith API key (input hidden): ')
+    except (getpass.GetPassWarning, EOFError, KeyboardInterrupt):
+        raise SystemExit('LangSmith key entry requires a private terminal')
+    if re.fullmatch(r'[\x21-\x7e]{16,2048}', key) is None:
+        raise SystemExit('LangSmith API key format is invalid')
+    expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=int(hours))
+    value = dict(project=project, region=region, api_key=key, expires_at=expires.isoformat())
+    if workspace: value['workspace_id'] = workspace
+    fd, temporary = tempfile.mkstemp(prefix='.langsmith-', dir=directory)
+    try:
+        with os.fdopen(fd, 'w') as output:
+            os.fchmod(output.fileno(), 0o600)
+            if os.getuid() == 0: os.fchown(output.fileno(), int(uid), int(gid))
+            json.dump(value, output)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+PY
+  compose_clean stop -t 30 authority || fail 'tracing selection saved; Authority stop is unconfirmed'
+  start_runtime || fail 'tracing selection saved; Authority restart failed'
+  compose_clean restart proxy || fail 'tracing selection saved; proxy restart failed'
+  printf 'langsmith_tracing_configured=%s\n' "$([[ "$disable" == true ]] && printf false || printf true)"
+}
+
 case "${1:-}" in
   doctor) shift; doctor "$@" ;;
   prepare) shift; prepare "$@" ;;
@@ -2343,5 +2424,6 @@ case "${1:-}" in
   status) [[ $# -eq 1 ]] || usage; status ;;
   extraction-attempts) shift; extraction_attempts "$@" ;;
   retry-extraction) shift; retry_extraction "$@" ;;
+  langsmith-tracing) shift; langsmith_tracing "$@" ;;
   *) usage ;;
 esac

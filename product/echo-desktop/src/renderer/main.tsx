@@ -140,8 +140,8 @@ function App() {
   const mine = state.route.page === 'mine';
   const tools = state.route.page === 'tools' ? state.tools : null;
   // Another app is in front: cover what a project, Mine, People & invites, an
-  // answer or an original shows until ECHO is back. Project rows stay (Home's
-  // and the sidebar's), so a file dragged from Finder can still be dropped on one.
+  // answer or an original shows until ECHO is back. The sidebar's project rows
+  // stay, so a file dragged from Finder can still be dropped on one.
   const covered = pageCovered(state);
   const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : mine ? 'Mine' : decision || send ? 'Decision' : null;
   const title = covered ? 'ECHO' : state.ask ? 'Ask' : pageName ?? 'ECHO';

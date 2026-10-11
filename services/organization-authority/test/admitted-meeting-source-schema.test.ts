@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV14,
+  applyAuthorityBaseline,
   AUTHORITY_BASELINE_APPLICATION_ID_V1,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V14,
-  authorityBaselineSha256V14,
+  AUTHORITY_BASELINE_SCHEMA_VERSION,
+  authorityBaselineSha256,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
-const AUTHORITY_BASELINE_SHA256_V14 =
+const AUTHORITY_BASELINE_SHA256 =
   "sha256:77c824e9cbbb2dbdbb079fe84edb9677807a56f11087bbd7f4889e008c2d3d84";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-29T00:00:00.000Z";
@@ -20,7 +20,7 @@ afterEach(() => { for (const database of databases.splice(0)) database.close(); 
 function openedCurrentDatabase() {
   const database = openAuthorityDatabase(":memory:");
   databases.push(database);
-  applyAuthorityBaselineV14(database);
+  applyAuthorityBaseline(database);
   return database;
 }
 
@@ -101,12 +101,12 @@ describe("Authority admitted meeting-source schema", () => {
   });
   it("is a pinned fresh-only provider-neutral schema with stable role headers", () => {
     const database = openedCurrentDatabase();
-    expect(authorityBaselineSha256V14()).toBe(AUTHORITY_BASELINE_SHA256_V14);
+    expect(authorityBaselineSha256()).toBe(AUTHORITY_BASELINE_SHA256);
     expect(database.pragma("application_id", { simple: true })).toBe(
       AUTHORITY_BASELINE_APPLICATION_ID_V1,
     );
     expect(database.pragma("user_version", { simple: true })).toBe(
-      AUTHORITY_BASELINE_SCHEMA_VERSION_V14,
+      AUTHORITY_BASELINE_SCHEMA_VERSION,
     );
     const tables = database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -168,7 +168,7 @@ describe("Authority admitted meeting-source schema", () => {
 
   it("refuses to reinitialize an occupied database", () => {
     const database = openedCurrentDatabase();
-    expect(() => applyAuthorityBaselineV14(database)).toThrow(
+    expect(() => applyAuthorityBaseline(database)).toThrow(
       /completely empty database/,
     );
   });

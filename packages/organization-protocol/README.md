@@ -41,9 +41,10 @@ The consequence text and its digest are contract bytes, not editable UI copy.
 The selected policy is committed by the approved or rejected human action and
 carried into the signed record.
 
-The private Slack Block Kit flow's signed action witness lives with the Slack
-provider in `providers/slack/server/src/organization-protocol/`. Raw Slack
-request bodies and response URLs never enter the record contract.
+A meeting approval decided in the approval core, on the desktop or through the
+Slack DM copy, is recorded with one neutral proof:
+`approval-decision-record-input-v1.ts` (`echo-approval-decision-ref-v1`). Raw
+Slack request bodies and response URLs never enter the record contract.
 
 ## Organization record contract
 
@@ -56,8 +57,8 @@ request bodies and response URLs never enter the record contract.
 - the Authority signing key and canonical record digest.
 
 The envelope accepts the provider-neutral human-action input, plus any input
-codec the caller registers, such as the Slack provider's Block Kit approval
-witness. Validation recomputes every joined digest and rejects mismatched
+codec the caller registers, such as the approval-decision proof above.
+Validation recomputes every joined digest and rejects mismatched
 provenance, event, policy, or predecessor facts.
 
 `organization-record-receipt-v2.ts` acknowledges the exact envelope, appended

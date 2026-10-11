@@ -22,8 +22,6 @@ export interface LocalOverlayInput {
   nango?: AuthorityLocalNango;
 }
 
-export function canonicalWorktreeId(repo?: string): string;
-
 export function localProjectName(
   repo?: string,
   uid?: number,

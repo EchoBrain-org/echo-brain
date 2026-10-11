@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import {
-  buildPrivateSlackApprovalBlockKitCardV1,
+  buildPrivateSlackApprovalReviewV1,
   type PrivateSlackApprovalBlockKitCardInputV1,
 } from "./private-slack-approval-block-kit-card-v1.js";
 
@@ -60,21 +60,13 @@ export function slackApprovalOwnerActionIdV4(
   return id(approvalId, `owner-${signalId}`);
 }
 
-/** Builds the V4 controls around the existing complete review renderer. */
+/** Builds the V4 controls below the complete review. */
 export function buildSlackApprovalCardV4(
   input: SlackApprovalCardInputV4,
 ): SlackApprovalCardV4 {
   if (input.projects.length > 100 || input.owners.length > 40)
     throw new Error("Slack approval card exceeds Slack limits");
-  const base = buildPrivateSlackApprovalBlockKitCardV1(input.review);
-  const retained = base.blocks.filter(
-    (block) =>
-      !["policy", "comment", "actions", "footer", "divider"].some(
-        (name) =>
-          (block as { block_id?: string }).block_id?.endsWith(`-${name}-v1`) ===
-          true,
-      ),
-  );
+  const review = buildPrivateSlackApprovalReviewV1(input.review);
   const projectLabel = (name: string) =>
     name.length <= 75 ? name : `${name.slice(0, 74).trimEnd()}…`;
   const projects = input.projects.map((project) =>
@@ -88,7 +80,7 @@ export function buildSlackApprovalCardV4(
     input.suggested_project_ids.includes(project.value),
   );
   const blocks: Readonly<Record<string, unknown>>[] = [
-    ...retained,
+    ...review.blocks,
     ...input.owners.map((owner) => ({
       type: "input",
       block_id: id(input.approval_id, `owner-${owner.signal_id}`),
@@ -188,16 +180,20 @@ export function buildSlackApprovalCardV4(
   ];
   if (blocks.length > 50)
     throw new Error("Slack approval card exceeds Slack limits");
-  const text = base.text
-    .replace(
-      "Visibility: Only me (default) or Team.\nOptionally add a comment, then choose Approve or Reject.",
-      "Visibility: Only me (default) or selected Projects.\nChoose Approve or Reject.",
-    )
-    .concat("\nTranscript sharing is off by default.");
+  const text = [
+    review.text,
+    "Visibility: Only me (default) or selected Projects.",
+    "Choose Approve or Reject.",
+    "Transcript sharing is off by default.",
+  ].join("\n");
   return Object.freeze({
     text,
     blocks: Object.freeze(blocks),
-    transport: base.transport,
+    transport: Object.freeze({
+      mrkdwn: false,
+      unfurl_links: false,
+      unfurl_media: false,
+    }),
   });
 }
 

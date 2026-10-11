@@ -58,7 +58,7 @@
       {
         "name": "@echo-brain/provider-synthetic-demo implementation",
         "path": "providers/synthetic-demo/src/source/synthetic-demo-meeting-source-v1.ts",
-        "export": "SyntheticDemoMeetingSourceAdapterV1"
+        "export": "loadSyntheticDemoMeetingCorpusV1"
       }
     ],
     "compatibility_entrypoints": [],

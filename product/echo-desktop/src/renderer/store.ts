@@ -18,7 +18,7 @@ import { message } from './messages.js';
 import { closable } from './needs.js';
 
 /** Mine: only what you added, to see and to ask about. Send: Tell the owners?, for one check's run. */
-type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision'; approval_id: string }
+type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision' }
   | { page: 'send'; run_id: string };
 
 /** A question, in the scope it was asked in. */
@@ -765,24 +765,29 @@ function failureOf(error: unknown): Failure {
   return error instanceof CommandFailed ? error.failure : { code: 'failed', retryable: true };
 }
 
+/** Only the Authority's answer settles a write whose outcome is unknown: a failed resend leaves it unknown. */
+function outcomeUnknown(failure: Failure, resend: boolean): boolean {
+  return resend || failure.mutation_outcome === 'unknown';
+}
+
 /** Account-fenced command for the personal meeting sheet. No provider token enters the renderer. */
-export async function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }): Promise<PersonMeetingResultsV2[K]> {
-  const account = expect();
-  if (!account || state.concealed) throw new Error('Sign in to use meetings.');
-  const result = await rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id: 'granola' } });
-  if (JSON.stringify(expect()) !== JSON.stringify(account) || state.concealed) throw new Error('Account or screen changed.');
-  if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure); }
-  return result.value as PersonMeetingResultsV2[K];
+export function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }): Promise<PersonMeetingResultsV2[K]> {
+  return fencedCommand<PersonMeetingResultsV2[K]>(account => rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id: 'granola' } }));
 }
 
 /** Account-fenced runs request: your own approvals' checks, and the open items you can see. */
-export async function runsCommand<K extends PersonRunsRequestV1['operation']>(request: PersonRunsRequestV1 & { readonly operation: K }): Promise<RunsResults[K]> {
+export function runsCommand<K extends PersonRunsRequestV1['operation']>(request: PersonRunsRequestV1 & { readonly operation: K }): Promise<RunsResults[K]> {
+  return fencedCommand<RunsResults[K]>(account => rpc('runs', { expect: account, request }));
+}
+
+/** Sends for the account shown; a reply once the account or the screen changed is refused, and a failure is thrown. */
+async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknown>>): Promise<T> {
   const account = expect();
   if (!account || state.concealed) throw new Error('Sign in to use meetings.');
-  const result = await rpc('runs', { expect: account, request });
+  const result = await send(account);
   if (JSON.stringify(expect()) !== JSON.stringify(account) || state.concealed) throw new Error('Account or screen changed.');
   if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure); }
-  return result.value as RunsResults[K];
+  return result.value as T;
 }
 
 /** Open in Jira, Confluence or Slack, from an impact card: the tool checks your access when it opens. */
@@ -865,39 +870,35 @@ export function signinPhase(browserOpened: boolean | undefined): void {
 
 // ---- home and projects -------------------------------------------------------
 
-/** The first page again, or the next page appended (More projects). */
-export async function loadProjects(more = false): Promise<void> {
-  const account = expect();
-  if (!account || (more && !state.projects.next)) return;
-  const cursor = more ? state.projects.next ?? undefined : undefined;
-  set({ projects: { ...state.projects, loading: true, failure: undefined } });
-  const result = await rpc('projects.list', { expect: account, status: 'active', ...(cursor ? { cursor } : {}) });
-  if (!result.ok) {
-    accountLost(result.failure);
-    set({ projects: { ...state.projects, loading: false, failure: result.failure } });
-    return;
-  }
-  if (rolesChanged(result.value.items)) emptyBar();
-  const seen = new Set(more ? state.projects.items.map(project => project.project_id) : []);
-  const items = [...(more ? state.projects.items : []), ...result.value.items.filter(project => !seen.has(project.project_id))];
-  set({ projects: { items, next: result.value.next_cursor, loading: false } });
+/** The rows shown, then the rows of a page they do not have yet. */
+function appendPage<T>(shown: readonly T[], page: readonly T[], key: (row: T) => string): T[] {
+  const seen = new Set(shown.map(key));
+  return [...shown, ...page.filter(row => !seen.has(key(row)))];
 }
 
+/** The first page again, or the next page appended (More projects). */
+export function loadProjects(more = false): Promise<void> { return loadProjectList('active', more); }
+
 /** Archived projects live in their own list: they can be opened, but never picked for new material. */
-export async function loadArchivedProjects(more = false): Promise<void> {
+export function loadArchivedProjects(more = false): Promise<void> { return loadProjectList('archived', more); }
+
+/** Your active or archived projects: the first page again, or the next page appended. */
+async function loadProjectList(status: 'active' | 'archived', more: boolean): Promise<void> {
+  const key = status === 'active' ? 'projects' : 'archivedProjects';
+  const show = (list: State['projects']) => set(key === 'projects' ? { projects: list } : { archivedProjects: list });
   const account = expect();
-  if (!account || (more && !state.archivedProjects.next)) return;
-  const cursor = more ? state.archivedProjects.next ?? undefined : undefined;
-  set({ archivedProjects: { ...state.archivedProjects, loading: true, failure: undefined } });
-  const result = await rpc('projects.list', { expect: account, status: 'archived', ...(cursor ? { cursor } : {}) });
+  if (!account || (more && !state[key].next)) return;
+  const cursor = more ? state[key].next ?? undefined : undefined;
+  show({ ...state[key], loading: true, failure: undefined });
+  const result = await rpc('projects.list', { expect: account, status, ...(cursor ? { cursor } : {}) });
   if (!result.ok) {
     accountLost(result.failure);
-    set({ archivedProjects: { ...state.archivedProjects, loading: false, failure: result.failure } });
+    show({ ...state[key], loading: false, failure: result.failure });
     return;
   }
-  const seen = new Set(more ? state.archivedProjects.items.map(project => project.project_id) : []);
-  const items = [...(more ? state.archivedProjects.items : []), ...result.value.items.filter(project => !seen.has(project.project_id))];
-  set({ archivedProjects: { items, next: result.value.next_cursor, loading: false } });
+  if (status === 'active' && rolesChanged(result.value.items)) emptyBar();
+  const items = appendPage(more ? state[key].items : [], result.value.items, project => project.project_id);
+  show({ items, next: result.value.next_cursor, loading: false });
 }
 
 /** A project you were lead of is now one you are a member of, or the other way: a change of access. */
@@ -1015,8 +1016,7 @@ async function loadList(how: 'first' | 'more' | 'quiet'): Promise<void> {
   }
   const page = result.value;
   if (how === 'first') { set({ list: { ...current, loading: false, items: [...page.items], next: page.next_cursor } }); return; }
-  const seen = new Set(current.items.map(refKey));
-  set({ list: { ...current, loading: false, items: [...current.items, ...page.items.filter(item => !seen.has(refKey(item)))], next: page.next_cursor } });
+  set({ list: { ...current, loading: false, items: appendPage(current.items, page.items, refKey), next: page.next_cursor } });
 }
 
 function refKey(item: ListItem): string { return `${item.ref.kind}:${item.ref.id}`; }
@@ -1055,8 +1055,7 @@ async function loadRoster(projectId: string, more = false): Promise<void> {
     accountLost(result.failure);
     return;
   }
-  const seen = new Set(more ? current.items.map(person => person.membership_id) : []);
-  const items = [...(more ? current.items : []), ...result.value.items.filter(person => !seen.has(person.membership_id))];
+  const items = appendPage(more ? current.items : [], result.value.items, person => person.membership_id);
   set({ roster: { projectId, items, next: result.value.next_cursor, loading: false } });
 }
 
@@ -1300,8 +1299,7 @@ async function sendChange(
   const current = state.change;
   if (current?.seq !== mine) return;
   if (!result.ok) {
-    // Only the Authority's answer settles an unknown change: a failed resend leaves it unknown.
-    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    const unknown = outcomeUnknown(result.failure, retrying);
     setChange({ ...current, status: unknown ? 'unknown' : 'failed', failure: result.failure });
     accountLost(result.failure);
     return;
@@ -1511,7 +1509,7 @@ export async function moreProjectConfluenceSpaces(): Promise<void> {
   const current = mappingAt('confluence', account, setting.seq);
   if (!current) return;
   setMapping(current.settings, 'confluence', result.ok
-    ? { ...current.setting, spaces: [...current.setting.spaces, ...result.value.items.filter(space => !current.setting.spaces.some(old => old.id === space.id))], next: result.value.next_cursor, loadingMore: false }
+    ? { ...current.setting, spaces: appendPage(current.setting.spaces, result.value.items, space => space.id), next: result.value.next_cursor, loadingMore: false }
     : { ...current.setting, loadingMore: false, failure: result.failure });
   if (!result.ok) accountLost(result.failure);
 }
@@ -1579,7 +1577,7 @@ async function sendProjectSetting(project: ProjectSummary, operation: 'rename' |
   const current = state.projectSettings;
   if (current?.write?.requestId !== requestId) return;
   if (!result.ok) {
-    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    const unknown = outcomeUnknown(result.failure, retrying);
     set({ projectSettings: { ...current, write: { ...current.write, status: unknown ? 'unknown' : 'failed', failure: result.failure } } });
     unresolvedChanged();
     accountLost(result.failure);
@@ -1781,9 +1779,8 @@ export async function findPeople(more = false): Promise<void> {
     accountLost(result.failure);
     return;
   }
-  const seen = new Set(shown.map(person => person.membership_id));
   patch({ directory: {
-    seq: mine, items: [...shown, ...result.value.items.filter(person => !seen.has(person.membership_id))], next: result.value.next_cursor, loading: false,
+    seq: mine, items: appendPage(shown, result.value.items, person => person.membership_id), next: result.value.next_cursor, loading: false,
   } });
 }
 
@@ -1932,8 +1929,7 @@ export async function createProject(): Promise<void> {
   const current = newProjectSheet(mine);
   if (!current) return;
   if (!result.ok) {
-    // Only the Authority's answer settles an unknown create: a failed resend leaves it unknown.
-    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    const unknown = outcomeUnknown(result.failure, retrying);
     setNewProject({ create: { ...current.create, status: unknown ? 'unknown' : 'failed', failure: result.failure } }, mine);
     accountLost(result.failure);
     return;
@@ -2108,8 +2104,7 @@ async function addPick(mine: number, id: number, retrying: boolean): Promise<voi
   });
   if (!newProjectSheet(mine)?.picks.some(entry => entry.id === id)) return;
   if (!result.ok) {
-    // Only the Authority's answer settles an unknown add: a failed resend leaves it unknown.
-    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    const unknown = outcomeUnknown(result.failure, retrying);
     patchPick(mine, id, { status: unknown ? 'unknown' : 'failed', failure: result.failure });
     accountLost(result.failure);
     // Refused, the rest carry on; unknown, they wait, and the project opens meanwhile.
@@ -2173,6 +2168,17 @@ function patchFile(mine: number, id: number, patch: Partial<ProjectFile>): void 
   if (sheet) setNewProject({ files: sheet.files.map(file => file.id === id ? { ...file, ...patch } : file), confirmClose: false }, mine);
 }
 
+/**
+ * Uploads a document, or with no upload resends the original the client kept
+ * of it under the same request (Try again), not whatever its path holds now.
+ */
+function sendDocument(account: Expect, request_id: string, audience: Audience,
+  upload: { file: FileHandle; title: string; project_ids: readonly string[] } | null): Promise<Result<Receipt>> {
+  return upload
+    ? rpc('documents.upload', { expect: account, request_id, file_handle: upload.file.handle, title: upload.title, audience, project_ids: upload.project_ids })
+    : rpc('documents.retry', { expect: account, request_id, audience });
+}
+
 /** Saves a file for the project's members, or resends the copy the client kept of one (Try again). */
 async function saveFile(mine: number, id: number, retrying: boolean): Promise<void> {
   const account = expect();
@@ -2182,16 +2188,11 @@ async function saveFile(mine: number, id: number, retrying: boolean): Promise<vo
   const project_id = sheet.project.project_id;
   const audience: Audience = { kind: 'project', project_id };
   patchFile(mine, id, { status: 'saving', failure: undefined });
-  const result = retrying
-    ? await rpc('documents.retry', { expect: account, request_id: file.requestId, audience })
-    : await rpc('documents.upload', {
-      expect: account, request_id: file.requestId, file_handle: file.handle!.handle, title: file.name, audience, project_ids: [project_id],
-    });
+  const result = await sendDocument(account, file.requestId, audience, retrying ? null : { file: file.handle!, title: file.name, project_ids: [project_id] });
   const current = newProjectSheet(mine)?.files.find(entry => entry.id === id);
   if (!current) return;
   if (!result.ok) {
-    // Only the Authority's answer settles an unknown save: a failed resend leaves it unknown.
-    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    const unknown = outcomeUnknown(result.failure, retrying);
     patchFile(mine, id, { status: unknown ? 'unknown' : 'failed', failure: result.failure, kept: current.kept || unknown });
     accountLost(result.failure);
     // Refused, the rest carry on; unknown, they wait, and the project opens meanwhile.
@@ -3102,22 +3103,13 @@ export async function sendCompose(): Promise<void> {
   setCompose({ ...compose, status: 'sending', picking: null, failure: undefined, confirmNew: false, notice: undefined });
   const audience = audienceOf(compose);
   const project_ids = filedIn(compose);
-  let result: Result<Receipt>;
-  if (compose.file && retrying) {
-    // The client kept the original: resend it, not whatever the path holds now.
-    result = await rpc('documents.retry', { expect: account, request_id: compose.requestId, audience });
-  } else if (compose.file) {
-    result = await rpc('documents.upload', {
-      expect: account, request_id: compose.requestId, file_handle: compose.file.handle, title: compose.file.name, audience, project_ids,
-    });
-  } else {
-    result = await rpc('notes.submit', { expect: account, request_id: compose.requestId, text: compose.text, audience, project_ids });
-  }
+  const result = compose.file
+    ? await sendDocument(account, compose.requestId, audience, retrying ? null : { file: compose.file, title: compose.file.name, project_ids })
+    : await rpc('notes.submit', { expect: account, request_id: compose.requestId, text: compose.text, audience, project_ids });
   const current = state.compose;
   if (current?.seq !== compose.seq) return;
   if (!result.ok) {
-    // Only the Authority's answer settles an unknown save: a failed retry leaves it unknown.
-    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    const unknown = outcomeUnknown(result.failure, retrying);
     setCompose({ ...current, status: unknown ? 'unknown' : 'error', failure: result.failure, hidden: false,
       kept: current.kept || (unknown && current.file !== null) });
     accountLost(result.failure);
@@ -3228,7 +3220,7 @@ export function conceal(): void {
   stopRunPolling();
   // The source pane closes and forgets what it read; the records are read again on return.
   const reading = state.sources !== null;
-  // People closes, as Home's and the sidebar's rows must take a drop; unless a change in it is on its way.
+  // People closes, as the sidebar's rows must take a drop; unless a change in it is on its way.
   const people = state.sheet?.kind === 'people' && !memberChangeSending();
   // New project stays: files are dropped on it from other apps.
   // People & invites closes what is open in it, and an invitation just saved is no longer offered back (its Undo ends).
@@ -3274,7 +3266,6 @@ export async function windowShown(): Promise<void> {
  * changed, and still does not match, since you sent it. `failed`: the impact
  * check did not finish. `checking`: it is on its way.
  */
-export type NeedKind = 'approve' | 'send' | 'update' | 'review' | 'checking' | 'failed';
 export type NeedRow =
   | { kind: 'approve'; review: PersonMeetingReviewV2 }
   | { kind: 'checking'; review: PersonMeetingReviewV2; run?: PersonRunV1 }
@@ -3684,7 +3675,7 @@ export async function openDecision(approval_id: string, run: PersonRunV1 | null 
   readSeq += 1;
   const mine = ++seq;
   set({
-    route: { page: 'decision', approval_id }, reader: null, ask: null, sources: null, toast: null, organization: null, list: null, roster: null,
+    route: { page: 'decision' }, reader: null, ask: null, sources: null, toast: null, organization: null, list: null, roster: null,
     barScope: { kind: 'global' },
     decision: { approval_id, seq: mine, loading: true, open: null, command: crypto.randomUUID(), audience: 'only-me', project_ids: [], share: false,
       owners: [], busy: false, run, impact: undefined, ...(back === undefined ? {} : { back }) },
@@ -4183,8 +4174,7 @@ async function loadItemsPage<View extends ItemsPage>(shown: () => View | null, s
   if (current?.seq !== mine) return;
   if (!result.ok) { show({ ...current, loading: false, failure: result.failure }); accountLost(result.failure); return; }
   const read = result.value as OpenItemsView;
-  const seen = new Set(more ? current.items.map(item => item.item_id) : []);
-  show(withRead({ ...current, loading: false, items: [...(more ? current.items : []), ...read.items.filter(item => keep(item) && !seen.has(item.item_id))],
+  show(withRead({ ...current, loading: false, items: appendPage(more ? current.items : [], read.items.filter(keep), item => item.item_id),
     next: read.next_cursor }, read));
 }
 

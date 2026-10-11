@@ -115,8 +115,8 @@ does not authorize release to another person.
 
 Meeting ingestion continues to use
 [`SourceAdapterV1`](../../packages/organization-processing/src/core/ports/source.ts)
-and the
-[`MeetingSourceBundleV1`](../../packages/organization-processing/src/ports/meeting-source-bundle-v1.ts)
+and the per-person
+[`PersonMeetingProviderV1`](../../services/organization-authority/src/composition/person-meeting-runtime-v1.ts)
 admission path. The shared access projection can represent `source_export`
 without granting live evidence reads. The provider implements the person's
 export-equivalent API access, revision identity and cursor behavior; ECHO

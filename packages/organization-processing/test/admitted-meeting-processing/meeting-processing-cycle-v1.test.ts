@@ -330,7 +330,6 @@ function stager(
       return result;
     },
     reconcilePendingDeliveries: async () => {},
-    reconcileSuperseded: async () => {},
   };
 }
 
@@ -834,7 +833,6 @@ describe("admitted meeting-processing cycle", () => {
         return { kind: "staged", stage_id: "stage-1" };
       },
       reconcilePendingDeliveries: async () => { order.push(`reconcile:${state.advances.length}`); },
-      reconcileSuperseded: async () => {},
     };
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
@@ -855,7 +853,6 @@ describe("admitted meeting-processing cycle", () => {
       reconcilePendingDeliveries: async () => {
         throw new Error("older Slack delivery failed");
       },
-      reconcileSuperseded: async () => {},
     };
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
@@ -881,7 +878,6 @@ describe("admitted meeting-processing cycle", () => {
         throw new Error("Slack transport threw");
       },
       reconcilePendingDeliveries: async () => {},
-      reconcileSuperseded: async () => {},
     };
     const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
@@ -902,7 +898,6 @@ describe("admitted meeting-processing cycle", () => {
       stager: {
         stage: async () => { throw new Error("proposal freeze refused"); },
         reconcilePendingDeliveries: async () => {},
-        reconcileSuperseded: async () => {},
       },
     });
 
@@ -1133,7 +1128,6 @@ describe("admitted meeting-processing cycle", () => {
         return { kind: "staged", stage_id: "stage-1" };
       },
       reconcilePendingDeliveries: async () => {},
-      reconcileSuperseded: async () => {},
     };
     const changedObservation: MeetingDocument = {
       ...originalMeeting,
@@ -1200,7 +1194,6 @@ describe("admitted meeting-processing cycle", () => {
         return { kind: "staged", stage_id: "stage-1" };
       },
       reconcilePendingDeliveries: async () => {},
-      reconcileSuperseded: async () => {},
     };
 
     const repeated = liveCycle({
