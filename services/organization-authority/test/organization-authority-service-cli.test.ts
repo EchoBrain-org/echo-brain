@@ -216,11 +216,11 @@ function stagingProfileDirectory(): string {
 }
 
 describe("admitted runtime CLI events", () => {
-  it('wires hosted traces to ordinary research without a Person capture and drains on shutdown', async () => {
+  it.each(['bounded', 'persistent'])('wires %s hosted traces to ordinary research without a Person capture and drains on shutdown', async mode => {
     runtimeState.authority_url = 'https://authority-staging.echobrain.org';
     process.env.ECHO_SOURCE_SHA = 'a'.repeat(40);
     const path = nangoKeyFile();
-    writeFileSync(path, JSON.stringify({ project: 'echo-staging', region: 'us', api_key: 'private-fixture-langsmith-key', expires_at: new Date(Date.now() + 3600_000).toISOString() }));
+    writeFileSync(path, JSON.stringify({ project: 'echo-staging', region: 'us', api_key: 'private-fixture-langsmith-key', expires_at: mode === 'persistent' ? null : new Date(Date.now() + 3600_000).toISOString() }));
     process.env.ECHO_STAGING_LANGSMITH_TRACING_FILE = path;
     const fetcher = vi.fn<typeof fetch>(async () => new Response('', { status: 202 }));
     vi.stubGlobal('fetch', fetcher);

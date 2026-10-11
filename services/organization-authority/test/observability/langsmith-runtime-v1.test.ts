@@ -4,11 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
-import { createLangSmithSenderV1, readLangSmithConfigV1 } from '../../src/composition/observability/langsmith-runtime-v1.js';
+import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { createLangSmithRuntimeV1, createLangSmithSenderV1, readLangSmithConfigV1 } from '../../src/composition/observability/langsmith-runtime-v1.js';
 import type { LangSmithRunV1 } from '../../src/composition/observability/langsmith-observer-v1.js';
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const fixture = () => {
   const root = mkdtempSync(join(tmpdir(), 'echo-langsmith-')); roots.push(root);
   const path = join(root, 'tracing.json');
@@ -17,6 +18,52 @@ const fixture = () => {
   return { path, config };
 };
 describe('explicit staging LangSmith selection', () => {
+  it('accepts an explicit persistent selection after a month, but never treats a missing expiry as persistent', () => {
+    const { path, config } = fixture();
+    const persistent = { ...config, expires_at: null };
+    writeFileSync(path, JSON.stringify(persistent));
+    expect(readLangSmithConfigV1(path, STAGING_AUTHORITY_ORIGIN_V1, Date.now() + 30 * 24 * 3600_000)).toEqual(persistent);
+    expect(() => readLangSmithConfigV1(path, 'https://authority.example')).toThrow('configuration is invalid');
+    for (const expires_at of [undefined, '', false, 0]) {
+      writeFileSync(path, JSON.stringify({ ...config, expires_at }));
+      expect(() => readLangSmithConfigV1(path, STAGING_AUTHORITY_ORIGIN_V1)).toThrow('configuration is invalid');
+    }
+  });
+
+  it('exports persistent research after the former window and after restarting from the same selection', async () => {
+    const { path, config } = fixture();
+    writeFileSync(path, JSON.stringify({ ...config, expires_at: null }));
+    const started = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(started);
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('', { status: 202 }));
+    const lines: string[] = [];
+    const create = () => createLangSmithRuntimeV1({ path, authority_url: STAGING_AUTHORITY_ORIGIN_V1, release_sha: 'a'.repeat(40), write: line => { lines.push(line); } });
+    const research = async (runtime: ReturnType<typeof create>) => {
+      await observeCoreRuntimeV1('research_run', async () => {
+        observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', tool_call_id: 1, round: 1, tool: 'search', args: { query: 'fixture THERM' } });
+        observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', tool_call_id: 1, round: 1, tool: 'search', result: { items: [] } });
+      }, runtime.scope);
+    };
+    const running = create();
+    try {
+      running.start();
+      clock.mockReturnValue(started + 25 * 3600_000);
+      await research(running);
+    } finally { await running.close(); }
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    clock.mockReturnValue(started + 30 * 24 * 3600_000);
+    const restarted = create();
+    try { restarted.start(); await research(restarted); } finally { await restarted.close(); }
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(lines.map(line => JSON.parse(line))).toContainEqual(expect.objectContaining({ enabled: true, exported: 1, failed: 0 }));
+    expect(lines.join('')).not.toContain(config.api_key);
+    expect(lines.join('')).not.toContain('fixture THERM');
+    rmSync(path);
+    const disabled = create();
+    try { disabled.start(); await research(disabled); } finally { await disabled.close(); }
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it('is disabled for missing or expired selections and rejects production, unsafe files, and unknown destinations', () => {
     const { path, config } = fixture();
     expect(readLangSmithConfigV1(`${path}-absent`, STAGING_AUTHORITY_ORIGIN_V1)).toBeUndefined();
