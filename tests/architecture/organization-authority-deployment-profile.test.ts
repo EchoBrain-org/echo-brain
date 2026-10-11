@@ -263,6 +263,14 @@ if [[ "$1" == compose ]]; then
   exit 0
 fi
 if [[ "$1" == image && "$2" == inspect ]]; then
+  if [[ "$*" == *org.echobrain.authority.config-capability.langsmith-persistent-v1* ]]; then
+    if [[ "$*" == *sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ]]; then
+      printf '%s\\n' "$ECHO_FAKE_LANGSMITH_RUNNING_CAPABILITY"
+    else
+      printf '%s\\n' "$ECHO_FAKE_LANGSMITH_ACCEPTED_CAPABILITY"
+    fi
+    exit 0
+  fi
   if [[ "$*" == *RepoDigests* ]]; then printf '%s\\n' "$ECHO_FAKE_REPO_DIGEST"; exit 0; fi
   if [[ "$*" == *org.opencontainers.image.revision* ]]; then printf '%s\\n' "$ECHO_FAKE_SOURCE"; exit 0; fi
   printf '%s\\n' sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
@@ -333,6 +341,8 @@ exec /usr/bin/install "$@"
     ECHO_FAKE_FAIL_EXTRACTION_STOP: "false",
     ECHO_FAKE_FAIL_EXTRACTION_GRANT: "false",
     ECHO_FAKE_HEALTH: "healthy",
+    ECHO_FAKE_LANGSMITH_RUNNING_CAPABILITY: "true",
+    ECHO_FAKE_LANGSMITH_ACCEPTED_CAPABILITY: "true",
     ECHO_FAKE_SETUP_STATUS: '{"next_step":"complete"}',
     ECHO_FAKE_SETUP_STATUS_AFTER_FINALIZE: "",
     ECHO_FAKE_SETUP_STATUS_AFTER_CREDENTIALS: "",
@@ -486,6 +496,40 @@ afterEach(() => {
 });
 
 describe("clean-v1 Organization Authority deployment profile", () => {
+  it('refuses persistent tracing before secret entry when the running or rollback image is incompatible', () => {
+    for (const unsupported of ['ECHO_FAKE_LANGSMITH_RUNNING_CAPABILITY', 'ECHO_FAKE_LANGSMITH_ACCEPTED_CAPABILITY']) {
+      const fixture = preparedStatusFixture();
+      const setup = join(fixture.privateDir, 'onboard-clean-v1.conf');
+      writeFileSync(setup, readFileSync(setup, 'utf8').replace('https://authority.example', 'https://authority-staging.echobrain.org'));
+      const selection = join(fixture.privateDir, 'langsmith-tracing.json');
+      writeFileSync(selection, 'unchanged-private-selection', { mode: 0o600 });
+      const result = fixture.run('langsmith-tracing', { [unsupported]: '<no value>' }, ['--project', 'echo-staging', '--region', 'us', '--until-disabled']);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('persistent LangSmith tracing requires compatible running and accepted images');
+      expect(result.stderr).not.toContain('key');
+      expect(readFileSync(selection, 'utf8')).toBe('unchanged-private-selection');
+      expect(readFileSync(fixture.calls, 'utf8')).not.toContain('stop -t');
+    }
+  });
+
+  it('enables persistent tracing only when both images support it, and keeps old-image disable working', () => {
+    const fixture = preparedStatusFixture();
+    const setup = join(fixture.privateDir, 'onboard-clean-v1.conf');
+    writeFileSync(setup, readFileSync(setup, 'utf8').replace('https://authority.example', 'https://authority-staging.echobrain.org'));
+    writeFileSync(join(fixture.root, 'getpass.py'), "class GetPassWarning(Warning): pass\ndef getpass(prompt): return 'private-fixture-langsmith-key'\n");
+    const enabled = fixture.run('langsmith-tracing', { PYTHONPATH: fixture.root }, ['--project', 'echo-staging', '--region', 'us', '--until-disabled']);
+    expect(enabled.status, enabled.stderr).toBe(0);
+    const selection = join(fixture.privateDir, 'langsmith-tracing.json');
+    expect(JSON.parse(readFileSync(selection, 'utf8')).expires_at).toBeNull();
+    expect(enabled.stdout + enabled.stderr).not.toContain('private-fixture-langsmith-key');
+    const disabled = fixture.run('langsmith-tracing', { ECHO_FAKE_LANGSMITH_RUNNING_CAPABILITY: '<no value>', ECHO_FAKE_LANGSMITH_ACCEPTED_CAPABILITY: '<no value>' }, ['--disable']);
+    expect(disabled.status, disabled.stderr).toBe(0);
+    expect(existsSync(selection)).toBe(false);
+    const timed = fixture.run('langsmith-tracing', { PYTHONPATH: fixture.root, ECHO_FAKE_LANGSMITH_RUNNING_CAPABILITY: '<no value>', ECHO_FAKE_LANGSMITH_ACCEPTED_CAPABILITY: '<no value>' }, ['--project', 'echo-staging', '--region', 'us', '--hours', '2']);
+    expect(timed.status, timed.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(selection, 'utf8')).expires_at).toEqual(expect.any(String));
+  });
+
   it('requires exactly one hosted tracing duration before touching the runtime or selection', () => {
     for (const duration of [[], ['--hours', '2', '--until-disabled'], ['--hours', '', '--until-disabled'],
       ['--until-disabled', '--until-disabled'], ['--hours', '2', '--hours', '3'], ['--hours', '25'],
@@ -592,6 +636,13 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     writeFileSync(selection, 'private-fixture-key', { mode: 0o600 });
     const result = fixture.run('langsmith-tracing', { ECHO_FAKE_SOURCE: 'd'.repeat(40), ECHO_FAKE_RELEASE_ID: releaseId, ECHO_FAKE_RUNTIME_PROFILE_SHA256: profile.digest }, ['--disable']);
     expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(selection)).toBe(false);
+    const persistent = fixture.run('langsmith-tracing', {
+      ECHO_FAKE_SOURCE: 'd'.repeat(40), ECHO_FAKE_RELEASE_ID: releaseId, ECHO_FAKE_RUNTIME_PROFILE_SHA256: profile.digest,
+      ECHO_FAKE_LANGSMITH_ACCEPTED_CAPABILITY: '<no value>',
+    }, ['--project', 'echo-staging', '--region', 'us', '--until-disabled']);
+    expect(persistent.status).toBe(1);
+    expect(persistent.stderr).toContain('persistent LangSmith tracing requires compatible running and accepted images');
     expect(existsSync(selection)).toBe(false);
   });
   const extractionRetryArguments = ["--admission-sha256", `sha256:${"a".repeat(64)}`,

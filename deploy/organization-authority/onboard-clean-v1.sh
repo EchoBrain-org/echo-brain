@@ -2375,6 +2375,18 @@ langsmith_tracing() {
     require_image_present
     running_authority && healthy_authority && authority_uses_accepted_image && runtime_uses_accepted_runtime_profile || fail 'running Authority differs from its accepted image or runtime profile'
   fi
+  if [[ "$until_disabled" == true ]]; then
+    local authority_id running_image accepted_image image
+    authority_id="$(compose_clean ps -q authority)"
+    running_image="$(docker inspect --format '{{.Image}}' "$authority_id")"
+    accepted_image="$(release_field authority-image)"
+    # The selection survives rollback. Both the active image and the accepted
+    # rollback image must be able to read it before asking for a key or writing.
+    for image in "$running_image" "$accepted_image"; do
+      [[ "$(docker image inspect --format '{{index .Config.Labels "org.echobrain.authority.config-capability.langsmith-persistent-v1"}}' "$image" 2>/dev/null)" == true ]] || \
+        fail 'persistent LangSmith tracing requires compatible running and accepted images; use --hours until the supporting candidate is promoted'
+    done
+  fi
   select_runtime_identity "$(setup_value runtime_user)"
   require_safe_directory_target "$PRIVATE_DIR" 'private directory'
   # The key stays in a hidden terminal prompt and a runtime-owned private file.

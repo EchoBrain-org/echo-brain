@@ -41,6 +41,7 @@ LABEL org.opencontainers.image.revision="${ECHO_SOURCE_SHA}"
 LABEL org.echobrain.authority.build-number="${ECHO_BUILD_NUMBER}"
 LABEL org.echobrain.authority.telemetry.staging-journey-v1="true"
 LABEL org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1="true"
+LABEL org.echobrain.authority.config-capability.langsmith-persistent-v1="true"
 ENV NODE_ENV=production \
     ECHO_STAGING_JOURNEY_TELEMETRY_V1="true" \
     ECHO_SOURCE_SHA="${ECHO_SOURCE_SHA}" \

@@ -1064,8 +1064,12 @@ finish current Ask requests first. Initial onboarding must already be prepared.
 It refuses non-staging Authorities. Persistent mode stores an explicit
 `expires_at: null`; a missing expiry is invalid. A reset does not carry either
 selection into the new rehearsal. Deploy the matching server and wrapper before
-selecting persistent mode; older server builds do not accept it. Before rolling
-back to an older build, use this wrapper to disable tracing or select `--hours`.
+selecting persistent mode. The wrapper checks the capability label on both the
+running image and the accepted rollback image before prompting for a key or
+changing the selection, because older builds cannot read it. During the first
+upgrade, use a timed window for candidate verification, then select persistent
+mode after promotion. Installing only the wrapper cannot enable it on an older
+server, and a candidate cannot leave an incompatible selection for rollback.
 
 Run one ordinary THERM Ask after enabling, for example:
 “What is the status of the project? Are there tasks blocking progress?”
