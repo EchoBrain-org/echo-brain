@@ -37,13 +37,17 @@ Slack setup, SNS confirmation or Explorer access grant is not a new handoff on
 every round. Fresh runtime and journey evidence is still required for each run.
 
 For staging resets, reuse the designated existing Slack app. Retain its app ID
-in the operator handoff and include `--existing-app <app-id>` in the human's
-`person tools setup --tool slack` command when the fresh organization has no
-active Slack connection. A reset clears ECHO's setup state; it does not delete
+in the operator handoff. When host `resume` reaches `connect_slack_in_app`, the
+human reruns `./onboard-clean-v1.sh resume --existing-slack-app <app-id>` with
+that ID. The wrapper emits the exact `person tools setup --tool slack
+--existing-app <app-id>` command for the owner Mac. With no choice it asks for
+one instead of printing bare setup. A reset clears ECHO's setup state; it does not delete
 the app in Slack. If setup already saved that app's credentials and consent
 needs resuming, use `--reconnect` instead. Never combine the two flags. Creating
-a new Slack app requires the owner's explicit choice; do not default to bare
-setup after a reset. The linked [existing-app procedure](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection)
+a new Slack app requires the owner's explicit `resume --create-slack-app` choice
+for that invocation; do not default to bare setup after a reset. These flags
+select only the printed handoff and never create an app or grant consent on the
+host. The linked [existing-app procedure](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection)
 owns the hidden prompts and connection checks.
 
 ## Coordinated server and client release

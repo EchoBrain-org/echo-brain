@@ -89,7 +89,7 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 | `runtime-profile.json`     | Exact canonical runtime profile referenced by the release record. It contains the reviewed Compose and Caddy bytes, never a secret. |
 | `oidc-config.json`         | OIDC configuration, including the exact callback above.                                                                             |
 | `oidc-client-secret`       | OIDC client secret.                                                                                                                 |
-| `nango-secret-key`         | Nango environment secret key. The Authority uses it to create Slack connect sessions and fetch the bot token; an owner sets Slack up afterward with `person tools setup --tool slack`. |
+| `nango-secret-key`         | Nango environment secret key. The Authority uses it to create Slack connect sessions and fetch the bot token; an owner follows the wrapper's selected-app setup handoff afterward. |
 | `llm-credential`           | Retained LLM provider credential.                                                                                                   |
 
 ### Optional staging connector rehearsal
@@ -199,9 +199,14 @@ with one fresh rehearsal, in this order:
 5. Put the profile above in `onboarding.clean-v1.json` and transfer the full
    seven-file onboarding input directory; the transfer runs `doctor` and
    `prepare` on the host. Then continue with `resume`.
-6. On the initial-owner machine, reuse the designated Slack app with
-   `person tools setup --tool slack --existing-app <app-id>`, using the app ID
-   retained in the operator handoff and the [named hidden prompts](#use-an-existing-slack-app-before-the-first-connection).
+6. When host `resume` reports `connect_slack_in_app`, the human reruns
+   `./onboard-clean-v1.sh resume --existing-slack-app <app-id>` using the ID
+   retained in the operator handoff. Follow its emitted owner-Mac command,
+   `person tools setup --tool slack --existing-app <app-id>`, and the
+   [named hidden prompts](#use-an-existing-slack-app-before-the-first-connection).
+   A missing choice prints selection instructions; only an explicit
+   `resume --create-slack-app` prints setup for a new app. The choice applies to
+   that invocation; retain the existing app ID in the handoff for the next reset.
    Complete Slack consent. Then link the owner with
    `person tools connect --tool slack` and complete Jira consent with
    `person tools connect --tool jira`.
@@ -274,7 +279,9 @@ Slack integration setting in the onboarding JSON. Run the re-onboarding only
 with a wholly fresh provider-neutral V4 staging lineage; do not reuse an older
 V3 or shared-channel rehearsal state directory, database, or approval binding.
 
-An owner sets Slack up from their own machine with
+An owner sets Slack up from their own machine using the wrapper's app-choice
+handoff. Staging resets reuse the designated app with `--existing-app <app-id>`
+as described below. Only when the owner explicitly chooses a new app, run
 `"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack`,
 pasting a Slack app configuration token at its hidden prompt; the ECHO desktop
 app's Tools page connects only each person's own tools, not the organization's. Add `--reconnect` to
@@ -295,7 +302,7 @@ that one-time platform configuration is not repeated for each ECHO app.
 
 #### Use an existing Slack app before the first connection
 
-An owner can instead choose an existing app while the organization has **no
+Reuse the designated staging app while the organization has **no
 active Slack connection**. This also replaces credentials from an unfinished
 setup. Any active connection blocks this option, even for the same app ID;
 disconnecting a person's Slack link does not remove the organization connection.

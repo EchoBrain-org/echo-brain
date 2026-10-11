@@ -716,7 +716,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     }
     expect(source).toContain('redirect: "error"');
     expect(source).toContain(".authority-operation-lock");
-    expect(source).toContain("resume) [[ $# -eq 1 ]] || usage; resume");
+    expect(source).toContain('resume) shift; resume "$@"');
     expect(source).toContain("status) [[ $# -eq 1 ]] || usage; status");
     expect(source).toContain("compose.clean-v1.yaml");
     expect(source).toContain("compose.clean-v1.ec2.yaml");
@@ -880,9 +880,8 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         ECHO_FAKE_SETUP_STATUS: '{"next_step":"connect_slack_in_app"}',
       });
       expect(setup.status, setup.stderr).toBe(0);
-      expect(setup.stdout).toContain(
-        'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack, paste a Slack app configuration token at its hidden prompt, and finish the install it opens. The ECHO app Connected tools page shows status only for now.\n',
-      );
+      expect(setup.stdout).toContain('resume --existing-slack-app <app-id>');
+      expect(setup.stdout).not.toContain('person tools setup --tool slack,');
       expect(setup.stdout).toContain('status_json={"next_step":"connect_slack_in_app"}');
       const calls = readFileSync(fixture.calls, "utf8");
       expect(calls).toContain(" up -d --no-build --wait --wait-timeout 90");
@@ -896,6 +895,33 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools connect --tool slack and finish the Slack sign-in it opens. Without a browser: "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools connect --tool slack --method dm-code --slack-user <U…>.\n',
       );
       expect(connect.stdout).not.toContain("slack-link");
+    }
+  });
+
+  it('emits the designated existing Slack app, with app creation requiring an explicit choice', () => {
+    const fixture = preparedStatusFixture();
+    const status = { ECHO_FAKE_SETUP_STATUS: '{"next_step":"connect_slack_in_app"}' };
+    const reused = fixture.run('resume', status, ['--existing-slack-app', 'A0TEST12345']);
+    expect(reused.status, reused.stderr).toBe(0);
+    expect(reused.stdout).toContain('person tools setup --tool slack --existing-app A0TEST12345');
+    expect(reused.stdout).toContain('four hidden prompts');
+    expect(reused.stdout).not.toContain('person tools setup --tool slack,');
+    const created = fixture.run('resume', status, ['--create-slack-app']);
+    expect(created.status, created.stderr).toBe(0);
+    expect(created.stdout).toContain('person tools setup --tool slack,');
+    // Explicit creation applies only to that invocation; later handoffs require a choice again.
+    const resumed = fixture.run('resume', status);
+    expect(resumed.stdout).toContain('resume --existing-slack-app <app-id>');
+    expect(resumed.stdout).not.toContain('person tools setup --tool slack,');
+  });
+
+  it('rejects ambiguous or invalid Slack setup choices before running host actions', () => {
+    for (const args of [['--existing-slack-app'], ['--existing-slack-app', 'bad-id'],
+      ['--existing-slack-app', 'A0TEST12345', '--create-slack-app'], ['--create-slack-app', '--create-slack-app']]) {
+      const fixture = preparedStatusFixture();
+      const result = fixture.run('resume', {}, args);
+      expect(result.status).toBe(2);
+      expect(existsSync(fixture.calls)).toBe(false);
     }
   });
 

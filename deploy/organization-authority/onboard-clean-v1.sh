@@ -120,7 +120,7 @@ usage:
   onboard-clean-v1.sh prepare-rehearsal --operation-id <onboarding-id>
   onboard-clean-v1.sh activate-provider-credentials --input-dir <absolute-private-provider-directory>
   onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users [--reuse-provider-inputs <onboarding-id> [--content-telemetry <true|false>]]
-  onboard-clean-v1.sh resume
+  onboard-clean-v1.sh resume [--existing-slack-app <app-id> | --create-slack-app]
   onboard-clean-v1.sh continue-staged-initial-onboarding
   onboard-clean-v1.sh status
   onboard-clean-v1.sh extraction-attempts [--limit <1..100>]
@@ -2065,6 +2065,14 @@ finalize() {
 }
 
 resume() {
+  local existing_slack_app='' create_slack_app=false
+  if [[ $# -eq 2 && "$1" == --existing-slack-app && "$2" =~ ^A[A-Z0-9]{2,63}$ ]]; then
+    existing_slack_app="$2"
+  elif [[ $# -eq 1 && "$1" == --create-slack-app ]]; then
+    create_slack_app=true
+  elif [[ $# -ne 0 ]]; then
+    usage
+  fi
   acquire_operation_lock resume
   trap 'release_operation_lock' EXIT
   trap 'exit 129' HUP
@@ -2108,7 +2116,13 @@ resume() {
         ;;
       connect_slack_in_app)
         start_runtime
-        printf 'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack, paste a Slack app configuration token at its hidden prompt, and finish the install it opens. The ECHO app Connected tools page shows status only for now.\n'
+        if [[ -n "$existing_slack_app" ]]; then
+          printf 'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack --existing-app %s, supply that app\047s configuration token, client ID, client secret and signing secret at the four hidden prompts, and finish the install it opens. If setup already saved this app\047s credentials and only consent needs resuming, run person tools setup --tool slack --reconnect instead. Never combine --existing-app and --reconnect.\n' "$existing_slack_app"
+        elif [[ "$create_slack_app" == true ]]; then
+          printf 'ACTION: You chose to create a new Slack app. On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack, paste a Slack app configuration token at its hidden prompt, and finish the install it opens.\n'
+        else
+          printf 'ACTION: Reuse the designated Slack app. On this host, rerun ./onboard-clean-v1.sh resume --existing-slack-app <app-id> with the ID retained in the operator handoff; then follow the emitted owner-Mac command. Only if you explicitly choose to create a new Slack app, rerun ./onboard-clean-v1.sh resume --create-slack-app.\n'
+        fi
         print_status "$(setup_status)"
         return
         ;;
@@ -2437,7 +2451,7 @@ case "${1:-}" in
   prepare-rehearsal) shift; prepare_rehearsal "$@" ;;
   activate-provider-credentials) shift; activate_provider_credentials "$@" ;;
   replace-rehearsal) shift; replace_rehearsal "$@" ;;
-  resume) [[ $# -eq 1 ]] || usage; resume ;;
+  resume) shift; resume "$@" ;;
   continue-staged-initial-onboarding) [[ $# -eq 1 ]] || usage; continue_staged_initial_onboarding ;;
   status) [[ $# -eq 1 ]] || usage; status ;;
   extraction-attempts) shift; extraction_attempts "$@" ;;
