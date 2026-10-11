@@ -1020,3 +1020,69 @@ readability and lineage on an offline copy; it does not prove current data,
 provider reconciliation, exact image availability, or a terminal-green serving
 Authority. [Issue #20](https://github.com/EchoBrain-org/echo-brain/issues/20)
 remains open for that full recovery path.
+
+## LangSmith staging tracing
+
+This optional exporter uses the unified runtime observer and its diagnostic
+events. It selects Ask and shared research runs (including approved-meeting
+impact and sweep), without adding worker polling or HTTP payload logs. Each
+trace contains exact model inputs and structured outputs, tool arguments and
+results, generated Jira JQL attached to the responsible tool, lifecycle
+outcomes, and final output/citations. Parallel tool calls retain separate IDs.
+The ECHO operation ID and release SHA link the trace to operational telemetry.
+Existing one-use Person diagnostic exports remain independent.
+
+Hosted tracing is disabled when its private selection file is absent or expired.
+It sends prompts and released source content to the chosen LangSmith project;
+choose a project whose access and retention are appropriate for the rehearsal.
+No infrastructure stack or LangChain framework is required. The composition
+adapter uses LangSmith's documented [multipart tracing API](https://docs.langchain.com/langsmith/trace-with-api).
+
+After the reviewed candidate and matching runtime profile are running, the
+human in Session Manager runs the installed wrapper, choosing the project,
+region and a window of one to 24 hours. Add `--workspace-id <uuid>` when the
+key requires an explicit workspace. Regions are `us`, `eu`, `apac`, `aws-us`.
+
+```sh
+cd /srv/echo-authority-clean-v1
+sudo ./onboard-clean-v1.sh langsmith-tracing \
+  --project echo-staging --region us --hours 2
+```
+
+Paste the API key only at its hidden terminal prompt. Never put it in command
+arguments, chat, a release artifact or a tracked file. The wrapper checks the
+exact running candidate or accepted image/profile under the existing operation
+lock, writes `clean-data/private/langsmith-tracing.json` as a runtime-owned
+0600 file, and restarts Authority and proxy. This causes a short interruption;
+finish current Ask requests first. Initial onboarding must already be prepared.
+It refuses non-staging Authorities. A reset does not carry this selection into
+the new rehearsal.
+
+Run one ordinary THERM Ask after enabling, for example:
+“What is the status of the project? Are there tasks blocking progress?”
+Verify its trace in LangSmith: planner/model steps, each search/open/list/finish
+with exact arguments and results, Jira search events containing the generated
+JQL, subsequent model context, and final citations. A Jira search returning no
+tickets is a valid trace; do not infer that mentioned ticket numbers were opened.
+`complete=true` describes capture completeness, not answer correctness.
+
+The exporter retains at most four active captures (each an 8 MiB/512-event exact
+prefix) and four queued/in-flight uploads. Uploads run independently with a
+five-second deadline and no automatic retry. Limits or missing event pairs
+mark the trace incomplete; whole dropped or failed uploads are counted in
+`echo-langsmith-tracing-status-v1`. That content-free record reports only when
+status changes, checked once per minute and at startup/shutdown. A zero pending
+count alone is not success: check `exported`, `failed`, `dropped`, `incomplete`.
+An upload failure never changes the product result; traces are not a durable
+audit log and a process crash can lose its buffered data.
+
+New captures stop at expiry; a run already admitted can finish (up to its
+15-minute capture limit). To disable immediately and remove the local key:
+
+```sh
+sudo ./onboard-clean-v1.sh langsmith-tracing --disable
+```
+
+This also restarts the runtime. Removing a local selection does not delete
+already-uploaded traces; manage their retention in LangSmith. None of these
+commands approves a canary, promotes a release or publishes a client feed.

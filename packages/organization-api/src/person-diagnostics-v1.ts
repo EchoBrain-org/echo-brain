@@ -42,7 +42,7 @@ export const PERSON_DIAGNOSTICS_MAX_TRACE_DEPTH_V1 = 48;
 const CAPTURE_ID = /^cap_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // Same durable-run id contract as person-runs-v1; captures do not create or approve a run.
 const RUN_ID = /^run_[A-Za-z0-9-]{4,60}$/;
-const TRACE_EVENT_KINDS = new Set(['model_request', 'model_response', 'model_error', 'tool_request', 'tool_response', 'tool_error', 'lifecycle']);
+const TRACE_EVENT_KINDS = new Set(['model_request', 'model_response', 'model_error', 'tool_request', 'tool_response', 'tool_error', 'provider_query', 'lifecycle']);
 const LIFECYCLE_STAGES = new Set(['run', 'trigger', 'application', 'brief', 'starting_read', 'preload', 'research', 'renderer', 'revalidation', 'audit', 'persistence', 'release', 'output_view', 'extraction', 'grounding']);
 const LIFECYCLE_EVENTS = new Set(['started', 'succeeded', 'failed', 'skipped']);
 const LIFECYCLE_ERROR_KINDS = new Set(['aborted', 'deadline', 'invalid_output', 'unavailable', 'unauthorized', 'not_found', 'stale_access_state', 'rate_limited', 'other']);

@@ -108,10 +108,14 @@ export interface CoreRuntimeObservationScopeV1 {
   readonly content_observer?: (event: CoreRuntimeContentV1) => void | Promise<void>;
   /** Explicit private payload selection. It is never forwarded to the metadata observer. */
   readonly diagnostic_observer?: CoreRuntimeDiagnosticObserverV1;
+  /** Runtime-selected diagnostic destination, independent of a person's one-use capture.
+   * The sink owns operation selection and bounded delivery; never forwarded to metadata. */
+  readonly diagnostic_exporter?: (operation_id: string) => CoreRuntimeDiagnosticObserverV1 | undefined;
   readonly correlation?: CoreRuntimeCorrelationV1;
   readonly parent_operation_id?: string;
 }
 interface Context extends CoreRuntimeObservationScopeV1 {
+  readonly diagnostic_tool?: { readonly tool_call_id: number; readonly round: number };
   /** Selection can be attached before the first observed operation begins. */
   readonly detail?: CoreRuntimeDetailV1;
 }
@@ -168,12 +172,23 @@ export function withCoreRuntimeDiagnosticsV1<T>(observer: CoreRuntimeDiagnosticO
   const { diagnostic_observer: _previous, ...parent } = context.getStore() ?? {};
   return context.run({ ...parent, ...(observer === undefined ? {} : { diagnostic_observer: observer }) }, operation);
 }
-/** Exact payloads go only to the currently selected private sink. */
+/** Correlate nested connector diagnostics without adding operational log entries. */
+export function withCoreRuntimeDiagnosticToolV1<T>(identity: { readonly tool_call_id: number; readonly round: number }, operation: () => T): T {
+  const current = context.getStore();
+  return current === undefined ? operation() : context.run({ ...current,
+    diagnostic_tool: { tool_call_id: identity.tool_call_id, round: identity.round } }, operation);
+}
+/** Exact payloads go only to the selected diagnostic destinations. */
 export function observeCoreRuntimeDiagnosticV1(event: CoreRuntimeDiagnosticEventV1): void {
   const current = context.getStore();
-  if (current?.diagnostic_observer === undefined || current.detail === undefined) return;
-  safe(() => emitCoreRuntimeDiagnosticV1(current.diagnostic_observer, { ...event,
-    operation_id: current.detail!.operation_id, span_id: current.detail!.span_id, parent_span_id: current.detail!.parent_span_id }));
+  if (current?.detail === undefined) return;
+  let exporter: CoreRuntimeDiagnosticObserverV1 | undefined;
+  safe(() => { exporter = current.diagnostic_exporter?.(current.detail!.operation_id); });
+  for (const observer of new Set([current.diagnostic_observer, exporter])) {
+    if (observer !== undefined) safe(() => emitCoreRuntimeDiagnosticV1(observer, { ...event,
+      operation_id: current.detail!.operation_id, span_id: current.detail!.span_id, parent_span_id: current.detail!.parent_span_id,
+      ...(current.diagnostic_tool === undefined ? {} : { tool_context: current.diagnostic_tool }) }));
+  }
 }
 /** Keep operational timings while excluding pending-custody payloads from content telemetry. */
 export function withoutCoreRuntimeContentV1<T>(operation: () => T): T {
@@ -186,7 +201,8 @@ function begin(phase: CoreRuntimePhaseV1, scope?: CoreRuntimeObservationScopeV1)
   const parent = context.getStore();
   const observer = scope?.observer ?? parent?.observer;
   const diagnosticObserver = scope?.diagnostic_observer ?? parent?.diagnostic_observer;
-  if (!observer && !diagnosticObserver) return null;
+  const diagnosticExporter = scope?.diagnostic_exporter ?? parent?.diagnostic_exporter;
+  if (!observer && !diagnosticObserver && !diagnosticExporter) return null;
   try {
     const started = performance.now();
     const usage = process.resourceUsage();
@@ -201,6 +217,8 @@ function begin(phase: CoreRuntimePhaseV1, scope?: CoreRuntimeObservationScopeV1)
       resource_scope: "process_overlap", sqlite_lock_time: "unavailable", disk_io_latency: "unavailable", event_loop_delay: "unavailable" };
     const current: Context = { ...(observer === undefined ? {} : { observer }), vocabulary,
       ...(diagnosticObserver === undefined ? {} : { diagnostic_observer: diagnosticObserver }),
+      ...(diagnosticExporter === undefined ? {} : { diagnostic_exporter: diagnosticExporter }),
+      ...(parent?.diagnostic_tool === undefined ? {} : { diagnostic_tool: parent.diagnostic_tool }),
       ...(scope?.content_observer ?? parent?.content_observer ? { content_observer: scope?.content_observer ?? parent?.content_observer } : {}), detail };
     const emit = (event: CoreRuntimeObservationV1["event"]) => { if (observer !== undefined) safe(() => observer({ ...normalizeCoreRuntimeDetailV1(detail, vocabulary), stage: phase, event, observed_at: new Date().toISOString(), elapsed_ms: event === "started" ? 0 : Math.max(0, Math.floor(performance.now() - started)) })); };
     if (phase === "model_call") { activeModels += 1; Object.assign(detail.counts, { active_models: activeModels }); }
@@ -250,6 +268,7 @@ export function observeCoreRuntimeRootV1<T>(phase: CoreRuntimePhaseV1, operation
   const parentOperationId = scope?.parent_operation_id ?? parent?.detail?.operation_id;
   const detached: CoreRuntimeObservationScopeV1 = {
     ...(observer === undefined ? {} : { observer }), ...(vocabulary === undefined ? {} : { vocabulary }),
+    ...(parent?.diagnostic_exporter === undefined ? {} : { diagnostic_exporter: parent.diagnostic_exporter }),
     ...(parentOperationId === undefined ? {} : { parent_operation_id: parentOperationId }),
     ...scope,
   };

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { validatePersonTicketCitationV1, type PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { observeCoreRuntimeDiagnosticV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { createAtlassianVerificationBatchV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
@@ -161,6 +162,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
   }
 
   async function searchPage(input: { readonly jql: string; readonly maximum: number; readonly origin: string; readonly inventory: boolean; readonly cursor?: ListCursor; readonly projectId?: string; readonly signal?: AbortSignal }) {
+    observeCoreRuntimeDiagnosticV1({ kind: 'provider_query', provider: 'jira', operation: 'search', query: input.jql, max_results: input.maximum });
     const page = jiraRecord(await transport.request({ path: `${pathPrefix}/search/jql`, method: 'POST',
       body: { jql: input.jql, maxResults: input.maximum, fields: ['id'], ...(input.cursor === undefined ? {} : { nextPageToken: input.cursor.token }) }, signal: input.signal }));
     input.signal?.throwIfAborted();

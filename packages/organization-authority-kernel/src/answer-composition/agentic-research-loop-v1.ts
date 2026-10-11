@@ -47,7 +47,7 @@ import type {
   AgenticResearchRoundV1,
 } from "./agentic-research-v1.js";
 import { AuthorityOperationError } from "../domain/errors.js";
-import { observeCoreRuntimeDiagnosticV1 } from '../shared/core-runtime-observation-v1.js';
+import { observeCoreRuntimeDiagnosticV1, withCoreRuntimeDiagnosticToolV1 } from '../shared/core-runtime-observation-v1.js';
 import { coreRuntimeDiagnosticErrorKindV1 } from '../shared/core-runtime-diagnostics-v1.js';
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 
@@ -509,6 +509,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     // Only planner-selected reads enter this function; finish has no tool result.
     const tool = action.tool === 'search' || action.tool === 'open' ? action.tool : 'list';
     const identity = { tool_call_id: ++toolCalls, round: steps, tool } as const;
+    return withCoreRuntimeDiagnosticToolV1(identity, async () => {
     observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', ...identity, args: action.args });
     try {
       const result = await (tool === 'search' ? search(action.args, admit, signal) : tool === 'open' ? open(action.args, admit, signal) : list(action.args, admit, signal));
@@ -518,6 +519,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       observeCoreRuntimeDiagnosticV1({ kind: 'tool_error', ...identity, error_kind: coreRuntimeDiagnosticErrorKindV1(error) });
       throw error;
     }
+    });
   };
   /**
    * Reads planned together have no model-visible dependency. Start their
