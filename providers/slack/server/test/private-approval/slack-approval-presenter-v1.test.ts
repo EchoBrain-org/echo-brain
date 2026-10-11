@@ -204,6 +204,16 @@ describe('Slack approval presenter V1', () => {
     expect(f.calls).toEqual([]); expect(row(f, 'apr_large')).toMatchObject({ delivery: 'unrepresentable' });
   });
 
+  it('keeps any card-build failure on its own row while other rows still deliver', async () => {
+    const f = fixture(); f.stage('apr_bad', { snapshot_json: '{}' }); f.stage('apr_late'); f.stage('apr_good');
+    await f.presenter.reconcile(signal());
+    f.proposal = { ...proposal('apr_late'), snapshot_json: '{}' };
+    await f.presenter.reconcile(signal());
+    expect(row(f, 'apr_bad')).toMatchObject({ delivery: 'unrepresentable' });
+    expect(row(f, 'apr_late')).toMatchObject({ delivery: 'posted', card_sha256: null, attempts: 1 });
+    expect(row(f, 'apr_good')).toMatchObject({ delivery: 'posted', shows: 'open', attempts: 0 });
+  });
+
   it('redraws a decided presentation and does not let 25 completed rows starve it', async () => {
     const f = fixture();
     for (let n = 0; n < 25; n++) f.db.prepare('INSERT INTO authority_approval_presentations_v1 VALUES (?,\'slack\',?,\'D1\',\'posted\',NULL,NULL,\'1.1\',\'hash\',\'approved\',0,NULL,?,?)').run(`done_${n}`, JSON.stringify(target), '2026-10-06T00:00:00.000Z', '2026-10-06T00:00:00.000Z');

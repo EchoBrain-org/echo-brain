@@ -10,6 +10,7 @@ export * from "./ports/source.js";
 export * from "./processing/brief.js";
 export * from "./processing/source-admission.js";
 export * from "./processing/meeting-source-bridge.js";
+export * from "./processing/meeting-evidence-units-v1.js";
 export * from "./contracts/context-capture-v1.js";
 export * from "./contracts/context-capture-v2.js";
 export * from "./contracts/context-derivation-v1.js";
