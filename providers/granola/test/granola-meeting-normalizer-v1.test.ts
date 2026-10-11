@@ -252,6 +252,11 @@ describe("Retained Granola content normalization", () => {
       scheduled_end_at: "2026-07-15T17:15:00.000Z",
     });
     expect(normalize({ ...liveCalendarShapeDetail, started_at: "2026-07-15T09:31:00-07:00", timezone: "America/Denver" }).time).toEqual(meeting.time);
+    // A calendar with no start keeps its other fields and still takes the note's own start.
+    expect(normalize({ ...liveCalendarShapeDetail, calendar_event: { end: "2026-07-15T17:15:00Z", timezone: "America/Chicago" },
+      started_at: "2026-07-15T09:31:00-07:00", timezone: "America/Denver" }).time).toEqual({
+      scheduled_end_at: "2026-07-15T17:15:00.000Z", timezone: "America/Chicago", actual_start_at: "2026-07-15T16:31:00.000Z",
+    });
     expect(meeting.context).toEqual({
       owner_participant_id: "email:founder@example.com",
       calendar: {

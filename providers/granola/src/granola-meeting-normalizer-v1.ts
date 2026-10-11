@@ -192,23 +192,19 @@ function meetingTime(note: GranolaMeetingContentInputV1): MeetingDocument["time"
   const allDay =
     isNonEmptyString(valueAtPath(note.calendar_event, ["start", "date"])) &&
     !isNonEmptyString(valueAtPath(note.calendar_event, ["start", "dateTime"]));
+  // Without a calendar start, fall back to the note's own reported start; other calendar fields stay.
+  const startedAt = scheduledStart === undefined ? normalizedIso(note.started_at) : null;
+  const zone = timezone ?? (startedAt !== null && isNonEmptyString(note.timezone) ? note.timezone : undefined);
   const time = {
     ...(scheduledStart === undefined
       ? {}
       : { scheduled_start_at: scheduledStart }),
     ...(scheduledEnd === undefined ? {} : { scheduled_end_at: scheduledEnd }),
-    ...(timezone === undefined ? {} : { timezone: timezone.trim() }),
+    ...(startedAt === null ? {} : { actual_start_at: startedAt }),
+    ...(zone === undefined ? {} : { timezone: zone.trim() }),
     ...(allDay ? { all_day: true } : {}),
   };
-  if (Object.keys(time).length > 0) return time;
-  // Without calendar times, fall back to the note's own reported start.
-  const startedAt = normalizedIso(note.started_at);
-  return startedAt === null
-    ? undefined
-    : {
-        actual_start_at: startedAt,
-        ...(isNonEmptyString(note.timezone) ? { timezone: note.timezone.trim() } : {}),
-      };
+  return Object.keys(time).length > 0 ? time : undefined;
 }
 
 function nameParticipantId(displayName: string): string {
