@@ -158,23 +158,6 @@ describe("private Slack approval card poster V1", () => {
         card: CARD,
       }),
     ).rejects.toThrow(error);
-    await expect(
-      poster.renderTerminal({
-        approval_id: "apr_123",
-        dm_channel_id: sharedChannel,
-        provider_message_ts: "123.000001",
-        outcome: "approved",
-        policy_label: "Only me",
-      }),
-    ).rejects.toThrow(error);
-    await expect(
-      poster.tombstone({
-        approval_id: "apr_123",
-        successor_id: "cnd_456",
-        dm_channel_id: sharedChannel,
-        provider_message_ts: "123.000001",
-      }),
-    ).rejects.toThrow(error);
     expect(providerCalls).toBe(0);
   });
 
@@ -206,61 +189,6 @@ describe("private Slack approval card poster V1", () => {
         text: expect.stringContaining("Duplicate private approval card"),
       }),
     ]);
-  });
-
-  it("removes every interactive block only after a consistent terminal outcome", async () => {
-    const bodies: Record<string, unknown>[] = [];
-    const poster = testPoster(async (_url, init) => {
-      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      return new Response(
-        JSON.stringify({ ok: true, channel: "D123", ts: "123.000001" }),
-      );
-    });
-
-    await expect(
-      poster.renderTerminal({
-        approval_id: "apr_123",
-        dm_channel_id: "D123",
-        provider_message_ts: "123.000001",
-        outcome: "approved",
-        policy_label: "Only me",
-      }),
-    ).resolves.toEqual({ kind: "done" });
-    expect(bodies[0]).toEqual({
-      channel: "D123",
-      ts: "123.000001",
-      text: "Approved\nVisibility: Only me\n\n[private-approval:apr_123]",
-      blocks: [],
-      unfurl_links: false,
-      unfurl_media: false,
-      mrkdwn: false,
-    });
-    await expect(
-      poster.tombstone({
-        approval_id: "apr_123",
-        successor_id: "cnd_456",
-        dm_channel_id: "D123",
-        provider_message_ts: "123.000001",
-      }),
-    ).resolves.toEqual({ kind: "done" });
-    expect(bodies[1]).toEqual({
-      channel: "D123",
-      ts: "123.000001",
-      text: "Superseded\nA newer meeting revision replaced this private review. This card can no longer be used.\n\n[private-approval:apr_123]\n[superseded-by:cnd_456]",
-      blocks: [],
-      unfurl_links: false,
-      unfurl_media: false,
-      mrkdwn: false,
-    });
-    await expect(
-      poster.renderTerminal({
-        approval_id: "apr_123",
-        dm_channel_id: "D123",
-        provider_message_ts: "123.000001",
-        outcome: "rejected",
-        policy_label: "Team",
-      }),
-    ).rejects.toThrow("terminal presentation is inconsistent");
   });
 
   it("keeps transport ambiguity distinct from a definitive retryable rejection", async () => {
@@ -361,8 +289,6 @@ describe("private Slack approval card poster V1", () => {
       post_started_at: "2026-08-28T00:00:00.000Z", reconciliation_started_at: "2026-08-28T00:20:00.000Z",
     })).resolves.toEqual({ kind: "uncertain" });
     await expect(poster.publish({ ...card, card: CARD })).resolves.toEqual({ kind: "uncertain" });
-    await expect(poster.renderTerminal({ ...card, outcome: "rejected", policy_label: null })).resolves.toEqual({ kind: "uncertain" });
-    await expect(poster.tombstone({ ...card, successor_id: "cnd_456" })).resolves.toEqual({ kind: "uncertain" });
     expect(requests).toEqual([]);
   });
 

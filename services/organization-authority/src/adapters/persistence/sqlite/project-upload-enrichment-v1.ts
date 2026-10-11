@@ -1,5 +1,6 @@
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import type Database from 'better-sqlite3';
+import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { validateAssociationProjectIdsV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type {
@@ -66,8 +67,8 @@ export class SqliteProjectUploadEnrichmentAuthorizationV1
   private readonly issued = new WeakSet<ProjectUploadEnrichmentSnapshotV1>();
 
   constructor(readonly database: Database.Database) {
-    if (database.pragma('user_version', { simple: true }) !== 14 || database.pragma('foreign_keys', { simple: true }) !== 1) {
-      throw new Error('Project upload enrichment authorization requires Authority V14 state with foreign keys enabled');
+    if (!isCurrentAuthorityState(database)) {
+      throw new Error(`Project upload enrichment authorization requires Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION} state with foreign keys enabled`);
     }
   }
 

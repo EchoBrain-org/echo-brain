@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { validateAssociationProjectIdsV1, validatePersonUpdateReceiptV2, validatePersonUpdateReceiptV3, validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validatePersonUploadAudienceV3, type PersonUpdateSubmitV2, type PersonUpdateSubmitV3, type ProjectIdV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -59,8 +60,8 @@ export class SqlitePersonUpdateEnrichmentWorkV2 implements PersonUpdateEnrichmen
     private readonly authorization: ProjectUploadEnrichmentAuthorizationV1,
     private readonly now: () => string = () => new Date().toISOString(),
   ) {
-    if (database.pragma('user_version', { simple: true }) !== 14 || database.pragma('foreign_keys', { simple: true }) !== 1) {
-      throw new Error('V2 Person upload enrichment requires Authority V14 state with foreign keys enabled');
+    if (!isCurrentAuthorityState(database)) {
+      throw new Error(`V2 Person upload enrichment requires Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION} state with foreign keys enabled`);
     }
   }
 

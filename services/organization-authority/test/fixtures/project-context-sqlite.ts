@@ -1,5 +1,5 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { applyAuthorityBaselineV14 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaseline } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import type { AuthorityPersonMembershipBinding } from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import Database from "better-sqlite3";
@@ -59,7 +59,7 @@ export function authorization(
 export function projectContextDatabase(path = ":memory:"): Database.Database {
   const database = new Database(path);
   database.pragma("foreign_keys = ON");
-  applyAuthorityBaselineV14(database);
+  applyAuthorityBaseline(database);
   database.prepare(
     `INSERT INTO authority_metadata
        (singleton, authority_id, organization_id, organization_display_name, descriptor_json, created_at, last_observed_at)

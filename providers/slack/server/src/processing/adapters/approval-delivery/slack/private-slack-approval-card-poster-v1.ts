@@ -39,12 +39,6 @@ export type PrivateSlackApprovalUpdateOutcomeV1 =
   | { readonly kind: "done" }
   | { readonly kind: "uncertain" };
 
-export interface PrivateSlackApprovalTerminalPresentationV1 {
-  readonly approval_id: string;
-  readonly outcome: "approved" | "rejected";
-  readonly policy_label: "Only me" | "Team" | "Projects" | null;
-}
-
 function marker(approvalId: string): string {
   return `[private-approval:${approvalId}]`;
 }
@@ -69,31 +63,6 @@ function duplicateMarkerText(input: {
     marker(input.approval_id),
     `[duplicate-of:${input.canonical_provider_message_ts}]`,
   ].join("\n");
-}
-
-function supersededText(input: {
-  readonly approval_id: string;
-  readonly successor_id: string;
-}): string {
-  return [
-    "Superseded",
-    "A newer meeting revision replaced this private review. This card can no longer be used.",
-    "",
-    marker(input.approval_id),
-    `[superseded-by:${input.successor_id}]`,
-  ].join("\n");
-}
-
-function terminalText(input: PrivateSlackApprovalTerminalPresentationV1): string {
-  const lines = [
-    input.outcome === "approved" ? "Approved" : "Rejected",
-    input.outcome === "approved"
-      ? `Visibility: ${input.policy_label}`
-      : "No ECHO record was released.",
-    "",
-    marker(input.approval_id),
-  ];
-  return lines.join("\n");
 }
 
 function compareSlackTimestamp(left: string, right: string): number {
@@ -419,86 +388,6 @@ export class PrivateSlackApprovalCardPosterV1 {
       return { kind: "done" };
     } catch (error) {
       if (signal?.aborted === true) throw error;
-      if (error instanceof SlackApiError) {
-        this.rememberRetryAfter(error);
-        return { kind: "uncertain" };
-      }
-      throw error;
-    }
-  }
-
-  async renderTerminal(
-    input: PrivateSlackApprovalTerminalPresentationV1 & {
-      readonly dm_channel_id: string;
-      readonly provider_message_ts: string;
-    },
-    signal?: AbortSignal,
-  ): Promise<PrivateSlackApprovalUpdateOutcomeV1> {
-    if (
-      (input.outcome === "approved" && input.policy_label === null) ||
-      (input.outcome === "rejected" && input.policy_label !== null)
-    ) {
-      throw new Error("private approval terminal presentation is inconsistent");
-    }
-    return this.replaceWithInertMessage(
-      {
-        dm_channel_id: input.dm_channel_id,
-        provider_message_ts: input.provider_message_ts,
-        text: terminalText(input),
-      },
-      signal,
-    );
-  }
-
-  async tombstone(
-    input: {
-      readonly approval_id: string;
-      readonly successor_id: string;
-      readonly dm_channel_id: string;
-      readonly provider_message_ts: string;
-    },
-    signal?: AbortSignal,
-  ): Promise<PrivateSlackApprovalUpdateOutcomeV1> {
-    return this.replaceWithInertMessage(
-      {
-        dm_channel_id: input.dm_channel_id,
-        provider_message_ts: input.provider_message_ts,
-        text: supersededText(input),
-      },
-      signal,
-    );
-  }
-
-  private async replaceWithInertMessage(
-    input: {
-      readonly dm_channel_id: string;
-      readonly provider_message_ts: string;
-      readonly text: string;
-    },
-    signal?: AbortSignal,
-  ): Promise<PrivateSlackApprovalUpdateOutcomeV1> {
-    assertDirectMessageChannel(input.dm_channel_id);
-    if (this.retryBlocked()) return { kind: "uncertain" };
-    try {
-      const updated = await this.slackOrNoToken((client) =>
-        client.updateMessage(
-          {
-            channel: input.dm_channel_id,
-            ts: input.provider_message_ts,
-            text: input.text,
-            blocks: [],
-            unfurlLinks: false,
-            unfurlMedia: false,
-            mrkdwn: false,
-          },
-          signal,
-        ),
-      );
-      if (updated === TOKEN_UNAVAILABLE) return { kind: "uncertain" };
-      return { kind: "done" };
-    } catch (error) {
-      if (signal?.aborted === true) throw error;
-      if (messageIsAbsent(error)) return { kind: "done" };
       if (error instanceof SlackApiError) {
         this.rememberRetryAfter(error);
         return { kind: "uncertain" };

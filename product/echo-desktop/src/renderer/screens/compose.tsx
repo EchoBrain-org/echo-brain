@@ -42,7 +42,7 @@ const STEPS: Readonly<Record<string, number>> = { ArrowRight: 1, ArrowDown: 1, A
 
 /**
  * Every project a capture can be filed in: the one Capture was opened for
- * first, then Home's list. One ticked that the list no longer has stays.
+ * first, then the sidebar's list. One ticked that the list no longer has stays.
  */
 function projectChoices(compose: ComposeState, listed: readonly ProjectSummary[]): ProjectSummary[] {
   const choices: ProjectSummary[] = [];
@@ -58,7 +58,7 @@ function projectChoices(compose: ComposeState, listed: readonly ProjectSummary[]
 
 /**
  * The projects keep the places they first showed in. The window coming
- * forward reads Home's list again while Capture may be open: a project new to
+ * forward reads the sidebar's list again while Capture may be open: a project new to
  * it joins at the end, and one it no longer has keeps its place, so a click
  * never lands on a row that moved under it. The Authority still refuses a
  * save to a project that is no longer yours.
@@ -70,7 +70,7 @@ function keepPlaces(placed: Map<string, ProjectSummary>, choices: readonly Proje
 
 /**
  * The Projects list, above Projects: one row per project to tick. Past eight
- * a field finds one, and More projects reads Home's next page.
+ * a field finds one, and More projects reads the sidebar list's next page.
  */
 function ProjectList({ state, compose, projects, anchor }: {
   state: State; compose: ComposeState; projects: readonly ProjectSummary[]; anchor: { current: HTMLButtonElement | null };

@@ -16,7 +16,7 @@ import {
   type BuildReadableSearchGenerationV1Input,
   type ReadableSearchAtomV1,
 } from '@echo-brain/organization-retrieval/readable-search-engine-v1';
-import { applyAuthorityBaselineV14 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { applyAuthorityBaseline } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -99,7 +99,7 @@ function emptyOriginals(): PersonOriginalContextEvidenceDeskPortV1 {
 
 function authorityDatabase() {
   const authority = openAuthorityDatabase(':memory:');
-  applyAuthorityBaselineV14(authority);
+  applyAuthorityBaseline(authority);
   authority.prepare("INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES(1,?,?, 'Clean','{}','2026-09-27T00:00:00.000Z','2026-09-27T00:00:00.000Z')").run(COORDINATES.authority_id, COORDINATES.organization_id);
   return authority;
 }

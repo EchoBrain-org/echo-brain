@@ -11,7 +11,6 @@
  * wrapper remains the authority for semantic input validation and preparation.
  */
 
-import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -29,6 +28,7 @@ import { basename, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { InvitationExportError, planInvitationExport, executeInvitationExport } from './authority-staging-invitation-export.mjs';
+import { awsCliArguments, sanitizedAwsEnvironment, sha256 } from './lib/operator-io.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TEMPLATE = resolve(
@@ -79,37 +79,6 @@ const STAGING_SYNTHETIC_MEETING_FILES = Object.freeze([
   "04-commercial-exception-review.json",
 ]);
 const STAGING_SYNTHETIC_MEETINGS_PREFIX = "staging-meetings/";
-const AMBIENT_AWS_CREDENTIAL_KEYS = Object.freeze([
-  "AWS_ACCESS_KEY_ID",
-  "AWS_SECRET_ACCESS_KEY",
-  "AWS_SESSION_TOKEN",
-  "AWS_SECURITY_TOKEN",
-  "AWS_ROLE_ARN",
-  "AWS_ROLE_SESSION_NAME",
-  "AWS_WEB_IDENTITY_TOKEN_FILE",
-  "AWS_CONTAINER_CREDENTIALS_FULL_URI",
-  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
-  "AWS_CONTAINER_AUTHORIZATION_TOKEN",
-  "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
-  "AWS_CONFIG_FILE",
-  "AWS_SHARED_CREDENTIALS_FILE",
-]);
-const AMBIENT_AWS_TRANSPORT_KEYS = Object.freeze([
-  "AWS_CA_BUNDLE",
-  "REQUESTS_CA_BUNDLE",
-  "CURL_CA_BUNDLE",
-  "SSL_CERT_FILE",
-  "SSL_CERT_DIR",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "NO_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-  "no_proxy",
-]);
-
 class TransferError extends Error {
   constructor(code) {
     super(code);
@@ -124,10 +93,6 @@ function refuse(code) {
 function exact(value, pattern, code) {
   if (typeof value !== "string" || !pattern.test(value)) refuse(code);
   return value;
-}
-
-function sha256(value) {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function privateDirectory(path, code) {
@@ -327,32 +292,6 @@ function parseConfig(path) {
     region: exact(value.region, REGION, "region_invalid"),
     stackName: exact(value.stackName, STACK, "stack_name_invalid"),
   });
-}
-
-/**
- * Pin every local AWS CLI call to the approved SSO profile and discard process
- * state that could redirect an encrypted archive upload to another endpoint or
- * proxy. The Cloudflare dynamic reference is resolved separately by asm-exec;
- * it never enters this environment.
- */
-export function sanitizedAwsEnvironment(sourceEnvironment = process.env) {
-  const environment = { ...sourceEnvironment };
-  for (const key of AMBIENT_AWS_CREDENTIAL_KEYS) delete environment[key];
-  for (const key of AMBIENT_AWS_TRANSPORT_KEYS) delete environment[key];
-  for (const key of Object.keys(environment)) {
-    if (key === "AWS_ENDPOINT_URL" || key.startsWith("AWS_ENDPOINT_URL_"))
-      delete environment[key];
-  }
-  environment.AWS_PROFILE = "echo-prod";
-  environment.AWS_DEFAULT_PROFILE = "echo-prod";
-  // Ignore an endpoint_url inherited through the normal AWS config file too.
-  environment.AWS_IGNORE_CONFIGURED_ENDPOINT_URLS = "true";
-  return environment;
-}
-
-/** Add non-ambient safety controls to every local AWS CLI process. */
-export function awsCliArguments(args) {
-  return ["--no-cli-pager", "--profile", "echo-prod", ...args];
 }
 
 function defaultAwsJson(args) {

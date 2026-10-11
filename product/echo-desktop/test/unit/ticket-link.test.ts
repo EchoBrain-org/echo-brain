@@ -12,7 +12,7 @@ it('dispatches generic external opening through the correct closed link policy',
 
 describe('ticket display link containment', () => {
   it('allows the generic ticket opener and a canonical safe display link', () => {
-    expect(MAIN_METHODS).toContain('source.openTicket');
+    expect(externalSourcePermalink('ticket', 'https://example.atlassian.net/browse/ECHO-7')).toBe('https://example.atlassian.net/browse/ECHO-7');
     expect(ticketPermalink('https://example.atlassian.net/browse/ECHO-7')).toBe('https://example.atlassian.net/browse/ECHO-7');
     // The client does not decide a provider tenant. The adapter validates that
     // before release; this final display boundary only constrains URL safety.
@@ -27,7 +27,7 @@ describe('ticket display link containment', () => {
 describe('page display link containment', () => {
   it('opens stable page-id URLs with their query intact', () => {
     const link = 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345';
-    expect(MAIN_METHODS).toContain('source.openPage');
+    expect(externalSourcePermalink('page', link)).toBe(link);
     expect(pagePermalink(link)).toBe(link);
   });
   it.each(['http://example.test/page/7', 'https://user:pass@example.test/page/7', 'https://example.test/page/7#secret',

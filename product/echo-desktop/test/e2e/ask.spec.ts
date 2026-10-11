@@ -314,7 +314,7 @@ test('a Slack citation survives the client and IPC, keeps its label, and opens o
     'https://acme.slack.com.evil.test/archives/C01ABCDEF/p1758873600000100']) {
     expect(await page.evaluate(permalink =>
       (window as unknown as { echo: { rpc(method: string, params: object): Promise<unknown> } })
-        .echo.rpc('source.openSlack', { permalink }), url))
+        .echo.rpc('source.openExternal', { kind: 'slack', permalink }), url))
       .toEqual({ ok: false, failure: { code: 'invalid_request', retryable: false } });
   }
   expect(await opened()).toEqual([permalink]);

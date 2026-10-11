@@ -53,7 +53,7 @@ const MEMBER_NAME_PARENT_KINDS = new Set([
   ts.SyntaxKind.EnumMember,
 ]);
 
-export function literalText(node) {
+function literalText(node) {
   return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
     ? node.text
     : null;
