@@ -199,8 +199,10 @@ with one fresh rehearsal, in this order:
 5. Put the profile above in `onboarding.clean-v1.json` and transfer the full
    seven-file onboarding input directory; the transfer runs `doctor` and
    `prepare` on the host. Then continue with `resume`.
-6. On the initial-owner machine, run `person tools setup --tool slack` with a
-   new configuration token and complete Slack consent. Then link the owner with
+6. On the initial-owner machine, reuse the designated Slack app with
+   `person tools setup --tool slack --existing-app <app-id>`, using the app ID
+   retained in the operator handoff and the [named hidden prompts](#use-an-existing-slack-app-before-the-first-connection).
+   Complete Slack consent. Then link the owner with
    `person tools connect --tool slack` and complete Jira consent with
    `person tools connect --tool jira`.
 7. Save the exact profile object as the runner's local profile before the

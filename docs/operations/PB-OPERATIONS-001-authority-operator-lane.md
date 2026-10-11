@@ -6,8 +6,8 @@ title: Select the Authority operator lane
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-09-02
-reviewed_at: 2026-09-27
-reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
+reviewed_at: 2026-10-10
+reviewed_ref: 12a212b6246524bff328e85aab6fa8160d55ba4b
 tested_at: null
 ---
 
@@ -35,6 +35,16 @@ authentication is missing or expired. Recheck evidence when its target, release,
 record head, search generation or relevant configuration changes. A completed
 Slack setup, SNS confirmation or Explorer access grant is not a new handoff on
 every round. Fresh runtime and journey evidence is still required for each run.
+
+For staging resets, reuse the designated existing Slack app. Retain its app ID
+in the operator handoff and include `--existing-app <app-id>` in the human's
+`person tools setup --tool slack` command when the fresh organization has no
+active Slack connection. A reset clears ECHO's setup state; it does not delete
+the app in Slack. If setup already saved that app's credentials and consent
+needs resuming, use `--reconnect` instead. Never combine the two flags. Creating
+a new Slack app requires the owner's explicit choice; do not default to bare
+setup after a reset. The linked [existing-app procedure](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection)
+owns the hidden prompts and connection checks.
 
 ## Coordinated server and client release
 
@@ -131,7 +141,7 @@ Use the actor below; preserve the underlying identity, approval and health check
 | Missing/expired login, MFA, provider secret entry, account switching/logout, and Slack `person tools setup`/`connect --tool slack` (the desktop app's Tools page connects only each person's own tools) | Human. The operator prepares the exact next action and resumes after completion. |
 | Initial host `resume`, `status`, `continue-staged-initial-onboarding`, and release-canary `./update-clean-v1.sh canary` | Human in Session Manager. The staged continuation applies only to the digest-bound original pre-Slack candidate and never accepts it or replaces the final release decision. The remote release CLI does not support host onboarding. Group consecutive host commands only when no intervening human action is needed. |
 | Inspect or retry a held extraction | Human in Session Manager through the installed `onboard-clean-v1.sh extraction-attempts` and `retry-extraction` commands; follow the [exact recovery procedure](../../deploy/organization-authority/README.md#inspect-and-retry-a-held-extraction). A retry explicitly authorizes one additional model call. |
-| Organization Slack setup token | Human generates a setup token from Slack's "Your App Configuration Tokens" page and pastes it at the hidden prompt of `person tools setup --tool slack`, or pipes it in (for example `pbpaste \| "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack`); neither echoes the token. Before an active organization Slack connection exists, the human may use the [existing-app setup option](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection) with its named hidden prompts. ECHO passes the saved app credentials to Nango; the human does not copy them into Nango's integration settings. To resume an unfinished install, or reconnect after Slack was uninstalled, after Nango lost the connection, or after an install landed in another workspace, without a new setup token, add `--reconnect`. |
+| Organization Slack setup | Human reuses the designated app for staging resets with `person tools setup --tool slack --existing-app <app-id>` and the [four named hidden prompts](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection): configuration token, client ID, client secret and signing secret. The operator supplies the app ID from the handoff; credentials never enter chat or command arguments. ECHO passes the saved app credentials to Nango; the human does not copy them into Nango's integration settings. To resume consent using credentials already saved for that app, use `person tools setup --tool slack --reconnect`. Reuse a completed setup when its evidence is still valid. |
 | Unreleased rehearsal replacement and `prepare-rehearsal` using retained provider inputs | Human in Session Manager after the nonsecret transfer completes. Credentials stay on the host; use the exact operation ID from its receipt. |
 | Approval of the canary or a fixture meeting | Human, for each proposal: on the desktop meetings sheet, or on the Slack DM copy when the owner linked Slack. The first decision wins, wherever it is made. |
 | Infrastructure change set or private handoff not yet approved for its exact scope | Human reviews the prepared result once. |
@@ -143,8 +153,8 @@ command-line kit, runs `"<release-matched-kit>/Start-ECHO.sh" --install-only`,
 then runs
 `"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person login --invitation <transferred-absolute-path> --open-browser`.
 Keep invitation mode `0600`; never print or paste its grant. The human completes
-browser login, any required logout, and Slack setup and connect: an owner runs
-`person tools setup --tool slack`, then everyone runs
+browser login, any required logout, and Slack setup and connect: an owner follows
+the organization Slack setup row above, then everyone runs
 `person tools connect --tool slack` (or, without a browser,
 `person tools connect --tool slack --method dm-code --slack-user U…`). Export
 does not advance onboarding.
