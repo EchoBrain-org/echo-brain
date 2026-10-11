@@ -124,7 +124,7 @@ usage:
   onboard-clean-v1.sh continue-staged-initial-onboarding
   onboard-clean-v1.sh status
   onboard-clean-v1.sh extraction-attempts [--limit <1..100>]
-  onboard-clean-v1.sh langsmith-tracing --project <project> --region <us|eu|apac|aws-us> --hours <1..24> [--workspace-id <uuid>]
+  onboard-clean-v1.sh langsmith-tracing --project <project> --region <us|eu|apac|aws-us> (--hours <1..24> | --until-disabled) [--workspace-id <uuid>]
   onboard-clean-v1.sh langsmith-tracing --disable
   onboard-clean-v1.sh retry-extraction --admission-sha256 <sha256:digest> --review-lineage-id <rli_digest> --review-input-sha256 <sha256:digest> --expected-attempt <number> --expected-outcome <failed|succeeded|pending> --confirm-new-model-call [--recover-pending]
 EOF
@@ -2334,21 +2334,27 @@ retry_extraction() {
 }
 
 langsmith_tracing() {
-  local project='' region='' hours='' workspace='' disable=false
+  local project='' region='' hours='' workspace='' disable=false until_disabled=false
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --project) [[ $# -ge 2 && -z "$project" ]] || usage; project="$2"; shift 2 ;;
       --region) [[ $# -ge 2 && -z "$region" ]] || usage; region="$2"; shift 2 ;;
-      --hours) [[ $# -ge 2 && -z "$hours" ]] || usage; hours="$2"; shift 2 ;;
+      --hours) [[ $# -ge 2 && -z "$hours" && "$2" =~ ^([1-9]|1[0-9]|2[0-4])$ ]] || usage; hours="$2"; shift 2 ;;
+      --until-disabled) [[ "$until_disabled" == false ]] || usage; until_disabled=true; shift ;;
       --workspace-id) [[ $# -ge 2 && -z "$workspace" ]] || usage; workspace="$2"; shift 2 ;;
       --disable) [[ "$disable" == false ]] || usage; disable=true; shift ;;
       *) usage ;;
     esac
   done
   if [[ "$disable" == true ]]; then
-    [[ -z "$project$region$hours$workspace" ]] || usage
+    [[ -z "$project$region$hours$workspace" && "$until_disabled" == false ]] || usage
   else
-    [[ "$project" =~ ^[A-Za-z0-9][A-Za-z0-9._\ -]{0,99}$ && "$region" =~ ^(us|eu|apac|aws-us)$ && "$hours" =~ ^([1-9]|1[0-9]|2[0-4])$ ]] || usage
+    [[ "$project" =~ ^[A-Za-z0-9][A-Za-z0-9._\ -]{0,99}$ && "$region" =~ ^(us|eu|apac|aws-us)$ ]] || usage
+    if [[ "$until_disabled" == true ]]; then
+      [[ -z "$hours" ]] || usage
+    else
+      [[ "$hours" =~ ^([1-9]|1[0-9]|2[0-4])$ ]] || usage
+    fi
     [[ -z "$workspace" || "$workspace" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || usage
   fi
   acquire_operation_lock
@@ -2373,9 +2379,9 @@ langsmith_tracing() {
   require_safe_directory_target "$PRIVATE_DIR" 'private directory'
   # The key stays in a hidden terminal prompt and a runtime-owned private file.
   # No secret in shell variables, argv, environment, output, or release artifacts.
-  python3 - "$PRIVATE_DIR" "$RUNTIME_UID" "$RUNTIME_GID" "$disable" "$project" "$region" "$hours" "$workspace" <<'PY'
+  python3 - "$PRIVATE_DIR" "$RUNTIME_UID" "$RUNTIME_GID" "$disable" "$project" "$region" "$hours" "$workspace" "$until_disabled" <<'PY'
 import datetime, getpass, json, os, re, stat, sys, tempfile, warnings
-directory, uid, gid, disable, project, region, hours, workspace = sys.argv[1:]
+directory, uid, gid, disable, project, region, hours, workspace, until_disabled = sys.argv[1:]
 target = os.path.join(directory, 'langsmith-tracing.json')
 if os.path.lexists(target):
     state = os.lstat(target)
@@ -2391,8 +2397,8 @@ else:
         raise SystemExit('LangSmith key entry requires a private terminal')
     if re.fullmatch(r'[\x21-\x7e]{16,2048}', key) is None:
         raise SystemExit('LangSmith API key format is invalid')
-    expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=int(hours))
-    value = dict(project=project, region=region, api_key=key, expires_at=expires.isoformat())
+    expires = None if until_disabled == 'true' else (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=int(hours))).isoformat()
+    value = dict(project=project, region=region, api_key=key, expires_at=expires)
     if workspace: value['workspace_id'] = workspace
     fd, temporary = tempfile.mkstemp(prefix='.langsmith-', dir=directory)
     try:

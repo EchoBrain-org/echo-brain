@@ -486,13 +486,51 @@ afterEach(() => {
 });
 
 describe("clean-v1 Organization Authority deployment profile", () => {
+  it('requires exactly one hosted tracing duration before touching the runtime or selection', () => {
+    for (const duration of [[], ['--hours', '2', '--until-disabled'], ['--hours', '', '--until-disabled'],
+      ['--until-disabled', '--until-disabled'], ['--hours', '2', '--hours', '3'], ['--hours', '25'],
+      ['--until-disabled', '--disable']]) {
+      const fixture = preparedStatusFixture();
+      const selection = join(fixture.privateDir, 'langsmith-tracing.json');
+      writeFileSync(selection, 'private-fixture-key', { mode: 0o600 });
+      const result = fixture.run('langsmith-tracing', {}, ['--project', 'echo-staging', '--region', 'us', ...duration]);
+      expect(result.status, result.stderr).toBe(2);
+      expect(readFileSync(selection, 'utf8')).toBe('private-fixture-key');
+      expect(existsSync(fixture.calls)).toBe(false);
+    }
+    const fixture = preparedStatusFixture();
+    expect(fixture.run('langsmith-tracing', {}, ['--disable', '--until-disabled']).status).toBe(2);
+  });
+
+  it('accepts persistent hosted tracing syntax but still requires the staging host', () => {
+    const fixture = preparedStatusFixture();
+    const result = fixture.run('langsmith-tracing', {}, ['--project', 'echo-staging', '--region', 'us', '--until-disabled']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('LangSmith tracing is staging-only');
+    expect(existsSync(join(fixture.privateDir, 'langsmith-tracing.json'))).toBe(false);
+    expect(existsSync(fixture.calls) ? readFileSync(fixture.calls, 'utf8') : '').not.toContain('stop -t');
+  });
+
+  it('writes an explicit persistent hosted tracing selection with no expiry and no key output', () => {
+    const fixture = preparedStatusFixture();
+    const command = deploymentFile('onboard-clean-v1.sh').split('langsmith_tracing() {')[1]!;
+    const writer = command.match(/<<'PY'\n([\s\S]*?)\nPY/)![1]!;
+    const program = "import getpass\ngetpass.getpass = lambda prompt: 'private-fixture-key-no-output'\n" + writer;
+    const result = spawnSync('python3', ['-c', program, fixture.privateDir, String(process.getuid!()), String(process.getgid!()), 'false', 'echo-staging', 'us', '', '', 'true'], { encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe('');
+    const path = join(fixture.privateDir, 'langsmith-tracing.json');
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ project: 'echo-staging', region: 'us', api_key: 'private-fixture-key-no-output', expires_at: null });
+  });
+
   it('writes the hosted tracing selection privately with an expiry and no key output', () => {
     const fixture = preparedStatusFixture();
     const command = deploymentFile('onboard-clean-v1.sh').split('langsmith_tracing() {')[1]!;
     const writer = command.match(/<<'PY'\n([\s\S]*?)\nPY/)![1]!;
     // Supply the hidden prompt through getpass's test double; no interactive terminal or real credential.
     const program = "import getpass\ngetpass.getpass = lambda prompt: 'private-fixture-key-no-output'\n" + writer;
-    const result = spawnSync('python3', ['-c', program, fixture.privateDir, String(process.getuid!()), String(process.getgid!()), 'false', 'echo-staging', 'eu', '2', ''], { encoding: 'utf8' });
+    const result = spawnSync('python3', ['-c', program, fixture.privateDir, String(process.getuid!()), String(process.getgid!()), 'false', 'echo-staging', 'eu', '2', '', 'false'], { encoding: 'utf8' });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe('');
     const path = join(fixture.privateDir, 'langsmith-tracing.json');

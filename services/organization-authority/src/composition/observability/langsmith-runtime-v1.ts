@@ -14,7 +14,7 @@ interface Config {
   region: keyof typeof ENDPOINTS;
   api_key: string;
   workspace_id?: string;
-  expires_at: string;
+  expires_at: string | null;
 }
 
 /** No environment fallback: this private file is the complete, explicit export selection. */
@@ -31,9 +31,9 @@ export function readLangSmithConfigV1(path: string, authorityUrl: string, now = 
         typeof value.project !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._ -]{0,99}$/.test(value.project) ||
         typeof value.region !== 'string' || !Object.hasOwn(ENDPOINTS, value.region) || typeof value.api_key !== 'string' || !/^[\x21-\x7e]{16,2048}$/.test(value.api_key) ||
         (value.workspace_id !== undefined && (typeof value.workspace_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.workspace_id))) ||
-        typeof value.expires_at !== 'string' || !Number.isFinite(Date.parse(value.expires_at)) ||
-        Date.parse(value.expires_at) > now + 24 * 60 * 60_000) throw new Error(CONFIG_ERROR);
-    if (Date.parse(value.expires_at) <= now) return undefined;
+        (value.expires_at !== null && (typeof value.expires_at !== 'string' || !Number.isFinite(Date.parse(value.expires_at)) ||
+        Date.parse(value.expires_at) > now + 24 * 60 * 60_000))) throw new Error(CONFIG_ERROR);
+    if (value.expires_at !== null && Date.parse(value.expires_at) <= now) return undefined;
     return value;
   } catch { throw new Error(CONFIG_ERROR); }
 }
@@ -72,7 +72,7 @@ export function createLangSmithRuntimeV1(options: {
   const config = options.path === undefined ? undefined : readLangSmithConfigV1(options.path, options.authority_url);
   if (config === undefined) return { scope: options.existing, start() {}, async close() {} };
   const exporter = createLangSmithObserverV1({ project: config.project, release_sha: options.release_sha,
-    expires_at: Date.parse(config.expires_at), send: createLangSmithSenderV1(config) });
+    ...(config.expires_at === null ? {} : { expires_at: Date.parse(config.expires_at) }), send: createLangSmithSenderV1(config) });
   const deliver = (action: (() => void | Promise<void>) | undefined) => {
     try { if (action !== undefined) void Promise.resolve(action()).catch(() => undefined); } catch { /* observation only */ }
   };
@@ -86,7 +86,7 @@ export function createLangSmithRuntimeV1(options: {
   let timer: ReturnType<typeof setInterval> | undefined;
   let last = '';
   const report = () => {
-    const status = { kind: 'echo-langsmith-tracing-status-v1', enabled: Date.now() < Date.parse(config.expires_at), ...exporter.status() };
+    const status = { kind: 'echo-langsmith-tracing-status-v1', enabled: config.expires_at === null || Date.now() < Date.parse(config.expires_at), ...exporter.status() };
     const line = JSON.stringify(status);
     if (line !== last) { last = line; deliver(() => options.write(`${line}\n`)); }
   };
