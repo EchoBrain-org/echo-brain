@@ -81,21 +81,24 @@ test('ten minutes of sign-in serve the reads as they are, and an upload that may
   expect(paths.indexOf('/v2/session/refresh')).toBeLessThan(paths.findIndex(path => path.startsWith('/v2/person/documents/')));
 });
 
-test('a refresh that never left the machine keeps you signed in, status alone never refreshes, and a note written then is not sent but refreshes again', async () => {
+test('an offline foreground refresh keeps you signed in, and a note is not sent when refreshing still cannot leave the machine', async () => {
   run = await launch('refresh-offline');
   const { page, app } = run;
   await expect(page.getByTestId('home-error')).toContainText('ECHO cannot be reached. Check your connection');
   await expect(page.getByTestId('signed-out')).toHaveCount(0);
   // Active and archived lists each try once; neither list reaches the Authority.
   await expectOfflineStartup();
-  // Showing the window again re-reads status; it does not try the network.
+  // Returning to ECHO reads local status, then retries the sidebar's active list.
+  // The failed Home read still waits for its explicit retry.
   const statuses = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8').match(/app\.status ok/g)?.length ?? 0;
   const before = statuses();
   await emit(app, 'echo-test:conceal');
   await emit(app, 'echo-test:resume');
   await expect.poll(statuses).toBe(before + 1);
   await expect(page.getByTestId('home-error')).toBeVisible();
-  expect(refreshes()).toHaveLength(3);
+  await expect.poll(() => refreshes().length).toBe(4);
+  await expect(page.getByTestId('sidebar-projects-error').getByRole('button', { name: 'Try again' })).toBeEnabled();
+  await expect(page.getByTestId('signed-out')).toHaveCount(0);
 
   // A note written while the refresh cannot leave the machine: that call refreshes again.
   const startupRefreshes = refreshes().length;
