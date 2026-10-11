@@ -45,7 +45,11 @@ export function createLangSmithSenderV1(config: Config, fetcher: typeof fetch = 
     for (const run of runs) {
       const { inputs, outputs, events, ...rest } = run;
       for (const [suffix, value] of [['', rest], ['.inputs', inputs], ['.outputs', outputs], ['.events', events]] as const) {
-        if (value !== undefined) body.append(`post.${run.id}${suffix}`, new Blob([JSON.stringify(value)], { type: 'application/json' }));
+        if (value === undefined) continue;
+        const json = JSON.stringify(value);
+        // Node FormData omits per-part Content-Length; LangSmith also accepts
+        // this Content-Type parameter, measured in UTF-8 bytes, on every part.
+        body.append(`post.${run.id}${suffix}`, new Blob([json], { type: `application/json; length=${Buffer.byteLength(json, 'utf8')}` }));
       }
     }
     try {
