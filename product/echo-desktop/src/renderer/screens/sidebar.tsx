@@ -110,7 +110,7 @@ export function Sidebar({ state }: { state: State }) {
       )}
       {account && (
         <div class="sidebar-rows tools-rows">
-          <button type="button" data-testid="sidebar-tools" onClick={openTools}
+          <button type="button" data-testid="sidebar-tools" onClick={() => openTools()}
             class={`side-row${tools ? ' current' : ''}`} aria-current={tools ? 'page' : undefined}>
             <Plug /><span class="label">Tools</span>
           </button>

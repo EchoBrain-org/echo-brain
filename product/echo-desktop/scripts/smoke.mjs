@@ -28,6 +28,9 @@ if (result.smoke !== 'passed' || !expected.every(check => result.checks?.[check]
     result.build?.source_sha !== source || result.build?.dirty !== false) {
   throw new Error(`Packaged smoke failed: ${JSON.stringify(result)}`);
 }
-const debugging = spawnSync(executable, ['--remote-debugging-port=0', '--smoke'], options);
-if (debugging.error || debugging.status !== 1) throw new Error('Release must refuse remote debugging');
+// Chromium takes a switch after one dash or two, and debugs over a pipe as well as a port.
+for (const argument of ['--remote-debugging-port=0', '-remote-debugging-port=0', '--remote-debugging-pipe']) {
+  const debugging = spawnSync(executable, [argument, '--smoke'], options);
+  if (debugging.error || debugging.status !== 1) throw new Error(`Release must refuse remote debugging: ${argument}`);
+}
 console.log(JSON.stringify({ ...result, fuses: 'passed', remote_debugging: 'refused' }));

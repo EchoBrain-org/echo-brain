@@ -34,7 +34,7 @@ async function chooseInDialog(paths: string[]): Promise<void> {
   await run.app.evaluate(({ dialog }, chosen) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: chosen }); }, paths);
 }
 
-test('New project is one page: name, people and files before Create, then the project, both people, the file, and it opens', async () => {
+test('New project is one page: name, people and files before Create; Create opens the project, and the people and the file go in behind it', async () => {
   run = await launch('no-projects');
   const { page } = run;
   await page.getByTestId('empty-new-project').click();
@@ -82,18 +82,20 @@ test('New project is one page: name, people and files before Create, then the pr
 
   await page.getByTestId('new-project-name').fill('  Cedar ');
   await page.getByTestId('new-project-create').click();
-  await expect(page.getByTestId('new-project-title')).toHaveText('Cedar');
-  await expect(picks).toHaveText(['RKRaj KumarAdded', 'MCMaya ChenAdded']);
-  await expect(files).toHaveText(['Brief.md · Saved · Extracting text']);
+  // Create closes the sheet and opens the project; the toast says how it went once everyone and everything is in.
+  await expect(page.getByTestId('new-project')).toHaveCount(0);
   await expect(page.getByTestId('title')).toHaveText('Cedar');
   await expect(page.getByTestId('sidebar-project')).toHaveText(['CCedar']);
+  await expect(page.getByTestId('toast')).toHaveText('Cedar is ready · 2 people, 1 file');
 
-  // In order: the project is made, both people added, the file saved, and then the project opens.
+  // In order: the project is made and opens, both people are added, then the file is saved.
   const steps = () => run.calls().map(call => call.method === 'POST' && call.path === '/v1/person/projects' ? 'create'
     : call.path === '/v1/person/projects/members/add' ? `add ${call.body?.membership_id === RAJ ? 'Raj' : call.body?.membership_id === MAYA ? 'Maya' : '?'}`
     : call.method === 'PUT' && call.path.startsWith('/v2/person/documents/') ? 'save'
     : call.path === '/v1/person/list' ? 'open' : null).filter(Boolean);
-  await expect.poll(steps).toEqual(['create', 'add Raj', 'add Maya', 'save', 'open']);
+  await expect.poll(() => steps().filter(step => step !== 'open')).toEqual(['create', 'add Raj', 'add Maya', 'save']);
+  expect(steps()).toContain('open');
+  expect(steps().indexOf('open')).toBeLessThan(steps().indexOf('save'));
   expect(creates().map(call => call.body)).toEqual([
     { schema_version: 1, kind: 'echo-project-create-v1', request_id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: 'Cedar' },
   ]);
@@ -105,15 +107,12 @@ test('New project is one page: name, people and files before Create, then the pr
   expect(uploads().map(call => call.body?.filename)).toEqual(['Brief.md']);
   expect(uploads()[0]!.body).toMatchObject({ audience: { kind: 'project', project_id: project }, association_project_ids: [project] });
 
-  await page.getByTestId('new-project-done').click();
-  await expect(page.getByTestId('new-project')).toHaveCount(0);
-  await expect(page.getByTestId('toast')).toHaveCount(0);
-  await expect(page.getByTestId('title')).toHaveText('Cedar');
   await expect(page.getByTestId('members-button')).toHaveText('ARKMC');
+  await expect(page.getByTestId('ask-field')).toBeFocused();
   await expect(page.getByTestId('scope-chip')).toHaveText('Cedar');
 });
 
-test('with neither people nor files, Create makes the project and opens it; Cancel before it sends nothing', async () => {
+test('with neither people nor files, Create makes the project, opens it and closes the sheet; Cancel before it sends nothing', async () => {
   run = await launch('no-projects');
   const { page } = run;
   // Cancel before Create: what was picked goes, and nothing was sent.
@@ -131,19 +130,15 @@ test('with neither people nor files, Create makes the project and opens it; Canc
   await expect(page.getByTestId('new-project-file')).toHaveCount(0);
   await page.getByTestId('new-project-name').fill('Cedar');
   await page.keyboard.press('Enter');
-  await expect(page.getByTestId('new-project-title')).toHaveText('Cedar');
   await expect(page.getByTestId('title')).toHaveText('Cedar');
+  await expect(page.getByTestId('new-project')).toHaveCount(0);
+  // Nothing went in but the project itself: the page that opened says so, and no toast does.
+  await expect(page.getByTestId('toast')).toHaveCount(0);
   expect(creates()).toHaveLength(1);
   expect(adds()).toHaveLength(0);
   expect(uploads()).toHaveLength(0);
-  // Done sits where Create was: the second click of a double-click there leaves the sheet open.
-  await page.getByTestId('new-project-done').dispatchEvent('click', { detail: 2 });
-  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve))));
-  await expect(page.getByTestId('new-project-title')).toHaveText('Cedar');
-  await page.getByTestId('new-project-done').click();
-  await expect(page.getByTestId('new-project')).toHaveCount(0);
-  await expect(page.getByTestId('toast')).toHaveCount(0);
   await expect(page.getByTestId('members-button')).toHaveText('A');
+  await expect(page.getByTestId('project-tools-setup')).toBeVisible();
 });
 
 test('a create whose reply was lost is never called made: Try again resends the same request, then the people and files go', async () => {
@@ -171,18 +166,17 @@ test('a create whose reply was lost is never called made: Try again resends the 
   expect(uploads()).toHaveLength(0);
 
   await page.getByTestId('new-project-retry').click();
-  await expect(page.getByTestId('new-project-title')).toHaveText('Cedar');
-  await expect(page.getByTestId('pick-row')).toHaveText(['RKRaj KumarAdded']);
-  await expect(page.getByTestId('new-project-file')).toHaveText(['Brief.md · Saved · Extracting text']);
+  await expect(page.getByTestId('new-project')).toHaveCount(0);
+  await expect(page.getByTestId('title')).toHaveText('Cedar');
+  await expect(page.getByTestId('toast')).toHaveText('Cedar is ready · 1 person, 1 file');
   await expect(page.getByTestId('sidebar-project')).toHaveCount(3);
   expect(creates()).toHaveLength(2);
   expect(creates()[1]!.body).toEqual(creates()[0]!.body);
-  await page.getByTestId('new-project-done').click();
-  await expect(page.getByTestId('new-project')).toHaveCount(0);
-  await expect(page.getByTestId('toast')).toHaveCount(0);
+  expect(adds()).toHaveLength(1);
+  expect(uploads()).toHaveLength(1);
 });
 
-test('an add whose reply was lost holds back the rest: Try again resends the same request, and closing is asked first', async () => {
+test('an add whose reply was lost brings the sheet back and holds back the rest: Try again resends the same request, and closing is asked first', async () => {
   run = await launch('member-reply-lost');
   const { page } = run;
   await page.getByTestId('sidebar-new-project').click();
@@ -212,17 +206,16 @@ test('an add whose reply was lost holds back the rest: Try again resends the sam
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('skip-confirm')).toHaveCount(0);
 
+  // Settled, the rest go in, and the sheet closes by itself.
   await page.getByTestId('pick-retry').click();
-  await expect(picks).toHaveText(['RKRaj KumarAdded', 'MCMaya ChenAdded']);
-  await expect(files).toHaveText(['Notes.txt · Saved · Extracting text']);
+  await expect(page.getByTestId('new-project')).toHaveCount(0);
+  await expect(page.getByTestId('toast')).toHaveText('Cedar is ready · 2 people, 1 file');
   expect(adds()).toHaveLength(3);
   expect(adds()[1]).toEqual(adds()[0]);
   expect(adds()[0]).toMatchObject({ membership_id: RAJ });
   expect(adds()[2]).toMatchObject({ membership_id: MAYA });
   expect(adds()[2]!.request_id).not.toBe(adds()[0]!.request_id);
-  await page.getByTestId('new-project-done').click();
-  await expect(page.getByTestId('new-project')).toHaveCount(0);
-  await expect(page.getByTestId('toast')).toHaveCount(0);
+  expect(uploads()).toHaveLength(1);
 });
 
 test('an Authority without the organization directory: people are added after Create, from the project’s own', async () => {
@@ -292,10 +285,9 @@ test('with another app in front New project hides its people but takes a drop; a
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('new-project-done')).toBeVisible();
   await page.getByTestId('file-check').click();
-  await expect(files).toHaveText(['A.txt · Saved · Extracting text', 'B.txt · Saved · Extracting text']);
+  await expect(page.getByTestId('new-project')).toHaveCount(0);
+  await expect(page.getByTestId('toast')).toHaveText('Cedar is ready · 2 files');
   expect(uploads().map(call => call.body?.filename)).toEqual(['A.txt', 'B.txt']);
-  await page.getByTestId('new-project-done').click();
-  await expect(page.getByTestId('toast')).toHaveCount(0);
 });
 
 test('focus stays in New project when what had it goes: an Add, a ×, and Create while you type a name to find', async () => {
@@ -321,13 +313,13 @@ test('focus stays in New project when what had it goes: an Add, a ×, and Create
     await page.keyboard.press('Tab');
     expect(await focusInSheet()).toBe(true);
   }
-  // Create while the caret is in the find field: the project is made and the caret stays where it was.
+  // Create while the caret is in the find field: the project is made and opens, and the caret goes to the bar.
   await page.getByTestId('new-project-name').fill('Cedar');
   await page.getByTestId('people-find').fill('ma');
   await page.getByTestId('new-project-create').evaluate(button => (button as HTMLButtonElement).click());
-  await expect(page.getByTestId('new-project-title')).toHaveText('Cedar');
-  await expect(page.getByTestId('people-find')).toBeFocused();
-  await expect(page.getByTestId('people-find')).toHaveValue('ma');
+  await expect(page.getByTestId('new-project')).toHaveCount(0);
+  await expect(page.getByTestId('title')).toHaveText('Cedar');
+  await expect(page.getByTestId('ask-field')).toBeFocused();
 });
 
 test('the organization’s people come ten at a time: More people asks for the next page with the Authority’s cursor, and adds to the list', async () => {

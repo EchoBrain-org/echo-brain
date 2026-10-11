@@ -404,6 +404,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   };
   /** Your projects, in the list's order, as the mode has them. */
   const listed = (): { project_id: string; name: string; role: 'lead' | 'member' }[] => {
+    // Created from another client after the desktop loaded an empty sidebar.
+    if (mode === 'granola-project-added') return projectLists === 0 ? [] : [
+      { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign', role: 'lead' },
+    ];
     if (GRANOLA_PROJECTS.has(mode)) return [
       { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign', role: 'lead' },
       { project_id: 'prj_44444444-4444-4444-8444-444444444444', name: 'Supplier review', role: 'member' },
@@ -677,8 +681,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
 
   // Your connections to the organization's tools, as Tools changes them.
   let slackLinked = true;
-  let jiraLinked = false;
-  let confluenceLinked = false;
+  // Modes that map a project to a tool start connected to it, as a lead must be to pick.
+  let jiraLinked = mode === 'ask-ticket' || mode.startsWith('jira-project');
+  let confluenceLinked = mode === 'ask-confluence' || mode.startsWith('confluence-');
   let jiraAttempt: { attempt: string; expires_at: string; status: string; failure_reason: string | null; reads: number } | null = null;
   let confluenceAttempt: { attempt: string; expires_at: string; status: string; failure_reason: string | null; reads: number } | null = null;
 
@@ -746,7 +751,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         case 'open': return json({ id: meetingId, title: 'Pilot planning', notes: 'Launch the pilot next week.', summary: 'Decision: launch.', truncated: false });
         case 'watch': granolaWatch = true; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
-        case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' ? [review] : [] });
+        case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' || mode === 'granola-project-added' ? [review] : [] });
         case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.',
           owners: [{ signal_id: 'act-1', action: 'Send the revised quote', proposed: 'Rafael Moreno' }, { signal_id: 'act-2', action: 'Confirm the trace', proposed: 'Mina Patel' }],
           suggested_projects: [{ project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign' }] });

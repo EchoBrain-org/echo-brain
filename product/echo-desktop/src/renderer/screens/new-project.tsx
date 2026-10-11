@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { message } from '../messages.js';
 import {
   askSkip, canDropFiles, cancelSkip, checkFile, chooseFiles, closeSheet, confirmSkip, createProject, dropFiles, EXTRACTION, keepNewProject,
-  MAX_PROJECT_FILES, newProjectBusy, newProjectUnsettled, pickable, pickPerson, projectName, removeRow, retryFile, retryPick, findPeople,
+  MAX_PROJECT_FILES, newProjectBusy, newProjectSteppable, newProjectUnsettled, pickable, pickPerson, projectName, removeRow, retryFile, retryPick, findPeople,
   setNewProjectName, setPickQuery, unsent, type FindingSheet, type NewProjectSheet, type ProjectFile, type ProjectPick, type State,
 } from '../store.js';
 import { trapTab } from './compose.js';
@@ -185,7 +185,7 @@ function Foot({ sheet }: { sheet: NewProjectSheet }) {
     // Done sits where Create was: the second click of a double-click on Create does not close the sheet.
     return (
       <div class="choices">
-        <button type="button" class="primary-button small" data-testid="new-project-done" disabled={busy}
+        <button type="button" class="primary-button small" data-testid="new-project-done" disabled={busy && !newProjectSteppable(sheet)}
           onClick={event => { if (event.detail <= 1) closeSheet(); }}>Done</button>
       </div>
     );
@@ -291,7 +291,7 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
               onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void createProject(); } }}
             />
           )}
-          <button type="button" class="circle small" aria-label="Close" data-testid="new-project-close" disabled={busy} onClick={closeSheet}><Close /></button>
+          <button type="button" class="circle small" aria-label="Close" data-testid="new-project-close" disabled={busy && !newProjectSteppable(sheet)} onClick={closeSheet}><Close /></button>
         </div>
         {!state.concealed && (
           <>
