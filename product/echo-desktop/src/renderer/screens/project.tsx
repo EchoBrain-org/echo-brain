@@ -2,10 +2,39 @@ import type { ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initials } from '../format.js';
 import { message } from '../messages.js';
 import { openCount, projectWords } from '../needs.js';
-import { checkNow, moreList, openCompose, openListItem, openOpenItems, openPeople, openProject, retryList, type State } from '../store.js';
-import { People, Plus } from './icons.js';
+import { checkNow, moreList, openCompose, openListItem, openOpenItems, openPeople, openProject, openProjectTools, readsWords, retryList, type State } from '../store.js';
+import { People, Plug, Plus } from './icons.js';
 import { ItemRow, useKeptPlace } from './items.js';
 import { CheckNow } from './open-items.js';
+
+/**
+ * What the project reads from its tools, above its feed: Set up tools for a
+ * lead while it reads none, and what it reads once it does. Only when the
+ * organization has a tool a project can read.
+ */
+function ToolsLine({ state, project }: { state: State; project: ProjectSummary }) {
+  const reads = state.projectReads?.project_id === project.project_id ? state.projectReads : null;
+  if (!reads?.available || reads.jira === undefined || reads.confluence === undefined) return null;
+  const words = readsWords(reads);
+  const lead = project.role === 'lead';
+  if (words.length === 0) {
+    if (!lead || project.status !== 'active') return null;
+    return (
+      <div class="tools-line setup" data-testid="project-tools-line">
+        <Plug />
+        <span class="tools-line-words">{project.name} reads nothing from your tools yet</span>
+        <button type="button" class="link-button" data-testid="project-tools-setup" onClick={() => openProjectTools(project)}>Set up tools</button>
+      </div>
+    );
+  }
+  return (
+    <div class="tools-line" data-testid="project-tools-line">
+      <Plug />
+      <span class="tools-line-words"><b>Reads</b> <span class="faint">· {words.join(' · ')}</span></span>
+      <button type="button" class="link-button" data-testid="project-tools-change" onClick={() => openProjectTools(project)}>{lead ? 'Change' : 'View'}</button>
+    </div>
+  );
+}
 
 /**
  * A project's one list: its notes, documents and approved meetings, newest
@@ -35,16 +64,20 @@ export function Project({ state, project }: { state: State; project: ProjectSumm
       return <div class="column center" data-testid="archived-project-empty"><div class="notice">This project is archived. Restore it to add files or notes.</div></div>;
     }
     return (
-      <div class="column center" data-testid="feed-empty">
-        <button type="button" class="empty-capture" data-testid="empty-capture" onClick={() => openCompose()}>
-          <span class="ring" aria-hidden="true"><Plus /></span>
-          <span>Capture</span>
-        </button>
+      <div class="column" data-testid="feed-empty">
+        <ToolsLine state={state} project={project} />
+        <div class="feed-empty">
+          <button type="button" class="empty-capture" data-testid="empty-capture" onClick={() => openCompose()}>
+            <span class="ring" aria-hidden="true"><Plus /></span>
+            <span>Capture</span>
+          </button>
+        </div>
       </div>
     );
   }
   return (
     <div class="column" data-testid="feed" aria-busy={list?.loading ?? true} ref={column}>
+      <ToolsLine state={state} project={project} />
       {words && line && (
         <div class="items-line project-line" data-testid="project-line">
           <button type="button" class="items-line-open" onClick={() => void openOpenItems('project', project.project_id, project.name)}>

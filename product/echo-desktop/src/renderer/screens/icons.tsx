@@ -14,6 +14,10 @@ export const Close = () => (
 export const Clip = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M12 6.5 6.5 12a2.6 2.6 0 0 1-3.7-3.7l6.4-6.4a3.7 3.7 0 0 1 5.2 5.2L8 13.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
 );
+/** Done, in the colour of the text around it. */
+export const Check = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
+);
 export const Saved = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" stroke="#f0c17f" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
 );

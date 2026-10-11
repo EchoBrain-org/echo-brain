@@ -2,9 +2,9 @@ import { validatePersonMeetingRequestV2, validatePersonMeetingResultV2, validate
 // The person host: an Electron utility process that runs the TypeScript person
 // client in-process. It is the only process that reads the session or holds a
 // token; what it posts back is a token-free view model or a failure code.
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   externalUrl, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods,
@@ -39,6 +39,16 @@ interface ClientModules {
   now: () => number;
 }
 
+/** The same folder by identity, not spelling: case and /System/Volumes/Data name one many ways. A missing one is never the same. */
+function sameFolder(a: string, b: string): boolean {
+  try {
+    const [left, right] = [statSync(a, { bigint: true }), statSync(b, { bigint: true })];
+    return left.dev === right.dev && left.ino === right.ino;
+  } catch {
+    return false;
+  }
+}
+
 async function load(): Promise<ClientModules> {
   const client = await import(pathToFileURL(entry!).href) as { runPersonClientCli: PersonCli };
   const sessions = await import(pathToFileURL(join(entry!, '..', 'session-store.js')).href) as {
@@ -58,7 +68,7 @@ async function load(): Promise<ClientModules> {
   let now = () => Date.now();
   if (__ECHO_TEST_HOOK__ && process.env.ECHO_DESKTOP_TEST_FIXTURES) {
     // Belt and braces with main: the fixture never writes into the real home.
-    if (resolve(home!) === resolve(homedir())) throw new Error('The test Authority needs a private ECHO_HOME');
+    if (sameFolder(home!, homedir())) throw new Error('The test Authority needs a private ECHO_HOME');
     const test = await import('./test-authority.js');
     const hook = test.installTestAuthority(home!, process.env.ECHO_DESKTOP_TEST_FIXTURES, sessions.PersonSessionStore);
     Object.assign(dependencies, hook.dependencies);
@@ -69,9 +79,17 @@ async function load(): Promise<ClientModules> {
     dependencies, now,
   };
 }
-// A note's text left behind by a host that was stopped mid-send.
+// A note's text left behind by a host that was stopped mid-send. Only an hour
+// old, well past a send's time limit: another host (the installed app, a dev
+// or test run) may be sending a note from its folder now.
 try {
-  for (const name of readdirSync(tmpdir())) if (name.startsWith('echo-note-')) rmSync(join(tmpdir(), name), { recursive: true, force: true });
+  for (const name of readdirSync(tmpdir())) {
+    if (!name.startsWith('echo-note-')) continue;
+    const folder = join(tmpdir(), name);
+    try {
+      if (Date.now() - statSync(folder).mtimeMs > 60 * 60_000) rmSync(folder, { recursive: true, force: true });
+    } catch { /* gone, or not ours */ }
+  }
 } catch { /* best effort */ }
 const modules = load();
 modules.catch(error => { console.error('person host failed to load the client:', error); });

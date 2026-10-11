@@ -86,7 +86,7 @@ beforeEach(() => {
   sweepStarts = 'running';
   page = null;
   rpc.mockReset();
-  rpc.mockImplementation(async (method: string, params: { request?: { operation: string; run_id?: string; state?: string } }) => {
+  rpc.mockImplementation(async (method: string, params: { project_id?: string; request?: { operation: string; run_id?: string; state?: string } }) => {
     const ok = (value: unknown) => ({ ok: true, value });
     const unavailable = { ok: false, failure: { code: 'unavailable', retryable: true } };
     switch (method) {
@@ -95,6 +95,8 @@ beforeEach(() => {
       case 'projects.members': return ok({ items: [], next_cursor: null });
       case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
       case 'open.ref': return unavailable;
+      // A project's tools line: it reads nothing.
+      case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
       case 'app.setUnresolved': return ok(null);
       case 'account.tools': return ok({ tools: granola === null ? [] : [{ tool_id: 'granola', status: granola }] });
       case 'tools.meetings':

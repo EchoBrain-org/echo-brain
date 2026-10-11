@@ -160,8 +160,8 @@ export interface ToolManageSheet {
 export interface Finding {
   /** The name typed to find someone. */
   query: string;
-  /** People the directory found for the name, or its first people. */
-  directory: { seq: number; items: readonly Member[]; next: string | null; loading: boolean; failure?: Failure } | null;
+  /** People the directory found for the name (`query`, as sent), or its first people. */
+  directory: { seq: number; query: string; items: readonly Member[]; next: string | null; loading: boolean; failure?: Failure } | null;
   /** The member whose ⋯ is open. */
   menu: string | null;
   /** What is being asked before it is done. */
@@ -211,13 +211,17 @@ export interface ProjectPick {
 
 /**
  * New project, one page: a name, the people to add and the files to save,
- * both optional. Nothing is sent before Create. Create makes the project;
- * then the same page adds each person and saves each file, in turn, and the
- * project opens behind the sheet. Done closes it.
+ * both optional. Nothing is sent before Create. Create makes the project,
+ * which opens at once while the sheet steps aside; each person is added and
+ * each file saved, in turn, with the toast saying how far it got. The sheet
+ * comes back only for one whose outcome needs you, and closes by itself once
+ * nothing does.
  */
 export interface NewProjectSheet extends Finding {
   kind: 'new-project';
   seq: number;
+  /** Stepped aside after Create: the work goes on, and the toast says where it is. */
+  hidden: boolean;
   name: string;
   /** The create: its request, the name it sends, and where it stands. An unknown one is resent as it was. */
   create: { requestId: string; name: string; status: 'editing' | 'sending' | 'unknown' | 'failed' | 'created'; failure?: Failure };
@@ -311,6 +315,8 @@ export interface ListState {
 /** A project's members: the stack in the title bar, and People. */
 export interface RosterState {
   projectId: string;
+  /** This read: an earlier read's reply cannot replace it. */
+  seq: number;
   items: Member[];
   next: string | null;
   loading: boolean;
@@ -353,14 +359,47 @@ export interface ProjectConfluenceSetting extends ProjectToolSetting<ProjectConf
   spaces: readonly ConfluenceSpace[];
   next: string | null;
   selected: readonly string[];
+  /** A lead's own spaces to pick from: read once the mapping is, and Confluence is connected. */
+  catalog: 'idle' | 'loading' | 'read';
   loadingMore?: boolean;
   /** The lead-only space catalog failed; the shared project mapping is still readable. */
   pickerFailure?: Failure;
 }
 
+/**
+ * A project's Tools: your connection to each tool a project can read, and
+ * what this project reads from it, on one sheet. Connect waits in its row;
+ * Save writes every changed setting, then the sheet closes.
+ */
+export interface ProjectToolsState {
+  seq: number;
+  /** Your tools as the Authority lists them; null until read, or when the read failed. */
+  items: readonly ConnectedTool[] | null;
+  failure?: Failure;
+  /** A connection started from a row: opening, waiting on the browser, or why it did not connect. */
+  connect?: { seq: number; tool: ConnectedTool; phase: 'starting' | 'waiting' | 'failed'; attempt?: ToolAttempt; reason?: string; failure?: Failure };
+  /** The tool connected from this sheet, said in its row. */
+  connected?: string;
+  saving: boolean;
+}
+
+/** What the project on screen reads from its tools: undefined until read, or when the read failed. */
+export interface ProjectReads {
+  /** This opening: replies from earlier visits cannot replace it. */
+  seq: number;
+  project_id: string;
+  /** The organization has a tool a project can read. */
+  available?: boolean;
+  /** The Jira project key, or null when none. */
+  jira?: string | null;
+  /** How many Confluence spaces, or null when none. */
+  confluence?: number | null;
+}
+
 export interface ProjectSettingsState {
   jira?: ProjectJiraSetting;
   confluence?: ProjectConfluenceSetting;
+  tools?: ProjectToolsState;
   project: ProjectSummary;
   menu: boolean;
   menuOrigin: 'header' | 'sidebar';
@@ -412,6 +451,8 @@ export interface State {
   compose: ComposeState | null;
   /** Where the last confirmed save went, until the next capture or page. */
   toast: string | null;
+  /** Counts each toast shown, so one that says the same again stays its own time. */
+  toastShown: number;
   concealed: boolean;
   /** form: the organization address is being asked for (Sign in with Google…). */
   signin: { phase: 'idle' | 'waiting' | 'failed'; form: boolean; failure?: Failure; browserOpened?: boolean };
@@ -447,6 +488,8 @@ export interface State {
   impactLine: ItemsLine | null;
   /** The open-items line above the feed of the project on screen. */
   projectLine: ItemsLine | null;
+  /** The tools line above the feed of the project on screen. */
+  projectReads: ProjectReads | null;
 }
 
 const SIDEBAR_OPEN = 'echo.sidebarOpen';
@@ -458,9 +501,9 @@ function rememberedSidebar(): boolean {
 let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false },
   archivedProjects: { items: [], next: null, loading: false }, list: null, roster: null, reader: null, change: null, projectSettings: null,
-  barScope: { kind: 'global' }, barText: '', matches: null, ask: null, sources: null, compose: null, toast: null, concealed: false,
+  barScope: { kind: 'global' }, barText: '', matches: null, ask: null, sources: null, compose: null, toast: null, toastShown: 0, concealed: false,
   signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null, employeeWrite: null,
-  home: null, decision: null, send: null, openItems: null, itemCard: null, itemStatus: null, impactLine: null, projectLine: null,
+  home: null, decision: null, send: null, openItems: null, itemCard: null, itemStatus: null, impactLine: null, projectLine: null, projectReads: null,
 };
 const listeners = new Set<() => void>();
 let seq = 0;
@@ -468,11 +511,29 @@ let seq = 0;
 let activeAskCancelId: string | null = null;
 
 export function getState(): State { return state; }
+
+/** A project settings dialog is up: Tools, Rename, a confirmation, or a write's outcome. It owns the window as a sheet does. */
+export function projectSettingsModal(current: State = state): boolean {
+  const settings = current.projectSettings;
+  return settings !== null && Boolean(settings.tools || settings.rename !== null || settings.confirm || settings.write);
+}
+
+/** The sheet over the window, unless it is New project stepped aside while its work goes on. */
+export function sheetShown(current: State = state): Sheet | null {
+  const sheet = current.sheet;
+  return sheet?.kind === 'new-project' && sheet.hidden ? null : sheet;
+}
+
+/** A toast that says something went well goes by itself; one that warns stays until the next page. */
+export function clearToast(shown: number): void {
+  if (state.toastShown === shown) set({ toast: null });
+}
+
 function set(patch: Partial<State>): void {
-  state = { ...state, ...patch };
+  state = { ...state, ...patch, ...(patch.toast ? { toastShown: state.toastShown + 1 } : {}) };
   // A modal owns keyboard focus. Dismiss only the transient project menu,
   // retaining settings drafts and writes while unmounting its global handlers.
-  if (state.projectSettings?.menu && (state.sheet || (state.compose && !state.compose.hidden))) {
+  if (state.projectSettings?.menu && (sheetShown() || (state.compose && !state.compose.hidden))) {
     state = { ...state, projectSettings: { ...state.projectSettings, menu: false } };
   }
   listeners.forEach(listener => listener());
@@ -512,6 +573,8 @@ function accountLost(failure: Failure): void {
 
 /** The last account signed in here. Signing out and back in as it keeps the drafts. */
 let lastAccount: Expect | null = null;
+/** A sign-out whose reply the host lost: the next status read settles whether it happened. */
+let signOutPending: 'signout' | 'switch' | null = null;
 
 let statusSeq = 0;
 
@@ -532,8 +595,12 @@ function applyStatus(status: AppStatus): void {
   set({ status, booting: false, startFailed: false });
   // Signed out: the sign-in page covers everything until someone signs in. Mine, and what was read in it, goes.
   if (!next) {
+    // A sign-out the host lost mid-way did happen: the account goes as it would have.
+    if (signOutPending) { signOutPending = null; forgetAccount(); }
     emptyBar();
-    set({ sheet: null });
+    // New project with work on its way stays, out of sight behind the sign-in page: its outcome is still owed, and the
+    // same person signing back in finds it as it is. Another account's sign-in forgets it.
+    set({ sheet: state.sheet?.kind === 'new-project' ? state.sheet : null });
     if (state.route.page === 'mine') {
       readSeq += 1;
       set({ route: { page: 'home' }, list: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' } });
@@ -550,11 +617,19 @@ function applyStatus(status: AppStatus): void {
     if (state.route.page === 'organization' && next.role !== 'owner') goHome();
   }
   lastAccount = { authority: next.authority, membership_id: next.membership_id };
+  signOutPending = null;
   if (!same || !wasSignedIn) { void loadProjects(); void loadArchivedProjects(); void loadHome(); }
 }
 
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
 function forgetAccount(): void {
+  // Cleanup belongs to the previous account, even after status has changed. The host may refuse it once that session
+  // is gone; never try an old request or connection with the newly signed-in account's authority.
+  const account = lastAccount;
+  if (state.compose) release(state.compose, account);
+  if (state.sheet?.kind === 'new-project') for (const file of state.sheet.files) if (file.kept) releaseCopy(file.requestId, account);
+  if (state.sheet?.kind === 'tool-connect') cancelWaitingConnection(state.sheet, account);
+  if (state.projectSettings?.tools) clearProjectMappings(state.projectSettings, account);
   stopRunPolling();
   runFailures = 0;
   openUnread = false;
@@ -568,7 +643,8 @@ function forgetAccount(): void {
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
     barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false }, archivedProjects: { items: [], next: null, loading: false },
     projectSettings: null, organization: null, tools: null, employeeWrite: null, home: null, decision: null, send: null, openItems: null, itemCard: null,
-    itemStatus: null, impactLine: null, projectLine: null });
+    itemStatus: null, impactLine: null, projectLine: null, projectReads: null });
+  listChanged();
   setCompose(null);
   setChange(null);
 }
@@ -618,10 +694,13 @@ export function accountCommand(command: AccountCommand): void {
     else void openInvitation();
     return;
   }
-  // A sign-out already under way is not interrupted, nor a sheet with work on its way.
-  if (!signedIn || signingOut() || sheetHeld()) return;
+  // A sign-out already under way is not interrupted, nor a sheet with work on its way: New project, out of sight, comes back to say so.
+  if (!signedIn || signingOut()) return;
+  if (command !== 'tools' && newProjectInTheWay()) return;
+  if (command === 'tools' && newProjectSheet()?.hidden) { openTools(true); return; }
+  if (sheetHeld()) return;
   if (state.sheet?.kind === 'new-project') finishNewProject(state.sheet);
-  if (command === 'tools') openTools();
+  if (command === 'tools') openTools(true);
   else set({ sheet: { kind: command, busy: false } });
 }
 
@@ -654,9 +733,9 @@ export function closeSheet(): void {
 /** How often a waiting connection is read: the terminal client's own pace. */
 const TOOL_POLL_MS = 2_000;
 
-/** The sidebar's Tools, and the Account menu's Connected tools…. The bar searches all context. */
-export function openTools(): void {
-  if (!state.status?.account || state.concealed) return;
+/** The sidebar's Tools, and the Account menu's Connected tools… (from the tray, with another app in front). The bar searches all context. */
+export function openTools(fromTray = false): void {
+  if (!state.status?.account || (state.concealed && !fromTray)) return;
   readSeq += 1;
   set({ route: { page: 'tools' }, list: null, roster: null, reader: null, ask: null, sources: null, toast: null, barScope: { kind: 'global' },
     organization: null, tools: { seq: ++seq, loading: false, items: null } });
@@ -692,56 +771,66 @@ function connectSheet(mine: number): ToolConnectSheet | null {
   return sheet?.kind === 'tool-connect' && sheet.seq === mine ? sheet : null;
 }
 
+/** Where a connection started from a sheet or a row stands, once it is not opening any more. */
+type ConnectStep = { phase: 'waiting'; attempt: ToolAttempt } | { phase: 'failed'; failure?: Failure; reason?: string };
+
 /**
- * Connect, Reconnect or Try again: the tool's page opens in the browser and
- * the sheet waits, reading the attempt every few seconds. A read is what
- * completes it, so the reads go on until it settles or is cancelled.
+ * One connection: the tool's page opens in the browser, and the attempt is
+ * read every few seconds. A read is what completes it, so the reads go on
+ * until it settles, or until what waits on it (`waiting`) has gone.
  */
-export async function connectTool(tool: ConnectedTool): Promise<void> {
-  const account = expect();
-  if (!account || state.concealed || (state.sheet && state.sheet.kind !== 'tool-connect')) return;
-  const mine = ++seq;
-  set({ sheet: { kind: 'tool-connect', seq: mine, tool, phase: 'starting' } });
+async function runConnect(account: Expect, tool: ConnectedTool, waiting: () => boolean, step: (to: ConnectStep) => void): Promise<'complete' | 'cancelled' | null> {
   const result = await rpc('tools.connect', { expect: account, tool_id: tool.tool_id });
-  if (!connectSheet(mine)) {
+  if (!waiting()) {
     // Cancelled while the page was opening: the attempt it started is cancelled too.
     if (result.ok) void rpc('tools.cancel', { expect: account, tool_id: tool.tool_id, attempt_id: result.value.attempt_id });
-    return;
+    return null;
   }
   if (!result.ok) {
-    set({ sheet: { kind: 'tool-connect', seq: mine, tool, phase: 'failed', failure: result.failure } });
+    step({ phase: 'failed', failure: result.failure });
     accountLost(result.failure);
-    return;
+    return null;
   }
   const attempt = result.value;
-  set({ sheet: { kind: 'tool-connect', seq: mine, tool, phase: 'waiting', attempt } });
+  step({ phase: 'waiting', attempt });
   for (;;) {
     await new Promise(resolve => setTimeout(resolve, TOOL_POLL_MS));
-    if (!connectSheet(mine)) return;
+    if (!waiting()) return null;
     const read = await rpc('tools.status', { expect: account, tool_id: tool.tool_id, attempt_id: attempt.attempt_id });
-    if (!connectSheet(mine)) return;
+    if (!waiting()) return null;
     if (!read.ok) {
       if (ACCESS_LOST.includes(read.failure.code) || read.failure.code === 'account_changed') {
-        set({ sheet: { kind: 'tool-connect', seq: mine, tool, phase: 'failed', failure: read.failure } });
+        step({ phase: 'failed', failure: read.failure });
         accountLost(read.failure);
-        return;
+        return null;
       }
       // A slow or failed read says nothing about the attempt: read again until it would have expired.
       if (Date.now() <= Date.parse(attempt.expires_at)) continue;
-      set({ sheet: { kind: 'tool-connect', seq: mine, tool, phase: 'failed', reason: 'expired' } });
-      return;
+      step({ phase: 'failed', reason: 'expired' });
+      return null;
     }
     const { status, failure_reason: reason } = read.value;
     if (status === 'pending') continue;
-    if (status === 'complete') {
-      set({ sheet: null, toast: `${tool.name} connected` });
-      void loadToolList();
-      return;
-    }
-    if (status === 'cancelled') { set({ sheet: null }); void loadToolList(); return; }
-    set({ sheet: { kind: 'tool-connect', seq: mine, tool, phase: 'failed', reason: status === 'expired' ? 'expired' : reason ?? 'failed' } });
-    return;
+    if (status === 'complete' || status === 'cancelled') return status;
+    step({ phase: 'failed', reason: status === 'expired' ? 'expired' : reason ?? 'failed' });
+    return null;
   }
+}
+
+/**
+ * Connect, Reconnect or Try again, from Tools: the sheet waits on the
+ * browser, and closes by itself once the tool is connected.
+ */
+export async function connectTool(tool: ConnectedTool): Promise<void> {
+  const account = expect();
+  if (!account || state.concealed || newProjectInTheWay() || (state.sheet && state.sheet.kind !== 'tool-connect')) return;
+  const mine = ++seq;
+  set({ sheet: { kind: 'tool-connect', seq: mine, tool, phase: 'starting' } });
+  const done = await runConnect(account, tool, () => connectSheet(mine) !== null,
+    to => set({ sheet: { kind: 'tool-connect', seq: mine, tool, ...to } }));
+  if (done === 'complete') set({ sheet: null, toast: `${tool.name} connected` });
+  else if (done === 'cancelled') set({ sheet: null });
+  if (done) void loadToolList();
 }
 
 /** Cancel, Close or Escape: a waiting attempt is cancelled, so a late approval in the browser binds nothing. */
@@ -750,8 +839,12 @@ export function cancelConnect(): void {
   if (sheet?.kind !== 'tool-connect') return;
   const account = expect();
   set({ sheet: null });
-  if (account && sheet.phase === 'waiting' && sheet.attempt) {
-    void rpc('tools.cancel', { expect: account, tool_id: sheet.tool.tool_id, attempt_id: sheet.attempt.attempt_id });
+  cancelWaitingConnection(sheet, account);
+}
+
+function cancelWaitingConnection(connect: Pick<ToolConnectSheet, 'tool' | 'phase' | 'attempt'> | undefined, account: Expect | null): void {
+  if (account && connect?.phase === 'waiting' && connect.attempt) {
+    void rpc('tools.cancel', { expect: account, tool_id: connect.tool.tool_id, attempt_id: connect.attempt.attempt_id });
   }
 }
 
@@ -780,12 +873,16 @@ export function runsCommand<K extends PersonRunsRequestV1['operation']>(request:
   return fencedCommand<RunsResults[K]>(account => rpc('runs', { expect: account, request }));
 }
 
-/** Sends for the account shown; a reply once the account or the screen changed is refused, and a failure is thrown. */
+/**
+ * Sends for the account shown; a reply once the account changed is refused,
+ * and a failure is thrown. Another app in front changes nothing: the reply is
+ * the Authority's answer, and the page it is for fences it by itself.
+ */
 async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknown>>): Promise<T> {
   const account = expect();
-  if (!account || state.concealed) throw new Error('Sign in to use meetings.');
+  if (!account) throw new Error('Sign in to use meetings.');
   const result = await send(account);
-  if (JSON.stringify(expect()) !== JSON.stringify(account) || state.concealed) throw new Error('Account or screen changed.');
+  if (JSON.stringify(expect()) !== JSON.stringify(account)) throw new Error('Account changed.');
   if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure); }
   return result.value as T;
 }
@@ -796,7 +893,7 @@ export async function openImpactSource(source: ExternalAnswerSource): Promise<bo
 }
 
 export function manageTool(tool: ConnectedTool): void {
-  if (!state.status?.account || state.concealed || state.sheet) return;
+  if (!state.status?.account || state.concealed || newProjectInTheWay() || state.sheet) return;
   set({ sheet: { kind: 'tool-manage', tool, busy: false } });
 }
 
@@ -837,12 +934,16 @@ export async function signOut(): Promise<void> {
   if (!account || !sheet || (sheet.kind !== 'signout' && sheet.kind !== 'switch') || sheet.busy || signOutHeld()) return;
   const busy: SignOutSheet = { ...sheet, busy: true, failure: undefined };
   set({ sheet: busy });
+  signOutPending = sheet.kind;
   const result = await rpc('account.signOut', { expect: account });
   if (!result.ok) {
     if (state.sheet?.kind === sheet.kind) set({ sheet: { ...sheet, busy: false, failure: result.failure } });
+    // The host went while signing out: whether the session went with it, the next status read says.
+    if (result.failure.code !== 'host_restarted') signOutPending = null;
     accountLost(result.failure);
     return;
   }
+  signOutPending = null;
   // The account is forgotten even if a status read already showed sign-in
   // and closed the sheet (the window came forward while the Authority ended
   // the session). A sign-in may have begun since: then this reply is stale,
@@ -882,23 +983,52 @@ export function loadProjects(more = false): Promise<void> { return loadProjectLi
 /** Archived projects live in their own list: they can be opened, but never picked for new material. */
 export function loadArchivedProjects(more = false): Promise<void> { return loadProjectList('archived', more); }
 
+type ListStatus = 'active' | 'archived';
+const LIST_KEY = { active: 'projects', archived: 'archivedProjects' } as const;
+
+/**
+ * Counts every change to a project list, read or made here. A foreground
+ * refresh that began before a change reads again, so what it shows is never
+ * older than the change.
+ */
+let projectsEdition = 0;
+/** A foreground refresh that found a page on its way: it runs once that page is in. */
+const refreshOwed = new Set<ListStatus>();
+/** Foreground refreshes on their way: a second foreground does not start another. */
+const refreshing = new Set<ListStatus>();
+
+function listChanged(): void { projectsEdition += 1; }
+
 /** Your active or archived projects: the first page again, or the next page appended. */
-async function loadProjectList(status: 'active' | 'archived', more: boolean): Promise<void> {
-  const key = status === 'active' ? 'projects' : 'archivedProjects';
+async function loadProjectList(status: ListStatus, more: boolean): Promise<void> {
+  const key = LIST_KEY[status];
   const show = (list: State['projects']) => set(key === 'projects' ? { projects: list } : { archivedProjects: list });
   const account = expect();
   if (!account || (more && !state[key].next)) return;
   const cursor = more ? state[key].next ?? undefined : undefined;
   show({ ...state[key], loading: true, failure: undefined });
   const result = await rpc('projects.list', { expect: account, status, ...(cursor ? { cursor } : {}) });
+  if (!sameAccount(account)) return;
   if (!result.ok) {
     accountLost(result.failure);
     show({ ...state[key], loading: false, failure: result.failure });
+    refreshIfOwed(status);
     return;
   }
   if (status === 'active' && rolesChanged(result.value.items)) emptyBar();
   const items = appendPage(more ? state[key].items : [], result.value.items, project => project.project_id);
   show({ items, next: result.value.next_cursor, loading: false });
+  listChanged();
+  refreshIfOwed(status);
+}
+
+function sameAccount(account: Expect): boolean {
+  const now = expect();
+  return now?.authority === account.authority && now.membership_id === account.membership_id;
+}
+
+function refreshIfOwed(status: ListStatus): void {
+  if (refreshOwed.delete(status)) void (status === 'active' ? refreshProjects() : refreshProjectList('archived'));
 }
 
 /** A project you were lead of is now one you are a member of, or the other way: a change of access. */
@@ -916,28 +1046,53 @@ export function goHome(): void {
   void loadHome();
 }
 
+/** The window came forward: the sidebar's lists read again, on every page; the archived one once the active one could be. */
+async function refreshProjects(): Promise<void> {
+  if (await refreshProjectList('active')) void refreshProjectList('archived');
+}
+
 /**
- * The window came forward on Home: re-read the first page and keep the pages
- * loaded after it, so More projects is not lost.
+ * A list read again, quietly, over as many pages as it shows: what shows is
+ * then what the Authority has now, in its order (creation time, newest first,
+ * then project ID), with More going on from the last row read. A page on its
+ * way (More, Try again) is waited for; a change made meanwhile, here or by a
+ * page landing, makes it read again over the changed list. A read that fails
+ * leaves what is shown: the next page read says when access is gone.
  */
-export async function refreshHome(): Promise<void> {
-  const account = expect();
-  if (!account || state.route.page !== 'home' || state.projects.loading) return;
-  set({ projects: { ...state.projects, loading: true } });
-  const result = await rpc('projects.list', { expect: account, status: 'active' });
-  if (!result.ok || state.route.page !== 'home') {
-    set({ projects: { ...state.projects, loading: false } });
-    if (!result.ok) accountLost(result.failure);
-    return;
+async function refreshProjectList(status: ListStatus): Promise<boolean> {
+  const key = LIST_KEY[status];
+  if (refreshing.has(status)) return false;
+  refreshing.add(status);
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const account = expect();
+      if (!account) return false;
+      // Nothing shown yet: the page on its way is as fresh as a refresh.
+      if (state[key].loading) { if (state[key].items.length > 0) refreshOwed.add(status); return false; }
+      const edition = projectsEdition;
+      const shown = state[key].items.length;
+      const items: ProjectSummary[] = [];
+      let next: string | null = null;
+      let cursor: string | undefined;
+      for (;;) {
+        const result = await rpc('projects.list', { expect: account, status, ...(cursor ? { cursor } : {}) });
+        if (!sameAccount(account)) return false;
+        if (!result.ok) { accountLost(result.failure); return false; }
+        items.push(...result.value.items.filter(project => !items.some(row => row.project_id === project.project_id)));
+        next = result.value.next_cursor;
+        cursor = next ?? undefined;
+        if (next === null || items.length >= shown) break;
+      }
+      if (edition !== projectsEdition) continue;
+      if (state[key].loading) { refreshOwed.add(status); return false; }
+      if (status === 'active' && rolesChanged(items)) emptyBar();
+      set(key === 'projects' ? { projects: { items, next, loading: false } } : { archivedProjects: { items, next, loading: false } });
+      return true;
+    }
+    return false;
+  } finally {
+    refreshing.delete(status);
   }
-  const first = result.value.items;
-  if (rolesChanged(first)) emptyBar();
-  const seen = new Set(first.map(project => project.project_id));
-  const loadedMore = state.projects.items.length > first.length;
-  const later = loadedMore ? state.projects.items.slice(first.length).filter(project => !seen.has(project.project_id)) : [];
-  set({ projects: { items: [...first, ...later], next: loadedMore ? state.projects.next : result.value.next_cursor, loading: false } });
-  void loadArchivedProjects();
-  void loadHome();
 }
 
 /** Opens a project, from Home or the sidebar: the bar's scope narrows to it, and its text stays. */
@@ -952,7 +1107,42 @@ export async function openProject(project: ProjectSummary): Promise<void> {
   syncSearch();
   void loadRoster(project.project_id);
   void loadLine('projectLine', 'project', project.project_id);
+  void loadProjectReads(project.project_id);
   await loadList('first');
+}
+
+/**
+ * What the project on screen reads from its tools, for the line above its
+ * feed, and whether the organization has a tool a project can read at all.
+ * Quiet: a read that fails leaves the line out; the list's own read says
+ * when access is gone.
+ */
+async function loadProjectReads(project_id: string): Promise<void> {
+  const account = expect();
+  if (!account) return;
+  const mine = ++seq;
+  set({ projectReads: { project_id, seq: mine } });
+  const settle = <Key extends 'available' | 'jira' | 'confluence'>(key: Key, value: ProjectReads[Key]) => {
+    const current = state.projectReads;
+    // Save may already have confirmed this field while the initial read waited.
+    if (current?.seq === mine && current[key] === undefined &&
+        expect()?.authority === account.authority && expect()?.membership_id === account.membership_id) {
+      set({ projectReads: { ...current, [key]: value } });
+    }
+  };
+  await Promise.all([
+    rpc('account.tools', { expect: account })
+      .then(result => { if (result.ok) settle('available', projectToolsAvailable(result.value.tools)); }),
+    rpc('projects.jiraRead', { expect: account, project_id })
+      .then(result => { if (result.ok) settle('jira', jiraMapping.reads(result.value)); }),
+    rpc('projects.confluenceRead', { expect: account, project_id })
+      .then(result => { if (result.ok) settle('confluence', confluenceMapping.reads(result.value)); }),
+  ]);
+}
+
+function projectToolsAvailable(tools: readonly ConnectedTool[]): boolean {
+  const readable: readonly string[] = PROJECT_MAPPING_TOOLS;
+  return tools.some(tool => readable.includes(tool.tool_id) && tool.status !== 'unavailable');
 }
 
 /**
@@ -1046,17 +1236,18 @@ async function loadRoster(projectId: string, more = false): Promise<void> {
   const roster = state.roster?.projectId === projectId ? state.roster : null;
   if (!account || (more && !roster?.next)) return;
   const cursor = more ? roster?.next ?? undefined : undefined;
-  set({ roster: { projectId, items: more ? roster!.items : roster?.items ?? [], next: roster?.next ?? null, loading: true } });
+  const mine = ++seq;
+  set({ roster: { projectId, seq: mine, items: more ? roster!.items : roster?.items ?? [], next: roster?.next ?? null, loading: true } });
   const result = await rpc('projects.members', { expect: account, project_id: projectId, ...(cursor ? { cursor } : {}) });
   const current = state.roster;
-  if (current?.projectId !== projectId) return;
+  if (current?.projectId !== projectId || current.seq !== mine) return;
   if (!result.ok) {
     set({ roster: { ...current, loading: false, failure: result.failure } });
     accountLost(result.failure);
     return;
   }
   const items = appendPage(more ? current.items : [], result.value.items, person => person.membership_id);
-  set({ roster: { projectId, items, next: result.value.next_cursor, loading: false } });
+  set({ roster: { projectId, seq: mine, items, next: result.value.next_cursor, loading: false } });
 }
 
 export function moreMembers(): void {
@@ -1374,13 +1565,15 @@ function changed(done: ChangeState): void {
 
 /** A project settings operation is unsettled until its exact receipt arrives. */
 export function projectSettingsBlocked(current: State = state): boolean {
-  const status = current.projectSettings?.write?.status;
-  return status === 'sending' || status === 'unknown' || activeProjectMapping(current.projectSettings)?.status === 'saving';
+  const settings = current.projectSettings;
+  const status = settings?.write?.status;
+  return status === 'sending' || status === 'unknown' || settings?.tools?.saving === true ||
+    PROJECT_MAPPING_TOOLS.some(tool => settings?.[tool]?.status === 'saving');
 }
 
 export function toggleProjectSettings(target?: ProjectSummary, menuOrigin: 'header' | 'sidebar' = 'header'): void {
   const project = target ?? (state.route.page === 'project' ? state.route.project : null);
-  if (!project || state.concealed || state.sheet || (state.compose && !state.compose.hidden) ||
+  if (!project || state.concealed || sheetShown() || (state.compose && !state.compose.hidden) ||
       (menuOrigin === 'header' && (state.ask || state.reader)) || projectSettingsBlocked()) return;
   const shown = state.projectSettings;
   set({ projectSettings: shown?.project.project_id === project.project_id ? {
@@ -1395,19 +1588,22 @@ export function closeProjectSettings(): void {
   if (settings && !projectSettingsBlocked()) set({ projectSettings: null });
 }
 
-const PROJECT_MAPPING_TOOLS = ['jira', 'confluence'] as const;
-type MappingTool = typeof PROJECT_MAPPING_TOOLS[number];
+/** The tools a project can read from, in the order its Tools sheet shows them. */
+export const PROJECT_MAPPING_TOOLS = ['jira', 'confluence'] as const;
+export type MappingTool = typeof PROJECT_MAPPING_TOOLS[number];
 type MappingSetting<Tool extends MappingTool> = NonNullable<ProjectSettingsState[Tool]>;
 type MappingValue<Tool extends MappingTool> = NonNullable<MappingSetting<Tool>['value']>;
-function activeProjectMapping(settings: ProjectSettingsState | null): MappingSetting<MappingTool> | undefined {
-  return PROJECT_MAPPING_TOOLS.map(tool => settings?.[tool]).find(setting => setting !== undefined);
-}
-function clearProjectMappings(settings: ProjectSettingsState): ProjectSettingsState {
+/** Tools closes: a connection still waiting on the browser is cancelled, so a late approval binds nothing. */
+function clearProjectMappings(settings: ProjectSettingsState, account: Expect | null = expect()): ProjectSettingsState {
+  cancelWaitingConnection(settings.tools?.connect, account);
   const cleared = { ...settings };
   for (const tool of PROJECT_MAPPING_TOOLS) delete cleared[tool];
+  delete cleared.tools;
   return cleared;
 }
 interface MappingAdapter<Tool extends MappingTool> {
+  /** What the project reads from the tool, as the line above its feed says it. */
+  reads(value: MappingValue<Tool>): ProjectReads[Tool];
   readonly tool: Tool;
   initial(seq: number): MappingSetting<Tool>;
   read(account: Expect, project_id: string): Promise<Result<MappingValue<Tool>>>;
@@ -1417,6 +1613,7 @@ interface MappingAdapter<Tool extends MappingTool> {
 }
 
 const jiraMapping: MappingAdapter<'jira'> = {
+  reads: value => value.mapping?.project_key ?? null,
   tool: 'jira', initial: seq => ({ seq, status: 'loading', key: '' }),
   read: (expect, project_id) => rpc('projects.jiraRead', { expect, project_id }),
   write: (expect, project_id, setting, remove, request_id) => rpc('projects.jiraSet', { expect, project_id, request_id,
@@ -1425,7 +1622,8 @@ const jiraMapping: MappingAdapter<'jira'> = {
   valid: setting => /^[A-Z][A-Z0-9_]{0,63}$/.test(setting.key.trim()) && setting.key.trim() !== setting.value?.mapping?.project_key,
 };
 const confluenceMapping: MappingAdapter<'confluence'> = {
-  tool: 'confluence', initial: seq => ({ seq, status: 'loading', spaces: [], next: null, selected: [] }),
+  reads: value => value.mapping ? value.mapping.space_ids.length : null,
+  tool: 'confluence', initial: seq => ({ seq, status: 'loading', spaces: [], next: null, selected: [], catalog: 'idle' }),
   read: (expect, project_id) => rpc('projects.confluenceRead', { expect, project_id }),
   write: (expect, project_id, setting, remove, request_id) => rpc('projects.confluenceSet', { expect, project_id, request_id,
     expected_revision: setting.value!.revision, space_ids: remove ? null : setting.selected }),
@@ -1443,68 +1641,306 @@ function mappingAt<Tool extends MappingTool>(tool: Tool, account: Expect, openin
 function setMapping<Tool extends MappingTool>(settings: ProjectSettingsState, tool: Tool, setting: MappingSetting<Tool>): void {
   set({ projectSettings: { ...settings, [tool]: setting } });
 }
-async function readProjectMapping<Tool extends MappingTool>(adapter: MappingAdapter<Tool>) {
-  const settings = state.projectSettings;
-  const account = expect();
-  if (!settings || !account || projectSettingsBlocked()) return;
-  const initial = adapter.initial(++seq);
-  setMapping({ ...clearProjectMappings(settings), menu: false, rename: null, confirm: null }, adapter.tool, initial);
-  const result = await adapter.read(account, settings.project.project_id);
-  const current = mappingAt(adapter.tool, account, initial.seq);
-  if (!current) return;
-  const setting = result.ok ? adapter.accepted(initial, result.value) : { ...initial, status: 'failed' as const, failure: result.failure };
-  setMapping(current.settings, adapter.tool, setting);
-  if (!result.ok) { accountLost(result.failure); return; }
-  return { account, settings: current.settings, setting };
+function setProjectTools(settings: ProjectSettingsState, patch: Partial<ProjectToolsState>): void {
+  if (settings.tools) set({ projectSettings: { ...settings, tools: { ...settings.tools, ...patch } } });
 }
-async function saveProjectMapping<Tool extends MappingTool>(adapter: MappingAdapter<Tool>, remove: boolean): Promise<void> {
+
+/** Every reply belongs to this account and this opening of Tools. */
+function toolsAt(account: Expect, opening: number): ProjectSettingsState | undefined {
+  const settings = state.projectSettings;
+  return settings?.tools?.seq === opening && expect()?.authority === account.authority && expect()?.membership_id === account.membership_id
+    ? settings : undefined;
+}
+
+/** Your connection to a tool, as Tools last read it; undefined while unknown. */
+export function projectToolEntry(settings: ProjectSettingsState, tool: MappingTool): ConnectedTool | undefined {
+  return settings.tools?.items?.find(item => item.tool_id === tool);
+}
+
+/** You can pick for a tool once it is connected, or when your connection could not be read (the Authority checks on save). */
+export function projectToolUsable(settings: ProjectSettingsState, tool: MappingTool): boolean {
+  return !settings.tools?.items || projectToolEntry(settings, tool)?.status === 'linked';
+}
+
+/**
+ * Tools, from the title bar, the project's tools line or its ⋯ menu: your
+ * connection to each tool a project can read, and what this project reads
+ * from it, all read at once.
+ */
+export function openProjectTools(project: ProjectSummary): void {
+  const account = expect();
+  if (!account || state.concealed || sheetShown() || (state.compose && !state.compose.hidden) || projectSettingsBlocked()) return;
+  const tools: ProjectToolsState = { seq: ++seq, items: null, saving: false };
+  const jira = jiraMapping.initial(++seq);
+  const confluence = confluenceMapping.initial(++seq);
+  set({ projectSettings: {
+    project, menu: false, menuOrigin: state.projectSettings?.menuOrigin ?? 'header', rename: null, confirm: null, write: null, tools, jira, confluence,
+  } });
+  void loadProjectToolList(account, tools.seq);
+  void readProjectMapping(jiraMapping, account, project.project_id, jira.seq);
+  void readProjectMapping(confluenceMapping, account, project.project_id, confluence.seq);
+}
+
+async function loadProjectToolList(account: Expect, opening: number): Promise<void> {
+  const result = await rpc('account.tools', { expect: account });
+  const settings = toolsAt(account, opening);
+  if (!settings) return;
+  setProjectTools(settings, result.ok ? { items: result.value.tools, failure: undefined } : { failure: result.failure });
+  if (!result.ok) accountLost(result.failure);
+  // Read or not, the spaces can be read now: without your connections the Authority checks on save.
+  void readSpaces(account);
+}
+
+async function readProjectMapping<Tool extends MappingTool>(adapter: MappingAdapter<Tool>, account: Expect, project_id: string, opening: number): Promise<void> {
+  const result = await adapter.read(account, project_id);
+  const current = mappingAt(adapter.tool, account, opening);
+  if (!current) return;
+  setMapping(current.settings, adapter.tool, result.ok ? adapter.accepted(current.setting, result.value)
+    : { ...current.setting, status: 'failed' as const, failure: result.failure });
+  if (!result.ok) { accountLost(result.failure); return; }
+  // The line above the feed says what was read, even after a save it could not confirm.
+  if (state.projectReads?.project_id === project_id) set({ projectReads: { ...state.projectReads, [adapter.tool]: adapter.reads(result.value) } });
+  if (adapter.tool === 'confluence') void readSpaces(account);
+}
+
+/** A lead picks from their own Confluence spaces: read once the mapping is, and once Confluence is connected. */
+async function readSpaces(account: Expect): Promise<void> {
+  const settings = state.projectSettings;
+  const setting = settings?.confluence;
+  if (!settings?.tools || !setting || settings.project.role !== 'lead' || setting.status !== 'ready' || setting.catalog !== 'idle') return;
+  // Your connection is still being read: its reply reads the spaces.
+  if (settings.tools.items === null && settings.tools.failure === undefined) return;
+  if (!projectToolUsable(settings, 'confluence')) return;
+  setMapping(settings, 'confluence', { ...setting, catalog: 'loading', pickerFailure: undefined });
+  const spaces = await rpc('projects.confluenceSpaces', { expect: account });
+  const current = mappingAt('confluence', account, setting.seq);
+  if (!current) return;
+  setMapping(current.settings, 'confluence', spaces.ok
+    ? { ...current.setting, catalog: 'read', spaces: spaces.value.items, next: spaces.value.next_cursor }
+    : { ...current.setting, catalog: 'read', pickerFailure: spaces.failure });
+  if (!spaces.ok) accountLost(spaces.failure);
+}
+
+/** One setting written; true once the Authority has it. A failure stays on its row until it is read again. */
+async function writeProjectMapping<Tool extends MappingTool>(adapter: MappingAdapter<Tool>, account: Expect, remove: boolean): Promise<boolean> {
   const settings = state.projectSettings;
   const setting = settings?.[adapter.tool] as MappingSetting<Tool> | undefined;
-  const account = expect();
-  if (!settings || !setting?.value || !account || settings.project.role !== 'lead' || setting.status !== 'ready' ||
-      (remove ? setting.value.mapping === null : !adapter.valid(setting))) return;
+  if (!settings || !setting?.value || setting.status !== 'ready') return false;
   setMapping(settings, adapter.tool, { ...setting, status: 'saving' });
   unresolvedChanged();
   const result = await adapter.write(account, settings.project.project_id, setting, remove, crypto.randomUUID());
   const current = mappingAt(adapter.tool, account, setting.seq);
-  if (!current) return;
-  setMapping(current.settings, adapter.tool, result.ok ? adapter.accepted(setting, result.value)
-    : { ...setting, status: 'failed', failure: result.failure, writeFailed: true });
+  if (!current) return false;
+  // Refused outright (a key the tool has no project for, a connection it did not accept), nothing changed on the
+  // Authority: the pick stays, with why, to correct. Unconfirmed or changed meanwhile: it is read again first.
+  const refused = !result.ok && result.failure.mutation_outcome !== 'unknown' && result.failure.code !== 'conflict';
+  setMapping(current.settings, adapter.tool, result.ok ? adapter.accepted(current.setting, result.value)
+    : refused ? { ...current.setting, status: 'ready' as const, failure: result.failure, writeFailed: false }
+      : { ...current.setting, status: 'failed' as const, failure: result.failure, writeFailed: true });
   unresolvedChanged();
-  if (!result.ok) accountLost(result.failure);
+  if (!result.ok && SIGN_IN_LOST.includes(result.failure.code)) accountLost(result.failure);
+  return result.ok;
 }
 
-export async function beginProjectJira(): Promise<void> { await readProjectMapping(jiraMapping); }
-export const saveProjectJira = (remove = false): Promise<void> => saveProjectMapping(jiraMapping, remove);
-export const saveProjectConfluence = (remove = false): Promise<void> => saveProjectMapping(confluenceMapping, remove);
+/** The sign-in itself is gone or someone else's: a tool's own refusal (not found, not authorized there) is not that. */
+const SIGN_IN_LOST = ['signed_out', 'account_changed', 'stale_access_state', 'sign_in_required'];
+
+/** Why a tool's setting on Tools could not be written or read, in the renderer's words; null while nothing failed. */
+export function projectToolFailureWords(settings: ProjectSettingsState, tool: MappingTool, name: string): string | null {
+  const setting = settings[tool];
+  const failure = setting?.failure;
+  if (!setting || !failure || (setting.status !== 'failed' && setting.status !== 'ready')) return null;
+  if (failure.code === 'conflict') return 'This setting changed. Reload it before editing.';
+  if (setting.writeFailed) return 'The change could not be confirmed. Reload the setting before editing again.';
+  if (setting.status === 'failed') return message(failure);
+  if (failure.code === 'not_found') return tool === 'jira' ? `No ${name} project with that key that you can see.` : `A space could not be read with your ${name} connection.`;
+  if (failure.code === 'unauthorized' || failure.code === 'forbidden') return `${name} refused the change. Check your ${name} connection in Tools and try again.`;
+  return message(failure);
+}
+
+/** What Save would do to a tool's setting: nothing, set it, remove it, or nothing yet, as what is typed is not valid. */
+export type ToolChange = 'set' | 'remove' | 'invalid' | null;
+export function projectToolChange(settings: ProjectSettingsState, tool: MappingTool): ToolChange {
+  if (tool === 'jira') {
+    const setting = settings.jira;
+    if (setting?.status !== 'ready' || !setting.value) return null;
+    const key = setting.key.trim();
+    const current = setting.value.mapping?.project_key ?? null;
+    if (key === '') return current ? 'remove' : null;
+    if (key === current) return null;
+    return jiraMapping.valid(setting) ? 'set' : 'invalid';
+  }
+  const setting = settings.confluence;
+  if (setting?.status !== 'ready' || !setting.value) return null;
+  const current = setting.value.mapping?.space_ids ?? [];
+  if (current.length === setting.selected.length && current.every(id => setting.selected.includes(id))) return null;
+  if (setting.selected.length === 0) return current.length > 0 ? 'remove' : null;
+  return confluenceMapping.valid(setting) ? 'set' : 'invalid';
+}
+
+/** Save is offered to a lead with something changed, nothing invalid, and no connection still waiting on the browser. */
+export function projectToolsSavable(settings: ProjectSettingsState): boolean {
+  const tools = settings.tools;
+  if (!tools || tools.saving || settings.project.role !== 'lead' || (tools.connect && tools.connect.phase !== 'failed')) return false;
+  const changes = PROJECT_MAPPING_TOOLS.map(tool => projectToolChange(settings, tool));
+  return !changes.includes('invalid') && changes.some(change => change === 'set' || change === 'remove');
+}
+
+/** What a project reads, as its tools line and Save's toast say it. */
+function readsOf(settings: ProjectSettingsState): Pick<ProjectReads, 'jira' | 'confluence'> {
+  const jira = settings.jira?.value;
+  const confluence = settings.confluence?.value;
+  return {
+    ...(jira ? { jira: jira.mapping?.project_key ?? null } : {}),
+    ...(confluence ? { confluence: confluence.mapping ? confluence.mapping.space_ids.length : null } : {}),
+  };
+}
+
+export function readsWords(reads: Pick<ProjectReads, 'jira' | 'confluence'>): string[] {
+  return [
+    reads.jira ? `Jira ${reads.jira}` : null,
+    reads.confluence ? `${reads.confluence} Confluence space${reads.confluence === 1 ? '' : 's'}` : null,
+  ].filter((part): part is string => part !== null);
+}
+
+/**
+ * Save: every changed setting is written, in turn. Once all are, the sheet
+ * closes and says what the project reads now; a row that failed keeps the
+ * sheet up with its reason.
+ */
+export async function saveProjectTools(): Promise<void> {
+  const settings = state.projectSettings;
+  const account = expect();
+  if (!settings?.tools || !account || !projectToolsSavable(settings)) return;
+  const opening = settings.tools.seq;
+  const changes = PROJECT_MAPPING_TOOLS.map(tool => [tool, projectToolChange(settings, tool)] as const)
+    .filter(([, change]) => change === 'set' || change === 'remove');
+  setProjectTools(settings, { saving: true });
+  let saved = true;
+  const done: typeof changes = [];
+  for (const [tool, change] of changes) {
+    const ok = tool === 'jira' ? await writeProjectMapping(jiraMapping, account, change === 'remove')
+      : await writeProjectMapping(confluenceMapping, account, change === 'remove');
+    saved &&= ok;
+    if (ok) done.push([tool, change]);
+    if (!toolsAt(account, opening)) return;
+  }
+  const current = toolsAt(account, opening);
+  if (!current) return;
+  const reads = readsOf(current);
+  // What did save shows above the feed, even when another row failed. Initial
+  // replies may still fill unknown fields, but cannot replace these known values.
+  if (state.projectReads?.project_id === current.project.project_id) set({ projectReads: {
+    ...state.projectReads, ...reads,
+    available: current.tools?.items ? projectToolsAvailable(current.tools.items) : state.projectReads.available,
+  } });
+  if (!saved) {
+    setProjectTools(toolsAt(account, opening) ?? current, { saving: false });
+    unresolvedChanged();
+    return;
+  }
+  set({ projectSettings: null, toast: savedWords(current.project.name, done, reads) });
+  unresolvedChanged();
+}
+
+/** What Save did, and only that: "now reads Jira KAN", "no longer reads Confluence", or both. */
+function savedWords(name: string, done: readonly (readonly [MappingTool, ToolChange])[], reads: Pick<ProjectReads, 'jira' | 'confluence'>): string {
+  const names: Record<MappingTool, string> = { jira: 'Jira', confluence: 'Confluence' };
+  const set = done.filter(([, change]) => change === 'set').map(([tool]) => readsWords({ [tool]: reads[tool] })[0]!);
+  const removed = done.filter(([, change]) => change === 'remove').map(([tool]) => names[tool]);
+  const parts = [set.length > 0 ? `now reads ${set.join(' and ')}` : null, removed.length > 0 ? `no longer reads ${removed.join(' and ')}` : null];
+  return `${name} ${parts.filter(Boolean).join(' and ')}`;
+}
+
+/** Try again, when your connections could not be read: Tools reads them again. */
+export function reloadProjectToolList(): void {
+  const settings = state.projectSettings;
+  const account = expect();
+  if (!settings?.tools || !account || settings.tools.saving) return;
+  setProjectTools(settings, { failure: undefined });
+  void loadProjectToolList(account, settings.tools.seq);
+}
+
+/** Read again: a row whose read or save failed shows what the Authority has now. */
+export function reloadProjectTool(tool: MappingTool): void {
+  const settings = state.projectSettings;
+  const account = expect();
+  if (!settings?.tools || !account || settings.tools.saving) return;
+  const { project_id } = settings.project;
+  if (tool === 'jira') {
+    const initial = jiraMapping.initial(++seq);
+    setMapping(settings, 'jira', initial);
+    void readProjectMapping(jiraMapping, account, project_id, initial.seq);
+  } else {
+    const initial = confluenceMapping.initial(++seq);
+    setMapping(settings, 'confluence', initial);
+    void readProjectMapping(confluenceMapping, account, project_id, initial.seq);
+  }
+}
+
+/** Connect, in a row of Tools: the row waits on the browser, then lets you pick. Nothing else on the sheet is lost. */
+export async function connectProjectTool(tool: ConnectedTool): Promise<void> {
+  const settings = state.projectSettings;
+  const account = expect();
+  const sheet = settings?.tools;
+  if (!settings || !sheet || !account || state.concealed || sheet.saving || (sheet.connect && sheet.connect.phase !== 'failed')) return;
+  const opening = sheet.seq;
+  const mine = ++seq;
+  setProjectTools(settings, { connect: { seq: mine, tool, phase: 'starting' }, connected: undefined });
+  const waiting = () => toolsAt(account, opening)?.tools?.connect?.seq === mine;
+  const done = await runConnect(account, tool, waiting, to => {
+    const current = toolsAt(account, opening);
+    if (current) setProjectTools(current, { connect: { seq: mine, tool, ...to } });
+  });
+  const current = toolsAt(account, opening);
+  if (!done || !current?.tools || current.tools.connect?.seq !== mine) return;
+  if (done === 'cancelled') { setProjectTools(current, { connect: undefined }); return; }
+  const items = current.tools.items?.map(item => item.tool_id === tool.tool_id ? { ...item, status: 'linked' as const } : item) ?? null;
+  setProjectTools(current, { connect: undefined, connected: tool.tool_id, items });
+  void readSpaces(account);
+}
+
+/** Cancel, in the row: the attempt is cancelled, so a late approval in the browser binds nothing. */
+export function cancelProjectConnect(): void {
+  const settings = state.projectSettings;
+  const connect = settings?.tools?.connect;
+  const account = expect();
+  if (!settings || !connect) return;
+  setProjectTools(settings, { connect: undefined });
+  if (account && connect.phase === 'waiting' && connect.attempt) {
+    void rpc('tools.cancel', { expect: account, tool_id: connect.tool.tool_id, attempt_id: connect.attempt.attempt_id });
+  }
+}
+
 export function setProjectJira(key: string): void {
   const settings = state.projectSettings;
   if (settings?.jira?.status === 'ready' && settings.project.role === 'lead') setMapping(settings, 'jira', { ...settings.jira, key: key.toUpperCase() });
 }
-export const projectJiraValid = (setting: ProjectJiraSetting): boolean => setting.status === 'ready' && jiraMapping.valid(setting);
 
-/** Read the shared mapping first. Only leads need their personal space picker. */
-export async function beginProjectConfluence(): Promise<void> {
-  const loaded = await readProjectMapping(confluenceMapping);
-  if (!loaded || loaded.settings.project.role !== 'lead') return;
-  const spaces = await rpc('projects.confluenceSpaces', { expect: loaded.account });
-  const current = mappingAt('confluence', loaded.account, loaded.setting.seq);
-  if (!current) return;
-  setMapping(current.settings, 'confluence', spaces.ok
-    ? { ...current.setting, spaces: spaces.value.items, next: spaces.value.next_cursor }
-    : { ...current.setting, pickerFailure: spaces.failure });
-  if (!spaces.ok) accountLost(spaces.failure);
+/** Stop reading: the row's choice is emptied, and Save removes the setting. */
+export function clearProjectTool(tool: MappingTool): void {
+  const settings = state.projectSettings;
+  if (!settings?.tools || settings.tools.saving || settings.project.role !== 'lead') return;
+  if (tool === 'jira' && settings.jira?.status === 'ready') setMapping(settings, 'jira', { ...settings.jira, key: '' });
+  if (tool === 'confluence' && settings.confluence?.status === 'ready') setMapping(settings, 'confluence', { ...settings.confluence, selected: [] });
 }
+
+/** Spaces the project reads that your own catalog does not show: another lead's, or on a page not read yet. */
+export function hiddenSpaces(setting: ProjectConfluenceSetting): string[] {
+  return setting.selected.filter(id => !setting.spaces.some(space => space.id === id));
+}
+
 export function toggleProjectConfluenceSpace(id: string): void {
   const settings = state.projectSettings; const setting = settings?.confluence;
-  if (!settings || !setting || setting.status !== 'ready' || settings.project.role !== 'lead' || !setting.spaces.some(space => space.id === id)) return;
+  if (!settings || !setting || setting.status !== 'ready' || settings.project.role !== 'lead' ||
+      (!setting.spaces.some(space => space.id === id) && !setting.selected.includes(id))) return;
   const selected = setting.selected.includes(id) ? setting.selected.filter(value => value !== id) : [...setting.selected, id];
   if (selected.length <= 20) setMapping(settings, 'confluence', { ...setting, selected });
 }
 export async function moreProjectConfluenceSpaces(): Promise<void> {
   const settings = state.projectSettings; const setting = settings?.confluence; const account = expect();
   if (!settings || !setting || !account || setting.status !== 'ready' || setting.next === null || setting.loadingMore) return;
-  setMapping(settings, 'confluence', { ...setting, loadingMore: true });
+  setMapping(settings, 'confluence', { ...setting, loadingMore: true, failure: undefined });
   const result = await rpc('projects.confluenceSpaces', { expect: account, cursor: setting.next });
   const current = mappingAt('confluence', account, setting.seq);
   if (!current) return;
@@ -1611,10 +2047,28 @@ export function keepProjectSetting(): void {
   if (settings?.write?.dismissConfirm) set({ projectSettings: { ...settings, write: { ...settings.write, dismissConfirm: false } } });
 }
 
+/**
+ * The project on screen, as it is now (renamed, archived, your role in it
+ * read again): the same page, with open items, an item's card or Your open
+ * items still open over it.
+ */
+function sameProjectRoute(project: ProjectSummary): Partial<State> {
+  if (state.route.page !== 'project' || state.route.project.project_id !== project.project_id) return {};
+  const was = state.route;
+  const route: Route = { page: 'project', project };
+  return {
+    route,
+    ...(state.openItems?.route === was ? { openItems: { ...state.openItems, route } } : {}),
+    ...(state.itemCard?.route === was ? { itemCard: { ...state.itemCard, route } } : {}),
+    ...(state.itemStatus?.route === was ? { itemStatus: { ...state.itemStatus, route } } : {}),
+  };
+}
+
 function replaceProject(project: ProjectSummary): void {
   const update = (items: ProjectSummary[]) => items.map(item => item.project_id === project.project_id ? project : item);
   set({ projects: { ...state.projects, items: update(state.projects.items) }, archivedProjects: { ...state.archivedProjects, items: update(state.archivedProjects.items) },
-    ...(state.route.page === 'project' && state.route.project.project_id === project.project_id ? { route: { page: 'project' as const, project } } : {}) });
+    ...sameProjectRoute(project) });
+  listChanged();
 }
 
 function appliedProjectSetting(project: ProjectSummary, operation: 'rename' | 'archive' | 'leave', detail: { name?: string; archived?: boolean }): void {
@@ -1641,12 +2095,13 @@ function appliedProjectSetting(project: ProjectSummary, operation: 'rename' | 'a
     const moved = [...to.items.filter(item => item.project_id !== project.project_id), fresh];
     set({ ...(detail.archived ? { projects: { ...from, items: without }, archivedProjects: { ...to, items: moved } }
       : { archivedProjects: { ...from, items: without }, projects: { ...to, items: moved } }),
-      ...(state.route.page === 'project' && state.route.project.project_id === project.project_id ? { route: { page: 'project' as const, project: fresh } } : {}),
+      ...sameProjectRoute(fresh),
       toast: detail.archived ? `Archived ${fresh.name}` : `Restored ${fresh.name}` });
+    listChanged();
     return;
   }
-  forgetLeftProject(project.project_id);
   set({ toast: `Left ${project.name}` });
+  forgetLeftProject(project.project_id);
 }
 
 /** Leaving removes every local target for the project before returning Home. */
@@ -1655,7 +2110,8 @@ function forgetLeftProject(projectId: string): void {
   const archivedProjects = state.archivedProjects.items.filter(project => project.project_id !== projectId);
   const compose = state.compose;
   let nextCompose = compose;
-  if (compose) {
+  // A capture on its way, or kept to resend, was sent as it was: only the Authority's answer changes it.
+  if (compose && !locked(compose) && !compose.kept) {
     const picked = compose.projects.filter(project => project.project_id !== projectId);
     const previous = compose.picking ? { ...compose.picking, projects: compose.picking.projects.filter(project => project.project_id !== projectId) } : null;
     nextCompose = { ...compose, context: compose.context?.project_id === projectId ? null : compose.context, projects: picked, picking: previous,
@@ -1663,8 +2119,15 @@ function forgetLeftProject(projectId: string): void {
   }
   readSeq += 1;
   emptyBar();
+  // New project working out of sight on another project stays at it; on this one, it ends, saying what may not have gone in.
+  const making = state.sheet?.kind === 'new-project' ? state.sheet : null;
+  const ownProject = making !== null && (making.project?.project_id === projectId || making.createdId === projectId);
   set({ projects: { ...state.projects, items: projects }, archivedProjects: { ...state.archivedProjects, items: archivedProjects }, compose: nextCompose,
-    route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: null, barScope: { kind: 'global' }, organization: null });
+    route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: making && !ownProject ? making : null,
+    barScope: { kind: 'global' }, organization: null });
+  listChanged();
+  if (making && ownProject) finishNewProject(making);
+  unresolvedChanged();
 }
 
 // ---- people ----------------------------------------------------------------------
@@ -1703,7 +2166,7 @@ export function canManage(current: State = state): boolean {
 export async function openPeople(): Promise<void> {
   const account = expect();
   const route = state.route;
-  if (!account || route.page !== 'project' || state.sheet || state.concealed) return;
+  if (!account || route.page !== 'project' || state.concealed || newProjectInTheWay() || state.sheet) return;
   const mine = ++seq;
   set({ sheet: { kind: 'people', seq: mine, project: route.project, query: '', directory: null, menu: null, confirm: null, added: null } });
   void loadRoster(route.project.project_id);
@@ -1726,8 +2189,9 @@ function roleRead(project: ProjectSummary): void {
   if ((known && known.role !== project.role) || (shown && shown.role !== project.role)) emptyBar();
   set({
     projects: { ...state.projects, items: state.projects.items.map(item => item.project_id === project.project_id ? { ...item, role: project.role } : item) },
-    ...(shown ? { route: { page: 'project' as const, project: { ...shown, role: project.role } } } : {}),
+    ...(shown && shown.role !== project.role ? sameProjectRoute({ ...shown, role: project.role }) : {}),
   });
+  listChanged();
 }
 
 /** Typing a name finds people once it pauses. */
@@ -1757,13 +2221,15 @@ export async function findPeople(more = false): Promise<void> {
     if (wholeOrganization) setNewProject(value, sheet.seq);
     else setPeople(value, sheet.seq);
   };
+  const query = askText(sheet.query);
+  // More for a name just changed: its page belongs to the old name, so the new one is found afresh.
+  if (more && sheet.directory && sheet.directory.query !== query) return findPeople(false);
   const cursor = more ? sheet.directory?.next : undefined;
   if (more && !cursor) return;
-  const query = askText(sheet.query);
   const mine = ++seq;
   const shown = more ? sheet.directory?.items ?? [] : [];
   // A new project-directory search ends the last add's Undo.
-  patch({ directory: { seq: mine, items: shown, next: sheet.directory?.next ?? null, loading: true },
+  patch({ directory: { seq: mine, query, items: shown, next: sheet.directory?.next ?? null, loading: true },
     ...(!wholeOrganization && !more ? { added: null } : {}) });
   const params = { expect: account, ...(query ? { query } : {}), ...(cursor ? { cursor } : {}) };
   const result = wholeOrganization ? await rpc('people.directory', params)
@@ -1772,15 +2238,16 @@ export async function findPeople(more = false): Promise<void> {
   if (!current || current.directory?.seq !== mine) return;
   if (!result.ok) {
     if (wholeOrganization && NO_DIRECTORY.includes(result.failure.code)) {
-      setNewProject({ peopleLater: true, query: '', directory: null }, sheet.seq);
+      // Once the project exists its people were picked or are added in People; the sheet's way of working stays.
+      setNewProject(current.project ? { directory: null } : { peopleLater: true, query: '', directory: null }, sheet.seq);
       return;
     }
-    patch({ directory: { seq: mine, items: shown, next: null, loading: false, failure: result.failure } });
+    patch({ directory: { seq: mine, query, items: shown, next: null, loading: false, failure: result.failure } });
     accountLost(result.failure);
     return;
   }
   patch({ directory: {
-    seq: mine, items: appendPage(shown, result.value.items, person => person.membership_id), next: result.value.next_cursor, loading: false,
+    seq: mine, query, items: appendPage(shown, result.value.items, person => person.membership_id), next: result.value.next_cursor, loading: false,
   } });
 }
 
@@ -1886,13 +2353,20 @@ export function projectName(text: string): string | null {
   return name === '' || new TextEncoder().encode(name).length > 200 || /[\u0000-\u001f\u007f-\u009f]/.test(name) ? null : name;
 }
 
-/** The sidebar's New project, and Home's when there are no projects. The organization's first people show at once. */
+/**
+ * The sidebar's New project, and Home's when there are no projects. The
+ * organization's first people show at once. One still at work after Create
+ * comes back as it is.
+ */
 export function openNewProject(): void {
-  if (!expect() || state.sheet || state.concealed || (state.compose && !state.compose.hidden)) return;
+  if (!expect() || state.concealed || (state.compose && !state.compose.hidden)) return;
+  const working = newProjectSheet();
+  if (working?.hidden) { setNewProject({ hidden: false }, working.seq); return; }
+  if (state.sheet) return;
   set({
     toast: null,
     sheet: {
-      kind: 'new-project', seq: ++seq, name: '', create: { requestId: crypto.randomUUID(), name: '', status: 'editing' }, confirmClose: false,
+      kind: 'new-project', seq: ++seq, hidden: false, name: '', create: { requestId: crypto.randomUUID(), name: '', status: 'editing' }, confirmClose: false,
       project: null, createdId: null, opening: false, opened: false, picks: [], peopleLater: false, files: [], skip: null,
       query: '', directory: null, menu: null, confirm: null, added: null,
     },
@@ -1939,9 +2413,10 @@ export async function createProject(): Promise<void> {
 }
 
 /**
- * The project Create made, read: it joins your projects, and the people and
- * files picked go into it. Without the organization's directory, a lead now
- * finds people in the project's own.
+ * The project Create made, read: it joins your projects and opens, the sheet
+ * steps aside, and the people and files picked go into it. Without the
+ * organization's directory the sheet stays: a lead now finds people in the
+ * project's own.
  */
 async function openCreated(): Promise<void> {
   const account = expect();
@@ -1959,11 +2434,15 @@ async function openCreated(): Promise<void> {
   const project = result.value;
   if (!state.projects.items.some(item => item.project_id === project.project_id)) {
     set({ projects: { ...state.projects, items: [project, ...state.projects.items] } });
+    listChanged();
   }
   setNewProject({ opening: false, project, notice: undefined }, mine);
   if (newProjectSheet(mine)?.peopleLater && project.role === 'lead') {
     void loadRoster(project.project_id);
     void findPeople();
+  } else {
+    setNewProject({ hidden: true, opened: true }, mine);
+    void openProject(project);
   }
   pumpNewProject();
 }
@@ -1971,8 +2450,9 @@ async function openCreated(): Promise<void> {
 /**
  * Once the project exists, New project works down its list one request at a
  * time: each person, then each file. One whose outcome is unknown holds back
- * the rest until it is settled. When nothing more can start, the project
- * opens behind the sheet, once.
+ * the rest until it is settled. When nothing more can start, the sheet comes
+ * back for what needs you, or closes. Without the organization's directory
+ * the sheet stays for finding people, and the project opens behind it, once.
  */
 function pumpNewProject(): void {
   const sheet = newProjectSheet();
@@ -1983,9 +2463,65 @@ function pumpNewProject(): void {
   if (person) { void addPick(sheet.seq, person.id, false); return; }
   const file = held || sheet.files.some(entry => entry.status === 'unknown') ? undefined : sheet.files.find(entry => entry.status === 'waiting');
   if (file) { void saveFile(sheet.seq, file.id, false); return; }
-  if (sheet.opened) return;
-  setNewProject({ opened: true }, sheet.seq);
-  void openProject(sheet.project);
+  if (!sheet.opened) {
+    setNewProject({ opened: true }, sheet.seq);
+    void openProject(sheet.project);
+    return;
+  }
+  if (!sheet.peopleLater || sheet.hidden) settleNewProject(sheet);
+}
+
+/** Once its project is open, New project can step aside while it works, and come back. */
+export function newProjectSteppable(sheet: NewProjectSheet): boolean {
+  return sheet.project !== null && sheet.opened && !sheet.peopleLater;
+}
+
+/**
+ * New project works out of sight: a sheet that would open over it would take
+ * its place, so New project comes back instead, showing what it is doing.
+ */
+function newProjectInTheWay(): boolean {
+  const sheet = newProjectSheet();
+  if (!sheet?.hidden) return false;
+  setNewProject({ hidden: false }, sheet.seq);
+  return true;
+}
+
+/**
+ * Nothing more can start. A person or file that may have arrived, or a file
+ * Try again can resend, brings the sheet back; otherwise it closes and the
+ * toast says how it went. A question already up is left to be answered.
+ */
+function settleNewProject(sheet: NewProjectSheet): void {
+  const refused = sheet.picks.some(pick => pick.status === 'failed') || sheet.files.some(file => file.status === 'failed' && file.handle !== undefined);
+  if (newProjectUnsettled(sheet) || refused) {
+    if (sheet.hidden) setNewProject({ hidden: false }, sheet.seq);
+    return;
+  }
+  if (sheet.skip !== null || sheet.confirmClose) return;
+  finishNewProject(sheet, true);
+}
+
+/** Said when New project closes by itself with everyone added and every file saved; nothing when there was nothing to add. */
+function readyWords(name: string, people: number, files: number): string | null {
+  const parts = [
+    people > 0 ? `${people} ${people === 1 ? 'person' : 'people'}` : null,
+    files > 0 ? `${files} ${files === 1 ? 'file' : 'files'}` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? `${name} is ready · ${parts.join(', ')}` : null;
+}
+
+/** While New project works out of sight: what it is doing, and how far it got. */
+export function newProjectProgress(sheet: NewProjectSheet): { words: string; done: number; total: number } | null {
+  if (!sheet.hidden || !sheet.project) return null;
+  const files = sheet.files.filter(file => file.handle);
+  const total = sheet.picks.length + files.length;
+  const done = sheet.picks.filter(pick => pick.status === 'added').length + files.filter(file => file.status === 'saved').length;
+  const doing = [
+    sheet.picks.length > 0 ? `adding ${sheet.picks.length} ${sheet.picks.length === 1 ? 'person' : 'people'}` : null,
+    files.length > 0 ? `saving ${files.length} ${files.length === 1 ? 'file' : 'files'}` : null,
+  ].filter(Boolean).join(', ');
+  return { words: doing ? `${sheet.project.name} created · ${doing}` : `${sheet.project.name} created`, done, total };
 }
 
 /** The create, an add, or a file may have arrived and nothing says yet whether it did. */
@@ -2001,7 +2537,9 @@ export function newProjectUnsettled(sheet: NewProjectSheet): boolean {
  */
 function closeNewProject(): void {
   const sheet = newProjectSheet();
-  if (!sheet || newProjectBusy(sheet)) return;
+  if (!sheet) return;
+  // Still working: it steps aside again, and the toast keeps saying how far it got.
+  if (newProjectBusy(sheet)) { if (newProjectSteppable(sheet)) setNewProject({ hidden: true }, sheet.seq); return; }
   if (newProjectUnsettled(sheet) && !sheet.confirmClose) {
     setNewProject({ confirmClose: true });
     return;
@@ -2017,15 +2555,17 @@ export function keepNewProject(): void {
 /**
  * New project goes. Copies kept to resend a file go too, as nothing can
  * resend them now. Once the project was made, the toast says if some people
- * were not added to it or some files not saved into it, or may not have been.
- * Before Create nothing was sent, so nothing is said.
+ * were not added to it or some files not saved into it, or may not have been;
+ * when it closed by itself, it says what went in. Before Create nothing was
+ * sent, so nothing is said.
  */
-function finishNewProject(sheet: NewProjectSheet): void {
+function finishNewProject(sheet: NewProjectSheet, settled = false): void {
   for (const file of sheet.files) if (file.kept) releaseCopy(file.requestId);
   const made = sheet.createdId !== null;
   const people = made && sheet.picks.some(pick => pick.status !== 'added');
   const files = made && sheet.files.some(file => file.status !== 'saved');
-  const toast = people && files ? UNFINISHED : people ? UNADDED_PEOPLE : files ? UNSAVED_FILES : null;
+  const toast = people && files ? UNFINISHED : people ? UNADDED_PEOPLE : files ? UNSAVED_FILES
+    : settled && sheet.project ? readyWords(sheet.project.name, sheet.picks.length, sheet.files.length) : null;
   set({ sheet: null, ...(toast ? { toast } : {}) });
   unresolvedChanged();
   if (!sheet.project) return;
@@ -2034,8 +2574,7 @@ function finishNewProject(sheet: NewProjectSheet): void {
   if (state.roster?.projectId === sheet.project.project_id) void loadRoster(sheet.project.project_id);
 }
 
-function releaseCopy(requestId: string): void {
-  const account = expect();
+function releaseCopy(requestId: string, account: Expect | null = expect()): void {
   if (account) void rpc('documents.abandon', { expect: account, request_id: requestId });
 }
 
@@ -2200,6 +2739,8 @@ async function saveFile(mine: number, id: number, retrying: boolean): Promise<vo
     return;
   }
   patchFile(mine, id, { status: 'saved', kept: false, ...(result.value.extraction ? { extraction: result.value.extraction } : {}) });
+  // The project on screen shows each file as it lands.
+  refreshList({ kind: 'project', project_id });
   pumpNewProject();
 }
 
@@ -2264,7 +2805,7 @@ export function confirmSkip(): void {
 /** Files can be dropped on New project, one or more, while it is up. */
 export function canDropFiles(event: DragEvent): boolean {
   const items = event.dataTransfer?.items;
-  return state.status?.signed_in === true && state.sheet?.kind === 'new-project' && items !== undefined && items.length > 0 &&
+  return state.status?.signed_in === true && sheetShown()?.kind === 'new-project' && items !== undefined && items.length > 0 &&
     [...items].every(item => item.kind === 'file');
 }
 
@@ -2316,7 +2857,7 @@ export function openOrganization(fromTray = false): void {
  * stays, as does People & invites already open: the window only comes forward.
  */
 export function trayOrganization(): void {
-  if (state.sheet || (state.compose && !state.compose.hidden) || state.route.page === 'organization') return;
+  if ((state.compose && !state.compose.hidden) || state.route.page === 'organization' || newProjectInTheWay() || state.sheet) return;
   openOrganization(true);
 }
 
@@ -2820,7 +3361,7 @@ export function submitBar(): void {
 
 /** The matches show over the page: not over a reader, an answer, a sheet, or a covered window. */
 export function matchesShown(current: State = state): boolean {
-  return current.matches !== null && !current.concealed && !current.ask && !current.reader && !current.sheet &&
+  return current.matches !== null && !current.concealed && !current.ask && !current.reader && !sheetShown(current) &&
     !(current.compose && !current.compose.hidden) && searchQuery(current.barText) !== null;
 }
 
@@ -2894,8 +3435,7 @@ function fresh(project: ProjectSummary | null): ComposeState {
  * goes, so kept copies do not pile up (the client holds ten at most). Only
  * this computer's copy: a file that did arrive stays saved.
  */
-function release(compose: ComposeState): void {
-  const account = expect();
+function release(compose: ComposeState, account: Expect | null = expect()): void {
   if (compose.kept && account) void rpc('documents.abandon', { expect: account, request_id: compose.requestId });
 }
 
@@ -2922,7 +3462,7 @@ export function openCompose(): void {
 export function openCapture(): void {
   const current = state.compose;
   // New project stays in front, as Capture would open under it. Files dropped on it go into its project.
-  if (state.sheet?.kind === 'new-project' || activeProjectMapping(state.projectSettings) !== undefined) return;
+  if (sheetShown()?.kind === 'new-project' || projectSettingsModal()) return;
   set({ toast: null });
   setCompose(current ? { ...current, hidden: false } : fresh(null));
 }
@@ -3159,7 +3699,7 @@ const NOT_ATTACHED = 'The file was not attached.';
 /** A drop can land: someone is signed in, no account sheet is up, and it is one file. */
 export function canDrop(event: DragEvent): boolean {
   const items = event.dataTransfer?.items;
-  return state.status?.signed_in === true && !state.sheet && items?.length === 1 && items[0]!.kind === 'file';
+  return state.status?.signed_in === true && !sheetShown() && !projectSettingsModal() && items?.length === 1 && items[0]!.kind === 'file';
 }
 
 /** The window takes a file dropped anywhere but a project row: not on Mine, which only shows and asks, unless Capture is up over it. */
@@ -3175,11 +3715,11 @@ export function windowTakesDrop(current: State = state): boolean {
  * attached.
  */
 export async function acceptDrop(file: File, on: ProjectSummary | 'window' | 'sheet'): Promise<void> {
-  if (!expect() || state.sheet || (on === 'window' && !windowTakesDrop())) return;
+  if (!expect() || sheetShown() || projectSettingsModal() || (on === 'window' && !windowTakesDrop())) return;
   const target = on === 'window' || on === 'sheet' ? (on === 'window' ? state.route.page === 'project' ? state.route.project : null : null) : on;
   if (target?.status === 'archived') { set({ toast: 'Restore this project to add files or notes.' }); return; }
   const result = await dropFile(file);
-  if (!expect() || state.sheet) return;
+  if (!expect() || sheetShown() || projectSettingsModal()) return;
   const current = state.compose;
   if (current && (locked(current) || current.text.trim() !== '')) {
     setCompose({ ...current, hidden: false, notice: locked(current) ? NOT_ATTACHED : `${NOT_ATTACHED} Save this note first.` });
@@ -3236,6 +3776,7 @@ export function resume(): void {
   set({ concealed: false });
   void refreshStatus().then(() => {
     searchAgain();
+    if (!state.concealed) void refreshProjects();
     // The answer's records are read again. A chip chosen meanwhile keeps its pane open.
     if (state.sources && !state.concealed) void readRecords(state.sources.gen);
     // People & invites is read again for whoever is signed in now.
@@ -3247,12 +3788,13 @@ export function resume(): void {
   });
 }
 
-/** The window came forward (⌘E, the tray): the account, Home and the bar's search are read again. */
+/** The window came forward (⌘E, the tray): refresh the account, sidebar and visible Home. */
 export async function windowShown(): Promise<void> {
   if (state.concealed) return;
   await refreshStatus();
   searchAgain();
-  await refreshHome();
+  await refreshProjects();
+  if (state.route.page === 'home' && !state.concealed) void loadHome();
 }
 
 // ---- Home: what needs you ---------------------------------------------------------

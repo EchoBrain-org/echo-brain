@@ -18,9 +18,11 @@ test('Back keeps the pages Home had loaded, and showing the window re-reads it',
   await page.getByTestId('back').click();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
   expect(lists()).toBe(2);
+  // Both pages shown are read again, so what shows is what the Authority has now; More stays gone.
   await emit(app, 'echo-test:shown');
-  await expect.poll(lists).toBe(3);
+  await expect.poll(lists).toBe(4);
   await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
+  await expect(page.getByTestId('sidebar-more')).toHaveCount(0);
 });
 
 test('opening ECHO again while it runs brings the window forward, as Open ECHO does', async () => {
@@ -33,6 +35,36 @@ test('opening ECHO again while it runs brings the window forward, as Open ECHO d
   await expect.poll(lists).toBe(before + 1);
   await expect(page.getByTestId('ask-field')).toBeFocused();
 });
+
+for (const event of ['shown', 'resume'] as const) {
+  test(`a project created elsewhere reaches the sidebar on ${event} without resetting an approval draft`, async () => {
+    run = await launch('granola-project-added');
+    const { page, app } = run;
+    await expect(page.getByTestId('need-row')).toContainText('Pilot planning');
+    await expect(page.getByTestId('sidebar-project')).toHaveCount(0);
+    await page.getByTestId('need-row').click();
+    const card = page.getByTestId('decision');
+    // The review reads its suggestions fresh even though the sidebar's first list was empty.
+    await expect(card.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
+    await card.getByLabel('Owner for: Send the revised quote').fill('Rafael M.');
+    await card.getByRole('radio', { name: 'Only me' }).check();
+    await card.getByLabel('Share the transcript with the selected audience').check();
+    const before = lists();
+    if (event === 'resume') {
+      await emit(app, 'echo-test:conceal');
+      await expect(page.getByTestId('concealed')).toBeVisible();
+      await emit(app, 'echo-test:resume');
+    } else await emit(app, 'echo-test:shown');
+    await expect(page.getByTestId('sidebar-project')).toHaveCount(1);
+    await expect(page.getByTestId('sidebar-project')).toContainText('Thermostat redesign');
+    expect(lists()).toBe(before + 1);
+    await expect(card.getByLabel('Owner for: Send the revised quote')).toHaveValue('Rafael M.');
+    await expect(card.getByRole('radio', { name: 'Only me' })).toHaveAttribute('aria-checked', 'true');
+    await expect(card.getByLabel('Share the transcript with the selected audience')).toBeChecked();
+    expect(run.calls().filter(call => call.method === 'POST' && call.path === '/v1/person/projects')).toHaveLength(0);
+    expect(run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(0);
+  });
+}
 
 test('the ask bar has the caret at launch and whenever the window comes forward', async () => {
   run = await launch();

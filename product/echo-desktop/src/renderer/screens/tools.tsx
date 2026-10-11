@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ConnectedTool, ToolStatus } from '../../shared/protocol.js';
 import { message, toolMessage } from '../messages.js';
 import {
@@ -85,6 +85,7 @@ export function Tools({ state, page }: { state: State; page: ToolsPage }) {
 
 /** Opening the page, waiting on the browser, or why it did not connect. Closing cancels a waiting attempt. */
 export function ToolConnect({ sheet }: { sheet: ToolConnectSheet }) {
+  useMinuteTick();
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => { box.current?.focus(); }, [sheet.phase]);
   const { tool } = sheet;
@@ -108,9 +109,18 @@ export function ToolConnect({ sheet }: { sheet: ToolConnectSheet }) {
   );
 }
 
-function expiresIn(expiresAt: string): string {
+export function expiresIn(expiresAt: string): string {
   const minutes = Math.max(1, Math.round((Date.parse(expiresAt) - Date.now()) / 60_000));
   return `expires in ${minutes} min`;
+}
+
+/** A line that counts minutes down is drawn again every half minute. */
+export function useMinuteTick(): void {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => tick(count => count + 1), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 }
 
 /** Manage: Disconnect removes only your own connection. Granola's sheet also sets up the folder ECHO watches. */

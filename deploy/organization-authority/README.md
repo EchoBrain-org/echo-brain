@@ -1035,6 +1035,9 @@ The ECHO operation ID and release SHA link the trace to operational telemetry.
 Existing one-use Person diagnostic exports remain independent.
 
 Hosted tracing is disabled when its private selection file is absent or expired.
+It runs on the Authority server using its configured LangSmith key, independently
+of the operator's AWS SSO session. An expired SSO session prevents operator log
+inspection; it does not stop exports.
 It sends prompts and released source content to the chosen LangSmith project;
 choose a project whose access and retention are appropriate for the rehearsal.
 No infrastructure stack or LangChain framework is required. The composition
@@ -1042,13 +1045,16 @@ adapter uses LangSmith's documented [multipart tracing API](https://docs.langcha
 
 After the reviewed candidate and matching runtime profile are running, the
 human in Session Manager runs the installed wrapper, choosing the project,
-region and a window of one to 24 hours. Add `--workspace-id <uuid>` when the
+region and duration. Use `--until-disabled` to keep tracing enabled whenever
+this staging server runs, including after ordinary restarts. For a temporary
+window, use `--hours <1..24>` instead. Exactly one duration is required; existing
+timed selections keep their original expiry. Add `--workspace-id <uuid>` when the
 key requires an explicit workspace. Regions are `us`, `eu`, `apac`, `aws-us`.
 
 ```sh
 cd /srv/echo-authority-clean-v1
 sudo ./onboard-clean-v1.sh langsmith-tracing \
-  --project echo-staging --region us --hours 2
+  --project echo-staging --region us --until-disabled
 ```
 
 Paste the API key only at its hidden terminal prompt. Never put it in command
@@ -1057,8 +1063,15 @@ exact running candidate or accepted image/profile under the existing operation
 lock, writes `clean-data/private/langsmith-tracing.json` as a runtime-owned
 0600 file, and restarts Authority and proxy. This causes a short interruption;
 finish current Ask requests first. Initial onboarding must already be prepared.
-It refuses non-staging Authorities. A reset does not carry this selection into
-the new rehearsal.
+It refuses non-staging Authorities. Persistent mode stores an explicit
+`expires_at: null`; a missing expiry is invalid. A reset does not carry either
+selection into the new rehearsal. Deploy the matching server and wrapper before
+selecting persistent mode. The wrapper checks the capability label on both the
+running image and the accepted rollback image before prompting for a key or
+changing the selection, because older builds cannot read it. During the first
+upgrade, use a timed window for candidate verification, then select persistent
+mode after promotion. Installing only the wrapper cannot enable it on an older
+server, and a candidate cannot leave an incompatible selection for rollback.
 
 Run one ordinary THERM Ask after enabling, for example:
 “What is the status of the project? Are there tasks blocking progress?”
@@ -1078,8 +1091,10 @@ count alone is not success: check `exported`, `failed`, `dropped`, `incomplete`.
 An upload failure never changes the product result; traces are not a durable
 audit log and a process crash can lose its buffered data.
 
-New captures stop at expiry; a run already admitted can finish (up to its
-15-minute capture limit). To disable immediately and remove the local key:
+For timed selections, new captures stop at expiry; a run already admitted can
+finish (up to its 15-minute capture limit). Persistent selections have no expiry;
+all capture and upload limits above still apply, and the LangSmith key must remain
+valid. To disable either mode immediately and remove the local key:
 
 ```sh
 sudo ./onboard-clean-v1.sh langsmith-tracing --disable

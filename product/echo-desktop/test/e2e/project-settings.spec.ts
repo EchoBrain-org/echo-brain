@@ -117,17 +117,34 @@ test('a native account sheet dismisses the project menu without restoring it aft
   expect(settingCalls()).toHaveLength(0);
 });
 
-for (const tool of ['jira', 'confluence']) {
-  test(`Capture preserves the open ${tool} project setting`, async () => {
-    run = await launch();
-    const { page } = run;
-    await openApolloSetting(page, tool);
-    await expect(page.getByTestId(`project-${tool}-current`)).toBeVisible();
-    await emit(run.app, 'echo-test:capture');
-    await expect(page.getByTestId('compose')).toHaveCount(0);
-    await expect(page.getByTestId(`project-${tool}-current`)).toBeVisible();
-  });
-}
+test('Rename owns Escape, Capture and the caret while it is up', async () => {
+  run = await launch();
+  const { page, app } = run;
+  await page.getByTestId('sidebar-project').first().click();
+  await page.getByTestId('project-settings').click();
+  await page.getByTestId('project-rename').click();
+  await expect(page.getByTestId('project-rename-input')).toBeFocused();
+  // Capture and the window coming forward open nothing under the dialog, and do not take its caret.
+  await emit(app, 'echo-test:capture');
+  await expect(page.getByTestId('compose')).toHaveCount(0);
+  await emit(app, 'echo-test:shown');
+  await expect(page.getByTestId('project-rename-input')).toBeFocused();
+  // Escape cancels the rename and only that: the project page stays.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('project-rename-input')).toHaveCount(0);
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
+  expect(settingCalls()).toHaveLength(0);
+});
+
+test('Capture keeps the open Tools sheet in front', async () => {
+  run = await launch();
+  const { page } = run;
+  await openApolloSetting(page, 'tools-item');
+  await expect(page.getByTestId('project-jira-current')).toBeVisible();
+  await emit(run.app, 'echo-test:capture');
+  await expect(page.getByTestId('compose')).toHaveCount(0);
+  await expect(page.getByTestId('project-tools-sheet')).toBeVisible();
+});
 
 for (const role of ['member', 'lead'] as const) {
   test(`a bottom-edge ${role} menu leaves its opener available to close it`, async () => {
@@ -212,56 +229,61 @@ test('switching away conceals a project settings draft and returning preserves i
 });
 
 
-test('a lead maps a Jira project, asks in that scope, and removes the mapping', async () => {
+test('a lead maps a Jira project on Tools, Save closes it, asks in that scope, and stops reading it', async () => {
   run = await launch('ask-ticket');
   const { page } = run;
-  await openApolloSetting(page, 'jira');
-  await expect(page.getByTestId('project-jira-current')).toHaveText('No Jira project mapped');
+  await openApolloSetting(page, 'tools-item');
+  await expect(page.getByTestId('project-jira-current')).toHaveText('Not set');
+  await expect(page.getByTestId('project-jira-linked')).toHaveText('Connected');
+  await expect(page.getByTestId('project-tools-save')).toBeDisabled();
   await page.getByTestId('project-jira-input').fill('echo');
-  await page.getByTestId('project-jira-save').click();
-  await expect(page.getByTestId('project-jira-current')).toHaveText('Mapped to ECHO');
+  await page.getByTestId('project-tools-save').click();
+  // Save closes the sheet by itself and says what the project reads now.
+  await expect(page.getByTestId('project-tools-sheet')).toHaveCount(0);
+  await expect(page.getByTestId('toast')).toHaveText('Apollo now reads Jira ECHO');
+  await expect(page.getByTestId('project-tools-line')).toContainText('Reads · Jira ECHO');
   const save = run.calls().find(call => call.path === '/v1/person/tools/jira/project/set');
   expect(save?.body).toMatchObject({ schema_version: 1, project_id: APOLLO, expected_revision: null, jira_project: 'ECHO' });
-  await page.getByRole('button', { name: 'Done', exact: true }).click();
   await page.getByTestId('ask-field').fill('What is the status of Apollo?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
   expect(run.calls().filter(call => call.path === '/v5/person/ask').at(-1)?.body).toMatchObject({ project_id: APOLLO });
   await expect(page.getByTestId('source-row')).toHaveText(/^1\s*ECHO-7 · Jira launch$/);
   await page.getByTestId('back').click();
-  await page.getByTestId('project-settings').click();
-  await page.getByTestId('project-jira').click();
-  await expect(page.getByTestId('project-jira-current')).toHaveText('Mapped to ECHO');
+  await page.getByTestId('project-tools').click();
+  await expect(page.getByTestId('project-jira-current')).toHaveText('Reads ECHO');
   await page.getByTestId('project-jira-remove').click();
-  await expect(page.getByTestId('project-jira-current')).toHaveText('No Jira project mapped');
+  await expect(page.getByTestId('project-jira-current')).toHaveText('Reads ECHO · stops on Save');
+  await page.getByTestId('project-tools-save').click();
+  await expect(page.getByTestId('project-tools-sheet')).toHaveCount(0);
+  await expect(page.getByTestId('toast')).toHaveText('Apollo no longer reads Jira');
   const removed = run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set').at(-1)!;
   expect(removed.body?.jira_project).toBeNull(); expect(removed.body?.expected_revision).toMatch(/^[0-9a-f-]{36}$/);
-  await page.getByRole('button', { name: 'Done', exact: true }).click();
   await page.getByTestId('ask-field').fill('What is the status of Apollo?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('answer')).toContainText('No accessible Jira ticket was found.');
   await expect(page.getByTestId('source-row')).toHaveCount(0);
 });
 
-test('a lead maps accessible Confluence spaces, loads another page, asks with a page citation, and removes the mapping', async () => {
+test('a lead maps accessible Confluence spaces, loads another page, asks with a page citation, and stops reading them', async () => {
   run = await launch('ask-confluence');
   const { page, app } = run;
   const permalink = 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345';
   const opened = await captureOpenExternal(app);
-  await openApolloSetting(page, 'confluence');
-  await expect(page.getByTestId('project-confluence-current')).toHaveText('No Confluence spaces mapped');
+  await openApolloSetting(page, 'tools-item');
+  await expect(page.getByTestId('project-confluence-current')).toHaveText('Not set');
   await expect(page.getByTestId('project-confluence-spaces')).toContainText('ECHO product (ECHO)');
   await expect(page.getByTestId('project-confluence-spaces')).not.toContainText('100');
   await page.getByTestId('project-confluence-more').click();
   await expect(page.getByTestId('project-confluence-spaces')).toContainText('Engineering (ENG)');
   await page.getByLabel(/ECHO product/).check();
   await page.getByLabel(/Engineering/).check();
-  await page.getByTestId('project-confluence-save').click();
-  await expect(page.getByTestId('project-confluence-current')).toHaveText('2 spaces mapped');
+  await page.getByTestId('project-tools-save').click();
+  await expect(page.getByTestId('project-tools-sheet')).toHaveCount(0);
+  await expect(page.getByTestId('toast')).toHaveText('Apollo now reads 2 Confluence spaces');
   const save = run.calls().find(call => call.path === '/v1/person/tools/confluence/project/set');
   expect(save?.body).toMatchObject({ schema_version: 1, project_id: APOLLO, expected_revision: null, space_ids: ['100', '300'] });
   expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/spaces/list').map(call => call.body)).toEqual([{ schema_version: 1 }, { schema_version: 1, cursor: 'next-spaces' }]);
-  await page.getByRole('button', { name: 'Done', exact: true }).click();
   await page.getByTestId('ask-field').fill('Are we ready for EVT?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('statement-text')).toHaveText('The Confluence EVT readiness page is current.');
@@ -273,24 +295,61 @@ test('a lead maps accessible Confluence spaces, loads another page, asks with a 
   await pane.getByTestId('open-page-source').click();
   await expect.poll(opened).toEqual([permalink]);
   await page.getByTestId('back').click();
-  await page.getByTestId('project-settings').click();
-  await page.getByTestId('project-confluence').click();
-  await expect(page.getByTestId('project-confluence-current')).toHaveText('2 spaces mapped');
+  await page.getByTestId('project-tools-change').click();
+  await expect(page.getByTestId('project-confluence-current')).toHaveText('Reads 2 spaces');
   await page.getByTestId('project-confluence-remove').click();
-  await expect(page.getByTestId('project-confluence-current')).toHaveText('No Confluence spaces mapped');
+  await page.getByTestId('project-tools-save').click();
+  await expect(page.getByTestId('toast')).toHaveText('Apollo no longer reads Confluence');
   const removed = run.calls().filter(call => call.path === '/v1/person/tools/confluence/project/set').at(-1)!;
   expect(removed.body?.space_ids).toBeNull();
 });
 
-test('a project member can read the Jira setting but cannot edit it', async () => {
+test('a lead sets up a new project’s tools from its feed: Connect waits in the row, then the spaces, and Save closes the sheet', async () => {
+  run = await launch();
+  const { page } = run;
+  await page.getByTestId('sidebar-project').first().click();
+  await expect(page.getByTestId('project-tools-line')).toContainText('Apollo reads nothing from your tools yet');
+  await page.getByTestId('project-tools-setup').click();
+  await expect(page.getByTestId('project-confluence-current')).toHaveText('Not set');
+  await expect(page.getByTestId('project-confluence')).toContainText('Connect Confluence to choose what Apollo reads.');
+  await page.getByTestId('project-confluence-connect').click();
+  await expect(page.getByTestId('project-confluence-waiting')).toContainText('Finish connecting Confluence in your browser');
+  // The row turns into the space list once the browser approves: no second sheet, no trip to Tools.
+  await expect(page.getByTestId('project-confluence-linked')).toHaveText('Connected just now', { timeout: 15_000 });
+  await expect(page.getByTestId('tool-connect-sheet')).toHaveCount(0);
+  await page.getByLabel(/ECHO product/).check();
+  await page.getByTestId('project-tools-save').click();
+  await expect(page.getByTestId('project-tools-sheet')).toHaveCount(0);
+  await expect(page.getByTestId('toast')).toHaveText('Apollo now reads 1 Confluence space');
+  await expect(page.getByTestId('project-tools-line')).toContainText('Reads · 1 Confluence space');
+  expect(run.calls().filter(call => call.path.startsWith('/v1/person/tools/confluence/') && !call.path.includes('/project/'))
+    .map(call => call.path.split('/').pop())).toEqual(['connect', 'status', 'status', 'list']);
+  expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/project/set').at(-1)?.body).toMatchObject({ project_id: APOLLO, space_ids: ['100'] });
+});
+
+test('closing Tools while a connection waits on the browser cancels it', async () => {
+  run = await launch('tools-waiting');
+  const { page } = run;
+  await openApolloSetting(page, 'tools-item');
+  await page.getByTestId('project-jira-connect').click();
+  await expect(page.getByTestId('project-jira-waiting')).toContainText(/expires in (29|30) min/);
+  await expect(page.getByTestId('project-tools-save')).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('project-tools-sheet')).toHaveCount(0);
+  await expect.poll(() => run.calls().filter(call => call.path === '/v1/person/tools/jira/cancel')).toHaveLength(1);
+});
+
+test('a project member reads what the project reads on Tools but cannot change it', async () => {
   run = await launch();
   const { page } = run;
   await page.getByRole('button', { name: 'Actions for Beacon' }).click();
-  await page.getByTestId('project-jira').click();
-  await expect(page.getByTestId('project-jira-current')).toHaveText('No Jira project mapped');
-  await expect(page.getByRole('dialog')).toContainText('A project lead can change this setting.');
-  await expect(page.getByTestId('project-jira-save')).toHaveCount(0);
+  await page.getByTestId('project-tools-item').click();
+  await expect(page.getByTestId('project-jira-current')).toHaveText('Not set');
+  await expect(page.getByRole('dialog')).toContainText('A project lead can change what Beacon reads.');
+  await expect(page.getByTestId('project-tools-save')).toHaveCount(0);
   await expect(page.getByTestId('project-jira-input')).toHaveCount(0);
+  await page.getByTestId('project-tools-close').click();
+  await expect(page.getByTestId('project-tools-sheet')).toHaveCount(0);
   expect(run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set')).toHaveLength(0);
 });
 
@@ -298,73 +357,75 @@ test('a member reads the saved Confluence mapping without loading a personal spa
   run = await launch('confluence-member-read');
   const { page } = run;
   await page.getByRole('button', { name: 'Actions for Beacon' }).click();
-  await page.getByTestId('project-confluence').click();
-  await expect(page.getByTestId('project-confluence-current')).toHaveText('1 space mapped');
-  await expect(page.getByRole('dialog')).toContainText('A project lead can change this setting.');
+  await page.getByTestId('project-tools-item').click();
+  await expect(page.getByTestId('project-confluence-current')).toHaveText('Reads 1 space');
+  await expect(page.getByRole('dialog')).toContainText('A project lead can change what Beacon reads.');
   await expect(page.getByTestId('project-confluence-spaces')).toHaveCount(0);
   expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/project/read')).toHaveLength(1);
   expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/spaces/list')).toHaveLength(0);
 });
 
-test('a lead keeps a saved Confluence mapping and can remove it when the personal picker is unavailable', async () => {
+test('a lead keeps a saved Confluence mapping and can stop reading it when the personal picker is unavailable', async () => {
   run = await launch('confluence-spaces-unavailable');
   const { page } = run;
-  await openApolloSetting(page, 'confluence');
-  await expect(page.getByTestId('project-confluence-current')).toHaveText('1 space mapped');
+  await openApolloSetting(page, 'tools-item');
+  await expect(page.getByTestId('project-confluence-current')).toHaveText('Reads 1 space');
   await expect(page.getByTestId('project-confluence-picker-error')).toContainText('ECHO is unavailable right now. Try again.');
-  await expect(page.getByTestId('project-confluence-save')).toBeDisabled();
+  await expect(page.getByTestId('project-tools-save')).toBeDisabled();
   await page.getByTestId('project-confluence-remove').click();
-  await expect(page.getByTestId('project-confluence-current')).toHaveText('No Confluence spaces mapped');
+  await page.getByTestId('project-tools-save').click();
+  await expect(page.getByTestId('toast')).toHaveText('Apollo no longer reads Confluence');
   expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/project/set').at(-1)?.body).toMatchObject({ project_id: APOLLO, space_ids: null });
 });
 
 for (const mode of ['confluence-project-conflict', 'confluence-project-reply-lost']) {
-  test(`${mode}: reloads the saved mapping after an unconfirmed change without resubmitting`, async () => {
+  test(`${mode}: keeps Tools up and reloads the saved mapping after an unconfirmed change without resubmitting`, async () => {
     run = await launch(mode);
     const { page } = run;
-    await openApolloSetting(page, 'confluence');
+    await openApolloSetting(page, 'tools-item');
     await page.getByLabel(/ECHO product/).check();
-    await page.getByTestId('project-confluence-save').click();
+    await page.getByTestId('project-tools-save').click();
     await expect(page.getByTestId('project-confluence-error')).toContainText(mode === 'confluence-project-conflict' ? 'This setting changed.' : 'The change could not be confirmed.');
-    await expect(page.getByTestId('project-confluence-save')).toBeDisabled();
+    await expect(page.getByTestId('project-tools-sheet')).toBeVisible();
+    await expect(page.getByTestId('project-tools-save')).toBeDisabled();
     await page.getByRole('button', { name: 'Reload setting' }).click();
-    await expect(page.getByTestId('project-confluence-current')).toHaveText(mode === 'confluence-project-reply-lost' ? '1 space mapped' : 'No Confluence spaces mapped');
+    await expect(page.getByTestId('project-confluence-current')).toHaveText(mode === 'confluence-project-reply-lost' ? 'Reads 1 space' : 'Not set');
     expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/project/set')).toHaveLength(1);
   });
 }
 
 for (const mode of ['jira-project-conflict', 'jira-project-reply-lost']) {
-  test(`${mode}: reloads the current setting after a failed save without silently resubmitting`, async () => {
+  test(`${mode}: keeps Tools up and reloads the current setting after a failed save without silently resubmitting`, async () => {
     run = await launch(mode);
     const { page } = run;
-    await openApolloSetting(page, 'jira');
+    await openApolloSetting(page, 'tools-item');
     await page.getByTestId('project-jira-input').fill('ECHO');
-    await page.getByTestId('project-jira-save').click();
+    await page.getByTestId('project-tools-save').click();
     await expect(page.getByTestId('project-jira-error')).toBeVisible();
-    await expect(page.getByTestId('project-jira-save')).toBeDisabled();
+    await expect(page.getByTestId('project-tools-save')).toBeDisabled();
     await page.getByRole('button', { name: 'Reload setting' }).click();
-    await expect(page.getByTestId('project-jira-current')).toHaveText(mode === 'jira-project-reply-lost' ? 'Mapped to ECHO' : 'No Jira project mapped');
+    await expect(page.getByTestId('project-jira-current')).toHaveText(mode === 'jira-project-reply-lost' ? 'Reads ECHO' : 'Not set');
     expect(run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set')).toHaveLength(1);
   });
 }
 
 
-test('a Jira mapping save stays visible until its reply and Escape closes the settled sheet', async () => {
+test('a Jira save keeps Tools up until its reply, ignores Escape meanwhile, then closes by itself', async () => {
   run = await launch('jira-project-slow');
   const { page } = run;
-  await openApolloSetting(page, 'jira');
+  await openApolloSetting(page, 'tools-item');
   await page.getByTestId('project-jira-input').fill('ECHO');
-  await page.getByTestId('project-jira-save').click();
+  await page.getByTestId('project-tools-save').click();
   await expect.poll(() => run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set').length).toBe(1);
   // Disabling the focused Save button may return focus to the document.
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Done', exact: true })).toBeDisabled();
+  await expect(page.getByTestId('project-tools-save')).toBeDisabled();
+  await expect(page.getByTestId('project-tools-cancel')).toBeDisabled();
   await expect(page.getByTestId('project-settings')).toBeDisabled();
   writeFileSync(join(run.home, 'release-jira-setting'), 'ready');
-  await expect(page.getByTestId('project-jira-current')).toHaveText('Mapped to ECHO');
-  await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByTestId('toast')).toHaveText('Apollo now reads Jira ECHO');
   await expect(page.getByTestId('title')).toHaveText('Apollo');
 });
