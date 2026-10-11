@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyAuthorityBaselineV14 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { applyAuthorityBaseline } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 
 const databases: Database.Database[] = [];
 const NOW = '2026-09-23T00:00:00.000Z';
@@ -9,7 +9,7 @@ const SHA = `sha256:${'a'.repeat(64)}`;
 function database() { const db = new Database(':memory:'); databases.push(db); db.pragma('foreign_keys = ON'); return db; }
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 function seeded() {
-  const db = database(); applyAuthorityBaselineV14(db);
+  const db = database(); applyAuthorityBaseline(db);
   db.prepare("INSERT INTO authority_metadata VALUES (1,'oau_fixture','org_fixture','Fixture','{}',?,?)").run(NOW,NOW);
   db.prepare("INSERT INTO authority_principals VALUES ('prn_fixture','org_fixture','PM',?)").run(NOW);
   db.prepare("INSERT INTO authority_memberships(membership_id,organization_id,principal_id,membership_type,status,provisioned_at) VALUES ('mem_fixture','org_fixture','prn_fixture','owner','active',?)").run(NOW);
@@ -21,12 +21,12 @@ function seeded() {
 
 describe('Authority person document schema', () => {
   it('isolates original BLOBs from metadata and applies only to an empty database', () => {
-    const db = database(); applyAuthorityBaselineV14(db);
+    const db = database(); applyAuthorityBaseline(db);
     expect(db.pragma('user_version', { simple: true })).toBe(14);
     const columns = db.prepare("PRAGMA table_info('authority_person_documents_v1')").all() as { name: string; type: string }[];
     expect(columns.some(column => column.type === 'BLOB')).toBe(false);
     expect(db.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'authority_person_document_%_v1' ORDER BY name").pluck().all()).toContain('authority_person_document_originals_v1');
-    expect(() => applyAuthorityBaselineV14(db)).toThrow('completely empty');
+    expect(() => applyAuthorityBaseline(db)).toThrow('completely empty');
     expect(db.pragma('user_version', { simple: true })).toBe(14);
   });
   it('enforces immutable custody, original size, and membership binding', () => {

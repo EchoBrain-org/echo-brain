@@ -1,6 +1,7 @@
 import { assertPersonDocumentCapacityV1 } from './document-quota-v1.js';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   validatePersonUpdateReceiptV2, validatePersonUpdateStatusV2, validatePersonUpdateSubmitV2,
@@ -131,8 +132,8 @@ function binary(a: string, b: string): number { return Buffer.compare(Buffer.fro
 export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositoryV1 {
   private readonly issued = new WeakMap<ProjectAuthorizationSnapshotV1, Issued>();
   constructor(private readonly database: Database.Database, private readonly now: () => string = () => new Date().toISOString()) {
-    if (database.pragma('user_version', { simple: true }) !== 14 || database.pragma('foreign_keys', { simple: true }) !== 1) {
-      throw new Error('Project context requires Authority V14 with foreign keys enabled');
+    if (!isCurrentAuthorityState(database)) {
+      throw new Error(`Project context requires Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION} with foreign keys enabled`);
     }
   }
 

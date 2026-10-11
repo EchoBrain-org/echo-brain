@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { afterEach, expect, it } from "vitest";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
-import { authorityBaselineSha256V14 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { authorityBaselineSha256 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { organizationControlBaselineSha256V4 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { organizationRecordLogBaselineSha256V4 } from "@echo-brain/organization-record/organization-record-api-v1";
 
@@ -13,7 +13,7 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 it("pins the current baseline bytes", () => {
-  expect(authorityBaselineSha256V14()).toBe("sha256:77c824e9cbbb2dbdbb079fe84edb9677807a56f11087bbd7f4889e008c2d3d84");
+  expect(authorityBaselineSha256()).toBe("sha256:77c824e9cbbb2dbdbb079fe84edb9677807a56f11087bbd7f4889e008c2d3d84");
   expect(organizationControlBaselineSha256V4()).toBe("sha256:ba84d1a7e605db91f0aca1319fca9db17fb3f62b004b22a943f89897a2a64825");
   expect(organizationRecordLogBaselineSha256V4()).toBe("sha256:b98091c9073ca1d1146d9f2b6d6b0cb7c950e829dbf26c7c431485370c76e52a");
 });

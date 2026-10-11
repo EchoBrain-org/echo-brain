@@ -88,7 +88,7 @@ function validateKit(archive, directory, manifest, release, target, config) {
   } finally { rmSync(temporary, { recursive: true, force: true }); }
 }
 
-export function prepareClientUpdateFeed({ configPath, releasePath, linuxKit, macosKit, sequence, expiresAt, output, now = new Date().toISOString() }) {
+function prepareClientUpdateFeed({ configPath, releasePath, linuxKit, macosKit, sequence, expiresAt, output, now = new Date().toISOString() }) {
   const config = parseUpdateConfig(json(configPath));
   if (config.installation !== 'cli-kit') fail('publisher_adapter_unavailable');
   const release = readCleanV1Release(releasePath);
@@ -179,7 +179,7 @@ export function validateSealedClientUpdateFeed({ prepared, authorizationPath, no
   return { ...validated, feedBytes };
 }
 
-export function sealClientUpdateFeed({ prepared, signaturePath, authorizationPath, now = Date.now() }) {
+function sealClientUpdateFeed({ prepared, signaturePath, authorizationPath, now = Date.now() }) {
   const { config, manifest, payload } = validatePreparedClientUpdateFeed({ prepared, authorizationPath, now });
   requireBothCliTargets(manifest);
   const signature = read(signaturePath, 64);

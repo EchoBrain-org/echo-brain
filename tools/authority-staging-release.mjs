@@ -2,14 +2,14 @@
 
 // Current-host staging releases only. No shell passthrough, S3 courier, IAM,
 // lifecycle mutation, onboarding input, credential read, or Cloud execution.
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonicalJson, readCleanV1Release, validateCleanV1Release } from './clean-v1-release.mjs';
 import { readRuntimeProfile, validateRuntimeProfile } from './clean-v1-runtime-profile.mjs';
-import { awsCliArguments, sanitizedAwsEnvironment } from './authority-staging-onboarding-transfer.mjs';
+import { privateDirectory, privateFile as boundedPrivateFile, runAwsCliOnce, sha256 as digest, withReceiptLock, writePrivateFile } from './lib/operator-io.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ACCOUNT = '904560150024';
@@ -31,7 +31,6 @@ const RUNNER = 'tools/authority-staging-release-host.py';
 const MAX_COMMAND_BYTES = 60 * 1024;
 const TERMINAL = ['Failed', 'Cancelled', 'TimedOut', 'Undeliverable', 'Terminated'];
 const fail = code => { throw new Error(code); };
-const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const same = (a, b) => canonicalJson(a) === canonicalJson(b);
 const jsonBytes = value => Buffer.from(`${canonicalJson(value)}\n`);
 
@@ -61,46 +60,17 @@ function reviewedRuntime() {
   return commit;
 }
 
-function privateDirectory(path) {
-  const absolute = resolve(path);
-  const state = lstatSync(absolute);
-  if (state.isSymbolicLink() || !state.isDirectory() || state.uid !== process.getuid() || (state.mode & 0o777) !== 0o700) fail('private_directory_required');
-  // Resolve ancestors as well; receipts must not live inside a checkout.
-  const real = realpathSync(absolute);
-  if (real === REPO || real.startsWith(`${REPO}/`)) fail('receipt_inside_checkout');
-  return absolute;
-}
-
-function privateFile(path, max = 1024 * 1024) {
-  const state = lstatSync(path);
-  if (state.isSymbolicLink() || !state.isFile() || state.nlink !== 1 || state.uid !== process.getuid() || (state.mode & 0o777) !== 0o600 || state.size > max) fail('private_file_required');
-  return readFileSync(path);
-}
+const privateFile = (path, max = 1024 * 1024) => boundedPrivateFile(path, max);
 
 function save(path, value, fresh = false) {
   privateDirectory(dirname(path));
   if (!fresh) privateFile(path);
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  const fd = openSync(fresh ? path : temporary, 'wx', 0o600);
-  try { writeFileSync(fd, jsonBytes(value)); fsyncSync(fd); } finally { closeSync(fd); }
-  if (!fresh) renameSync(temporary, path);
-  const directory = openSync(dirname(path), 'r');
-  try { fsyncSync(directory); } finally { closeSync(directory); }
-}
-
-function withReceiptLock(path, action) {
-  privateDirectory(dirname(path));
-  const lock = `${path}.lock`;
-  try { mkdirSync(lock, { mode: 0o700 }); } catch { fail('receipt_locked'); }
-  try { return action(); } finally { rmdirSync(lock); }
+  writePrivateFile(path, jsonBytes(value), fresh);
 }
 
 function awsJson(args) {
   try {
-    return JSON.parse(execFileSync('aws', awsCliArguments([...args, '--region', REGION, '--output', 'json']), {
-      env: { ...sanitizedAwsEnvironment(), AWS_MAX_ATTEMPTS: '1', AWS_RETRY_MODE: 'standard' },
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 45000, maxBuffer: 2 * 1024 * 1024,
-    }));
+    return JSON.parse(runAwsCliOnce([...args, '--region', REGION, '--output', 'json'], { timeout: 45000, maxBuffer: 2 * 1024 * 1024 }));
   } catch { fail('aws_operation_unconfirmed'); }
 }
 

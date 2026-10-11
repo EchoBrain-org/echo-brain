@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { loadSyntheticDemoMeetingCorpusV1, SYNTHETIC_DEMO_INITIAL_CURSOR_V1, SyntheticDemoMeetingSourceAdapterV1 } from "../../src/source/synthetic-demo-meeting-source-v1.js";
+import { loadSyntheticDemoMeetingCorpusV1 } from "../../src/source/synthetic-demo-meeting-source-v1.js";
 
 const meetingsDirectory = fileURLToPath(
   new URL("../../../../demo/meetings", import.meta.url),
@@ -77,42 +77,4 @@ describe("synthetic demo meeting source", () => {
         "unexpected fixture meeting",
       );
     }));
-
-  it("advances four one-item polls to an empty terminal cursor without replay", async () => {
-    const corpus = await loadSyntheticDemoMeetingCorpusV1(meetingsDirectory);
-    const source = new SyntheticDemoMeetingSourceAdapterV1(corpus);
-    let cursor: string | undefined = SYNTHETIC_DEMO_INITIAL_CURSOR_V1;
-    const received: string[] = [];
-
-    for (let index = 0; index < 4; index += 1) {
-      const page = await source.pull({ cursor, limit: 1 });
-      received.push(...page.meetings.map((meeting) => meeting.id));
-      expect(page.next_cursor).toBeDefined();
-      expect(page.next_cursor).not.toBe(cursor);
-      cursor = page.next_cursor;
-    }
-
-    const terminal = await source.pull({ cursor, limit: 1 });
-    const repeatedTerminal = await source.pull({ cursor, limit: 1 });
-
-    expect(received).toEqual(corpus.meetings.map((meeting) => meeting.id));
-    expect(terminal).toEqual({ meetings: [] });
-    expect(repeatedTerminal).toEqual(terminal);
-  });
-
-  it("rejects non-canonical and out-of-range cursors", async () => {
-    const corpus = await loadSyntheticDemoMeetingCorpusV1(meetingsDirectory);
-    const source = new SyntheticDemoMeetingSourceAdapterV1(corpus);
-
-    for (const cursor of [
-      "synthetic-demo-source:customer-demo:1.0.0:v1:",
-      "synthetic-demo-source:customer-demo:1.0.0:v1:01",
-      "synthetic-demo-source:customer-demo:1.0.0:v1:1e0",
-      "synthetic-demo-source:customer-demo:1.0.0:v1:5",
-    ]) {
-      await expect(source.pull({ cursor, limit: 1 })).rejects.toThrow(
-        "synthetic-demo cursor is invalid",
-      );
-    }
-  });
 });

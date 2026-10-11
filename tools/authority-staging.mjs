@@ -22,6 +22,7 @@ import {
   installStagingEdgeToken,
   stagingEdgeStatus,
 } from "./authority-staging-edge.mjs";
+import { awsCliArguments, sanitizedAwsEnvironment } from "./lib/operator-io.mjs";
 
 const STACK_NAME = /^[A-Za-z][A-Za-z0-9-]{0,127}$/;
 const OPERATION_ID = /^staging-[a-z0-9][a-z0-9-]{7,63}$/;
@@ -40,43 +41,12 @@ const RESOURCE_TYPE = /^AWS::[A-Za-z0-9:]+$/;
 const HEALTHY_STACK_STATUSES = new Set(["CREATE_COMPLETE", "UPDATE_COMPLETE"]);
 const RECOVERABLE_UPDATE_STACK_STATUS = "UPDATE_ROLLBACK_COMPLETE";
 const EDGE_RECEIPT_STATES = new Set(["ready", "incomplete", "absent"]);
-const ECHO_HOSTED_STAGING_AWS_PROFILE = "echo-prod";
 const AWS_CLI_STANDARD_TIMEOUT_MS = 45_000;
 const AWS_CLOUDFORMATION_WAIT_TIMEOUT_MS = 30 * 60_000;
 const AWS_SSM_LIFECYCLE_WAIT_TIMEOUT_MS = 6 * 60_000;
 const AWS_CLI_OUTPUT_MAX_BYTES = 256 * 1024;
 const AWS_CLI_TERMINATE_GRACE_MS = 1_000;
 const SSM_LIFECYCLE_RUN_TIMEOUT_SECONDS = 300;
-const AMBIENT_AWS_CREDENTIAL_KEYS = Object.freeze([
-  "AWS_ACCESS_KEY_ID",
-  "AWS_SECRET_ACCESS_KEY",
-  "AWS_SESSION_TOKEN",
-  "AWS_SECURITY_TOKEN",
-  "AWS_ROLE_ARN",
-  "AWS_ROLE_SESSION_NAME",
-  "AWS_WEB_IDENTITY_TOKEN_FILE",
-  "AWS_CONTAINER_CREDENTIALS_FULL_URI",
-  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
-  "AWS_CONTAINER_AUTHORIZATION_TOKEN",
-  "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
-  "AWS_CONFIG_FILE",
-  "AWS_SHARED_CREDENTIALS_FILE",
-]);
-const AMBIENT_AWS_TRANSPORT_KEYS = Object.freeze([
-  "AWS_CA_BUNDLE",
-  "REQUESTS_CA_BUNDLE",
-  "CURL_CA_BUNDLE",
-  "SSL_CERT_FILE",
-  "SSL_CERT_DIR",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "NO_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-  "no_proxy",
-]);
 const TEMPLATE_MAX_BYTES = 51200;
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_TEMPLATE_PATH = resolve(
@@ -1415,17 +1385,7 @@ export async function runAuthorityStaging(action, rawInput, dependencies = {}) {
 }
 
 function echoHostedAwsEnvironment({ preserveCloudflareToken = false } = {}) {
-  const environment = { ...process.env };
-  for (const key of AMBIENT_AWS_CREDENTIAL_KEYS) delete environment[key];
-  for (const key of AMBIENT_AWS_TRANSPORT_KEYS) delete environment[key];
-  for (const key of Object.keys(environment)) {
-    if (key === "AWS_ENDPOINT_URL" || key.startsWith("AWS_ENDPOINT_URL_"))
-      delete environment[key];
-  }
-  environment.AWS_PROFILE = ECHO_HOSTED_STAGING_AWS_PROFILE;
-  environment.AWS_DEFAULT_PROFILE = ECHO_HOSTED_STAGING_AWS_PROFILE;
-  // Never honor endpoint_url from an inherited AWS config file either.
-  environment.AWS_IGNORE_CONFIGURED_ENDPOINT_URLS = "true";
+  const environment = sanitizedAwsEnvironment(process.env);
   if (!preserveCloudflareToken) delete environment.ECHO_CLOUDFLARE_API_TOKEN;
   return environment;
 }
@@ -1484,7 +1444,7 @@ export function awsJson(
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(
       "aws",
-      ["--no-cli-pager", "--profile", ECHO_HOSTED_STAGING_AWS_PROFILE, ...args],
+      awsCliArguments(args),
       {
         detached: true,
         env: echoHostedAwsEnvironment(),

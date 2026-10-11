@@ -10,8 +10,9 @@ multi-person organizations and preserve member-readable and restricted-reviewer
 policy behavior.
 
 Provider-neutral policy-fact and approver-projection contracts live in
-`application`. The Slack policy projector lives under
-`providers/slack/server/src/organization-record`. Composition selects the
+`application`. The approval-decision policy and approver projectors live in
+`services/organization-authority/src/composition/approval-decision-projection-v1.ts`.
+Composition selects the
 protocol decoder; the read route checks its coordinates and resolves a current
 display name. The approver port derives identity only from an already
 permission-filtered envelope. Unknown references and generic HumanAct

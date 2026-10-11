@@ -33,7 +33,7 @@ import {
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { applyAuthorityBaselineV14 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaseline } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -248,7 +248,7 @@ afterEach(() => {
 
 function setup(pointer = true) {
   const authority = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV14(authority);
+  applyAuthorityBaseline(authority);
   authority
     .prepare(
       `INSERT INTO authority_metadata

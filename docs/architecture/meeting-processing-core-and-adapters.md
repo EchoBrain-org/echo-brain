@@ -154,9 +154,9 @@ and the cursor advance rebases onto the current queue at the intake boundary
 (the person intake's `rebase`), keeping those changes. A cancel of the
 meeting's own import, or a folder or baseline change, still refuses.
 
-**Writer gate.** The worker's single-file gate covers only recovery, approval
-publication and bounded operator mutations: record-log appends, their
-after-record hooks, and operator work. An approval therefore never waits
+**Writer gate.** The worker's single-file gate covers only recovery and
+approval publication: record-log appends and their after-record hooks. An
+approval therefore never waits
 behind a source poll, an extraction call or a Slack post. Notes enrichment,
 personal meeting intake, Slack card presentation and the staging canary run
 outside it. Durable fences keep that safe:

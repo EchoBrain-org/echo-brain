@@ -6,10 +6,10 @@
 import { Buffer } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmdirSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { awsCliArguments, sanitizedAwsEnvironment } from './authority-staging-onboarding-transfer.mjs';
+import { privateDirectory as sharedPrivateDirectory, privateFile, runAwsCliOnce, sha256 as digest, writePrivateFile } from './lib/operator-io.mjs';
 import { canonicalJson } from './clean-v1-release.mjs';
 import { requireBothCliTargets, validateSealedClientUpdateFeed } from './client-update-feed.mjs';
 import { UPDATE_ARTIFACT_LIMIT, UPDATE_METADATA_LIMIT, verifyUpdateEnvelope } from '../src/product/person-client/dist/client-update-contract.js';
@@ -34,7 +34,6 @@ const OBJECT_PUBLICATION_WINDOW_MS = 8 * 60 * 1000;
 // operations plus one 120-second scheduling cushion before the feed verifies.
 const INITIAL_PUBLICATION_WINDOW_MS = 24 * 60 * 1000;
 const fail = code => { throw new Error(code); };
-const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const equal = (left, right) => canonicalJson(left) === canonicalJson(right);
 const templateHash = value => digest(canonicalJson(typeof value === 'string' || Buffer.isBuffer(value) ? JSON.parse(value.toString()) : value));
 
@@ -47,29 +46,13 @@ function runtime() {
   } catch { fail('reviewed_clean_checkout_required'); }
 }
 function absolute(path) { if (typeof path !== 'string' || !isAbsolute(path) || resolve(path) !== path) fail('absolute_path_required'); return path; }
-function privateDirectory(path) {
-  absolute(path);
-  const stat = lstatSync(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o700) fail('private_directory_required');
-  const real = realpathSync(path);
-  if (real === REPO || real.startsWith(`${REPO}/`)) fail('private_state_outside_checkout_required');
-}
-function read(path, limit = UPDATE_METADATA_LIMIT) {
-  absolute(path);
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600 || stat.size <= 0 || stat.size > limit) fail('private_file_required');
-  return readFileSync(path);
-}
+function privateDirectory(path) { sharedPrivateDirectory(absolute(path), 'private_state_outside_checkout_required'); }
+function read(path, limit = UPDATE_METADATA_LIMIT) { return privateFile(absolute(path), limit, 1); }
 function save(path, value, fresh = false) {
   privateDirectory(dirname(path));
   if (!fresh) read(path);
   if (fresh && existsSync(path)) fail('receipt_destination_exists');
-  const destination = fresh ? path : `${path}.${randomUUID()}.tmp`;
-  const descriptor = openSync(destination, 'wx', 0o600);
-  try { writeFileSync(descriptor, `${canonicalJson(value)}\n`); fsyncSync(descriptor); } finally { closeSync(descriptor); }
-  if (!fresh) renameSync(destination, path);
-  const parent = openSync(dirname(path), 'r');
-  try { fsyncSync(parent); } finally { closeSync(parent); }
+  writePrivateFile(path, `${canonicalJson(value)}\n`, fresh);
 }
 async function locked(path, action) {
   privateDirectory(dirname(path));
@@ -83,10 +66,7 @@ export function isAbsentClientUpdateHead(args, stderr) {
 }
 function defaultAws(args) {
   try {
-    const output = execFileSync('aws', awsCliArguments([...args, '--region', REGION, '--output', 'json']), {
-      env: { ...sanitizedAwsEnvironment(), AWS_MAX_ATTEMPTS: '1', AWS_RETRY_MODE: 'standard' },
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000, maxBuffer: 1024 * 1024,
-    });
+    const output = runAwsCliOnce([...args, '--region', REGION, '--output', 'json'], { timeout: 120_000, maxBuffer: 1024 * 1024 });
     return output ? JSON.parse(output) : {};
   } catch (error) {
     // An authenticated 403 is never evidence that an object is absent.

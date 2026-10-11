@@ -2,12 +2,12 @@
 
 // Dedicated, bounded CloudFormation lane for the signed CLI-update staging
 // feed.  It intentionally has no Authority, SSM, IAM, or arbitrary S3 path.
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { awsCliArguments, sanitizedAwsEnvironment } from './authority-staging-onboarding-transfer.mjs';
+import { awsCliArguments, privateDirectory, privateFile as boundedPrivateFile, runAwsCliOnce, sha256, singleAttemptAwsEnvironment, withReceiptLock as withLock, writePrivateFile } from './lib/operator-io.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ACCOUNT = '904560150024';
@@ -35,7 +35,6 @@ const HOSTING = Object.freeze(Object.fromEntries([
 const fail = code => { throw new Error(code); };
 const hostingLane = name => Object.hasOwn(HOSTING, name) ? HOSTING[name] : fail('hosting_invalid');
 const receiptLane = receipt => Object.values(HOSTING).find(lane => lane.kind === receipt?.kind) ?? fail('receipt_invalid');
-const sha256 = value => createHash('sha256').update(value).digest('hex');
 const canonical = value => {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
@@ -64,47 +63,20 @@ function executionRuntime() {
   return commit;
 }
 
-function privateDirectory(path) {
-  const absolute = resolve(path);
-  const state = lstatSync(absolute);
-  if (state.isSymbolicLink() || !state.isDirectory() || state.uid !== process.getuid() || (state.mode & 0o777) !== 0o700) fail('private_directory_required');
-  const real = realpathSync(absolute);
-  if (real === REPO || real.startsWith(`${REPO}/`)) fail('receipt_inside_checkout');
-  return absolute;
-}
-
-function privateFile(path, limit = 256 * 1024) {
-  const state = lstatSync(path);
-  if (state.isSymbolicLink() || !state.isFile() || state.nlink !== 1 || state.uid !== process.getuid() || (state.mode & 0o777) !== 0o600 || state.size <= 0 || state.size > limit) fail('private_file_required');
-  return readFileSync(path);
-}
+// A receipt is never empty.
+const privateFile = (path, limit = 256 * 1024) => boundedPrivateFile(path, limit, 1);
 
 function save(path, value, fresh = false) {
   const absolute = resolve(path);
   privateDirectory(dirname(absolute));
   if (!fresh) privateFile(absolute);
   if (fresh && existsSync(absolute)) fail('receipt_destination_exists');
-  const temporary = `${absolute}.${randomUUID()}.tmp`;
-  const fd = openSync(fresh ? absolute : temporary, 'wx', 0o600);
-  try { writeFileSync(fd, jsonBytes(value)); fsyncSync(fd); } finally { closeSync(fd); }
-  if (!fresh) renameSync(temporary, absolute);
-  const parent = openSync(dirname(absolute), 'r');
-  try { fsyncSync(parent); } finally { closeSync(parent); }
-}
-
-function withLock(path, action) {
-  privateDirectory(dirname(path));
-  const lock = `${path}.lock`;
-  try { mkdirSync(lock, { mode: 0o700 }); } catch { fail('receipt_locked'); }
-  try { return action(); } finally { rmdirSync(lock); }
+  writePrivateFile(absolute, jsonBytes(value), fresh);
 }
 
 function defaultAws(args) {
   try {
-    const stdout = execFileSync('aws', awsCliArguments([...args, '--region', REGION, '--output', 'json']), {
-      env: { ...sanitizedAwsEnvironment(), AWS_MAX_ATTEMPTS: '1', AWS_RETRY_MODE: 'standard' },
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 45_000, maxBuffer: 1024 * 1024,
-    });
+    const stdout = runAwsCliOnce([...args, '--region', REGION, '--output', 'json'], { timeout: 45_000, maxBuffer: 1024 * 1024 });
     return stdout ? JSON.parse(stdout) : {};
   } catch (error) {
     // A missing staging-feed stack is the one expected "not found" outcome:
@@ -120,7 +92,7 @@ function defaultAws(args) {
 function defaultAwsNoOutput(args) {
   try {
     execFileSync('aws', awsCliArguments([...args, '--region', REGION]), {
-      env: { ...sanitizedAwsEnvironment(), AWS_MAX_ATTEMPTS: '1', AWS_RETRY_MODE: 'standard' },
+      env: singleAttemptAwsEnvironment(),
       stdio: ['ignore', 'ignore', 'ignore'], timeout: 45_000,
     });
   } catch { fail('aws_operation_unconfirmed'); }

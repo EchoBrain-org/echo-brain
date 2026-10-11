@@ -124,11 +124,6 @@
         "export": "AdmittedMeetingProcessingCycleV1"
       },
       {
-        "name": "Meeting source bundle",
-        "path": "packages/organization-processing/src/ports/meeting-source-bundle-v1.ts",
-        "export": "MeetingSourceBundleV1"
-      },
-      {
         "name": "Decision processor bundle",
         "path": "packages/organization-processing/src/ports/decision-processor-bundle-v1.ts",
         "export": "DecisionProcessorBundleV1"
@@ -143,7 +138,8 @@
     "retired_source_paths": [
       "packages/organization-processing/src/core/approval/approval-gate.ts",
       "packages/organization-processing/src/core/delivery/envelope.ts",
-      "packages/organization-processing/src/core/storage/meeting-processing-state-store.ts"
+      "packages/organization-processing/src/core/storage/meeting-processing-state-store.ts",
+      "packages/organization-processing/src/ports/meeting-source-bundle-v1.ts"
     ]
   }
 }
