@@ -6,7 +6,7 @@ import type {
 } from "@echo-brain/organization-processing/core";
 
 /** Content mapping version retained so existing semantic revisions stay stable. */
-export const GRANOLA_MEETING_NORMALIZER_VERSION_V1 = "2.2.0";
+export const GRANOLA_MEETING_NORMALIZER_VERSION_V1 = "2.3.0";
 
 /**
  * Transport-independent input for the retained content transforms. This is not
@@ -48,8 +48,20 @@ export interface GranolaTranscriptItem {
 export interface GranolaMeetingContentInputV1 extends GranolaNoteMetadataV1 {
   summary_markdown?: string | null;
   summary_text?: string | null;
+  /** The person's own notes; kept apart from Granola's AI summary. */
+  private_notes_markdown?: string | null;
+  /** Actual start, ISO with offset; used only when no calendar time exists. */
+  started_at?: string | null;
+  /** IANA zone of `started_at`. */
+  timezone?: string | null;
   transcript?: GranolaTranscriptItem[] | null;
+  /** Names, emails, or `{ id?, name?, email? }` objects of attendees; they get the attendee role. */
   attendees?: unknown;
+  /**
+   * `{ name?, email? }` people Granola reports for the meeting. They prove
+   * neither identity nor attendance, so they become participants with no role.
+   */
+  reported_participants?: unknown;
   calendar_event?: unknown;
   folder_membership?: unknown;
   web_url?: string | null;
@@ -116,8 +128,12 @@ function sourceRevision(note: GranolaMeetingContentInputV1): string {
     updated_at: note.updated_at,
     summary_markdown: note.summary_markdown,
     summary_text: note.summary_text,
+    private_notes_markdown: note.private_notes_markdown,
+    started_at: note.started_at,
+    timezone: note.timezone,
     transcript: note.transcript,
     attendees: note.attendees,
+    reported_participants: note.reported_participants,
     calendar_event: note.calendar_event,
     folder_membership: note.folder_membership,
     provider_fields: note.provider_fields,
@@ -176,15 +192,19 @@ function meetingTime(note: GranolaMeetingContentInputV1): MeetingDocument["time"
   const allDay =
     isNonEmptyString(valueAtPath(note.calendar_event, ["start", "date"])) &&
     !isNonEmptyString(valueAtPath(note.calendar_event, ["start", "dateTime"]));
+  // Without a calendar start, fall back to the note's own reported start; other calendar fields stay.
+  const startedAt = scheduledStart === undefined ? normalizedIso(note.started_at) : null;
+  const zone = timezone ?? (startedAt !== null && isNonEmptyString(note.timezone) ? note.timezone : undefined);
   const time = {
     ...(scheduledStart === undefined
       ? {}
       : { scheduled_start_at: scheduledStart }),
     ...(scheduledEnd === undefined ? {} : { scheduled_end_at: scheduledEnd }),
-    ...(timezone === undefined ? {} : { timezone: timezone.trim() }),
+    ...(startedAt === null ? {} : { actual_start_at: startedAt }),
+    ...(zone === undefined ? {} : { timezone: zone.trim() }),
     ...(allDay ? { all_day: true } : {}),
   };
-  return Object.keys(time).length === 0 ? undefined : time;
+  return Object.keys(time).length > 0 ? time : undefined;
 }
 
 function nameParticipantId(displayName: string): string {
@@ -360,6 +380,9 @@ function noteParticipants(note: GranolaMeetingContentInputV1): MeetingParticipan
 
   if (Array.isArray(note.attendees)) {
     for (const attendee of note.attendees) addCandidate(attendee, "attendee");
+  }
+  if (Array.isArray(note.reported_participants)) {
+    for (const person of note.reported_participants) addCandidate(person);
   }
   if (isPlainObject(note.calendar_event)) {
     for (const field of ["attendees", "invitees"] as const) {
@@ -551,6 +574,15 @@ function noteContent(
   participants: readonly MeetingParticipant[],
 ): MeetingContentBlock[] {
   const blocks: MeetingContentBlock[] = [];
+  if (isNonEmptyString(note.private_notes_markdown)) {
+    blocks.push({
+      id: `${note.id}:notes`,
+      kind: "note",
+      text: note.private_notes_markdown.trim(),
+      origin: "human",
+      metadata: { format: "markdown" },
+    });
+  }
   const markdownSummary = isNonEmptyString(note.summary_markdown)
     ? note.summary_markdown
     : null;
@@ -668,6 +700,12 @@ function captureState(
       : transcriptAvailable
         ? "available"
         : "empty";
+  const notesState =
+    note.private_notes_markdown === undefined
+      ? "not_provided"
+      : content.some((block) => block.kind === "note")
+        ? "available"
+        : "empty";
   const speakerModes = new Set(
     (note.transcript ?? [])
       .filter((turn) => isNonEmptyString(turn.text))
@@ -708,7 +746,7 @@ function captureState(
         state: transcriptState,
       },
       { kind: "agenda", state: "not_provided" },
-      { kind: "notes", state: "not_provided" },
+      { kind: "notes", state: notesState },
       { kind: "chat", state: "not_provided" },
       { kind: "recording", state: "not_provided" },
       { kind: "attachments", state: "not_provided" },
