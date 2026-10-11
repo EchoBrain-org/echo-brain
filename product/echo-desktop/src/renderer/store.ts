@@ -383,6 +383,8 @@ export interface ProjectToolsState {
 
 /** What the project on screen reads from its tools: undefined until read, or when the read failed. */
 export interface ProjectReads {
+  /** This opening: replies from earlier visits cannot replace it. */
+  seq: number;
   project_id: string;
   /** The organization has a tool a project can read. */
   available?: boolean;
@@ -619,7 +621,7 @@ function forgetAccount(): void {
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
     barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false }, archivedProjects: { items: [], next: null, loading: false },
     projectSettings: null, organization: null, tools: null, employeeWrite: null, home: null, decision: null, send: null, openItems: null, itemCard: null,
-    itemStatus: null, impactLine: null, projectLine: null });
+    itemStatus: null, impactLine: null, projectLine: null, projectReads: null });
   setCompose(null);
   setChange(null);
 }
@@ -998,9 +1000,13 @@ async function refreshProjects(): Promise<void> {
   const first = result.value.items;
   if (rolesChanged(first)) emptyBar();
   const seen = new Set(first.map(project => project.project_id));
-  const loadedMore = state.projects.items.length > first.length;
-  const later = loadedMore ? state.projects.items.slice(first.length).filter(project => !seen.has(project.project_id)) : [];
-  set({ projects: { items: [...first, ...later], next: loadedMore ? state.projects.next : result.value.next_cursor, loading: false } });
+  const last = first.at(-1);
+  // The Authority orders by creation time descending, then project ID ascending.
+  // Keep loaded rows beyond that boundary, including one displaced by a new
+  // project. An absent row inside the boundary has left the active list.
+  const later = result.value.next_cursor !== null && last ? state.projects.items.filter(project => !seen.has(project.project_id) &&
+    (project.created_at < last.created_at || (project.created_at === last.created_at && project.project_id > last.project_id))) : [];
+  set({ projects: { items: [...first, ...later], next: later.length > 0 ? state.projects.next : result.value.next_cursor, loading: false } });
   void loadArchivedProjects();
 }
 
@@ -1029,20 +1035,29 @@ export async function openProject(project: ProjectSummary): Promise<void> {
 async function loadProjectReads(project_id: string): Promise<void> {
   const account = expect();
   if (!account) return;
-  set({ projectReads: { project_id } });
-  const settle = <T>(result: Result<T>, patch: (value: T) => Partial<ProjectReads>) => {
+  const mine = ++seq;
+  set({ projectReads: { project_id, seq: mine } });
+  const settle = <Key extends 'available' | 'jira' | 'confluence'>(key: Key, value: ProjectReads[Key]) => {
     const current = state.projectReads;
-    if (result.ok && current?.project_id === project_id) set({ projectReads: { ...current, ...patch(result.value) } });
+    // Save may already have confirmed this field while the initial read waited.
+    if (current?.seq === mine && current[key] === undefined &&
+        expect()?.authority === account.authority && expect()?.membership_id === account.membership_id) {
+      set({ projectReads: { ...current, [key]: value } });
+    }
   };
-  const readable: readonly string[] = PROJECT_MAPPING_TOOLS;
   await Promise.all([
     rpc('account.tools', { expect: account })
-      .then(result => settle(result, value => ({ available: value.tools.some(tool => readable.includes(tool.tool_id) && tool.status !== 'unavailable') }))),
+      .then(result => { if (result.ok) settle('available', projectToolsAvailable(result.value.tools)); }),
     rpc('projects.jiraRead', { expect: account, project_id })
-      .then(result => settle(result, value => ({ jira: value.mapping?.project_key ?? null }))),
+      .then(result => { if (result.ok) settle('jira', result.value.mapping?.project_key ?? null); }),
     rpc('projects.confluenceRead', { expect: account, project_id })
-      .then(result => settle(result, value => ({ confluence: value.mapping ? value.mapping.space_ids.length : null }))),
+      .then(result => { if (result.ok) settle('confluence', result.value.mapping ? result.value.mapping.space_ids.length : null); }),
   ]);
+}
+
+function projectToolsAvailable(tools: readonly ConnectedTool[]): boolean {
+  const readable: readonly string[] = PROJECT_MAPPING_TOOLS;
+  return tools.some(tool => readable.includes(tool.tool_id) && tool.status !== 'unavailable');
 }
 
 /**
@@ -1665,8 +1680,12 @@ export function projectToolsSavable(settings: ProjectSettingsState): boolean {
 
 /** What a project reads, as its tools line and Save's toast say it. */
 function readsOf(settings: ProjectSettingsState): Pick<ProjectReads, 'jira' | 'confluence'> {
-  const spaces = settings.confluence?.value?.mapping?.space_ids;
-  return { jira: settings.jira?.value?.mapping?.project_key ?? null, confluence: spaces ? spaces.length : null };
+  const jira = settings.jira?.value;
+  const confluence = settings.confluence?.value;
+  return {
+    ...(jira ? { jira: jira.mapping?.project_key ?? null } : {}),
+    ...(confluence ? { confluence: confluence.mapping ? confluence.mapping.space_ids.length : null } : {}),
+  };
 }
 
 export function readsWords(reads: Pick<ProjectReads, 'jira' | 'confluence'>): string[] {
@@ -1699,8 +1718,12 @@ export async function saveProjectTools(): Promise<void> {
   const current = toolsAt(account, opening);
   if (!current) return;
   const reads = readsOf(current);
-  // What did save shows above the feed, even when another row failed.
-  if (state.projectReads?.project_id === current.project.project_id) set({ projectReads: { ...state.projectReads, ...reads } });
+  // What did save shows above the feed, even when another row failed. Initial
+  // replies may still fill unknown fields, but cannot replace these known values.
+  if (state.projectReads?.project_id === current.project.project_id) set({ projectReads: {
+    ...state.projectReads, ...reads,
+    available: current.tools?.items ? projectToolsAvailable(current.tools.items) : state.projectReads.available,
+  } });
   if (!saved) {
     setProjectTools(toolsAt(account, opening) ?? current, { saving: false });
     unresolvedChanged();
