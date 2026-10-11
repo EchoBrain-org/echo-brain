@@ -37,7 +37,7 @@ const MESSAGES: Record<string, string> = {
 
 export function message(failure: Failure): string {
   if (failure.mutation_outcome === 'unknown') return 'This may not have been sent.';
-  return MESSAGES[failure.code] ?? 'Something went wrong. Try again.';
+  return Object.hasOwn(MESSAGES, failure.code) ? MESSAGES[failure.code]! : 'Something went wrong. Try again.';
 }
 
 /**
@@ -57,7 +57,7 @@ const TOOL_REASONS: Record<string, (name: string) => string> = {
 
 export function toolMessage(name: string, reason: string | undefined, failure: Failure | undefined): string {
   const code = reason ?? failure?.code;
-  const words = code === undefined ? undefined : TOOL_REASONS[code];
+  const words = code !== undefined && Object.hasOwn(TOOL_REASONS, code) ? TOOL_REASONS[code] : undefined;
   if (words) return words(name);
   return failure ? message(failure) : `${name} could not be connected. Try again.`;
 }

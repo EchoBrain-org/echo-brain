@@ -23,16 +23,17 @@ import { SignedOut } from './screens/signin.js';
 import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeItemCard,
-  closeItemStatus, closeOpenItems, closePicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, findingSheet, getState, goHome,
-  hostFailed, itemCardShown, itemStatusShown, keepNewProject, matchesShown, newProjectProgress, openCapture, openItemsShown, openMine, pageCovered, refreshStatus, resume, retryStart, returnToSend, sheetShown, signinPhase, toastOpensMine,
+  closeItemStatus, closeOpenItems, closePicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, dismissProjectSetting, findingSheet, getState, goHome,
+  hostFailed, itemCardShown, itemStatusShown, keepNewProject, matchesShown, newProjectProgress, openCapture, openItemsShown, openMine, pageCovered, projectSettingsModal,
+  refreshStatus, resume, retryStart, returnToSend, sheetShown, signinPhase, toastOpensMine,
   toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, useStore, WARNINGS, windowShown, windowTakesDrop, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
 
 function sheetUp(): boolean {
-  const { compose, projectSettings } = getState();
-  return Boolean((compose && !compose.hidden) || sheetShown() || projectSettings?.tools);
+  const { compose } = getState();
+  return Boolean((compose && !compose.hidden) || sheetShown() || projectSettingsModal());
 }
 
 /** How long a toast that says something went well stays: one that warns stays until the next page. */
@@ -71,7 +72,10 @@ function back(): void {
   if (sheet?.kind === 'new-project' && sheet.skip !== null) return cancelSkip();
   if (sheet?.kind === 'new-project' && sheet.confirmClose) return keepNewProject();
   if (sheet) return closeSheet();
-  if (state.projectSettings?.tools) return cancelProjectSettingsAction();
+  // A project settings dialog owns Escape: a write on its way keeps it.
+  const settings = state.projectSettings;
+  if (settings?.write) { if (settings.write.status !== 'sending') dismissProjectSetting(); return; }
+  if (settings && (settings.tools || settings.rename !== null || settings.confirm)) return cancelProjectSettingsAction();
   if (!state.status?.signed_in) return closeSigninForm();
   // Escape closes the Projects list first, and only the list.
   if (state.compose && !state.compose.hidden) return state.compose.picking ? closeProjects() : closeCompose();
@@ -99,14 +103,13 @@ function App() {
   useEffect(() => { if (!making) focusBar(); }, [making]);
 
   // A toast that says something went well goes by itself, counted while it can be seen.
-  const working = state.sheet?.kind === 'new-project' && state.sheet.hidden;
   useEffect(() => {
     const toast = state.toast;
-    if (!toast || WARNINGS.has(toast) || state.concealed || working) return;
+    if (!toast || WARNINGS.has(toast) || state.concealed) return;
     const shown = state.toastShown;
     const timer = setTimeout(() => clearToast(shown), TOAST_MS);
     return () => clearTimeout(timer);
-  }, [state.toastShown, state.toast, state.concealed, working]);
+  }, [state.toastShown, state.toast, state.concealed]);
 
   useEffect(() => {
     void refreshStatus().then(focusBar);
@@ -172,8 +175,11 @@ function App() {
   // A project change not shown where it was asked for shows at the top of the page.
   const banner = state.change && !state.concealed && !changeShownInPlace(state) ? state.change : null;
   const sheet = state.sheet;
-  // New project, stepped aside after Create: the toast says how far it got.
+  // New project, stepped aside after Create: the toast says how far it got, when nothing else has just been said.
   const progress = sheet?.kind === 'new-project' ? newProjectProgress(sheet) : null;
+  const toasts = !state.concealed;
+  // The bar's matches rise from the bar: a toast moves to the top of the page while they show, so neither hides the other.
+  const toastClass = `toast${matchesShown(state) ? ' lifted' : ''}`;
   return (
     <Shell state={state} title={title} backLabel={backLabel} pane={pane}
       trailing={inProject && !covered && !state.ask ? <><MembersButton state={state} /><ProjectToolsButton state={state} /><ProjectSettingsButton state={state} /></> : null}>
@@ -193,16 +199,16 @@ function App() {
       </main>
       {/* Always there, so a screen reader announces each toast as it appears. A save only Mine shows opens it. */}
       <div role="status">
-        {progress && !state.concealed ? (
-          <div class="toast" data-testid="new-project-progress">
+        {toasts && state.toast ? (toastOpensMine(state.toast) ? (
+          <button type="button" class={toastClass} data-testid="toast" onClick={() => void openMine()}><Saved /><span>{state.toast}</span></button>
+        ) : (
+          <div class={toastClass} data-testid="toast">{WARNINGS.has(state.toast) ? <Warning /> : <Saved />}<span>{state.toast}</span></div>
+        )) : toasts && progress && (
+          <div class={toastClass} data-testid="new-project-progress">
             <span class="asking" aria-hidden="true"><i /><i /><i /></span><span>{progress.words}</span>
             {progress.total > 0 && <span class="toast-count">{progress.done} of {progress.total}</span>}
           </div>
-        ) : state.toast && !state.concealed && (toastOpensMine(state.toast) ? (
-          <button type="button" class="toast" data-testid="toast" onClick={() => void openMine()}><Saved /><span>{state.toast}</span></button>
-        ) : (
-          <div class="toast" data-testid="toast">{WARNINGS.has(state.toast) ? <Warning /> : <Saved />}<span>{state.toast}</span></div>
-        ))}
+        )}
       </div>
       {/* Under a toast, not hidden by it: Try again and Dismiss stay in reach. */}
       {banner && <div class={`banner${state.toast ? ' below' : ''}`} data-testid="change-banner"><ChangeLine change={banner} /></div>}

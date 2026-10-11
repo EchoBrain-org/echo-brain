@@ -4,13 +4,14 @@ import type { ProjectSummary } from '../../shared/protocol.js';
 import { message, toolMessage } from '../messages.js';
 import {
   askProjectSetting, beginProjectRename, cancelProjectConnect, cancelProjectSettingsAction, clearProjectTool, closeProjectSettings, confirmProjectSetting,
-  connectProjectTool, dismissProjectSetting, keepProjectSetting, moreProjectConfluenceSpaces, openProjectTools, PROJECT_MAPPING_TOOLS, projectRenameValid,
-  projectSettingsBlocked, projectToolChange, projectToolEntry, projectToolsSavable, projectToolUsable, reloadProjectTool, retryProjectSetting, saveProjectTools,
-  setProjectJira, setProjectRename, sheetShown, toggleProjectConfluenceSpace, toggleProjectSettings, type MappingTool, type ProjectSettingsState, type State,
+  connectProjectTool, dismissProjectSetting, hiddenSpaces, keepProjectSetting, moreProjectConfluenceSpaces, openProjectTools, PROJECT_MAPPING_TOOLS, projectRenameValid,
+  projectSettingsBlocked, projectToolChange, projectToolEntry, projectToolFailureWords, projectToolsSavable, projectToolUsable, reloadProjectTool, reloadProjectToolList,
+  retryProjectSetting, saveProjectTools, setProjectJira, setProjectRename, sheetShown, toggleProjectConfluenceSpace, toggleProjectSettings,
+  type MappingTool, type ProjectSettingsState, type State,
 } from '../store.js';
 import { trapTab } from './compose.js';
 import { Check, Close, Ellipsis, Plug } from './icons.js';
-import { expiresIn } from './tools.js';
+import { expiresIn, useMinuteTick } from './tools.js';
 
 /** Both entry points share one target and the same project actions. */
 export function ProjectSettingsButton({ state, project }: { state: State; project?: ProjectSummary }) {
@@ -110,18 +111,11 @@ const SCOPE: Record<MappingTool, string> = { jira: 'One project', confluence: 'U
 function currentWords(settings: ProjectSettingsState, tool: MappingTool): string {
   const setting = settings[tool];
   if (!setting || setting.status === 'loading') return 'Loading…';
+  if (setting.status === 'failed' && !setting.value) return 'Could not be read';
   if (!setting.value) return SCOPE[tool];
   if (tool === 'jira') return settings.jira?.value?.mapping ? `Reads ${settings.jira.value.mapping.project_key}` : 'Not set';
   const spaces = settings.confluence?.value?.mapping?.space_ids.length ?? 0;
   return spaces > 0 ? `Reads ${spaces} space${spaces === 1 ? '' : 's'}` : 'Not set';
-}
-
-/** Why a row's setting cannot be edited until it is read again. */
-function failureWords(settings: ProjectSettingsState, tool: MappingTool): string | null {
-  const setting = settings[tool];
-  if (setting?.status !== 'failed' || !setting.failure) return null;
-  return setting.failure.code === 'conflict' ? 'This setting changed. Reload it before editing.'
-    : setting.writeFailed ? 'The change could not be confirmed. Reload the setting before editing again.' : message(setting.failure);
 }
 
 /** Connected, Connect or Reconnect, on the right of a row. */
@@ -146,6 +140,7 @@ function Connection({ settings, tool, name }: { settings: ProjectSettingsState; 
 function Connecting({ settings, tool, name }: { settings: ProjectSettingsState; tool: MappingTool; name: string }) {
   const connect = settings.tools!.connect;
   if (connect?.tool.tool_id !== tool) return null;
+  useMinuteTick();
   if (connect.phase === 'failed') {
     return (
       <div class="tool-body tool-trouble" role="alert">
@@ -193,6 +188,7 @@ function Picker({ settings, tool, name, onSave }: { settings: ProjectSettingsSta
       </div>
     );
   }
+  const hidden = hiddenSpaces(confluence);
   return (
     <div class="tool-body tool-spaces">
       <span class="select-label">Spaces</span>
@@ -204,7 +200,14 @@ function Picker({ settings, tool, name, onSave }: { settings: ProjectSettingsSta
             <span>{space.name} <span class="faint">({space.key})</span></span>
           </label>
         ))}
-        {confluence.spaces.length === 0 && <span class="notice-line">You can’t see any spaces in {name}.</span>}
+        {/* Read by the project, picked by another lead or on a page not read yet: it can still be unticked. */}
+        {hidden.map(id => (
+          <label key={id} class="check" data-testid="project-confluence-hidden-space">
+            <input type="checkbox" checked disabled={!editing || confluence.status !== 'ready'} onChange={() => toggleProjectConfluenceSpace(id)} />
+            <span>A space you can’t see <span class="faint">({id})</span></span>
+          </label>
+        ))}
+        {confluence.spaces.length === 0 && hidden.length === 0 && <span class="notice-line">You can’t see any spaces in {name}.</span>}
       </div>
       {confluence.status === 'ready' && confluence.failure && (
         <span class="error" data-testid="project-confluence-more-error">More spaces could not be read. {message(confluence.failure)}</span>
@@ -226,7 +229,8 @@ function ToolSection({ state, tool, onSave }: { state: State; tool: MappingTool;
   const lead = settings.project.role === 'lead';
   const usable = projectToolUsable(settings, tool);
   const connecting = sheet.connect?.tool.tool_id === tool;
-  const failure = failureWords(settings, tool);
+  const failure = projectToolFailureWords(settings, tool, name);
+  const off = projectToolEntry(settings, tool)?.status === 'unavailable';
   const mapped = tool === 'jira' ? Boolean(settings.jira?.value?.mapping) : Boolean(settings.confluence?.value?.mapping);
   const change = projectToolChange(settings, tool);
   return (
@@ -246,13 +250,15 @@ function ToolSection({ state, tool, onSave }: { state: State; tool: MappingTool;
       {failure && (
         <div class="tool-body tool-trouble">
           <span class="error" data-testid={`project-${tool}-error`}>{failure}</span>
-          <button type="button" class="link-button" data-testid={`project-${tool}-reload`} disabled={sheet.saving} onClick={() => reloadProjectTool(tool)}>Reload setting</button>
+          {setting.status === 'failed' && (
+            <button type="button" class="link-button" data-testid={`project-${tool}-reload`} disabled={sheet.saving} onClick={() => reloadProjectTool(tool)}>Reload setting</button>
+          )}
         </div>
       )}
       {setting.status === 'saving' && <div class="tool-body notice-line" role="status">Checking access and saving…</div>}
       {lead && !connecting && setting.value && setting.status !== 'failed' && (usable
         ? <Picker settings={settings} tool={tool} name={name} onSave={onSave} />
-        : <div class="tool-body notice-line">Connect {name} to choose what {settings.project.name} reads.</div>)}
+        : !off && <div class="tool-body notice-line">Connect {name} to choose what {settings.project.name} reads.</div>)}
     </section>
   );
 }
@@ -290,8 +296,12 @@ function ProjectTools({ state }: { state: State }) {
           </div>
           <button type="button" class="circle small" aria-label="Close" data-testid="project-tools-x" disabled={sheet.saving} onClick={cancelProjectSettingsAction}><Close /></button>
         </div>
-        <div class="tools-sheet-rows" aria-live="polite">
-          {sheet.failure && <p class="error tool-list-failure">Your connections could not be read. {message(sheet.failure)}</p>}
+        <div class="tools-sheet-rows">
+          {sheet.failure && (
+            <p class="error tool-list-failure">Your connections could not be read. {message(sheet.failure)}{' '}
+              <button type="button" class="link-button" data-testid="project-tools-reload" disabled={sheet.saving} onClick={reloadProjectToolList}>Try again</button>
+            </p>
+          )}
           {tools.map(tool => <ToolSection key={tool} state={state} tool={tool} onSave={save} />)}
           {tools.length === 0 && <p class="notice-line tool-none">Your organization hasn’t turned on a tool a project can read.</p>}
         </div>
@@ -367,14 +377,16 @@ function Write({ state }: { state: State }) {
   const settings = state.projectSettings!;
   const write = settings.write!;
   const box = useRef<HTMLDivElement>(null);
+  useEffect(() => { box.current?.focus(); }, []);
   const conflict = write.operation === 'leave' && write.failure?.code === 'conflict';
   const text = write.status === 'sending' ? 'Saving project settings…' : write.status === 'unknown' && write.dismissConfirm ? 'Dismiss it? It may still have been made.'
     : write.status === 'unknown' ? 'This may not have been sent.'
     : conflict ? 'Promote another lead before leaving this project.' : message(write.failure!);
   return (
     <div class="overlay">
-      <div class="sheet confirm" role="alertdialog" aria-live="polite" ref={box} onKeyDown={event => trapTab(event, box.current)}>
-        <h2>{write.status === 'sending' ? 'Saving' : 'Project settings'}</h2>
+      <div class="sheet confirm" role="alertdialog" aria-labelledby="project-settings-write-title" aria-live="polite" ref={box} tabIndex={-1}
+        onKeyDown={event => trapTab(event, box.current)}>
+        <h2 id="project-settings-write-title">{write.status === 'sending' ? 'Saving' : 'Project settings'}</h2>
         <p class={write.status === 'sending' ? '' : 'error'} data-testid="project-settings-error">{text}</p>
         {write.status !== 'sending' && <div class="choices">
           {write.status === 'unknown' && !write.dismissConfirm && <button type="button" class="plain-button" data-testid="project-settings-retry" onClick={retryProjectSetting}>Try again</button>}

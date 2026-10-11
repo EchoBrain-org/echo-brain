@@ -46,3 +46,16 @@ describe('a project renamed while its rows show', () => {
     expect(shown[0]!.projects).toEqual(['Apollo', 'Beacon']);
   });
 });
+
+describe('rows added at the same instant', () => {
+  const key = (item: ListItem) => `${item.ref.kind}:${item.ref.id}`;
+  it('are told apart by ref, as the Authority orders them: one the page should hold but does not is dropped', () => {
+    const same = (title: string, kind: ListItem['ref']['kind'] = 'note') => row(title, 10, kind);
+    // document:… sorts before note:…, so the page's last row (note b) is followed by note c, not by the document.
+    const shown = { items: [row('new', 12), same('a', 'document'), same('b'), same('c'), row('old', 9)], next: 'page2' };
+    const first = { items: [row('new', 12), same('b')], next: 'page1b' };
+    const again = reread(shown, first, key);
+    expect(again.items.map(item => item.title)).toEqual(['new', 'b', 'c', 'old']);
+    expect(again.next).toBe('page2');
+  });
+});

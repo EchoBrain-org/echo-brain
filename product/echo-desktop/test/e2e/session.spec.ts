@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chooseFromAccountMenu, drop, emit, launch, type Launched } from './launch.js';
 
@@ -171,6 +172,74 @@ test('a note sent while quit waits out a refresh is asked about, once', async ()
   await page.getByTestId('compose-send').click();
   await exited;
   expect(existsSync(asked) && readFileSync(asked, 'utf8')).toBe('asked\n');
+});
+
+test('an invitation no host took leaves no folder behind, so saving one under the same name works again', async () => {
+  run = await launch('host-crash');
+  const { app, page, home } = run;
+  await expect.poll(() => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8'), { timeout: 10_000 }).toContain('host gave-up');
+  const folder = join(home, 'ECHO invitation for Kim');
+  await app.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = (async () => ({ canceled: false, filePath })) as never; }, folder);
+  type Reply = { ok: boolean; value?: { handle: string }; failure?: { code: string; mutation_outcome?: string } };
+  const invite = () => page.evaluate(async () => {
+    const { rpc } = (window as unknown as { echo: { rpc(method: string, params: object): Promise<Reply> } }).echo;
+    const chosen = await rpc('dialog.saveInvitation', { name: 'Kim' });
+    const expect = { authority: 'https://authority.example', membership_id: 'mem_22222222-2222-4222-8222-222222222222' };
+    return { chosen, invited: chosen.value && await rpc('employees.invite', { expect, name: 'Kim', email: 'kim@example.com', invitation_handle: chosen.value.handle }) };
+  });
+  const first = await invite();
+  expect(first.invited).toMatchObject({ ok: false, failure: { code: 'host_failed', mutation_outcome: 'not_submitted' } });
+  expect(existsSync(folder)).toBe(false);
+  // Not 'file_exists': nothing was issued, so the folder was never kept.
+  expect((await invite()).chosen).toMatchObject({ ok: true });
+});
+
+test('pressing Quit again while quit waits out a refresh asks once, after the wait, and Cancel keeps ECHO open', async () => {
+  run = await launch('refresh-hangs');
+  const { app, page, home } = run;
+  await expect.poll(() => refreshes().length).toBe(1);
+  const asked = join(home, 'asked');
+  const askedAt = () => existsSync(asked) ? readFileSync(asked, 'utf8').trim().split('\n').map(Number) : [];
+  const answer = (choice: number) => app.evaluate(({ dialog }, [file, chosen]) => {
+    dialog.showMessageBoxSync = () => { process.getBuiltinModule('node:fs').appendFileSync(file, `${Date.now()}\n`); return chosen; };
+  }, [asked, choice] as const);
+  // A save whose outcome is unknown, so quitting asks.
+  await page.evaluate(() => (window as unknown as { echo: { rpc(method: string, params: object): Promise<unknown> } }).echo
+    .rpc('app.setUnresolved', { unresolved: true }));
+  await answer(1); // Cancel
+  const quitAt = Date.now();
+  await app.evaluate(({ app: electronApp }) => { electronApp.quit(); electronApp.quit(); });
+  // The second press joins the first wait: asked once, when the 5 s cap ends it.
+  await expect.poll(() => askedAt().length, { timeout: 10_000 }).toBe(1);
+  expect(askedAt()[0]! - quitAt).toBeGreaterThanOrEqual(4_500);
+  // Cancelled: no wait left over asks again, or quits with the host mid-refresh.
+  await new Promise(resolveWait => setTimeout(resolveWait, quitAt + 12_000 - Date.now()));
+  expect(askedAt()).toHaveLength(1);
+  expect(app.process().exitCode).toBeNull();
+  // A later Quit waits again from the start, then asks, and Quit Anyway quits.
+  await answer(0);
+  const exited = new Promise(resolveExit => app.process().once('exit', resolveExit));
+  const againAt = Date.now();
+  await app.evaluate(({ app: electronApp }) => { electronApp.quit(); });
+  await exited;
+  expect(askedAt()).toHaveLength(2);
+  expect(askedAt()[1]! - againAt).toBeGreaterThanOrEqual(4_500);
+});
+
+test('a starting host leaves a note folder another host may be sending from, and removes an hour-old one', async () => {
+  const fresh = mkdtempSync(join(tmpdir(), 'echo-note-'));
+  const stale = mkdtempSync(join(tmpdir(), 'echo-note-'));
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000);
+  utimesSync(stale, twoHoursAgo, twoHoursAgo);
+  try {
+    run = await launch();
+    await expect(run.page.getByTestId('sidebar-project')).toHaveCount(2);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(stale)).toBe(false);
+  } finally {
+    rmSync(fresh, { recursive: true, force: true });
+    rmSync(stale, { recursive: true, force: true });
+  }
 });
 
 test('a crashed page reloads and reads status again', async () => {

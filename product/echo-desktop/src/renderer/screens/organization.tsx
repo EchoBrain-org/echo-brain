@@ -88,7 +88,7 @@ function Status({ page }: { page: OrganizationState }) {
             {` It expires ${dateTime(saved.expires_at)}. Send the folder to them privately; they open it with Account ▸ Open invitation…`}
           </span>
           <span class="org-actions">
-            <button type="button" class="pill" data-testid="invitation-show" onClick={showInvitation}>Show invitation in Finder</button>
+            <button type="button" class="pill" data-testid="invitation-show" onClick={showInvitation}>{navigator.userAgent.includes('Mac') ? 'Show invitation in Finder' : 'Show invitation folder'}</button>
             {saved.action === 'invite' && (
               <button type="button" class="pill" aria-label={`Undo inviting ${saved.name}`} data-testid="invite-undo" onClick={undoInvite}>Undo</button>
             )}

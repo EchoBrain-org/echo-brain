@@ -226,7 +226,7 @@ button.marker:hover { background: rgba(240, 236, 230, 0.18); }
 .actions { display: flex; gap: 8px; }
 
 /* Sheets over the window: Capture, and the Account's. */
-.overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.45); }
+.overlay { position: fixed; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.45); }
 .sheet { width: 560px; max-width: calc(100vw - 32px); height: 420px; padding: 16px 18px 14px; display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--ink); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45); }
 .sheet:focus { outline: none; }
 
@@ -277,6 +277,7 @@ button.marker:hover { background: rgba(240, 236, 230, 0.18); }
 .toast { position: absolute; bottom: 88px; left: 50%; z-index: 1; transform: translateX(-50%); max-width: calc(100% - 48px); height: 38px; display: flex; align-items: center; gap: 10px; padding: 0 16px 0 14px; border: 1px solid var(--line-strong); border-radius: 19px; font-size: 13px; background: #171616; }
 .toast span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toast { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45); }
+.toast.lifted { top: 44px; bottom: auto; }
 .plain-button { height: 32px; padding: 0 18px; border: 0; border-radius: 16px; font-size: 13.5px; background: var(--chip); }
 
 /* Sign-in and the cover shown while another app is in front. */

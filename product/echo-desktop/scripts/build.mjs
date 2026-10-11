@@ -31,10 +31,12 @@ await Promise.all([
 ]);
 for (const file of ['index.html', 'styles.css']) copyFileSync(join(root, 'src/renderer', file), join(out, 'renderer', file));
 
-// The commit this was built from, shown in the tray.
+// The commit this was built from, shown in the tray. Modified means anywhere
+// in the repository: the host bundles the organization API, and the app ships
+// the person client beside it.
 const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
 writeFileSync(join(out, 'build-info.json'), JSON.stringify({
-  source_sha: git(['rev-parse', 'HEAD']), dirty: git(['status', '--porcelain', '--', '.']) !== '',
+  source_sha: git(['rev-parse', 'HEAD']), dirty: git(['status', '--porcelain']) !== '',
 }));
 
 // Tray icons: a ring drawn here, so no binary asset lives in the repository.

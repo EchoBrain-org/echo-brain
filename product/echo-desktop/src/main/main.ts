@@ -13,8 +13,9 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, externalSourcePermalink, HOST_METHODS, MAIN_METHODS, MAX_PARAMS_BYTES, STATUS_METHODS, WRITE_METHODS, type AccountCommand, type AppStatus,
-  type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods, type Result,
+  externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, MAIN_METHODS, MAX_PARAMS_BYTES, plainJsonBytes, remoteDebuggingRequested, STATUS_METHODS,
+  type AccountCommand, type AppStatus, type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods,
+  type Result,
 } from '../shared/protocol.js';
 
 const BUILD = __dirname;
@@ -33,11 +34,23 @@ const MAX_COPY_CHARACTERS = 12_000;
 const MAX_PROJECT_FILES = 20;
 const test = __ECHO_TEST_HOOK__ ? process.env : {} as NodeJS.ProcessEnv;
 const smoke = process.argv.includes('--smoke');
+// Release builds: no fuse covers remote debugging, so refuse every form of it
+// (what Chromium parsed, and any spelling of it in argv) before touching anything.
+if (!__ECHO_TEST_HOOK__ && remoteDebuggingRequested(process.argv, name => app.commandLine.hasSwitch(name))) {
+  app.exit(1);
+}
 /** `--smoke` never touches the person's session or data: it gets its own. */
 if (smoke) {
-  // Chromium writes its preferences while exiting, after smoke cleans up; sweep earlier runs.
+  // Chromium writes its preferences while exiting, after smoke cleans up; sweep
+  // earlier runs. Only an hour old: another smoke may be running now.
   try {
-    for (const name of readdirSync(tmpdir())) if (name.startsWith('echo-smoke-')) rmSync(join(tmpdir(), name), { recursive: true, force: true });
+    for (const name of readdirSync(tmpdir())) {
+      if (!name.startsWith('echo-smoke-')) continue;
+      const folder = join(tmpdir(), name);
+      try {
+        if (Date.now() - statSync(folder).mtimeMs > 60 * 60_000) rmSync(folder, { recursive: true, force: true });
+      } catch { /* gone, or not ours */ }
+    }
   } catch { /* best effort */ }
 }
 const smokeRoot = smoke ? realpathSync(mkdtempSync(join(tmpdir(), 'echo-smoke-'))) : null;
@@ -48,10 +61,6 @@ else if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_USER_DATA) app.setPath('userDat
 else if (app.isPackaged) app.setPath('userData', join(app.getPath('appData'), 'ECHO', 'chromium'));
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true } }]);
 
-// Release builds: no fuse covers remote debugging, so refuse every form of it.
-if (!__ECHO_TEST_HOOK__ && process.argv.some(argument => /^--remote-(debugging|allow-origins)/.test(argument))) {
-  app.exit(1);
-}
 // Dev builds never run on the person's real session: they need a named home.
 if (__ECHO_TEST_HOOK__ && !smoke && !test.ECHO_HOME) {
   process.stderr.write('Dev builds need ECHO_HOME. Use `npm start` for fixture data, or set ECHO_HOME to a private folder.\n');
@@ -83,6 +92,16 @@ function log(line: string): void {
     appendFileSync(file, `${new Date().toISOString()} ${line}\n`, { mode: 0o600 });
     chmodSync(file, 0o600);
   } catch { /* logging never breaks the app */ }
+}
+
+/** The same folder by identity, not spelling: case and /System/Volumes/Data name one many ways. A missing one is never the same. */
+function sameFolder(a: string, b: string): boolean {
+  try {
+    const [left, right] = [statSync(a, { bigint: true }), statSync(b, { bigint: true })];
+    return left.dev === right.dev && left.ino === right.ino;
+  } catch {
+    return false;
+  }
 }
 
 interface BuildInfo { source_sha: string; dirty: boolean }
@@ -118,7 +137,7 @@ function startHost(restarted = false): void {
   }
   // The fixture Authority writes a synthetic session: only ever into a home
   // the test named, never the person's own.
-  if (__ECHO_TEST_HOOK__ && !smokeRoot && test.ECHO_HOME && resolve(test.ECHO_HOME) !== resolve(homedir())) {
+  if (__ECHO_TEST_HOOK__ && !smokeRoot && test.ECHO_HOME && !sameFolder(test.ECHO_HOME, homedir())) {
     env.ECHO_HOME = test.ECHO_HOME;
     for (const name of ['ECHO_DESKTOP_TEST_FIXTURES', 'ECHO_DESKTOP_TEST_MODE']) if (test[name]) env[name] = test[name]!;
     fixtureHost = Boolean(env.ECHO_DESKTOP_TEST_FIXTURES);
@@ -143,9 +162,7 @@ function startHost(restarted = false): void {
     for (const [id, call] of pending) {
       pending.delete(id);
       // A write the host was holding may already have reached the Authority.
-      call.resolve({ ok: false, failure: { code: 'host_restarted', retryable: true,
-        ...(WRITE_METHODS.has(call.method) ? { mutation_outcome: 'unknown' as const } : {}),
-        ...(call.requestId === undefined ? {} : { request_id: call.requestId }) } });
+      call.resolve({ ok: false, failure: hostGoneFailure('host_restarted', call.method, call.requestId, true) });
     }
     if (quitting) return;
     const now = Date.now();
@@ -164,9 +181,11 @@ function startHost(restarted = false): void {
 }
 
 function callHost(method: HostMethodName | 'host.drain', params: unknown): Promise<Result<unknown>> {
-  if (!host) return Promise.resolve({ ok: false, failure: { code: hostGaveUp ? 'host_failed' : 'host_restarted', retryable: true } });
-  const id = nextId++;
   const requestId = (params as { request_id?: unknown } | null)?.request_id;
+  // No host took it, so nothing left the machine: a write says so, and Invite
+  // removes the empty folder it made, so trying again can use the same name.
+  if (!host) return Promise.resolve({ ok: false, failure: hostGoneFailure(hostGaveUp ? 'host_failed' : 'host_restarted', method, requestId, false) });
+  const id = nextId++;
   return new Promise(resolveReply => {
     pending.set(id, { method, resolve: resolveReply, ...(typeof requestId === 'string' ? { requestId } : {}) });
     host!.postMessage({ id, method, params });
@@ -391,7 +410,8 @@ async function broker(event: IpcMainInvokeEvent, request: unknown): Promise<Resu
   const { method, params } = request as { method?: unknown; params?: unknown };
   if (typeof method !== 'string') return refused();
   const value = params ?? {};
-  if (typeof value !== 'object' || JSON.stringify(value).length > MAX_PARAMS_BYTES) return refused();
+  // Plain JSON data only, by its UTF-8 bytes: JSON.stringify writes a Map or a buffer as `{}`.
+  if (typeof value !== 'object' || value === null || plainJsonBytes(value, MAX_PARAMS_BYTES) === null) return refused();
   if (mainMethods.has(method)) return mainMethod(method as keyof MainMethods, value as never);
   if (!hostMethods.has(method)) return refused();
   if (method === 'documents.upload') {
@@ -631,17 +651,27 @@ if (!test.ECHO_DESKTOP_HIDDEN) {
   app.on('did-resign-active', () => send('lifecycle.conceal', {}));
   app.on('did-become-active', () => send('lifecycle.resume', {}));
 }
+/** The wait for a refresh to finish, while it runs: another Quit joins it. */
+let draining: Promise<void> | null = null;
 let drained = false;
+/** Each Quit the dialog cancels ends its attempt: a wait from it that settles later quits nothing. */
+let quitAttempt = 0;
 app.on('before-quit', event => {
   // Never kill the host mid-refresh: that leaves the shared session claimed.
   // Wait here, while the window is open: once it closes the app must exit at
   // once, or a late macOS notice to the closed window throws, and Electron's
   // error box can hold the quit open for good.
+  if (draining) { event.preventDefault(); return; }
   if (host && !drained) {
     event.preventDefault();
-    drained = true;
+    const attempt = quitAttempt;
     const cap = new Promise(resolveCap => setTimeout(resolveCap, 5_000));
-    void Promise.race([callHost('host.drain', {}), cap]).then(() => app.quit());
+    draining = Promise.race([callHost('host.drain', {}), cap]).then(() => {
+      if (attempt !== quitAttempt) return;
+      draining = null;
+      drained = true;
+      app.quit();
+    });
     return;
   }
   // Asked after the wait: the page stays usable during it and may start a save.
@@ -650,7 +680,15 @@ app.on('before-quit', event => {
       type: 'warning', message: unresolved === 'change' ? 'A project change may not have finished.' : `A ${unresolved} may not have been sent.`,
       detail: 'Check or retry it before quitting, or quit anyway.', buttons: ['Quit Anyway', 'Cancel'], defaultId: 1, cancelId: 1,
     });
-    if (choice !== 0) { event.preventDefault(); drained = false; show(); return; }
+    if (choice !== 0) {
+      // ECHO stays open: a later Quit waits again, from the start.
+      event.preventDefault();
+      quitAttempt += 1;
+      draining = null;
+      drained = false;
+      show();
+      return;
+    }
   }
   quitting = true;
 });

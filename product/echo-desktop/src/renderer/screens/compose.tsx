@@ -21,7 +21,8 @@ export function trapTab(event: KeyboardEvent, sheet: HTMLElement | null): void {
   if (focusable.length === 0) return;
   const first = focusable[0]!;
   const last = focusable[focusable.length - 1]!;
-  const inside = sheet.contains(document.activeElement);
+  // The sheet itself can hold focus (it opens that way): from there, Tab goes to the first control and Shift-Tab to the last.
+  const inside = document.activeElement !== sheet && sheet.contains(document.activeElement);
   if (event.shiftKey && (document.activeElement === first || !inside)) { event.preventDefault(); last.focus(); }
   else if (!event.shiftKey && (document.activeElement === last || !inside)) { event.preventDefault(); first.focus(); }
 }

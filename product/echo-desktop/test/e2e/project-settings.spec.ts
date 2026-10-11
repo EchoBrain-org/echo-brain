@@ -117,6 +117,25 @@ test('a native account sheet dismisses the project menu without restoring it aft
   expect(settingCalls()).toHaveLength(0);
 });
 
+test('Rename owns Escape, Capture and the caret while it is up', async () => {
+  run = await launch();
+  const { page, app } = run;
+  await page.getByTestId('sidebar-project').first().click();
+  await page.getByTestId('project-settings').click();
+  await page.getByTestId('project-rename').click();
+  await expect(page.getByTestId('project-rename-input')).toBeFocused();
+  // Capture and the window coming forward open nothing under the dialog, and do not take its caret.
+  await emit(app, 'echo-test:capture');
+  await expect(page.getByTestId('compose')).toHaveCount(0);
+  await emit(app, 'echo-test:shown');
+  await expect(page.getByTestId('project-rename-input')).toBeFocused();
+  // Escape cancels the rename and only that: the project page stays.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('project-rename-input')).toHaveCount(0);
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
+  expect(settingCalls()).toHaveLength(0);
+});
+
 test('Capture keeps the open Tools sheet in front', async () => {
   run = await launch();
   const { page } = run;
@@ -237,7 +256,7 @@ test('a lead maps a Jira project on Tools, Save closes it, asks in that scope, a
   await expect(page.getByTestId('project-jira-current')).toHaveText('Reads ECHO · stops on Save');
   await page.getByTestId('project-tools-save').click();
   await expect(page.getByTestId('project-tools-sheet')).toHaveCount(0);
-  await expect(page.getByTestId('toast')).toHaveText('Apollo no longer reads your tools');
+  await expect(page.getByTestId('toast')).toHaveText('Apollo no longer reads Jira');
   const removed = run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set').at(-1)!;
   expect(removed.body?.jira_project).toBeNull(); expect(removed.body?.expected_revision).toMatch(/^[0-9a-f-]{36}$/);
   await page.getByTestId('ask-field').fill('What is the status of Apollo?');
@@ -280,7 +299,7 @@ test('a lead maps accessible Confluence spaces, loads another page, asks with a 
   await expect(page.getByTestId('project-confluence-current')).toHaveText('Reads 2 spaces');
   await page.getByTestId('project-confluence-remove').click();
   await page.getByTestId('project-tools-save').click();
-  await expect(page.getByTestId('toast')).toHaveText('Apollo no longer reads your tools');
+  await expect(page.getByTestId('toast')).toHaveText('Apollo no longer reads Confluence');
   const removed = run.calls().filter(call => call.path === '/v1/person/tools/confluence/project/set').at(-1)!;
   expect(removed.body?.space_ids).toBeNull();
 });
@@ -355,7 +374,7 @@ test('a lead keeps a saved Confluence mapping and can stop reading it when the p
   await expect(page.getByTestId('project-tools-save')).toBeDisabled();
   await page.getByTestId('project-confluence-remove').click();
   await page.getByTestId('project-tools-save').click();
-  await expect(page.getByTestId('toast')).toHaveText('Apollo no longer reads your tools');
+  await expect(page.getByTestId('toast')).toHaveText('Apollo no longer reads Confluence');
   expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/project/set').at(-1)?.body).toMatchObject({ project_id: APOLLO, space_ids: null });
 });
 

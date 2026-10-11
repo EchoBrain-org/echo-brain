@@ -18,9 +18,11 @@ test('Back keeps the pages Home had loaded, and showing the window re-reads it',
   await page.getByTestId('back').click();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
   expect(lists()).toBe(2);
+  // Both pages shown are read again, so what shows is what the Authority has now; More stays gone.
   await emit(app, 'echo-test:shown');
-  await expect.poll(lists).toBe(3);
+  await expect.poll(lists).toBe(4);
   await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
+  await expect(page.getByTestId('sidebar-more')).toHaveCount(0);
 });
 
 test('opening ECHO again while it runs brings the window forward, as Open ECHO does', async () => {

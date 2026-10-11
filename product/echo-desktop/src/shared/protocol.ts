@@ -652,3 +652,60 @@ export function externalSourcePermalink(kind: unknown, raw: unknown): string | n
 
 /** Parameters larger than this are refused at the broker. */
 export const MAX_PARAMS_BYTES = 64 * 1024;
+/** Deeper than any request's parameters: it bounds the walk, and ends a cycle a structured clone can carry. */
+const MAX_PARAMS_DEPTH = 32;
+
+/**
+ * About the UTF-8 bytes `value` takes as JSON, or null when it is not plain
+ * JSON data or takes more than `limit`. Only plain objects, arrays, strings,
+ * finite numbers, booleans and null count: a Map, Set, Date or typed array
+ * crosses IPC intact, where JSON would write `{}`. Undefined counts as null;
+ * escapes are not counted.
+ */
+export function plainJsonBytes(value: unknown, limit: number): number | null {
+  const encoder = new TextEncoder();
+  let total = 0;
+  const add = (bytes: number): boolean => (total += bytes) <= limit;
+  // Quotes, and at least a byte a UTF-16 unit before encoding it, so a long string is never encoded.
+  const text = (node: string): boolean => add(2 + node.length) && add(encoder.encode(node).length - node.length);
+  const walk = (node: unknown, depth: number): boolean => {
+    if (node === null || node === undefined) return add(4);
+    if (typeof node === 'string') return text(node);
+    if (typeof node === 'number') return Number.isFinite(node) && add(String(node).length);
+    if (typeof node === 'boolean') return add(node ? 4 : 5);
+    // A bigint, symbol or function, or nesting no request needs.
+    if (typeof node !== 'object' || depth >= MAX_PARAMS_DEPTH) return false;
+    if (Array.isArray(node)) {
+      // Brackets and commas first: a sparse array's length alone can pass the limit.
+      if (!add(2 + Math.max(0, node.length - 1))) return false;
+      for (let index = 0; index < node.length; index += 1) if (!walk(node[index], depth + 1)) return false;
+      return true;
+    }
+    const prototype = Object.getPrototypeOf(node) as unknown;
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    const keys = Object.keys(node);
+    // Braces, commas and colons.
+    if (!add(2 + Math.max(0, keys.length - 1) + keys.length)) return false;
+    for (const key of keys) if (!text(key) || !walk((node as Record<string, unknown>)[key], depth + 1)) return false;
+    return true;
+  };
+  return walk(value, 0) ? total : null;
+}
+
+/**
+ * A call no host answered. A write the host was holding may already have
+ * reached the Authority; one no host took never left the machine.
+ */
+export function hostGoneFailure(code: 'host_restarted' | 'host_failed', method: string, requestId: unknown, taken: boolean): Failure {
+  return {
+    code, retryable: true,
+    ...(WRITE_METHODS.has(method) ? { mutation_outcome: taken ? 'unknown' as const : 'not_submitted' as const } : {}),
+    ...(typeof requestId === 'string' ? { request_id: requestId } : {}),
+  };
+}
+
+/** Chromium takes a switch after one dash or two. Release builds refuse every form of remote debugging. */
+export function remoteDebuggingRequested(argv: readonly string[], hasSwitch: (name: string) => boolean): boolean {
+  return ['remote-debugging-port', 'remote-debugging-pipe', 'remote-allow-origins'].some(name => hasSwitch(name)) ||
+    argv.some(argument => /^--?remote-(debugging|allow-origins)/.test(argument));
+}

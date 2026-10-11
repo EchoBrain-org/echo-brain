@@ -26,7 +26,10 @@ export function reread<T extends { added_at: string }>(
   // The page reaches the end: the list is all of it.
   if (first.next === null) return { items: [...first.items], next: null };
   const seen = new Set(first.items.map(key));
-  const oldest = Math.min(...first.items.map(item => time(item.added_at)));
-  const older = shown.items.filter(item => !seen.has(key(item)) && time(item.added_at) <= oldest);
+  // Rows after the page's last: older, or added at the same instant with a ref that sorts after it, as the Authority orders them.
+  const last = first.items.at(-1);
+  const boundary = last ? time(last.added_at) : Infinity;
+  const lastKey = last ? key(last) : '';
+  const older = shown.items.filter(item => !seen.has(key(item)) && (time(item.added_at) < boundary || (time(item.added_at) === boundary && key(item) > lastKey)));
   return older.length > 0 ? { items: [...first.items, ...older], next: shown.next } : { items: [...first.items], next: first.next };
 }

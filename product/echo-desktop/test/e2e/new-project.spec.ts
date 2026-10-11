@@ -94,6 +94,7 @@ test('New project is one page: name, people and files before Create; Create open
     : call.method === 'PUT' && call.path.startsWith('/v2/person/documents/') ? 'save'
     : call.path === '/v1/person/list' ? 'open' : null).filter(Boolean);
   await expect.poll(() => steps().filter(step => step !== 'open')).toEqual(['create', 'add Raj', 'add Maya', 'save']);
+  expect(steps()).toContain('open');
   expect(steps().indexOf('open')).toBeLessThan(steps().indexOf('save'));
   expect(creates().map(call => call.body)).toEqual([
     { schema_version: 1, kind: 'echo-project-create-v1', request_id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: 'Cedar' },
