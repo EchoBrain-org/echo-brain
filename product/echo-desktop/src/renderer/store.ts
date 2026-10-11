@@ -917,17 +917,18 @@ export function goHome(): void {
 }
 
 /**
- * The window came forward on Home: re-read the first page and keep the pages
- * loaded after it, so More projects is not lost.
+ * The window came forward: refresh the sidebar on every page, keeping the
+ * pages loaded after the first so More projects is not lost.
  */
-export async function refreshHome(): Promise<void> {
+async function refreshProjects(): Promise<void> {
   const account = expect();
-  if (!account || state.route.page !== 'home' || state.projects.loading) return;
+  if (!account || state.projects.loading) return;
   set({ projects: { ...state.projects, loading: true } });
   const result = await rpc('projects.list', { expect: account, status: 'active' });
-  if (!result.ok || state.route.page !== 'home') {
+  if (expect()?.authority !== account.authority || expect()?.membership_id !== account.membership_id) return;
+  if (!result.ok) {
     set({ projects: { ...state.projects, loading: false } });
-    if (!result.ok) accountLost(result.failure);
+    accountLost(result.failure);
     return;
   }
   const first = result.value.items;
@@ -937,7 +938,6 @@ export async function refreshHome(): Promise<void> {
   const later = loadedMore ? state.projects.items.slice(first.length).filter(project => !seen.has(project.project_id)) : [];
   set({ projects: { items: [...first, ...later], next: loadedMore ? state.projects.next : result.value.next_cursor, loading: false } });
   void loadArchivedProjects();
-  void loadHome();
 }
 
 /** Opens a project, from Home or the sidebar: the bar's scope narrows to it, and its text stays. */
@@ -3236,6 +3236,7 @@ export function resume(): void {
   set({ concealed: false });
   void refreshStatus().then(() => {
     searchAgain();
+    if (!state.concealed) void refreshProjects();
     // The answer's records are read again. A chip chosen meanwhile keeps its pane open.
     if (state.sources && !state.concealed) void readRecords(state.sources.gen);
     // People & invites is read again for whoever is signed in now.
@@ -3247,12 +3248,13 @@ export function resume(): void {
   });
 }
 
-/** The window came forward (⌘E, the tray): the account, Home and the bar's search are read again. */
+/** The window came forward (⌘E, the tray): refresh the account, sidebar and visible Home. */
 export async function windowShown(): Promise<void> {
   if (state.concealed) return;
   await refreshStatus();
   searchAgain();
-  await refreshHome();
+  await refreshProjects();
+  if (state.route.page === 'home' && !state.concealed) void loadHome();
 }
 
 // ---- Home: what needs you ---------------------------------------------------------
