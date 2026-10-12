@@ -125,10 +125,10 @@ documentation checks, TypeScript checking, linting, and the complete root
 Vitest suite. It does not run the desktop app's tests or the `node --test`
 evaluator suites; when a change touches them, also run their commands from
 the table above or the [test map](tests/README.md).
-CI also runs both core evaluation commands above, the research-loop and demo
-evaluator tests, and the desktop app in its own job. The root suite uses at
-most two isolated test workers; mutable Git and packaging fixtures use
-temporary checkouts.
+CI also runs both core evaluation commands above, the research-loop evaluator
+tests, and the desktop app in its own job. Locally the root suite uses at most
+two isolated test workers (CI's Vitest leg uses three); mutable Git and
+packaging fixtures use temporary checkouts.
 
 For operational tools, start with the
 [Authority operator playbook](docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
