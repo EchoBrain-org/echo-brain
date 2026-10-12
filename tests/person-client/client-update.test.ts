@@ -120,15 +120,32 @@ describe('signed cross-platform client updates', () => {
     const f = fixture();
     const session = join(f.directory, 'session-sentinel');
     writeFileSync(session, 'synthetic untouched session', { mode: 0o600 });
-    const result = await runClientUpdate('apply', f.dependencies);
-    expect(result.status).toBe('updated');
-    expect(result.installed_release).toBe(f.manifest.release_id);
+    // The updating process runs A and installs B; that is not a mismatch.
+    const result = await runClientUpdate('apply', { ...f.dependencies, running_release: 'clean-v1-release-a' });
+    expect(result).toMatchObject({ status: 'updated', installed_release: f.manifest.release_id, running_release: 'clean-v1-release-a' });
     expect(f.install).toHaveBeenCalledOnce();
     expect(readFileSync(session, 'utf8')).toBe('synthetic untouched session');
-    expect((await runClientUpdate('automatic', f.dependencies)).status).toBe('not_due');
+    const next = { ...f.dependencies, running_release: f.manifest.release_id };
+    expect((await runClientUpdate('automatic', next)).status).toBe('not_due');
     expect(f.fetcher).toHaveBeenCalledTimes(2);
-    expect((await runClientUpdate('apply', f.dependencies)).status).toBe('current');
+    expect((await runClientUpdate('apply', next)).status).toBe('current');
     expect(f.install).toHaveBeenCalledOnce();
+  });
+
+  it('reports a launcher still running A after the managed command selects B, without checking or installing', async () => {
+    const f = fixture();
+    await runClientUpdate('apply', f.dependencies);
+    const wrapper = readFileSync(join(f.root, 'bin', 'echo-brain'));
+    const state = readFileSync(join(f.root, 'updater/state.json'));
+    const pinned = { ...f.dependencies, running_release: 'clean-v1-release-a' };
+    for (const mode of ['apply', 'check', 'status', 'automatic'] as const) {
+      expect(await runClientUpdate(mode, pinned)).toMatchObject({ status: 'running_release_mismatch', installed_release: f.manifest.release_id, running_release: 'clean-v1-release-a' });
+    }
+    expect(f.fetcher).toHaveBeenCalledTimes(2);
+    expect(f.install).toHaveBeenCalledOnce();
+    expect(readFileSync(join(f.root, 'bin', 'echo-brain'))).toEqual(wrapper);
+    expect(readFileSync(join(f.root, 'updater/state.json'))).toEqual(state);
+    expect(readFileSync(join(f.root, 'releases/clean-v1-release-a/.echo-owned-release-v1'), 'utf8').trim()).toBe('clean-v1-release-a');
   });
 
   it('selects and activates the macOS CLI kit from the same feed as Linux', async () => {
