@@ -17,6 +17,7 @@ const BUNDLE_BUILDER = resolve(
   REPO,
   "tools/build-authority-recovery-helper-bundle.mjs",
 );
+const SOURCE_CHECKOUT = resolve(REPO, "tools/lib/source-checkout.mjs");
 const BUNDLE_WORKFLOW = resolve(
   REPO,
   ".github/workflows/authority-recovery-helper-bundle.yml",
@@ -255,7 +256,9 @@ describe("Authority isolated recovery helper stack", () => {
   it("pins the bundle build itself to clean Linux ARM64 source and the verifier prerequisites", () => {
     expectTypeOf<AuthorityRecoveryHelperBundleManifest>()
       .toHaveProperty("npm_shrinkwrap_sha256").toBeString();
-    const builder = readFileSync(BUNDLE_BUILDER, "utf8");
+    const builder = [BUNDLE_BUILDER, SOURCE_CHECKOUT]
+      .map((path) => readFileSync(path, "utf8"))
+      .join("\n");
     for (const required of [
       'process.platform !== "linux"',
       'process.arch !== "arm64"',
