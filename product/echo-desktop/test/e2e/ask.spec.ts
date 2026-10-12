@@ -129,6 +129,7 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   await field.fill('Second?');
   await field.press('Enter');
   await expect(page.getByTestId('asking')).toContainText('Thinking…');
+  await expect(page.getByTestId('asking').locator('[aria-hidden="true"]')).toHaveText(/^\d+s$/);
   await expect(earlier.locator('.q')).toHaveText(['First?']);
   // The pending state is rendered before its IPC request reaches the fixture.
   // Wait for that receipt before checking that a second follow-up is blocked.
