@@ -65,6 +65,29 @@ Tools → Granola manages folder watching and individual meeting imports. Home a
 decision content is covered while another app is in front, and unfinished checks
 refresh when ECHO returns.
 
+## Develop
+
+Use the repository's pinned Node and npm versions. The app loads the Person
+client built in this checkout, so build it at the root first. From the
+repository root:
+
+```sh
+npm ci
+node tools/build.mjs --person-client
+cd product/echo-desktop
+npm ci
+npm start
+```
+
+`npm start` builds the app and runs it against the test fixture Authority in a
+throwaway home and app-data directory, deleted on exit; it never reads or
+writes your real ECHO session. `npm start -- <mode>` selects one of the
+fixture's test modes in `src/host/test-authority.ts`.
+
+`npm run typecheck` checks the app's TypeScript. `npm test` builds the app,
+then runs the unit tests (`test/unit`, Vitest) and the Electron end-to-end
+tests (`test/e2e`, Playwright). The root `npm run check` runs none of these.
+
 ## Build
 
 Use the repository's pinned Node and npm versions. From the repository root:

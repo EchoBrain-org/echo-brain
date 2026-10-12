@@ -109,6 +109,8 @@ Choose the smallest check that covers the change while iterating:
 | Checking dependency boundaries quickly | `npm run check:architecture-boundaries` | Forbidden imports and package boundaries |
 | Editing docs and evidence references | `npm run check:docs` | Documentation structure and Git proof references |
 | Editing the core evaluation harness | `npm run test:capacity` | Contract and verifier tests in `tools/evals/authority-core` |
+| Editing the research-loop evaluator | `npm run test:research-loop-eval` | `node --test` suites in `tools/evals/research-loop` |
+| Editing the desktop app | `cd product/echo-desktop && npm run typecheck && npm test` | Desktop typecheck, unit and Electron end-to-end tests (see `product/echo-desktop/README.md`) |
 | Measuring one runtime round | `npm run capacity:checkpoint` | Deterministic, provider-independent functional checkpoint; about one minute, not an org-capacity result |
 
 For one test file, run `npm run build:workspaces` followed by
@@ -119,11 +121,14 @@ Workspace builds reuse TypeScript's existing outputs. `npm test` and
 
 Use the focused command that covers the change during the inner loop. Before
 submitting the final reviewable tree, run `npm run check`: boundary and
-documentation checks, TypeScript checking, linting, and the complete active
-test suite.
-CI also runs both core evaluation commands above. The full suite uses at most
-two isolated test workers; mutable Git and packaging fixtures use temporary
-checkouts.
+documentation checks, TypeScript checking, linting, and the complete root
+Vitest suite. It does not run the desktop app's tests or the `node --test`
+evaluator suites; when a change touches them, also run their commands from
+the table above or the [test map](tests/README.md).
+CI also runs both core evaluation commands above, the research-loop and demo
+evaluator tests, and the desktop app in its own job. The root suite uses at
+most two isolated test workers; mutable Git and packaging fixtures use
+temporary checkouts.
 
 For operational tools, start with the
 [Authority operator playbook](docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
