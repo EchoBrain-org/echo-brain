@@ -67,12 +67,15 @@ An adapter owns provider transport and canonicalization. It must not redefine
 core evidence, identity, authorization, or approval semantics.
 
 The organization Granola credential, owner admission, and REST polling path
-have been removed. `providers/granola` retains only transport-free meeting
-normalization and the generic context capture adapter. These transforms preserve
-semantic revisions, transcript attribution and capture bounds; they do not
-acquire provider data or establish access rights. Personal OAuth and folder
-intake remain the next phase of the
-[Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md).
+have been removed. `providers/granola` now implements the personal Granola MCP
+connection through the shared Nango lifecycle, folder enumeration, meeting
+acquisition and normalization
+([ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md)), and
+keeps the generic context capture adapter. It owns transport and
+canonicalization, preserving semantic revisions and transcript attribution;
+custody, extraction and review stay in the Authority. The
+[Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md)
+records its limits and live qualification.
 
 Jira's server-only capture handoff derives its transport and current-grant fences
 from an authenticated Person connection. Meeting processing, approval, revision

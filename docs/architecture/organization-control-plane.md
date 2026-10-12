@@ -345,9 +345,11 @@ when an accepted milestone has an externally observable behavior that cannot
 be implemented safely with the current model.
 
 No Teams, Granola, project-management, or other non-Slack organization-tool
-onboarding is implemented. The Person CLI dispatches the Slack and server-gated
-Jira tool fragments ([connector contracts](connector-contracts.md)); the
-server's Connected tools list reports Slack only today.
+onboarding is implemented. The Person CLI dispatches the Granola, Slack, Jira
+and Confluence tools and the staging synthetic meeting tool
+([connector contracts](connector-contracts.md)); Granola, Jira and Confluence
+are personal connections, not organization tools. The server's Connected tools
+list merges the tools of every composed connector.
 
 ## Schema growth rule
 

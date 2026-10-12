@@ -71,9 +71,12 @@ defines that ceremony and its credential custody.
 
 Organization onboarding no longer requires a Granola credential, owner binding,
 or source admission. Shared meeting admission and approval remain available.
-Personal OAuth and selected-folder intake are specified in the
-[Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md);
-that connection flow is not implemented by the cleanup phase.
+Meetings enter through each person's own source: a person connects Granola with
+`echo-brain person tools connect --tool granola` (or the desktop Tools page)
+and chooses a watched folder
+([ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md); the
+[Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md)
+records its limits).
 
 After that organization tool is active, a signed-in Person runs
 `echo-brain person tools connect --tool slack` (browser sign-in, or a DM-code

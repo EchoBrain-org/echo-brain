@@ -99,9 +99,11 @@ deployment also includes a separate reverse proxy.
 
 Central state is authoritative for organization membership and access,
 provider integration policy, the append-only organization record, and
-centrally served retrieval generations. Under an active organization-recording
-policy it may also hold governed pre-record meeting data from an exactly bound
-member identity and organization-owned source credential. That data remains in
+centrally served retrieval generations. It may also hold governed pre-record
+meeting data from an exactly bound member identity and that member's own
+connected meeting source (a personal Nango grant under
+[ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md), or the
+staging synthetic source). That data remains in
 the pending approval boundary: it is not an organization record, retrieval
 input, or delivery payload until an audited resolution admits it. Central state
 must not accept unrestricted provider payloads or bypass that pending-only

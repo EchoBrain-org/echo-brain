@@ -59,7 +59,7 @@ meeting provider -> MeetingSourceAdapter -> MeetingSourceBridgeV1 ------+
                            /                    \
             document extraction/index       meeting decision workflow
 
-Reusable context capture adapter (no active Granola acquisition)
+Reusable context capture adapter (dormant: no active registration)
   -> SourceAdapterV1<ContextCaptureContentV1>.pull()
   -> createContextSourceIntakeV1() -> intakeContextBatchV1()
   -> SqliteContextCaptureStoreV1 (a SourceAdmissionStoreV1)
@@ -368,7 +368,7 @@ Sharing follows capabilities, so a provider reuses only the layers it needs:
 | Shared layer | Current consumers | Provider-owned behavior |
 | --- | --- | --- |
 | Bounded JSON/UTF-8 reads, byte limits, abort/deadline handling and response cleanup | Jira, Confluence, Slack setup clients, Nango broker | URLs, HTTP/media-type policy, error meanings, retries and provider payloads |
-| Personal Nango connection lifecycle, binding store, connection HTTP/client contracts | Jira and Confluence | OAuth scopes, resource/account verification and API permissions |
+| Personal Nango connection lifecycle, binding store, connection HTTP/client contracts | Granola, Jira and Confluence | OAuth scopes, resource/account verification and API permissions |
 | Project mapping store and current project-grant fence | Jira and Confluence | Mapping shape, project/space discovery and visibility checks |
 | Native Atlassian Document Format text normalization | Jira and Confluence | Requested representation, unsupported-content policy and evidence section identity |
 | Registered live-source dispatch and Ask catalog | Jira, Confluence and explicitly bound Slack reads | Reader implementation and declared scope/capabilities |
@@ -410,8 +410,8 @@ shared meeting custody and processing contracts remain distinct from personal
 live reads. Slack's organization app and approval DM copies likewise retain
 their own lifecycle. A Slack Person read requires a separately authorized
 binding; an organization approval installation alone grants no such access. This refactor
-does not migrate Slack approval onboarding onto the Jira/Confluence personal
-Nango lifecycle.
+does not migrate Slack approval onboarding onto the shared personal Nango
+lifecycle.
 
 ## Extension rule
 

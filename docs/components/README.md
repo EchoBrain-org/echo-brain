@@ -75,9 +75,9 @@ The shared implementation packages are `packages/organization-processing` and
 
 ### Reusing personal tool connections
 
-For Jira and Confluence, Nango owns browser consent, credential storage, and
-refresh. ECHO stores only the connection reference and the person, membership,
-account, and consent attempt that may use it. The shared server package
+For Granola, Jira and Confluence, Nango owns browser consent, credential
+storage, and refresh. ECHO stores only the connection reference and the person,
+membership, account, and consent attempt that may use it. The shared server package
 `@echo-brain/provider-runtime` implements that lifecycle, revocation checks,
 connection HTTP routes, and bounded authenticated JSON requests. The shared
 client contracts and consent commands live in `packages/organization-api`.
