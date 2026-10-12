@@ -1,5 +1,4 @@
 import { chmodSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +11,7 @@ import { openOrganizationAuthorityRuntime } from '../src/composition/organizatio
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 import { initializePersonSessionCredentials } from '../src/composition/person-onboarding-service.js';
+import { port as availablePort } from './fixtures/owner-session.js';
 
 // The real meeting runtime, recording the diagnostics its meeting worker claims captures through.
 const meetingDiagnostics = vi.hoisted(() => [] as unknown[]);
@@ -25,14 +25,6 @@ vi.mock('../src/composition/person-meeting-runtime-v1.js', async importOriginal 
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-
-async function availablePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>(resolve => server.close(() => resolve()));
-  return port;
-}
 
 const generation: AnswerCompositionGenerationBindingV1 = {
   generation: { generation_adapter_id: 'personal-only-generation', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1000 },

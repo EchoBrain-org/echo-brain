@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -6,17 +6,13 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV4, validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
-import { readPrivateAuthorityPersonSessionPkceKey } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import type { NangoConnectionClientV1 } from '@echo-brain/provider-slack-server/organization-control-plane/adapters/nango/nango-connection-client-v1';
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
-import type { BegunPersonOidcLogin } from '../src/application/person-identity-sessions.js';
-import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
-import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from '../src/composition/person-onboarding-service.js';
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
 import { createJourneyTelemetryTransportV1 } from '../src/composition/observability/journey-telemetry-transport-v1.js';
 import { FIXTURE_JIRA_CLOUD_V1 as CLOUD, FIXTURE_JIRA_SITE_V1 as SITE, fakeJiraCloudFetchV1, fakeJiraNangoV1 } from './fixtures/fake-jira-v1.js';
-import { port } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
+import { ownerGenesis, port, signInHttp, syntheticOidcProvider } from './fixtures/owner-session.js';
 
 const EMAIL = 'founder@example.test';
 const AUTHORITY = 'https://authority.example.test';
@@ -27,17 +23,11 @@ afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, 
 /** Production selecting composition and real Person sessions; both providers and models are synthetic. */
 it('connects Jira for the authenticated Person, audits tickets before Ask, and retains modern Slack Nango setup wiring', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-jira-ask-proof-'))); chmodSync(root, 0o700); roots.push(root);
-  const initialized = bootstrapOrganizationAuthorityState({ state_directory: join(root, 'state'), organization_display_name: 'Fixture', owner_display_name: 'Founder', created_at: new Date(Date.now() - 1000).toISOString(), creating_artifact_revision: 'jira-fixture' });
+  const genesis = ownerGenesis({ root, oidc: OIDC, email: EMAIL, authority_url: AUTHORITY, revision: 'jira-fixture' });
+  const { initialized, credentials: keys } = genesis;
   const state = initialized.state_directory;
-  const keys = initializePersonSessionCredentials({ state_directory: state });
-  const invitation = join(root, 'invitation.json');
-  issuePersonOnboardingInvitation({ state_directory: state, oidc: OIDC, pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(keys.pkce_sealing_key_reference), membership_id: initialized.owner_membership_id, expected_email: EMAIL, authority_url: AUTHORITY, output_path: invitation });
-  let attempt: BegunPersonOidcLogin | undefined;
   let loginEmail = EMAIL;
-  const oidc_provider = {
-    buildAuthorizationUrl(value: BegunPersonOidcLogin) { attempt = value; return `${OIDC.issuer}/authorize?state=${encodeURIComponent(value.state)}`; },
-    async redeemAuthorizationCode() { return { kind: 'verified' as const, token: { issuer: OIDC.issuer, subject: `fixture-${loginEmail}`, audience: OIDC.client_id, nonce: attempt!.nonce, issued_at: Math.floor(Date.now() / 1000), claims: { email: loginEmail, email_verified: true } } }; },
-  };
+  const oidc_provider = syntheticOidcProvider(OIDC, () => loginEmail);
   const jira = fakeJiraNangoV1();
   // Wrong key normalization or phrase semantics must produce an empty provider
   // result, not the fixture ticket that used to hide every query error.
@@ -96,14 +86,9 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(response.status).toBe(200);
     return validateOrganizationPersonToolsV4(await response.json()).tools;
   };
-  const login = async (login_grant: string, code: string) => {
-    const begun = await post('/v2/session/oidc/begin', { kind: 'identity_bootstrap', login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } });
-    expect(begun.status).toBe(201);
-    const page = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(attempt!.state)}&code=${code}`)).text();
-    return (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
-  };
+  const login = (login_grant: string, code: string) => signInHttp(origin, oidc_provider, login_grant, code);
   try {
-    owner = await login((JSON.parse(readFileSync(invitation, 'utf8')) as { login_grant: string }).login_grant, 'synthetic');
+    owner = await login(genesis.login_grant, 'synthetic');
     expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', display_name: 'Jira', availability: 'enabled', personal_status: 'unlinked', external_subject_id: null })]));
     expect((await post('/v1/person/tools/jira/connect', { schema_version: 1 }, 'wrong-person-token')).status).toBe(401);
     const connected = await post('/v1/person/tools/jira/connect', { schema_version: 1 }); expect(connected.status).toBe(201);

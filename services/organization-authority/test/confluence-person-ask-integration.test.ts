@@ -1,17 +1,13 @@
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV6 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
-import type { BegunPersonOidcLogin } from '../src/application/person-identity-sessions.js';
-import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
-import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from '../src/composition/person-onboarding-service.js';
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
-import { readPrivateAuthorityPersonSessionPkceKey } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
 import { FIXTURE_CONFLUENCE_CLOUD_V1 as CLOUD, FIXTURE_CONFLUENCE_SITE_V1 as SITE, fakeConfluenceCloudFetchV1, fakeConfluenceNangoV1 } from './fixtures/fake-confluence-v1.js';
-import { port } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
+import { ownerGenesis, port, signInHttp, syntheticOidcProvider } from './fixtures/owner-session.js';
 
 const EMAIL = 'founder@example.test';
 const AUTHORITY = 'https://authority.example.test';
@@ -22,15 +18,9 @@ afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, 
 /** Production Authority composition with synthetic OIDC/model/provider boundaries. */
 it('catalogs, connects, maps, cites, and disconnects Confluence page evidence through the V6 Ask route', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-confluence-ask-proof-'))); chmodSync(root, 0o700); roots.push(root);
-  const initialized = bootstrapOrganizationAuthorityState({ state_directory: join(root, 'state'), organization_display_name: 'Fixture', owner_display_name: 'Founder', created_at: new Date(Date.now() - 1000).toISOString(), creating_artifact_revision: 'confluence-fixture' });
-  const keys = initializePersonSessionCredentials({ state_directory: initialized.state_directory });
-  const invitation = join(root, 'invitation.json');
-  issuePersonOnboardingInvitation({ state_directory: initialized.state_directory, oidc: OIDC, pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(keys.pkce_sealing_key_reference), membership_id: initialized.owner_membership_id, expected_email: EMAIL, authority_url: AUTHORITY, output_path: invitation });
-  let attempt: BegunPersonOidcLogin | undefined;
-  const oidc_provider = {
-    buildAuthorizationUrl(value: BegunPersonOidcLogin) { attempt = value; return `${OIDC.issuer}/authorize?state=${encodeURIComponent(value.state)}`; },
-    async redeemAuthorizationCode() { return { kind: 'verified' as const, token: { issuer: OIDC.issuer, subject: 'fixture-founder', audience: OIDC.client_id, nonce: attempt!.nonce, issued_at: Math.floor(Date.now() / 1000), claims: { email: EMAIL, email_verified: true } } }; },
-  };
+  const genesis = ownerGenesis({ root, oidc: OIDC, email: EMAIL, authority_url: AUTHORITY, revision: 'confluence-fixture' });
+  const { initialized, credentials: keys } = genesis;
+  const oidc_provider = syntheticOidcProvider(OIDC, () => EMAIL);
   const confluence = fakeConfluenceNangoV1();
   const confluenceFetch = fakeConfluenceCloudFetchV1();
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
@@ -65,10 +55,7 @@ it('catalogs, connects, maps, cites, and disconnects Confluence page evidence th
     expect(response.status).toBe(200); return validateOrganizationPersonToolsV4(await response.json()).tools;
   };
   try {
-    const login_grant = (JSON.parse(readFileSync(invitation, 'utf8')) as { login_grant: string }).login_grant;
-    expect((await post('/v2/session/oidc/begin', { kind: 'identity_bootstrap', login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } })).status).toBe(201);
-    const page = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(attempt!.state)}&code=synthetic`)).text();
-    owner = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
+    owner = await signInHttp(origin, oidc_provider, genesis.login_grant);
     expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'confluence', personal_status: 'unlinked', external_subject_id: null })]));
     const connected = await post('/v1/person/tools/confluence/connect', { schema_version: 1 }); expect(connected.status).toBe(201);
     expect(confluence.tags()).toMatchObject({ organization_id: initialized.organization_id, echo_membership: initialized.owner_membership_id });
