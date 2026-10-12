@@ -27,11 +27,12 @@ const source_cursor_policy = Object.freeze({
 });
 
 /**
- * The personal intake writes a checkpoint when it admits the source. This
- * benchmark never watches a folder or queues a manual import: meetings arrive
- * only through `offer`, and the processing cycle owns the cursor from then on.
- * So the codec accepts exactly the empty initial checkpoint and maps it to the
- * first offered position.
+ * The personal intake asks the codec for the initial cursor when it admits the
+ * source. This benchmark never watches a folder or queues a manual import:
+ * meetings arrive only through `offer`, and the processing cycle owns the cursor
+ * from then on. So the initial cursor is the first offered position, the codec
+ * writes exactly the empty checkpoint to that same position, a watch is refused
+ * and automatic import is never active.
  */
 const checkpoint_codec = Object.freeze({
   read(value) {
@@ -43,6 +44,15 @@ const checkpoint_codec = Object.freeze({
       throw new Error("core input admits only the empty initial checkpoint");
     }
     return cursor(0);
+  },
+  initial() {
+    return cursor(0);
+  },
+  watch() {
+    throw new Error("core input never watches a folder");
+  },
+  ready() {
+    return false;
   },
 });
 
