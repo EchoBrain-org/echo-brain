@@ -4,16 +4,22 @@ An invariant is a precise rule that must or must not hold across a declared
 scope. It is stronger than an implementation note and narrower than a product
 vision.
 
-The current permission catalog remains in the
+The `INV-01` through `INV-12` and `AD-*` statements remain in the
 [architecture invariant registry](../product/2026-08-11-architecture-invariant-registry.md)
-while stable records are migrated here. Do not change its normative meaning
-during migration.
+while stable records are migrated here. Do not change their normative meaning
+during migration. The registry's implementation, deferred-work and
+approval-surface tables are pinned to the baselines it names (last revised
+2026-09-26) and do not describe current enforcement. For current Person content-release
+scope, including ADR-0010 related-atom expansion and the Layer 4 Ask boundary,
+see [INV-PERMISSIONS-015](INV-PERMISSIONS-015-layer-3-person-release-boundary.md);
+for provider-to-ECHO identity scope, see
+[INV-IDENTITY-005](INV-IDENTITY-005-adapter-to-echo-identity-chain.md).
 
 ## Index
 
 | ID | Statement | Scope | Implementation | Assurance |
 | --- | --- | --- | --- | --- |
-| `INV-01` through `INV-12` | Permission and append/retrieval invariants | Permission system | See current registry | See current registry |
+| `INV-01` through `INV-12` | Permission and append/retrieval invariants | Permission system | pinned to registry baselines; current scope in `INV-PERMISSIONS-015` | registry baselines (historical) |
 | [`INV-ADAPTERS-001`](INV-ADAPTERS-001-provider-transport.md) | Provider transport is part of the verified contract | External provider methods | partial | linked tests |
 | [`INV-IDENTITY-001`](INV-IDENTITY-001-symmetric-provider-proof.md) | Provider identity proof is complete and symmetric | Provider enrollment and action-time proof | partial | linked tests and live evidence |
 | [`INV-ADAPTERS-002`](INV-ADAPTERS-002-durable-external-reference.md) | External object identity is durable before verification | Consequential provider writes | partial | linked tests and live evidence |
