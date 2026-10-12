@@ -10,8 +10,8 @@ import { JiraConnectionStoreV1, type JiraStoredConnectionV1 } from './jira-conne
 import { createJiraCloudTransportV1, type JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { createJiraPersonLiveEvidenceReaderV1 } from './jira-person-live-evidence-reader-v1.js';
 import type { JiraNangoV1 } from './jira-nango-v1.js';
-import { jiraProjectMatches, parseJiraProject, verifyJiraConnectionV1 } from './jira-payload-v1.js';
-import { copyJiraBindingV1, JIRA_PERSON_PROVIDER_V1, jiraFailure } from './jira-validation-v1.js';
+import { jiraProjectMatches, parseJiraProject, readJiraAssigneeAccountsV1, verifyJiraConnectionV1 } from './jira-payload-v1.js';
+import { copyJiraBindingV1, JIRA_ID, JIRA_PERSON_PROVIDER_V1, jiraFailure } from './jira-validation-v1.js';
 
 export type JiraPersonAuthorizationV1 = PersonConnectionAuthorizationV1;
 /**
@@ -41,6 +41,16 @@ export function createJiraPersonConnectionV1(options: {
   });
   const { actor, tags, authenticated } = shared;
   const { projectAccess, mappingInput } = createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, options);
+  async function captureConnection(input: { readonly access_token: string; readonly signal?: AbortSignal }): Promise<JiraCurrentCaptureConnectionV1> {
+    const { person, requirePerson } = actor(input.access_token); input.signal?.throwIfAborted();
+    const stored = options.store.current(person);
+    if (stored === undefined || !stored.active) jiraFailure('unauthorized');
+    const binding = copyJiraBindingV1(stored.binding);
+    const current = () => { requirePerson(); options.store.requireCurrent(binding); };
+    current(); input.signal?.throwIfAborted();
+    const transport = createJiraCloudTransportV1(authenticated(binding, stored.reference, tags(person, stored.attempt), current));
+    return Object.freeze({ transport, require_current: current });
+  }
   return Object.freeze({
     ...shared.application,
     projectRead(input: { readonly access_token: string; readonly request: unknown }): JiraProjectMappingV1 {
@@ -86,15 +96,13 @@ export function createJiraPersonConnectionV1(options: {
       requirePerson();
       return Object.freeze({ connected: stored?.active === true });
     },
-    async captureConnection(input: { readonly access_token: string; readonly signal?: AbortSignal }): Promise<JiraCurrentCaptureConnectionV1> {
-      const { person, requirePerson } = actor(input.access_token); input.signal?.throwIfAborted();
-      const stored = options.store.current(person);
-      if (stored === undefined || !stored.active) jiraFailure('unauthorized');
-      const binding = copyJiraBindingV1(stored.binding);
-      const current = () => { requirePerson(); options.store.requireCurrent(binding); };
-      current(); input.signal?.throwIfAborted();
-      const transport = createJiraCloudTransportV1(authenticated(binding, stored.reference, tags(person, stored.attempt), current));
-      return Object.freeze({ transport, require_current: current });
+    captureConnection,
+    /** Assignee account ids by ticket id, read in bulk with this person's own connection. */
+    async assigneeAccounts(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string>> {
+      const ticket_ids = [...new Set(input.ticket_ids)].filter(id => JIRA_ID.test(id));
+      if (ticket_ids.length === 0) return new Map();
+      const { transport } = await captureConnection(input);
+      return readJiraAssigneeAccountsV1(transport, { cloud_id: cloud, ticket_ids, signal: input.signal });
     },
     async source(input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined> {
       const { person, requirePerson } = actor(input.access_token);

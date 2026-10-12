@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { JiraOwnerAccountsV1 } from '../src/application/ports/jira-owner-accounts-v1.js';
+import type { TicketOwnerAccountsV1 } from '../src/application/ports/ticket-owner-accounts-v1.js';
 import { matchImpactOwnersV1, type ImpactOwnerPeopleV1 } from '../src/composition/impact-owner-matching-v1.js';
 
 type Person = { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string };
@@ -22,13 +22,13 @@ const slack = () => ({ kind: 'slack_message', team_id: 'T0FIXTURE', channel_id: 
 
 function fakeJira(options: { readonly assignees: ReadonlyMap<string, string> | Error; readonly people: Readonly<Record<string, readonly Person[]>> }) {
   return {
-    cloud_id: CLOUD,
+    tool_id: 'jira', external_scope_id: CLOUD,
     assignees: vi.fn(async (_input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }) => {
       if (options.assignees instanceof Error) throw options.assignees;
       return options.assignees;
     }),
     people: vi.fn((accountId: string) => options.people[accountId] ?? []),
-  } satisfies JiraOwnerAccountsV1;
+  } satisfies TicketOwnerAccountsV1;
 }
 
 /** ECHO's directory: active members by exact display name; `inactive` memberships have left. */
@@ -47,7 +47,7 @@ describe('impact owner matching', () => {
       { pointer: record(), owner_name: 'Rafael Moreno' },
       { pointer: page(), owner_name: 'Someone' },
       { pointer: ticket('10047'), owner_name: 'Rafael Moreno' },
-    ], approver: ARI, access_token: 'tok', people: people({ 'Rafael Moreno': ['mem_rafael'] }), jira });
+    ], approver: ARI, access_token: 'tok', people: people({ 'Rafael Moreno': ['mem_rafael'] }), owners: jira });
     expect(result).toEqual([
       { owner_membership_id: MINA.membership_id, owner_match: 'jira_account' },
       { owner_membership_id: 'mem_rafael', owner_match: 'name' },
@@ -73,21 +73,21 @@ describe('impact owner matching', () => {
       { pointer: ticket('10047') },
       { pointer: ticket('10048', OTHER_CLOUD) },
       { pointer: ticket('10049') },
-    ], approver: ARI, access_token: 'tok', people: directory, jira })).toEqual([APPROVER, APPROVER, APPROVER, APPROVER, APPROVER]);
+    ], approver: ARI, access_token: 'tok', people: directory, owners: jira })).toEqual([APPROVER, APPROVER, APPROVER, APPROVER, APPROVER]);
     expect(jira.assignees).toHaveBeenCalledWith({ access_token: 'tok', ticket_ids: ['10046', '10047', '10049'] });
 
     const failed = fakeJira({ assignees: new Error('Jira is unavailable'), people: { 'acct-mina': [MINA] } });
     expect(await matchImpactOwnersV1({ candidates: [{ pointer: ticket('10046') }, { pointer: record(), owner_name: 'Rafael Moreno' }],
-      approver: ARI, access_token: 'tok', people: directory, jira: failed })).toEqual([APPROVER, { owner_membership_id: 'mem_rafael', owner_match: 'name' }]);
+      approver: ARI, access_token: 'tok', people: directory, owners: failed })).toEqual([APPROVER, { owner_membership_id: 'mem_rafael', owner_match: 'name' }]);
     const brokenStore = { ...fakeJira({ assignees: new Map([['10046', 'acct-mina']]), people: {} }), people: () => { throw new Error('connection store is unavailable'); } };
     const brokenDirectory: ImpactOwnerPeopleV1 = {
       activeByName: () => { throw new Error('directory is unavailable'); },
       isActiveMember: () => { throw new Error('directory is unavailable'); },
     };
     expect(await matchImpactOwnersV1({ candidates: [{ pointer: ticket('10046') }, { pointer: record(), owner_name: 'Rafael Moreno' }],
-      approver: ARI, access_token: 'tok', people: directory, jira: brokenStore })).toEqual([APPROVER, { owner_membership_id: 'mem_rafael', owner_match: 'name' }]);
+      approver: ARI, access_token: 'tok', people: directory, owners: brokenStore })).toEqual([APPROVER, { owner_membership_id: 'mem_rafael', owner_match: 'name' }]);
     expect(await matchImpactOwnersV1({ candidates: [{ pointer: ticket('10046') }, { pointer: record(), owner_name: 'Rafael Moreno' }],
-      approver: ARI, access_token: 'tok', people: brokenDirectory, jira: fakeJira({ assignees: new Map([['10046', 'acct-mina']]), people: { 'acct-mina': [MINA] } }) }))
+      approver: ARI, access_token: 'tok', people: brokenDirectory, owners: fakeJira({ assignees: new Map([['10046', 'acct-mina']]), people: { 'acct-mina': [MINA] } }) }))
       .toEqual([APPROVER, APPROVER]);
   });
 
@@ -106,9 +106,10 @@ describe('impact owner matching', () => {
       { owner_membership_id: 'mem_rafael', owner_match: 'name' },
       APPROVER, APPROVER, APPROVER, APPROVER, APPROVER, APPROVER,
     ]);
-    // No ticket on the runtime's site: no Jira read at all.
+    // No ticket on the owner accounts' tool and site: no assignee read at all.
     const jira = fakeJira({ assignees: new Map(), people: {} });
-    await matchImpactOwnersV1({ candidates: [{ pointer: record(), owner_name: 'Rafael Moreno' }, { pointer: ticket('10046', OTHER_CLOUD) }], approver: ARI, access_token: 'tok', people: directory, jira });
+    await matchImpactOwnersV1({ candidates: [{ pointer: record(), owner_name: 'Rafael Moreno' }, { pointer: ticket('10046', OTHER_CLOUD) }, { pointer: ticket('10047', CLOUD, 'linear') }],
+      approver: ARI, access_token: 'tok', people: directory, owners: jira });
     expect(jira.assignees).not.toHaveBeenCalled();
   });
 });

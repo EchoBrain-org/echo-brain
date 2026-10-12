@@ -365,14 +365,14 @@ export async function startOrganizationAuthorityApiRuntime(
       const runs = new SqliteTriggerRunsV1(database);
       const items = new SqliteImpactItemsV1(database);
       const people = new SqliteOpenItemPeopleV1(database);
-      // Jira assignees match impact owners only when the Jira live connector is configured.
-      const jiraOwners = liveConnectors.find(({ runtime }) => runtime.owners !== undefined)?.runtime.owners;
+      // Ticket assignees match impact owners only when a live connector that reads them is configured.
+      const owners = liveConnectors.find(({ runtime }) => runtime.owners !== undefined)?.runtime.owners;
       return Object.freeze({
         ...createPersonTriggerRunsV1({
           runs, sessions, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, audit: answerOptions.audit, bind_options: answerOptions, live_sources: liveSources,
           research: ({ desk, context }) => createAgenticResearchV1({ desk, model: dependencies.answer_composition_background ?? answerOptions.model, generation: answerOptions.generation, audit: answerOptions.audit.forRequest(context),
             ...(answerOptions.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}) }),
-          items, people, ...(jiraOwners === undefined ? {} : { jira_owners: jiraOwners }),
+          items, people, ...(owners === undefined ? {} : { owners }),
         }),
         ...createPersonOpenItemsV1({ sessions, runs, items, people, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, bind_options: answerOptions, live_sources: liveSources }),
       });

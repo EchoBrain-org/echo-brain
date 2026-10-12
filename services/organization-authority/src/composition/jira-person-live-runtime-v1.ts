@@ -9,16 +9,11 @@ import { createJiraPersonConnectionV1, type JiraPersonConnectionV1 } from '@echo
 import Database from 'better-sqlite3';
 import { join } from 'node:path';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
-import type { JiraOwnerAccountsV1 } from '../application/ports/jira-owner-accounts-v1.js';
+import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
 import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
 
 /** ADR-0026 permits person-bound live reads; runtime selection remains explicit. */
 export const JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 = true;
-
-/** Jira's bulk fetch reads at most 100 issues per call. */
-const BULK_FETCH_MAX_IDS = 100;
-const TICKET_ID = /^[1-9][0-9]{0,19}$/;
-const ACCOUNT_ID = /^[A-Za-z0-9:_-]{1,128}$/;
 
 /** Explicit selecting configuration, absent until enabled by an operator. */
 export interface JiraPersonLiveConfigurationV1 {
@@ -36,7 +31,7 @@ export interface OpenedJiraPersonLiveRuntimeV1 {
   readonly application: JiraPersonConnectionV1;
   readonly connection_http: ProviderHttpApplicationV1;
   /** Assignee accounts for matching impact owners, read with the caller's own connection. */
-  readonly owners: JiraOwnerAccountsV1;
+  readonly owners: TicketOwnerAccountsV1;
   tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]>;
   close(): void;
 }
@@ -69,33 +64,11 @@ export function openJiraPersonLiveRuntimeV1(options: {
       fetch: transport,
       authenticate: personToolAuthenticationV1(options.sessions),
     });
-    const owners: JiraOwnerAccountsV1 = Object.freeze({
-      cloud_id,
-      async assignees(input: Parameters<JiraOwnerAccountsV1['assignees']>[0]): Promise<ReadonlyMap<string, string>> {
-        const ids = [...new Set(input.ticket_ids)].filter(id => TICKET_ID.test(id));
-        if (ids.length === 0) return new Map();
-        try {
-          const { transport: jira } = await application.captureConnection({ access_token: input.access_token, signal: input.signal });
-          // The provider's own output checks; any malformed page fails the whole read.
-          const { record, array, string, failure } = store.provider;
-          const found = new Map<string, string>();
-          for (let offset = 0; offset < ids.length; offset += BULK_FETCH_MAX_IDS) {
-            const batch = new Set(ids.slice(offset, offset + BULK_FETCH_MAX_IDS));
-            const page = record(await jira.request({ path: `/ex/jira/${cloud_id}/rest/api/3/issue/bulkfetch`, method: 'POST',
-              body: { issueIdsOrKeys: [...batch], fields: ['assignee'] }, signal: input.signal }));
-            const seen = new Set<string>();
-            // issueErrors name tickets this person cannot read; they are left out.
-            for (const raw of array(page.issues, batch.size)) {
-              const issue = record(raw);
-              const id = string(issue.id, 20, TICKET_ID);
-              if (!batch.has(id) || seen.has(id)) failure('invalid_output');
-              seen.add(id);
-              const assignee = record(issue.fields).assignee;
-              if (assignee !== null && assignee !== undefined) found.set(id, string(record(assignee).accountId, 128, ACCOUNT_ID));
-            }
-          }
-          return found;
-        } catch { return new Map(); }
+    const owners: TicketOwnerAccountsV1 = Object.freeze({
+      tool_id: 'jira', external_scope_id: cloud_id,
+      async assignees(input: Parameters<TicketOwnerAccountsV1['assignees']>[0]): Promise<ReadonlyMap<string, string>> {
+        // A failed read, including a malformed page, matches no one.
+        try { return await application.assigneeAccounts(input); } catch { return new Map(); }
       },
       people: (accountId: string) => store.peopleForSubject(cloud_id, accountId),
     });

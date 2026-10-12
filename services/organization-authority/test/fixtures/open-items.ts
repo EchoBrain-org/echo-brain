@@ -7,7 +7,7 @@ import { expect, vi } from 'vitest';
 import { SqliteImpactItemsV1, type ImpactItemVerdictV1 } from '../../src/adapters/persistence/sqlite/impact-items-v1.js';
 import { SqliteOpenItemPeopleV1 } from '../../src/adapters/persistence/sqlite/open-item-people-v1.js';
 import { SqliteTriggerRunsV1, enqueueApprovedRecordRunV1 } from '../../src/adapters/persistence/sqlite/trigger-runs-v1.js';
-import type { JiraOwnerAccountsV1 } from '../../src/application/ports/jira-owner-accounts-v1.js';
+import type { TicketOwnerAccountsV1 } from '../../src/application/ports/ticket-owner-accounts-v1.js';
 import { createPersonOpenItemsV1, type OpenItemsLiveFailureV1 } from '../../src/composition/person-open-items-v1.js';
 import type { PersonReadableDecisionsV1 } from '../../src/composition/person-record-search-route.js';
 import { createPersonTriggerRunsV1 } from '../../src/composition/person-trigger-runs-v1.js';
@@ -203,8 +203,8 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     }) }));
   const accounts = { mina: 'acct-mina', okafor: 'acct-okafor', none: undefined };
   const assignee = accounts[options.ticketOwner ?? 'mina'];
-  const jira_owners: JiraOwnerAccountsV1 = {
-    cloud_id: CLOUD,
+  const owners: TicketOwnerAccountsV1 = {
+    tool_id: 'jira', external_scope_id: CLOUD,
     assignees: vi.fn(async ({ ticket_ids }: { readonly ticket_ids: readonly string[] }) => {
       if (options.jiraFails === true) throw new Error('Jira is unavailable');
       return new Map(assignee === undefined ? [] : ticket_ids.map(id => [id, assignee] as const));
@@ -217,7 +217,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
   const bind_options = { authority_id: 'authority', state_lineage_id: 'lineage' } as never;
   const clock = () => now;
   const runsApp = createPersonTriggerRunsV1({ runs, sessions, records, bindDesk: bindDesk as never, audit: {} as never, bind_options, research: research as never,
-    items, people: directory, jira_owners, lease_ms: 60_000, now: clock });
+    items, people: directory, owners, lease_ms: 60_000, now: clock });
   const liveFailures: OpenItemsLiveFailureV1[] = [];
   /** The open-items service's options, so a test can build it again with one of them changed. */
   const openItemsOptions = { sessions, runs, items, people: directory, records, bindDesk: bindDesk as never, bind_options, now: clock,
@@ -248,7 +248,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
   const runItems = (access_token: FixturePerson = 'ari') => app.items({ access_token, request: { schema_version: 1, operation: 'items', scope: 'run', id: run.run_id } });
   return {
     // `db` comes with `f`, typed by the approval fixture's named interface, so this inferred type can be emitted.
-    ...f, runs, items, directory, records, readable, bindDesk, openCitation, opened, revalidated, liveFailures, openItemsOptions, jira_owners, research, card, app, runsApp, openItemsApp,
+    ...f, runs, items, directory, records, readable, bindDesk, openCitation, opened, revalidated, liveFailures, openItemsOptions, owners, research, card, app, runsApp, openItemsApp,
     runId: run.run_id, record: recordSha256, people, outsideText, finishImpactRun, runItems,
     membership: (name: FixturePerson) => people[name].membership_id,
     okaforMembership: people.okafor.membership_id,
