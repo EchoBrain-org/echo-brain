@@ -2114,7 +2114,7 @@ function appliedProjectSetting(project: ProjectSummary, operation: 'rename' | 'a
   forgetLeftProject(project.project_id);
 }
 
-/** Leaving removes every local target for the project before returning Home. */
+/** Leaving removes every local target for the project before returning Home, which reads again. */
 function forgetLeftProject(projectId: string): void {
   const projects = state.projects.items.filter(project => project.project_id !== projectId);
   const archivedProjects = state.archivedProjects.items.filter(project => project.project_id !== projectId);
@@ -2138,6 +2138,7 @@ function forgetLeftProject(projectId: string): void {
   listChanged();
   if (making && ownProject) finishNewProject(making);
   unresolvedChanged();
+  void loadHome();
 }
 
 // ---- people ----------------------------------------------------------------------

@@ -123,6 +123,22 @@ describe('leaving a project', () => {
     await flush();
     expect(store.getState().compose).toMatchObject({ status: 'unknown', kept: true, readers: 'projects', requestId, projects: [apollo] });
   });
+
+  it('reads Home again, so a Home load dropped on the way there is not left busy', async () => {
+    const homeTools = held.hold('account.tools');
+    const store = await startStore();
+    await store.openProject(apollo);
+    await flush();
+    homeTools(ok({ tools: [] }));
+    await flush();
+    expect(store.getState().home?.loading).toBe(true);
+    store.toggleProjectSettings(apollo, 'sidebar');
+    store.askProjectSetting('leave');
+    store.confirmProjectSetting();
+    await flush();
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.getState().home?.loading).toBe(false);
+  });
 });
 
 describe('leaving Ask while it answers', () => {
