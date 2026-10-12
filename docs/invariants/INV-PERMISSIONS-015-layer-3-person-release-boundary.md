@@ -105,7 +105,11 @@ ID narrow every read; moved tickets, mapping edits/removal and lost membership
 invalidate in-flight evidence. A runtime project fence cannot be widened by a
 mapping. The mapping stores configuration coordinates only, never tool content.
 Mine and unmapped ECHO projects exclude Jira. Runtime model-content capture is
-suppressed once live metadata or text enters a prompt; operational metrics remain.
+suppressed once live metadata or text enters a prompt, except for the selected
+diagnostic paths that
+[connector contracts](../architecture/connector-contracts.md#live-evidence)
+name (the person's own one-use capture and the operator-selected, staging-only
+LangSmith exporter); operational metrics remain.
 
 ADR-0032 extends the same rule to a stored run of an approved record's impact
 check. The check runs as the approver with that person's own access, and the

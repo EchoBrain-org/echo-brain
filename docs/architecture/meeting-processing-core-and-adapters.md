@@ -335,7 +335,9 @@ opening releases bounded sections with stable page and section coordinates,
 the provider version, and a digest of the text actually read. Continuations
 remain bound to the request, and current provider permissions are rechecked
 before evidence reaches a model or an answer. Page bodies remain in request
-memory and never enter source admission, capture, indexing, or change history.
+memory and never enter source admission, capture, indexing, or change history,
+except through the selected diagnostic paths that
+[connector contracts](connector-contracts.md#live-evidence) name.
 The new answer response version keeps historical citation codecs strict.
 Confluence query syntax, pagination, body formats, and site validation remain
 inside the provider; the planner uses shared source capabilities.
