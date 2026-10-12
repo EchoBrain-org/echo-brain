@@ -12,7 +12,6 @@ import {
   type PersonHumanActActionV2,
   type PersonHumanActResolutionRefV1View,
   type ProjectPersonPolicyFactsV2Input,
-  type RevalidatedPersonPolicyAuthorizationWitnessV2,
   type StructurallyVerifiedPersonPolicyRecordV4View,
 } from '../src/application/person-policy-facts-v2.js';
 import {
@@ -20,6 +19,7 @@ import {
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PersonPolicyIdV2,
 } from '../src/application/person-policy-fact-contracts-v2.js';
+import { authorizationWitness } from './fixtures/record-append-fixture.js';
 
 const AUTHORITY_ID = 'oau_authority_one';
 const ORGANIZATION_ID = 'org_organization_one';
@@ -62,45 +62,6 @@ function reference(
   };
 }
 
-function witness(
-  ref: PersonHumanActResolutionRefV1View,
-): RevalidatedPersonPolicyAuthorizationWitnessV2 {
-  return {
-    authorization_allow: {
-      authority_id: ref.authority_id,
-      organization_id: ref.organization_id,
-      state_lineage_id: ref.state_lineage_id,
-      approval_id: ref.approval_id,
-      action: ref.action,
-      policy_id: ref.policy_id,
-      policy_contract_sha256: ref.policy_contract_sha256,
-      principal_id: PRINCIPAL_ID,
-      membership_id: MEMBERSHIP_ID,
-      provider_action_sha256: ref.provider_action_sha256,
-      decision: 'allow',
-    },
-    authorization_proof_sha256: ref.authorization_proof_sha256,
-    provider_action_kind: ref.provider_action_kind,
-    provider_action_schema_version: ref.provider_action_schema_version,
-    audit_entry: {
-      authority_id: ref.authority_id,
-      organization_id: ref.organization_id,
-      state_lineage_id: ref.state_lineage_id,
-      audit_event_id: ref.audit_event_id,
-      audit_sequence: ref.audit_sequence,
-      actor_class: 'provider_human',
-      principal_id: PRINCIPAL_ID,
-      membership_id: MEMBERSHIP_ID,
-      action: ref.action,
-      subject_kind: 'approval',
-      subject_id: ref.approval_id,
-      detail_digest: ref.authorization_proof_sha256,
-      provider_action_sha256: ref.provider_action_sha256,
-    },
-    audit_entry_sha256: ref.audit_entry_sha256,
-  };
-}
-
 function approvedEvent(options: FixtureOptions): ApprovedPersonPolicyEventV4View {
   return {
     kind: 'approved',
@@ -136,7 +97,7 @@ function fixture(
   return {
     envelope,
     record_position: 11,
-    witness: witness(ref),
+    witness: authorizationWitness({ human_act_resolution_ref: ref }, { principal_id: PRINCIPAL_ID, membership_id: MEMBERSHIP_ID }),
   };
 }
 
