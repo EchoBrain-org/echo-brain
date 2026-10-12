@@ -13,8 +13,6 @@
     "providers/slack/server/src/organization-control-plane/application/slack-integration-contracts.ts",
     "providers/slack/server/src/organization-control-plane/application/slack-bot-token-source-v1.ts",
     "providers/slack/server/src/organization-control-plane/application/slack-connection-health-v1.ts",
-    "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.ts",
-    "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.ts",
     "providers/slack/server/src/organization-control-plane/application/organization-tool-connection-contracts-v2.ts",
     "providers/slack/server/src/private-approval/private-slack-approval-block-kit-card-v1.ts",
     "providers/slack/server/src/private-approval/slack-approval-card-v4.ts",
@@ -55,8 +53,7 @@
   "allowed_node_builtins": [
     "fs",
     "crypto",
-    "path",
-    "http"
+    "path"
   ],
   "runtime_assets": [
     "providers/slack/server/assets/telemetry-vocabulary.v1.json"
@@ -85,8 +82,7 @@
       "allowed_node_builtins": [
         "fs",
         "crypto",
-        "path",
-        "http"
+        "path"
       ]
     }
   ],
@@ -165,7 +161,9 @@
       "providers/slack/server/src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.ts",
       "providers/slack/server/src/private-approval/private-slack-approval-block-kit-card-v2.ts",
       "providers/slack/server/src/private-approval/slack-approval-card-input-v1.ts",
-      "providers/slack/server/src/private-approval/private-slack-approval-project-eligibility-v2.ts"
+      "providers/slack/server/src/private-approval/private-slack-approval-project-eligibility-v2.ts",
+      "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.ts",
+      "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.ts"
     ]
   }
 }

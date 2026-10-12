@@ -38,9 +38,10 @@ defines the supported operator and employee flow.
   an optional presenter on the core
   (`providers/slack/server/src/private-approval/slack-approval-presenter-v1.ts`,
   with clicks decided through `slack-approval-click-v1.ts`). Slack Person
-  identity composition is under `providers/slack/server/src/person-identity/`;
-  the Slack private-DM staging canary is under
-  `providers/slack/server/src/composition/staging/slack-private-approval/`.
+  identity composition is under `providers/slack/server/src/person-identity/`.
+  The provider-neutral staging release canary's private socket control and
+  client are `staging-release-canary-{control,client}-v1.ts` under
+  `src/composition/staging/`.
 - Private Slack interactions are separated into protocol, handler, HTTP adapter,
   and presentation-port components.
 - Identity and approval callbacks share the application-owned

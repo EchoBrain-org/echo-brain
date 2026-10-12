@@ -58,8 +58,8 @@ Provider-neutral runtime components must not import a provider implementation.
 Provider-neutral bundle seams live in `packages/organization-processing/src/ports/`.
 Concrete bundles live in `providers/synthetic-demo` (the staging synthetic
 personal meeting provider), `providers/openrouter`, `providers/slack/server`
-(the approval presenter and click, Person identity, the staging canary control
-and the fixed-channel context pointer source) and
+(the approval presenter and click, Person identity and the fixed-channel
+context pointer source) and
 `providers/jira` (the gated Person connection, live reader and context
 source). Secret values enter only through private-file adapters.
 Public `clean-*` command names and versioned `clean-founder` wire values are

@@ -53,14 +53,6 @@
       "types": "./dist/organization-control-plane/application/slack-connection-health-v1.d.ts",
       "import": "./dist/organization-control-plane/application/slack-connection-health-v1.js"
     },
-    "./composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1": {
-      "types": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.d.ts",
-      "import": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.js"
-    },
-    "./composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1": {
-      "types": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.d.ts",
-      "import": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.js"
-    },
     "./organization-control-plane/slack-approval-integration-v1": {
       "types": "./dist/organization-control-plane/slack-approval-integration-v1.d.ts",
       "import": "./dist/organization-control-plane/slack-approval-integration-v1.js"

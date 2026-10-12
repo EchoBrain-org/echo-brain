@@ -6,7 +6,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock(
-  "@echo-brain/provider-slack-server/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1",
+  "../../src/composition/staging/staging-release-canary-client-v1.js",
   () => ({
     requestStagingSyntheticPrivateDmCanaryV1: state.request,
   }),

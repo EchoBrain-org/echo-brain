@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { requestStagingSyntheticPrivateDmCanaryV1 } from "../../../../src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.js";
+import { requestStagingSyntheticPrivateDmCanaryV1 } from "../../../src/composition/staging/staging-release-canary-client-v1.js";
 
 const RELEASE_ID = "clean-v1-staging-canary";
 const directories: string[] = [];
@@ -59,7 +59,7 @@ afterEach(async () => {
 });
 
 describe("staging synthetic private-DM canary client", () => {
-  it.each(["staged", "quarantined"] as const)(
+  it.each(["staged", "not_staged"] as const)(
     "uses only the private socket and returns a bounded %s receipt",
     async (approvalOutcome) => {
       const receipt = {
@@ -81,6 +81,17 @@ describe("staging synthetic private-DM canary client", () => {
         kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
         release_id: "clean-v1-other-release",
         approval_outcome: "not_actionable",
+      }),
+      {},
+    ],
+    [
+      "an outcome the canary runner never produces",
+      JSON.stringify({
+        schema_version: 1,
+        kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
+        release_id: RELEASE_ID,
+        approval_outcome: "quarantined",
+        approval_id: "apr_private",
       }),
       {},
     ],

@@ -5,9 +5,9 @@ import { readPrivateAuthorityCredential, readPrivateAuthorityOidcClientSecret } 
 import { readOrganizationAuthoritySetupManifest } from "./organization-authority-setup-cli.js";
 import { openOrganizationAuthorityService } from "./organization-authority-composition-root.js";
 import { readPersonOidcConfiguration } from "./organization-authority-person-administration-cli.js";
-import { openStagingSyntheticPrivateDmCanaryControlV1 } from "@echo-brain/provider-slack-server/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1";
+import { openStagingSyntheticPrivateDmCanaryControlV1 } from "./staging/staging-release-canary-control-v1.js";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
-import { requestStagingSyntheticPrivateDmCanaryV1 } from "@echo-brain/provider-slack-server/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1";
+import { requestStagingSyntheticPrivateDmCanaryV1 } from "./staging/staging-release-canary-client-v1.js";
 import { createJourneyTelemetryTransportFromEnvironmentV1 } from "./observability/journey-telemetry-transport-v1.js";
 import { createLangSmithRuntimeV1 } from './observability/langsmith-runtime-v1.js';
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
