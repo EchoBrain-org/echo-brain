@@ -40,7 +40,7 @@ This is the primary customer proof. Do not replace it with a narrower question.
 
 Use only the queries needed for the time available. Queries 1-4 are asked by Audrey
 Ortiz, the team-member persona, after the first three meetings are approved for
-Team. Query 5 is the paired privacy proof.
+the project Audrey belongs to. Query 5 is the paired privacy proof.
 
 ### 1. Customer-safe briefing
 
@@ -108,9 +108,9 @@ Required answer facts:
 
 Shows: one permission-aware operating view across meetings and departments.
 
-For a normal team member, the answer may include Team-approved actions and
-dates. It must not include the private order-form action or hint that a private
-commercial decision exists.
+For a normal team member, the answer may include actions and dates approved for
+their project. It must not include the private order-form action or hint that a
+private commercial decision exists.
 
 ### 5. Same question, different authorization
 

@@ -37,9 +37,9 @@ different parts of the answer; no single meeting contains the complete truth.
 
 | Meeting | Approved knowledge | Policy |
 | --- | --- | --- |
-| Revenue signal calibration | Start with 10 locations; expansion requires four weeks of adoption evidence. | Team project |
-| Data handling review | Production requires a revised DPA and verified security contact. | Team project |
-| Implementation capacity triage | September 16 is conditional onboarding for 10, not an all-28 launch. | Team project |
+| Revenue signal calibration | Start with 10 locations; expansion requires four weeks of adoption evidence. | Shared project |
+| Data handling review | Production requires a revised DPA and verified security contact. | Shared project |
+| Implementation capacity triage | September 16 is conditional onboarding for 10, not an all-28 launch. | Shared project |
 | Commercial exception review | The first 10 receive a private, time-bounded price exception. | Only me |
 
 Audrey, a team member who attended none of the meetings, asks the hero

@@ -951,8 +951,8 @@ is a local smoke build; independent invocations are not evidence of one shared
 release or tarball. Native Linux execution is still owed when working on a Mac.
 
 Retire the one-off Mac-pinned stress checker as a qualification workflow; keep
-its old evidence outside Git. Use this smoke path plus the existing
-`demo/evaluate-rehearsal.mjs` captured-result gate. Capture stdout, stderr, exit
+its old evidence outside Git. Use this smoke path plus the demo runbook's
+[pass/fail gate](../../demo/RUNBOOK.md#passfail-gate). Capture stdout, stderr, exit
 code, termination signal and launch errors separately. NUL argv and `E2BIG`
 fail at process launch; do not label them HTTP/input-validation failures or add
 another stdin/file question path. Successful JSON is on stdout; structured
