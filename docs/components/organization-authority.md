@@ -116,7 +116,7 @@ context captures, which the proposed
 [ADR-0028](../decisions/ADR-0028-broadened-layer-1-source-captures.md) names
 Layer 1 source captures. Custody grants no read access. The
 [persistence ownership](../architecture/organization-workspace-boundaries.md#persistence-ownership)
-map lists the databases, including the gated Jira connection sidecar.
+map lists the databases and the provider-owned and operational sidecars.
 
 ## Provider identity-link composition
 

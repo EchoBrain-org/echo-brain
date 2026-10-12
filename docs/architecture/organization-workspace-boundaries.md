@@ -137,10 +137,23 @@ The server uses separate databases with explicit responsibilities:
   connection handles, Person identity links, and private approval evidence;
 - `record-log.sqlite` is the append-only organization record;
 - retrieval generations are immutable projections built from record state; and
-- when selected, the gated Jira runtime and the staging connector rehearsal keep
-  provider-owned Jira connection state in `jira-person-connections.sqlite`. It
-  is not a manifest role; the staging restore wrapper retains the rehearsal
-  copy as a sidecar.
+- provider-owned and operational sidecars sit beside them in the state
+  directory. None is a V2 root-manifest role:
+  - `granola-person-connections.sqlite` holds Granola Person connection
+    handles. The Authority service opens it on every start and checks its
+    lineage binding.
+  - `confluence-person-connections.sqlite` holds the gated Confluence
+    live-evidence connections. Offline recovery verification refuses a backup
+    that contains it; the operator revokes and reconnects after a restore.
+  - When selected, the gated Jira runtime and the staging connector rehearsal
+    keep provider-owned Jira connection state in
+    `jira-person-connections.sqlite`; the staging restore wrapper retains the
+    rehearsal copy.
+  - `extraction-attempts.sqlite` is the paid-extraction ledger and durable
+    spend history. Keep it with backups and never delete it to clear a
+    [held extraction](../../deploy/organization-authority/README.md#inspect-and-retry-a-held-extraction).
+  - `staging-synthetic-meetings.sqlite` (staging only) holds custom synthetic
+    meeting submissions; retain it with the Authority state on restore.
 
 The V2 root manifest binds six roles: Authority, control plane, record log,
 and retrieval facts, lexical, and content. Each database carries a V1 database
