@@ -125,6 +125,25 @@ describe('leaving a project', () => {
   });
 });
 
+describe('leaving Ask while it answers', () => {
+  it('cancels the host\'s Ask once, whichever way the thread is left', async () => {
+    const store = await startStore();
+    const sent = () => rpc.mock.calls.filter(([method]) => method === 'ask.run').map(([, params]) => params.cancel_id);
+    const cancelled = () => rpc.mock.calls.filter(([method]) => method === 'ask.cancel').map(([, params]) => params.cancel_id);
+    held.hold('ask.run');
+    void store.ask('What changed?');
+    await store.openProject(apollo);
+    await flush();
+    expect(cancelled()).toEqual(sent());
+    held.hold('ask.run');
+    void store.ask('And here?');
+    store.closeAsk();
+    store.goHome();
+    expect(sent()).toHaveLength(2);
+    expect(cancelled()).toEqual(sent());
+  });
+});
+
 describe('signing out while the host restarts', () => {
   it('forgets the account once a status read shows no one signed in', async () => {
     const store = await startStore();

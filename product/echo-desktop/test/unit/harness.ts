@@ -77,6 +77,7 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
       case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
       case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
       case 'search.run': return ok({ items: [] });
+      case 'ask.cancel': return ok(null);
       case 'runs': return fail('unavailable', { retryable: true });
     }
     throw new Error(`Unexpected request: ${method}`);

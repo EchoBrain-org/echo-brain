@@ -530,6 +530,12 @@ export function clearToast(shown: number): void {
 }
 
 function set(patch: Partial<State>): void {
+  // Leaving Ask by any route drops a late answer: the host stops working on it.
+  if ('ask' in patch && patch.ask === null && activeAskCancelId) {
+    const cancelId = activeAskCancelId;
+    activeAskCancelId = null;
+    void rpc('ask.cancel', { cancel_id: cancelId });
+  }
   state = { ...state, ...patch, ...(patch.toast ? { toastShown: state.toastShown + 1 } : {}) };
   // A modal owns keyboard focus. Dismiss only the transient project menu,
   // retaining settings drafts and writes while unmounting its global handlers.
@@ -3140,9 +3146,6 @@ export async function copyAnswer(): Promise<boolean> {
 
 /** Back or Escape: leaves the thread, and it is gone. */
 export function closeAsk(): void {
-  const cancelId = activeAskCancelId;
-  activeAskCancelId = null;
-  if (cancelId) void rpc('ask.cancel', { cancel_id: cancelId });
   set({ ask: null, sources: null });
   syncSearch();
 }
