@@ -327,31 +327,40 @@ Keep the three operator lanes separate:
 Copy the release validators and operational commands from the exact reviewed
 source checkout into the deployment directory beside the clean Compose files.
 Before copying, compare the SHA-256 of each source file with the private review
-receipt for that source commit. For a normal update, do not edit or pre-install
-`current.clean-v1.json` by hand:
+receipt for that source commit. Install all six host tools from that one
+commit together: the update, onboarding, retained-restore and
+backup-maintenance wrappers and both validators. The release lane checks them
+as one set and refuses later actions with `tool_hash_unknown` when any one
+comes from another commit, and the wrappers share one release guard. On the
+staging host, use the lane's `install` action instead. For a normal update, do
+not edit or pre-install `current.clean-v1.json` by hand:
 
 ```sh
 cd /srv/echo-authority-clean-v1
 sudo install -d -m 0755 release
-sudo install -m 0755 /absolute/reviewed/clean-v1-release.py release/clean-v1-release.py
-sudo install -m 0755 /absolute/reviewed/clean-v1-runtime-profile.py release/clean-v1-runtime-profile.py
-sudo install -m 0755 /absolute/reviewed/update-clean-v1.sh ./update-clean-v1.sh
+sudo install -o root -g root -m 0755 /absolute/reviewed/clean-v1-release.py release/clean-v1-release.py
+sudo install -o root -g root -m 0755 /absolute/reviewed/clean-v1-runtime-profile.py release/clean-v1-runtime-profile.py
+sudo install -o root -g root -m 0755 /absolute/reviewed/update-clean-v1.sh ./update-clean-v1.sh
+sudo install -o root -g root -m 0755 /absolute/reviewed/onboard-clean-v1.sh ./onboard-clean-v1.sh
+sudo install -o root -g root -m 0755 /absolute/reviewed/restore-clean-v1-host.sh ./restore-clean-v1-host.sh
 sudo install -o root -g root -m 0755 \
   /absolute/reviewed/backup-authority-maintenance.sh \
   ./backup-authority-maintenance.sh
 sudo install -d -m 0700 clean-data/release
-sha256sum ./backup-authority-maintenance.sh
+sha256sum ./backup-authority-maintenance.sh ./update-clean-v1.sh \
+  ./onboard-clean-v1.sh ./restore-clean-v1-host.sh \
+  release/clean-v1-release.py release/clean-v1-runtime-profile.py
 python3 release/clean-v1-release.py validate /absolute/private/release.json
 python3 release/clean-v1-runtime-profile.py validate /absolute/private/runtime-profile.json
 sudo ./update-clean-v1.sh stage --release /absolute/private/release.json \
   --runtime-profile /absolute/private/runtime-profile.json
 ```
 
-The printed maintenance-script digest must equal the reviewed receipt before
-the script is used. It is root-owned host tooling, not application state:
-release rollback does not replace or remove it. Replace or remove it only as a
-separately reviewed host-tooling change, and record the old and new digests in
-the private operator receipt.
+All six printed digests must equal the reviewed receipt for that source commit
+before any of the tools is used. They are root-owned host tooling, not
+application state: release rollback does not replace or remove them. Replace or
+remove them only as a separately reviewed host-tooling change, and record the
+old and new digests in the private operator receipt.
 
 For an ordinary baseline-preserving replacement, stage the exact candidate in
 the same way. The command refuses floating images, a reused release ID, a
