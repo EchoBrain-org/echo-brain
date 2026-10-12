@@ -17,15 +17,15 @@ if (args.includes('--help')) {
   console.log('Usage: npm run package -- [--mac | --linux]\nBuilds macOS arm64 zip or Linux x64 deb/tar.gz from a clean checkout. Defaults to the current OS.');
   process.exit(0);
 }
-if (args.some(arg => !['--mac', '--linux', '--allow-dirty'].includes(arg)) || (args.includes('--mac') && args.includes('--linux'))) {
+if (args.some(arg => !['--mac', '--linux'].includes(arg)) || (args.includes('--mac') && args.includes('--linux'))) {
   throw new Error('Choose --mac or --linux. See --help.');
 }
 const platform = args.includes('--linux') ? 'linux' : args.includes('--mac') ? 'darwin' : process.platform;
 if (!['darwin', 'linux'].includes(platform)) throw new Error('Supported package targets: --mac or --linux.');
 const linux = platform === 'linux';
 
-if (run('git', ['status', '--porcelain'], repository).trim() !== '' && !process.argv.includes('--allow-dirty')) {
-  console.error('Refusing to package: commit your changes first (or pass --allow-dirty for a local try).');
+if (run('git', ['status', '--porcelain'], repository).trim() !== '') {
+  console.error('Refusing to package: commit your changes first.');
   process.exit(1);
 }
 
