@@ -19,8 +19,8 @@ during migration.
 | [`INV-ADAPTERS-002`](INV-ADAPTERS-002-durable-external-reference.md) | External object identity is durable before verification | Consequential provider writes | partial | linked tests and live evidence |
 | [`INV-RUNTIME-001`](INV-RUNTIME-001-lifecycle-owned-side-effects.md) | Durable side-effect follow-up belongs to the runtime lifecycle | Background external effects | partial | linked lifecycle test |
 | [`INV-PERMISSIONS-013`](INV-PERMISSIONS-013-frozen-pending-contract.md) | Pending consequential work resolves under its frozen contract | Approval and diagnostics | partial | linked tests; diagnostic clause unenforced |
-| [`INV-PERMISSIONS-014`](INV-PERMISSIONS-014-actor-not-source-owner.md) | Approval authority is independent from source custody | Bounded Slack modes | partial | live negative evidence |
-| [`INV-ADAPTERS-003`](INV-ADAPTERS-003-model-execution-controls.md) | Model execution controls are explicit processing identity | Model/provider pairs | partial | linked test and live evidence |
+| [`INV-PERMISSIONS-014`](INV-PERMISSIONS-014-actor-not-source-owner.md) | Approval authority is independent from source custody | Approval core (desktop and Slack) | partial | linked tests |
+| [`INV-ADAPTERS-003`](INV-ADAPTERS-003-model-execution-controls.md) | Model execution controls are explicit processing identity | OpenRouter adapters | partial | linked tests |
 | [`INV-ADAPTERS-004`](INV-ADAPTERS-004-source-owned-grounding.md) | Models select source-owned evidence references | Shared LLM processor | partial | linked tests and live evidence |
 | [`INV-ADAPTERS-005`](INV-ADAPTERS-005-provider-semantics-at-boundary.md) | Provider semantics terminate at the adapter boundary | Active provider boundaries and canonical durable contracts | partial | boundary gate; full qualification pending |
 | [`INV-IDENTITY-002`](INV-IDENTITY-002-versioned-lease-duration.md) | Access duration changes are versioned compatibility changes | Access protocol | retired | none; access leases deleted |

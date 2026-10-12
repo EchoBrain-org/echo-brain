@@ -7,11 +7,11 @@ component_ids:
   - CMP-PROCESSING-ADAPTERS
   - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: fd762a45e8745eebf27f346317e97038be69de44
+reviewed_at: 2026-10-11
+reviewed_ref: 6b69e51323a266d49c7c599a8168576152eb6fc1
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Qwen 3 through the Ollama adapter
+enforcement_scope: OpenRouter decision-processor and Ask structured-generation adapters
 failure_pattern_ids:
   - FP-ADAPTERS-003
 ---
@@ -32,6 +32,26 @@ behavior into a successful empty extraction.
 
 ## Enforcement and verification
 
-The reviewed Ollama Qwen path disables the incompatible thinking channel and
-pins the wire request in tests. Every new model/provider pair needs its own
-conformance probe.
+The reviewed Ollama Qwen path that disabled the incompatible thinking channel
+([FP-ADAPTERS-003](../failure-patterns/FP-ADAPTERS-003-model-execution-channel.md))
+was removed with the Ollama provider in `6b87c73b` (2026-10-06). OpenRouter is
+the only current model provider:
+
+- The decision processor's client
+  (`providers/openrouter/src/llm/openrouter-client.ts`) sends a strict
+  `json_schema` response format, `max_tokens` and
+  `provider.require_parameters`, and maps `finish_reason: length` to a
+  retryable truncation error.
+  `providers/openrouter/test/llm/openrouter-client.test.ts` pins the request
+  and each finish reason.
+- The Ask structured-generation adapter sends the same controls plus
+  `provider.data_collection: "deny"`;
+  `providers/openrouter/test/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.test.ts`
+  pins its request.
+- The processor's model, maximum output tokens and adapter, prompt and schema
+  versions feed its processing identity (`llmProcessingVersion`). The
+  hard-coded wire controls enter that identity only through a manual
+  `LLM_DECISION_PROCESSOR_ADAPTER_VERSION` bump.
+
+No per-model thinking control is pinned on OpenRouter, so every new
+model/provider pair still needs its own conformance probe.

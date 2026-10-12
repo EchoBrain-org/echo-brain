@@ -254,7 +254,8 @@ the trusted server context and remains covered by these cases.
 ## Decision and migration status
 
 - [RFC-0001](../rfcs/RFC-0001-server-core-lean-authority-contracts.md)
-  proposes the exact replacement contracts that would enforce the full chain.
+  (superseded by ADR-0004 and never accepted; history only) proposed the exact
+  replacement contracts that would have enforced the full chain.
 - [ADR-0006](../decisions/ADR-0006-permission-aware-clean-v1-completion.md)
   accepts the clean V1 enforcement scope; this invariant remains partial outside that scope.
 - The 2026-08-20 Phase 0 closure ledger (removed 2026-10-06; see git history)

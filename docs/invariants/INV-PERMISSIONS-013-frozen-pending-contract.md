@@ -8,11 +8,11 @@ component_ids:
   - CMP-PERSON-CLIENT
   - CMP-PERMISSIONS
 created_at: 2026-08-13
-reviewed_at: 2026-09-27
-reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
+reviewed_at: 2026-10-11
+reviewed_ref: 6b69e51323a266d49c7c599a8168576152eb6fc1
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Frozen private Slack approval delivery, tap-time fence, and terminal resolution
+enforcement_scope: Approval core frozen proposal and decision row; Slack presenter target check and click check
 invariant_ids:
   - INV-12
 failure_pattern_ids:
@@ -66,5 +66,4 @@ removed with the Slack approval internals on 2026-10-07:
 
 The diagnostic clause has no current enforcement point. The `doctor` path and
 its parity tests were deleted with the Mac runtime in `a254232c`, and no
-current diagnostic evaluates pending approval work. Broader approval paths
-remain outside this bounded enforcement scope.
+current diagnostic evaluates pending approval work.
