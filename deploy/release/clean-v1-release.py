@@ -142,9 +142,7 @@ def setup_readiness(path, accepted, candidate):
     digest = lambda item: hashlib.sha256(pathlib.Path(item).read_bytes()).hexdigest()
     if value["candidate_sha256"] != digest(candidate):
         fail("setup readiness evidence does not match the candidate")
-    if accepted == "-":
-        if value["accepted_sha256"] is not None: fail("setup readiness evidence does not match the accepted release")
-    elif value["accepted_sha256"] != digest(accepted):
+    if value["accepted_sha256"] != digest(accepted):
         fail("setup readiness evidence does not match the accepted release")
     sys.stdout.write(value["setup_class"] + "\n")
 

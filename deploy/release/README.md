@@ -446,11 +446,6 @@ environment tuple and leave the accepted record unchanged:
 sudo ./update-clean-v1.sh rollback
 ```
 
-For a first deployment, where no accepted release record exists yet, the same
-command is an abort: it stops the staged candidate before archiving that
-candidate as failed and does not create an accepted record. After it succeeds,
-stage the next candidate with a new release ID.
-
 The operation lock prevents concurrent changes. The environment, active
 profile, and four materialized deployment files are replaced individually, so
 a host power loss or `SIGKILL` during activation can leave a mixed local cache.

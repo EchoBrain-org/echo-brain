@@ -499,7 +499,7 @@ if path.parent.is_symlink() or path.exists() or path.is_symlink() or not pathlib
     raise SystemExit(1)
 def digest(raw): return hashlib.sha256(pathlib.Path(raw).read_bytes()).hexdigest()
 payload = json.dumps({
-    "accepted_sha256": None if accepted == "-" else digest(accepted),
+    "accepted_sha256": digest(accepted),
     "candidate_sha256": digest(candidate),
     "setup_class": value,
 }, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
@@ -519,10 +519,9 @@ PY
 }
 
 candidate_setup_class() {
-  local path accepted_record=-
+  local path
   path="$(candidate_setup_class_path "$CANDIDATE_RECORD")" || return 1
-  [[ ! -f "$CURRENT_RECORD" ]] || accepted_record="$CURRENT_RECORD"
-  python3 "$RELEASE_TOOL" setup-readiness "$path" "$accepted_record" "$CANDIDATE_RECORD"
+  python3 "$RELEASE_TOOL" setup-readiness "$path" "$CURRENT_RECORD" "$CANDIDATE_RECORD"
 }
 
 remove_candidate_record() {
@@ -535,32 +534,6 @@ archive_candidate_as_failed() {
   id="$(field "$CANDIDATE_RECORD" release-id)"
   copy_record "$CANDIDATE_RECORD" "$RELEASE_STATE_DIR/failed/$id.json" idempotent-immutable || return 1
   remove_candidate_record
-}
-
-service_is_stopped() {
-  local service="$1" id running
-  id="$(compose_clean ps -q "$service")" || return 1
-  [[ -n "$id" ]] || return 0
-  running="$(docker inspect --format '{{.State.Running}}' "$id")" || return 1
-  [[ "$running" != true ]]
-}
-
-candidate_runtime_is_stopped() {
-  service_is_stopped authority && service_is_stopped proxy
-}
-
-abort_first_deploy_candidate() {
-  # The persisted candidate tuple, rather than the active cache, is the only
-  # durable source of truth after an interrupted first activation. Restore it
-  # before Compose is consulted, then require any running runtime to prove it.
-  stored_release_tuple_matches "$CANDIDATE_RECORD"
-  activate_release_tuple "$CANDIDATE_RECORD" || return 1
-  if running_exact_release "$CANDIDATE_RECORD"; then
-    compose_clean down || return 1
-  elif ! candidate_runtime_is_stopped; then
-    return 1
-  fi
-  archive_candidate_as_failed
 }
 
 release_id_unused() {
@@ -1015,9 +988,6 @@ case "$command" in
     [[ ! -e "$CANDIDATE_RECORD" ]] || fail 'a candidate is already staged; promote or roll it back first'
     candidate_setup_path="$(candidate_setup_class_path "$candidate")" || fail 'candidate release id is invalid'
     [[ ! -e "$candidate_setup_path" && ! -L "$candidate_setup_path" ]] || fail 'a staged candidate setup class already exists'
-    first_deploy=false
-    expected_setup_class=ready
-    accepted_marker_record=-
     if [[ -f "$CURRENT_RECORD" ]]; then
       validate "$CURRENT_RECORD"
       [[ "$(field "$candidate" baseline-class)" == "$(field "$CURRENT_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the current release'
@@ -1033,12 +1003,8 @@ case "$command" in
         [[ "$(authority_host)" == authority-staging.echobrain.org ]] || \
           fail 'initial-onboarding staging updates are available only on the exact Authority staging host'
       fi
-      accepted_marker_record="$CURRENT_RECORD"
     else
-      first_deploy=true
-      if running_container_id authority >/dev/null; then
-        fail 'first deployment refuses to replace an unrecorded running Authority'
-      fi
+      fail 'no accepted release record; run onboard-clean-v1.sh prepare first'
     fi
     verify_candidate_state_lineage "$candidate"
     store_release_tuple "$candidate" "$supplied_profile"
@@ -1046,7 +1012,7 @@ case "$command" in
       remove_release_tuple "$candidate" || true
       fail 'could not persist the staged candidate release record'
     fi
-    if ! write_candidate_setup_class "$expected_setup_class" "$accepted_marker_record" "$CANDIDATE_RECORD"; then
+    if ! write_candidate_setup_class "$expected_setup_class" "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
       remove_record "$CANDIDATE_RECORD" || true
       remove_release_tuple "$candidate" || true
       fail 'could not persist the staged candidate setup class'
@@ -1056,13 +1022,8 @@ case "$command" in
       if [[ "$expected_setup_class" == initial_onboarding ]]; then
         next_action='Install the exact candidate Person kit, complete Slack setup and the owner Slack link, then have the human host operator run onboard-clean-v1.sh continue-staged-initial-onboarding before the candidate canary and approval checks.'
       fi
-      printf '{"ok":true,"stage":"candidate_ready","accepted_release_present":%s,"next_action":"%s"}\n' "$([[ "$first_deploy" == true ]] && printf false || printf true)" "$next_action"
+      printf '{"ok":true,"stage":"candidate_ready","accepted_release_present":true,"next_action":"%s"}\n' "$next_action"
       exit 0
-    fi
-    if [[ "$first_deploy" == true ]]; then
-      compose_clean down || fail 'first deployment failed and candidate stop could not be confirmed'
-      archive_candidate_as_failed || fail 'first deployment candidate was stopped but could not be marked failed; leave it staged and retry rollback'
-      fail 'first deployment candidate failed health/setup checks; candidate was stopped and no release was accepted'
     fi
     restore_accepted "$CURRENT_RECORD" "$expected_setup_class" || fail 'candidate failed and rollback also failed; candidate remains staged so recovery can be retried'
     archive_candidate_as_failed || fail 'candidate recovery was verified but the candidate could not be marked failed; leave it staged and retry rollback'
@@ -1085,25 +1046,18 @@ case "$command" in
     safe_setup_status || fail 'candidate setup is not ready for promotion'
     require_staged_canary_receipt "$CANDIDATE_RECORD"
     safe_public_descriptor_check || fail 'candidate public descriptor is unavailable; roll back instead of promoting'
-    if [[ -f "$CURRENT_RECORD" ]]; then
-      validate "$CURRENT_RECORD"
-      if cmp -s "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
-        remove_candidate_record
-        printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","idempotent":true}\n'
-        exit 0
-      fi
-      candidate_setup_class >/dev/null || fail 'staged candidate setup class is missing or unsafe'
-      [[ "$(field "$candidate" baseline-class)" == "$(field "$CURRENT_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the current release'
-      stored_release_tuple_matches "$CURRENT_RECORD"
-      copy_record "$CURRENT_RECORD" "$RELEASE_STATE_DIR/history/$(field "$CURRENT_RECORD" release-id).json" idempotent-immutable
-      copy_record "$CANDIDATE_RECORD" "$CURRENT_RECORD" replace
-    else
-      candidate_setup_class >/dev/null || fail 'staged candidate setup class is missing or unsafe'
-      copy_record "$CANDIDATE_RECORD" "$CURRENT_RECORD" no-replace || fail 'could not accept first deployment candidate'
+    [[ -f "$CURRENT_RECORD" ]] || fail 'no accepted release record; run onboard-clean-v1.sh prepare first'
+    validate "$CURRENT_RECORD"
+    if cmp -s "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
       remove_candidate_record
-      printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","first_deploy":true}\n'
+      printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","idempotent":true}\n'
       exit 0
     fi
+    candidate_setup_class >/dev/null || fail 'staged candidate setup class is missing or unsafe'
+    [[ "$(field "$candidate" baseline-class)" == "$(field "$CURRENT_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the current release'
+    stored_release_tuple_matches "$CURRENT_RECORD"
+    copy_record "$CURRENT_RECORD" "$RELEASE_STATE_DIR/history/$(field "$CURRENT_RECORD" release-id).json" idempotent-immutable
+    copy_record "$CANDIDATE_RECORD" "$CURRENT_RECORD" replace
     remove_candidate_record
     printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","first_deploy":false}\n'
     ;;
@@ -1111,13 +1065,7 @@ case "$command" in
     [[ $# -eq 1 ]] || usage
     [[ -f "$CANDIDATE_RECORD" ]] || fail 'rollback requires a staged candidate'
     validate "$CANDIDATE_RECORD"
-    if [[ ! -e "$CURRENT_RECORD" && ! -L "$CURRENT_RECORD" ]]; then
-      if ! abort_first_deploy_candidate; then
-        fail 'first deployment candidate is stopped or runtime image drifted; leave it staged and investigate before retrying rollback'
-      fi
-      printf '{"ok":true,"stage":"aborted","baseline_compatibility_class":"clean-v1","first_deploy":true}\n'
-      exit 0
-    fi
+    [[ -e "$CURRENT_RECORD" || -L "$CURRENT_RECORD" ]] || fail 'no accepted release record; run onboard-clean-v1.sh prepare first'
     [[ -f "$CURRENT_RECORD" ]] || fail 'accepted current release record is unsafe'
     validate "$CURRENT_RECORD"
     if cmp -s "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
@@ -1135,17 +1083,14 @@ case "$command" in
   status)
     [[ $# -eq 1 ]] || usage
     if [[ -f "$CANDIDATE_RECORD" ]]; then
-      accepted=false
-      if [[ -e "$CURRENT_RECORD" || -L "$CURRENT_RECORD" ]]; then
-        validate "$CURRENT_RECORD"
-        accepted=true
-      fi
+      [[ -e "$CURRENT_RECORD" || -L "$CURRENT_RECORD" ]] || fail 'no accepted release record; run onboard-clean-v1.sh prepare first'
+      validate "$CURRENT_RECORD"
       validate "$CANDIDATE_RECORD"
       active_runtime_profile_matches "$CANDIDATE_RECORD"
       active_materialized_profile_matches
       active_environment_matches "$CANDIDATE_RECORD"
       running_exact_release "$CANDIDATE_RECORD" || fail 'candidate is stopped or runtime image drifted'
-      printf '{"ok":true,"accepted_release_present":%s,"candidate_staged":true,"runtime_matches_staged_candidate":true}\n' "$accepted"
+      printf '{"ok":true,"accepted_release_present":true,"candidate_staged":true,"runtime_matches_staged_candidate":true}\n'
       exit 0
     fi
     [[ -f "$CURRENT_RECORD" ]] || fail 'no accepted or staged release record is available'
