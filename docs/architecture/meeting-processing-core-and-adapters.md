@@ -276,7 +276,7 @@ Each adapter must:
 - define retry, crash, concurrency, and reconciliation behavior.
 
 The bundled `llm` decision processor owns one canonical prompt/output/evidence
-contract. Its Ollama, OpenAI, Anthropic, and OpenRouter drivers own only
+contract. Its one driver, OpenRouter (`providers/openrouter`), owns only
 provider authentication, wire translation, capability checks, response
 extraction, and error normalization.
 
@@ -311,10 +311,8 @@ state. Meetings enter only through a person's own sources, so ordinary startup
 requires no meeting source. A staging-only synthetic personal source exercises
 the retained meeting pipeline without Granola. It separately
 composes the bounded Person `ask` path above Layer 3 with a pinned OpenRouter
-DeepSeek planner/answer model. The other LLM transports are compiled
-alternatives, not active runtime dependencies. This is an allowed selecting
-composition profile, not evidence that every active provider has completed
-qualification.
+DeepSeek planner/answer model. This is an allowed selecting composition
+profile, not evidence that every active provider has completed qualification.
 
 The Jira live runtime (`jira-person-live-runtime-v1.ts`) is a selected,
 request-bound Person read capability. Global Ask reads tickets visible through
@@ -403,8 +401,9 @@ Revalidation checks every released source, then all local grants synchronously.
 Older construction inputs translate into this same dispatch path, while older
 answer versions retain their strict citation contracts.
 
-Granola retains transport-free meeting normalization and context capture
-transforms. Its organization acquisition and owner-admission code is retired;
+Granola provides the person-bound MCP connection, the selected-folder meeting
+source and meeting normalization, and retains its context capture transform.
+Its organization acquisition and owner-admission code is retired;
 shared meeting custody and processing contracts remain distinct from personal
 live reads. Slack's organization app and approval DM copies likewise retain
 their own lifecycle. A Slack Person read requires a separately authorized

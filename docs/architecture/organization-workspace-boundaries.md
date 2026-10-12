@@ -9,9 +9,9 @@ and the Person client. The root package only orchestrates workspaces.
 `packages/` owns inward contracts and reusable implementations. `services/`
 owns deployable processes and their lifecycle. `providers/<provider>/` owns
 that provider's wire formats, credentials, persistence translations, model
-vocabulary, command/UI fragments, tests, and runtime assets. Slack and Jira
-have separate client and server workspaces because the Person artifact must
-remain free of Authority code and native SQLite.
+vocabulary, command/UI fragments, tests, and runtime assets. Slack, Jira and
+Confluence have separate client and server workspaces because the Person
+artifact must remain free of Authority code and native SQLite.
 
 ## Dependency direction
 
@@ -29,8 +29,8 @@ public exports, and the complete workspace graph must remain acyclic.
 - Federation/API/protocol, control-plane, record and retrieval retain their
   existing responsibilities. Record has no runtime dependency on protocol.
 - The Authority and Person composition modules select provider implementations.
-  The deployed Authority selects its product profile; it does not ship unused
-  OpenAI, Anthropic or Ollama transports.
+  The deployed Authority selects its product profile. OpenRouter is the only
+  LLM transport.
 
 The registry is
 [`tools/workspace-source-boundaries.v1.json`](../../tools/workspace-source-boundaries.v1.json).
@@ -47,8 +47,8 @@ traversal or exception mechanism.
 
 ## Product and build boundaries
 
-The Person tarball contains the client, federation/protocol/API and the Slack
-and Jira client fragments. It includes public versioned data exports and
+The Person tarball contains the client, federation/protocol/API and the Slack,
+Jira and Confluence client fragments. It includes public versioned data exports and
 contains no Authority, processing, server provider or SQLite dependency. Its
 dedicated build (`tools/build.mjs --person-client`) compiles only these
 workspaces. The Authority image contains the workspace dependency closure and

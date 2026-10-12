@@ -11,8 +11,8 @@ Ticket content is never captured or stored. ECHO reads tickets live at question
 time and keeps only the read audit.
 
 [ADR-0026](../../docs/decisions/ADR-0026-jira-person-live-evidence-nango.md)
-remains proposed; production startup is disabled pending acceptance. No live
-account has been connected or qualified.
+is accepted; runtime selection stays explicit. Live qualification is still
+open; see [remaining human inputs](#remaining-human-inputs-and-live-qualification).
 
 ## Initial support boundary
 
