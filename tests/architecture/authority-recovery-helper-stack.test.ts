@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { AuthorityRecoveryHelperBundleManifest } from "../../tools/build-authority-recovery-helper-bundle.mjs";
+import { readTemplate, resource } from "../support/cloudformation-template.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const TEMPLATE = resolve(
@@ -25,25 +26,7 @@ const RUNBOOK = resolve(
   "docs/operations/RB-OPERATIONS-002-authority-recovery-floor.md",
 );
 
-type Resource = Readonly<{
-  Type: string;
-  Properties: Record<string, unknown>;
-}>;
-
-type Template = Readonly<{
-  Parameters: Record<string, Record<string, unknown>>;
-  Resources: Record<string, Resource>;
-}>;
-
-function template(): Template {
-  return JSON.parse(readFileSync(TEMPLATE, "utf8")) as Template;
-}
-
-function resource(stack: Template, logicalId: string): Resource {
-  const value = stack.Resources[logicalId];
-  expect(value, `missing ${logicalId}`).toBeDefined();
-  return value!;
-}
+const template = () => readTemplate(TEMPLATE);
 
 describe("Authority isolated recovery helper stack", () => {
   it("creates only the bounded disposable helper environment", () => {

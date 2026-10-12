@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readTemplate, resource } from "../support/cloudformation-template.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const TEMPLATE = resolve(
@@ -12,31 +13,7 @@ const RUNBOOK = resolve(
   "docs/operations/RB-OPERATIONS-001-authority-observability.md",
 );
 
-type CloudFormationResource = {
-  readonly Type: string;
-  readonly DeletionPolicy?: string;
-  readonly UpdateReplacePolicy?: string;
-  readonly Properties?: Record<string, unknown>;
-};
-
-type CloudFormationTemplate = {
-  readonly Parameters: Record<string, Record<string, unknown>>;
-  readonly Resources: Record<string, CloudFormationResource>;
-  readonly Outputs: Record<string, Record<string, unknown>>;
-};
-
-function template(): CloudFormationTemplate {
-  return JSON.parse(readFileSync(TEMPLATE, "utf8")) as CloudFormationTemplate;
-}
-
-function resource(
-  stack: CloudFormationTemplate,
-  logicalId: string,
-): CloudFormationResource {
-  const value = stack.Resources[logicalId];
-  expect(value, `missing ${logicalId}`).toBeDefined();
-  return value!;
-}
+const template = () => readTemplate(TEMPLATE);
 
 describe("Authority minimal observability stack", () => {
   it("reattaches the shared-network proxy after the controlled Authority stop", () => {

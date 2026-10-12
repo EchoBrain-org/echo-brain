@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readTemplate, resource } from "../support/cloudformation-template.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const TEMPLATE = resolve(
@@ -16,29 +17,7 @@ const STAGING_LOG_GROUP =
   "/echo-brain/authority/authority-staging.echobrain.org";
 const INLINE_TEMPLATE_LIMIT = 51_200;
 
-type Resource = {
-  readonly Type: string;
-  readonly Properties?: Record<string, unknown>;
-  readonly DependsOn?: unknown;
-  readonly DeletionPolicy?: unknown;
-  readonly UpdateReplacePolicy?: unknown;
-};
-
-type Template = {
-  readonly Parameters: Record<string, Record<string, unknown>>;
-  readonly Resources: Record<string, Resource>;
-  readonly Outputs: Record<string, Record<string, unknown>>;
-};
-
-function template(): Template {
-  return JSON.parse(readFileSync(TEMPLATE, "utf8")) as Template;
-}
-
-function resource(stack: Template, logicalId: string): Resource {
-  const value = stack.Resources[logicalId];
-  expect(value, `missing ${logicalId}`).toBeDefined();
-  return value!;
-}
+const template = () => readTemplate(TEMPLATE);
 
 describe("staging Journey Explorer backend stack", () => {
   it("has four existing resources and one explicit Authority log group input with staging default", () => {
