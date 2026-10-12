@@ -624,7 +624,11 @@ function applyStatus(status: AppStatus): void {
   }
   lastAccount = { authority: next.authority, membership_id: next.membership_id };
   signOutPending = null;
-  if (!same || !wasSignedIn) { void loadProjects(); void loadArchivedProjects(); void loadHome(); }
+  if (!same || !wasSignedIn) {
+    void loadProjects(); void loadArchivedProjects(); void loadHome();
+    // New project kept through a sign-out goes on with what waited while no one was signed in.
+    pumpNewProject();
+  }
 }
 
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
