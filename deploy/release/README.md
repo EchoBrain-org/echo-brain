@@ -598,9 +598,10 @@ npm run authority:staging-release -- status \
 ```
 
 When the changed tools do not all fit the command cap, `install` carries the
-bytes of as many as fit, in the fixed tool order, and sends the rest as hash
-witnesses. The host leaves a witnessed tool at its old or new hash and still
-returns `installed`, so `installed` does not mean every tool is new. Run
+bytes of as many as fit, in a fixed order with the two release validators
+first, and sends the rest as hash witnesses. The host leaves a witnessed tool
+at its old or new hash and still returns `installed`, so `installed` does not
+mean every tool is new. Run
 `inspect-install` again with the same inputs and `--previous-tooling-source`.
 While its inventory shows any tool `old`, plan another `install` with the same
 inputs plus `--inspection <succeeded-inspect-install-receipt>`; that install

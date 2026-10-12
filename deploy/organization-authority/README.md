@@ -205,8 +205,10 @@ with one fresh rehearsal, in this order:
 2. While the old rehearsal is still in place, install the target release's
    reviewed host tooling through the
    [current-host staging release lane](../release/README.md#automated-current-host-staging-lane)
-   (`inspect-install`, then `install`, each with `--previous-tooling-source`,
-   repeated until every tool is `new`).
+   (`inspect-install`, then `install`, each with `--previous-tooling-source`;
+   while the inspection shows any tool `old`, rerun `inspect-install` and plan
+   the next `install` with `--inspection <succeeded-inspect-install-receipt>`,
+   until every tool is `new`).
 3. Disconnect the retired rehearsal's Jira connection in Nango.
 4. Run `replace-rehearsal --confirm-no-live-users` without
    `--reuse-provider-inputs`. The archive keeps the old profiles, sidecar and
@@ -450,8 +452,10 @@ initial-owner attestation.
 While the old rehearsal is still in place, first install the target release's
 reviewed host tooling through the
 [current-host staging release lane](../release/README.md#automated-current-host-staging-lane)
-(`inspect-install`, then `install`, each with `--previous-tooling-source`,
-repeated until every tool is `new`). The transfer runs the installed wrapper's `doctor` and `prepare`, and an older
+(`inspect-install`, then `install`, each with `--previous-tooling-source`;
+while the inspection shows any tool `old`, rerun `inspect-install` and plan the
+next `install` with `--inspection <succeeded-inspect-install-receipt>`, until
+every tool is `new`). The transfer runs the installed wrapper's `doctor` and `prepare`, and an older
 installed wrapper lacks `resume --existing-slack-app` and `langsmith-tracing`
 and prints the bare new-app Slack setup handoff. The lane checks
 the host's accepted release record and environment, which `replace-rehearsal`
