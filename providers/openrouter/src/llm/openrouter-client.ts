@@ -17,6 +17,8 @@ import {
 const transportProfile: LlmTransportProfile = {
   id: 'openrouter', displayName: 'OpenRouter',
   usage: (payload) => isRecord(payload) ? generationUsageObservation(payload) : {},
+  // OpenRouter bills no non-2xx reply; a 429 or 5xx refusal is the transient, unbilled kind.
+  unbilledStatus: (status) => status === 429 || status >= 500,
 };
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';

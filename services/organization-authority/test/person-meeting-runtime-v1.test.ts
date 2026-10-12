@@ -715,7 +715,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const f = await fixture(), runtime = f.create();
     const poll = async () => { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); return (await f.call(runtime, { operation: 'home' })).sources[0]!; };
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
-    f.failNextExtraction(providerStatusError('OpenRouter', 429));
+    f.failNextExtraction(providerStatusError('OpenRouter', 429, true));
     // Not parked, still queued, no operator wording: one grant for the exact key.
     expect(await poll()).toMatchObject({ pending_imports: [id], error: null });
     const [attempt] = f.ledger.listLatest();
@@ -724,7 +724,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.extracted()).toBe(1);
     const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
     try {
-      if (failsAgain) f.failNextExtraction(providerStatusError('OpenRouter', 503));
+      if (failsAgain) f.failNextExtraction(providerStatusError('OpenRouter', 503, true));
       // The next poll re-runs it and consumes the grant; a second unbilled failure parks it.
       expect((await poll()).pending_imports).toEqual([]);
       expect(f.extracted()).toBe(2);

@@ -45,14 +45,24 @@ export type AdapterErrorCode =
   | 'timeout'
   | 'unknown_outcome';
 
+export interface AdapterErrorOptions {
+  /** The adapter declares that its provider refused the call without billing it. */
+  readonly unbilled?: boolean;
+}
+
 export class AdapterError extends Error {
+  /** Only the adapter knows its provider's billing; core reads this instead of transport detail. */
+  readonly unbilled: boolean;
+
   constructor(
     public readonly code: AdapterErrorCode,
     message: string,
     public readonly retryable: boolean,
+    options: AdapterErrorOptions = {},
   ) {
     super(message);
     this.name = 'AdapterError';
+    this.unbilled = options.unbilled === true;
   }
 }
 

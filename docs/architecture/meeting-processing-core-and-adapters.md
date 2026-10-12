@@ -137,11 +137,13 @@ re-runs only that meeting from retained custody: no provider pull and no cursor
 move. Success stages it and drops the held row; another failure holds it at the
 new attempt and stage.
 
-**Free retry.** OpenRouter bills no non-2xx reply. A first attempt that the
-provider refuses with a 429 or 5xx, before any model output, is not parked:
-the cycle records the failed attempt, grants that exact key one retry through
-the ledger's existing `authorizeRetry`, and leaves the meeting at the head of
-its queue (`retry_scheduled`). The source waits 60 s, then its next poll
+**Free retry.** The processor adapter declares which refusals its provider
+does not bill, by marking the `AdapterError` `unbilled` (OpenRouter bills no
+non-2xx reply and marks its 429 and 5xx refusals). A first attempt refused that
+way, before any model output, is not parked: the cycle records the failed
+attempt, grants that exact key one retry through the ledger's existing
+`authorizeRetry`, and leaves the meeting at the head of its queue
+(`retry_scheduled`). The source waits 60 s, then its next poll
 re-runs the meeting and the reservation consumes the grant. A failure on a
 later attempt, any failure after model output, a timeout and a shutdown cancel
 all park as above, so a meeting gets at most one automatic retry. While it

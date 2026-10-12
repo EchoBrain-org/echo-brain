@@ -170,6 +170,18 @@ describe('OpenRouter provider client', () => {
     },
   );
 
+  it.each([[429, true], [503, true], [400, false], [401, false]])(
+    'declares a %i refusal unbilled: %s',
+    async (status, unbilled) => {
+      const refusal = new OpenRouterClient({
+        credentialRef: 'env:OPENROUTER_API_KEY',
+        credentialResolver: () => 'openrouter-secret',
+        fetchImpl: async () => new Response('{}', { status }),
+      }).generateStructured(generationRequest);
+      await expect(refusal).rejects.toMatchObject({ http_status: status, unbilled });
+    },
+  );
+
   it('treats HTTP 200 provider errors as failures', async () => {
     await expect(
       client({
