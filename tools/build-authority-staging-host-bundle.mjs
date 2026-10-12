@@ -17,10 +17,10 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { gzipSync } from "node:zlib";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import process from "node:process";
+import { deterministicTarGz } from "./lib/deterministic-tar.mjs";
 import { sourceCheckout } from "./lib/source-checkout.mjs";
 
 const ARCHIVE_SUFFIX = ".tar.gz";
@@ -116,47 +116,15 @@ function bundleFiles(sourceRoot) {
   return Object.freeze(files);
 }
 
-function writeString(buffer, offset, length, value) {
-  const bytes = Buffer.from(value, "utf8");
-  if (bytes.length > length) fail(`tar header field is too long: ${value}`);
-  bytes.copy(buffer, offset);
-}
-
-function writeOctal(buffer, offset, length, value) {
-  const encoded = value.toString(8).padStart(length - 1, "0");
-  if (encoded.length >= length) fail("tar header numeric field is too large");
-  writeString(buffer, offset, length, `${encoded}\0`);
-}
-
-function tarHeader(name, size, mode) {
-  const header = Buffer.alloc(512, 0);
-  writeString(header, 0, 100, name);
-  writeOctal(header, 100, 8, mode);
-  writeOctal(header, 108, 8, 0);
-  writeOctal(header, 116, 8, 0);
-  writeOctal(header, 124, 12, size);
-  writeOctal(header, 136, 12, 0);
-  header.fill(0x20, 148, 156);
-  header[156] = "0".charCodeAt(0);
-  writeString(header, 257, 6, "ustar");
-  writeString(header, 263, 2, "00");
-  writeString(header, 265, 32, "root");
-  writeString(header, 297, 32, "root");
-  const checksum = header.reduce((total, byte) => total + byte, 0);
-  writeOctal(header, 148, 8, checksum);
-  return header;
-}
-
 function deterministicArchive(files) {
-  const chunks = [];
-  for (const file of files) {
-    const name = basename(file.path);
-    chunks.push(tarHeader(name, file.content.length, file.mode), file.content);
-    const padding = (512 - (file.content.length % 512)) % 512;
-    if (padding !== 0) chunks.push(Buffer.alloc(padding, 0));
-  }
-  chunks.push(Buffer.alloc(1024, 0));
-  return gzipSync(Buffer.concat(chunks), { level: 9, mtime: 0 });
+  return deterministicTarGz(
+    files.map((file) => ({
+      name: basename(file.path),
+      content: file.content,
+      mode: file.mode,
+    })),
+    { owner: "root", invalid: fail },
+  );
 }
 
 function inspectExtractedBundle(archive, files) {

@@ -58,7 +58,7 @@ function exactOutput(path, bytes) {
   } else save(path, bytes, true);
 }
 function sourceHash() {
-  return hash(Buffer.concat(['authority-staging-invitation-export.mjs', 'authority-staging-invitation-seal.mjs', 'authority-staging-onboarding-transfer.mjs', 'authority-staging-release.mjs', 'clean-v1-release.mjs', 'lib/operator-io.mjs'].map(name => readFileSync(resolve(REPO, 'tools', name)))));
+  return hash(Buffer.concat(['authority-staging-invitation-export.mjs', 'authority-staging-invitation-seal.mjs', 'authority-staging-onboarding-transfer.mjs', 'authority-staging-release.mjs', 'clean-v1-release.mjs', 'lib/deterministic-tar.mjs', 'lib/operator-io.mjs'].map(name => readFileSync(resolve(REPO, 'tools', name)))));
 }
 function awsJson(args) {
   try {

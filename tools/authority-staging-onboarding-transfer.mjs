@@ -23,11 +23,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { gzipSync } from "node:zlib";
 import { basename, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { InvitationExportError, planInvitationExport, executeInvitationExport } from './authority-staging-invitation-export.mjs';
+import { deterministicTarGz } from './lib/deterministic-tar.mjs';
 import { awsCliArguments, sanitizedAwsEnvironment, sha256 } from './lib/operator-io.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -164,35 +164,6 @@ function pathOutsideRepository(path, code) {
   return candidate;
 }
 
-function writeString(buffer, offset, length, value) {
-  const bytes = Buffer.from(value, "utf8");
-  if (bytes.length > length) refuse("archive_header_invalid");
-  bytes.copy(buffer, offset);
-}
-
-function writeOctal(buffer, offset, length, value) {
-  const encoded = value.toString(8).padStart(length - 1, "0");
-  if (encoded.length >= length) refuse("archive_header_invalid");
-  writeString(buffer, offset, length, `${encoded}\0`);
-}
-
-function tarHeader(name, size) {
-  const header = Buffer.alloc(512, 0);
-  writeString(header, 0, 100, name);
-  writeOctal(header, 100, 8, 0o600);
-  writeOctal(header, 108, 8, 0);
-  writeOctal(header, 116, 8, 0);
-  writeOctal(header, 124, 12, size);
-  writeOctal(header, 136, 12, 0);
-  header.fill(0x20, 148, 156);
-  header[156] = "0".charCodeAt(0);
-  writeString(header, 257, 6, "ustar");
-  writeString(header, 263, 2, "00");
-  const checksum = header.reduce((total, byte) => total + byte, 0);
-  writeOctal(header, 148, 8, checksum);
-  return header;
-}
-
 function exactPrivateInputLeaves({ sourceDir, names, prefix = "", directoryCode, shapeCode, fileCode, maximumFileBytes = MAXIMUM_INPUT_FILE_BYTES, rejectDirectorySymlink = false }) {
   const source = rejectDirectorySymlink
     ? privateDirectoryWithoutSymlink(sourceDir, directoryCode)
@@ -236,20 +207,16 @@ export function createOnboardingInputArchive({ sourceDir, stagingSyntheticMeetin
   const destination = pathOutsideRepository(output, "archive_inside_repo");
   if (existsSync(destination)) refuse("archive_destination_exists");
   if (!basename(destination).endsWith(".tar.gz")) refuse("archive_suffix_invalid");
-  const chunks = [];
+  const entries = [];
   let totalBytes = 0;
   for (const leaf of [...inputLeaves, ...fixtureLeaves]) {
     const { path, state, archiveName } = leaf;
     if (state.size > leaf.maximumFileBytes) refuse("input_file_too_large");
     totalBytes += state.size;
     if (totalBytes > MAXIMUM_INPUT_TOTAL_BYTES) refuse("input_total_too_large");
-    const content = readFileSync(path);
-    chunks.push(tarHeader(archiveName, content.length), content);
-    const padding = (512 - (content.length % 512)) % 512;
-    if (padding) chunks.push(Buffer.alloc(padding, 0));
+    entries.push({ name: archiveName, content: readFileSync(path), mode: 0o600 });
   }
-  chunks.push(Buffer.alloc(1024, 0));
-  const archive = gzipSync(Buffer.concat(chunks), { level: 9, mtime: 0 });
+  const archive = deterministicTarGz(entries, { invalid: () => refuse("archive_header_invalid") });
   writeFileSync(destination, archive, { encoding: undefined, flag: "wx", mode: 0o600 });
   chmodSync(destination, 0o600);
   return Object.freeze({ path: destination, sha256: sha256(archive) });
