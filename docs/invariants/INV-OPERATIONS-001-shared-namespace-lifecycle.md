@@ -7,11 +7,11 @@ component_ids:
   - CMP-ORGANIZATION-AUTHORITY
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
+reviewed_at: 2026-10-11
+reviewed_ref: 6b69e51323a266d49c7c599a8168576152eb6fc1
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Explicit Authority Compose restart
+enforcement_scope: Explicit proxy restart in the update, backup-maintenance and tracing operator paths; Compose restart propagation is declared but not exercised in CI
 failure_pattern_ids:
   - FP-OPERATIONS-001
 ---
@@ -33,6 +33,23 @@ stated residual until the topology or supervisor closes it.
 
 ## Enforcement and verification
 
-The reviewed Compose change and CI smoke cover explicit Authority restart and
-proxy replacement. Externally served reachability remains a separate exact-run
-qualification assertion.
+`deploy/organization-authority/compose.clean-v1.yaml` still declares the proxy
+with `network_mode: service:authority` and
+`depends_on.authority.restart: true`, and
+`tests/architecture/organization-authority-deployment-profile.test.ts` pins
+that declaration. The CI smoke that restarted the Authority and proved the
+proxy process was replaced (added in `5aa7a37`) was removed in `e75250d`, so
+CI no longer exercises Compose restart propagation.
+
+The tested mitigation is an explicit `compose restart proxy` after the
+Authority starts in `restart_and_prove` (`backup-authority-maintenance.sh`),
+`start_and_check` (`update-clean-v1.sh`) and `langsmith-tracing`
+(`onboard-clean-v1.sh`). Those restarts are asserted by
+`tests/architecture/authority-backup-maintenance.test.ts`,
+`tests/architecture/organization-authority-release-record.test.ts` and
+`tests/architecture/organization-authority-deployment-profile.test.ts`; the
+runbook's public failure rehearsal is asserted by
+`tests/architecture/authority-observability-stack.test.ts`. The other
+onboarding starts (`start_runtime`, a whole-stack `compose up --wait`) rely on
+the declared Compose propagation alone. Externally served reachability remains
+a separate exact-run qualification assertion.

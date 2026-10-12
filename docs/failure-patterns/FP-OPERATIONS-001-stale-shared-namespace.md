@@ -7,8 +7,8 @@ component_ids:
   - CMP-ORGANIZATION-AUTHORITY
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
+reviewed_at: 2026-10-11
+reviewed_ref: 6b69e51323a266d49c7c599a8168576152eb6fc1
 origin: live
 evidence_status: observed-live
 status: mitigating
@@ -23,6 +23,8 @@ implementation_refs:
   - commit:5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
 regression_test_refs:
   - .github/workflows/ci.yml@5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
+  - tests/architecture/authority-backup-maintenance.test.ts@6b69e51323a266d49c7c599a8168576152eb6fc1
+  - tests/architecture/organization-authority-release-record.test.ts@6b69e51323a266d49c7c599a8168576152eb6fc1
 residual_risk: Engine-initiated dependency crash restart is not covered by explicit Compose restart propagation
 ---
 
@@ -57,3 +59,9 @@ Restart the stack as one unit, prove the proxy process was replaced, verify it
 targets the current Authority namespace, and test both private health and
 public descriptor/no-store behavior. The reviewed fix covers explicit Compose
 restart. Engine-initiated crash restart remains an explicit residual.
+
+The CI smoke from the reviewed fix was removed in `e75250d`. The current
+regression proof is the explicit `compose restart proxy` that the update,
+backup-maintenance and tracing paths run after starting the Authority, asserted
+by the tests named above; other onboarding starts rely on Compose propagation alone
+([INV-OPERATIONS-001](../invariants/INV-OPERATIONS-001-shared-namespace-lifecycle.md)).

@@ -710,6 +710,10 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         '      - "${ECHO_CLEAN_NANGO_INTEGRATION:?',
     );
     expect(compose).not.toMatch(/slack-(signing|bot)/);
+    // INV-OPERATIONS-001: the proxy lives in the Authority's namespace and restarts with it.
+    expect(compose).toContain(
+      "      authority:\n        condition: service_healthy\n        restart: true\n    network_mode: service:authority\n",
+    );
     expect(source).toContain("docker image inspect");
     expect(source).toContain("compose_clean pull authority");
     expect(source).toContain('"$SETUP_COMMAND" resume --state-dir /echo-clean/state');
