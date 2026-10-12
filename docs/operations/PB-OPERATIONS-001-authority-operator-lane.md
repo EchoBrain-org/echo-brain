@@ -97,7 +97,7 @@ entry in its signed feed.
 
 | Goal | Supported path |
 | --- | --- |
-| Compile or test locally | `npm run authority:local`. For the simulated staging journey, run `npm run test:staging-journey`, fix failures and run `npm run check` before review. Local tests are not live delivery proof. |
+| Compile or test locally | [`npm run authority:local`](../../README.md#local-authority-exercise), which needs a local Nango key file for `up` and `reset`. For the simulated staging journey, run `npm run test:staging-journey`, fix failures and run `npm run check` before review. Local tests are not live delivery proof. |
 | Inspect staging | `authority:staging status` for the slot; the release CLI's fresh `status` action for a current-host release; human host-wrapper `status` during initial onboarding. |
 | Capture full research traces in LangSmith | Use the [staging tracing selection](../../deploy/organization-authority/README.md#langsmith-staging-tracing). The human chooses the external project, region and duration (a timed window or until disabled) and enters its API key at the installed wrapper's hidden prompt. The operator verifies a normal Ask trace and the finite export status. This does not replace release or canary approval. |
 | Rehearse staged connector intake | After deploying the explicit staging connector profile through the existing release/onboarding lanes, use the [staging connector runner](../../services/organization-authority/README.md#staging-connector-rehearsal) from the owner Mac. It uses the existing Person session for bounded, release/profile-bound observations. It neither deploys nor resets the host, enables Jira Ask, or grants provider qualification. |

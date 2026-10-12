@@ -159,8 +159,29 @@ release and update workflows are documented under `deploy/release/`.
 
 For a disposable, local-only Authority exercise, use the committed harness. It
 creates synthetic state outside the checkout, uses a distinct Compose project,
-and binds two high loopback ports. It does not read deployment state, a release
-record, or any provider credential.
+and binds two high loopback ports. It does not read deployment state or a
+release record. Its only credential input is the Nango secret-key file you
+name, which it mounts read-only into the container.
+
+`up` and `reset` refuse to start until two variables are set (`down` and
+`ca-path` need neither):
+
+- `ECHO_LOCAL_NANGO_SECRET_KEY_FILE`: an absolute, normalized path to a
+  regular file you own with mode `0600`, holding 32 to 4096 visible ASCII
+  characters and no trailing newline.
+- `ECHO_LOCAL_NANGO_INTEGRATION`: the Nango Slack integration key, for example
+  `slack`.
+
+No Nango call happens before Slack setup, so a random placeholder key, as CI
+uses, is enough unless you exercise Slack setup, which needs a key from your
+own development Nango environment. Never use the staging or production Nango
+environment key here.
+
+```bash
+export ECHO_LOCAL_NANGO_INTEGRATION=slack
+export ECHO_LOCAL_NANGO_SECRET_KEY_FILE="$HOME/.echo-local-nango-secret-key"
+(umask 077 && node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))' > "$ECHO_LOCAL_NANGO_SECRET_KEY_FILE")
+```
 
 ```bash
 npm run authority:local -- up

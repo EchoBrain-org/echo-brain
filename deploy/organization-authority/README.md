@@ -28,7 +28,9 @@ this deployment directory and do not run this deployment wrapper. Use
 [`npm run authority:local`](../../README.md#local-authority-exercise) from the
 repository root. That separate harness creates only sentinel-owned state outside
 the checkout and applies a local overlay to the base profile; it never uses this
-EC2 profile or reads provider credentials.
+EC2 profile. Its only credential input is the developer's own Nango key file,
+named by `ECHO_LOCAL_NANGO_SECRET_KEY_FILE`: a random placeholder unless
+exercising Slack setup, and never the staging or production key.
 
 ## One-time preparation
 
