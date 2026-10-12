@@ -8,7 +8,7 @@ component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
 reviewed_at: 2026-10-11
-reviewed_ref: 6b69e51323a266d49c7c599a8168576152eb6fc1
+reviewed_ref: 3aea847cca4fa44cfa1ab28dbf44b1b707590b8b
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Explicit proxy restart in the update, backup-maintenance and tracing operator paths; Compose restart propagation is declared but not exercised in CI

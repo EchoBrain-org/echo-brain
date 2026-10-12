@@ -8,7 +8,7 @@ component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
 reviewed_at: 2026-10-11
-reviewed_ref: 6b69e51323a266d49c7c599a8168576152eb6fc1
+reviewed_ref: 3aea847cca4fa44cfa1ab28dbf44b1b707590b8b
 origin: live
 evidence_status: observed-live
 status: mitigating
@@ -23,8 +23,8 @@ implementation_refs:
   - commit:5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
 regression_test_refs:
   - .github/workflows/ci.yml@5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
-  - tests/architecture/authority-backup-maintenance.test.ts@6b69e51323a266d49c7c599a8168576152eb6fc1
-  - tests/architecture/organization-authority-release-record.test.ts@6b69e51323a266d49c7c599a8168576152eb6fc1
+  - tests/architecture/authority-backup-maintenance.test.ts@3aea847cca4fa44cfa1ab28dbf44b1b707590b8b
+  - tests/architecture/organization-authority-release-record.test.ts@3aea847cca4fa44cfa1ab28dbf44b1b707590b8b
 residual_risk: Engine-initiated dependency crash restart is not covered by explicit Compose restart propagation
 ---
 
