@@ -483,6 +483,21 @@ function send<N extends EventName>(name: N, payload: Events[N]): void {
   window?.webContents.send('event', { name, payload });
 }
 
+/** Another app in front, or ECHO back in front: the page covers, then uncovers, what it shows. */
+const concealApp = () => send('lifecycle.conceal', {});
+const resumeApp = () => send('lifecycle.resume', {});
+
+// Linux has no app-level focus events: the window's own stand in for them.
+// Hidden tests drive lifecycle explicitly; native focus must not override their state.
+function concealAfterBlur(): void {
+  if (process.platform === 'darwin' || test.ECHO_DESKTOP_HIDDEN) return;
+  setTimeout(() => { if (!BrowserWindow.getFocusedWindow()) concealApp(); }, 150);
+}
+
+function resumeOnFocus(): void {
+  if (process.platform !== 'darwin' && !test.ECHO_DESKTOP_HIDDEN) resumeApp();
+}
+
 // ---- window, tray, shortcuts -----------------------------------------------
 
 function createWindow(): BrowserWindow {
@@ -507,12 +522,8 @@ function createWindow(): BrowserWindow {
   });
   // Quitting closes the window before macOS stops reporting app events.
   created.on('closed', () => { if (window === created) window = null; });
-  // Hidden tests drive lifecycle explicitly; native focus must not override their state.
-  created.on('blur', () => {
-    if (process.platform === 'darwin' || test.ECHO_DESKTOP_HIDDEN) return;
-    setTimeout(() => { if (!BrowserWindow.getFocusedWindow()) send('lifecycle.conceal', {}); }, 150);
-  });
-  created.on('focus', () => { if (process.platform !== 'darwin' && !test.ECHO_DESKTOP_HIDDEN) send('lifecycle.resume', {}); });
+  created.on('blur', concealAfterBlur);
+  created.on('focus', resumeOnFocus);
   void created.loadURL(`${ORIGIN}/index.html`);
   return created;
 }
@@ -649,8 +660,8 @@ app.on('activate', () => { if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}
 // Tests drive these with echo-test:conceal and echo-test:resume: a hidden test
 // window never follows which app the machine has in front.
 if (!test.ECHO_DESKTOP_HIDDEN) {
-  app.on('did-resign-active', () => send('lifecycle.conceal', {}));
-  app.on('did-become-active', () => send('lifecycle.resume', {}));
+  app.on('did-resign-active', concealApp);
+  app.on('did-become-active', resumeApp);
 }
 /** The wait for a refresh to finish, while it runs: another Quit joins it. */
 let draining: Promise<void> | null = null;
@@ -699,8 +710,8 @@ app.on('window-all-closed', () => { /* stays in the tray */ });
 if (__ECHO_TEST_HOOK__) {
   // Playwright cannot press a global shortcut; it emits these instead.
   (app as unknown as NodeJS.EventEmitter).on('echo-test:capture', capture);
-  (app as unknown as NodeJS.EventEmitter).on('echo-test:conceal', () => send('lifecycle.conceal', {}));
-  (app as unknown as NodeJS.EventEmitter).on('echo-test:resume', () => send('lifecycle.resume', {}));
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:conceal', concealApp);
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:resume', resumeApp);
   (app as unknown as NodeJS.EventEmitter).on('echo-test:kill-host', () => { host?.kill(); });
   // What show() tells the page, without putting a window on the test machine's screen.
   (app as unknown as NodeJS.EventEmitter).on('echo-test:shown', () => send('window.shown', {}));
@@ -708,8 +719,9 @@ if (__ECHO_TEST_HOOK__) {
 
 /**
  * `--smoke`: prove a packaged build is sound without showing anything. The
- * renderer is locked down, the test hook is absent, the host starts and the
- * person client reports its build identity.
+ * renderer is locked down, the test hook is absent, concealment follows the
+ * system's app focus, the host starts and the person client reports its
+ * build identity.
  */
 async function runSmoke(): Promise<void> {
   const checks: Record<string, boolean> = {};
@@ -722,6 +734,10 @@ async function runSmoke(): Promise<void> {
   checks.renderer_has_no_node = !inside.node;
   checks.bridge_present = inside.bridge;
   checks.test_hook_absent = !__ECHO_TEST_HOOK__;
+  // ECHO's own handlers, not a count: Electron adds window focus listeners of its own.
+  checks.lifecycle_wired = process.platform === 'darwin'
+    ? app.listeners('did-resign-active').includes(concealApp) && app.listeners('did-become-active').includes(resumeApp)
+    : probe.listeners('blur').includes(concealAfterBlur) && probe.listeners('focus').includes(resumeOnFocus);
   quitting = true;
   probe.destroy();
   startHost();
