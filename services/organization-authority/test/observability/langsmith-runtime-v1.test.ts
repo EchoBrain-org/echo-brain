@@ -153,4 +153,65 @@ describe('explicit staging LangSmith selection', () => {
       expect(fetcher).toHaveBeenCalledTimes(1);
     }
   });
+
+  it.each([400, 401, 403, 429, 500])('reports HTTP %s in the existing status record without private response content', async status => {
+    const { path, config } = fixture();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('private service response', { status }));
+    const lines: string[] = [];
+    const runtime = createLangSmithRuntimeV1({ path, authority_url: STAGING_AUTHORITY_ORIGIN_V1,
+      release_sha: 'a'.repeat(40), write: line => { lines.push(line); } });
+    try {
+      runtime.start();
+      await expect(observeCoreRuntimeV1('research_run', async () => {
+        observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', tool_call_id: 1, round: 1,
+          tool: 'search', args: { query: 'private question' } });
+        observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', tool_call_id: 1, round: 1,
+          tool: 'search', result: { text: 'private source' } });
+        return 42;
+      }, runtime.scope)).resolves.toBe(42);
+    } finally { await runtime.close(); }
+    expect(lines.map(line => JSON.parse(line))).toContainEqual(expect.objectContaining({
+      enabled: true, exported: 0, failed: 1, pending: 0,
+      last_failure: { kind: 'http', http_status: status },
+    }));
+    for (const secret of [config.api_key, 'private service response', 'private question', 'private source']) {
+      expect(lines.join('')).not.toContain(secret);
+    }
+  });
+
+  it.each(['timeout', 'cancelled', 'network'] as const)('distinguishes %s without retaining transport errors', async kind => {
+    const { config } = fixture();
+    const deadline = new AbortController();
+    const caller = new AbortController();
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      if (kind === 'timeout') deadline.abort();
+      if (kind === 'cancelled') caller.abort();
+      throw new Error('private network failure with credentials');
+    });
+    await expect(createLangSmithSenderV1(config, fetcher)([], caller.signal)).rejects.toMatchObject({
+      message: 'LangSmith trace export failed', failure: { kind, http_status: null },
+    });
+    expect(AbortSignal.timeout).toHaveBeenCalledWith(5000);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('classifies serialization failure without sending or exposing the payload', async () => {
+    const { config } = fixture();
+    const fetcher = vi.fn<typeof fetch>();
+    const run = { id: 'fixture', inputs: { private: 1n } } as unknown as LangSmithRunV1;
+    await expect(createLangSmithSenderV1(config, fetcher)([run], new AbortController().signal)).rejects.toMatchObject({
+      message: 'LangSmith trace export failed', failure: { kind: 'serialization', http_status: null },
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([202, 403])('preserves HTTP %s when discarding the response body fails', async status => {
+    const { config } = fixture();
+    const response = new Response(new ReadableStream({ cancel() { throw new Error('private cleanup failure'); } }), { status });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response);
+    const sent = createLangSmithSenderV1(config, fetcher)([], new AbortController().signal);
+    if (status === 202) await expect(sent).resolves.toBeUndefined();
+    else await expect(sent).rejects.toMatchObject({ failure: { kind: 'http', http_status: status } });
+  });
 });

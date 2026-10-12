@@ -69,7 +69,14 @@ describe('LangSmith projection of the shared observer', () => {
     await pause();
     rejectSend(new Error('private transport error'));
     await observer.flush();
-    expect(observer.status()).toMatchObject({ failed: 1, pending: 0 });
+    expect(observer.status()).toMatchObject({ failed: 1, pending: 0,
+      last_failure: { kind: 'unknown', http_status: null } });
+    expect(JSON.stringify(observer.status())).not.toContain('private transport error');
+    send.mockResolvedValueOnce(undefined);
+    await observeCoreRuntimeV1('research_run', async () => 42, observer.scope);
+    await observer.flush();
+    expect(observer.status()).toMatchObject({ exported: 1, failed: 1,
+      last_failure: { kind: 'unknown', http_status: null } });
     await observer.close();
   });
 
@@ -135,7 +142,8 @@ describe('LangSmith projection of the shared observer', () => {
       await vi.advanceTimersByTimeAsync(5000);
       await closing;
       expect(send.mock.calls[0]![1].aborted).toBe(true);
-      expect(observer.status()).toMatchObject({ active: 0, pending: 0, failed: 1, incomplete: 1 });
+      expect(observer.status()).toMatchObject({ active: 0, pending: 0, failed: 1, incomplete: 1,
+        last_failure: { kind: 'shutdown', http_status: null } });
       finish(); await work;
       expect(send).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }

@@ -2,6 +2,19 @@ import { randomUUID } from 'node:crypto';
 import type { CoreRuntimeDiagnosticObservationV1, CoreRuntimeObservationScopeV1, CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { createPersonDiagnosticTraceV1, type PersonDiagnosticTraceCollectorV1 } from '../person-diagnostic-trace-v1.js';
 
+type ExportFailureKind = 'http' | 'timeout' | 'cancelled' | 'network' | 'serialization' | 'projection' | 'shutdown' | 'unknown';
+interface ExportFailure { readonly kind: ExportFailureKind; readonly http_status: number | null }
+
+/** Only a finite category and numeric status may cross into operational telemetry. */
+export class LangSmithExportErrorV1 extends Error {
+  readonly failure: ExportFailure;
+  constructor(kind: ExportFailureKind, httpStatus: number | null = null) {
+    super('LangSmith trace export failed');
+    this.failure = Object.freeze({ kind, http_status: kind === 'http' && typeof httpStatus === 'number' &&
+      Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? httpStatus : null });
+  }
+}
+
 /** Provider-shaped output only at this composition boundary. No SDK in the core. */
 export interface LangSmithRunV1 {
   id: string;
@@ -123,6 +136,11 @@ export function createLangSmithObserverV1(options: {
   const pending: LangSmithRunV1[][] = [];
   const abort = new AbortController();
   const counts = { exported: 0, failed: 0, dropped: 0, incomplete: 0 };
+  let lastFailure: ExportFailure | null = null;
+  const failed = (error: unknown) => {
+    counts.failed++;
+    lastFailure = error instanceof LangSmithExportErrorV1 ? error.failure : { kind: 'unknown', http_status: null };
+  };
   let sending: Promise<void> | undefined;
   let delivery = 0;
   let closed = false;
@@ -131,7 +149,7 @@ export function createLangSmithObserverV1(options: {
     const runs = pending.shift()!;
     const attempt = ++delivery;
     sending = Promise.resolve().then(() => options.send(runs, abort.signal))
-      .then(() => { if (attempt === delivery) counts.exported++; }, () => { if (attempt === delivery) counts.failed++; })
+      .then(() => { if (attempt === delivery) counts.exported++; }, error => { if (attempt === delivery) failed(error); })
       .finally(() => { sending = undefined; pump(); });
   };
   const finish = (capture: Capture, end: CoreRuntimeObservationV1, interrupted = false) => {
@@ -142,7 +160,7 @@ export function createLangSmithObserverV1(options: {
       const runs = project(capture, end, options.project, options.release_sha, interrupted);
       if (runs[0]!.extra.metadata.complete !== true) counts.incomplete++;
       pending.push(runs); pump();
-    } catch { counts.failed++; } finally { capture.collector.close(); }
+    } catch { failed(new LangSmithExportErrorV1('projection')); } finally { capture.collector.close(); }
   };
   const expire = () => {
     for (const capture of active.values()) {
@@ -170,7 +188,8 @@ export function createLangSmithObserverV1(options: {
   const flush = async () => { while (sending !== undefined) await sending; };
   return Object.freeze({
     scope, flush,
-    status: () => ({ ...counts, active: active.size, pending: pending.length + Number(sending !== undefined) }),
+    status: () => ({ ...counts, active: active.size, pending: pending.length + Number(sending !== undefined),
+      last_failure: lastFailure === null ? null : { ...lastFailure } }),
     async close() {
       if (closed) return;
       closed = true; clearInterval(timer);
@@ -180,7 +199,7 @@ export function createLangSmithObserverV1(options: {
       clearTimeout(timeout); abort.abort(); counts.dropped += pending.length; pending.length = 0;
       // A shutdown deadline leaves delivery unconfirmed. Count it once, even
       // if a late transport completion arrives after the final status report.
-      if (sending !== undefined) { counts.failed++; delivery++; sending = undefined; }
+      if (sending !== undefined) { failed(new LangSmithExportErrorV1('shutdown')); delivery++; sending = undefined; }
     },
   });
 }
