@@ -19,7 +19,7 @@ paths below are relative to its `organization-control-plane/` folder:
 | Slack provider `adapters/slack/slack-web-identity-provider-v1` | Slack `auth.test` checks of an install and the DM-code person link |
 | Slack provider `application/organization-tool-connection-contracts-v2` | External human-link and organization-tool connection contracts |
 | `security/file-secret-store` | The private secret store for the organization's Slack app credential bundle: client ID/secret, signing secret, and Nango connection ID ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)) |
-| Slack provider `slack-approval-integration-v1` | The control database opener, visibility policy and tool connection contracts, and the Slack identity-link lookup (`resolveCurrentSlackDmApprovalReviewerTargetV1`) used by the Slack approval plug-in |
+| Slack provider `slack-approval-integration-v1` | The control database opener, visibility policy and tool connection contracts, and the Slack identity-link lookups used by the Slack approval plug-in: `resolveCurrentSlackDmApprovalReviewerTargetV1` and the card-target pick, recheck and click match built on it |
 | `organization-control-database-v1` | Opening the control database and applying the current V4 baseline |
 | `record-visibility-policy-contracts-v1` | Provider-neutral Person visibility policy identifiers and contract digests |
 
@@ -256,7 +256,10 @@ with the Slack-bound policy resolutions. The Slack connection, the bot token
 source, connection health and the identity-link lookup
 (`resolveCurrentSlackDmApprovalReviewerTargetV1`) serve the plug-in
 ([unified meeting approval](../product/2026-10-07-unified-meeting-approval-v1.md),
-sections 3 and 5). The presenter posts a copy of each proposal to a reviewer
+sections 3 and 5). The Slack provider also owns the identity reads that pick,
+recheck and click-match a card's target, and the ephemeral `response_url`
+reply; the Authority composition root passes in only its own membership and
+project rows. The presenter posts a copy of each proposal to a reviewer
 who linked Slack and redraws it once the proposal is decided or replaced, and a
 verified click is decided through the same approval core as the desktop. The
 decision is Authority state, written once to the decision table

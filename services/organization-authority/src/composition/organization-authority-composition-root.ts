@@ -40,16 +40,22 @@ import { SlackConnectionHealthV1 } from "@echo-brain/provider-slack-server/organ
 import {
   createSlackApprovalPresenterV1,
   createTargetBoundSlackApprovalPosterV1,
+  type SlackApprovalTargetV1,
 } from "@echo-brain/provider-slack-server/private-approval/slack-approval-presenter-v1";
 import { createSlackApprovalClickV1 } from "@echo-brain/provider-slack-server/private-approval/slack-approval-click-v1";
-import { createPrivateSlackApprovalInteractionHandlerV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-interaction-handler-v1";
+import {
+  createPrivateSlackApprovalInteractionHandlerV1,
+  sendSlackResponseUrlFeedbackV1,
+} from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-interaction-handler-v1";
 import { createPrivateSlackApprovalHttpAdapterV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-http-adapter-v1";
 import { findSlackAppCredentialsByReferenceSha256V1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-app-credentials-v1";
 import {
-  openOrganizationControlDatabase,
+  isCurrentSlackDmApprovalTargetV1,
+  matchSlackApprovalClickActorV1,
   readActiveSlackConnectionV1,
-  resolveCurrentSlackDmApprovalReviewerTargetV1,
+  resolveSlackDmApprovalTargetV1,
 } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
+import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { join } from "node:path";
 import { createModelCallLimiterV1 } from "./model-call-limiter-v1.js";
@@ -226,38 +232,13 @@ export async function openOrganizationAuthorityService(
           authority_url: sharedConfig.authority_url, state_directory: sharedConfig.state_directory, coordinates: resources.coordinates,
           ...(stagingFixtures === undefined ? {} : { fixtures_directory: stagingFixtures }),
         });
-        const targetCurrent = (target: {
-          readonly connection_id: string;
-          readonly external_identity_link_id: string;
-          readonly external_identity_link_contract_sha256: string;
-          readonly slack_workspace_id: string;
-          readonly slack_subject_id: string;
-          readonly api_app_id: string;
-        }): boolean => {
-          const active = readActiveSlackConnectionV1(
+        // Slack owns its identity reads; the Authority supplies only its own membership rows.
+        const targetCurrent = (target: SlackApprovalTargetV1): boolean =>
+          isCurrentSlackDmApprovalTargetV1(
             openedControl,
             resources.coordinates,
+            target,
           );
-          if (
-            active === undefined ||
-            active.connection.connection_id !== target.connection_id ||
-            active.connection.provider_tenant_id !==
-              target.slack_workspace_id ||
-            active.connection.provider_app_id !== target.api_app_id
-          )
-            return false;
-          return (
-            openedControl
-              .prepare(
-                `SELECT 1 FROM organization_external_human_link_current WHERE external_identity_link_id=? AND contract_sha256=? AND current_status='active' AND provider_subject_id=?`,
-              )
-              .get(
-                target.external_identity_link_id,
-                target.external_identity_link_contract_sha256,
-                target.slack_subject_id,
-              ) !== undefined
-          );
-        };
         let meetings:
           ReturnType<typeof openPersonMeetingRuntimeV1> | undefined;
         const interaction = createPrivateSlackApprovalHttpAdapterV1(
@@ -283,88 +264,28 @@ export async function openOrganizationAuthorityService(
               return createSlackApprovalClickV1({
                 database: resources.database,
                 core,
-                link: (hint) => {
-                  const active = readActiveSlackConnectionV1(
+                link: (hint) =>
+                  matchSlackApprovalClickActorV1(
                     openedControl,
                     resources.coordinates,
-                  );
-                  if (
-                    active === undefined ||
-                    active.connection.provider_tenant_id !== hint.workspace_id
-                  )
-                    return null;
-                  const membership = resources.database
-                    .prepare(
-                      "SELECT organization_id,principal_id,membership_id,membership_type FROM authority_memberships WHERE organization_id=? AND status='active'",
-                    )
-                    .all(resources.coordinates.organization_id) as readonly {
-                    readonly organization_id: string;
-                    readonly principal_id: string;
-                    readonly membership_id: string;
-                    readonly membership_type: "owner" | "employee";
-                  }[];
-                  const matches = membership.flatMap((actor) => {
-                    if (
-                      actor.membership_type !== "owner" &&
-                      actor.membership_type !== "employee"
-                    )
-                      return [];
-                    const target =
-                      resolveCurrentSlackDmApprovalReviewerTargetV1(
-                        openedControl,
-                        resources.coordinates,
-                        active.connection.connection_id,
-                        actor,
-                      );
-                    return target === undefined ||
-                      target.current_slack_identity_link.provider_subject_id !==
-                        hint.subject_id
-                      ? []
-                      : [{ actor, target }];
-                  });
-                  if (matches.length !== 1 || matches[0] === undefined)
-                    return null;
-                  const match = matches[0];
-                  return {
-                    organization_id: match.actor.organization_id,
-                    principal_id: match.actor.principal_id,
-                    membership_id: match.actor.membership_id,
-                    connection_id: active.connection.connection_id,
-                    api_app_id: active.connection.provider_app_id,
-                    external_identity_link_id:
-                      match.target.current_slack_identity_link
-                        .external_identity_link_id,
-                    contract_sha256:
-                      match.target.current_slack_identity_link
-                        .external_identity_link_contract_sha256,
-                  };
-                },
+                    hint,
+                    resources.database
+                      .prepare(
+                        "SELECT organization_id,principal_id,membership_id,membership_type FROM authority_memberships WHERE organization_id=? AND status='active'",
+                      )
+                      .all(resources.coordinates.organization_id) as readonly {
+                      readonly organization_id: string;
+                      readonly principal_id: string;
+                      readonly membership_id: string;
+                      readonly membership_type: string;
+                    }[],
+                  ),
                 redraw: () => {
                   resources.on_processing_queued?.();
                 },
               })(click);
             },
-            feedback: async ({ response_url, text }) => {
-              const controller = new AbortController();
-              const timeout = setTimeout(() => controller.abort(), 4_000);
-              try {
-                const response = await fetch(response_url, {
-                  method: "POST",
-                  redirect: "error",
-                  signal: controller.signal,
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify({
-                    response_type: "ephemeral",
-                    replace_original: false,
-                    text,
-                  }),
-                });
-                if (!response.ok)
-                  throw new Error("Slack approval feedback was rejected");
-              } finally {
-                clearTimeout(timeout);
-              }
-            },
+            feedback: sendSlackResponseUrlFeedbackV1,
           }),
         );
         // Granola opens first, so its state binding is checked before the shared runtime opens the attempt ledger.
@@ -396,11 +317,6 @@ export async function openOrganizationAuthorityService(
                   database: resources.database,
                   core,
                   target: (reviewer) => {
-                    const active = readActiveSlackConnectionV1(
-                      openedControl,
-                      resources.coordinates,
-                    );
-                    if (active === undefined) return null;
                     const membership_type = resources.database
                       .prepare(
                         "SELECT membership_type FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND status='active'",
@@ -416,28 +332,11 @@ export async function openOrganizationAuthorityService(
                       membership_type !== "employee"
                     )
                       return null;
-                    const resolved =
-                      resolveCurrentSlackDmApprovalReviewerTargetV1(
-                        openedControl,
-                        resources.coordinates,
-                        active.connection.connection_id,
-                        { ...reviewer, membership_type },
-                      );
-                    if (resolved === undefined) return null;
-                    return {
-                      connection_id: active.connection.connection_id,
-                      external_identity_link_id:
-                        resolved.current_slack_identity_link
-                          .external_identity_link_id,
-                      external_identity_link_contract_sha256:
-                        resolved.current_slack_identity_link
-                          .external_identity_link_contract_sha256,
-                      slack_workspace_id: active.connection.provider_tenant_id,
-                      slack_subject_id:
-                        resolved.current_slack_identity_link
-                          .provider_subject_id,
-                      api_app_id: active.connection.provider_app_id,
-                    };
+                    return resolveSlackDmApprovalTargetV1(
+                      openedControl,
+                      resources.coordinates,
+                      { ...reviewer, membership_type },
+                    );
                   },
                   targetCurrent,
                   poster: (target) =>
