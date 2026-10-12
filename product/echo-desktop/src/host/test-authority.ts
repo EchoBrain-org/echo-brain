@@ -216,7 +216,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     access_expires_at: '2026-09-21T22:11:00.000Z', refresh_expires_at: '2026-09-28T22:00:00.000Z',
     hard_reauthentication_at: '2026-09-28T22:00:00.000Z',
   };
-  if (!existsSync(store.paths.live) && mode !== 'signed-out') {
+  if (!existsSync(store.paths.live) && !mode.startsWith('signed-out')) {
     store.install(AUTHORITY, 'oau_00000000-0000-4000-8000-000000000001', {
       // A week-old session: every deadline already passed, consistently.
       ...session, ...(expired ? {
@@ -353,7 +353,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const handoff = url.origin === IDENTITY_PROVIDER ? handoffs.get(state) : undefined;
     if (!handoff) return false;
     handoffs.delete(state);
-    const form = new URLSearchParams({ token: handoff.token, session: Buffer.from(JSON.stringify(session)).toString('base64url') });
+    // signed-out-not-bound: a Google account the organization never invited; the callback page says so instead.
+    const form = new URLSearchParams(mode === 'signed-out-not-bound' ? { token: handoff.token, error: 'identity_not_bound' }
+      : { token: handoff.token, session: Buffer.from(JSON.stringify(session)).toString('base64url') });
     const post = () => { globalThis.fetch(handoff.url, { method: 'POST', body: form }).catch(() => undefined); };
     // Still in the browser when a slow sign-out finishes.
     if (mode === 'signout-slow-browser') setTimeout(post, 4_000); else post();
