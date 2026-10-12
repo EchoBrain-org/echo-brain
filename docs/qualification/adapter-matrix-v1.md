@@ -102,11 +102,17 @@ matrix passed.
 `seam-substitution` is an offline architectural proof, separate from real-provider
 qualification. It cannot mark an external integration qualified.
 
-| Seam | Implementations | Evidence |
-| --- | --- | --- |
-| Person tools and identity | Two independent offline fragments | Generic v3 aggregation, route dispatch, duplicate rejection, account/session revalidation, reverse resource cleanup and injected client command/transport tests. |
-| Approval workflow | Slack with deterministic transport; persisted alternate fixture with the generic HumanAct codec | The shared Authority runtime suite exercises durable presentation, restart reconstruction, dispatch, finalization, signed append, replay, permission-aware record reads and missing-ownership refusal. The alternate additionally interrupts delivery and receipt signing across restart. |
-
-The fixture persists only its own presentation/action state, uses the real
-Authority candidate store and record log, and introduces no production schema.
-Provider identity/signature qualification remains in each real adapter's tests.
+No offline seam-substitution evidence is current. The persisted alternate
+approval fixture and the shared Authority approval runtime suite were removed.
+Approvals now run through one approval core with two closed surfaces, desktop
+and Slack
+([ADR-0031](../decisions/ADR-0031-unified-meeting-approval-core.md));
+`services/organization-authority/test/approval-core-v1.test.ts`,
+`services/organization-authority/test/slack-approval-click-v1.test.ts` and
+`providers/slack/server/test/private-approval/slack-approval-presenter-v1.test.ts`
+cover them. The multi-fragment Person identity composer was also removed: the
+composition root passes only the Slack identity bundle, and
+`services/organization-authority/test/presentation/person-tools-http-application-v3.test.ts`
+keeps the V3/V4 status authorization, account/session revalidation and
+duplicate-tool rejection tests. Provider identity/signature qualification
+remains in each real adapter's tests.
