@@ -73,7 +73,9 @@ fixtures, and shared neutral test support. The test-layer architecture check
 uses the module-reference parser to enforce this across every `packages/*/test`
 root and shared support, including type imports and re-exports. Provider-specific
 contract tests live with their provider; tests that combine a provider with
-Authority transports live with the composing service. Generic processing and
+Authority transports live with the composing service. The same check holds
+each `providers/*/test` root to neutral packages, the shared provider library
+and its own provider folder. Generic processing and
 record tests retain independent fixture implementations and signed protocol
 helpers without importing a provider or application workspace.
 
