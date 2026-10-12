@@ -1095,6 +1095,13 @@ mark the trace incomplete; whole dropped or failed uploads are counted in
 `echo-langsmith-tracing-status-v1`. That content-free record reports only when
 status changes, checked once per minute and at startup/shutdown. A zero pending
 count alone is not success: check `exported`, `failed`, `dropped`, `incomplete`.
+`last_failure` retains the most recent failure category and numeric `http_status`
+(or `null` when no HTTP response was received), without keys, headers, response
+bodies or exception text. It distinguishes `http`, `timeout`, `cancelled`,
+`network`, `serialization`, `projection`, `shutdown`, and `unknown`; it is `null`
+until the first failure in the current process. A later successful upload does
+not erase that failure history. For HTTP failures, inspect the status before
+changing credentials or retrying; a timeout does not prove ingestion failed.
 An upload failure never changes the product result; traces are not a durable
 audit log and a process crash can lose its buffered data.
 
