@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { generateKeyPairSync } from "node:crypto";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { cleanReleaseRecord } from "../support/clean-v1-release.js";
 import {
   canonicalJsonForTest as canonical,
   sha256FileForTest as sha256,
@@ -166,26 +167,11 @@ describe("Linux Person onboarding kit", () => {
     const artifact = join(root, "person-client.tgz");
     expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
     const release = join(root, "release.json");
-    writeFileSync(release, `${canonical({
-      schema_version: 1,
-      kind: "echo-clean-v1-release",
+    writeFileSync(release, `${canonical(cleanReleaseRecord({
       release_id: "clean-v1-linux-kit",
-      released_at: "2026-09-11T00:00:00Z",
-      baseline_compatibility_class: "clean-v1",
       source_sha: sourceSha,
-      authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"a".repeat(64)}` },
-      person_client: {
-        package: "@echo-brain/person-client",
-        version,
-        artifact_url: "https://downloads.example.test/person-client.tgz",
-        artifact_sha256: sha256(artifact),
-      },
-      runtime_profile: {
-        artifact_url: "https://downloads.example.test/runtime-profile.json",
-        artifact_sha256: "b".repeat(64),
-        profile_version: "clean-v1-profile-1",
-      },
-    })}\n`);
+      person_client: { version, artifact_sha256: sha256(artifact) },
+    }))}\n`);
     const outputZip = join(output, "echo-linux-kit.zip");
     const { publicKey } = generateKeyPairSync('ed25519');
     const updateConfig = join(root, 'update-config.json');

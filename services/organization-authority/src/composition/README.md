@@ -1,17 +1,22 @@
 # Composition
 
 This directory assembles the Organization Authority. It selects concrete
-adapters and provider bundles and connects them to application ports.
-Provider-neutral runtime components must not import a provider implementation.
+adapters and provider bundles and connects them to application ports. It also
+hosts the Person use-case services [listed below](#use-case-services-with-direct-sqlite-access),
+which reach SQLite directly. Provider-neutral runtime components must not
+import a provider implementation.
 
 - `organization-authority-composition-root.ts` is the deployable root. It
   selects the OpenRouter bundle and the Slack pieces from the `providers/`
   workspaces, the staging synthetic personal source (release canary, or the
-  selected fixed fixtures), the approval core with its after-record hook and
-  optional Slack presenter, and the Jira Person runtime
-  (`jira-person-live-runtime-v1.ts`) only when its ADR-0026 gate allows it.
-  Meetings come only from person-owned sources; there is no organization
-  meeting source.
+  selected fixed fixtures), the personal Granola meeting provider
+  (`granola-person-live-runtime-v1.ts`), and the shared personal meeting
+  runtime with the approval core, its after-record hook and optional Slack
+  presenter. It adds the Jira and Confluence Person runtimes
+  (`jira-person-live-runtime-v1.ts`, `confluence-person-live-runtime-v1.ts`)
+  as live connectors only when the service CLI supplies their explicit
+  configuration behind their release gates. Meetings come only from
+  person-owned sources; there is no organization meeting source.
 - `organization-authority-service-cli.ts` instead opens
   `staging-connector-rehearsal-runtime.ts` when the staging host selects a
   connector rehearsal profile. That opt-in, staging-only root and its
@@ -52,15 +57,48 @@ Provider-neutral runtime components must not import a provider implementation.
 - The `person-*` modules wire Person routes and upload processing, the
   `readable-search-*` modules own search generations, the `*-journey-*`
   modules record Ask journeys, `staging/` holds the staging synthetic meeting
-  source selection, the release canary and the journey telemetry transport,
-  and `synthetic-demo-*` is the no-write demo extraction evaluator.
+  source selection and personal provider, the release canary with its private
+  socket control and client, and (in `staging/observability/`) the staging
+  journey content telemetry format, and `synthetic-demo-*` is the no-write
+  demo extraction evaluator.
+- `observability/` holds the journey metrics and telemetry transport and the
+  optional staging LangSmith trace exporter (`langsmith-observer-v1.ts`,
+  `langsmith-runtime-v1.ts`), which `organization-authority-service-cli.ts`
+  opens. When selected, it sends trace content off-host.
 
 Provider-neutral bundle seams live in `packages/organization-processing/src/ports/`.
 Concrete bundles live in `providers/synthetic-demo` (the staging synthetic
 personal meeting provider), `providers/openrouter`, `providers/slack/server`
-(the approval presenter and click, Person identity, the staging canary control
-and the fixed-channel context pointer source) and
-`providers/jira` (the gated Person connection, live reader and context
-source). Secret values enter only through private-file adapters.
+(the approval presenter and click, Person identity and the organization Slack
+connection state), `providers/granola` (the personal Granola connection and
+folder meeting source), `providers/jira` and `providers/confluence` (each a
+gated Person connection and live reader), and `providers/shared` (the shared
+Person connection and Nango runtime). Secret values enter only through
+private-file adapters.
 Public `clean-*` command names and versioned `clean-founder` wire values are
 compatibility contracts, not component names.
+
+## Use-case services with direct SQLite access
+
+Presentation routes never open SQLite. These non-root composition modules hold
+use-case logic and reach SQLite directly, through raw SQL, a `better-sqlite3`
+handle or a concrete `Sqlite*` adapter class, instead of through application
+ports. The composition layer rule in
+[`source-boundary.v1.json`](../../source-boundary.v1.json) allows this; it is
+known layering debt:
+
+- `approval-core-v1.ts` and `approval-publisher-v1.ts`: the decision table and
+  record publication (raw SQL);
+- `person-meeting-runtime-v1.ts`: the personal meeting lanes and the
+  `POST /v1/person/meetings` route (raw SQL and SQLite adapters);
+- `person-trigger-runs-v1.ts`, `person-sweep-runs-v1.ts` and
+  `person-open-items-v1.ts`: runs, sweeps and open items (typed against
+  `Sqlite*` adapter classes, with `better-sqlite3` write callbacks);
+- `person-record-search-route.ts`: record list, search and open (raw SQL on
+  record-log tables), with `person-record-read-route.ts` and
+  `person-answer-v3-route.ts` (concrete SQLite audit adapters); and
+- `readable-search-generation-composition.ts` and
+  `readable-search-generation-reconciler.ts`: search generations (raw SQL).
+
+A new module must not join this list quietly: add it here in the same change,
+or put its logic behind an application port.

@@ -15,7 +15,6 @@ import {
  * another profile needs a versioned bootstrap design. Provider verification
  * and persisted provider facts stay in provider helpers.
  */
-import { captureCommand } from '@echo-brain/organization-authority-kernel/composition/capture-stopped-state-command';
 import { plannedSlackConnectionIsActiveV1, readInitialOwnerSlackSetupStatusV1 } from '@echo-brain/provider-slack-server/setup/initial-owner-slack-setup-v1';
 import { randomUUID } from "node:crypto";
 import {
@@ -45,10 +44,7 @@ import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-ap
 
 import { assertDisplayName } from "@echo-brain/organization-authority-kernel/domain/rules";
 import { personLoginGrantExpectedEmailSha256 } from "@echo-brain/organization-authority-kernel/domain/person-email-binding";
-import {
-  isCanonicalPersonEmail,
-  isExpectedPersonEmail,
-} from "@echo-brain/organization-authority-kernel/domain/person-session-rules";
+import { isExpectedPersonEmail } from "@echo-brain/organization-authority-kernel/domain/person-session-rules";
 import { readPrivateAuthorityCredential, readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import {
   bootstrapOrganizationAuthorityState,
@@ -61,10 +57,11 @@ import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSIT
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
 import {
   assertPersonAuthorityCallback,
+  issueSetupOwnerInvitation,
   readPersonOidcConfiguration,
-  runOrganizationAuthorityPersonAdministrationCli,
+  type SetupOwnerInvitationInput,
 } from "./organization-authority-person-administration-cli.js";
-import { reissueLegacyPersonOnboardingInvitation } from "./person-onboarding-service.js";
+import { initializePersonSessionCredentials } from "./person-onboarding-service.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
@@ -159,15 +156,7 @@ export interface OrganizationAuthoritySetupCliDependencies {
   readonly now: () => string;
   readonly initialize_state: typeof bootstrapOrganizationAuthorityState;
   readonly initialize_credentials: (stateDirectory: string) => Promise<void>;
-  readonly issue_invitation: (input: {
-    readonly state_directory: string;
-    readonly oidc_config_path: string;
-    readonly pkce_key_file: string;
-    readonly membership_id: string;
-    readonly expected_email: string;
-    readonly authority_url: string;
-    readonly output_path: string;
-  }) => Promise<void>;
+  readonly issue_invitation: (input: SetupOwnerInvitationInput) => Promise<void>;
   /** Test seam only; production queues into the owner's staging synthetic source. */
   readonly queue_staging_synthetic_meetings?: (input: {
     readonly state_directory: string;
@@ -195,39 +184,10 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
   now: () => new Date().toISOString(),
   initialize_state: bootstrapOrganizationAuthorityState,
   initialize_credentials: async (stateDirectory) => {
-    await captureCommand((stdout) =>
-      runOrganizationAuthorityPersonAdministrationCli(
-        ["credentials-init", "--state-dir", stateDirectory],
-        {
-          stdout,
-          stderr: () => undefined,
-        },
-      ),
-    );
+    initializePersonSessionCredentials({ state_directory: stateDirectory });
   },
   issue_invitation: async (input) => {
-    await captureCommand((stdout) =>
-      runOrganizationAuthorityPersonAdministrationCli(
-        [
-          "invite",
-          "--state-dir",
-          input.state_directory,
-          "--oidc-config",
-          input.oidc_config_path,
-          "--pkce-key-file",
-          input.pkce_key_file,
-          "--membership-id",
-          input.membership_id,
-          "--expected-email",
-          input.expected_email,
-          "--authority-url",
-          input.authority_url,
-          "--out",
-          input.output_path,
-        ],
-        { stdout, stderr: () => undefined },
-      ),
-    );
+    issueSetupOwnerInvitation(input);
   },
 };
 
@@ -474,7 +434,7 @@ function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV3 
   }
   const manifest = record as unknown as OrganizationAuthoritySetupManifestV3;
   if (
-    !isCanonicalPersonEmail(manifest.owner_email) ||
+    !isExpectedPersonEmail(manifest.owner_email) ||
     typeof manifest.organization_name !== "string" ||
     typeof manifest.owner_display_name !== "string" ||
     manifest.setup_seed === undefined
@@ -727,11 +687,8 @@ function usableInitialOwnerInvitation(
         : undefined;
     // `keys` is undefined unless the invitation is a plain object.
     if (
-      !(
-        keys === "authority_url,expires_at,kind,login_grant,schema_version" ||
-        keys ===
-          "authority_url,expected_email,expires_at,kind,login_grant,schema_version"
-      ) ||
+      keys !==
+        "authority_url,expected_email,expires_at,kind,login_grant,schema_version" ||
       `${canonicalJson(parsed as never)}\n` !== raw
     ) return false;
     const invitation = parsed as {
@@ -740,18 +697,12 @@ function usableInitialOwnerInvitation(
       authority_url: unknown;
       login_grant: unknown;
       expires_at: unknown;
-      expected_email?: unknown;
+      expected_email: unknown;
     };
     if (
-      !(
-        (invitation.schema_version === 1 &&
-          keys === "authority_url,expires_at,kind,login_grant,schema_version") ||
-        (invitation.schema_version === 2 &&
-          keys ===
-            "authority_url,expected_email,expires_at,kind,login_grant,schema_version" &&
-          isExpectedPersonEmail(invitation.expected_email) &&
-          invitation.expected_email === manifest.owner_email)
-      ) ||
+      invitation.schema_version !== 2 ||
+      !isExpectedPersonEmail(invitation.expected_email) ||
+      invitation.expected_email !== manifest.owner_email ||
       invitation.kind !== "echo-person-onboarding-invitation" ||
       invitation.authority_url !== manifest.authority_url ||
       typeof invitation.login_grant !== "string" ||
@@ -1429,32 +1380,15 @@ async function bootstrap(
       : stage().invitation_file_present;
   if (!initialOwnerAlreadyBound && !invitationIsUsable()) {
     discardUnusableInvitation(invitationPath);
-    if (isExpectedPersonEmail(manifest.owner_email)) {
-      await dependencies.issue_invitation({
-        state_directory: input.state_directory,
-        oidc_config_path: input.oidc_config_path,
-        pkce_key_file: manifest.pkce_key_file,
-        membership_id: manifest.owner_membership_id,
-        expected_email: input.owner_email,
-        authority_url: input.authority_url,
-        output_path: invitationPath,
-      });
-    } else {
-      const oidc = readPersonOidcConfiguration(manifest.oidc_config_path);
-      reissueLegacyPersonOnboardingInvitation({
-        state_directory: manifest.state_directory,
-        oidc: oidc.configuration,
-        pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(
-          `file:${manifest.pkce_key_file}`,
-        ),
-        organization_id: manifest.organization_id,
-        principal_id: manifest.owner_principal_id,
-        membership_id: manifest.owner_membership_id,
-        expected_email: manifest.owner_email,
-        authority_url: manifest.authority_url,
-        output_path: invitationPath,
-      });
-    }
+    await dependencies.issue_invitation({
+      state_directory: input.state_directory,
+      oidc_config_path: input.oidc_config_path,
+      pkce_key_file: manifest.pkce_key_file,
+      membership_id: manifest.owner_membership_id,
+      expected_email: input.owner_email,
+      authority_url: input.authority_url,
+      output_path: invitationPath,
+    });
   }
   const completedStage = stage();
   const completedFull = readInitialOwnerSetupStatus(manifest, dependencies);

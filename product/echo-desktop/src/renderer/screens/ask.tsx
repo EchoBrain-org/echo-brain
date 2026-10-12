@@ -322,7 +322,8 @@ function Asking() {
     return () => clearInterval(timer);
   }, []);
   return <div class="asking" data-testid="asking">
-    <i /><i /><i /><span>Thinking… {elapsed}s</span>
+    {/* The section is a live region: the counter would be read out every second. */}
+    <i /><i /><i /><span>Thinking…</span><span aria-hidden="true">{elapsed}s</span>
     <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
   </div>;
 }

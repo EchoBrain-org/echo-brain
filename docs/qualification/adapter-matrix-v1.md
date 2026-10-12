@@ -10,9 +10,9 @@ component_ids:
   - CMP-PERSON-CLIENT
   - CMP-PERMISSIONS
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
-matrix_version: 1
+reviewed_at: 2026-10-11
+reviewed_ref: 3aea847cca4fa44cfa1ab28dbf44b1b707590b8b
+matrix_version: 2
 assertion_ids:
   - ADP-T01
   - ADP-T02
@@ -22,7 +22,6 @@ assertion_ids:
   - ADP-I01
   - ADP-I02
   - ADP-I03
-  - ADP-I04
   - ADP-E01
   - ADP-E02
   - ADP-E03
@@ -32,8 +31,6 @@ assertion_ids:
   - ADP-A02
   - ADP-M01
   - ADP-M02
-  - ADP-L01
-  - ADP-L02
   - ADP-R01
   - ADP-R02
   - ADP-B01
@@ -45,9 +42,6 @@ invariant_ids:
   - INV-ADAPTERS-003
   - INV-ADAPTERS-004
   - INV-IDENTITY-001
-  - INV-IDENTITY-002
-  - INV-IDENTITY-003
-  - INV-IDENTITY-004
   - INV-RUNTIME-001
   - INV-PERMISSIONS-013
   - INV-PERMISSIONS-014
@@ -57,9 +51,6 @@ failure_pattern_ids:
   - FP-ADAPTERS-003
   - FP-ADAPTERS-004
   - FP-IDENTITY-001
-  - FP-IDENTITY-002
-  - FP-IDENTITY-003
-  - FP-IDENTITY-004
   - FP-RUNTIME-001
   - FP-PERMISSIONS-001
   - FP-RELEASE-001
@@ -84,7 +75,6 @@ a real-provider probe before founder-live qualification.
 | `ADP-I01` | Each identity field missing, malformed, or mismatched | Closed failure naming an internal sanitized mismatch stage |
 | `ADP-I02` | Authoritative endpoints disagree | No activation or authorization-grade evidence |
 | `ADP-I03` | Wrong tenant, app, bot, user, revoked credential, or missing scope | Closed failure before consequential action |
-| `ADP-I04` | Legacy incomplete identity | Fresh owner-authorized proof and atomic audited promotion; no blind backfill |
 | `ADP-E01` | Acknowledgement differs from stored provider object | Reference persisted, stored object verified, no repost |
 | `ADP-E02` | Response lost before a provider reference is known | Provider-specific reconciliation or explicit unknown outcome; no blind retry |
 | `ADP-E03` | Crash after reference acquisition and before verification | Restart reads the same object and finalizes once |
@@ -94,8 +84,6 @@ a real-provider probe before founder-live qualification.
 | `ADP-A02` | Conflicting or incomplete provider action evidence | Remain pending or deny; absence is not inferred from unknown evidence |
 | `ADP-M01` | Empty, thinking-only, truncated, and invalid-schema model output | Distinct classified outcomes with bounded retry policy |
 | `ADP-M02` | Mixed valid and invalid grounding, then all-invalid grounding | Keep only valid references; all-invalid nonempty output fails retryably |
-| `ADP-L01` | Old client with new lease request/state version | Legacy bound preserved; incompatible head never silently accepted |
-| `ADP-L02` | Central revocation and disconnected local lease | Both enforcement windows measured and reported separately |
 | `ADP-R01` | Durable resolution after current cycle sweep | One lifecycle-owned follow-up or durable work for successor |
 | `ADP-R02` | Shutdown during follow-up | Abort and drain before runtime lock release |
 | `ADP-B01` | Packaging from a second clean worktree | Embedded identity equals claimed source and exact artifact receipt |
@@ -114,11 +102,17 @@ matrix passed.
 `seam-substitution` is an offline architectural proof, separate from real-provider
 qualification. It cannot mark an external integration qualified.
 
-| Seam | Implementations | Evidence |
-| --- | --- | --- |
-| Person tools and identity | Two independent offline fragments | Generic v3 aggregation, route dispatch, duplicate rejection, account/session revalidation, reverse resource cleanup and injected client command/transport tests. |
-| Approval workflow | Slack with deterministic transport; persisted alternate fixture with the generic HumanAct codec | The shared Authority runtime suite exercises durable presentation, restart reconstruction, dispatch, finalization, signed append, replay, permission-aware record reads and missing-ownership refusal. The alternate additionally interrupts delivery and receipt signing across restart. |
-
-The fixture persists only its own presentation/action state, uses the real
-Authority candidate store and record log, and introduces no production schema.
-Provider identity/signature qualification remains in each real adapter's tests.
+No offline seam-substitution evidence is current. The persisted alternate
+approval fixture and the shared Authority approval runtime suite were removed.
+Approvals now run through one approval core with two closed surfaces, desktop
+and Slack
+([ADR-0031](../decisions/ADR-0031-unified-meeting-approval-core.md));
+`services/organization-authority/test/approval-core-v1.test.ts`,
+`services/organization-authority/test/slack-approval-click-v1.test.ts` and
+`providers/slack/server/test/private-approval/slack-approval-presenter-v1.test.ts`
+cover them. The multi-fragment Person identity composer was also removed: the
+composition root passes only the Slack identity bundle, and
+`services/organization-authority/test/presentation/person-tools-http-application-v3.test.ts`
+keeps the V3/V4 status authorization, account/session revalidation and
+duplicate-tool rejection tests. Provider identity/signature qualification
+remains in each real adapter's tests.

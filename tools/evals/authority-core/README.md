@@ -59,7 +59,7 @@ or `--seed` for exploration.
 The report includes corpus/query/code hashes, seed, runtime versions and local
 build/warm/search timings. Timings are diagnostics, not capacity qualification
 or a speedup claim. This artificial-vocabulary test cannot establish natural
-language answer quality; [the four-meeting evaluator](../../../demo/README.md)
+language answer quality; the [four-meeting rehearsal pass/fail gate](../../../demo/RUNBOOK.md#passfail-gate)
 remains the acceptance path for captured answers, citations and visibility.
 
 The frozen V4 definition names the test's original location under

@@ -7,8 +7,8 @@ component_ids:
   - CMP-PROCESSING-ADAPTERS
   - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-29
-reviewed_at: 2026-10-02
-reviewed_ref: 30f8e999dadca97a2a653e5fec12a1ad4107deac
+reviewed_at: 2026-10-11
+reviewed_ref: 3aea847cca4fa44cfa1ab28dbf44b1b707590b8b
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Complete production module ownership, inward workspace edges, explicit bootstrap modules, and shared deployment source assemblies
@@ -31,14 +31,19 @@ immutable adapter commitments, and opaque provider references.
 The allowed selecting modules are exactly the
 `adapter_architecture.bootstrap_entrypoints` declared in
 `product/source-boundary.v1.json`. They may select Granola, OpenRouter, Slack,
-Jira, or a future external-capability provider. The shared runtime must receive
+Jira, Confluence, or a future external-capability provider. The shared runtime must receive
 only their ports, identity/configuration commitments, presenter factories for
 the approval core, and approved-record policy projectors.
 
-The Jira live runtime (`jira-person-live-runtime-v1.ts`) and the opt-in
+The Jira, Confluence and Granola Person runtimes
+(`jira-person-live-runtime-v1.ts`, `confluence-person-live-runtime-v1.ts`,
+`granola-person-live-runtime-v1.ts`), the staging connector rehearsal runtime
+and the staging synthetic personal provider and canary are among those
+entrypoints. The kept intake of the opt-in
 [context capture integration](../product/2026-10-01-connector-context-integration-v1.md)
-add the selecting modules `provider-context-intakes-v1.ts`,
-`connector-rehearsal-capture-v1.ts`, and the staging connector rehearsal runtime. Jira constructs a reader from the
+(`context-source-intake-v1.ts`) selects no provider; its former selectors
+`provider-context-intakes-v1.ts` and `connector-rehearsal-capture-v1.ts` were
+removed in `0f759417`. Jira constructs a reader from the
 asker's current connection and permissions: global scope has no additional
 project allowlist, project scope requires its saved mapping, and Mine excludes
 Jira. Its provider data is request-only and is never admitted into canonical
@@ -114,9 +119,14 @@ target of the presentation (connection, identity link, subject and app) is still
 current. A changed connection or link never posts or redraws a card through the
 new target, and the proposal stays decidable on the desktop.
 
-The approved-record policy-projector registry is additive across a change of
-approval surface: it MUST retain projectors for historical record protocols as
-well as the selected protocol. The optional approver-metadata projector
+Within one record-log lineage, the approved-record policy-projector registry
+is additive across a change of approval surface: it MUST keep a projector for
+every record protocol that has rows in the log, as well as the selected
+protocol. A fresh-lineage reset under
+[ADR-0031](../decisions/ADR-0031-unified-meeting-approval-core.md) (an empty
+record log at Authority baseline V12 or later) may drop protocols with no
+surviving rows; `authority-record-protocols-v1.ts` lists only the protocols the
+current lineage appends. The optional approver-metadata projector
 uses an explicit retained composite too: unsupported or multiply matched records
 omit metadata. Projection runs after read authorization and cannot grant access.
 
@@ -158,8 +168,8 @@ because that directory no longer has a layer rule.
 The active synthetic-demo lane remains separate. Its source adapter and
 pre-Slack evaluator use canonical meeting documents and the production
 processing port; their tests cover the four-meeting fixture and extraction
-defect classes without live provider calls. The external `demo/` rehearsal
-graders and deterministic core-runtime checkpoint remain available.
+defect classes without live provider calls. The deterministic core-runtime
+checkpoint remains available.
 
 Structural enforcement covers ownership, dependency direction and build inputs.
 Semantic enforcement remains partial: a reviewed, generically named module can

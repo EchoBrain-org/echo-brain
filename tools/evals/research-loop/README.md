@@ -183,7 +183,12 @@ exact subsequent prompt's `opened` and `seen` fields.
 have a complete trace; a successful answer can have an incomplete trace. A
 truncated, missing or incomplete capture is saved and reported as incomplete.
 Capture is bounded to 8 MiB and 512 events per run. Exact payloads stay in
-bounded server memory; CloudWatch and Journey Explorer retain separate,
+bounded server memory, except while an operator has enabled
+[staging LangSmith tracing](../../../deploy/organization-authority/README.md#langsmith-staging-tracing):
+then the staging server also exports each research run, including this traced
+Ask or run, to the chosen LangSmith project, with its exact prompts, model
+outputs, tool arguments and results and released source text. That export is
+separate from this capture. CloudWatch and Journey Explorer retain separate,
 content-free operational metadata.
 
 If execution or polling is interrupted, use the saved capture id to resume
@@ -223,6 +228,14 @@ absolute directory outside this repository; directories are `0700` and files
 `0600`. The judge receives the answer key, the items research read and the
 run's answer, card or sweep result, and nothing else. Delete the output
 directory when the evaluation is finished.
+
+Evaluation runs execute on staging, so while an operator has enabled
+[LangSmith tracing](../../../deploy/organization-authority/README.md#langsmith-staging-tracing),
+the server also uploads each run's research, including prompts, tool results
+and released source text, to the chosen LangSmith project. If that is not
+wanted, disable it on the host with
+`sudo ./onboard-clean-v1.sh langsmith-tracing --disable`; disabling does not
+delete traces already uploaded.
 
 ## Limits to keep in mind
 

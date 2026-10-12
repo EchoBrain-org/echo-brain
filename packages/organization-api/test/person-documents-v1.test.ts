@@ -120,13 +120,15 @@ describe.each([1, 2] as const)('document V%i shared validation', (version) => {
       documents: [{ ...document, excerpt: 'Found text', anchor: { kind: 'paragraph', start: 1 } }], next_cursor: null,
     };
     expect(validateResults(results)).toBe(results);
+    // Package errors let the client report a malformed Authority response, not a bad request.
+    const apiError = expect.objectContaining({ name: 'OrganizationApiValidationError' });
     for (const invalid of [
       { extraction_detail: '\u0000' }, { extractor: '' }, { extracted_text_bytes: -1 },
       { request_id: 'wrong' }, { received_at: 'not-a-time' },
-    ]) expect(() => validateMetadata({ ...document, ...invalid })).toThrow();
+    ]) expect(() => validateMetadata({ ...document, ...invalid })).toThrow(apiError);
     for (const invalid of [{ excerpt: 'x'.repeat(241) }, { anchor: { kind: 'paragraph', start: 0 } }]) {
-      expect(() => validateResults({ ...results, documents: [{ ...results.documents[0], ...invalid }] })).toThrow();
+      expect(() => validateResults({ ...results, documents: [{ ...results.documents[0], ...invalid }] })).toThrow(apiError);
     }
-    expect(() => validateResults({ ...results, next_cursor: 'bad=' })).toThrow();
+    expect(() => validateResults({ ...results, next_cursor: 'bad=' })).toThrow(apiError);
   });
 });

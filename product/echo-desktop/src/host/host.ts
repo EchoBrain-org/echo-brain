@@ -7,7 +7,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods,
+  externalUrl, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods,
   type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
@@ -249,8 +249,8 @@ function sameAccount(current: AppStatus | null, expect: Expect): boolean {
 /** Runs a command for the account the renderer is showing, never another. */
 async function forAccount<T>(
   method: HostMethodName, expect: Expect, argv: readonly string[], view: (stdout: string) => T, requestId?: string, abortSignal?: AbortSignal,
+  write = WRITE_METHODS.has(method),
 ): Promise<Result<T>> {
-  const write = WRITE_METHODS.has(method);
   if (!sameAccount(await status(), expect)) return code('account_changed', write, requestId);
   if (write && requestId !== undefined) inFlight.add(requestId);
   let run: CliRun;
@@ -681,7 +681,7 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       let request;
       try { request = validatePersonMeetingRequestV2(raw); } catch { return code('invalid_request', true); }
       return forAccount(method, expect, ['tools', 'meetings', option('tool', request.tool_id), option('request', JSON.stringify(request))],
-        stdout => validatePersonMeetingResultV2(request.operation, (lastJson(stdout) as { result: unknown }).result));
+        stdout => validatePersonMeetingResultV2(request.operation, (lastJson(stdout) as { result: unknown }).result), undefined, undefined, isWriteCall(method, params));
     }
     // Impact checks of your own approvals, and the open items they found. Start
     // and retry change a run, send, set_state and assign change items; view and
@@ -701,7 +701,7 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
           case 'item': return openItemView((result as { item: Parameters<typeof openItemView>[0] }).item);
           default: return result;
         }
-      });
+      }, undefined, undefined, isWriteCall(method, params));
     }
     case 'tools.connect': {
       const { expect, tool_id: tool } = params as Params<'tools.connect'>;
@@ -752,7 +752,7 @@ port.on('message', ({ data }) => {
     port.postMessage({ id: request.id, result: ok(null) });
     return;
   }
-  const write = WRITE_METHODS.has(request.method);
+  const write = isWriteCall(request.method, request.params);
   const abort = request.method === 'ask.run' && typeof cancelId === 'string' && ASK_CANCEL_ID.test(cancelId) ? new AbortController() : undefined;
   if (abort && typeof cancelId === 'string') activeAsks.set(cancelId, abort);
   // A call still queued behind a refresh when its time runs out never starts.

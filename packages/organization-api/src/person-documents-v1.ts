@@ -2,6 +2,7 @@ import { sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonUpdateRequestId } from './person-updates.js';
 import { validateProjectContextAudienceV1, validateProjectIdV1, type ProjectContextAudienceV1, type ProjectIdV1 } from './project-context-v1.js';
 import { validateAssociationProjectIdsV1, validatePersonUploadAudienceV3, type PersonUploadAudienceV3 } from './person-upload-audience-v3.js';
+import { fail } from './validation.js';
 
 export const PERSON_DOCUMENTS_PATH_V1 = '/v1/person/documents';
 export const PERSON_DOCUMENTS_PATH_V2 = '/v2/person/documents';
@@ -56,25 +57,25 @@ export interface PersonDocumentMetadataV2 extends Omit<PersonDocumentReceiptV2, 
 export type PersonDocumentStatusV2 = PersonDocumentMetadataV2 | PersonDocumentSavedV2;
 
 function plainObject(value: unknown): Record<string, unknown> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new Error('Document metadata must be an object');
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) fail('Document metadata must be an object');
   return value as Record<string, unknown>;
 }
-function utf8Bytes(value: string): number { return Array.from(value).reduce((total, point) => { const code = point.codePointAt(0)!; if(code>=0xd800&&code<=0xdfff)throw new Error('Document string contains an invalid Unicode scalar'); return total + (code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4); }, 0); }
+function utf8Bytes(value: string): number { return Array.from(value).reduce((total, point) => { const code = point.codePointAt(0)!; if(code>=0xd800&&code<=0xdfff)fail('Document string contains an invalid Unicode scalar'); return total + (code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4); }, 0); }
 function boundedText(value: unknown, label: string, maximum: number): asserts value is string {
-  if (typeof value !== 'string' || value.length === 0 || value.normalize('NFC') !== value || /[\u0000-\u001f\u007f-\u009f]/u.test(value) || utf8Bytes(value) > maximum) throw new Error(`${label} is invalid`);
+  if (typeof value !== 'string' || value.length === 0 || value.normalize('NFC') !== value || /[\u0000-\u001f\u007f-\u009f]/u.test(value) || utf8Bytes(value) > maximum) fail(`${label} is invalid`);
 }
 function documentUploadFields(input: Record<string, unknown>): void {
   validatePersonUpdateRequestId(input.request_id);
   boundedText(input.filename, 'Document filename', 255);
   boundedText(input.title, 'Document title', 200);
-  if (/[\\/]/u.test(input.filename) || input.filename === '.' || input.filename === '..') throw new Error('Document filename must be a basename');
-  if (!Number.isSafeInteger(input.content_length) || (input.content_length as number) < 1 || (input.content_length as number) > PERSON_DOCUMENT_MAX_ORIGINAL_BYTES) throw new Error('Document content length is invalid');
-  if (typeof input.sha256 !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(input.sha256)) throw new Error('Document SHA-256 is invalid');
+  if (/[\\/]/u.test(input.filename) || input.filename === '.' || input.filename === '..') fail('Document filename must be a basename');
+  if (!Number.isSafeInteger(input.content_length) || (input.content_length as number) < 1 || (input.content_length as number) > PERSON_DOCUMENT_MAX_ORIGINAL_BYTES) fail('Document content length is invalid');
+  if (typeof input.sha256 !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(input.sha256)) fail('Document SHA-256 is invalid');
 }
 export function validatePersonDocumentUploadMetadataV1(value: unknown): PersonDocumentUploadMetadataV1 {
   const input = plainObject(value);
   const keys = ['audience','content_length','filename','kind','project_id','request_id','schema_version','sha256','title'];
-  if (Object.keys(input).sort().join() !== keys.join() || input.schema_version !== 1 || input.kind !== 'echo-person-document-upload-v1') throw new Error('Document metadata shape is invalid');
+  if (Object.keys(input).sort().join() !== keys.join() || input.schema_version !== 1 || input.kind !== 'echo-person-document-upload-v1') fail('Document metadata shape is invalid');
   documentUploadFields(input);
   const audience = validateProjectContextAudienceV1(input.audience);
   const project_id = input.project_id === null ? null : validateProjectIdV1(input.project_id, 'Document associated project_id');
@@ -82,24 +83,24 @@ export function validatePersonDocumentUploadMetadataV1(value: unknown): PersonDo
 }
 export function validatePersonDocumentUploadMetadataV2(value: unknown): PersonDocumentUploadMetadataV2 {
   const input = plainObject(value); const keys = ['association_project_ids','audience','content_length','filename','kind','request_id','schema_version','sha256','title'];
-  if (Object.keys(input).sort().join() !== keys.join() || input.schema_version !== 2 || input.kind !== 'echo-person-document-upload-v2') throw new Error('Document metadata shape is invalid');
+  if (Object.keys(input).sort().join() !== keys.join() || input.schema_version !== 2 || input.kind !== 'echo-person-document-upload-v2') fail('Document metadata shape is invalid');
   documentUploadFields(input);
   return Object.freeze({ schema_version: 2, kind: 'echo-person-document-upload-v2', request_id: input.request_id as string, filename: input.filename as string, title: input.title as string, content_length: input.content_length as number, sha256: input.sha256 as `sha256:${string}`, audience: validatePersonUploadAudienceV3(input.audience), association_project_ids: validateAssociationProjectIdsV1(input.association_project_ids) });
 }
 
 /** Detects supported content from bytes; caller-supplied filename/MIME is never authoritative. */
 export function detectPersonDocumentMediaTypeV1(bytes: Uint8Array, filename: string): PersonDocumentMediaTypeV1 {
-  if (bytes.byteLength < 1 || bytes.byteLength > PERSON_DOCUMENT_MAX_ORIGINAL_BYTES) throw new Error('Document original exceeds the supported size');
+  if (bytes.byteLength < 1 || bytes.byteLength > PERSON_DOCUMENT_MAX_ORIGINAL_BYTES) fail('Document original exceeds the supported size');
   const extension = filename.toLocaleLowerCase('en-US').split('.').at(-1);
-  if (extension === 'doc') throw new Error('Legacy .doc is unsupported');
-  if (bytes.length >= 5 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46 && bytes[4] === 0x2d) { if (extension !== 'pdf') throw new Error('PDF content requires a .pdf filename'); return 'application/pdf'; }
+  if (extension === 'doc') fail('Legacy .doc is unsupported');
+  if (bytes.length >= 5 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46 && bytes[4] === 0x2d) { if (extension !== 'pdf') fail('PDF content requires a .pdf filename'); return 'application/pdf'; }
   if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
-    if (extension !== 'docx') throw new Error('Word ZIP content requires a .docx filename');
-    if (!isWordDocumentContainer(bytes)) throw new Error('ZIP original is not a supported Word document container');
+    if (extension !== 'docx') fail('Word ZIP content requires a .docx filename');
+    if (!isWordDocumentContainer(bytes)) fail('ZIP original is not a supported Word document container');
     return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   }
-  if (!validUtf8(bytes) || bytes.includes(0)) throw new Error('Document content is unsupported');
-  if (extension !== 'txt' && extension !== 'md' && extension !== 'markdown') throw new Error('Document content is unsupported');
+  if (!validUtf8(bytes) || bytes.includes(0)) fail('Document content is unsupported');
+  if (extension !== 'txt' && extension !== 'md' && extension !== 'markdown') fail('Document content is unsupported');
   return extension === 'txt' ? 'text/plain' : 'text/markdown';
 }
 
@@ -167,8 +168,8 @@ function validUtf8(bytes: Uint8Array): boolean {
 }
 
 export function assertPersonDocumentOriginalV1(metadata: PersonDocumentUploadMetadataV1, bytes: Uint8Array): PersonDocumentMediaTypeV1 {
-  if (bytes.byteLength !== metadata.content_length) throw new Error('Document content length does not match metadata');
-  if (sha256Digest(bytes) !== metadata.sha256) throw new Error('Document SHA-256 does not match metadata');
+  if (bytes.byteLength !== metadata.content_length) fail('Document content length does not match metadata');
+  if (sha256Digest(bytes) !== metadata.sha256) fail('Document SHA-256 does not match metadata');
   return detectPersonDocumentMediaTypeV1(bytes, metadata.filename);
 }
 
@@ -211,7 +212,7 @@ export interface PersonDocumentSearchResultV2 {
   readonly next_cursor: string | null;
 }
 export function validatePersonDocumentIdV1(value: unknown): `doc_${string}` {
-  if (typeof value !== 'string' || !/^doc_[a-f0-9]{64}$/.test(value)) throw new Error('Document ID is invalid');
+  if (typeof value !== 'string' || !/^doc_[a-f0-9]{64}$/.test(value)) fail('Document ID is invalid');
   return value as `doc_${string}`;
 }
 export function validatePersonDocumentSearchV1(value: unknown): PersonDocumentSearchV1 {
@@ -222,10 +223,10 @@ export function validatePersonDocumentSearchV2(value: unknown): PersonDocumentSe
 }
 function documentSearch(value: unknown, version: 1 | 2): PersonDocumentSearchV1 | PersonDocumentSearchV2 {
   const input = plainObject(value);
-  if (Object.keys(input).sort().join() !== ['cursor','kind','limit','project_id','query','schema_version'].join() || input.schema_version !== version || input.kind !== `echo-person-document-search-v${version}`) throw new Error('Document search shape is invalid');
-  if (typeof input.query !== 'string' || utf8Bytes(input.query) > 200 || /[\u0000-\u001f\u007f-\u009f]/u.test(input.query)) throw new Error('Document query is invalid');
-  if (!Number.isInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > 20) throw new Error('Document search limit is invalid');
-  if (input.cursor !== null && (typeof input.cursor !== 'string' || input.cursor.length > 1024 || !/^[A-Za-z0-9_-]+$/.test(input.cursor))) throw new Error('Document cursor is invalid');
+  if (Object.keys(input).sort().join() !== ['cursor','kind','limit','project_id','query','schema_version'].join() || input.schema_version !== version || input.kind !== `echo-person-document-search-v${version}`) fail('Document search shape is invalid');
+  if (typeof input.query !== 'string' || utf8Bytes(input.query) > 200 || /[\u0000-\u001f\u007f-\u009f]/u.test(input.query)) fail('Document query is invalid');
+  if (!Number.isInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > 20) fail('Document search limit is invalid');
+  if (input.cursor !== null && (typeof input.cursor !== 'string' || input.cursor.length > 1024 || !/^[A-Za-z0-9_-]+$/.test(input.cursor))) fail('Document cursor is invalid');
   const fields = { project_id: input.project_id === null ? null : validateProjectIdV1(input.project_id, 'project_id'), query: input.query.normalize('NFC').trim(), limit: input.limit as number, cursor: input.cursor as string | null };
   return version === 1
     ? { schema_version: 1, kind: 'echo-person-document-search-v1', ...fields }
@@ -235,8 +236,8 @@ function documentSearch(value: unknown, version: 1 | 2): PersonDocumentSearchV1 
 const documentReceiptKeys = ['schema_version','kind','request_id','filename','title','content_length','sha256','audience','project_id','document_id','detected_media_type','received_at','state','extraction_state'];
 const documentStates = ['extracting','ready','partial','no_text','encrypted','malformed','limit_exceeded','timed_out','unsupported','unavailable'];
 const documentMedia = ['text/plain','text/markdown','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
-function exactDocumentKeys(value: Record<string, unknown>, keys: readonly string[]): void { if(Object.keys(value).sort().join()!==[...keys].sort().join())throw new Error('Document response shape is invalid'); }
-function documentJsonBound(value: unknown, maximum = PERSON_DOCUMENT_JSON_MAX_BYTES): void { if(utf8Bytes(JSON.stringify(value))>maximum)throw new Error('Document response exceeds its wire budget'); }
+function exactDocumentKeys(value: Record<string, unknown>, keys: readonly string[]): void { if(Object.keys(value).sort().join()!==[...keys].sort().join())fail('Document response shape is invalid'); }
+function documentJsonBound(value: unknown, maximum = PERSON_DOCUMENT_JSON_MAX_BYTES): void { if(utf8Bytes(JSON.stringify(value))>maximum)fail('Document response exceeds its wire budget'); }
 /** Metadata withholds another uploader's request ID; the upload validators still check the rest. */
 const WITHHELD_REQUEST_ID = '00000000-0000-4000-8000-000000000000';
 function metadataRequestId(value: Record<string,unknown>): unknown { return value.request_id === null ? WITHHELD_REQUEST_ID : value.request_id; }
@@ -246,10 +247,10 @@ function documentBase(value: Record<string,unknown>, requestId: unknown = value.
 }
 function documentReceiptFields(value: Record<string, unknown>): void {
   validatePersonDocumentIdV1(value.document_id);
-  if(!documentMedia.includes(value.detected_media_type as string)||!documentStates.includes(value.extraction_state as string)||value.state!=='saved'||typeof value.received_at!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.received_at)||!Number.isFinite(Date.parse(value.received_at)))throw new Error('Document receipt fields are invalid');
+  if(!documentMedia.includes(value.detected_media_type as string)||!documentStates.includes(value.extraction_state as string)||value.state!=='saved'||typeof value.received_at!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.received_at)||!Number.isFinite(Date.parse(value.received_at)))fail('Document receipt fields are invalid');
 }
 export function validatePersonDocumentReceiptV1(value: unknown): PersonDocumentReceiptV1 {
-  const input=plainObject(value);exactDocumentKeys(input,documentReceiptKeys);if(input.kind!=='echo-person-document-receipt-v1')throw new Error('Document receipt kind is invalid');documentBase(input);documentJsonBound(input);return input as unknown as PersonDocumentReceiptV1;
+  const input=plainObject(value);exactDocumentKeys(input,documentReceiptKeys);if(input.kind!=='echo-person-document-receipt-v1')fail('Document receipt kind is invalid');documentBase(input);documentJsonBound(input);return input as unknown as PersonDocumentReceiptV1;
 }
 export function validatePersonDocumentSavedV1(value: unknown): PersonDocumentSavedV1 {
   return documentSaved(value, 1) as unknown as PersonDocumentSavedV1;
@@ -266,45 +267,45 @@ function documentBaseV2(value: Record<string, unknown>, requestId: unknown = val
 }
 export function validatePersonDocumentReceiptV2(value: unknown): PersonDocumentReceiptV2 {
   const input = plainObject(value); exactDocumentKeys(input, ['schema_version','kind','request_id','filename','title','content_length','sha256','audience','association_project_ids','document_id','detected_media_type','received_at','state','extraction_state']);
-  if (input.kind !== 'echo-person-document-receipt-v2') throw new Error('Document receipt kind is invalid'); documentBaseV2(input); documentJsonBound(input); return input as unknown as PersonDocumentReceiptV2;
+  if (input.kind !== 'echo-person-document-receipt-v2') fail('Document receipt kind is invalid'); documentBaseV2(input); documentJsonBound(input); return input as unknown as PersonDocumentReceiptV2;
 }
 export function validatePersonDocumentSavedV2(value: unknown): PersonDocumentSavedV2 {
   return documentSaved(value, 2) as unknown as PersonDocumentSavedV2;
 }
 function documentSaved(value: unknown, version: 1 | 2): Record<string, unknown> {
   const input = plainObject(value); exactDocumentKeys(input, ['schema_version','kind','request_id','document_id','received_at','state']);
-  if (input.schema_version !== version || input.kind !== `echo-person-document-saved-v${version}` || input.state !== 'saved' || typeof input.received_at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(input.received_at) || !Number.isFinite(Date.parse(input.received_at))) throw new Error('Document saved receipt is invalid');
+  if (input.schema_version !== version || input.kind !== `echo-person-document-saved-v${version}` || input.state !== 'saved' || typeof input.received_at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(input.received_at) || !Number.isFinite(Date.parse(input.received_at))) fail('Document saved receipt is invalid');
   validatePersonUpdateRequestId(input.request_id); validatePersonDocumentIdV1(input.document_id); documentJsonBound(input); return input;
 }
 export function validatePersonDocumentUploadResultV2(value: unknown): PersonDocumentUploadResultV2 { return plainObject(value).kind === 'echo-person-document-saved-v2' ? validatePersonDocumentSavedV2(value) : validatePersonDocumentReceiptV2(value); }
 export function validatePersonDocumentMetadataV2(value: unknown): PersonDocumentMetadataV2 {
   const input = plainObject(value); exactDocumentKeys(input, ['schema_version','kind','request_id','filename','title','content_length','sha256','audience','association_project_ids','document_id','detected_media_type','received_at','state','extraction_state','extraction_detail','extractor','extracted_text_bytes']);
-  if (input.kind !== 'echo-person-document-metadata-v2') throw new Error('Document metadata kind is invalid'); documentBaseV2(input, metadataRequestId(input));
+  if (input.kind !== 'echo-person-document-metadata-v2') fail('Document metadata kind is invalid'); documentBaseV2(input, metadataRequestId(input));
   documentExtractionFields(input); return input as unknown as PersonDocumentMetadataV2;
 }
 export function validatePersonDocumentStatusV2(value: unknown): PersonDocumentStatusV2 { return plainObject(value).kind === 'echo-person-document-saved-v2' ? validatePersonDocumentSavedV2(value) : validatePersonDocumentMetadataV2(value); }
 export function validatePersonDocumentMetadataV1(value: unknown): PersonDocumentMetadataV1 {
-  const input=plainObject(value);exactDocumentKeys(input,[...documentReceiptKeys,'extraction_detail','extractor','extracted_text_bytes']);if(input.kind!=='echo-person-document-metadata-v1')throw new Error('Document metadata kind is invalid');documentBase(input,metadataRequestId(input));
+  const input=plainObject(value);exactDocumentKeys(input,[...documentReceiptKeys,'extraction_detail','extractor','extracted_text_bytes']);if(input.kind!=='echo-person-document-metadata-v1')fail('Document metadata kind is invalid');documentBase(input,metadataRequestId(input));
   documentExtractionFields(input);return input as unknown as PersonDocumentMetadataV1;
 }
 function documentExtractionFields(input: Record<string, unknown>): void {
-  if (input.extraction_detail !== null && (typeof input.extraction_detail !== 'string' || utf8Bytes(input.extraction_detail) > 512 || /[\u0000-\u001f\u007f-\u009f]/u.test(input.extraction_detail))) throw new Error('Document extraction detail is invalid');
+  if (input.extraction_detail !== null && (typeof input.extraction_detail !== 'string' || utf8Bytes(input.extraction_detail) > 512 || /[\u0000-\u001f\u007f-\u009f]/u.test(input.extraction_detail))) fail('Document extraction detail is invalid');
   documentExtractor(input.extractor);
-  if (!Number.isSafeInteger(input.extracted_text_bytes) || (input.extracted_text_bytes as number) < 0 || (input.extracted_text_bytes as number) > PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES) throw new Error('Document extraction byte count is invalid');
+  if (!Number.isSafeInteger(input.extracted_text_bytes) || (input.extracted_text_bytes as number) < 0 || (input.extracted_text_bytes as number) > PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES) fail('Document extraction byte count is invalid');
   documentJsonBound(input);
 }
 function documentExtractor(value: unknown): void {
-  if (value !== null && (typeof value !== 'string' || utf8Bytes(value) < 1 || utf8Bytes(value) > 512)) throw new Error('Document extractor is invalid');
+  if (value !== null && (typeof value !== 'string' || utf8Bytes(value) < 1 || utf8Bytes(value) > 512)) fail('Document extractor is invalid');
 }
 export function validatePersonDocumentTextV1(value: unknown): PersonDocumentTextV1 {
   const input=plainObject(value);exactDocumentKeys(input,['schema_version','kind','document_id','original_sha256','extractor','extraction_state','chunks','next_cursor']);
-  if(input.schema_version!==1||input.kind!=='echo-person-document-text-v1'||typeof input.original_sha256!=='string'||!/^sha256:[0-9a-f]{64}$/.test(input.original_sha256)||!documentStates.includes(input.extraction_state as string))throw new Error('Document text envelope is invalid');validatePersonDocumentIdV1(input.document_id);
+  if(input.schema_version!==1||input.kind!=='echo-person-document-text-v1'||typeof input.original_sha256!=='string'||!/^sha256:[0-9a-f]{64}$/.test(input.original_sha256)||!documentStates.includes(input.extraction_state as string))fail('Document text envelope is invalid');validatePersonDocumentIdV1(input.document_id);
   documentExtractor(input.extractor);
-  if(!Array.isArray(input.chunks)||input.chunks.length>8)throw new Error('Document text chunks are invalid');let prior=-1;
-  for(const value of input.chunks){const chunk=plainObject(value);exactDocumentKeys(chunk,['ordinal','anchor_kind','anchor_start','text']);if(!Number.isSafeInteger(chunk.ordinal)||(chunk.ordinal as number)<=prior||!['page','paragraph'].includes(chunk.anchor_kind as string)||!Number.isSafeInteger(chunk.anchor_start)||(chunk.anchor_start as number)<1||typeof chunk.text!=='string'||utf8Bytes(chunk.text)<1||utf8Bytes(chunk.text)>PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES)throw new Error('Document text chunk is invalid');prior=chunk.ordinal as number;}
+  if(!Array.isArray(input.chunks)||input.chunks.length>8)fail('Document text chunks are invalid');let prior=-1;
+  for(const value of input.chunks){const chunk=plainObject(value);exactDocumentKeys(chunk,['ordinal','anchor_kind','anchor_start','text']);if(!Number.isSafeInteger(chunk.ordinal)||(chunk.ordinal as number)<=prior||!['page','paragraph'].includes(chunk.anchor_kind as string)||!Number.isSafeInteger(chunk.anchor_start)||(chunk.anchor_start as number)<1||typeof chunk.text!=='string'||utf8Bytes(chunk.text)<1||utf8Bytes(chunk.text)>PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES)fail('Document text chunk is invalid');prior=chunk.ordinal as number;}
   documentNextCursor(input.next_cursor);documentJsonBound(input,24*1024);return input as unknown as PersonDocumentTextV1;
 }
-function documentNextCursor(value: unknown): void { if(value!==null&&(typeof value!=='string'||value.length>1024||!/^[A-Za-z0-9_-]+$/.test(value)))throw new Error('Document next cursor is invalid'); }
+function documentNextCursor(value: unknown): void { if(value!==null&&(typeof value!=='string'||value.length>1024||!/^[A-Za-z0-9_-]+$/.test(value)))fail('Document next cursor is invalid'); }
 export function validatePersonDocumentSearchResultV1(value: unknown): PersonDocumentSearchResultV1 {
   return documentSearchResult(value, 1) as unknown as PersonDocumentSearchResultV1;
 }
@@ -312,8 +313,8 @@ export function validatePersonDocumentSearchResultV2(value: unknown): PersonDocu
   return documentSearchResult(value, 2) as unknown as PersonDocumentSearchResultV2;
 }
 function documentSearchResult(value: unknown, version: 1 | 2): Record<string, unknown> {
-  const input = plainObject(value); exactDocumentKeys(input,['schema_version','kind','documents','next_cursor']); if(input.schema_version!==version||input.kind!==`echo-person-document-search-result-v${version}`||!Array.isArray(input.documents)||input.documents.length>20)throw new Error('Document search result is invalid');
+  const input = plainObject(value); exactDocumentKeys(input,['schema_version','kind','documents','next_cursor']); if(input.schema_version!==version||input.kind!==`echo-person-document-search-result-v${version}`||!Array.isArray(input.documents)||input.documents.length>20)fail('Document search result is invalid');
   const validateMetadata = version === 1 ? validatePersonDocumentMetadataV1 : validatePersonDocumentMetadataV2;
-  for(const value of input.documents){const item=plainObject(value);const {excerpt,anchor,...metadata}=item;validateMetadata(metadata);if(excerpt!==null&&(typeof excerpt!=='string'||Array.from(excerpt).length>240))throw new Error('Document excerpt is invalid');if(anchor!==null){const a=plainObject(anchor);exactDocumentKeys(a,['kind','start']);if(!['page','paragraph'].includes(a.kind as string)||!Number.isSafeInteger(a.start)||(a.start as number)<1)throw new Error('Document search anchor is invalid');}}
+  for(const value of input.documents){const item=plainObject(value);const {excerpt,anchor,...metadata}=item;validateMetadata(metadata);if(excerpt!==null&&(typeof excerpt!=='string'||Array.from(excerpt).length>240))fail('Document excerpt is invalid');if(anchor!==null){const a=plainObject(anchor);exactDocumentKeys(a,['kind','start']);if(!['page','paragraph'].includes(a.kind as string)||!Number.isSafeInteger(a.start)||(a.start as number)<1)fail('Document search anchor is invalid');}}
   documentNextCursor(input.next_cursor);documentJsonBound(input);return input;
 }

@@ -145,14 +145,19 @@ class HostProtocol(unittest.TestCase):
         with self.assertRaises(host.Refused):
             host.validate_request(legacy)
 
-    def test_v4_install_cannot_omit_changed_or_candidate_bytes(self):
-        for name in ('update-clean-v1.sh', 'candidate.json', 'runtime-profile.json'):
+    def test_v4_install_may_defer_changed_tools_but_not_candidate_bytes(self):
+        for name in ('candidate.json', 'runtime-profile.json'):
             request = self.request('install')
             del request['files'][name]['base64']
             with self.assertRaises(host.Refused): host.validate_request(request)
+        old = (self.root / host.TOOLS[0]).read_bytes()
         request = self.request('install')
-        for name in host.TOOLS[1:]: del request['files'][name]['base64']
+        for name in host.TOOLS: del request['files'][name]['base64']
         self.assertTrue(self.execute(request)['ok'])
+        self.assertEqual((self.root / host.TOOLS[0]).read_bytes(), old)
+        self.assertEqual(self.execute(self.request('inspect-install'))['diagnostic']['inventory'][host.TOOLS[0]]['state'], 'old')
+        self.install()
+        self.assertEqual(host.sha((self.root / host.TOOLS[0]).read_bytes()), base['files'][host.TOOLS[0]]['sha256'])
 
     def test_install_is_exact_and_idempotent_without_runtime_mutation(self):
         request = self.request('install')

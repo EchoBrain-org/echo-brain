@@ -2,17 +2,17 @@
 
 Tests live beside the narrowest active component they exercise:
 
-- `adapters/`, `answer-composition/` and `processing/adapters/` cover the
-  onboarding-invitation file adapter, the answer-composition audit and the LLM
-  provider transport clients.
+- `adapters/` and `answer-composition/` cover the onboarding-invitation file
+  adapter and the answer-composition audit.
 - `composition/` covers concrete implementation selection, journey telemetry
   and staging tools.
 - `presentation/` and the `person-*` suites cover authenticated HTTP request
   and response behavior.
 - `project-context-*` suites and `project-context-integration/` cover project
   storage, application commands, HTTP transport and the synthetic harness.
-- The top-level `authority-state-lineage-initializer` suite covers baselines
-  and state-lineage initialization.
+- The top-level `authority-state-lineage-initializer` suite covers
+  state-lineage initialization; the `organization-authority-state-bootstrap`
+  and `current-storage-schema` suites cover the real baselines.
 
 Use `npm run test:authority` for the workspace. The provider-neutral
 processing core and the durable meeting-processing cycle are tested in

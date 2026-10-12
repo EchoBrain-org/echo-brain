@@ -154,17 +154,11 @@ export class PersonEmployeeLifecycleApplication {
         }
         transaction.invalidatePendingPersonLoginGrants(membership.membership_id);
         return invitation(
-          isExpectedPersonEmail(input.email)
-            ? this.sessions.issueEmployeeBootstrapLoginGrantAt(
-                transaction,
-                observedAt,
-                { target_membership_id: membership.membership_id, expected_email: input.email },
-              )
-            : this.sessions.issueEmployeeBootstrapLoginGrantForDurableIdentityAt(
-                transaction,
-                observedAt,
-                { target_membership_id: membership.membership_id, expected_email: input.email },
-              ),
+          this.sessions.issueEmployeeBootstrapLoginGrantAt(
+            transaction,
+            observedAt,
+            { target_membership_id: membership.membership_id, expected_email: input.email },
+          ),
         );
       },
     });

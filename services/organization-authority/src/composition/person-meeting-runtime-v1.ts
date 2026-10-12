@@ -1,4 +1,6 @@
 import type Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { PERSON_MEETINGS_PATH_V2, validatePersonMeetingRequestV2, validatePersonMeetingResultV2,
   type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonSyntheticMeetingV1 } from '@echo-brain/organization-api';
@@ -15,6 +17,9 @@ import { AdmittedMeetingProcessingCycleV1 } from '@echo-brain/organization-proce
 import { SqliteApprovalWorkflowStateV1, SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { readAdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments';
 import { bindApprovalWorkflowStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1';
+import { openExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
+import { OrganizationRecordAppenderV4, type RecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { FileOrganizationAuthoritySigner } from '../adapters/security/file-organization-authority-signer.js';
 import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointCodecV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { SqlitePersonListDirectoryV1 } from '../adapters/persistence/sqlite/person-list-directory-v1.js';
@@ -23,6 +28,7 @@ import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { OrganizationAuthorityProcessingCycleV1 } from './organization-authority-service-lifecycle.js';
 import type { PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
+import type { PersonHttpRuntimeResourcesV1 } from './organization-authority-api-runtime.js';
 
 export interface PersonMeetingProviderV1 {
   readonly id: string; readonly normalizer_version: string;
@@ -392,9 +398,12 @@ export function createPersonMeetingRuntimeV1(options: {
         if (input.operation === 'home') {
           const folders = session === null ? [] : await session.folders();
           return { connected: session !== null, email: session?.email ?? null, workspace: session?.workspace ?? null, folders, settings_sha256: settings(person),
-            sources: intake.list(person).filter(s => s.source_adapter_id === provider.cursor.policy.source_adapter_id).map(s => ({ source_key: s.source_key, folder_id: s.folder_id, folder_project_id: s.folder_project_id,
-              baseline: ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).baseline, pending_imports: ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual,
-              checked_at: observed.get(s.source_key)?.checked_at ?? null, error: sourceError(s.source_key) })) };
+            sources: intake.list(person).filter(s => s.source_adapter_id === provider.cursor.policy.source_adapter_id).map(s => {
+              const owner = ownerOf(s.source_adapter_id), checkpoint = owner.intake.checkpoint(s.source_key);
+              return { source_key: s.source_key, folder_id: s.folder_id, folder_project_id: s.folder_project_id,
+                baseline: owner.provider.cursor.ready(checkpoint), pending_imports: checkpoint.manual,
+                checked_at: observed.get(s.source_key)?.checked_at ?? null, error: sourceError(s.source_key) };
+            }) };
         }
         if (!session) throw new AuthorityOperationError('unauthorized', 'Connect your meeting account first');
         if (input.operation === 'browse') return session.browse(input.folder_id);
@@ -446,4 +455,32 @@ export function createPersonMeetingRuntimeV1(options: {
   return { applications: [...providers.map(p => p.connection_http), ...(options.provider_applications ?? []), application], processing, queue, pollAndStageSource,
     attachDiagnostics(value: PersonDiagnosticsV1) { diagnostics = value; },
     tools: async (token: string) => providers.map(p => p.tool(token)), approvals, close() {} };
+}
+/**
+ * Opens the shared runtime over the Authority's state directory: the extraction-attempt ledger, the Authority
+ * signer and the record appender. The composition root selects the providers it serves; none is built in.
+ */
+export function openPersonMeetingRuntimeV1(options: {
+  readonly state_directory: string; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
+  readonly resources: PersonHttpRuntimeResourcesV1; readonly processor: DecisionProcessorBundleV1;
+  readonly projectors: RecordPolicyFactProjectorRegistryV1; readonly providers: readonly PersonMeetingProviderV1[];
+  /** After-record hooks and presenters of the shared approval core. */
+  readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'after_record' | 'presenters'>;
+  readonly provider_applications?: readonly ProviderHttpApplicationV1[];
+  /** The service's observation scope, for the meeting lanes' roots. */
+  readonly observation?: CoreRuntimeObservationScopeV1;
+}) {
+  const { coordinates, database, record } = options.resources;
+  const attempts = openExtractionAttemptStoreV1(join(options.state_directory, 'extraction-attempts.sqlite'), coordinates);
+  try {
+    const signer = FileOrganizationAuthoritySigner.openExisting({ directory: join(options.state_directory, 'keys'), ...coordinates });
+    const runtime = createPersonMeetingRuntimeV1({ database, sessions: options.sessions, processor: options.processor, extraction_attempts: attempts,
+      ...(options.approval_core === undefined ? {} : { approval_core: options.approval_core }),
+      ...(options.provider_applications === undefined ? {} : { provider_applications: options.provider_applications }),
+      ...(options.observation === undefined ? {} : { observation: options.observation }),
+      approval: { coordinates, signer, on_terminal_action_queued: options.resources.on_processing_queued, record_append: new OrganizationRecordAppenderV4(record, coordinates, options.projectors), next_envelope_id: () => `env_${randomUUID()}` },
+      providers: options.providers,
+    });
+    return { ...runtime, close() { runtime.close(); attempts.close(); } };
+  } catch (error) { attempts.close(); throw error; }
 }

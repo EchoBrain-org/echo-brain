@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { AuthorityRecoveryHelperBundleManifest } from "../../tools/build-authority-recovery-helper-bundle.mjs";
+import { readTemplate, resource } from "../support/cloudformation-template.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const TEMPLATE = resolve(
@@ -16,6 +17,7 @@ const BUNDLE_BUILDER = resolve(
   REPO,
   "tools/build-authority-recovery-helper-bundle.mjs",
 );
+const SOURCE_CHECKOUT = resolve(REPO, "tools/lib/source-checkout.mjs");
 const BUNDLE_WORKFLOW = resolve(
   REPO,
   ".github/workflows/authority-recovery-helper-bundle.yml",
@@ -25,25 +27,7 @@ const RUNBOOK = resolve(
   "docs/operations/RB-OPERATIONS-002-authority-recovery-floor.md",
 );
 
-type Resource = Readonly<{
-  Type: string;
-  Properties: Record<string, unknown>;
-}>;
-
-type Template = Readonly<{
-  Parameters: Record<string, Record<string, unknown>>;
-  Resources: Record<string, Resource>;
-}>;
-
-function template(): Template {
-  return JSON.parse(readFileSync(TEMPLATE, "utf8")) as Template;
-}
-
-function resource(stack: Template, logicalId: string): Resource {
-  const value = stack.Resources[logicalId];
-  expect(value, `missing ${logicalId}`).toBeDefined();
-  return value!;
-}
+const template = () => readTemplate(TEMPLATE);
 
 describe("Authority isolated recovery helper stack", () => {
   it("creates only the bounded disposable helper environment", () => {
@@ -272,7 +256,9 @@ describe("Authority isolated recovery helper stack", () => {
   it("pins the bundle build itself to clean Linux ARM64 source and the verifier prerequisites", () => {
     expectTypeOf<AuthorityRecoveryHelperBundleManifest>()
       .toHaveProperty("npm_shrinkwrap_sha256").toBeString();
-    const builder = readFileSync(BUNDLE_BUILDER, "utf8");
+    const builder = [BUNDLE_BUILDER, SOURCE_CHECKOUT]
+      .map((path) => readFileSync(path, "utf8"))
+      .join("\n");
     for (const required of [
       'process.platform !== "linux"',
       'process.arch !== "arm64"',
@@ -297,6 +283,8 @@ describe("Authority isolated recovery helper stack", () => {
       "runs-on: ubuntu-24.04-arm",
       'PRODUCT_NODE_VERSION: "22.22.1"',
       "build-authority-recovery-helper-bundle.mjs",
+      "fetch-depth: 0",
+      'git merge-base --is-ancestor "$GITHUB_SHA" origin/main',
       'test "$(uname -m)" = aarch64',
       "value.source_commit !== process.env.GITHUB_SHA",
       "value.npm_shrinkwrap_sha256",

@@ -15,6 +15,7 @@ decision_ids:
   - ADR-0033
   - ADR-0031
   - ADR-0030
+  - ADR-0034
   - ADR-0026
   - ADR-0012
   - ADR-0001
@@ -99,9 +100,11 @@ deployment also includes a separate reverse proxy.
 
 Central state is authoritative for organization membership and access,
 provider integration policy, the append-only organization record, and
-centrally served retrieval generations. Under an active organization-recording
-policy it may also hold governed pre-record meeting data from an exactly bound
-member identity and organization-owned source credential. That data remains in
+centrally served retrieval generations. It may also hold governed pre-record
+meeting data from an exactly bound member identity and that member's own
+connected meeting source (a personal Nango grant under
+[ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md), or the
+staging synthetic source). That data remains in
 the pending approval boundary: it is not an organization record, retrieval
 input, or delivery payload until an audited resolution admits it. Central state
 must not accept unrestricted provider payloads or bypass that pending-only
@@ -114,7 +117,7 @@ context captures, which the proposed
 [ADR-0028](../decisions/ADR-0028-broadened-layer-1-source-captures.md) names
 Layer 1 source captures. Custody grants no read access. The
 [persistence ownership](../architecture/organization-workspace-boundaries.md#persistence-ownership)
-map lists the databases, including the gated Jira connection sidecar.
+map lists the databases and the provider-owned and operational sidecars.
 
 ## Provider identity-link composition
 
@@ -131,10 +134,10 @@ would weaken the Authority boundary.
 
 An opt-in [connector capture composition](../product/2026-10-01-connector-context-integration-v1.md)
 binds provider-neutral capture envelopes to explicit Authority disposition,
-organization, read authorization and atomic retention checks. It is not installed
-in the production root and grants no retrieval or release authority; only the
-staging connector rehearsal composes it, and it retains Jira and Slack
-pointers.
+organization, read authorization and atomic retention checks. It is dormant
+library code with no production or rehearsal registration, and it grants no
+retrieval or release authority. The staging connector rehearsal serves only the
+owner's `status` and `verify-read` actions.
 
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)
 - [Organization control plane](../architecture/organization-control-plane.md)
@@ -158,9 +161,9 @@ route is retired; V1 originals already retained keep their Only me/Team
 visibility and remain citable by Ask. Uploads remain in
 protected Authority custody/backups; they are not appended as approved decision
 records. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md)
-for provisional transport limits, indefinite retention, and the offline V5 copy.
+for provisional transport limits and indefinite retention.
 The [PC-01 persistence handoff](../product/2026-09-21-project-context-pc01-persistence.md)
-describes the original V7 project storage. The current Authority is V10, which
+describes the original V7 project storage. The current Authority is V14, which
 accepts only fresh state, and its project routes and client operations are live.
 
 Ask is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md) as

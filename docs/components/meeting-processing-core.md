@@ -54,8 +54,8 @@ provider and infrastructure code depends inward on the core; the core must not
 depend outward on them. Provider selection belongs only in the selecting
 modules that
 [INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md)
-allows. Shared flow retains only opaque presentation references and
-approved-record policy projectors.
+allows. Shared flow keeps no presentation reference (each surface records its
+own) and receives approved-record policy projectors.
 
 ## Current references
 

@@ -2,24 +2,14 @@ import Database from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
-import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
-import { readPrivateAuthorityPersonSessionPkceKey } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
 import { createCoherentWorktreeSnapshot } from '../../../tests/fixtures/coherent-worktree.js';
-import type { BegunPersonOidcLogin, IssuedPersonSession } from '../src/application/person-identity-sessions.js';
-import { PersonIdentitySessionApplication } from '../src/application/person-identity-sessions.js';
-import { SqlitePersonSessionRepository } from '../src/adapters/persistence/sqlite/sqlite-person-session-repository.js';
-import { NodePersonSessionCrypto } from '../src/adapters/security/node-person-session-crypto.js';
-import { SystemAuthorityClock } from '../src/adapters/system/system-authority-clock.js';
-import type { PersonSessionOidcAuthorizationProvider } from '../src/composition/lazy-person-session-oidc-provider.js';
 import { openOrganizationAuthorityService, type OrganizationAuthorityServiceConfig } from '../src/composition/organization-authority-composition-root.js';
-import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
-import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from '../src/composition/person-onboarding-service.js';
+import { port as availablePort, ownerGenesis, signInInProcess, syntheticOidcProvider } from './fixtures/owner-session.js';
 
 /** The deployable service with no organization meeting source: meetings enter only through personal sources. */
 const OIDC = {
@@ -40,58 +30,19 @@ function root(): string {
   return value;
 }
 
-async function availablePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>(resolve => server.close(() => resolve()));
-  return port;
-}
-
-class TestPersonOidcProvider implements PersonSessionOidcAuthorizationProvider {
-  private attempt: BegunPersonOidcLogin | undefined;
-  buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string {
-    this.attempt = attempt;
-    return `https://issuer.example/authorize?state=${encodeURIComponent(attempt.state)}`;
-  }
-  async redeemAuthorizationCode() {
-    if (this.attempt === undefined) throw new Error('OIDC begin was not called');
-    return { kind: 'verified' as const, token: { issuer: OIDC.issuer, subject: 'founder-subject', audience: OIDC.client_id, nonce: this.attempt.nonce,
-      issued_at: Math.floor(Date.now() / 1_000), claims: { email: 'founder@example.com', email_verified: true } } };
-  }
-}
-
 /** A bootstrapped organization whose owner completed browser login; no meeting source of any kind exists. */
 async function sourceFreeService() {
   const parent = root();
-  const initialized = bootstrapOrganizationAuthorityState({
-    state_directory: join(parent, 'state'), organization_display_name: 'Founder Organization', owner_display_name: 'Founder',
-    created_at: '2026-08-22T11:00:00.000Z', creating_artifact_revision: 'organization-authority-runtime-test',
-  });
-  const credentials = initializePersonSessionCredentials({ state_directory: initialized.state_directory });
-  const pkce = readPrivateAuthorityPersonSessionPkceKey(credentials.pkce_sealing_key_reference);
-  const invitationPath = join(parent, 'founder.invitation.json');
-  issuePersonOnboardingInvitation({ state_directory: initialized.state_directory, oidc: OIDC, pkce_sealing_key: pkce,
-    membership_id: initialized.owner_membership_id, expected_email: 'founder@example.com', authority_url: 'https://authority.example', output_path: invitationPath });
-  const invitation = JSON.parse(readFileSync(invitationPath, 'utf8')) as { login_grant: string };
-  const authority = openAuthorityDatabase(join(initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
-  let owner_session: IssuedPersonSession;
-  try {
-    const provider = new TestPersonOidcProvider();
-    const crypto = new NodePersonSessionCrypto(pkce);
-    const sessions = new PersonIdentitySessionApplication(new SqlitePersonSessionRepository(authority), OIDC,
-      { clock: new SystemAuthorityClock(), random: crypto, hash: crypto, pkce_sealer: crypto, oidc_provider: provider });
-    const begun = sessions.beginOidcLogin({ kind: 'identity_bootstrap', login_grant: invitation.login_grant });
-    provider.buildAuthorizationUrl(begun);
-    owner_session = await sessions.completeOidcLogin({ state: begun.state, authorization_code: 'founder-code' });
-  } finally { authority.close(); }
+  const owner = ownerGenesis({ root: parent, oidc: OIDC, email: 'founder@example.com', authority_url: 'https://authority.example', revision: 'organization-authority-runtime-test' });
+  const { initialized, credentials } = owner;
+  const owner_session = await signInInProcess(owner, OIDC, syntheticOidcProvider(OIDC, () => 'founder@example.com'));
   const llm = join(parent, 'llm.key');
   writeFileSync(llm, 'llm-private-credential-material-000000', { mode: 0o600 });
   chmodSync(llm, 0o600);
   const config: OrganizationAuthorityServiceConfig = {
     state_directory: initialized.state_directory, host: '127.0.0.1', port: await availablePort(), authority_url: 'https://authority.example',
     oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: credentials.pkce_sealing_key_reference.slice('file:'.length),
-    slack_nango: SLACK_NANGO, openrouter_credential_file: llm, worker_interval_ms: 60_000,
+    nango: SLACK_NANGO, openrouter_credential_file: llm, worker_interval_ms: 60_000,
   };
   return { parent, initialized, config, owner_session };
 }

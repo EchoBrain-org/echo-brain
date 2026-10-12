@@ -7,6 +7,8 @@ export default defineConfig({
   testDir: 'test/e2e',
   timeout: 60_000,
   workers: 2,
+  // A stray test.only must fail CI rather than silently skip the rest.
+  forbidOnly: !!process.env.CI,
   reporter: reportDir ? [['list'], ['json', { outputFile: join(reportDir, 'desktop-e2e.json') }]] : [['list']],
   use: {
     trace: process.env.CI ? 'retain-on-failure' : 'off',

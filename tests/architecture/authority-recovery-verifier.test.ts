@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   chmodSync,
   chownSync,
@@ -33,6 +32,11 @@ import {
   parseLinuxMountinfo,
   verifyAuthorityRecovery,
 } from "../../tools/verify-authority-recovery.mjs";
+import {
+  cleanReleaseRecord,
+  cleanRuntimeProfile,
+  deployRuntimeProfileFiles,
+} from "../support/clean-v1-release.js";
 import { canonicalJsonForTest as canonical } from "../support/test-canonical-json.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
@@ -153,49 +157,15 @@ function retrievalDatabasePath(cleanData: string): string {
 function writeReleaseTuple(cleanData: string): string {
   const releaseDirectory = join(cleanData, "release");
   const sourceSha = "a".repeat(40);
-  const profile = {
-    schema_version: 1,
-    kind: "echo-clean-v1-runtime-profile",
-    source_sha: sourceSha,
-    files: Object.fromEntries(
-      [
-        "Caddyfile.clean-v1",
-        "Caddyfile.clean-v1.ec2",
-        "compose.clean-v1.ec2.yaml",
-        "compose.clean-v1.yaml",
-      ].map((name) => [
-        name,
-        readFileSync(
-          join(REPO, "deploy", "organization-authority", name),
-          "utf8",
-        ),
-      ]),
-    ),
-  };
-  const profileBytes = `${canonical(profile)}\n`;
-  const profileDigest = createHash("sha256").update(profileBytes).digest("hex");
-  const release = {
-    schema_version: 1,
-    kind: "echo-clean-v1-release",
+  const { bytes: profileBytes, digest: profileDigest } = cleanRuntimeProfile(
+    sourceSha,
+    deployRuntimeProfileFiles(),
+  );
+  const release = cleanReleaseRecord({
     release_id: "clean-v1-20260825-001",
-    released_at: "2026-08-25T12:00:00Z",
-    baseline_compatibility_class: "clean-v1",
     source_sha: sourceSha,
-    authority_image: {
-      reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"b".repeat(64)}`,
-    },
-    person_client: {
-      package: "@echo-brain/person-client",
-      version: "0.1.0-internal.1",
-      artifact_url: "https://downloads.example.test/person-client.tgz",
-      artifact_sha256: "c".repeat(64),
-    },
-    runtime_profile: {
-      artifact_url: "https://downloads.example.test/runtime-profile.json",
-      artifact_sha256: profileDigest,
-      profile_version: "clean-v1-profile-1",
-    },
-  };
+    runtime_profile: { artifact_sha256: profileDigest },
+  });
   const releaseId = release.release_id;
   mkdirSync(join(releaseDirectory, "runtime-profiles"), { mode: 0o700 });
   mkdirSync(join(releaseDirectory, "runtime-environments"), { mode: 0o700 });
@@ -385,6 +355,30 @@ describe("authority offline recovery verifier", () => {
     expect(lstatSync(store).mtimeMs).toBe(before.mtimeMs);
   });
 
+  it("accepts the snapshot update-clean-v1.sh writes after a four-meeting staging prepare", async () => {
+    const cleanData = writeFixture();
+    const prepared = [
+      ...readFileSync(environmentPath(cleanData), "utf8").split("\n"),
+      "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=",
+      "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=false",
+      "ECHO_STAGING_SYNTHETIC_MEETINGS_DIR=/echo-clean/meetings",
+    ];
+    // create_environment_snapshot moves the release-bound values to the end,
+    // appends both agentic Ask flags and ends the file with a newline.
+    const releaseBound = /^ECHO_CLEAN_(?:AUTHORITY_IMAGE|RELEASE_|RUNTIME_PROFILE_)/;
+    const updated = [
+      ...prepared.filter((line) => !releaseBound.test(line)),
+      ...prepared.filter((line) => releaseBound.test(line)),
+      "ECHO_AGENTIC_ASK_V1=true",
+      "ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT=false",
+    ];
+    writeFileSync(environmentPath(cleanData), `${updated.join("\n")}\n`, {
+      mode: 0o600,
+    });
+
+    await expect(verify(cleanData)).resolves.toMatchObject({ ok: true });
+  });
+
   it("refuses a runtime environment snapshot with a duplicate, missing, or unexpected field", async () => {
     const cleanData = writeFixture();
     const valid = readFileSync(environmentPath(cleanData), "utf8");
@@ -395,6 +389,8 @@ describe("authority offline recovery verifier", () => {
       ),
       valid.replace("ECHO_CLEAN_AWS_REGION=us-west-2\n", ""),
       `${valid}\nECHO_CLEAN_EXTRA=value`,
+      `${valid}\nECHO_AGENTIC_ASK_V1=yes`,
+      `${valid}\n\n`,
       // A snapshot from before in-app Slack setup names a channel, not Nango.
       valid.replace("ECHO_CLEAN_NANGO_INTEGRATION=slack", "ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=C012345678"),
       valid.replace("ECHO_CLEAN_NANGO_INTEGRATION=slack", "ECHO_CLEAN_NANGO_INTEGRATION=Slack Prod"),

@@ -344,40 +344,6 @@ export class PersonIdentitySessionApplication {
         "login grant expected email must be canonical lowercase ASCII",
       );
     }
-    return this.issueBootstrapLoginGrantForCanonicalIdentity(input);
-  }
-
-  /**
-   * Reissues a grant for an identity already committed in durable Authority
-   * state. This is intentionally separate from the public/new-bootstrap path:
-   * old state used the broader canonical identity-key rule, while every new
-   * expected-email boundary remains mailbox-shaped.
-   */
-  issueBootstrapLoginGrantForDurableIdentity(input: {
-    target_membership_id: string;
-    expected_issuer: string;
-    expected_email: string;
-  }): IssuedPersonLoginGrant {
-    if (input.expected_issuer !== this.configuration.issuer) {
-      throw new AuthorityOperationError(
-        "invalid_request",
-        "login grant issuer does not match Authority configuration",
-      );
-    }
-    if (!isCanonicalPersonEmail(input.expected_email)) {
-      throw new AuthorityOperationError(
-        "invalid_request",
-        "login grant expected email must be a durable canonical identity",
-      );
-    }
-    return this.issueBootstrapLoginGrantForCanonicalIdentity(input);
-  }
-
-  private issueBootstrapLoginGrantForCanonicalIdentity(input: {
-    target_membership_id: string;
-    expected_issuer: string;
-    expected_email: string;
-  }): IssuedPersonLoginGrant {
     const loginGrant = this.secret("login_grant");
     const loginGrantSha256 = this.digestSecret(loginGrant);
     const expectedEmailSha256 = this.expectedEmailSha256(input.expected_email);
@@ -413,33 +379,6 @@ export class PersonIdentitySessionApplication {
       transaction,
       issuedAt,
       { ...input, expected_issuer: expectedIssuer },
-      loginGrant,
-      this.digestSecret(loginGrant),
-      this.expectedEmailSha256(input.expected_email),
-    );
-  }
-
-  /**
-   * Reissues a grant for a durable employee identity created before the v2
-   * expected-email boundary. Callers must use this only for an existing
-   * membership; new invitations remain mailbox-shaped.
-   */
-  issueEmployeeBootstrapLoginGrantForDurableIdentityAt(
-    transaction: PersonSessionWriteTransaction,
-    issuedAt: string,
-    input: { target_membership_id: string; expected_email: string },
-  ): IssuedPersonLoginGrant {
-    if (!isCanonicalPersonEmail(input.expected_email)) {
-      throw new AuthorityOperationError(
-        "invalid_request",
-        "login grant expected email must be a durable canonical identity",
-      );
-    }
-    const loginGrant = this.secret("login_grant");
-    return this.issueBootstrapLoginGrantAt(
-      transaction,
-      issuedAt,
-      { ...input, expected_issuer: this.configuration.issuer },
       loginGrant,
       this.digestSecret(loginGrant),
       this.expectedEmailSha256(input.expected_email),

@@ -61,6 +61,21 @@ test('signed out shows "Sign in to use ECHO"; Sign in with Google… asks for th
   await expect(page.getByTestId('account-row')).toContainText('Ari');
 });
 
+test('a sign-in the organization refuses says so, writes no session, and can be tried again', async () => {
+  run = await launch('signed-out-not-bound');
+  const { page } = run;
+  const begun = () => run.calls().filter(call => call.path === '/v2/session/oidc/begin').length;
+  await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Sign in with Google…');
+  await page.getByTestId('signin-url').fill('https://authority.example');
+  await page.getByTestId('signin-button').click();
+  await expect(page.getByTestId('signin')).toContainText('Sign-in did not finish. Try again.');
+  await expect(page.getByTestId('signin-button')).toHaveText('Sign in with Google');
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(0);
+  expect(existsSync(session())).toBe(false);
+  await page.getByTestId('signin-button').click();
+  await expect.poll(begun).toBe(2);
+});
+
 test('sign out asks first, then shows sign-in; Cancel keeps you signed in', async () => {
   run = await launch();
   const { page, app } = run;

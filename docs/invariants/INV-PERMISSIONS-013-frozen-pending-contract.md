@@ -8,11 +8,11 @@ component_ids:
   - CMP-PERSON-CLIENT
   - CMP-PERMISSIONS
 created_at: 2026-08-13
-reviewed_at: 2026-09-27
-reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
+reviewed_at: 2026-10-11
+reviewed_ref: 3aea847cca4fa44cfa1ab28dbf44b1b707590b8b
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Frozen private Slack approval delivery, tap-time fence, and terminal resolution
+enforcement_scope: Approval core frozen proposal and decision row; Slack presenter target check and click check
 invariant_ids:
   - INV-12
 failure_pattern_ids:
@@ -46,8 +46,8 @@ and a Slack click is checked against the posted row and the current identity
 link when the decision is written (`slack-approval-click-v1.test.ts`).
 
 Frozen private Slack approval state was first implemented for the bounded
-owner-review path. These tests, at the reviewed ref, proved it; they were
-removed with the Slack approval internals on 2026-10-07:
+owner-review path. These tests, at `83c8eb63`, proved it; they were removed
+with the Slack approval internals on 2026-10-07:
 
 - `private-slack-dm-approval-stager-v2.test.ts`:
   the V2 pending contract is frozen before Slack I/O, a retry resolves from it
@@ -66,5 +66,4 @@ removed with the Slack approval internals on 2026-10-07:
 
 The diagnostic clause has no current enforcement point. The `doctor` path and
 its parity tests were deleted with the Mac runtime in `a254232c`, and no
-current diagnostic evaluates pending approval work. Broader approval paths
-remain outside this bounded enforcement scope.
+current diagnostic evaluates pending approval work.

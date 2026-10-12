@@ -52,62 +52,8 @@ function options(outputPath: string) {
   };
 }
 
-/**
- * Replica of the strict parser shipped before schema version 2. Keep this
- * local: the compatibility property is that an old client recognizes only the
- * exact V1 shape, including its schema version.
- */
-function parsePriorReleasedV1Invitation(serialized: string): {
-  authority_url: string;
-  expires_at: string;
-  kind: "echo-person-onboarding-invitation";
-  login_grant: string;
-  schema_version: 1;
-} {
-  const parsed: unknown = JSON.parse(serialized);
-  if (
-    parsed === null ||
-    typeof parsed !== "object" ||
-    Array.isArray(parsed)
-  ) {
-    throw new Error("Person onboarding invitation is invalid");
-  }
-  const record = parsed as Record<string, unknown>;
-  if (
-    Object.keys(record).sort().join(",") !==
-      "authority_url,expires_at,kind,login_grant,schema_version" ||
-    record.schema_version !== 1 ||
-    record.kind !== "echo-person-onboarding-invitation" ||
-    typeof record.authority_url !== "string" ||
-    typeof record.login_grant !== "string" ||
-    typeof record.expires_at !== "string"
-  ) {
-    throw new Error("Person onboarding invitation is invalid");
-  }
-  return {
-    authority_url: record.authority_url,
-    expires_at: record.expires_at,
-    kind: record.kind,
-    login_grant: record.login_grant,
-    schema_version: 1,
-  };
-}
-
 describe("private Person onboarding invitation", () => {
-  it("writes only the canonical bootstrap material as a 0600 file", () => {
-    const path = join(directory(), "person.json");
-    const input = options(path);
-    const reservation = reservePersonOnboardingInvitationTarget(input);
-    writePersonOnboardingInvitation(reservation, input.issued_login_grant);
-
-    expect(lstatSync(path).mode & 0o777).toBe(0o600);
-    expect(readFileSync(path, "utf8")).toBe(
-      '{"authority_url":"https://authority.example.com","expires_at":"2026-08-21T00:15:00.000Z","kind":"echo-person-onboarding-invitation","login_grant":"GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG","schema_version":1}\n',
-    );
-    expect(parsePriorReleasedV1Invitation(readFileSync(path, "utf8"))).toMatchObject({ schema_version: 1 });
-  });
-
-  it("emits a versioned v2 artifact when the expected account is present", () => {
+  it("writes only the canonical v2 bootstrap material as a 0600 file", () => {
     const path = join(directory(), "person.json");
     const input = options(path);
     const invitation = writePersonOnboardingInvitation(
@@ -120,11 +66,9 @@ describe("private Person onboarding invitation", () => {
       schema_version: 2,
       expected_email: "founder@example.com",
     });
+    expect(lstatSync(path).mode & 0o777).toBe(0o600);
     expect(readFileSync(path, "utf8")).toBe(
       '{"authority_url":"https://authority.example.com","expected_email":"founder@example.com","expires_at":"2026-08-21T00:15:00.000Z","kind":"echo-person-onboarding-invitation","login_grant":"GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG","schema_version":2}\n',
-    );
-    expect(() => parsePriorReleasedV1Invitation(readFileSync(path, "utf8"))).toThrow(
-      "Person onboarding invitation is invalid",
     );
   });
 
@@ -159,7 +103,9 @@ describe("private Person onboarding invitation", () => {
     closeSync(reservation.descriptor!);
 
     expect(() =>
-      writePersonOnboardingInvitation(reservation, input.issued_login_grant),
+      writePersonOnboardingInvitation(reservation, input.issued_login_grant, {
+        expected_email: "founder@example.com",
+      }),
     ).toThrow();
     expect(existsSync(path)).toBe(false);
   });

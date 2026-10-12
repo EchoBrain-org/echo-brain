@@ -2022,6 +2022,14 @@ describe("Authority staging lifecycle", () => {
             volumeUnmounted: true,
           },
           marker: "authority-staging-quiesced",
+          // down refuses retained state that no later `up` can clear before
+          // it stops anything.
+          orderedCommands: [
+            "test ! -e '/srv/echo-authority-clean-v1/clean-data/release/candidate.clean-v1.json'",
+            "test ! -e '/srv/echo-authority-clean-v1/clean-data/.authority-operation-lock'",
+            "test ! -e '/srv/echo-authority-clean-v1/.staging-release-guard'",
+            "docker stop",
+          ],
           run: () => adapters.ssm!.quiesceHost(request),
           unprovenCode: "ssm_quiesce_unproven",
         },
@@ -2032,6 +2040,7 @@ describe("Authority staging lifecycle", () => {
             volumeMounted: true,
           },
           marker: "authority-staging-recovered",
+          orderedCommands: [],
           run: () => adapters.ssm!.recoverHost(request),
           unprovenCode: "ssm_recovery_unproven",
         },
@@ -2045,6 +2054,11 @@ describe("Authority staging lifecycle", () => {
           `ARG=--parameters\nARG={"commands":["set -eu",`,
         );
         expect(calls).toContain('"executionTimeout":["300"]');
+        const positions = testCase.orderedCommands.map((command) =>
+          calls.indexOf(command),
+        );
+        expect(positions).not.toContain(-1);
+        expect(positions).toEqual([...positions].sort((a, b) => a - b));
         expect(calls).toContain(`${testCase.marker}\\\\n`);
         expect(calls).toContain(
           `ARG=--region\nARG=us-west-2\nARG=--document-name\nARG=AWS-RunShellScript\nARG=--instance-ids\nARG=${instanceId}`,

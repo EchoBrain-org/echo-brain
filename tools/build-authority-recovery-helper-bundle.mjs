@@ -8,13 +8,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
   cpSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -25,8 +23,8 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import process from "node:process";
+import { sourceCheckout } from "./lib/source-checkout.mjs";
 
-const SOURCE_SHA = /^[0-9a-f]{40}$/;
 const NODE_VERSION = "v22.22.1";
 const BUNDLE_SUFFIX = ".tar.gz";
 
@@ -38,39 +36,8 @@ function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function run(file, args, options = {}) {
-  try {
-    return execFileSync(file, args, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      ...options,
-    });
-  } catch {
-    fail(`${file} did not complete successfully`);
-  }
-}
-
-function regularDirectory(path, label) {
-  let state;
-  try {
-    state = lstatSync(path);
-  } catch {
-    fail(`${label} is missing`);
-  }
-  if (state.isSymbolicLink() || !state.isDirectory())
-    fail(`${label} must be a directory, not a symlink`);
-}
-
-function regularFile(path, label) {
-  let state;
-  try {
-    state = lstatSync(path);
-  } catch {
-    fail(`${label} is missing`);
-  }
-  if (state.isSymbolicLink() || !state.isFile())
-    fail(`${label} must be a regular file, not a symlink`);
-}
+const { run, regularDirectory, regularFile, checkedCommit } =
+  sourceCheckout(fail);
 
 function parseArguments(argv) {
   if (
@@ -92,23 +59,6 @@ function parseArguments(argv) {
     fail("output and its manifest must be new .tar.gz paths");
   }
   return Object.freeze({ sourceRoot, output });
-}
-
-function checkedCommit(sourceRoot) {
-  regularDirectory(sourceRoot, "source root");
-  const status = run("git", [
-    "-C",
-    sourceRoot,
-    "status",
-    "--porcelain=v1",
-    "--untracked-files=all",
-  ]);
-  if (status !== "")
-    fail("source root must have no tracked or untracked changes");
-  const commit = run("git", ["-C", sourceRoot, "rev-parse", "HEAD"]).trim();
-  if (!SOURCE_SHA.test(commit))
-    fail("source root must resolve a full Git commit");
-  return commit;
 }
 
 function requiredBuildPaths(sourceRoot) {

@@ -1,4 +1,5 @@
-import { openGranolaPersonLiveRuntimeV1 } from "./granola-person-live-runtime-v1.js";
+import { openGranolaPersonMeetingProviderV1 } from "./granola-person-live-runtime-v1.js";
+import { openPersonMeetingRuntimeV1 } from "./person-meeting-runtime-v1.js";
 import {
   enqueueApprovedRecordRunV1,
   SqliteTriggerRunsV1,
@@ -9,7 +10,6 @@ import {
   authorityRecordPolicyProjectorsV1,
 } from "./authority-record-protocols-v1.js";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
-import { composePersonExternalIdentityRuntimeBundlesV1 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import { composeRecordApproverProjectorsV1 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   openOrganizationAuthorityRuntime,
@@ -39,16 +39,22 @@ import { SlackConnectionHealthV1 } from "@echo-brain/provider-slack-server/organ
 import {
   createSlackApprovalPresenterV1,
   createTargetBoundSlackApprovalPosterV1,
+  type SlackApprovalTargetV1,
 } from "@echo-brain/provider-slack-server/private-approval/slack-approval-presenter-v1";
 import { createSlackApprovalClickV1 } from "@echo-brain/provider-slack-server/private-approval/slack-approval-click-v1";
-import { createPrivateSlackApprovalInteractionHandlerV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-interaction-handler-v1";
+import {
+  createPrivateSlackApprovalInteractionHandlerV1,
+  sendSlackResponseUrlFeedbackV1,
+} from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-interaction-handler-v1";
 import { createPrivateSlackApprovalHttpAdapterV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-http-adapter-v1";
 import { findSlackAppCredentialsByReferenceSha256V1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-app-credentials-v1";
 import {
-  openOrganizationControlDatabase,
+  isCurrentSlackDmApprovalTargetV1,
+  matchSlackApprovalClickActorV1,
   readActiveSlackConnectionV1,
-  resolveCurrentSlackDmApprovalReviewerTargetV1,
+  resolveSlackDmApprovalTargetV1,
 } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
+import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { join } from "node:path";
 import { createModelCallLimiterV1 } from "./model-call-limiter-v1.js";
@@ -88,8 +94,11 @@ export interface OrganizationAuthorityServiceConfig extends Omit<
   readonly jira_person_live?: JiraPersonLiveConfigurationV1;
   /** Explicit Confluence Cloud selection. It is absent unless an operator enables live page reads. */
   readonly confluence_person_live?: ConfluencePersonLiveConfigurationV1;
-  /** Nango holds the organization's Slack connection. The key stays in process memory only. */
-  readonly slack_nango: {
+  /**
+   * The organization's Nango account: it holds the Slack app connection and each person's tool
+   * connections. The key stays in process memory only.
+   */
+  readonly nango: {
     /** An https origin; defaults to Nango Cloud. */
     readonly base_url?: string;
     readonly secret_key: string;
@@ -121,15 +130,15 @@ export interface OrganizationAuthorityServiceDependencies {
 function composeSlackV1(
   config: Pick<
     OrganizationAuthorityServiceConfig,
-    "state_directory" | "authority_url" | "slack_nango"
+    "state_directory" | "authority_url" | "nango"
   >,
   seams: OrganizationAuthorityServiceDependencies["slack"] = {},
 ) {
-  const base_url = config.slack_nango.base_url ?? "https://api.nango.dev";
+  const base_url = config.nango.base_url ?? "https://api.nango.dev";
   const callback_url = new URL("/oauth/callback", base_url).href;
   const nango =
     seams.nango ??
-    new HttpNangoConnectionClientV1({ ...config.slack_nango, base_url });
+    new HttpNangoConnectionClientV1({ ...config.nango, base_url });
   const connection_health = new SlackConnectionHealthV1();
   const provider = seams.provider ?? new SlackWebIdentityProviderV1();
   // The secret store is opened on first use, after the runtime has verified its state directory.
@@ -171,13 +180,13 @@ export async function openOrganizationAuthorityService(
   const {
     staging_synthetic_meetings_directory,
     openrouter_credential_file,
-    slack_nango,
+    nango,
     jira_person_live,
     confluence_person_live,
     ...sharedConfig
   } = config;
   const slack = composeSlackV1(
-    { ...sharedConfig, slack_nango },
+    { ...sharedConfig, nango },
     dependencies.slack,
   );
   // One limiter for every call on the OpenRouter credential: extraction here, Ask and the rest in the runtime.
@@ -208,6 +217,7 @@ export async function openOrganizationAuthorityService(
       let control:
         ReturnType<typeof openOrganizationControlDatabase> | undefined;
       let synthetic: ReturnType<typeof openStagingSyntheticPersonalProviderV1> | undefined;
+      let granola: ReturnType<typeof openGranolaPersonMeetingProviderV1> | undefined;
       // This root selects one personal intake runtime; a caller cannot silently replace its worker.
       try {
         if (existing?.processing !== undefined)
@@ -221,40 +231,15 @@ export async function openOrganizationAuthorityService(
           authority_url: sharedConfig.authority_url, state_directory: sharedConfig.state_directory, coordinates: resources.coordinates,
           ...(stagingFixtures === undefined ? {} : { fixtures_directory: stagingFixtures }),
         });
-        const targetCurrent = (target: {
-          readonly connection_id: string;
-          readonly external_identity_link_id: string;
-          readonly external_identity_link_contract_sha256: string;
-          readonly slack_workspace_id: string;
-          readonly slack_subject_id: string;
-          readonly api_app_id: string;
-        }): boolean => {
-          const active = readActiveSlackConnectionV1(
+        // Slack owns its identity reads; the Authority supplies only its own membership rows.
+        const targetCurrent = (target: SlackApprovalTargetV1): boolean =>
+          isCurrentSlackDmApprovalTargetV1(
             openedControl,
             resources.coordinates,
+            target,
           );
-          if (
-            active === undefined ||
-            active.connection.connection_id !== target.connection_id ||
-            active.connection.provider_tenant_id !==
-              target.slack_workspace_id ||
-            active.connection.provider_app_id !== target.api_app_id
-          )
-            return false;
-          return (
-            openedControl
-              .prepare(
-                `SELECT 1 FROM organization_external_human_link_current WHERE external_identity_link_id=? AND contract_sha256=? AND current_status='active' AND provider_subject_id=?`,
-              )
-              .get(
-                target.external_identity_link_id,
-                target.external_identity_link_contract_sha256,
-                target.slack_subject_id,
-              ) !== undefined
-          );
-        };
-        let granola:
-          ReturnType<typeof openGranolaPersonLiveRuntimeV1> | undefined;
+        let meetings:
+          ReturnType<typeof openPersonMeetingRuntimeV1> | undefined;
         const interaction = createPrivateSlackApprovalHttpAdapterV1(
           createPrivateSlackApprovalInteractionHandlerV1({
             signing_secret: () => {
@@ -272,103 +257,51 @@ export async function openOrganizationAuthorityService(
               ).credentials.signing_secret;
             },
             click: async (click) => {
-              if (granola === undefined)
+              if (meetings === undefined)
                 throw new Error("Slack approval runtime is unavailable");
-              const core = await granola.approvals();
+              const core = await meetings.approvals();
               return createSlackApprovalClickV1({
                 database: resources.database,
                 core,
-                link: (hint) => {
-                  const active = readActiveSlackConnectionV1(
+                link: (hint) =>
+                  matchSlackApprovalClickActorV1(
                     openedControl,
                     resources.coordinates,
-                  );
-                  if (
-                    active === undefined ||
-                    active.connection.provider_tenant_id !== hint.workspace_id
-                  )
-                    return null;
-                  const membership = resources.database
-                    .prepare(
-                      "SELECT organization_id,principal_id,membership_id,membership_type FROM authority_memberships WHERE organization_id=? AND status='active'",
-                    )
-                    .all(resources.coordinates.organization_id) as readonly {
-                    readonly organization_id: string;
-                    readonly principal_id: string;
-                    readonly membership_id: string;
-                    readonly membership_type: "owner" | "employee";
-                  }[];
-                  const matches = membership.flatMap((actor) => {
-                    if (
-                      actor.membership_type !== "owner" &&
-                      actor.membership_type !== "employee"
-                    )
-                      return [];
-                    const target =
-                      resolveCurrentSlackDmApprovalReviewerTargetV1(
-                        openedControl,
-                        resources.coordinates,
-                        active.connection.connection_id,
-                        actor,
-                      );
-                    return target === undefined ||
-                      target.current_slack_identity_link.provider_subject_id !==
-                        hint.subject_id
-                      ? []
-                      : [{ actor, target }];
-                  });
-                  if (matches.length !== 1 || matches[0] === undefined)
-                    return null;
-                  const match = matches[0];
-                  return {
-                    organization_id: match.actor.organization_id,
-                    principal_id: match.actor.principal_id,
-                    membership_id: match.actor.membership_id,
-                    connection_id: active.connection.connection_id,
-                    api_app_id: active.connection.provider_app_id,
-                    external_identity_link_id:
-                      match.target.current_slack_identity_link
-                        .external_identity_link_id,
-                    contract_sha256:
-                      match.target.current_slack_identity_link
-                        .external_identity_link_contract_sha256,
-                  };
-                },
+                    hint,
+                    resources.database
+                      .prepare(
+                        "SELECT organization_id,principal_id,membership_id,membership_type FROM authority_memberships WHERE organization_id=? AND status='active'",
+                      )
+                      .all(resources.coordinates.organization_id) as readonly {
+                      readonly organization_id: string;
+                      readonly principal_id: string;
+                      readonly membership_id: string;
+                      readonly membership_type: string;
+                    }[],
+                  ),
                 redraw: () => {
                   resources.on_processing_queued?.();
                 },
               })(click);
             },
-            feedback: async ({ response_url, text }) => {
-              const controller = new AbortController();
-              const timeout = setTimeout(() => controller.abort(), 4_000);
-              try {
-                const response = await fetch(response_url, {
-                  method: "POST",
-                  redirect: "error",
-                  signal: controller.signal,
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify({
-                    response_type: "ephemeral",
-                    replace_original: false,
-                    text,
-                  }),
-                });
-                if (!response.ok)
-                  throw new Error("Slack approval feedback was rejected");
-              } finally {
-                clearTimeout(timeout);
-              }
-            },
+            feedback: sendSlackResponseUrlFeedbackV1,
           }),
         );
-        granola = openGranolaPersonLiveRuntimeV1({
+        // Granola opens first, so its state binding is checked before the shared runtime opens the attempt ledger.
+        const openedGranola = openGranolaPersonMeetingProviderV1({
+          state_directory: sharedConfig.state_directory,
+          sessions,
+          resources,
+          nango_authorization: () => nango.secret_key,
+        });
+        granola = openedGranola;
+        meetings = openPersonMeetingRuntimeV1({
           state_directory: sharedConfig.state_directory,
           sessions,
           resources,
           processor: dependencies.person_meeting_processor ?? decisionProcessor,
           projectors: policyProjectors,
-          nango_authorization: () => slack_nango.secret_key,
+          providers: [openedGranola.provider, ...(synthetic === undefined ? [] : [synthetic.provider])],
           provider_applications: [interaction],
           ...(sharedConfig.core_runtime_observation === undefined ? {} : { observation: sharedConfig.core_runtime_observation }),
           approval_core: {
@@ -383,11 +316,6 @@ export async function openOrganizationAuthorityService(
                   database: resources.database,
                   core,
                   target: (reviewer) => {
-                    const active = readActiveSlackConnectionV1(
-                      openedControl,
-                      resources.coordinates,
-                    );
-                    if (active === undefined) return null;
                     const membership_type = resources.database
                       .prepare(
                         "SELECT membership_type FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND status='active'",
@@ -403,28 +331,11 @@ export async function openOrganizationAuthorityService(
                       membership_type !== "employee"
                     )
                       return null;
-                    const resolved =
-                      resolveCurrentSlackDmApprovalReviewerTargetV1(
-                        openedControl,
-                        resources.coordinates,
-                        active.connection.connection_id,
-                        { ...reviewer, membership_type },
-                      );
-                    if (resolved === undefined) return null;
-                    return {
-                      connection_id: active.connection.connection_id,
-                      external_identity_link_id:
-                        resolved.current_slack_identity_link
-                          .external_identity_link_id,
-                      external_identity_link_contract_sha256:
-                        resolved.current_slack_identity_link
-                          .external_identity_link_contract_sha256,
-                      slack_workspace_id: active.connection.provider_tenant_id,
-                      slack_subject_id:
-                        resolved.current_slack_identity_link
-                          .provider_subject_id,
-                      api_app_id: active.connection.provider_app_id,
-                    };
+                    return resolveSlackDmApprovalTargetV1(
+                      openedControl,
+                      resources.coordinates,
+                      { ...reviewer, membership_type },
+                    );
                   },
                   targetCurrent,
                   poster: (target) =>
@@ -462,33 +373,36 @@ export async function openOrganizationAuthorityService(
                 }),
             ],
           },
-          ...(synthetic === undefined
-            ? {}
-            : { providers: [synthetic.provider] }),
         });
         if (synthetic !== undefined)
           stagingCanary = (release_id, signal) =>
             runStagingSyntheticPersonalCanaryV1({
               database: resources.database,
-              runtime: granola!,
+              runtime: meetings,
               release_id,
               signal,
             });
         return {
           applications: [
             ...(existing?.applications ?? []),
-            ...granola.applications,
+            ...meetings.applications,
           ],
-          processing: granola.processing,
+          processing: meetings.processing,
           tools: async (token) => [
             ...(await (existing?.tools?.(token) ?? [])),
-            ...(await granola.tools(token)),
+            ...(await meetings.tools(token)),
           ],
+          // The meeting worker claims prepared extraction captures only through this.
+          attachDiagnostics(value) {
+            meetings.attachDiagnostics(value);
+            existing?.attachDiagnostics?.(value);
+          },
           close() {
             try {
-              granola.close();
+              meetings.close();
             } finally {
               try {
+                openedGranola.close();
                 synthetic?.close();
                 openedControl.close();
               } finally {
@@ -498,6 +412,7 @@ export async function openOrganizationAuthorityService(
           },
         };
       } catch (error) {
+        granola?.close();
         synthetic?.close();
         control?.close();
         existing?.close();
@@ -548,8 +463,7 @@ export async function openOrganizationAuthorityService(
         : [dependencies.api.record_approver]),
     ]),
     external_identity_runtime_bundle:
-      dependencies.api?.external_identity_runtime_bundle ??
-      composePersonExternalIdentityRuntimeBundlesV1([slack.external_identity]),
+      dependencies.api?.external_identity_runtime_bundle ?? slack.external_identity,
   };
   return openOrganizationAuthorityRuntime(
     {

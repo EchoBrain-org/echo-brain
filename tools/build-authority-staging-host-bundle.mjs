@@ -7,24 +7,22 @@
  * secret value belongs in this archive.
  */
 
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
-  lstatSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { gzipSync } from "node:zlib";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import process from "node:process";
+import { deterministicTarGz } from "./lib/deterministic-tar.mjs";
+import { sourceCheckout } from "./lib/source-checkout.mjs";
 
-const SOURCE_SHA = /^[0-9a-f]{40}$/;
 const ARCHIVE_SUFFIX = ".tar.gz";
 const BOOTSTRAP = "deploy/organization-authority/bootstrap-ubuntu-arm64.sh";
 const UNIT = "deploy/organization-authority/cloudflared-echo-authority.service";
@@ -62,41 +60,8 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function run(file, args, options = {}) {
-  try {
-    return execFileSync(file, args, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      ...options,
-    });
-  } catch {
-    fail(`${file} did not complete successfully`);
-  }
-}
-
-function regularDirectory(path, label) {
-  let state;
-  try {
-    state = lstatSync(path);
-  } catch {
-    fail(`${label} is missing`);
-  }
-  if (state.isSymbolicLink() || !state.isDirectory())
-    fail(`${label} must be a directory, not a symlink`);
-  return state;
-}
-
-function regularFile(path, label) {
-  let state;
-  try {
-    state = lstatSync(path);
-  } catch {
-    fail(`${label} is missing`);
-  }
-  if (state.isSymbolicLink() || !state.isFile())
-    fail(`${label} must be a regular file, not a symlink`);
-  return state;
-}
+const { run, regularDirectory, regularFile, checkedCommit } =
+  sourceCheckout(fail);
 
 function privateDirectory(path, label) {
   const state = regularDirectory(path, label);
@@ -136,23 +101,6 @@ function parseArguments(argv) {
   return Object.freeze({ sourceRoot, output, reuseIdentical });
 }
 
-function checkedCommit(sourceRoot) {
-  regularDirectory(sourceRoot, "source root");
-  const status = run("git", [
-    "-C",
-    sourceRoot,
-    "status",
-    "--porcelain=v1",
-    "--untracked-files=all",
-  ]);
-  if (status !== "")
-    fail("source root must have no tracked or untracked changes");
-  const commit = run("git", ["-C", sourceRoot, "rev-parse", "HEAD"]).trim();
-  if (!SOURCE_SHA.test(commit))
-    fail("source root must resolve a full Git commit");
-  return commit;
-}
-
 function bundleFiles(sourceRoot) {
   const files = REQUIRED_FILES.map((path) => {
     regularFile(join(sourceRoot, path), path);
@@ -168,47 +116,15 @@ function bundleFiles(sourceRoot) {
   return Object.freeze(files);
 }
 
-function writeString(buffer, offset, length, value) {
-  const bytes = Buffer.from(value, "utf8");
-  if (bytes.length > length) fail(`tar header field is too long: ${value}`);
-  bytes.copy(buffer, offset);
-}
-
-function writeOctal(buffer, offset, length, value) {
-  const encoded = value.toString(8).padStart(length - 1, "0");
-  if (encoded.length >= length) fail("tar header numeric field is too large");
-  writeString(buffer, offset, length, `${encoded}\0`);
-}
-
-function tarHeader(name, size, mode) {
-  const header = Buffer.alloc(512, 0);
-  writeString(header, 0, 100, name);
-  writeOctal(header, 100, 8, mode);
-  writeOctal(header, 108, 8, 0);
-  writeOctal(header, 116, 8, 0);
-  writeOctal(header, 124, 12, size);
-  writeOctal(header, 136, 12, 0);
-  header.fill(0x20, 148, 156);
-  header[156] = "0".charCodeAt(0);
-  writeString(header, 257, 6, "ustar");
-  writeString(header, 263, 2, "00");
-  writeString(header, 265, 32, "root");
-  writeString(header, 297, 32, "root");
-  const checksum = header.reduce((total, byte) => total + byte, 0);
-  writeOctal(header, 148, 8, checksum);
-  return header;
-}
-
 function deterministicArchive(files) {
-  const chunks = [];
-  for (const file of files) {
-    const name = basename(file.path);
-    chunks.push(tarHeader(name, file.content.length, file.mode), file.content);
-    const padding = (512 - (file.content.length % 512)) % 512;
-    if (padding !== 0) chunks.push(Buffer.alloc(padding, 0));
-  }
-  chunks.push(Buffer.alloc(1024, 0));
-  return gzipSync(Buffer.concat(chunks), { level: 9, mtime: 0 });
+  return deterministicTarGz(
+    files.map((file) => ({
+      name: basename(file.path),
+      content: file.content,
+      mode: file.mode,
+    })),
+    { owner: "root", invalid: fail },
+  );
 }
 
 function inspectExtractedBundle(archive, files) {

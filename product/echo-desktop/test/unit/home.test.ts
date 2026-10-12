@@ -302,6 +302,25 @@ describe('Home decisions and impact checks', () => {
     expect(store.pageCovered()).toBe(true);
   });
 
+  it('locks the choices once an approve may have arrived, and Approve sends them again as they were', async () => {
+    const store = await start();
+    await store.openDecision(approval);
+    await flush();
+    store.setDecisionShare(true);
+    const reviews = () => rpc.mock.calls.filter(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'review').map(([, params]) => params.request);
+    rpc.mockImplementationOnce(async () => ({ ok: false, failure: { code: 'timeout', retryable: true, mutation_outcome: 'unknown' } }));
+    await store.decide('approve');
+    expect(store.getState().decision).toMatchObject({ busy: false, unknown: true, failure: 'This may not have been sent.' });
+    store.setDecisionShare(false);
+    store.setDecisionAudience('projects');
+    expect(store.getState().decision).toMatchObject({ share: true, audience: 'only-me' });
+    rpc.mockImplementationOnce(async () => ({ ok: true, value: { status: 'approved', decided_on: 'desktop' } }));
+    await store.decide('approve');
+    expect(reviews()).toHaveLength(2);
+    expect(reviews()[1]).toEqual(reviews()[0]);
+    expect(store.getState().toast).toBe('Approved · checking what it changes');
+  });
+
   it('keeps a publishing approval visible and shows what its check found once it finishes', async () => {
     review = { ...review, status: 'publishing', decided_on: 'desktop' };
     const store = await start();
@@ -575,11 +594,13 @@ describe('Home decisions and impact checks', () => {
     expect(store.getState().route).toEqual({ page: 'send', run_id: run.run_id });
     await flush();
     expect(statusReads()).toBe(before);
-    // Lost access is another matter: the account is read again.
+    // Maybe-lost access is another matter: the account is read again, and only that read may empty the bar.
+    store.setBarText('launch plan');
     sendFailure = { code: 'stale_access_state', retryable: false };
     await store.sendToOwners();
     await flush();
-    expect(store.getState().send?.failure).not.toBe('These items changed meanwhile. Open them again from Home.');
+    expect(store.getState().send?.failure).toBe('That changed meanwhile, or your access did. Refresh and try again.');
+    expect(store.getState().barText).toBe('launch plan');
     expect(statusReads()).toBe(before + 1);
   });
 

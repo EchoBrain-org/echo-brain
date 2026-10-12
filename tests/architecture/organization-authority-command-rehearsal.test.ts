@@ -268,7 +268,7 @@ describe("Organization Authority command rehearsal", () => {
       oidc: OIDC,
       client_authentication: { method: "none" },
       pkce_key_file: join(stateDirectory, "credentials", "person-session-pkce-sealing-key"),
-      slack_nango: SLACK_NANGO,
+      nango: SLACK_NANGO,
       openrouter_credential_file: join(stateDirectory, "credentials", "llm-credential"),
     };
     const slack = { nango: nango.client, manifest_provider: fakeManifest, provider: fakeSlack };

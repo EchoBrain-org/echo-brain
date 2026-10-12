@@ -96,7 +96,6 @@ describe("CI workflow", () => {
     expect(legCommands("tail")).toEqual([
       "npm run build",
       "node tests/fixtures/person-onboarding-smoke.mjs",
-      "node --test demo/test/rehearsal-evaluator.test.mjs",
       "npm run test:research-loop-eval",
       "npm run test:capacity",
       "npm run capacity:checkpoint",
@@ -525,6 +524,8 @@ describe("CI workflow", () => {
     expect(desktopJob).toContain("xvfb-run -a dbus-run-session -- npm run smoke");
     expect(desktopJob).toContain("\n            npm run smoke\n");
     expect(desktopJob).toContain("npm run smoke -- /opt/ECHO/echo-desktop");
+    // The installed deb is smoked under Ubuntu's default userns restriction.
+    expect(desktopJob).toContain("sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1");
     expect(desktopJob).toContain("desktop-file-validate");
     expect(desktopJob).toContain("codesign --verify --deep --strict");
     const packager = readFileSync(
@@ -538,5 +539,10 @@ describe("CI workflow", () => {
     expect(smoke).toContain("result.build?.dirty !== false");
     expect(smoke).toContain("getCurrentFuseWire");
     expect(smoke).toContain("--remote-debugging-port=0");
+    // A committed test.only must fail the e2e step rather than skip the rest.
+    const playwright = readFileSync(
+      resolve(REPO, "product/echo-desktop/playwright.config.ts"), "utf8",
+    );
+    expect(playwright).toContain("forbidOnly: !!process.env.CI,");
   });
 });

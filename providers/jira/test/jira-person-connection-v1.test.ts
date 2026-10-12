@@ -186,6 +186,19 @@ describe('Nango-backed personal Jira connection', () => {
     } finally { f.database.close(); }
   });
 
+  it('reads ticket assignees in bulk with the person connection and fails a malformed page', async () => {
+    const f = fixture(); try {
+      await f.connected(); f.transport.mockClear();
+      const reply = (issues: unknown) => f.transport.mockImplementationOnce(async () => Response.json({ issues, issueErrors: [{ issueIdsOrKeys: ['10003'], status: 404 }] }));
+      reply([{ id: '10001', fields: { assignee: { accountId: 'acct-mina' } } }, { id: '10002', fields: { assignee: null } }]);
+      expect(await f.service.assigneeAccounts({ access_token: f.token, ticket_ids: ['10001', '10002', '10003', '10001', 'ECHO-1'] })).toEqual(new Map([['10001', 'acct-mina']]));
+      expect(f.transport).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(f.transport.mock.calls[0]![1]!.body))).toEqual({ issueIdsOrKeys: ['10001', '10002', '10003'], fields: ['assignee'] });
+      reply([{ id: '99999', fields: { assignee: null } }]);
+      await expect(f.service.assigneeAccounts({ access_token: f.token, ticket_ids: ['10001'] })).rejects.toMatchObject({ code: 'invalid_output' });
+    } finally { f.database.close(); }
+  });
+
   it('refuses a capture handoff after the authenticated membership is revoked', async () => {
     const f = fixture(); try {
       await f.connected(); f.setActive(false);

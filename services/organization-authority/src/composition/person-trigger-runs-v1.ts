@@ -11,7 +11,7 @@ import { SqliteTriggerRunsV1, triggerRunStateAtV1, type ApprovalActorV1, type Tr
 import type { ImpactItemDraftV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
 import type { SqlitePersonAgenticAskAuditV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
-import type { JiraOwnerAccountsV1 } from '../application/ports/jira-owner-accounts-v1.js';
+import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
 import { matchImpactOwnersV1, type ImpactOwnerPeopleV1 } from './impact-owner-matching-v1.js';
 import { PersonRecordSearchIndexLagV1, type PersonReadableDecisionsV1, type PersonRecordAnchorV1, type PersonRecordProjectsV1 } from './person-record-search-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1, type PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
@@ -41,8 +41,8 @@ export interface CreatePersonTriggerRunsV1Options {
   readonly items: Pick<SqliteImpactItemsV1, 'insertForRun' | 'involving' | 'forRecords' | 'read' | 'recordCheck'>;
   /** ECHO's member directory: exact owner matches, and the facts the open-items policy weighs for a sweep. */
   readonly people: ImpactOwnerPeopleV1 & Pick<SqliteOpenItemPeopleV1, 'people' | 'leadsAny'>;
-  /** Jira assignee accounts, read with the approver's own connection; absent without the Jira live connector. */
-  readonly jira_owners?: JiraOwnerAccountsV1;
+  /** Ticket assignee accounts, read with the approver's own connection; absent without a live connector that has them. */
+  readonly owners?: TicketOwnerAccountsV1;
   /** Kept injectable for focused service tests and shared with the live evaluator. */
   readonly bindDesk: typeof bindPersonLiveEvidenceDeskV1;
   readonly audit: SqlitePersonAgenticAskAuditV1;
@@ -130,7 +130,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
       candidates: candidates.map(candidate => ({ pointer: candidate.pointer, ...(candidate.owner_name === undefined ? {} : { owner_name: candidate.owner_name }) })),
       approver: { organization_id: row.actor.organization_id, membership_id: row.actor.membership_id },
       access_token: token, people: options.people, signal,
-      ...(options.jira_owners === undefined ? {} : { jira: options.jira_owners }),
+      ...(options.owners === undefined ? {} : { owners: options.owners }),
     });
     // A cancelled assignee read matches no one; its fallbacks are never stored as the run's owners.
     signal.throwIfAborted();

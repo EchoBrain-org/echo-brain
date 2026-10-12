@@ -6,7 +6,6 @@ import {
   extractionGroundingFailureStage,
   extractionSchemaFailureStage,
 } from '../llm/llm-decision-processor.js';
-import { ProviderStatusError } from '../llm/llm-provider.js';
 import { EXTRACTION_ATTEMPT_FAILURE_CODES_V1 } from './extraction-attempt-store-v1.js';
 
 /**
@@ -49,11 +48,10 @@ export function classifyExtractionFailureStageV1(
 }
 
 /**
- * True only when a failed extraction provably cost nothing: the provider refused it with a 429 or 5xx reply
- * before generating (OpenRouter bills no non-2xx reply). A timeout, a transport failure, a cancel or any
+ * True only when a failed extraction provably cost nothing: the processor adapter declared the refusal
+ * unbilled (AdapterError.unbilled) and no output arrived. A timeout, a transport failure, a cancel or any
  * received output may have been billed.
  */
 export function unbilledExtractionFailureV1(error: unknown, context: ExtractionFailureContextV1): boolean {
-  return !context.aborted && !context.received_output && error instanceof ProviderStatusError
-    && (error.http_status === 429 || error.http_status >= 500);
+  return !context.aborted && !context.received_output && error instanceof AdapterError && error.unbilled;
 }

@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { executeStagingRelease, planStagingRelease, releaseAction, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
 import type { StagingReleasePlanOptions } from '../../tools/authority-staging-release.mjs';
+import { cleanReleaseRecord, cleanRuntimeProfile, deployRuntimeProfileFiles } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
 
 const temporary: string[] = [];
@@ -23,17 +24,17 @@ function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'echo-staging-release-test-'));
   chmodSync(directory, 0o700);
   temporary.push(directory);
-  const profile = { schema_version: 1, kind: 'echo-clean-v1-runtime-profile', source_sha: COMMIT, files: Object.fromEntries(['Caddyfile.clean-v1', 'Caddyfile.clean-v1.ec2', 'compose.clean-v1.ec2.yaml', 'compose.clean-v1.yaml'].map(name => [name, readFileSync(join(REPO, 'deploy/organization-authority', name), 'utf8')])) };
-  const record = (id: string) => ({ schema_version: 1, kind: 'echo-clean-v1-release', release_id: id, released_at: '2026-09-05T00:00:00Z', source_sha: COMMIT, baseline_compatibility_class: 'clean-v1', authority_image: { reference: `904560150024.dkr.ecr.us-west-2.amazonaws.com/echo/organization-authority@sha256:${'d'.repeat(64)}` }, person_client: { package: '@echo-brain/person-client', version: '0.1.0-internal.1', artifact_url: 'https://rehearsal.invalid/client.tgz', artifact_sha256: 'c'.repeat(64) }, runtime_profile: { profile_version: 'clean-v1-profile-1', artifact_url: 'https://rehearsal.invalid/profile.json', artifact_sha256: digest(canonical(profile) + '\n') } });
+  const profile = cleanRuntimeProfile(COMMIT, deployRuntimeProfileFiles());
+  const record = (id: string) => cleanReleaseRecord({ release_id: id, source_sha: COMMIT, authority_image: { reference: `904560150024.dkr.ecr.us-west-2.amazonaws.com/echo/organization-authority@sha256:${'d'.repeat(64)}` }, runtime_profile: { artifact_sha256: profile.digest } });
   const options: StagingReleasePlanOptions = { action: 'status', acceptedRelease: join(directory, 'accepted.json'), release: join(directory, 'candidate.json'), runtimeProfile: join(directory, 'profile.json'), output: join(directory, 'operation.json'), previousToolingSource: OLD };
   write(options.acceptedRelease, record('clean-v1-accepted-test'));
   write(options.release, record('clean-v1-candidate-test'));
-  write(options.runtimeProfile, profile);
+  writeFileSync(options.runtimeProfile, profile.bytes, { mode: 0o600 });
   const calls: string[][] = [];
   const state = { sendLost: false, invocationPending: false, failure: false, targetChanged: false, targetAccount: '904560150024', tagEnvironment: 'staging', outputOverride: null as string | null, submissions: 0 };
   const request = () => JSON.parse(readFileSync(options.output, 'utf8')).request;
-  const outcome = () => {
-    const receipt = JSON.parse(readFileSync(options.output, 'utf8'));
+  const outcome = (path = options.output) => {
+    const receipt = JSON.parse(readFileSync(path, 'utf8'));
     const inspection = receipt.request.action === 'inspect-install';
     return { schema_version: 1, kind: 'echo-staging-release-host-result-v1', operation_id: receipt.request.operation_id, request_sha256: receipt.request_sha256, action: receipt.request.action, ok: true, code: inspection ? 'inspection_verified' : 'verified', diagnostic: inspection ? { schema_version: 2, kind: 'echo-staging-release-install-inspection-v2', category: 'ready', tool: null, inventory: Object.fromEntries(Object.entries(receipt.request.old_tool_hashes).map(([name, sha256]) => [name, { state: sha256 === receipt.request.files[name].sha256 ? 'new' : 'old', sha256 }])) } : null };
   };
@@ -94,12 +95,37 @@ describe('bounded staging release operator', () => {
     const request = f.request();
     expect(request.files['update-clean-v1.sh'].base64).toBeDefined();
     expect(request.files['onboard-clean-v1.sh'].base64).toBeUndefined();
-    for (const name of ['update-clean-v1.sh', 'candidate.json', 'runtime-profile.json']) {
+    for (const name of ['candidate.json', 'runtime-profile.json']) {
       const changed = structuredClone(request); delete changed.files[name].base64;
       expect(() => validateReleaseRequest(changed, f.dependencies.readSource), name).toThrow();
     }
     const unknown = structuredClone(request); unknown.files['onboard-clean-v1.sh'].sha256 = '0'.repeat(64);
     expect(() => validateReleaseRequest(unknown, f.dependencies.readSource)).toThrow();
+  });
+
+  it('splits an install of six changed tools under the command cap and finishes it from an inspection', () => {
+    const f = fixture();
+    const dependencies = { ...f.dependencies, readSource: (commit: string, path: string) => commit === OLD ? Buffer.from(`old-reviewed-tool:${path}\n`) : readFileSync(join(REPO, path)) };
+    const tools = (request: any) => Object.keys(request.old_tool_hashes).filter(name => request.files[name].base64 !== undefined);
+    planStagingRelease({ ...f.options, action: 'install' }, dependencies);
+    const first = f.request();
+    expect(Buffer.byteLength(JSON.stringify(releaseSsmParameters(first, dependencies.readSource)))).toBeLessThan(60 * 1024);
+    const sent = tools(first);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.length).toBeLessThan(6);
+    // The validators go first: new wrappers call `fields`, which an old clean-v1-release.py rejects.
+    expect(sent).toEqual(expect.arrayContaining(['release/clean-v1-release.py', 'release/clean-v1-runtime-profile.py']));
+    const inspection = join(f.directory, 'inspection.json');
+    planStagingRelease({ ...f.options, action: 'inspect-install', output: inspection }, dependencies);
+    const result: any = f.outcome(inspection);
+    for (const name of sent) result.diagnostic.inventory[name] = { state: 'new', sha256: first.files[name].sha256 };
+    f.state.outputOverride = JSON.stringify(result);
+    expect(executeStagingRelease(inspection, dependencies).state).toBe('succeeded');
+    planStagingRelease({ ...f.options, action: 'install', inspection, output: join(f.directory, 'install-rest.json') }, dependencies);
+    const rest = tools(JSON.parse(readFileSync(join(f.directory, 'install-rest.json'), 'utf8')).request);
+    expect([...sent, ...rest].sort()).toEqual(Object.keys(first.old_tool_hashes).sort());
+    // @ts-expect-error Only an install reads an inspection receipt.
+    expect(() => planStagingRelease({ ...f.options, action: 'stage', inspection, output: join(f.directory, 'stage.json') }, dependencies)).toThrow('unexpected_inspection');
   });
 
   it('exposes validated protocol results without losing their types', () => {

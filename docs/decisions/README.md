@@ -51,11 +51,11 @@ separately.
 | [ADR-0027](ADR-0027-rebind-lost-nango-slack-connection.md) | Rebind a lost Nango Slack connection under the same credential handle | proposed |
 | [ADR-0028](ADR-0028-broadened-layer-1-source-captures.md) | Layer 1 holds the people directory, signed record log and source captures | proposed |
 | [ADR-0029](ADR-0029-capture-and-derive-foundation.md) | Project-scoped capture and exact derivation inputs | proposed |
-
 | [ADR-0030](ADR-0030-personal-meeting-custody-and-review.md) | Personal Granola custody and shared in-app meeting review | accepted |
 | [ADR-0031](ADR-0031-unified-meeting-approval-core.md) | One meeting approval core with optional surfaces | accepted |
 | [ADR-0032](ADR-0032-stored-trigger-runs.md) | Stored trigger runs keep pointers and judgments, not outside text | accepted |
 | [ADR-0033](ADR-0033-shared-open-items.md) | Open items are one shared row per affected item, seen by the decision's audience | proposed |
+| [ADR-0034](ADR-0034-confluence-person-live-page-evidence.md) | Person-bound Confluence live page evidence with Nango custody | proposed |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

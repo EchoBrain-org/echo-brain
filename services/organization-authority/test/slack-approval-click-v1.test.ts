@@ -3,12 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   approvalCoreFixture,
   PROJECT_A,
-} from "../../../../../services/organization-authority/test/fixtures/approval-core.js";
+} from "./fixtures/approval-core.js";
 import {
   enqueueApprovedRecordRunV1,
   SqliteTriggerRunsV1,
-} from "../../../../../services/organization-authority/src/adapters/persistence/sqlite/trigger-runs-v1.js";
-import { createSlackApprovalClickV1 } from "../../src/private-approval/slack-approval-click-v1.js";
+} from "../src/adapters/persistence/sqlite/trigger-runs-v1.js";
+import { createSlackApprovalClickV1 } from "../../../providers/slack/server/src/private-approval/slack-approval-click-v1.js";
 
 const TARGET = {
   connection_id: "con_00000000-0000-4000-8000-000000000001",

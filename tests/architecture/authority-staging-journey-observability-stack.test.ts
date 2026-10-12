@@ -1,6 +1,10 @@
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  readTemplate,
+  resource,
+  type CloudFormationTemplate,
+} from "../support/cloudformation-template.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const TEMPLATE = resolve(
@@ -19,35 +23,16 @@ const HISTORICAL_ASK_TERMINAL_OUTCOMES = [
   "off_scope",
 ] as const;
 
-type Resource = {
-  readonly Type: string;
-  readonly Properties?: Record<string, unknown>;
-};
+const template = () => readTemplate(TEMPLATE);
 
-type Template = {
-  readonly Parameters: Record<string, Record<string, unknown>>;
-  readonly Resources: Record<string, Resource>;
-  readonly Outputs: Record<string, Record<string, unknown>>;
-};
-
-function template(): Template {
-  return JSON.parse(readFileSync(TEMPLATE, "utf8")) as Template;
-}
-
-function resource(stack: Template, logicalId: string): Resource {
-  const value = stack.Resources[logicalId];
-  expect(value, `missing ${logicalId}`).toBeDefined();
-  return value!;
-}
-
-function dashboardBodyTemplate(stack: Template): string {
+function dashboardBodyTemplate(stack: CloudFormationTemplate): string {
   const body = resource(stack, "StagingJourneyOverviewDashboard").Properties
     ?.DashboardBody as { readonly "Fn::Sub": string };
   expect(body).toEqual({ "Fn::Sub": expect.any(String) });
   return body["Fn::Sub"];
 }
 
-function dashboardBody(stack: Template): Record<string, unknown> {
+function dashboardBody(stack: CloudFormationTemplate): Record<string, unknown> {
   return JSON.parse(
     dashboardBodyTemplate(stack).replace(/\$\{[^}]+\}/g, "placeholder"),
   ) as Record<string, unknown>;

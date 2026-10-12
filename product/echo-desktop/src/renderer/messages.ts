@@ -11,7 +11,8 @@ const MESSAGES: Record<string, string> = {
   rate_limited: 'Too many requests. Try again in a moment.',
   not_found: 'This is no longer available to you.',
   unauthorized: 'Your access changed. Sign in again.',
-  stale_access_state: 'Your access changed. Sign in again.',
+  // The Authority also says this when what you acted on changed meanwhile, with the session still valid.
+  stale_access_state: 'That changed meanwhile, or your access did. Refresh and try again.',
   sign_in_required: 'Sign in again to continue.',
   invalid_request: 'That cannot be sent.',
   unsupported_file: 'Choose a TXT, Markdown, PDF or Word file up to 25 MB.',

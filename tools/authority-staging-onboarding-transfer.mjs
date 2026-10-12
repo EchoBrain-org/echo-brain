@@ -23,11 +23,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { gzipSync } from "node:zlib";
 import { basename, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { InvitationExportError, planInvitationExport, executeInvitationExport } from './authority-staging-invitation-export.mjs';
+import { deterministicTarGz } from './lib/deterministic-tar.mjs';
 import { awsCliArguments, sanitizedAwsEnvironment, sha256 } from './lib/operator-io.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -164,35 +164,6 @@ function pathOutsideRepository(path, code) {
   return candidate;
 }
 
-function writeString(buffer, offset, length, value) {
-  const bytes = Buffer.from(value, "utf8");
-  if (bytes.length > length) refuse("archive_header_invalid");
-  bytes.copy(buffer, offset);
-}
-
-function writeOctal(buffer, offset, length, value) {
-  const encoded = value.toString(8).padStart(length - 1, "0");
-  if (encoded.length >= length) refuse("archive_header_invalid");
-  writeString(buffer, offset, length, `${encoded}\0`);
-}
-
-function tarHeader(name, size) {
-  const header = Buffer.alloc(512, 0);
-  writeString(header, 0, 100, name);
-  writeOctal(header, 100, 8, 0o600);
-  writeOctal(header, 108, 8, 0);
-  writeOctal(header, 116, 8, 0);
-  writeOctal(header, 124, 12, size);
-  writeOctal(header, 136, 12, 0);
-  header.fill(0x20, 148, 156);
-  header[156] = "0".charCodeAt(0);
-  writeString(header, 257, 6, "ustar");
-  writeString(header, 263, 2, "00");
-  const checksum = header.reduce((total, byte) => total + byte, 0);
-  writeOctal(header, 148, 8, checksum);
-  return header;
-}
-
 function exactPrivateInputLeaves({ sourceDir, names, prefix = "", directoryCode, shapeCode, fileCode, maximumFileBytes = MAXIMUM_INPUT_FILE_BYTES, rejectDirectorySymlink = false }) {
   const source = rejectDirectorySymlink
     ? privateDirectoryWithoutSymlink(sourceDir, directoryCode)
@@ -236,20 +207,16 @@ export function createOnboardingInputArchive({ sourceDir, stagingSyntheticMeetin
   const destination = pathOutsideRepository(output, "archive_inside_repo");
   if (existsSync(destination)) refuse("archive_destination_exists");
   if (!basename(destination).endsWith(".tar.gz")) refuse("archive_suffix_invalid");
-  const chunks = [];
+  const entries = [];
   let totalBytes = 0;
   for (const leaf of [...inputLeaves, ...fixtureLeaves]) {
     const { path, state, archiveName } = leaf;
     if (state.size > leaf.maximumFileBytes) refuse("input_file_too_large");
     totalBytes += state.size;
     if (totalBytes > MAXIMUM_INPUT_TOTAL_BYTES) refuse("input_total_too_large");
-    const content = readFileSync(path);
-    chunks.push(tarHeader(archiveName, content.length), content);
-    const padding = (512 - (content.length % 512)) % 512;
-    if (padding) chunks.push(Buffer.alloc(padding, 0));
+    entries.push({ name: archiveName, content: readFileSync(path), mode: 0o600 });
   }
-  chunks.push(Buffer.alloc(1024, 0));
-  const archive = gzipSync(Buffer.concat(chunks), { level: 9, mtime: 0 });
+  const archive = deterministicTarGz(entries, { invalid: () => refuse("archive_header_invalid") });
   writeFileSync(destination, archive, { encoding: undefined, flag: "wx", mode: 0o600 });
   chmodSync(destination, 0o600);
   return Object.freeze({ path: destination, sha256: sha256(archive) });
@@ -654,14 +621,20 @@ export function onboardingTransferSsmCommands({ artifact, region, stagingSynthet
   const stageOperationId = reuseCurrentProvider
     ? exact(operationId, OPERATION, "operation_id_invalid")
     : undefined;
-  const archiveFixtureNames = STAGING_SYNTHETIC_MEETING_FILES.map(
-    (name) => `${STAGING_SYNTHETIC_MEETINGS_PREFIX}${name}`,
-  );
-  const fixtureInputFiles = reuseCurrentProvider
+  const inputFiles = reuseCurrentProvider
     ? REUSABLE_STAGING_INPUT_FILES
     : INPUT_FILES;
-  const fixtureExtraction = selectedSyntheticMeetings
-    ? `
+  // Without the fixture corpus the meeting list is empty: the archive must
+  // then hold exactly the input files and no meetings directory is created.
+  const archiveFixtureNames = selectedSyntheticMeetings
+    ? STAGING_SYNTHETIC_MEETING_FILES.map((name) => `${STAGING_SYNTHETIC_MEETINGS_PREFIX}${name}`)
+    : [];
+  const meetingChecks = selectedSyntheticMeetings
+    ? `for name in ${STAGING_SYNTHETIC_MEETING_FILES.join(" ")}; do test -f "$meetings/$name" && test ! -L "$meetings/$name"; done
+test "$(find "$meetings" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d " ")" = ${STAGING_SYNTHETIC_MEETING_FILES.length}
+`
+    : "";
+  const extraction = `
 meetings="$workdir/meetings"
 python3 - "$archive" "$input" "$meetings" <<'PY'
 import os
@@ -669,7 +642,7 @@ import sys
 import tarfile
 
 archive, destination, meetings_destination = sys.argv[1:]
-expected_input = ${JSON.stringify(fixtureInputFiles)}
+expected_input = ${JSON.stringify(inputFiles)}
 expected_meetings = ${JSON.stringify(archiveFixtureNames)}
 expected = expected_input + expected_meetings
 maximum_file_bytes = ${MAXIMUM_INPUT_FILE_BYTES}
@@ -683,7 +656,8 @@ with tarfile.open(archive, "r:gz") as source:
     if sum(member.size for member in members) > maximum_total_bytes:
         raise SystemExit(1)
     os.mkdir(destination, 0o700)
-    os.mkdir(meetings_destination, 0o700)
+    if expected_meetings:
+        os.mkdir(meetings_destination, 0o700)
     for member in members:
         source_file = source.extractfile(member)
         if source_file is None:
@@ -701,49 +675,10 @@ with tarfile.open(archive, "r:gz") as source:
                 output.write(chunk)
         os.chmod(target, 0o600)
 PY
-chmod 0700 "$input" "$meetings"
-for name in ${fixtureInputFiles.join(" ")}; do test -f "$input/$name" && test ! -L "$input/$name"; done
-test "$(find "$input" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d " ")" = ${fixtureInputFiles.length}
-for name in ${STAGING_SYNTHETIC_MEETING_FILES.join(" ")}; do test -f "$meetings/$name" && test ! -L "$meetings/$name"; done
-test "$(find "$meetings" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d " ")" = ${STAGING_SYNTHETIC_MEETING_FILES.length}
-`
-    : `
-python3 - "$archive" "$input" <<'PY'
-import os
-import sys
-import tarfile
-
-archive, destination = sys.argv[1:]
-expected = ${JSON.stringify(INPUT_FILES)}
-maximum_file_bytes = ${MAXIMUM_INPUT_FILE_BYTES}
-maximum_total_bytes = ${MAXIMUM_INPUT_TOTAL_BYTES}
-with tarfile.open(archive, "r:gz") as source:
-    members = source.getmembers()
-    if [member.name for member in members] != expected:
-        raise SystemExit(1)
-    if any(not member.isreg() or member.issym() or member.islnk() or member.size > maximum_file_bytes for member in members):
-        raise SystemExit(1)
-    if sum(member.size for member in members) > maximum_total_bytes:
-        raise SystemExit(1)
-    os.mkdir(destination, 0o700)
-    for member in members:
-        source_file = source.extractfile(member)
-        if source_file is None:
-            raise SystemExit(1)
-        target = os.path.join(destination, member.name)
-        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "wb") as output:
-            while True:
-                chunk = source_file.read(131072)
-                if not chunk:
-                    break
-                output.write(chunk)
-        os.chmod(target, 0o600)
-PY
-chmod 0700 "$input"
-for name in ${INPUT_FILES.join(" ")}; do test -f "$input/$name" && test ! -L "$input/$name"; done
-test "$(find "$input" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d " ")" = ${INPUT_FILES.length}
-`;
+chmod 0700 "$input"${selectedSyntheticMeetings ? ' "$meetings"' : ""}
+for name in ${inputFiles.join(" ")}; do test -f "$input/$name" && test ! -L "$input/$name"; done
+test "$(find "$input" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d " ")" = ${inputFiles.length}
+${meetingChecks}`;
   return Object.freeze([
     "set -eu",
     "umask 077",
@@ -758,7 +693,7 @@ test "$(find "$input" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d " ")" = ${
     'test "$downloaded" = true',
     `printf '%s  %s\\n' '${artifact.sha256}' "$archive" | sha256sum -c - >/dev/null`,
     'input="$workdir/input"',
-    fixtureExtraction,
+    extraction,
     ...(reuseCurrentProvider
       ? [`/srv/echo-authority-clean-v1/onboard-clean-v1.sh stage-rehearsal-inputs --operation-id '${stageOperationId}' --artifact-sha256 '${artifact.sha256}' --input-dir "$input" --staging-synthetic-meetings-dir "$meetings" >/dev/null 2>&1`]
       : [

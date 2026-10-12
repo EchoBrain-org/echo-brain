@@ -1,8 +1,7 @@
 import { chmodSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { HUMAN_ACT_RECORD_INPUT_CODECS_V4 } from '@echo-brain/organization-protocol';
 import { createPersonPolicyFactProjectorV2, createRecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
@@ -12,17 +11,20 @@ import { openOrganizationAuthorityRuntime } from '../src/composition/organizatio
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 import { initializePersonSessionCredentials } from '../src/composition/person-onboarding-service.js';
+import { port as availablePort } from './fixtures/owner-session.js';
+
+// The real meeting runtime, recording the diagnostics its meeting worker claims captures through.
+const meetingDiagnostics = vi.hoisted(() => [] as unknown[]);
+vi.mock('../src/composition/person-meeting-runtime-v1.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/composition/person-meeting-runtime-v1.js')>();
+  return { ...actual, openPersonMeetingRuntimeV1: (...args: Parameters<typeof actual.openPersonMeetingRuntimeV1>) => {
+    const runtime = actual.openPersonMeetingRuntimeV1(...args);
+    return { ...runtime, attachDiagnostics: (value: Parameters<typeof runtime.attachDiagnostics>[0]) => { meetingDiagnostics.push(value); runtime.attachDiagnostics(value); } };
+  } };
+});
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-
-async function availablePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>(resolve => server.close(() => resolve()));
-  return port;
-}
 
 const generation: AnswerCompositionGenerationBindingV1 = {
   generation: { generation_adapter_id: 'personal-only-generation', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1000 },
@@ -100,7 +102,7 @@ describe('Organization Authority runtime without an organization source lane', (
       state_directory: initialized.state_directory, host: '127.0.0.1', port: await availablePort(), authority_url: 'https://authority.example',
       oidc: { issuer: 'https://issuer.invalid', client_id: 'founder-client', redirect_uri: 'https://authority.example/v2/session/oidc/callback', tenant: { kind: 'issuer' }, id_token_algorithms: ['RS256'] },
       client_authentication: { method: 'none' }, pkce_key_file: credentials.pkce_sealing_key_reference.slice('file:'.length),
-      slack_nango: { secret_key: 'nango-secret-key-not-used-000000', integration_key: 'slack' },
+      nango: { secret_key: 'nango-secret-key-not-used-000000', integration_key: 'slack' },
       openrouter_credential_file: join(parent, 'not-read-openrouter'),
     });
     const database = openAuthorityDatabase(join(initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
@@ -108,6 +110,8 @@ describe('Organization Authority runtime without an organization source lane', (
       // The personal meeting runtime is composed and idle until a person connects a source.
       expect(runtime.processing).toBe('active');
       expect(runtime.run_staging_synthetic_canary).toBeUndefined();
+      // Prepared meeting_extraction captures are claimed only once the root hands the worker its diagnostics.
+      expect(meetingDiagnostics).toEqual([expect.objectContaining({ claimMeeting: expect.any(Function) })]);
       expect((await fetch(`http://127.0.0.1:${String(runtime.address.port)}/v1/authority-descriptor`)).status).toBe(200);
       expect(database.prepare('SELECT count(*) FROM authority_live_source_admission_v2').pluck().get()).toBe(0);
     } finally { database.close(); await runtime.close(); }

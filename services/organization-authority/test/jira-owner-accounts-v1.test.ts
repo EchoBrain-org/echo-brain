@@ -110,7 +110,7 @@ describe('Jira owner accounts', () => {
     const f = await jiraRuntimeFixture({ bulk: { issues: [] } });
     const rafael = { organization_id: 'org_fixture', principal_id: 'prn_rafael', membership_id: 'mem_rafael' };
     f.connect(rafael, 'acct-rafael', OTHER_CLOUD);
-    expect(f.runtime.owners.cloud_id).toBe(FIXTURE_JIRA_CLOUD_V1);
+    expect(f.runtime.owners).toMatchObject({ tool_id: 'jira', external_scope_id: FIXTURE_JIRA_CLOUD_V1 });
     expect(f.runtime.owners.people('acct-rafael')).toEqual([]);
     expect(f.runtime.owners.people('acct-ari')).toEqual([ARI]);
   });

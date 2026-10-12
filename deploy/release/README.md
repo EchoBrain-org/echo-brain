@@ -23,10 +23,14 @@ pre-V10 staging conversions and offline copiers were removed (git history keeps
 them). The historical project-context sprint used fresh V7 state and PC-06 reset/reseed,
 as described in the [PC-01 handoff](../../docs/product/2026-09-21-project-context-pc01-persistence.md).
 An incompatible baseline requires a new, explicitly designed migration or an
-authorized reset. For an authorized reset with no live users,
-run `onboard-clean-v1.sh
+authorized reset. For an authorized reset with no live users, first install the
+target release's reviewed host tooling through the
+[automated current-host lane](#automated-current-host-staging-lane) while the
+old rehearsal is in place, then run `onboard-clean-v1.sh
 replace-rehearsal --confirm-no-live-users`, then prepare the organization again
-with the new release record and matching profile. Ordinary `stage` never migrates an older baseline.
+with the new release record and matching profile, as described in
+[Replace unreleased rehearsal state](../organization-authority/README.md#replace-unreleased-rehearsal-state).
+Ordinary `stage` never migrates an older baseline.
 
 Historical baseline verification now uses Git history. The retention statements
 in [ADR-0017](../../docs/decisions/ADR-0017-project-meeting-approval-v1.md)
@@ -110,7 +114,11 @@ A release that ships [ADR-0024](../../docs/decisions/ADR-0024-person-list-open-a
   server goes first.
 - Publish the CLI feed right after promotion. Desktops embed their own Person
   client and do not update themselves: reinstall each desktop seat through its
-  packaging lane.
+  packaging lane. A Linux seat reinstalls the same-named `0.1.0` deb with
+  `apt install --reinstall`
+  ([desktop install](../../product/echo-desktop/README.md#install-and-verify-on-linux));
+  record the installed-path smoke result or the tray's build SHA as desktop
+  evidence, not the version string.
 - Select the minimum client by committed source SHA, not by answer kind or
   schema, which did not change.
 - Add a `person list` (global and `--mine`) and a `person open --ref` of a
@@ -304,7 +312,12 @@ invitation, Slack, Granola, or model secret.
 For the existing staging host, prefer the
 [automated current-host lane](#automated-current-host-staging-lane). The direct
 host commands below remain the installed-wrapper contract and human fallback;
-they are not permission for an agent to open a shell session.
+they are not permission for an agent to open a shell session. A human in
+Session Manager runs them from `/srv/echo-authority-clean-v1` with `sudo`
+scoped to each command, as shown; never use `sudo -i`, `su` or a root shell.
+The deployment directory is root-owned and `clean-data` belongs to the service
+account, so an unelevated wrapper fails with a misleading "operation in
+progress" error.
 
 Keep the three operator lanes separate:
 
@@ -318,31 +331,40 @@ Keep the three operator lanes separate:
 Copy the release validators and operational commands from the exact reviewed
 source checkout into the deployment directory beside the clean Compose files.
 Before copying, compare the SHA-256 of each source file with the private review
-receipt for that source commit. For a normal update, do not edit or pre-install
-`current.clean-v1.json` by hand:
+receipt for that source commit. Install all six host tools from that one
+commit together: the update, onboarding, retained-restore and
+backup-maintenance wrappers and both validators. The release lane checks them
+as one set and refuses later actions with `tool_hash_unknown` when any one
+comes from another commit, and the wrappers share one release guard. On the
+staging host, use the lane's `install` action instead. For a normal update, do
+not edit or pre-install `current.clean-v1.json` by hand:
 
 ```sh
 cd /srv/echo-authority-clean-v1
-install -d -m 0755 release
-install -m 0755 /absolute/reviewed/clean-v1-release.py release/clean-v1-release.py
-install -m 0755 /absolute/reviewed/clean-v1-runtime-profile.py release/clean-v1-runtime-profile.py
-install -m 0755 /absolute/reviewed/update-clean-v1.sh ./update-clean-v1.sh
-install -o root -g root -m 0755 \
+sudo install -d -m 0755 release
+sudo install -o root -g root -m 0755 /absolute/reviewed/clean-v1-release.py release/clean-v1-release.py
+sudo install -o root -g root -m 0755 /absolute/reviewed/clean-v1-runtime-profile.py release/clean-v1-runtime-profile.py
+sudo install -o root -g root -m 0755 /absolute/reviewed/update-clean-v1.sh ./update-clean-v1.sh
+sudo install -o root -g root -m 0755 /absolute/reviewed/onboard-clean-v1.sh ./onboard-clean-v1.sh
+sudo install -o root -g root -m 0755 /absolute/reviewed/restore-clean-v1-host.sh ./restore-clean-v1-host.sh
+sudo install -o root -g root -m 0755 \
   /absolute/reviewed/backup-authority-maintenance.sh \
   ./backup-authority-maintenance.sh
-install -d -m 0700 clean-data/release
-sha256sum ./backup-authority-maintenance.sh
+sudo install -d -m 0700 clean-data/release
+sha256sum ./backup-authority-maintenance.sh ./update-clean-v1.sh \
+  ./onboard-clean-v1.sh ./restore-clean-v1-host.sh \
+  release/clean-v1-release.py release/clean-v1-runtime-profile.py
 python3 release/clean-v1-release.py validate /absolute/private/release.json
 python3 release/clean-v1-runtime-profile.py validate /absolute/private/runtime-profile.json
-./update-clean-v1.sh stage --release /absolute/private/release.json \
+sudo ./update-clean-v1.sh stage --release /absolute/private/release.json \
   --runtime-profile /absolute/private/runtime-profile.json
 ```
 
-The printed maintenance-script digest must equal the reviewed receipt before
-the script is used. It is root-owned host tooling, not application state:
-release rollback does not replace or remove it. Replace or remove it only as a
-separately reviewed host-tooling change, and record the old and new digests in
-the private operator receipt.
+All six printed digests must equal the reviewed receipt for that source commit
+before any of the tools is used. They are root-owned host tooling, not
+application state: release rollback does not replace or remove them. Replace or
+remove them only as a separately reviewed host-tooling change, and record the
+old and new digests in the private operator receipt.
 
 For an ordinary baseline-preserving replacement, stage the exact candidate in
 the same way. The command refuses floating images, a reused release ID, a
@@ -352,7 +374,7 @@ checks the actual running container image digest plus descriptor and safe setup
 status, but does not accept it yet.
 
 ```sh
-./update-clean-v1.sh stage --release /absolute/private/candidate-release.json \
+sudo ./update-clean-v1.sh stage --release /absolute/private/candidate-release.json \
   --runtime-profile /absolute/private/candidate-runtime-profile.json
 ```
 
@@ -404,10 +426,10 @@ the Slack DM copy if the owner linked Slack), then use that binary to search for
 before making the human promotion confirmation explicit:
 
 ```sh
-./update-clean-v1.sh canary
+sudo ./update-clean-v1.sh canary
 "$HOME/.local/bin/echo-brain" person records --query '<candidate-release-id> verify owner approval of a staged meeting'
 "$HOME/.local/bin/echo-brain" person ask --question 'What did we decide for synthetic staging release <candidate-release-id>?'
-./update-clean-v1.sh promote --release /absolute/private/candidate-release.json --canary-passed
+sudo ./update-clean-v1.sh promote --release /absolute/private/candidate-release.json --canary-passed
 ```
 
 The canary command stores a private receipt bound to the exact selected release.
@@ -421,13 +443,8 @@ If it fails, restore the prior **same-clean-v1** image, runtime profile, and
 environment tuple and leave the accepted record unchanged:
 
 ```sh
-./update-clean-v1.sh rollback
+sudo ./update-clean-v1.sh rollback
 ```
-
-For a first deployment, where no accepted release record exists yet, the same
-command is an abort: it stops the staged candidate before archiving that
-candidate as failed and does not create an accepted record. After it succeeds,
-stage the next candidate with a new release ID.
 
 The operation lock prevents concurrent changes. The environment, active
 profile, and four materialized deployment files are replaced individually, so
@@ -580,6 +597,19 @@ npm run authority:staging-release -- status \
   --receipt /absolute/private/releases/install-operation.json
 ```
 
+When the changed tools do not all fit the command cap, `install` carries the
+bytes of as many as fit, in a fixed order with the two release validators
+first, and sends the rest as hash witnesses. The host leaves a witnessed tool
+at its old or new hash and still returns `installed`, so `installed` does not
+mean every tool is new. Run
+`inspect-install` again with the same inputs and `--previous-tooling-source`.
+While its inventory shows any tool `old`, plan another `install` with the same
+inputs plus `--inspection <succeeded-inspect-install-receipt>`; that install
+omits the tools the inspection shows as `new`. Repeat until the inventory is
+all `new`. Only `install` accepts `--inspection`, and only a succeeded
+inspection of the same tooling sources and target. Every other action refuses
+until all six tools are new.
+
 Substitute `--action inspect-install` and use a distinct receipt path for the
 non-mutating guard inspection. It never replaces tooling, invokes an updater or
 runtime wrapper, restarts containers, changes the environment or release
@@ -596,7 +626,8 @@ Plan/execute are mechanical operator steps within the founder's staging
 delegation, not a new approval prompt for each command. The only commands sent
 are generated from the fixed reviewed host runner. Its compressed non-secret
 payload and checksums fit under the CLI's conservative 60-KiB command cap; it
-refuses larger artifacts rather than selecting another courier implicitly.
+splits an `install` as described above and refuses anything that still does
+not fit rather than selecting another courier implicitly.
 
 The host independently checks IMDSv2 identity, the mounted retained volume,
 its bootstrap-required service ownership (`999:988`, mode `0700`), root-owned
@@ -654,7 +685,7 @@ and [invocation status contract](https://docs.aws.amazon.com/cli/latest/referenc
 
 Plans use request version 4 and a checksum-bound XZ-compressed text bundle
 containing the exact reviewed runner and non-secret artifacts. Installed tools travel as checksum witnesses;
-`install` carries bytes for changed tools, and witnesses for unchanged tools.
+`install` carries bytes for the changed tools that fit, and witnesses for the rest.
 Every installed file still passes owner, mode and old/new hash checks before
 any action. Candidate records and profiles always include their exact bytes. The fixed loader
 checks its digest and size, reconstructs the canonical request and checks its
@@ -921,8 +952,8 @@ is a local smoke build; independent invocations are not evidence of one shared
 release or tarball. Native Linux execution is still owed when working on a Mac.
 
 Retire the one-off Mac-pinned stress checker as a qualification workflow; keep
-its old evidence outside Git. Use this smoke path plus the existing
-`demo/evaluate-rehearsal.mjs` captured-result gate. Capture stdout, stderr, exit
+its old evidence outside Git. Use this smoke path plus the demo runbook's
+[pass/fail gate](../../demo/RUNBOOK.md#passfail-gate). Capture stdout, stderr, exit
 code, termination signal and launch errors separately. NUL argv and `E2BIG`
 fail at process launch; do not label them HTTP/input-validation failures or add
 another stdin/file question path. Successful JSON is on stdout; structured

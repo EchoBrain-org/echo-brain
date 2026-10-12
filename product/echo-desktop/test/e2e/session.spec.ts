@@ -140,10 +140,11 @@ test('quit waits out a refresh with the window open, and never touches the close
   const { app, home } = run;
   await expect.poll(() => refreshes().length).toBe(1);
   // Any throw while quitting raises Electron's error box, which can hold the
-  // quit open. macOS reports the app inactive after its window has closed.
+  // quit open. macOS reports the app inactive after its window has closed:
+  // conceal, through the handler that report reaches, must skip the closed window.
   await app.evaluate(({ app: electronApp, BrowserWindow }, threw) => {
     BrowserWindow.getAllWindows()[0]!.once('closed', () => {
-      try { electronApp.emit('did-resign-active'); } catch { process.getBuiltinModule('node:fs').writeFileSync(threw, ''); }
+      try { electronApp.emit('echo-test:conceal'); } catch { process.getBuiltinModule('node:fs').writeFileSync(threw, ''); }
     });
   }, join(home, 'threw'));
   const exited = new Promise(resolveExit => app.process().once('exit', resolveExit));

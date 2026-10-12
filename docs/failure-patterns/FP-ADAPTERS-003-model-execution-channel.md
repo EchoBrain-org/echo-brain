@@ -57,3 +57,8 @@ Pin execution controls per provider/model, include them in processing
 identity, and test visible-empty, thinking-only, truncation, invalid schema,
 and valid-empty outcomes. The exact implementation, regression, and live
 evidence scope is fixed by the refs and evidence IDs above.
+
+The Ollama path that `fd762a45` mitigated was removed with the Ollama provider
+in `6b87c73b` (2026-10-06). The OpenRouter adapters are the current path;
+[INV-ADAPTERS-003](../invariants/INV-ADAPTERS-003-model-execution-controls.md)
+names their enforcement.

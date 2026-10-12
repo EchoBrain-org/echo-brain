@@ -16,7 +16,7 @@ const { runtimeState, initialRuntimeState } = vi.hoisted(() => {
     worker_telemetry: undefined as WorkerTelemetryObserver | undefined,
     startup_error: undefined as Error | undefined,
     open_gate: undefined as Promise<void> | undefined,
-    slack_nango: undefined as object | undefined,
+    nango: undefined as object | undefined,
     jira_person_live: undefined as object | undefined,
     confluence_person_live: undefined as object | undefined,
     openrouter_credential_file: undefined as string | undefined,
@@ -60,7 +60,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
     readonly agentic_ask_v1_small_scope_shortcut?: true;
     readonly staging_research_eval_v1?: true;
-    readonly slack_nango: object;
+    readonly nango: object;
     readonly jira_person_live?: object;
     readonly confluence_person_live?: object;
     readonly openrouter_credential_file: string;
@@ -75,7 +75,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.agentic_ask_v1_small_scope_shortcut =
       config.agentic_ask_v1_small_scope_shortcut;
     runtimeState.staging_research_eval_v1 = config.staging_research_eval_v1;
-    runtimeState.slack_nango = config.slack_nango;
+    runtimeState.nango = config.nango;
     runtimeState.jira_person_live = config.jira_person_live;
     runtimeState.confluence_person_live = config.confluence_person_live;
     runtimeState.openrouter_credential_file = config.openrouter_credential_file;
@@ -565,13 +565,13 @@ describe("admitted runtime CLI events", () => {
       await expect(start({ stderr: (value) => stderr.push(value) }, "/private/state", nango)).resolves.toBe(1);
       expect(stderr).toEqual([failure]);
     }
-    expect(runtimeState.slack_nango).toBeUndefined();
+    expect(runtimeState.nango).toBeUndefined();
 
     const stderr: string[] = [];
     const running = start({ stderr: (value) => stderr.push(value) }, "/private/state", [
       "--nango-secret-key-file", key, "--nango-integration", "slack", "--nango-base-url", "https://nango.example",
     ]);
-    await vi.waitFor(() => expect(runtimeState.slack_nango).toEqual({
+    await vi.waitFor(() => expect(runtimeState.nango).toEqual({
       secret_key: NANGO_KEY, integration_key: "slack", base_url: "https://nango.example",
     }));
     process.emit("SIGTERM");
@@ -580,7 +580,7 @@ describe("admitted runtime CLI events", () => {
     expect(runtimeState.openrouter_credential_file).toBe("/private/llm.credential");
 
     const defaulted = start({ stderr: () => undefined });
-    await vi.waitFor(() => expect(runtimeState.slack_nango).toEqual({ secret_key: NANGO_KEY, integration_key: "slack" }));
+    await vi.waitFor(() => expect(runtimeState.nango).toEqual({ secret_key: NANGO_KEY, integration_key: "slack" }));
     process.emit("SIGTERM");
     await expect(defaulted).resolves.toBe(0);
   });

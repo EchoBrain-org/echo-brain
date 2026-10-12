@@ -107,3 +107,31 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
       attributes: Object.freeze({ status, ...(owner === undefined ? {} : { owner }), ...(due_at === undefined ? {} : { due_at }) }),
       ...(content === undefined ? {} : { text: content.text }) }) });
 }
+
+/** Jira's bulk fetch reads at most 100 issues per call. */
+const ASSIGNEE_BULK_FETCH_MAX_IDS = 100;
+const JIRA_ACCOUNT_ID = /^[A-Za-z0-9:_-]{1,128}$/;
+
+/**
+ * Assignee account ids by issue id, for distinct valid issue ids. Issues this
+ * person cannot read (issueErrors) and unassigned issues are left out; any
+ * malformed page fails the whole read.
+ */
+export async function readJiraAssigneeAccountsV1(transport: JiraCloudTransportV1, input: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string>> {
+  const found = new Map<string, string>();
+  for (let offset = 0; offset < input.ticket_ids.length; offset += ASSIGNEE_BULK_FETCH_MAX_IDS) {
+    const batch = new Set(input.ticket_ids.slice(offset, offset + ASSIGNEE_BULK_FETCH_MAX_IDS));
+    const page = jiraRecord(await transport.request({ path: `/ex/jira/${input.cloud_id}/rest/api/3/issue/bulkfetch`, method: 'POST',
+      body: { issueIdsOrKeys: [...batch], fields: ['assignee'] }, signal: input.signal }));
+    const seen = new Set<string>();
+    for (const raw of jiraArray(page.issues, batch.size)) {
+      const issue = jiraRecord(raw);
+      const id = jiraString(issue.id, 20, JIRA_ID);
+      if (!batch.has(id) || seen.has(id)) jiraFailure('invalid_output');
+      seen.add(id);
+      const assignee = jiraRecord(issue.fields).assignee;
+      if (assignee !== null && assignee !== undefined) found.set(id, jiraString(jiraRecord(assignee).accountId, 128, JIRA_ACCOUNT_ID));
+    }
+  }
+  return found;
+}

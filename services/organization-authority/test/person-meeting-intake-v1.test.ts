@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type Database from 'better-sqlite3';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { readGranolaCheckpointV1, writeGranolaCheckpointV1 } from '@echo-brain/provider-granola/granola-folder-source-v1';
+import { GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1, readGranolaCheckpointV1, writeGranolaCheckpointV1 } from '@echo-brain/provider-granola/granola-folder-source-v1';
 import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 
@@ -26,7 +26,7 @@ function world() {
     }
   };
   project(PROJECT_ALPHA, [OWNER]); project(PROJECT_BETA, [OWNER]); project(FOREIGN, [MEMBER]); project(ARCHIVED, [OWNER], 'archived');
-  const intake = new SqlitePersonMeetingIntakeV1(db, { read: readGranolaCheckpointV1, write: writeGranolaCheckpointV1 });
+  const intake = new SqlitePersonMeetingIntakeV1(db, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1);
   const ensure = (tool = 'granola', actor = OWNER) => intake.ensure({
     person: person(actor), identity: identity(tool, actor), normalizer_version: '1.0.0', custodian: { tool, actor: actor.membership_id },
     processor: { adapter_id: 'llm', instance_id: `personal-${canonicalSha256(person(actor)).slice(7, 39)}`, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('reference') },

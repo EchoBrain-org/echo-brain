@@ -122,7 +122,7 @@ if (mode === 'init') {
   assert.equal(await runOrganizationAuthoritySetupCli(['finalize', '--state-dir', state], { stdout: () => undefined, stderr: value => process.stderr.write(value) }), 0);
   // Explicit canary calls drive this test. Keep periodic work out of its window
   // even on a slow CI host.
-  write(metadataPath, { initialized, canary_project_id, config: { state_directory: state, host: '127.0.0.1', port: await port(), authority_url: ORIGIN, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: owner.pkce_key_file, slack_nango: { secret_key: 'synthetic-not-a-nango-secret-key-000000', integration_key: 'slack' }, openrouter_credential_file: llm, worker_interval_ms: 3_600_000 } });
+  write(metadataPath, { initialized, canary_project_id, config: { state_directory: state, host: '127.0.0.1', port: await port(), authority_url: ORIGIN, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: owner.pkce_key_file, nango: { secret_key: 'synthetic-not-a-nango-secret-key-000000', integration_key: 'slack' }, openrouter_credential_file: llm, worker_interval_ms: 3_600_000 } });
   write(evidencePath, { extraction_calls: 0, worker_errors: [] });
 } else if (mode === 'serve') {
   const metadata = read(metadataPath);
@@ -142,7 +142,7 @@ if (mode === 'init') {
   const { openOrganizationAuthorityService } = await product('composition/organization-authority-composition-root.js');
   const runtime = await openOrganizationAuthorityService({ ...metadata.config, on_worker_error(error) { const evidence = read(evidencePath); evidence.worker_errors.push(error.message); write(evidencePath, evidence); } }, { person_meeting_processor });
   assert.equal(runtime.processing, 'active');
-  const { openStagingSyntheticPrivateDmCanaryControlV1 } = await import(pathToFileURL(join(REPO, 'providers/slack/server/dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.js')));
+  const { openStagingSyntheticPrivateDmCanaryControlV1 } = await product('composition/staging/staging-release-canary-control-v1.js');
   const observedRuntime = { ...runtime, async run_staging_synthetic_canary(...args) {
     try { return await runtime.run_staging_synthetic_canary(...args); }
     catch (error) { write(join(root, 'runtime-error.txt'), String(error.stack)); throw error; }
@@ -152,7 +152,7 @@ if (mode === 'init') {
   await new Promise(resolve => { process.once('SIGTERM', resolve); process.once('SIGINT', resolve); });
   await control.close(); await runtime.close();
 } else if (mode === 'client') {
-  const { requestStagingSyntheticPrivateDmCanaryV1 } = await import(pathToFileURL(join(REPO, 'providers/slack/server/dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.js')));
+  const { requestStagingSyntheticPrivateDmCanaryV1 } = await product('composition/staging/staging-release-canary-client-v1.js');
   process.stdout.write(JSON.stringify(await requestStagingSyntheticPrivateDmCanaryV1({ release_id: releaseId, socket_path: socket })) + '\n');
 } else if (mode === 'verify') {
   const { verifyAuthorityStateLineage } = await import(pathToFileURL(join(REPO, 'packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js')));

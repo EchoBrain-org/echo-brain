@@ -1,7 +1,10 @@
 # Project settings V1
 
-The project title menu provides Jira project, Confluence spaces, Rename, Archive/Unarchive, and Leave. Existing
-People controls continue to manage membership and Lead/Member roles.
+The project menu provides **Tools…**, **Rename project**, **Archive project**
+(or **Restore project**), and **Leave project**. **Tools…** opens one sheet for
+every tool a project can read; **Tools** in the project's title bar opens the
+same sheet once the organization has such a tool. Existing People controls
+continue to manage membership and Lead/Member roles.
 
 Only leads can rename or archive a project. Any member may leave unless they
 are its last lead; appoint another lead first. Leaving ends access through that
@@ -12,7 +15,7 @@ browse, search, and Ask about retained content under its existing permissions.
 People management stays available so access can still be changed. Archived
 projects cannot receive new uploads, new meeting approvals, or new file
 associations. A lead can
-unarchive the project to resume contributions.
+restore the project (**Restore project**) to resume contributions.
 
 An upload accepted before archive remains saved and may finish processing.
 Removing a file from a project still changes only its filing, not its audience.
@@ -20,17 +23,18 @@ Archive neither deletes files nor frees retained storage. There is no project
 deletion or upload withdrawal in this version.
 
 The [accepted contract](../decisions/ADR-0018-project-settings-v1.md) defines
-the API, authorization, and compatibility boundaries. These settings share one
-fresh V10 Authority schema with project meeting approval. Existing development
-data is disposable; the combined version requires fresh databases and a matching
-runtime. Startup does not automatically migrate or reset older state. Release actions follow the
+the API, authorization, and compatibility boundaries. These settings were
+introduced with project meeting approval in fresh Authority V10; current
+releases require fresh state at the current baseline and a matching runtime.
+Existing development data is disposable. Startup does not automatically
+migrate or reset older state. Release actions follow the
 [Authority operator playbook](../operations/PB-OPERATIONS-001-authority-operator-lane.md).
 
 
 ## Jira project mapping
 
-Open a project’s menu, choose **Jira project**, enter a Jira project key (for example
-`KAN`), and save. Project leads can set or remove the mapping; members can read it.
+Open the project's **Tools…** and, in the Jira row, enter a Jira project key (for
+example `KAN`), then **Save**. Project leads can set or remove the mapping; members can read it.
 The lead needs a connected Jira account to verify a new mapping. Removal does not
 require Jira access. One ECHO project maps to one Jira project on the configured site.
 
@@ -56,7 +60,7 @@ for the connection, scope and persistence contract.
 
 ## Confluence space mapping
 
-Open a project's menu and choose **Confluence spaces**. A lead can select up to
+Open the project's **Tools…**. In the Confluence row, a lead can select up to
 20 spaces by name and key from their connected account, load more spaces, and
 save or remove the setting. Members can read the saved setting without connecting
 Confluence. Removing a setting does not require a working provider connection.

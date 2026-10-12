@@ -32,8 +32,8 @@ import {
   runOrganizationAuthoritySetupCli,
   type OrganizationAuthoritySetupCliDependencies,
 } from "../src/composition/organization-authority-setup-cli.js";
-import { runOrganizationAuthorityPersonAdministrationCli } from "../src/composition/organization-authority-person-administration-cli.js";
-import { personLoginGrantExpectedEmailSha256 } from "@echo-brain/organization-authority-kernel/domain/person-email-binding";
+import { issueSetupOwnerInvitation } from "../src/composition/organization-authority-person-administration-cli.js";
+import { initializePersonSessionCredentials } from "../src/composition/person-onboarding-service.js";
 import {bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
@@ -125,8 +125,6 @@ function finalizeDeps(
   return { ...base, read_setup_stage: () => CONNECTED_STAGE, read_initial_owner_setup_status: () => owner };
 }
 
-const QUIET = { stdout: () => undefined, stderr: () => undefined };
-
 /** Runs one setup command, asserts its exit code and returns its raw output. */
 async function cli(
   args: readonly string[],
@@ -153,26 +151,6 @@ async function cli(
 function writePrivate(path: string, text: string): void {
   writeFileSync(path, text, { mode: 0o600 });
   chmodSync(path, 0o600);
-}
-
-function inviteArgv(input: Parameters<OrganizationAuthoritySetupCliDependencies["issue_invitation"]>[0]): string[] {
-  return [
-    "invite",
-    "--state-dir",
-    input.state_directory,
-    "--oidc-config",
-    input.oidc_config_path,
-    "--pkce-key-file",
-    input.pkce_key_file,
-    "--membership-id",
-    input.membership_id,
-    "--expected-email",
-    input.expected_email,
-    "--authority-url",
-    input.authority_url,
-    "--out",
-    input.output_path,
-  ];
 }
 
 function readyStatusDependencies(
@@ -773,16 +751,11 @@ describe("Organization Authority setup coordinator", () => {
     const defaultPathDependencies: OrganizationAuthoritySetupCliDependencies = {
       ...dependencies(order),
       initialize_credentials: async (stateDirectory) => {
-        const status = await runOrganizationAuthorityPersonAdministrationCli(
-          ["credentials-init", "--state-dir", stateDirectory],
-          QUIET,
-        );
-        expect(status).toBe(0);
+        initializePersonSessionCredentials({ state_directory: stateDirectory });
       },
       issue_invitation: async (input) => {
         invitationIssues += 1;
-        const status = await runOrganizationAuthorityPersonAdministrationCli(inviteArgv(input), QUIET);
-        expect(status).toBe(0);
+        issueSetupOwnerInvitation(input);
       },
     };
 
@@ -796,89 +769,44 @@ describe("Organization Authority setup coordinator", () => {
     await cli(["resume", "--state-dir", state], defaultPathDependencies);
     expect(invitationIssues).toBe(1);
 
-    /** Rewrites an issued invitation as a pre-v2 artifact at the owner's invitation path. */
-    const writeLegacyInvitation = (from: string) => {
-      const legacy = JSON.parse(readFileSync(from, "utf8")) as Record<string, unknown>;
-      delete legacy.expected_email;
-      legacy.schema_version = 1;
-      writePrivate(manifest.invitation_path, `${canonicalJson(legacy)}\n`);
-    };
-
-    // A pre-v2 artifact remains a usable legacy invitation when its grant is
-    // otherwise valid. This protects a setup resumed after an older release.
-    writeLegacyInvitation(manifest.invitation_path);
-    expect((await cli(["status", "--state-dir", state])).json).toMatchObject({
-      founder_invitation_valid: true,
+    // A live grant issued for another address is not the owner's invitation.
+    const mismatchedPath = join(dirname(manifest.invitation_path), "other.json");
+    issueSetupOwnerInvitation({
+      ...manifest,
+      membership_id: manifest.owner_membership_id,
+      expected_email: "other@example.com",
+      output_path: mismatchedPath,
     });
-
-    // A manifest alone cannot opt an identity into legacy issuance.
-    const manifestPath = join(state, "onboarding", "clean-founder-v1.json");
-    const historicManifest = JSON.parse(
-      readFileSync(manifestPath, "utf8"),
-    ) as Record<string, unknown>;
-    historicManifest.owner_email = "founder@localhost";
-    writePrivate(manifestPath, `${canonicalJson(historicManifest)}\n`);
-    unlinkSync(manifest.invitation_path);
-
-    await cli(["resume", "--state-dir", state], defaultPathDependencies, 1);
-    expect(existsSync(manifest.invitation_path)).toBe(false);
-
-    // A pre-a612c9e owner grant is immutable evidence that this exact broad
-    // identity key was historically bound to the same owner and OIDC config.
-    // Its expiry is intentionally irrelevant: it is proof, not a credential.
-    const authority = new Database(join(state, "authority.sqlite"));
-    try {
-      authority
-        .prepare(
-          `INSERT INTO authority_person_login_grants
-             (login_grant_sha256, grant_purpose, organization_id, principal_id,
-              membership_id, membership_type, expected_issuer,
-              expected_email_sha256, oidc_configuration_sha256, issued_at,
-              expires_at, consumed_at)
-           SELECT ?, grant_purpose, organization_id, principal_id,
-                  membership_id, membership_type, expected_issuer,
-                  ?, oidc_configuration_sha256, ?, ?, NULL
-             FROM authority_person_login_grants
-            WHERE organization_id = ? AND principal_id = ? AND membership_id = ?
-              AND membership_type = 'owner'
-            LIMIT 1`,
-        )
-        .run(
-          sha256Digest("historic-founder-localhost-grant"),
-          personLoginGrantExpectedEmailSha256("founder@localhost"),
-          "2020-01-01T00:00:00.000Z",
-          "2020-01-01T00:15:00.000Z",
-          manifest.organization_id,
-          manifest.owner_principal_id,
-          manifest.owner_membership_id,
-        );
-    } finally {
-      authority.close();
-    }
-
-    await cli(["resume", "--state-dir", state], defaultPathDependencies);
-    expect(invitationIssues).toBe(1);
-    expect(
-      JSON.parse(readFileSync(manifest.invitation_path, "utf8")),
-    ).toMatchObject({ schema_version: 1 });
-    expect(
-      JSON.parse(readFileSync(manifest.invitation_path, "utf8")),
-    ).not.toHaveProperty("expected_email");const mismatchedPath = join(dirname(manifest.invitation_path), "other.json",);
-    expect(
-      await runOrganizationAuthorityPersonAdministrationCli(
-        inviteArgv({
-          ...manifest,
-          membership_id: manifest.owner_membership_id,
-          expected_email: "other@example.com",
-          output_path: mismatchedPath,
-        }),
-        QUIET,
-      ),
-    ).toBe(0);
-    writeLegacyInvitation(mismatchedPath);
+    const mismatched = readFileSync(mismatchedPath, "utf8");
+    writePrivate(manifest.invitation_path, mismatched);
     expect((await cli(["status", "--state-dir", state])).json).toMatchObject({
       founder_invitation_valid: false,
     });
+    // Relabeled with the owner's address, the file passes every file-level
+    // check; only the grant's stored email binding rejects it.
+    const relabeled = mismatched.replace(
+      '"expected_email":"other@example.com"',
+      '"expected_email":"founder@example.com"',
+    );
+    expect(relabeled).not.toBe(mismatched);
+    writePrivate(manifest.invitation_path, relabeled);
+    expect((await cli(["status", "--state-dir", state])).json).toMatchObject({
+      founder_invitation_valid: false,
+    });
+
+    // A hand-edited manifest cannot name a non-mailbox owner.
+    const manifestPath = join(state, "onboarding", "clean-founder-v1.json");
+    const editedManifest = JSON.parse(
+      readFileSync(manifestPath, "utf8"),
+    ) as Record<string, unknown>;
+    editedManifest.owner_email = "founder@localhost";
+    writePrivate(manifestPath, `${canonicalJson(editedManifest)}\n`);
+    unlinkSync(manifest.invitation_path);
+
+    expect((await cli(["resume", "--state-dir", state], defaultPathDependencies, 1)).stderr)
+      .toContain("organization setup manifest is invalid");
+    expect(existsSync(manifest.invitation_path)).toBe(false);
+    expect(invitationIssues).toBe(1);
   });
 
   it("rejects a noncanonical owner email before creating state or connecting Slack", async () => {

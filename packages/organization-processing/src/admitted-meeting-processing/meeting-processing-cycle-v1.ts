@@ -471,8 +471,8 @@ function rebindDecisionsToRevision(
  * poll parks its revision as `cancelled`. A parked
  * revision stays in source custody for an operator-authorized retry
  * (`retryHeldOnce`). A revision whose pending attempt is still within its lease
- * is left in place (`in_flight`) for a later poll. A first attempt the provider
- * refused unbilled (a 429 or 5xx reply, no output) is not parked: its exact key
+ * is left in place (`in_flight`) for a later poll. A first attempt the processor
+ * adapter declares refused unbilled (no output) is not parked: its exact key
  * gets one automatic retry and the revision stays at the head
  * (`retry_scheduled`); any later failure parks. Advancing past a queued
  * import consumes it, so its "Save to" projects are recorded as suggestions
@@ -818,7 +818,7 @@ export class AdmittedMeetingProcessingCycleV1 {
             review_policy: reviewPolicy,
             next_cursor: nextCursor,
           });
-          annotateCoreRuntimeV1({ result: saved.disposition === 'no_signals' ? 'empty' : 'published',
+          annotateCoreRuntimeV1({ result: saved.disposition === 'no_signals' ? 'empty' : saved.disposition === 'coalesced' ? 'coalesced' : 'published',
             ...(saved.disposition === 'actionable' ? { approval_id: coreRuntimeIdentityV1('approval', saved.approval_id) } : {}) });
           return saved;
         });
@@ -970,7 +970,7 @@ export class AdmittedMeetingProcessingCycleV1 {
   ): ReturnType<AuthorityMeetingProcessingStateV1["advanceCursor"]> {
     return observeCoreRuntimeV1("source_cursor", async () => {
       const advanced = await this.options.state.advanceCursor(input);
-      annotateCoreRuntimeV1({ result: advanced ? "advanced" : "retry_pending" });
+      annotateCoreRuntimeV1({ result: advanced === "advanced" ? "advanced" : "retry_pending" });
       return advanced;
     });
   }

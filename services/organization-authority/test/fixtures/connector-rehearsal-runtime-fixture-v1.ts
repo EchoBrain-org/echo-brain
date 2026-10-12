@@ -1,7 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
-import { once } from 'node:events';
 import { join } from 'node:path';
 import { expect, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
@@ -10,21 +8,11 @@ import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATI
 import type { NangoConnectionClientV1 } from '@echo-brain/provider-slack-server/organization-control-plane/adapters/nango/nango-connection-client-v1';
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, type ObserveSlackIdentityLinkChallengeInput, type SlackIntegrationProvider } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
 import { slackConnectionVerificationEvidenceSha256V1 } from '../../../../providers/slack/server/src/organization-control-plane/application/slack-connection-verification-evidence-v1.js';
-import type { BegunPersonOidcLogin } from '../../src/application/person-identity-sessions.js';
 import { FIXTURE_JIRA_CLOUD_V1, fakeJiraCloudFetchV1, fakeJiraNangoV1 } from './fake-jira-v1.js';
+import { port, signInHttp, syntheticOidcProvider } from './owner-session.js';
+export { port };
 export const FIXTURE_EMAIL = 'founder@example.test';
 export const FIXTURE_CLOUD = FIXTURE_JIRA_CLOUD_V1;
-
-export async function port(): Promise<number> {
-  const server = createServer();
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const result = (server.address() as { port: number }).port;
-  const closed = once(server, 'close');
-  server.close();
-  await closed;
-  return result;
-}
 
 export function privateFile(path: string, value: string): void {
   writeFileSync(path, value, { mode: 0o600 });
@@ -52,19 +40,7 @@ export function configuration(root: string) {
 }
 
 export function providerSeams() {
-  let attempted: BegunPersonOidcLogin | undefined;
-  const oidc_provider = {
-    buildAuthorizationUrl(input: BegunPersonOidcLogin) {
-      attempted = input;
-      return `https://issuer.example.test/authorize?state=${encodeURIComponent(input.state)}`;
-    },
-    async redeemAuthorizationCode() {
-      return { kind: 'verified' as const, token: {
-        issuer: 'https://issuer.example.test', subject: 'fixture-founder', audience: 'connector-rehearsal-client', nonce: attempted!.nonce,
-        issued_at: Math.floor(Date.now() / 1000), claims: { email: FIXTURE_EMAIL, email_verified: true },
-      } };
-    },
-  };
+  const oidc_provider = syntheticOidcProvider({ issuer: 'https://issuer.example.test', client_id: 'connector-rehearsal-client' }, () => FIXTURE_EMAIL);
   let slackTags: Readonly<Record<string, string>> = {};
   let slackConnection: Awaited<ReturnType<NangoConnectionClientV1['getSlackConnection']>> | undefined;
   const slackNango: NangoConnectionClientV1 = {
@@ -104,7 +80,7 @@ export function providerSeams() {
   };
   const jira = fakeJiraNangoV1();
   const jiraFetch = fakeJiraCloudFetchV1();
-  return { oidc_provider, oidcState: () => attempted?.state ?? '', slack: { nango: slackNango, manifest_provider: { createApp: vi.fn(async () => ({ app_id: 'AFIXTURE', client_id: '111.222', client_secret: 'synthetic-slack-client-secret', signing_secret: 'synthetic-slack-signing-secret' })), updateApp: vi.fn() }, provider }, jira_person_live_seams: { nango: jira.nango, fetch: jiraFetch }, finishSlack, finishJira: jira.finish, jiraFetch };
+  return { oidc_provider, oidcState: oidc_provider.state, slack: { nango: slackNango, manifest_provider: { createApp: vi.fn(async () => ({ app_id: 'AFIXTURE', client_id: '111.222', client_secret: 'synthetic-slack-client-secret', signing_secret: 'synthetic-slack-signing-secret' })), updateApp: vi.fn() }, provider }, jira_person_live_seams: { nango: jira.nango, fetch: jiraFetch }, finishSlack, finishJira: jira.finish, jiraFetch };
 }
 
 type ProviderSeamsV1 = ReturnType<typeof providerSeams>;
@@ -113,13 +89,7 @@ type FixturePostV1 = (path: string, body: unknown) => Promise<{ readonly status:
 /** Completes the owner's invitation sign-in as a browser would and returns the sealed access token. */
 export async function signInOwner(origin: string, seams: ProviderSeamsV1, invitationPath: string): Promise<string> {
   const { login_grant } = JSON.parse(readFileSync(invitationPath, 'utf8')) as { login_grant: string };
-  const begun = await fetch(`${origin}/v2/session/oidc/begin`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ kind: 'identity_bootstrap', login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } }),
-  });
-  expect(begun.status).toBe(201);
-  const callback = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(seams.oidcState())}&code=fixture`)).text();
-  return (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(callback)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
+  return signInHttp(origin, seams.oidc_provider, login_grant, 'fixture');
 }
 
 /** Sets up and installs the organization Slack app, then links the signed-in owner's Slack identity. */

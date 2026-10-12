@@ -83,6 +83,8 @@ compose_clean() {
 }
 
 field() { python3 "$RELEASE_TOOL" field "$1" "$2"; }
+# Validates one record once and prints each named field on its own line.
+fields() { python3 "$RELEASE_TOOL" fields "$@"; }
 validate() { python3 "$RELEASE_TOOL" validate "$1" >/dev/null; }
 profile_field() { python3 "$RUNTIME_PROFILE_TOOL" field "$1" "$2"; }
 validate_profile() { python3 "$RUNTIME_PROFILE_TOOL" validate "$1" >/dev/null; }
@@ -208,28 +210,23 @@ environment_snapshot_path() {
 }
 
 verify_runtime_profile() {
-  local record="$1" profile="$2" expected_sha expected_source
+  local record="$1" profile="$2" expected expected_sha expected_source
   validate_profile "$profile" || return 1
-  expected_sha="$(field "$record" runtime-profile-sha256)"
+  expected="$(fields "$record" runtime-profile-sha256 source-sha)"
+  { read -r expected_sha; read -r expected_source; } <<<"$expected"
   [[ "$(sha256_file "$profile")" == "$expected_sha" ]] || fail 'runtime profile SHA-256 does not match the release record'
-  expected_source="$(field "$record" source-sha)"
   [[ "$(profile_field "$profile" source-sha)" == "$expected_source" ]] || fail 'runtime profile source_sha does not match the release record'
 }
 
 create_environment_snapshot() {
-  local destination="$1" record="$2"
-  python3 - "$ENV_FILE" "$destination" \
-    "$(field "$record" authority-image)" \
-    "$(field "$record" release-id)" \
-    "$(field "$record" source-sha)" \
-    "$(field "$record" runtime-profile-sha256)" \
-    "$(field "$record" runtime-profile-version)" \
-    "$(field "$record" agentic-ask-v1)" \
-    "$(field "$record" small-scope-shortcut)" <<'PY'
+  local destination="$1" record="$2" values
+  values="$(fields "$record" authority-image release-id source-sha runtime-profile-sha256 \
+    runtime-profile-version agentic-ask-v1 small-scope-shortcut)" || return 1
+  python3 - "$ENV_FILE" "$destination" "$values" <<'PY'
 import os, pathlib, stat, sys
 
 source, destination = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-image, release_id, source_sha, profile_sha, profile_version, agentic_ask_v1, small_scope_shortcut = sys.argv[3:10]
+image, release_id, source_sha, profile_sha, profile_version, agentic_ask_v1, small_scope_shortcut = sys.argv[3].split('\n')
 if agentic_ask_v1 not in ('true', 'false'):
     raise SystemExit('release record agentic Ask flag is invalid')
 if small_scope_shortcut not in ('true', 'false'):
@@ -338,11 +335,11 @@ PY
 }
 
 active_runtime_profile_matches() {
-  local record="$1" expected_sha expected_source actual_sha actual_source
+  local record="$1" expected expected_sha expected_source actual_sha actual_source
   [[ -f "$ACTIVE_RUNTIME_PROFILE" && ! -L "$ACTIVE_RUNTIME_PROFILE" ]] || fail 'runtime profile drifted from the accepted release record'
   validate_profile "$ACTIVE_RUNTIME_PROFILE" || fail 'runtime profile drifted from the accepted release record'
-  expected_sha="$(field "$record" runtime-profile-sha256)"
-  expected_source="$(field "$record" source-sha)"
+  expected="$(fields "$record" runtime-profile-sha256 source-sha)"
+  { read -r expected_sha; read -r expected_source; } <<<"$expected"
   actual_sha="$(sha256_file "$ACTIVE_RUNTIME_PROFILE")" || fail 'runtime profile drifted from the accepted release record'
   actual_source="$(profile_field "$ACTIVE_RUNTIME_PROFILE" source-sha)" || fail 'runtime profile drifted from the accepted release record'
   [[ "$actual_sha" == "$expected_sha" && "$actual_source" == "$expected_source" ]] || fail 'runtime profile drifted from the accepted release record'
@@ -366,18 +363,14 @@ active_materialized_profile_matches() {
 }
 
 stored_release_tuple_matches() {
-  local record="$1" profile snapshot
+  local record="$1" profile snapshot values
   profile="$(runtime_profile_path "$record")"
   snapshot="$(environment_snapshot_path "$record")"
   [[ -f "$profile" && ! -L "$profile" ]] || fail 'stored runtime profile is missing or unsafe'
   verify_runtime_profile "$record" "$profile"
   [[ -f "$snapshot" && ! -L "$snapshot" ]] || fail 'release environment snapshot is missing or unsafe'
-  python3 - "$snapshot" \
-    "$(field "$record" authority-image)" \
-    "$(field "$record" release-id)" \
-    "$(field "$record" source-sha)" \
-    "$(field "$record" runtime-profile-sha256)" \
-    "$(field "$record" runtime-profile-version)" <<'PY'
+  values="$(fields "$record" authority-image release-id source-sha runtime-profile-sha256 runtime-profile-version)" || return 1
+  python3 - "$snapshot" "$values" <<'PY'
 import pathlib, stat, sys
 
 path = pathlib.Path(sys.argv[1])
@@ -387,7 +380,7 @@ expected = dict(zip((
     'ECHO_CLEAN_RELEASE_SOURCE_SHA',
     'ECHO_CLEAN_RUNTIME_PROFILE_SHA256',
     'ECHO_CLEAN_RUNTIME_PROFILE_VERSION',
-), sys.argv[2:]))
+), sys.argv[2].split('\n')))
 state = path.lstat()
 if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
     raise SystemExit('release environment snapshot must be a private regular file')
@@ -499,7 +492,7 @@ if path.parent.is_symlink() or path.exists() or path.is_symlink() or not pathlib
     raise SystemExit(1)
 def digest(raw): return hashlib.sha256(pathlib.Path(raw).read_bytes()).hexdigest()
 payload = json.dumps({
-    "accepted_sha256": None if accepted == "-" else digest(accepted),
+    "accepted_sha256": digest(accepted),
     "candidate_sha256": digest(candidate),
     "setup_class": value,
 }, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
@@ -519,10 +512,9 @@ PY
 }
 
 candidate_setup_class() {
-  local path accepted_record=-
+  local path
   path="$(candidate_setup_class_path "$CANDIDATE_RECORD")" || return 1
-  [[ ! -f "$CURRENT_RECORD" ]] || accepted_record="$CURRENT_RECORD"
-  python3 "$RELEASE_TOOL" setup-readiness "$path" "$accepted_record" "$CANDIDATE_RECORD"
+  python3 "$RELEASE_TOOL" setup-readiness "$path" "$CURRENT_RECORD" "$CANDIDATE_RECORD"
 }
 
 remove_candidate_record() {
@@ -535,32 +527,6 @@ archive_candidate_as_failed() {
   id="$(field "$CANDIDATE_RECORD" release-id)"
   copy_record "$CANDIDATE_RECORD" "$RELEASE_STATE_DIR/failed/$id.json" idempotent-immutable || return 1
   remove_candidate_record
-}
-
-service_is_stopped() {
-  local service="$1" id running
-  id="$(compose_clean ps -q "$service")" || return 1
-  [[ -n "$id" ]] || return 0
-  running="$(docker inspect --format '{{.State.Running}}' "$id")" || return 1
-  [[ "$running" != true ]]
-}
-
-candidate_runtime_is_stopped() {
-  service_is_stopped authority && service_is_stopped proxy
-}
-
-abort_first_deploy_candidate() {
-  # The persisted candidate tuple, rather than the active cache, is the only
-  # durable source of truth after an interrupted first activation. Restore it
-  # before Compose is consulted, then require any running runtime to prove it.
-  stored_release_tuple_matches "$CANDIDATE_RECORD"
-  activate_release_tuple "$CANDIDATE_RECORD" || return 1
-  if running_exact_release "$CANDIDATE_RECORD"; then
-    compose_clean down || return 1
-  elif ! candidate_runtime_is_stopped; then
-    return 1
-  fi
-  archive_candidate_as_failed
 }
 
 release_id_unused() {
@@ -671,11 +637,9 @@ accepted_image_can_read_staging_canary_state() {
 }
 
 running_exact_release() {
-  local record="$1" expected expected_source expected_release expected_profile_sha authority_id proxy_id image_id
-  expected="$(field "$record" authority-image)"
-  expected_source="$(field "$record" source-sha)"
-  expected_release="$(field "$record" release-id)"
-  expected_profile_sha="$(field "$record" runtime-profile-sha256)"
+  local record="$1" values expected expected_source expected_release expected_profile_sha authority_id proxy_id image_id
+  values="$(fields "$record" authority-image source-sha release-id runtime-profile-sha256)" || return 1
+  { read -r expected; read -r expected_source; read -r expected_release; read -r expected_profile_sha; } <<<"$values"
   authority_id="$(running_container_id authority)" || return 1
   proxy_id="$(running_container_id proxy)" || return 1
   [[ "$(docker inspect --format '{{index .Config.Labels "io.echo-brain.release-id"}}' "$authority_id")" == "$expected_release" ]] || return 1
@@ -957,9 +921,9 @@ PY
 }
 
 start_and_check() {
-  local record="$1" expected_setup_class="$2" allow_initial_progress="$3" expected expected_source observed_setup_class
-  expected="$(field "$record" authority-image)"
-  expected_source="$(field "$record" source-sha)"
+  local record="$1" expected_setup_class="$2" allow_initial_progress="$3" values expected expected_source observed_setup_class
+  values="$(fields "$record" authority-image source-sha)" || return 1
+  { read -r expected; read -r expected_source; } <<<"$values"
   compose_clean pull authority || return 1
   image_source_matches "$expected" "$expected_source" || return 1
   compose_clean up -d --no-build --wait --wait-timeout 90 || return 1
@@ -1015,9 +979,6 @@ case "$command" in
     [[ ! -e "$CANDIDATE_RECORD" ]] || fail 'a candidate is already staged; promote or roll it back first'
     candidate_setup_path="$(candidate_setup_class_path "$candidate")" || fail 'candidate release id is invalid'
     [[ ! -e "$candidate_setup_path" && ! -L "$candidate_setup_path" ]] || fail 'a staged candidate setup class already exists'
-    first_deploy=false
-    expected_setup_class=ready
-    accepted_marker_record=-
     if [[ -f "$CURRENT_RECORD" ]]; then
       validate "$CURRENT_RECORD"
       [[ "$(field "$candidate" baseline-class)" == "$(field "$CURRENT_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the current release'
@@ -1033,12 +994,8 @@ case "$command" in
         [[ "$(authority_host)" == authority-staging.echobrain.org ]] || \
           fail 'initial-onboarding staging updates are available only on the exact Authority staging host'
       fi
-      accepted_marker_record="$CURRENT_RECORD"
     else
-      first_deploy=true
-      if running_container_id authority >/dev/null; then
-        fail 'first deployment refuses to replace an unrecorded running Authority'
-      fi
+      fail 'no accepted release record; run onboard-clean-v1.sh prepare first'
     fi
     verify_candidate_state_lineage "$candidate"
     store_release_tuple "$candidate" "$supplied_profile"
@@ -1046,7 +1003,7 @@ case "$command" in
       remove_release_tuple "$candidate" || true
       fail 'could not persist the staged candidate release record'
     fi
-    if ! write_candidate_setup_class "$expected_setup_class" "$accepted_marker_record" "$CANDIDATE_RECORD"; then
+    if ! write_candidate_setup_class "$expected_setup_class" "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
       remove_record "$CANDIDATE_RECORD" || true
       remove_release_tuple "$candidate" || true
       fail 'could not persist the staged candidate setup class'
@@ -1056,13 +1013,8 @@ case "$command" in
       if [[ "$expected_setup_class" == initial_onboarding ]]; then
         next_action='Install the exact candidate Person kit, complete Slack setup and the owner Slack link, then have the human host operator run onboard-clean-v1.sh continue-staged-initial-onboarding before the candidate canary and approval checks.'
       fi
-      printf '{"ok":true,"stage":"candidate_ready","accepted_release_present":%s,"next_action":"%s"}\n' "$([[ "$first_deploy" == true ]] && printf false || printf true)" "$next_action"
+      printf '{"ok":true,"stage":"candidate_ready","accepted_release_present":true,"next_action":"%s"}\n' "$next_action"
       exit 0
-    fi
-    if [[ "$first_deploy" == true ]]; then
-      compose_clean down || fail 'first deployment failed and candidate stop could not be confirmed'
-      archive_candidate_as_failed || fail 'first deployment candidate was stopped but could not be marked failed; leave it staged and retry rollback'
-      fail 'first deployment candidate failed health/setup checks; candidate was stopped and no release was accepted'
     fi
     restore_accepted "$CURRENT_RECORD" "$expected_setup_class" || fail 'candidate failed and rollback also failed; candidate remains staged so recovery can be retried'
     archive_candidate_as_failed || fail 'candidate recovery was verified but the candidate could not be marked failed; leave it staged and retry rollback'
@@ -1085,25 +1037,18 @@ case "$command" in
     safe_setup_status || fail 'candidate setup is not ready for promotion'
     require_staged_canary_receipt "$CANDIDATE_RECORD"
     safe_public_descriptor_check || fail 'candidate public descriptor is unavailable; roll back instead of promoting'
-    if [[ -f "$CURRENT_RECORD" ]]; then
-      validate "$CURRENT_RECORD"
-      if cmp -s "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
-        remove_candidate_record
-        printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","idempotent":true}\n'
-        exit 0
-      fi
-      candidate_setup_class >/dev/null || fail 'staged candidate setup class is missing or unsafe'
-      [[ "$(field "$candidate" baseline-class)" == "$(field "$CURRENT_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the current release'
-      stored_release_tuple_matches "$CURRENT_RECORD"
-      copy_record "$CURRENT_RECORD" "$RELEASE_STATE_DIR/history/$(field "$CURRENT_RECORD" release-id).json" idempotent-immutable
-      copy_record "$CANDIDATE_RECORD" "$CURRENT_RECORD" replace
-    else
-      candidate_setup_class >/dev/null || fail 'staged candidate setup class is missing or unsafe'
-      copy_record "$CANDIDATE_RECORD" "$CURRENT_RECORD" no-replace || fail 'could not accept first deployment candidate'
+    [[ -f "$CURRENT_RECORD" ]] || fail 'no accepted release record; run onboard-clean-v1.sh prepare first'
+    validate "$CURRENT_RECORD"
+    if cmp -s "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
       remove_candidate_record
-      printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","first_deploy":true}\n'
+      printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","idempotent":true}\n'
       exit 0
     fi
+    candidate_setup_class >/dev/null || fail 'staged candidate setup class is missing or unsafe'
+    [[ "$(field "$candidate" baseline-class)" == "$(field "$CURRENT_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the current release'
+    stored_release_tuple_matches "$CURRENT_RECORD"
+    copy_record "$CURRENT_RECORD" "$RELEASE_STATE_DIR/history/$(field "$CURRENT_RECORD" release-id).json" idempotent-immutable
+    copy_record "$CANDIDATE_RECORD" "$CURRENT_RECORD" replace
     remove_candidate_record
     printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","first_deploy":false}\n'
     ;;
@@ -1111,13 +1056,7 @@ case "$command" in
     [[ $# -eq 1 ]] || usage
     [[ -f "$CANDIDATE_RECORD" ]] || fail 'rollback requires a staged candidate'
     validate "$CANDIDATE_RECORD"
-    if [[ ! -e "$CURRENT_RECORD" && ! -L "$CURRENT_RECORD" ]]; then
-      if ! abort_first_deploy_candidate; then
-        fail 'first deployment candidate is stopped or runtime image drifted; leave it staged and investigate before retrying rollback'
-      fi
-      printf '{"ok":true,"stage":"aborted","baseline_compatibility_class":"clean-v1","first_deploy":true}\n'
-      exit 0
-    fi
+    [[ -e "$CURRENT_RECORD" || -L "$CURRENT_RECORD" ]] || fail 'no accepted release record; run onboard-clean-v1.sh prepare first'
     [[ -f "$CURRENT_RECORD" ]] || fail 'accepted current release record is unsafe'
     validate "$CURRENT_RECORD"
     if cmp -s "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
@@ -1135,17 +1074,14 @@ case "$command" in
   status)
     [[ $# -eq 1 ]] || usage
     if [[ -f "$CANDIDATE_RECORD" ]]; then
-      accepted=false
-      if [[ -e "$CURRENT_RECORD" || -L "$CURRENT_RECORD" ]]; then
-        validate "$CURRENT_RECORD"
-        accepted=true
-      fi
+      [[ -e "$CURRENT_RECORD" || -L "$CURRENT_RECORD" ]] || fail 'no accepted release record; run onboard-clean-v1.sh prepare first'
+      validate "$CURRENT_RECORD"
       validate "$CANDIDATE_RECORD"
       active_runtime_profile_matches "$CANDIDATE_RECORD"
       active_materialized_profile_matches
       active_environment_matches "$CANDIDATE_RECORD"
       running_exact_release "$CANDIDATE_RECORD" || fail 'candidate is stopped or runtime image drifted'
-      printf '{"ok":true,"accepted_release_present":%s,"candidate_staged":true,"runtime_matches_staged_candidate":true}\n' "$accepted"
+      printf '{"ok":true,"accepted_release_present":true,"candidate_staged":true,"runtime_matches_staged_candidate":true}\n'
       exit 0
     fi
     [[ -f "$CURRENT_RECORD" ]] || fail 'no accepted or staged release record is available'

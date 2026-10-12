@@ -134,6 +134,8 @@ async function addMeeting(page: Page) {
   const meetings = page.getByRole('region', { name: 'Personal meetings' });
   await expect(meetings).toContainText('ari@example.test · EchoBrain');
   await meetings.getByLabel('Granola folder').selectOption({ label: 'ECHO (1)' });
+  // Granola's label is the meeting's own day; an evening in Pacific time is already the next day in UTC.
+  await expect(meetings.getByRole('button', { name: 'Pilot planning', exact: true })).toContainText('Oct 6');
   await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
   const add = meetings.getByRole('button', { name: 'Add to ECHO', exact: true });
   await expect(add).toBeDisabled();
@@ -184,6 +186,8 @@ test('approves a meeting into two projects with an edited owner', async () => {
   await addMeeting(page);
   await page.getByTestId('need-row').click();
   const card = page.getByTestId('decision');
+  // The heading has the focus, not Only me: Enter or Space keeps the suggested projects.
+  await expect(card.getByRole('heading', { name: 'Approve this decision?' })).toBeFocused();
   await expect(card.getByRole('radio', { name: /Thermostat redesign/ })).toHaveAttribute('aria-checked', 'true');
   await expect(card.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
   await card.getByRole('checkbox', { name: 'Supplier review' }).check();

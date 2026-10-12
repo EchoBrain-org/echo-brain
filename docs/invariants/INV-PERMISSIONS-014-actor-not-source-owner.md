@@ -8,11 +8,11 @@ component_ids:
   - CMP-IDENTITY-ACCESS
   - CMP-PERMISSIONS
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
+reviewed_at: 2026-10-11
+reviewed_ref: 3aea847cca4fa44cfa1ab28dbf44b1b707590b8b
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Bounded Slack reviewer and organization-member approval modes only
+enforcement_scope: Approval core decide() (frozen reviewer, active membership, project recheck) on desktop and Slack; Slack clicks checked against the identity link
 invariant_ids:
   - INV-12
 ---
@@ -33,7 +33,19 @@ Permission mode can change the read audience; it does not delegate approval.
 
 ## Enforcement and verification
 
-The bounded Slack paths enforce this rule, and focused internal-dogfood evidence
-observed the second actor receiving no unintended result. That receipt is not
-yet promoted into an exact qualification report, and this is not a global role
-or delegation system.
+The approval core's `decide` carries this rule on every surface. It accepts a
+decision only from the proposal's frozen reviewer with an active membership in
+the same organization, and rechecks every chosen project
+(`services/organization-authority/test/approval-core-v1.test.ts`: an actor from
+another organization, a revoked reviewer and a non-reviewer are denied). A
+Slack click is decided only after it matches the posted card and the clicker's
+current identity link
+(`services/organization-authority/test/slack-approval-click-v1.test.ts`).
+[ADR-0031](../decisions/ADR-0031-unified-meeting-approval-core.md) makes the
+person who brings a meeting in its reviewer by explicit rule, so review
+authority comes from that rule, not from holding the source.
+
+Earlier focused internal-dogfood evidence on the retired bounded Slack paths
+observed the second actor receiving no unintended result. That receipt was
+never promoted into an exact qualification report, and this is not a global
+role or delegation system.

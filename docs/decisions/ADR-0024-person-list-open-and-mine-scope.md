@@ -488,3 +488,12 @@ Negative disclosure cases, as the tests name them:
   the same 401 before any store runs.
 - N-20: the desktop copies no project id or header field into the renderer,
   and its host refuses a malformed scope, ref or cursor without a CLI call.
+
+## Evidence note, 2026-10-11
+
+The cost benchmark in
+`services/organization-authority/test/person-meeting-list-route.test.ts` is
+now opt-in, because seeding 1,024 records took about a minute of every CI
+run and the benchmark asserts no threshold. Run it with
+`ECHO_RUN_BENCHMARKS=1 npx vitest run --config vitest.config.ts services/organization-authority/test/person-meeting-list-route.test.ts`.
+The rest of that file still runs on every check.

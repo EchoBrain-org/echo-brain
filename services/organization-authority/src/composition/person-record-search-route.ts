@@ -59,10 +59,6 @@ import type {
 } from "../application/ports/person-list-v1.js";
 import type { PersonAskScopeV2 } from "../application/ports/person-original-context-retrieval-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import {
-  containsCanonicalReleaseId,
-  isCanonicalReleaseId,
-} from "@echo-brain/organization-authority-kernel/shared/canonical-release-id";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { samePersonReleaseAuthorizationV1 } from "../application/person-release-authorization-v1.js";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -87,7 +83,6 @@ interface ActiveGenerationRow {
 }
 
 type SearchGeneration = typeof searchReadableSearchGenerationV1;
-const RELATED_ATOM_PACKET_MAX_ITEMS_V1 = 16;
 const EVIDENCE_DESK_MAX_ITEM_UTF8_BYTES_V1 = 3_072;
 
 /** Only an observed head/pointer lag may put the request in originals-only mode. */
@@ -117,9 +112,10 @@ export type ExpandReadableSearchRelatedAtomsV1 = (
 ) => ReadableSearchResultV1;
 
 /**
- * In-process Layer 3 input for a bounded answer-composition retrieval plan. This is not
- * part of the Person HTTP contract: the bearer remains server-side while the
- * caller's plan is executed under one reader tuple and one exact snapshot.
+ * In-process input for a bounded record-search batch (the evidence desk and
+ * the HTTP search route). This is not part of the Person HTTP contract: the
+ * bearer remains server-side while every query runs under one reader tuple
+ * and one exact snapshot.
  */
 export interface PersonRecordSearchBatchInputV1 {
   readonly access_token: string;
@@ -128,30 +124,17 @@ export interface PersonRecordSearchBatchInputV1 {
   readonly project_id?: string;
   /** Records whose final approver is the caller (ADR-0024); exclusive with project_id. */
   readonly mine?: true;
-  /**
-   * A canonical release named by the answer question. Layer 3 applies it only
-   * after normal authorization has admitted the merged evidence.
-   */
-  readonly exact_release_id?: string;
   readonly limit?: number;
   /** Desk-only result kind narrowing, applied by Layer 2 before its cap. */
   readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][];
   /** Internal desk release: bind immutable presentation metadata into audit. */
   readonly desk?: true;
   /**
-   * Server-only answer-composition request for the bounded decision packet.
-   * The HTTP search route and direct `searchBatch` callers retain lexical
-   * ordering unless Layer 4 explicitly asks for this plan.
-   */
-  readonly include_related_atom_packet?: true;
-  /**
    * Request-bound callers may require the pointer captured by an earlier
    * release.  A changed active generation is unavailable rather than silently
    * mixing evidence from two record heads.
    */
   readonly expected_pointer?: PersonRecordSearchReleasePointerV1;
-  /** Internal, fail-open seam used to close the Ask authorization stage. */
-  readonly on_authorized?: () => void;
 }
 
 export type PersonRecordSearchReleaseAuthorizationV1 =
@@ -186,8 +169,6 @@ export interface PersonRecordSearchBatchReleaseV1 {
 export interface PersonRecordSearchBatchResultV1 {
   readonly response: PersonRecordSearchResponseV2;
   readonly release: PersonRecordSearchBatchReleaseV1;
-  /** Ordered per-query result counts, kept server-side for answer auditing only. */
-  readonly query_hit_counts: readonly number[];
   /** Private desk projection of immutable V4 meeting metadata. */
   readonly desk_items?: readonly PersonRecordDeskItemV1[];
   readonly truncated?: boolean;
@@ -444,8 +425,6 @@ function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
     new Set(input.queries).size !== input.queries.length ||
     input.queries.some((query) => !validBatchQuery(query)) ||
     (input.kinds !== undefined && (!Array.isArray(input.kinds) || input.kinds.length < 1 || new Set(input.kinds).size !== input.kinds.length || input.kinds.some((kind) => kind !== "decision" && kind !== "action" && kind !== "rationale"))) ||
-    (input.exact_release_id !== undefined &&
-      !isCanonicalReleaseId(input.exact_release_id)) ||
     (input.limit !== undefined &&
       (!Number.isSafeInteger(input.limit) ||
         input.limit < 1 ||
@@ -935,11 +914,6 @@ export function createPersonRecordSearchRouteV1(
     });
     assertExpectedOrganization(authorization);
     const projects = captureRecordProjectsV1(options.capture_projects, authorization, input.project_id);
-    try {
-      input.on_authorized?.();
-    } catch {
-      // Observability cannot alter authorization or retrieval behavior.
-    }
     const head = recordHead(options.record);
     const pointer = activeGeneration(options.authority);
     if (
@@ -974,9 +948,9 @@ export function createPersonRecordSearchRouteV1(
       }),
     ));
     for (const result of results) assertGeneration(result, pointer);
-    // Preserve the answer-composition plan's order while giving every focused query one
-    // result per round. This is deterministic breadth without pretending that
-    // the Layer 3 boundary has a cross-query reranker.
+    // Preserve the caller's query order while giving every query one result
+    // per round. This is deterministic breadth without pretending that the
+    // route has a cross-query reranker.
     const merged = new Map<Sha256Digest, ReadableSearchResultItemV1>();
     const longestResult = Math.max(
       ...results.map((result) => result.items.length),
@@ -989,79 +963,7 @@ export function createPersonRecordSearchRouteV1(
         }
       }
     }
-    const lexicalItems = [...merged.values()];
-    let items = lexicalItems;
-    if (
-      input.include_related_atom_packet === true &&
-      options.expand_related_atoms !== undefined
-    ) {
-      // Cover distinct matching records, preferring a decision when available.
-      // An action can identify a source whose decision missed every top ten.
-      const decisions = lexicalItems.filter((item) => item.item_kind === "decision");
-      const support = new Map<Sha256Digest, number>();
-      for (const item of lexicalItems) {
-        support.set(item.record_sha256, (support.get(item.record_sha256) ?? 0) + 1);
-      }
-      const records = new Set<Sha256Digest>();
-      const recordAnchors = [...decisions, ...lexicalItems].filter((item) => {
-        if (records.has(item.record_sha256)) return false;
-        records.add(item.record_sha256);
-        return true;
-      });
-      // Prefer records supported by multiple distinct lexical hits over an
-      // isolated matching decision (for example, an unrelated dated launch),
-      // after retaining the best lexical decision/record as a packet anchor.
-      recordAnchors.sort((left, right) =>
-        support.get(right.record_sha256)! - support.get(left.record_sha256)!,
-      );
-      const primaryAnchor = decisions[0] ?? lexicalItems[0];
-      const anchors = [
-        ...new Set([
-          ...(primaryAnchor === undefined ? [] : [primaryAnchor]),
-          ...recordAnchors,
-          ...decisions,
-        ]),
-      ].slice(0, 3);
-      if (anchors.length > 0) {
-        const relatedLimit = RELATED_ATOM_PACKET_MAX_ITEMS_V1 - anchors.length;
-        const related = readGeneration(() => options.expand_related_atoms!({
-          state_directory: options.state_directory,
-          active_generation: activeGenerationAt(pointer),
-          reader: readerOf(authorization, projects),
-          ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
-          ...(mine === undefined ? {} : { record_sha256s: mine }),
-          anchor_atom_ids: anchors.map((item) => item.atom_id),
-          limit: relatedLimit,
-          include_anchor_records: true,
-        }));
-        assertGeneration(related, pointer);
-        // Expansion is bounded to three anchors, not three relevant records.
-        // Give independent lexical evidence a turn before related facts fill
-        // the packet. Reuse the multiple-hit support preference above so an
-        // isolated incidental match does not reserve space for every record.
-        const anchorRecords = new Set(anchors.map((item) => item.record_sha256));
-        const independent = lexicalItems.filter((item) =>
-          !anchorRecords.has(item.record_sha256) && support.get(item.record_sha256)! > 1,
-        );
-        const supplements: ReadableSearchResultItemV1[] = [];
-        const relatedItems = related.items.slice(0, relatedLimit);
-        for (let index = 0; index < Math.max(relatedItems.length, independent.length); index += 1) {
-          const relatedItem = relatedItems[index];
-          const lexicalItem = independent[index];
-          if (relatedItem !== undefined) supplements.push(relatedItem);
-          if (lexicalItem !== undefined) supplements.push(lexicalItem);
-        }
-        const packet = new Map<Sha256Digest, ReadableSearchResultItemV1>();
-        for (const item of [
-          ...anchors,
-          ...supplements,
-          ...lexicalItems,
-        ]) {
-          if (!packet.has(item.atom_id)) packet.set(item.atom_id, item);
-        }
-        items = [...packet.values()];
-      }
-    }
+    const items = [...merged.values()];
     const released = options.sessions.authenticateAccess({
       access_token: input.access_token,
     });
@@ -1078,24 +980,10 @@ export function createPersonRecordSearchRouteV1(
     ) {
       personDenied();
     }
-    // This selector is a relevance narrowing only. It runs after the existing
-    // generation, head, and second current-Person checks, and falls back to
-    // the complete authorized result set when no exact evidence exists.
-    const exactReleaseId = input.exact_release_id;
-    const exactItems =
-      exactReleaseId === undefined
-        ? []
-        : items.filter((item) =>
-            containsCanonicalReleaseId(item.text, exactReleaseId),
-          );
-    const selectedItems = exactItems.length === 0 ? items : exactItems;
-    const responseItems = input.include_related_atom_packet === true
-      ? selectedItems.slice(0, RELATED_ATOM_PACKET_MAX_ITEMS_V1)
-      : selectedItems;
     const deskSourceItems = input.desk === true
-      ? boundedDeskItems(responseItems)
+      ? boundedDeskItems(items)
       : undefined;
-    const response = asResponse({ items: deskSourceItems ?? responseItems });
+    const response = asResponse({ items: deskSourceItems ?? items });
     const deskProjection = deskSourceItems === undefined
       ? undefined
       : deskItems(options.record, deskSourceItems, options.record_input_codecs);
@@ -1107,10 +995,9 @@ export function createPersonRecordSearchRouteV1(
     return Object.freeze({
       response,
       release,
-      query_hit_counts: Object.freeze(results.map((result) => result.items.length)),
       ...(deskProjection === undefined ? {} : { desk_items: deskProjection }),
       truncated: results.some((result) => result.truncated === true) ||
-        (deskSourceItems !== undefined && deskSourceItems.length !== responseItems.length),
+        (deskSourceItems !== undefined && deskSourceItems.length !== items.length),
     });
   }
 
@@ -1166,7 +1053,7 @@ export function createPersonRecordSearchRouteV1(
       initial_authorization: input.initial_authorization,
       current: released, pointer: input.pointer, projects: input.projects, scope: input, response, desk_items: projection,
     });
-    return Object.freeze({ response, release, query_hit_counts: Object.freeze([]), desk_items: projection, truncated: approvedRecordAtomCount(options.record, resolvedAnchor.record_position, resolvedAnchor.record_sha256, options.record_input_codecs) > 10 || deskSourceItems.length !== items.length });
+    return Object.freeze({ response, release, desk_items: projection, truncated: approvedRecordAtomCount(options.record, resolvedAnchor.record_position, resolvedAnchor.record_sha256, options.record_input_codecs) > 10 || deskSourceItems.length !== items.length });
   }
 
   return Object.freeze({
@@ -1241,7 +1128,7 @@ export function createPersonRecordSearchRouteV1(
         initial_authorization: releaseAuthorization(authorization),
         current: released, pointer, projects, scope: input, response, desk_items: projection,
       });
-      return Object.freeze({ response, release, query_hit_counts: Object.freeze([]), desk_items: projection, truncated: inventory.truncated === true || deskSourceItems.length !== inventory.items.length });
+      return Object.freeze({ response, release, desk_items: projection, truncated: inventory.truncated === true || deskSourceItems.length !== inventory.items.length });
     },
     openDeskCitation(input: {
       readonly access_token: string;

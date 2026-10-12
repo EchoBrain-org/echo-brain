@@ -56,11 +56,12 @@ unknown keys rather than silently accepting a near-canonical shape.
 ## Demo-specific requirement
 
 `context.owner_participant_id` is optional in the general canonical schema, but
-it is required for this demo because the runtime must resolve one private Slack
-approval recipient. Here it is always `zhen`, and that participant must have
-exactly one canonical lowercase email identity. Replace only
-`owner@example.test` before a staging run.
+it is required for this demo because each meeting names the owner who approves
+it on the desktop approval card (with an optional Slack DM copy). Here it is
+always `zhen`, and that participant must have exactly one canonical lowercase
+email identity. Replace only `owner@example.test` before a staging run.
 
 Approval policy, expected extracted facts, expected answers, and Slack IDs do not
-belong in a meeting record. The policy is chosen in Slack after extraction, and
-the evaluation oracle remains in `expectations.json` outside the runtime input.
+belong in a meeting record. The owner chooses the policy (Only me or a project)
+on the approval card after extraction, and the evaluation oracle remains in
+`expectations.json` outside the runtime input.

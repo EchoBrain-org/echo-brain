@@ -199,9 +199,11 @@ changes and reloaded on return. Runtime processing and telemetry are unchanged.
 The desktop app's **Tools** page (the sidebar's Tools row, or **Account →
 Connected tools…**) lists every tool the Authority returns from `person tools`,
 grouped by the signed-in person's connection: needs attention (revoked),
-connected, available, and not turned on. The page names no tool itself, so a
-tool the Authority adds appears without desktop changes. Connect, Reconnect and
-Disconnect run the same Person CLI tools verbs as the terminal:
+connected, available, and not turned on. The list names no tool itself, so a
+tool the Authority adds appears without desktop changes; only Granola's Manage
+sheet differs, adding the meeting setup that chooses the folder ECHO watches.
+Connect, Reconnect and Disconnect run the same Person CLI tools verbs as the
+terminal:
 `person tools connect --tool <id> --no-wait` opens the tool's page and returns
 the attempt, the window reads it with `person tools status --tool <id>
 --attempt-id …` every 2 seconds until it settles (a status read is what
@@ -251,8 +253,8 @@ person who runs them; an agent has no membership of its own
 ## Artifact boundary
 
 `tools/pack-person-client.mjs` builds the Person client and only its protocol
-and provider-client dependency closure. The Slack and Jira client fragments own
-their wire contracts and commands without acquiring server code. The tarball contains no
+and provider-client dependency closure. The Slack, Jira and Confluence client
+fragments own their wire contracts and commands without acquiring server code. The tarball contains no
 Authority service, processing runtime, server provider, native SQLite, LaunchAgent
 code, JSONL outbox, or root product package.
 

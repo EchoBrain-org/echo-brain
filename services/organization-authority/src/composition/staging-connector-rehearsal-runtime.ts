@@ -192,7 +192,7 @@ function requireSelection(config: OrganizationAuthorityServiceConfig, selection:
   validateOrganizationAuthorityOrigin(config.authority_url);
   const authority = new URL(config.authority_url);
   if (config.authority_url !== STAGING_AUTHORITY_ORIGIN_V1 || selection.authority_host !== authority.host ||
-      selection.authority_host !== 'authority-staging.echobrain.org' || (config.slack_nango.base_url !== undefined && config.slack_nango.base_url !== 'https://api.nango.dev') ||
+      selection.authority_host !== 'authority-staging.echobrain.org' || (config.nango.base_url !== undefined && config.nango.base_url !== 'https://api.nango.dev') ||
       (config.jira_person_live !== undefined && (config.jira_person_live.enabled !== true ||
         config.jira_person_live.cloud_id !== profile.jira.cloud_id || config.jira_person_live.integration_id !== profile.jira.integration_key)) ||
       config.staging_synthetic_meetings_directory !== undefined ||
@@ -332,7 +332,7 @@ export async function openStagingConnectorRehearsalService(
         state_directory: config.state_directory,
         sessions: jiraAsk === undefined ? { authenticateAccess: input => requireOwner(input.access_token) } : sessions,
         configuration: { enabled: true, cloud_id: selected.profile.jira.cloud_id,
-          integration_id: selected.profile.jira.integration_key, nango_authorization: () => config.slack_nango.secret_key },
+          integration_id: selected.profile.jira.integration_key, nango_authorization: () => config.nango.secret_key },
         seams: { ...dependencies.jira, database: sidecar.database },
       });
       return jira;

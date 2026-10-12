@@ -25,9 +25,11 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
   const projects = choices(state.projects.items, open.suggested_projects);
   const chosen = decision.project_ids.map(id => projects.find(project => project.project_id === id)?.name ?? id);
   const approvable = !decision.busy && (decision.audience === 'only-me' || decision.project_ids.length > 0);
+  // Sending, or maybe sent: Approve and Reject resend the same choices.
+  const frozen = decision.busy || decision.unknown === true;
   return (
     <article class="decision-card" data-testid="decision" aria-labelledby="decision-ask">
-      <h1 id="decision-ask" class="decision-ask">Approve this decision?</h1>
+      <h1 id="decision-ask" class="decision-ask" tabIndex={-1}>Approve this decision?</h1>
       <div class="decision-from">From <b>{open.review.title}</b></div>
       {open.review.first_line && <div class="decision-line" data-testid="decision-line">{open.review.first_line}</div>}
       <div class="passage selectable decision-body" data-testid="decision-body"><Passage text={open.content} label={open.review.title} /></div>
@@ -38,7 +40,7 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
             <label class="decision-action" key={owner.signal_id}>
               <Owner name={owner.owner || '?'} />
               <span class="decision-action-text">{owner.action}</span>
-              <input class="field small" type="text" value={owner.owner} disabled={decision.busy} placeholder="No owner" aria-label={`Owner for: ${owner.action}`}
+              <input class="field small" type="text" value={owner.owner} disabled={frozen} placeholder="No owner" aria-label={`Owner for: ${owner.action}`}
                 onInput={event => setDecisionOwner(owner.signal_id, (event.target as HTMLInputElement).value)} />
             </label>
           ))}
@@ -47,20 +49,20 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
       <div class="decision-section">
         <div class="section-label" id="decision-readers">Seen by</div>
         <div role="radiogroup" aria-labelledby="decision-readers" class="readers-row">
-          <button type="button" role="radio" class="reader-pill" aria-checked={decision.audience === 'only-me'} disabled={decision.busy}
+          <button type="button" role="radio" class="reader-pill" aria-checked={decision.audience === 'only-me'} disabled={frozen}
             data-testid="decision-only-me" onClick={() => setDecisionAudience('only-me')}>Only me</button>
-          <button type="button" role="radio" class="reader-pill" aria-checked={decision.audience === 'projects'} disabled={decision.busy}
+          <button type="button" role="radio" class="reader-pill" aria-checked={decision.audience === 'projects'} disabled={frozen}
             data-testid="decision-projects" onClick={() => setDecisionAudience('projects')}>
             {decision.audience === 'projects' && chosen.length > 0 ? `${chosen[0]}${chosen.length > 1 ? ` +${chosen.length - 1}` : ''}` : 'Projects'}
           </button>
         </div>
         {decision.audience === 'projects' && (
           <div class="well picker" data-testid="decision-picker">
-            <ProjectPicker projects={projects} ticked={decision.project_ids} max={MAX_CAPTURE_PROJECTS} onTick={tickDecisionProject}
+            <ProjectPicker projects={projects} ticked={decision.project_ids} max={MAX_CAPTURE_PROJECTS} onTick={tickDecisionProject} disabled={frozen}
               more={state.projects.next !== null && !state.projects.loading} onMore={() => void loadProjects(true)} />
           </div>
         )}
-        <label class="check"><input type="checkbox" checked={decision.share} disabled={decision.busy} onChange={event => setDecisionShare((event.target as HTMLInputElement).checked)} />
+        <label class="check"><input type="checkbox" checked={decision.share} disabled={frozen} onChange={event => setDecisionShare((event.target as HTMLInputElement).checked)} />
           <span>Share the transcript with the selected audience</span></label>
       </div>
       {decision.failure && <div class="error" data-testid="decision-error" aria-live="polite">{decision.failure}</div>}
@@ -86,7 +88,7 @@ function Impact({ state, decision }: { state: State; decision: DecisionState }) 
   const standing = open.review.decided_on === 'slack' ? `${verb} in Slack` : verb;
   return (
     <article class="decision-card" data-testid="decision" aria-labelledby="decision-ask">
-      <h1 id="decision-ask" class="decision-ask">{ask}</h1>
+      <h1 id="decision-ask" class="decision-ask" tabIndex={-1}>{ask}</h1>
       <div class="decision-from">{standing} · <b>{open.review.title}</b></div>
       <div class="passage selectable decision-body" data-testid="decision-body"><Passage text={open.content} label={open.review.title} /></div>
       <ImpactSection run={run ?? undefined} view={decision.impact} publishing={open.review.status === 'publishing'} busy={decision.busy}
@@ -98,7 +100,8 @@ function Impact({ state, decision }: { state: State; decision: DecisionState }) 
 /** The decision page, from a Home row: the proposal to approve, or what an approved one changed. */
 export function Decision({ state, decision }: { state: State; decision: DecisionState }) {
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => { box.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus({ preventScroll: true }); }, [decision.loading]);
+  // The heading takes the focus, as on Your open items: Enter or Space must not change a choice or open a source.
+  useEffect(() => { box.current?.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true }); }, [decision.loading]);
   if (decision.loading) return <div class="column center" aria-busy="true" data-testid="decision-loading"><span class="asking"><i /><i /><i /></span></div>;
   if (!decision.open) {
     return <div class="column center" data-testid="decision-error"><div class="error">{decision.failure ?? 'The decision could not be read.'}</div></div>;

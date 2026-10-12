@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { observeCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import type {
   ExtractionAttemptKeyV1,
   ExtractionAttemptStoreV1,
@@ -126,6 +127,15 @@ const healthy = (): AdapterHealth => ({
   status: "healthy",
   checked_at: "2026-08-22T02:05:04.005Z",
 });
+
+/** Runs `operation` under a telemetry observer; returns its value and each settled span's result by phase. */
+async function observedResults<T>(operation: () => Promise<T>): Promise<[T, Record<string, unknown>]> {
+  const results: Record<string, unknown> = {};
+  const value = await observeCoreRuntimeV1("source_poll", operation, {
+    observer: (event) => { if (event.event !== "started") results[event.stage] = event.result; },
+  });
+  return [value, results];
+}
 
 class FakeState implements AuthorityMeetingProcessingStateV1 {
   readonly advances: Array<{ expected_cursor: string; next_cursor: string }> =
@@ -932,7 +942,9 @@ describe("admitted meeting-processing cycle", () => {
       source: source({ meetings: [], next_cursor: "fixture-source:v1:next" }),
       state,
     });
-    await expect(cycle.runOnce()).resolves.toEqual(expected);
+    const [result, spans] = await observedResults(() => cycle.runOnce());
+    expect(result).toEqual(expected);
+    expect(spans.source_cursor).toBe(fence === "advanced" ? "advanced" : "retry_pending");
     expect(state.advances).toEqual([
       {
         expected_cursor: current.source.cursor,
@@ -1036,10 +1048,12 @@ describe("admitted meeting-processing cycle", () => {
       state,
       stager: downstream,
     });
-    await expect(second.runOnce()).resolves.toEqual({
+    const [coalesced, spans] = await observedResults(() => second.runOnce());
+    expect(coalesced).toEqual({
       kind: "already_processed",
       cursor_advanced: false,
     });
+    expect(spans.candidate_persist).toBe("coalesced");
     expect(extracts).toBe(1);
     expect(downstream.calls).toBe(1);
     expect(state.candidates.at(-1)).toMatchObject({

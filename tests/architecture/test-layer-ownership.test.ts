@@ -13,9 +13,15 @@ const { collectModuleReferences } = await import(pathToFileURL(
 };
 const workspaces: string[] = JSON.parse(readFileSync(resolve(REPOSITORY_ROOT, 'package.json'), 'utf8')).workspaces;
 const neutralWorkspaces = workspaces.filter((path) => path.startsWith('packages/'));
-const neutralPackages = new Set(neutralWorkspaces.map((path) =>
-  `workspace:${JSON.parse(readFileSync(resolve(REPOSITORY_ROOT, path, 'package.json'), 'utf8')).name}`,
-));
+const workspacePackage = (path: string) =>
+  `workspace:${JSON.parse(readFileSync(resolve(REPOSITORY_ROOT, path, 'package.json'), 'utf8')).name}`;
+const neutralPackages = new Set(neutralWorkspaces.map(workspacePackage));
+const workspaceSources = new Map(workspaces.map((path) => [workspacePackage(path), `${path}/src/`]));
+const providerArchitecture = JSON.parse(readFileSync(resolve(REPOSITORY_ROOT, 'product/source-boundary.v1.json'), 'utf8'))
+  .adapter_architecture as { provider_roots: string[]; shared_provider_roots: string[] };
+const sharedProviderRoots = providerArchitecture.shared_provider_roots;
+const providerRootOf = (path: string) => [...providerArchitecture.provider_roots, ...sharedProviderRoots]
+  .find((root) => path === root || path.startsWith(`${root}/`));
 
 function sourceFiles(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
@@ -55,6 +61,23 @@ const rules: readonly TestLayerRule[] = [
       neutralWorkspaces.some((neutral) => path.startsWith(`${neutral}/src/`)) ||
       path.startsWith(`${workspace}/test/`) || path.startsWith('tests/support/'),
   })),
+  // Provider tests reach neutral packages, the shared provider library and their own provider
+  // (including its client workspace); tests that need the Authority live with the service.
+  ...workspaces.filter((path) => providerRootOf(path) !== undefined && existsSync(resolve(REPOSITORY_ROOT, path, 'test')))
+    .map((workspace) => {
+      const root = providerRootOf(workspace)!;
+      return {
+        root: `${workspace}/test`,
+        allows: (imported: string) => {
+          const path = workspaceSources.get(imported) ?? imported;
+          return neutralWorkspaces.some((neutral) => path.startsWith(`${neutral}/src/`)) ||
+            path.startsWith('tests/support/') || path.startsWith(`${root}/`) ||
+            sharedProviderRoots.some((shared) => path.startsWith(`${shared}/src/`)) ||
+            // The shared provider library is tested against concrete providers.
+            (sharedProviderRoots.includes(root) && providerRootOf(path) !== undefined);
+        },
+      };
+    }),
   {
     root: 'tests/support',
     allows: (path) => neutralPackages.has(path) || path.startsWith('tests/support/'),
@@ -91,6 +114,19 @@ describe('test layer ownership', () => {
   ])('recognizes forbidden test dependencies: %s', (content) => {
     const path = resolve(REPOSITORY_ROOT, 'packages/organization-processing/test/probe.ts');
     const rule = rules.find((entry) => entry.root === 'packages/organization-processing/test')!;
+    const imports = repositoryImports(path, content);
+    expect(imports.length).toBeGreaterThan(0);
+    expect(imports.every((entry) => !rule.allows(entry))).toBe(true);
+  });
+
+  it.each([
+    'import "../../../../services/organization-authority/test/fixtures/approval-core.js";',
+    'import "@echo-brain/organization-authority";',
+    'import "@echo-brain/provider-openrouter/openrouter-decision-processor-config-v1";',
+    'import "../../../../src/product/person-client/client.js";',
+  ])('keeps provider tests out of the Authority, the Person client and other providers: %s', (content) => {
+    const path = resolve(REPOSITORY_ROOT, 'providers/slack/server/test/probe.ts');
+    const rule = rules.find((entry) => entry.root === 'providers/slack/server/test')!;
     const imports = repositoryImports(path, content);
     expect(imports.length).toBeGreaterThan(0);
     expect(imports.every((entry) => !rule.allows(entry))).toBe(true);

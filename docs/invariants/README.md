@@ -4,23 +4,29 @@ An invariant is a precise rule that must or must not hold across a declared
 scope. It is stronger than an implementation note and narrower than a product
 vision.
 
-The current permission catalog remains in the
+The `INV-01` through `INV-12` and `AD-*` statements remain in the
 [architecture invariant registry](../product/2026-08-11-architecture-invariant-registry.md)
-while stable records are migrated here. Do not change its normative meaning
-during migration.
+while stable records are migrated here. Do not change their normative meaning
+during migration. The registry's implementation, deferred-work and
+approval-surface tables are pinned to the baselines it names (last revised
+2026-09-26) and do not describe current enforcement. For current Person content-release
+scope, including ADR-0010 related-atom expansion and the Layer 4 Ask boundary,
+see [INV-PERMISSIONS-015](INV-PERMISSIONS-015-layer-3-person-release-boundary.md);
+for provider-to-ECHO identity scope, see
+[INV-IDENTITY-005](INV-IDENTITY-005-adapter-to-echo-identity-chain.md).
 
 ## Index
 
 | ID | Statement | Scope | Implementation | Assurance |
 | --- | --- | --- | --- | --- |
-| `INV-01` through `INV-12` | Permission and append/retrieval invariants | Permission system | See current registry | See current registry |
+| `INV-01` through `INV-12` | Permission and append/retrieval invariants | Permission system | pinned to registry baselines; current scope in `INV-PERMISSIONS-015` | registry baselines (historical) |
 | [`INV-ADAPTERS-001`](INV-ADAPTERS-001-provider-transport.md) | Provider transport is part of the verified contract | External provider methods | partial | linked tests |
 | [`INV-IDENTITY-001`](INV-IDENTITY-001-symmetric-provider-proof.md) | Provider identity proof is complete and symmetric | Provider enrollment and action-time proof | partial | linked tests and live evidence |
 | [`INV-ADAPTERS-002`](INV-ADAPTERS-002-durable-external-reference.md) | External object identity is durable before verification | Consequential provider writes | partial | linked tests and live evidence |
 | [`INV-RUNTIME-001`](INV-RUNTIME-001-lifecycle-owned-side-effects.md) | Durable side-effect follow-up belongs to the runtime lifecycle | Background external effects | partial | linked lifecycle test |
 | [`INV-PERMISSIONS-013`](INV-PERMISSIONS-013-frozen-pending-contract.md) | Pending consequential work resolves under its frozen contract | Approval and diagnostics | partial | linked tests; diagnostic clause unenforced |
-| [`INV-PERMISSIONS-014`](INV-PERMISSIONS-014-actor-not-source-owner.md) | Approval authority is independent from source custody | Bounded Slack modes | partial | live negative evidence |
-| [`INV-ADAPTERS-003`](INV-ADAPTERS-003-model-execution-controls.md) | Model execution controls are explicit processing identity | Model/provider pairs | partial | linked test and live evidence |
+| [`INV-PERMISSIONS-014`](INV-PERMISSIONS-014-actor-not-source-owner.md) | Approval authority is independent from source custody | Approval core (desktop and Slack) | partial | linked tests |
+| [`INV-ADAPTERS-003`](INV-ADAPTERS-003-model-execution-controls.md) | Model execution controls are explicit processing identity | OpenRouter adapters | partial | linked tests |
 | [`INV-ADAPTERS-004`](INV-ADAPTERS-004-source-owned-grounding.md) | Models select source-owned evidence references | Shared LLM processor | partial | linked tests and live evidence |
 | [`INV-ADAPTERS-005`](INV-ADAPTERS-005-provider-semantics-at-boundary.md) | Provider semantics terminate at the adapter boundary | Active provider boundaries and canonical durable contracts | partial | boundary gate; full qualification pending |
 | [`INV-IDENTITY-002`](INV-IDENTITY-002-versioned-lease-duration.md) | Access duration changes are versioned compatibility changes | Access protocol | retired | none; access leases deleted |
@@ -29,7 +35,7 @@ during migration.
 | [`INV-IDENTITY-005`](INV-IDENTITY-005-adapter-to-echo-identity-chain.md) | Adapter and provider identities confer ECHO authority only through explicit links | Provider approval and Person reads | partial | linked tests; v4 end-to-end qualification open |
 | [`INV-PERMISSIONS-015`](INV-PERMISSIONS-015-layer-3-person-release-boundary.md) | Layer 3 is the sole Authority content-release boundary | Clean V1 Person release, Person list and open, and Layer 4 request boundary | partial | focused boundary and integration tests |
 | [`INV-RELEASE-001`](INV-RELEASE-001-worktree-bound-artifact.md) | Artifact identity is bound to the exact source worktree | Build and release | not implemented systemically | live detection only |
-| [`INV-OPERATIONS-001`](INV-OPERATIONS-001-shared-namespace-lifecycle.md) | Shared namespaces imply shared lifecycle qualification | Authority and proxy | partial | explicit restart tests |
+| [`INV-OPERATIONS-001`](INV-OPERATIONS-001-shared-namespace-lifecycle.md) | Shared namespaces imply shared lifecycle qualification | Authority and proxy | partial | operator-path proxy restart tests; Compose propagation not exercised in CI |
 
 Future component and failure records should link stable invariant IDs rather
 than copy their wording.

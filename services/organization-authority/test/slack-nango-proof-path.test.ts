@@ -471,7 +471,7 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
     oidc: OIDC,
     client_authentication: { method: "none" },
     pkce_key_file: credentials.pkce_sealing_key_reference.slice("file:".length),
-    slack_nango: {
+    nango: {
       base_url: NANGO_URL,
       secret_key: NANGO_KEY,
       integration_key: "slack",

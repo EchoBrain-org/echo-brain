@@ -11,7 +11,9 @@ readers. Its public entry point exposes four responsibility groups:
   the descriptor matched an independently trusted pin;
 - the approval and rejection payload shapes that carry exactly the meeting
   facts a person reviewed;
-- restricted-reviewer and organization-member-readable content policies; and
+- restricted-reviewer, project-members-readable and
+  organization-member-readable content policies, plus the meeting approval
+  event, approval-decision proof and owner-choice rules; and
 - authority-signed organization record envelopes and append receipts.
 
 The package does not own enrollment, access leases, user sessions, HTTP
@@ -29,13 +31,18 @@ comparison after restart rather than reconstructing the proof from stored JSON.
 
 ## Approval and visibility policy contracts
 
-`person-content-policy-v2.ts` defines the two reader-selection contracts used
-by current Person retrieval:
+`person-content-policy-v2.ts` defines three reader-selection contracts that
+Person retrieval honors:
 
-- restricted reviewer: only the exact approving principal and membership
-  tenure may read the released record; and
-- organization member readable: any current active owner or employee in the
-  record's organization may read it.
+- restricted reviewer (`restricted-reviewer-person-v2`): only the exact
+  approving principal and membership tenure may read the released record;
+- project members readable (`project-members-readable-person-v1`): current
+  active members of the projects frozen in the approval consequence's
+  `audience_project_ids` may read it, including people who join later; and
+- organization member readable (`organization-member-readable-person-v2`): any
+  current active owner or employee in the record's organization may read it.
+  The provider-neutral human-act input still accepts it; the approval-decision
+  proof below refuses it.
 
 The consequence text and its digest are contract bytes, not editable UI copy.
 The selected policy is committed by the approved or rejected human action and
@@ -45,6 +52,11 @@ A meeting approval decided in the approval core, on the desktop or through the
 Slack DM copy, is recorded with one neutral proof:
 `approval-decision-record-input-v1.ts` (`echo-approval-decision-ref-v1`). Raw
 Slack request bodies and response URLs never enter the record contract.
+It accepts only restricted reviewer (Only me) or project members readable
+(Projects), so new meeting approvals never record organization member
+readable. It validates the decision's event with `meeting-approval-event-v2.ts`
+and its confirmed action owners with `approval-owner-choice-v1.ts`, the one
+owner rule every approval surface shares.
 
 ## Organization record contract
 
@@ -60,6 +72,9 @@ The envelope accepts the provider-neutral human-action input, plus any input
 codec the caller registers, such as the approval-decision proof above.
 Validation recomputes every joined digest and rejects mismatched
 provenance, event, policy, or predecessor facts.
+
+`record-append-factories-v4.ts` builds and verifies the signed envelope and
+receipt for every approval surface.
 
 `organization-record-receipt-v2.ts` acknowledges the exact envelope, appended
 position, resulting record head, event outcome, and any appended content-policy

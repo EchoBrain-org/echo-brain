@@ -105,7 +105,7 @@ function config(directory: string) {
   return {
     state_directory: directory, authority_url: 'https://authority-staging.echobrain.org', host: '127.0.0.1', port: 39478,
     oidc: {}, client_authentication: { method: 'none' as const }, pkce_key_file: '/fixture/pkce', openrouter_credential_file: '/fixture/openrouter',
-    slack_nango: { secret_key: 'not-a-live-secret', integration_key: 'slack' },
+    nango: { secret_key: 'not-a-live-secret', integration_key: 'slack' },
   } as never;
 }
 function request(route_id: string, token: string, body: unknown) {

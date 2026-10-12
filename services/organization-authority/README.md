@@ -38,17 +38,19 @@ defines the supported operator and employee flow.
   an optional presenter on the core
   (`providers/slack/server/src/private-approval/slack-approval-presenter-v1.ts`,
   with clicks decided through `slack-approval-click-v1.ts`). Slack Person
-  identity composition is under `providers/slack/server/src/person-identity/`;
-  the Slack private-DM staging canary is under
-  `providers/slack/server/src/composition/staging/slack-private-approval/`.
+  identity composition is under `providers/slack/server/src/person-identity/`.
+  The provider-neutral staging release canary's private socket control and
+  client are `staging-release-canary-{control,client}-v1.ts` under
+  `src/composition/staging/`.
 - Private Slack interactions are separated into protocol, handler, HTTP adapter,
   and presentation-port components.
 - Identity and approval callbacks share the application-owned
   `provider-http-application-v1.ts` contract in
   `packages/organization-authority-kernel/src/application/ports/`. The host mounts
   exact routes, preserves raw request bytes, permits queries only by opt-in,
-  and owns response headers and limits: 64 KiB request/response bodies, 8 KiB
-  query strings, and 16 KiB fixed HTML pages. Providers select JSON, bounded
+  and owns response headers and limits: 64 KiB request bodies and raw response
+  bytes, 128 KiB JSON responses, 8 KiB query strings, and 16 KiB fixed HTML
+  pages. Providers select JSON, bounded
   response bytes, or an empty acknowledgment and retain verification and
   durable acceptance. HTML pages never reflect request fields; query-token
   reflection is not a supported callback mode.
@@ -114,9 +116,15 @@ its private profile file. A checkout build alone does not enable a running
 Authority.
 
 Save an exact copy of that profile object as a local nonsecret JSON file. Use
-the release-matched Person client to sign in and run the ordinary shared
-connection commands when a connection is absent: `person tools setup --tool slack`,
-`person tools connect --tool slack`, and `person tools connect --tool jira`.
+the release-matched Person client to sign in. The runner reads only Jira: run
+`person tools connect --tool jira` when the owner's Jira connection is absent.
+Organization Slack setup belongs to onboarding, not to this runner. If the
+organization Slack connection is absent after a staging reset, follow the host
+`resume --existing-slack-app <app-id>` handoff and the
+[existing-app procedure](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection):
+`person tools setup --tool slack --existing-app <app-id>`, or `--reconnect`
+when that app's credentials are already saved (never both). Then run
+`person tools connect --tool slack`.
 Slack setup asks only for the bot's four delivery scopes; human Slack consent is still required. Without live Jira Ask enabled, the diagnostic profile admits Jira connection commands only for its initial owner. Enabling live Jira Ask lets each Person connect their own account. Organization Granola capture is retired.
 
 After `npm run build`, the owner Mac can run:
@@ -201,7 +209,7 @@ Bootstrap and finalization are stopped-state operations. The path is:
 2. Start the Organization Authority service, complete the initial owner's
    browser OIDC sign-in, set up the organization's Slack connection in the
    app, and connect the signed-in person's own Slack.
-3. Stop the Organization Authority service, install the three provider credentials, then finalize.
+3. Stop the Organization Authority service, install the LLM credential, then finalize.
 4. Restart the Organization Authority service and complete the staging canary.
 
 The OIDC JSON must be readable JSON with exactly `issuer`, `client_id`,
@@ -265,15 +273,17 @@ including the four required bot scopes (`chat:write`, `im:history`,
 only the person's browser sign-in requests. The `im:*` scopes are required for
 the meeting-owner DM lane.
 
-Re-onboarding a staging lineage uses the same in-app setup and connect as a
-first connection; it does not reuse a Slack app's scopes or token by hand. Use
+Re-onboarding a staging lineage uses the same in-app setup and connect, but
+reuses the designated Slack app with `--existing-app <app-id>` (see the
+[existing-app procedure](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection));
+it does not reuse a Slack app's scopes or token by hand. Use
 a wholly fresh Authority V14 staging lineage with the
 [current storage baselines](#state-and-baselines); use the supported
 rehearsal reset before preparing state from an earlier release.
 
 ### 2. Start Person service, sign in, set up and connect Slack
 
-Before finalization, the compatibility-named `clean-live` command exposes the Person surface with an inert
+Before finalization, the `echo-organization-authority-serve serve` command exposes the Person surface with an inert
 processing worker. The manifest supplies the Authority URL and OIDC
 configuration, so they are not repeated here.
 
@@ -349,7 +359,7 @@ into that source. Neither staging mode needs a Granola account or credential.
 
 ### 4. Restart the Authority service and run the canary
 
-Restart the same `clean-live serve` compatibility command. Optional
+Restart the same `echo-organization-authority-serve serve` command. Optional
 `--worker-interval-ms <positive-integer>` changes the worker interval. At
 startup, the runtime reconciles the search index once, then each cycle recovers
 decided approvals whose record was not appended, polls the personal meeting

@@ -53,26 +53,51 @@ export class PersonProjectMappingStoreV1<T extends ProjectMapping> {
 
 export type PersonProjectAuthorizationV1 = (access_token: string, project_id: string) => Readonly<{ role: 'lead' | 'member'; authorization_sha256: Sha256Digest }>;
 
+/** A saved mapping that names the provider site (cloud) it reads. */
+interface ScopedProjectMapping extends ProjectMapping { readonly mapping: Readonly<{ cloud_id: string }> | null }
+
 /** Snapshot ECHO project authorization independently of the provider's live permissions. */
-export function createPersonProjectMappingAccessV1<T extends ProjectMapping>(provider: Pick<PersonProviderV1, 'id' | 'failure'>, options: {
+export function createPersonProjectMappingAccessV1<T extends ScopedProjectMapping>(provider: Pick<PersonProviderV1, 'id' | 'failure'>, options: {
   readonly project_mappings?: PersonProjectMappingStoreV1<T>;
   readonly authorize_project?: PersonProjectAuthorizationV1;
 }) {
   const failure: PersonProviderV1['failure'] = provider.failure;
+  function projectAccess(token: string, projectId: string, lead = false) {
+    const store = options.project_mappings, authorize = options.authorize_project;
+    if (store === undefined || authorize === undefined) failure('unavailable');
+    if (store.provider !== provider.id) failure('invalid_request');
+    const grant = authorize(token, projectId);
+    if (lead && grant.role !== 'lead') failure('unauthorized');
+    const before = canonicalSha256(grant);
+    return { store, current: () => {
+      if (canonicalSha256(authorize(token, projectId)) !== before) failure('stale_access_state');
+    } };
+  }
+  function mappingInput<R>(validate: () => R): R {
+    try { return validate(); } catch { return failure('invalid_request'); }
+  }
   return {
-    projectAccess(token: string, projectId: string, lead = false) {
-      const store = options.project_mappings, authorize = options.authorize_project;
-      if (store === undefined || authorize === undefined) failure('unavailable');
-      if (store.provider !== provider.id) failure('invalid_request');
-      const grant = authorize(token, projectId);
-      if (lead && grant.role !== 'lead') failure('unauthorized');
-      const before = canonicalSha256(grant);
-      return { store, current: () => {
-        if (canonicalSha256(authorize(token, projectId)) !== before) failure('stale_access_state');
+    projectAccess,
+    mappingInput,
+    /**
+     * The project-scoped live read rule, once for every provider. Without a
+     * project: undefined (global scope). An unmapped project: null, and the
+     * caller reads nothing; it never falls back to the person's global
+     * results. A mapping for another site is refused. `current` re-checks the
+     * project grant and that the saved mapping has not changed.
+     */
+    projectScope(token: string, organizationId: string, projectId: string | undefined, scopeId: string, validate: (request: unknown) => { readonly project_id: string }) {
+      if (projectId === undefined) return undefined;
+      const project = mappingInput(() => validate({ schema_version: 1, project_id: projectId })).project_id;
+      const access = projectAccess(token, project);
+      const mapped = access.store.read(organizationId, project);
+      const mapping = mapped.mapping;
+      if (mapping === null) return null;
+      if (mapping.cloud_id !== scopeId) failure('unauthorized');
+      return { mapping: mapping as NonNullable<T['mapping']>, current: () => {
+        access.current();
+        if (access.store.read(organizationId, project).revision !== mapped.revision) failure('stale_access_state');
       } };
-    },
-    mappingInput<R>(validate: () => R): R {
-      try { return validate(); } catch { return failure('invalid_request'); }
     },
   };
 }

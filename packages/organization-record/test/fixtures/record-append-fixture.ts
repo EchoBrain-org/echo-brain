@@ -48,6 +48,7 @@ import {
 } from "../../src/application/person-policy-fact-contracts-v2.js";
 import {
   type PersonHumanActActionV2,
+  type PersonHumanActResolutionRefV1View,
   type RevalidatedPersonPolicyAuthorizationWitnessV2,
 } from "../../src/application/person-policy-facts-v2.js";
 import {
@@ -300,7 +301,7 @@ export function humanAct(
 }
 
 export function authorizationWitness(
-  human: ReturnType<typeof humanAct>,
+  human: { readonly human_act_resolution_ref: PersonHumanActResolutionRefV1View },
   reviewer: { readonly principal_id: string; readonly membership_id: string } = { principal_id: "principal-1", membership_id: "membership-1" },
 ): RevalidatedPersonPolicyAuthorizationWitnessV2 {
   const ref = human.human_act_resolution_ref;

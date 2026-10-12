@@ -48,6 +48,30 @@ async function sendFeedbackBestEffort(
     // Slack feedback is best effort after the core's durable outcome.
   }
 }
+/** Posts Slack's ephemeral reply to a verified response URL, bounded to four seconds and refusing redirects. */
+export async function sendSlackResponseUrlFeedbackV1(input: {
+  readonly response_url: string;
+  readonly text: string;
+}): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4_000);
+  try {
+    const response = await fetch(input.response_url, {
+      method: "POST",
+      redirect: "error",
+      signal: controller.signal,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        response_type: "ephemeral",
+        replace_original: false,
+        text: input.text,
+      }),
+    });
+    if (!response.ok) throw new Error("Slack approval feedback was rejected");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 /** Verifies, parses and durably decides before acknowledgement. Provider feedback only uses a validated response URL and never delays the acknowledgement. */
 export function createPrivateSlackApprovalInteractionHandlerV1(
   input: PrivateSlackApprovalInteractionHandlerInputV1,

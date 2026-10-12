@@ -63,8 +63,8 @@ The shared implementation packages are `packages/organization-processing` and
 | Workspace | Scope |
 | --- | --- |
 | `providers/openrouter` | OpenRouter processing, generation and model vocabulary |
-| `providers/granola` | Transport-free Granola meeting normalization retained for the personal integration |
-| `providers/jira` | Person-bound Jira Nango connection store and HTTP application, gated live reader and context source; [authentication and support boundary](../../providers/jira/README.md) |
+| `providers/granola` | Person-bound Granola MCP connection, selected-folder meeting source and meeting normalizer, plus the retained context capture transform |
+| `providers/jira` | Person-bound Jira Nango connection store and HTTP application, and gated live reader; [authentication and support boundary](../../providers/jira/README.md) |
 | `providers/jira/client` | Jira connection wire contracts and shared Person tool commands; no server dependencies |
 | `providers/shared` | Reusable Nango personal connection lifecycle, local ownership state, HTTP routes, and bounded JSON transport; product grants and readers remain separate |
 | `providers/confluence` | Person-bound Confluence connection, project-space mapping, live page discovery and section reader; no retained page content |
@@ -75,9 +75,9 @@ The shared implementation packages are `packages/organization-processing` and
 
 ### Reusing personal tool connections
 
-For Jira and Confluence, Nango owns browser consent, credential storage, and
-refresh. ECHO stores only the connection reference and the person, membership,
-account, and consent attempt that may use it. The shared server package
+For Granola, Jira and Confluence, Nango owns browser consent, credential
+storage, and refresh. ECHO stores only the connection reference and the person,
+membership, account, and consent attempt that may use it. The shared server package
 `@echo-brain/provider-runtime` implements that lifecycle, revocation checks,
 connection HTTP routes, and bounded authenticated JSON requests. The shared
 client contracts and consent commands live in `packages/organization-api`.

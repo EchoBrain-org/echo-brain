@@ -65,6 +65,29 @@ Tools → Granola manages folder watching and individual meeting imports. Home a
 decision content is covered while another app is in front, and unfinished checks
 refresh when ECHO returns.
 
+## Develop
+
+Use the repository's pinned Node and npm versions. The app loads the Person
+client built in this checkout, so build it at the root first. From the
+repository root:
+
+```sh
+npm ci
+node tools/build.mjs --person-client
+cd product/echo-desktop
+npm ci
+npm start
+```
+
+`npm start` builds the app and runs it against the test fixture Authority in a
+throwaway home and app-data directory, deleted on exit; it never reads or
+writes your real ECHO session. `npm start -- <mode>` selects one of the
+fixture's test modes in `src/host/test-authority.ts`.
+
+`npm run typecheck` checks the app's TypeScript. `npm test` builds the app,
+then runs the unit tests (`test/unit`, Vitest) and the Electron end-to-end
+tests (`test/e2e`, Playwright). The root `npm run check` runs none of these.
+
 ## Build
 
 Use the repository's pinned Node and npm versions. From the repository root:
@@ -107,6 +130,21 @@ sudo apt install ./ECHO-0.1.0-linux-amd64.deb
 echo-desktop
 ```
 
+The package version stays `0.1.0` across releases, so every release's deb has
+the same file name and version. When a seat already has ECHO installed, apt can
+report "already the newest version" and leave the old app, including its
+embedded Person client, in place. Install every update or replacement with
+`--reinstall`:
+
+```sh
+sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb
+```
+
+Then prove the installed build rather than its version string: run
+`npm run smoke -- /opt/ECHO/echo-desktop` (described below) from the release's
+clean build checkout, or check that the tray menu's `Build <sha7>` matches the
+release's source SHA.
+
 The application appears as **ECHO** in the desktop launcher. The executable is
 `echo-desktop`, so it does not replace the system's `echo` command. The installed
 desktop filename matches `desktopName` in `package.json`, which provides the
@@ -139,7 +177,9 @@ not cancel the other.
 Each typechecks the desktop, runs unit and full Electron end-to-end tests,
 builds the platform's packages, and verifies release fuses and packaged startup.
 Linux uses Xvfb and additionally installs the deb, validates its desktop entry,
-and smokes the installed executable. macOS verifies the app's code signature.
+and smokes the installed executable under Ubuntu's default user-namespace
+restriction, so it starts only through the deb's AppArmor profile. macOS
+verifies the app's code signature.
 A pull request into `main` selects the matrix when its tested merge changes the
 desktop inputs listed in
 [`tools/ci-select-jobs.mjs`](../../tools/ci-select-jobs.mjs) or `main`'s own

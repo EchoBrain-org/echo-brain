@@ -2,6 +2,8 @@ import { validateExternalHumanIdentityLinkContractV2, validateOrganizationToolCo
 import type { ApprovalContractSha256 } from "@echo-brain/organization-control-plane/application/record-visibility-policy-contracts-v1";
 import { canonicalJson, canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
 import type Database from "better-sqlite3";
+import type { SlackApprovalTargetV1 } from "../../private-approval/slack-approval-presenter-v1.js";
+import { readActiveSlackConnectionV1 } from "./sqlite-slack-active-connection-v1.js";
 
 /** Exact Slack external-human-link commitment for the assigned human. */
 export interface PrivateApprovalSlackIdentityLinkV1 {
@@ -255,4 +257,106 @@ export function resolveCurrentSlackDmApprovalReviewerTargetV1(
       provider_subject_id: link.provider_subject_id,
     }),
   });
+}
+
+/**
+ * The approval card target for a current reviewer on the active connection, or null when the reviewer has no
+ * exact, DM-eligible Slack identity there.
+ */
+export function resolveSlackDmApprovalTargetV1(
+  database: Database.Database,
+  state: SlackDmApprovalReviewerTargetCoordinatesV1,
+  reviewer: CurrentSlackDmApprovalReviewerV1,
+): SlackApprovalTargetV1 | null {
+  const active = readActiveSlackConnectionV1(database, state);
+  if (active === undefined) return null;
+  const resolved = resolveCurrentSlackDmApprovalReviewerTargetV1(database, state, active.connection.connection_id, reviewer);
+  if (resolved === undefined) return null;
+  const link = resolved.current_slack_identity_link;
+  return {
+    connection_id: active.connection.connection_id,
+    external_identity_link_id: link.external_identity_link_id,
+    external_identity_link_contract_sha256: link.external_identity_link_contract_sha256,
+    slack_workspace_id: active.connection.provider_tenant_id,
+    slack_subject_id: link.provider_subject_id,
+    api_app_id: active.connection.provider_app_id,
+  };
+}
+
+/**
+ * Whether a stored card target still names the active connection and app, and an active identity link with the
+ * same contract and Slack user.
+ */
+export function isCurrentSlackDmApprovalTargetV1(
+  database: Database.Database,
+  state: SlackDmApprovalReviewerTargetCoordinatesV1,
+  target: SlackApprovalTargetV1,
+): boolean {
+  const active = readActiveSlackConnectionV1(database, state);
+  if (
+    active === undefined ||
+    active.connection.connection_id !== target.connection_id ||
+    active.connection.provider_tenant_id !== target.slack_workspace_id ||
+    active.connection.provider_app_id !== target.api_app_id
+  )
+    return false;
+  return (
+    database
+      .prepare(
+        `SELECT 1 FROM organization_external_human_link_current WHERE external_identity_link_id=? AND contract_sha256=? AND current_status='active' AND provider_subject_id=?`,
+      )
+      .get(target.external_identity_link_id, target.external_identity_link_contract_sha256, target.slack_subject_id) !== undefined
+  );
+}
+
+/** A clicking Slack user resolved to one ECHO member and the identity link the click is checked against. */
+export interface SlackApprovalClickActorV1 {
+  readonly organization_id: string;
+  readonly principal_id: string;
+  readonly membership_id: string;
+  readonly connection_id: string;
+  readonly api_app_id: string;
+  readonly external_identity_link_id: string;
+  readonly contract_sha256: string;
+}
+
+/**
+ * The one active owner or employee, among `members`, whose current Slack identity on the active connection is the
+ * clicking user in its workspace; null when none or several match.
+ */
+export function matchSlackApprovalClickActorV1(
+  database: Database.Database,
+  state: SlackDmApprovalReviewerTargetCoordinatesV1,
+  click: { readonly workspace_id: string; readonly subject_id: string },
+  members: readonly {
+    readonly organization_id: string;
+    readonly principal_id: string;
+    readonly membership_id: string;
+    readonly membership_type: string;
+  }[],
+): SlackApprovalClickActorV1 | null {
+  const active = readActiveSlackConnectionV1(database, state);
+  if (active === undefined || active.connection.provider_tenant_id !== click.workspace_id) return null;
+  const matches = members.flatMap((actor) => {
+    if (actor.membership_type !== "owner" && actor.membership_type !== "employee") return [];
+    const target = resolveCurrentSlackDmApprovalReviewerTargetV1(database, state, active.connection.connection_id, {
+      principal_id: actor.principal_id,
+      membership_id: actor.membership_id,
+      membership_type: actor.membership_type,
+    });
+    return target === undefined || target.current_slack_identity_link.provider_subject_id !== click.subject_id
+      ? []
+      : [{ actor, link: target.current_slack_identity_link }];
+  });
+  if (matches.length !== 1 || matches[0] === undefined) return null;
+  const { actor, link } = matches[0];
+  return {
+    organization_id: actor.organization_id,
+    principal_id: actor.principal_id,
+    membership_id: actor.membership_id,
+    connection_id: active.connection.connection_id,
+    api_app_id: active.connection.provider_app_id,
+    external_identity_link_id: link.external_identity_link_id,
+    contract_sha256: link.external_identity_link_contract_sha256,
+  };
 }

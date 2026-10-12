@@ -252,8 +252,8 @@ describe('open items written when an impact check finishes', () => {
     expect(items.find(item => item.pointer.kind === 'ticket')).toMatchObject({ state: 'unsent', relation: 'needs_updating', expected: 'launch next week', owner_membership_id: f.membership('mina'), owner_match: 'jira_account', record_sha256: f.record });
     expect(items.find(item => item.pointer.kind === 'approved_record')).toMatchObject({ state: 'unsent', relation: 'conflicts', expected: 'pilot starts next week', owner_membership_id: f.membership('ari'), owner_match: 'approver' });
     // One bulk assignee read, with the approver's own session.
-    expect(f.jira_owners.assignees).toHaveBeenCalledTimes(1);
-    expect(f.jira_owners.assignees).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'ari', ticket_ids: ['10012'] }));
+    expect(f.owners.assignees).toHaveBeenCalledTimes(1);
+    expect(f.owners.assignees).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'ari', ticket_ids: ['10012'] }));
   });
 
   it('reports a run whose attempt stopped without finishing as pending, without changing it, and starts it again (R60)', async () => {

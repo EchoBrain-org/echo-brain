@@ -3,8 +3,8 @@ import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { openStagingSyntheticPrivateDmCanaryControlV1, STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1 } from "../../../../src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.js";
-import type { OpenedOrganizationAuthorityRuntime } from "../../../../../../../services/organization-authority/src/composition/organization-authority-runtime.js";
+import { openStagingSyntheticPrivateDmCanaryControlV1, STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1 } from "../../../src/composition/staging/staging-release-canary-control-v1.js";
+import type { OpenedOrganizationAuthorityRuntime } from "../../../src/composition/organization-authority-runtime.js";
 
 const RELEASE_ID = "clean-v1-staging-canary";
 const directories: string[] = [];

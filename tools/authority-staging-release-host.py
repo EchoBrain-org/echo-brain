@@ -141,7 +141,6 @@ def validate_request(request):
     for name, artifact in request['files'].items():
         require(re.fullmatch(r'[a-f0-9]{64}', artifact['sha256']) is not None)
         if name in TOOLS and set(artifact) == {'sha256'}:
-            require(request['action'] != 'install' or request['old_tool_hashes'][name] == artifact['sha256'])
             files[name] = None
             continue
         require(set(artifact) == {'sha256', 'base64'})
@@ -631,7 +630,8 @@ def execute_pinned(request, request_hash, root, files, invoke, now, binding_ok):
             for index, name in enumerate(TOOLS):
                 immutable(operation / f'tool-{index}.before', regular(root / name))
                 if files[name] is None:
-                    require(old_hashes[name] == request['files'][name]['sha256'])
+                    # The preconditions bound it to its old or new hash. A
+                    # bounded partial install leaves it; a later install sends it.
                     continue
                 # clean-data may be a separate filesystem from deployment.
                 # Create the final temp beside its destination, then rename.

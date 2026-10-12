@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readTemplate, resource } from "../support/cloudformation-template.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const TEMPLATE = resolve(
@@ -12,27 +12,7 @@ const S3_TEMPLATE = resolve(
   "deploy/client-updates/staging-feed-s3-v1.template.json",
 );
 
-type Resource = {
-  readonly Type: string;
-  readonly DeletionPolicy?: string;
-  readonly UpdateReplacePolicy?: string;
-  readonly Properties?: Record<string, unknown>;
-};
-
-type Template = {
-  readonly Resources: Record<string, Resource>;
-  readonly Outputs: Record<string, { readonly Value: unknown }>;
-};
-
-function template(path = TEMPLATE): Template {
-  return JSON.parse(readFileSync(path, "utf8")) as Template;
-}
-
-function resource(stack: Template, logicalId: string): Resource {
-  const value = stack.Resources[logicalId];
-  expect(value, `missing ${logicalId}`).toBeDefined();
-  return value!;
-}
+const template = (path = TEMPLATE) => readTemplate(path);
 
 describe("CLI update staging-feed stack", () => {
   it("keeps the feed private and exposes only HTTPS GET/HEAD through its exact CloudFront distribution", () => {

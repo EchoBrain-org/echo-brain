@@ -2,13 +2,15 @@ import { useState } from 'preact/hooks';
 import type { ProjectSummary } from '../../shared/protocol.js';
 
 /** A controlled, multi-project picker for a screen that already owns its choices. */
-export function ProjectPicker({ projects, ticked, onTick, onMore, more, max }: {
+export function ProjectPicker({ projects, ticked, onTick, onMore, more, max, disabled = false }: {
   projects: readonly ProjectSummary[];
   ticked: readonly string[];
   onTick(id: string): void;
   onMore(): void;
   more: boolean;
   max: number;
+  /** The choices are locked: nothing can be ticked, found or loaded. */
+  disabled?: boolean;
 }) {
   const [find, setFind] = useState('');
   const query = projects.length > 8 ? find.trim().toLocaleLowerCase() : '';
@@ -19,7 +21,7 @@ export function ProjectPicker({ projects, ticked, onTick, onMore, more, max }: {
   return <>
     {projects.length > 8 && <input
       type="text" class="field find" data-testid="projects-find" placeholder="Find a project" aria-label="Find a project" spellcheck={false}
-      value={find} onInput={event => setFind((event.target as HTMLInputElement).value)}
+      disabled={disabled} value={find} onInput={event => setFind((event.target as HTMLInputElement).value)}
       onKeyDown={event => {
         if (event.key !== 'Enter' || event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
         event.preventDefault();
@@ -31,12 +33,12 @@ export function ProjectPicker({ projects, ticked, onTick, onMore, more, max }: {
       {shown.map(project => {
         const on = chosen.has(project.project_id);
         return <label class="project-tick" key={project.project_id} data-testid="projects-row">
-          <input type="checkbox" checked={on} disabled={!on && full} onChange={() => onTick(project.project_id)} />
+          <input type="checkbox" checked={on} disabled={disabled || (!on && full)} onChange={() => onTick(project.project_id)} />
           <span>{project.name}</span>
         </label>;
       })}
       {shown.length === 0 && <div class="project-note" data-testid="projects-none">{query ? 'No project matches.' : 'No projects yet.'}</div>}
-      {more && <button type="button" class="link-button" data-testid="projects-more" onClick={onMore}>More projects</button>}
+      {more && <button type="button" class="link-button" data-testid="projects-more" disabled={disabled} onClick={onMore}>More projects</button>}
     </div>
     <div aria-live="polite">{full && <span class="project-note" data-testid="projects-limit">Up to {max} projects.</span>}</div>
   </>;

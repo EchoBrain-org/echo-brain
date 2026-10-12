@@ -530,6 +530,12 @@ export function clearToast(shown: number): void {
 }
 
 function set(patch: Partial<State>): void {
+  // Leaving Ask by any route drops a late answer: the host stops working on it.
+  if ('ask' in patch && patch.ask === null && activeAskCancelId) {
+    const cancelId = activeAskCancelId;
+    activeAskCancelId = null;
+    void rpc('ask.cancel', { cancel_id: cancelId });
+  }
   state = { ...state, ...patch, ...(patch.toast ? { toastShown: state.toastShown + 1 } : {}) };
   // A modal owns keyboard focus. Dismiss only the transient project menu,
   // retaining settings drafts and writes while unmounting its global handlers.
@@ -554,8 +560,11 @@ function expect(): Expect | null {
   return account ? { authority: account.authority, membership_id: account.membership_id } : null;
 }
 
-/** Access that was lost or refused. A timeout, an outage or a bad reply says nothing about it. */
-const ACCESS_LOST = ['signed_out', 'unauthorized', 'stale_access_state', 'sign_in_required', 'not_found', 'forbidden', 'owner_access_required'];
+/**
+ * Access that was lost or refused. A timeout, an outage or a bad reply says nothing about it, and neither does
+ * stale_access_state, which also means only that what was acted on changed meanwhile: the status read settles it.
+ */
+const ACCESS_LOST = ['signed_out', 'unauthorized', 'sign_in_required', 'not_found', 'forbidden', 'owner_access_required'];
 
 /**
  * Signed out or switched under us: re-read the account. The page that failed
@@ -618,7 +627,11 @@ function applyStatus(status: AppStatus): void {
   }
   lastAccount = { authority: next.authority, membership_id: next.membership_id };
   signOutPending = null;
-  if (!same || !wasSignedIn) { void loadProjects(); void loadArchivedProjects(); void loadHome(); }
+  if (!same || !wasSignedIn) {
+    void loadProjects(); void loadArchivedProjects(); void loadHome();
+    // New project kept through a sign-out goes on with what waited while no one was signed in.
+    pumpNewProject();
+  }
 }
 
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
@@ -2104,7 +2117,7 @@ function appliedProjectSetting(project: ProjectSummary, operation: 'rename' | 'a
   forgetLeftProject(project.project_id);
 }
 
-/** Leaving removes every local target for the project before returning Home. */
+/** Leaving removes every local target for the project before returning Home, which reads again. */
 function forgetLeftProject(projectId: string): void {
   const projects = state.projects.items.filter(project => project.project_id !== projectId);
   const archivedProjects = state.archivedProjects.items.filter(project => project.project_id !== projectId);
@@ -2128,6 +2141,7 @@ function forgetLeftProject(projectId: string): void {
   listChanged();
   if (making && ownProject) finishNewProject(making);
   unresolvedChanged();
+  void loadHome();
 }
 
 // ---- people ----------------------------------------------------------------------
@@ -3140,9 +3154,6 @@ export async function copyAnswer(): Promise<boolean> {
 
 /** Back or Escape: leaves the thread, and it is gone. */
 export function closeAsk(): void {
-  const cancelId = activeAskCancelId;
-  activeAskCancelId = null;
-  if (cancelId) void rpc('ask.cancel', { cancel_id: cancelId });
   set({ ask: null, sources: null });
   syncSearch();
 }
@@ -3858,6 +3869,8 @@ export interface DecisionState {
   share: boolean;
   owners: { signal_id: string; action: string; owner: string }[];
   busy: boolean;
+  /** The approve or reject may have arrived: the choices are locked, and a resend repeats them. */
+  unknown?: boolean;
   /** The impact check of an approved decision, and its card once read. */
   run: PersonRunV1 | null;
   impact: ImpactView | null | undefined;
@@ -4251,18 +4264,22 @@ async function readImpact(mine: number, runId: string): Promise<void> {
 function editDecision(patch: Partial<DecisionState>): void {
   if (state.decision && state.route.page === 'decision') set({ decision: { ...state.decision, ...patch } });
 }
-export function setDecisionAudience(audience: DecisionState['audience']): void { editDecision({ audience }); }
-export function setDecisionShare(share: boolean): void { editDecision({ share }); }
+/** The choices change only while nothing is on its way or may have arrived: a resend must repeat what was sent. */
+function editChoices(patch: Partial<DecisionState>): void {
+  if (!state.decision?.busy && !state.decision?.unknown) editDecision(patch);
+}
+export function setDecisionAudience(audience: DecisionState['audience']): void { editChoices({ audience }); }
+export function setDecisionShare(share: boolean): void { editChoices({ share }); }
 export function setDecisionOwner(signalId: string, owner: string): void {
   const decision = state.decision;
-  if (decision) editDecision({ owners: decision.owners.map(item => item.signal_id === signalId ? { ...item, owner } : item) });
+  if (decision) editChoices({ owners: decision.owners.map(item => item.signal_id === signalId ? { ...item, owner } : item) });
 }
 export function tickDecisionProject(projectId: string): void {
   const decision = state.decision;
   if (!decision) return;
   const ticked = decision.project_ids.includes(projectId);
   if (!ticked && decision.project_ids.length >= MAX_CAPTURE_PROJECTS) return;
-  editDecision({ project_ids: ticked ? decision.project_ids.filter(id => id !== projectId) : [...decision.project_ids, projectId].sort() });
+  editChoices({ project_ids: ticked ? decision.project_ids.filter(id => id !== projectId) : [...decision.project_ids, projectId].sort() });
 }
 
 /** Approve or Reject: one send per opening. Home shows where it went; the check runs by itself. */
@@ -4284,7 +4301,8 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
     goHome();
     set({ toast });
   } catch (error) {
-    if (decisionShown(mine)) editDecision({ busy: false, failure: error instanceof Error ? error.message : 'That was not sent. Try again.' });
+    const unknown = outcomeUnknown(failureOf(error), decision.unknown === true);
+    if (decisionShown(mine)) editDecision({ busy: false, unknown, failure: error instanceof Error ? error.message : 'That was not sent. Try again.' });
   }
 }
 

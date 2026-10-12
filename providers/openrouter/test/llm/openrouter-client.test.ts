@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OpenRouterClient } from "../../../../../providers/openrouter/src/llm/openrouter-client.js";
+import { OpenRouterClient } from "../../src/llm/openrouter-client.js";
 import {
   StructuredGenerationAttemptError,
   type StructuredGenerationRequest,
@@ -167,6 +167,18 @@ describe('OpenRouter provider client', () => {
       expect(JSON.stringify(failure)).not.toContain(
         'generation-id-must-not-escape',
       );
+    },
+  );
+
+  it.each([[429, true], [503, true], [400, false], [401, false]])(
+    'declares a %i refusal unbilled: %s',
+    async (status, unbilled) => {
+      const refusal = new OpenRouterClient({
+        credentialRef: 'env:OPENROUTER_API_KEY',
+        credentialResolver: () => 'openrouter-secret',
+        fetchImpl: async () => new Response('{}', { status }),
+      }).generateStructured(generationRequest);
+      await expect(refusal).rejects.toMatchObject({ http_status: status, unbilled });
     },
   );
 

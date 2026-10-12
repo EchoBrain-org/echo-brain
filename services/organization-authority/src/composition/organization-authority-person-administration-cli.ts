@@ -1,55 +1,12 @@
+/**
+ * In-process Person setup helpers for the setup and service commands. No
+ * command-line program is built from this module.
+ */
 import { readFileSync } from "node:fs";
-import { canonicalJson } from "@echo-brain/federation-protocol";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import type { PersonSessionOidcConfiguration } from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
 import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
-import {
-  initializePersonSessionCredentials,
-  issuePersonOnboardingInvitation,
-} from "./person-onboarding-service.js";
-
-const USAGE = `usage:
-  credentials-init --state-dir <absolute-path>
-  invite --state-dir <absolute-path> --oidc-config <absolute-json-path> --pkce-key-file <absolute-path> --membership-id <mem-id> --expected-email <email> --authority-url <https-origin> --out <absolute-path>`;
-
-interface OrganizationAuthorityPersonAdministrationCliIo {
-  stdout(value: string): void;
-  stderr(value: string): void;
-}
-const PROCESS_IO: OrganizationAuthorityPersonAdministrationCliIo = {
-  stdout: (value) => process.stdout.write(value),
-  stderr: (value) => process.stderr.write(value),
-};
-
-function flags(
-  values: readonly string[],
-  accepted: readonly string[],
-): Readonly<Record<string, string>> {
-  const result: Record<string, string> = {};
-  for (let index = 0; index < values.length; index += 2) {
-    const key = values[index];
-    const value = values[index + 1];
-    if (
-      key === undefined ||
-      value === undefined ||
-      !accepted.includes(key) ||
-      result[key] !== undefined ||
-      value.length === 0
-    )
-      throw new Error(USAGE);
-    result[key] = value;
-  }
-  return result;
-}
-
-function required(
-  values: Readonly<Record<string, string>>,
-  key: string,
-): string {
-  const value = values[key];
-  if (value === undefined) throw new Error(USAGE);
-  return value;
-}
+import { issuePersonOnboardingInvitation } from "./person-onboarding-service.js";
 
 export function readPersonOidcConfiguration(path: string): {
   configuration: PersonSessionOidcConfiguration;
@@ -105,50 +62,29 @@ export function assertPersonAuthorityCallback(
   }
 }
 
-export async function runOrganizationAuthorityPersonAdministrationCli(
-  argv: readonly string[],
-  io: OrganizationAuthorityPersonAdministrationCliIo = PROCESS_IO,
-): Promise<number> {
-  const command = argv[0];
-  if (command === "credentials-init") {
-    const parsed = flags(argv.slice(1), ["--state-dir"]);
-    if (Object.keys(parsed).length !== 1) throw new Error(USAGE);
-    io.stdout(
-      `${canonicalJson(initializePersonSessionCredentials({ state_directory: required(parsed, "--state-dir") }) as never)}\n`,
-    );
-    return 0;
-  }
-  if (command === "invite") {
-    const parsed = flags(argv.slice(1), [
-      "--state-dir",
-      "--oidc-config",
-      "--pkce-key-file",
-      "--membership-id",
-      "--expected-email",
-      "--authority-url",
-      "--out",
-    ]);
-    if (Object.keys(parsed).length !== 7) throw new Error(USAGE);
-    const configured = readPersonOidcConfiguration(
-      required(parsed, "--oidc-config"),
-    );
-    const authorityUrl = required(parsed, "--authority-url");
-    assertPersonAuthorityCallback(authorityUrl, configured.configuration);
-    const result = issuePersonOnboardingInvitation({
-      state_directory: required(parsed, "--state-dir"),
-      oidc: configured.configuration,
-      pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(
-        `file:${required(parsed, "--pkce-key-file")}`,
-      ),
-      membership_id: required(parsed, "--membership-id"),
-      expected_email: required(parsed, "--expected-email"),
-      authority_url: authorityUrl,
-      output_path: required(parsed, "--out"),
-    });
-    io.stdout(
-      `${canonicalJson({ schema_version: 1, kind: "echo-clean-person-invitation-issued-v1", ...result } as never)}\n`,
-    );
-    return 0;
-  }
-  throw new Error(USAGE);
+export interface SetupOwnerInvitationInput {
+  readonly state_directory: string;
+  readonly oidc_config_path: string;
+  readonly pkce_key_file: string;
+  readonly membership_id: string;
+  readonly expected_email: string;
+  readonly authority_url: string;
+  readonly output_path: string;
+}
+
+/** Issues the owner's one-time invitation from setup's private file paths. */
+export function issueSetupOwnerInvitation(input: SetupOwnerInvitationInput): void {
+  const configured = readPersonOidcConfiguration(input.oidc_config_path);
+  assertPersonAuthorityCallback(input.authority_url, configured.configuration);
+  issuePersonOnboardingInvitation({
+    state_directory: input.state_directory,
+    oidc: configured.configuration,
+    pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(
+      `file:${input.pkce_key_file}`,
+    ),
+    membership_id: input.membership_id,
+    expected_email: input.expected_email,
+    authority_url: input.authority_url,
+    output_path: input.output_path,
+  });
 }

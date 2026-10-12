@@ -16,6 +16,7 @@ supersedes: []
 superseded_by: []
 updates:
   - ADR-0019
+  - ADR-0022
   - ADR-0024
 ---
 

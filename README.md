@@ -51,7 +51,8 @@ Tokens are never printed by successful commands.
 
 - external OIDC Person identity and rotating sessions;
 - organization authorization and audit;
-- meeting-source, decision-processing, and Slack approval and identity adapters;
+- meeting-source, decision-processing, and Slack approval and identity
+  adapters, plus the per-person live Jira and Confluence readers;
 - the append-only organization record; and
 - deterministic, permission-aware record reads and cited answers.
 
@@ -59,12 +60,17 @@ The server starts only from six byte-pinned baseline schemas, one per state
 role: Authority V14, control-plane V4, record-log V4, retrieval facts V3,
 retrieval lexical V2 and retrieval content V2. Startup refuses older state
 instead of migrating it; historical baselines and converters remain in Git
-history. Released retrieval
-is the sole content-release boundary. The answer-composition generation path is one
-synchronous Person `ask` path: one bounded plan, one released-retrieval batch,
-at most one answer call, and
-citations limited to that request's released atoms. It has no agents, tools,
-memory, streaming, or direct record or retrieval-store access.
+history.
+
+Ask is the agentic research loop of
+[ADR-0019](docs/decisions/ADR-0019-agentic-ask-v1.md) as updated by
+[ADR-0022](docs/decisions/ADR-0022-agentic-ask-only.md): a bounded number of
+research rounds over read-only search, open and list tools, plus the asker's
+request-local live Jira and Confluence sources when they are configured, then
+a final answer call. Citations are limited to evidence that request released
+and audited, and the loop has no direct record or store access. The evidence
+desk owns Person authorization and release audits; Person list and open read
+originals outside the answer-model gate.
 
 ## Repository layout
 
@@ -75,7 +81,7 @@ packages/organization-processing/       Provider-neutral meeting processing
 packages/organization-control-plane/    Linked Authority control-plane module
 packages/organization-record/           Linked Authority record module
 packages/organization-retrieval/        Linked Authority retrieval module
-providers/                              Granola, Slack, model and synthetic provider adapters
+providers/                              Granola, Slack, Jira, Confluence, OpenRouter model, synthetic and shared provider adapters
 services/organization-authority/        Deployable Authority and processing service
 src/product/person-client/              Standalone Person CLI package
 product/echo-desktop/                   Electron desktop app over the Person client
@@ -103,6 +109,8 @@ Choose the smallest check that covers the change while iterating:
 | Checking dependency boundaries quickly | `npm run check:architecture-boundaries` | Forbidden imports and package boundaries |
 | Editing docs and evidence references | `npm run check:docs` | Documentation structure and Git proof references |
 | Editing the core evaluation harness | `npm run test:capacity` | Contract and verifier tests in `tools/evals/authority-core` |
+| Editing the research-loop evaluator | `npm run test:research-loop-eval` | `node --test` suites in `tools/evals/research-loop` |
+| Editing the desktop app | `cd product/echo-desktop && npm run typecheck && npm test` | Desktop typecheck, unit and Electron end-to-end tests (see `product/echo-desktop/README.md`) |
 | Measuring one runtime round | `npm run capacity:checkpoint` | Deterministic, provider-independent functional checkpoint; about one minute, not an org-capacity result |
 
 For one test file, run `npm run build:workspaces` followed by
@@ -113,11 +121,14 @@ Workspace builds reuse TypeScript's existing outputs. `npm test` and
 
 Use the focused command that covers the change during the inner loop. Before
 submitting the final reviewable tree, run `npm run check`: boundary and
-documentation checks, TypeScript checking, linting, and the complete active
-test suite.
-CI also runs both core evaluation commands above. The full suite uses at most
-two isolated test workers; mutable Git and packaging fixtures use temporary
-checkouts.
+documentation checks, TypeScript checking, linting, and the complete root
+Vitest suite. It does not run the desktop app's tests or the `node --test`
+evaluator suites; when a change touches them, also run their commands from
+the table above or the [test map](tests/README.md).
+CI also runs both core evaluation commands above, the research-loop evaluator
+tests, and the desktop app in its own job. Locally the root suite uses at most
+two isolated test workers (CI's Vitest leg uses three); mutable Git and
+packaging fixtures use temporary checkouts.
 
 For operational tools, start with the
 [Authority operator playbook](docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
@@ -137,9 +148,10 @@ mkdir -p /absolute/path/to/artifacts
 npm run pack:person-client -- /absolute/path/to/artifacts
 ```
 
-The packer includes only the Person client and its four bundled workspace
-dependencies: the federation, organization protocol and organization API
-contracts and the Slack client fragment. CI installs that exact tarball
+The packer includes only the Person client and the six workspace dependencies
+listed in `bundleDependencies` of `src/product/person-client/package.json`:
+the federation, organization protocol and organization API contracts and the
+Slack, Jira and Confluence client fragments. CI installs that exact tarball
 offline on macOS arm64 and checks version, help, and absent-session behavior.
 
 Installed CLI shape:
@@ -159,8 +171,29 @@ release and update workflows are documented under `deploy/release/`.
 
 For a disposable, local-only Authority exercise, use the committed harness. It
 creates synthetic state outside the checkout, uses a distinct Compose project,
-and binds two high loopback ports. It does not read deployment state, a release
-record, or any provider credential.
+and binds two high loopback ports. It does not read deployment state or a
+release record. Its only credential input is the Nango secret-key file you
+name, which it mounts read-only into the container.
+
+`up` and `reset` refuse to start until two variables are set (`down` and
+`ca-path` need neither):
+
+- `ECHO_LOCAL_NANGO_SECRET_KEY_FILE`: an absolute, normalized path to a
+  regular file you own with mode `0600`, holding 32 to 4096 visible ASCII
+  characters and no trailing newline.
+- `ECHO_LOCAL_NANGO_INTEGRATION`: the Nango Slack integration key, for example
+  `slack`.
+
+No Nango call happens before Slack setup, so a random placeholder key, as CI
+uses, is enough unless you exercise Slack setup, which needs a key from your
+own development Nango environment. Never use the staging or production Nango
+environment key here.
+
+```bash
+export ECHO_LOCAL_NANGO_INTEGRATION=slack
+export ECHO_LOCAL_NANGO_SECRET_KEY_FILE="$HOME/.echo-local-nango-secret-key"
+(umask 077 && node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))' > "$ECHO_LOCAL_NANGO_SECRET_KEY_FILE")
+```
 
 ```bash
 npm run authority:local -- up
@@ -209,9 +242,9 @@ The public descriptor health endpoint is:
 GET /v1/authority-descriptor
 ```
 
-Live meeting processing remains disabled until an administrator installs an
-explicit processing-source configuration binding. Identity/session testing
-does not enable meeting ingestion by itself.
+Ordinary deployments admit no organization meeting source; meetings enter
+only through a person's own connected source. Identity/session testing does
+not enable meeting ingestion by itself.
 
 ### AWS staging slot
 
@@ -233,7 +266,10 @@ volume around a disposable EC2 host. Its initial host onboarding and three
 retained-state host-replacement cycles have passed qualification; this does not
 claim a snapshot restore, GAP-01/#20 closure, or GAP-04 closure. The
 [staging sprint specification](docs/product/2026-08-26-disposable-authority-staging-sprint-v1.md)
-owns the recovery and safety boundaries. The [assertion
+owns the recovery and safety boundaries. Its Phase 4 check that the host
+bundle's `source_commit` equals the accepted release's source SHA is not
+enforced by the host or the controller; the retained-volume `up` steps below
+say what the operator checks instead. The [assertion
 matrix](docs/qualification/authority-staging-host-replacement-v1-matrix.md) and
 [qualification report](docs/qualification/QUAL-20260827-174106-001-authority-staging-host-replacement-v1.md)
 own the passed assertions and exact-run evidence.
@@ -242,7 +278,7 @@ own the passed assertions and exact-run evidence.
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `slot-init` | Creates or repairs the retained AWS boundary, then creates or verifies its Cloudflare tunnel, ingress, DNS record, and connector-token deposit.                                    |
 | `up`        | Creates a disposable host and attaches the retained data volume. `--require-authority` binds a retained restart to resume the accepted Authority before CloudFormation signals ready, then gates it on the independently pinned public descriptor. |
-| `down`      | Stops the host safely and removes only disposable host resources. The edge and retained volume remain.                                                                             |
+| `down`      | Stops the host safely and removes only disposable host resources. The edge and retained volume remain. Refuses before stopping anything while a staged release candidate, an operation lock or the staging release guard is present, because a retained `up` cannot clear them. |
 | `status`    | Reads AWS, host, and public-descriptor observations separately. An edge observation alone is never proof that the host or Authority is ready.                                      |
 
 Prerequisites: an `echo-prod` IAM Identity Center session, `asm-exec`, the
@@ -334,6 +370,17 @@ npm run authority:staging -- status \
   --input /absolute/private/authority-staging/input.json
 ```
 
+A retained-volume `up` starts from a new root disk: only `clean-data/` is
+retained, and the six host tools under `/srv/echo-authority-clean-v1` are the
+copies in the `hostSetup` bundle, not the ones the release lane last installed.
+Nothing compares the bundle's source with the installed tooling or the accepted
+release. Before that `up`, rebuild the bundle with
+`npm run bundle:authority-staging-host` from a clean checkout of the
+`tooling_source` in the last succeeded release-lane `install` receipt, writing
+to a new output path, and update `hostSetup`'s `path` and `sha256` from its
+manifest. If an older bundle was used, the next lane `install` must pass that
+bundle's commit as `--previous-tooling-source`.
+
 The first `up` intentionally omits `--require-authority`: a fresh volume has
 not been onboarded yet. After the first accepted release reaches terminal green,
 a human must copy the independently trusted Authority `authority_pin_sha256`
@@ -385,7 +432,7 @@ deleting or renaming the stack.
 ### Initial host onboarding input transfer
 
 Do not SSH, copy credentials into a terminal, or open a root shell. In the
-ordinary eight-file onboarding mode, the input moves through one short-lived, KMS-encrypted and
+ordinary seven-file onboarding mode, the input moves through one short-lived, KMS-encrypted and
 versioned transfer bucket. The host receives permission for only the exact
 object version during one bounded SSM command, with a 30-minute IAM expiry as
 a backstop that starts when the plan is made. Execute refuses a grant with less
@@ -393,7 +440,7 @@ than eight minutes left for CloudFormation plus the 300-second Run Command
 plugin timeout. The controller polls for a terminal SSM result for up to six
 minutes, cancels on local timeout, and waits up to two more minutes for terminal
 cancellation before it permits any cleanup. It verifies the archive digest,
-accepts exactly the eight established regular input files, including
+accepts exactly the seven established regular input files, including
 `nango-secret-key`, runs `doctor` and
 `prepare` without exposing their output, then revokes the host permission and
 permanently deletes that exact S3 version. The private local archive and receipt
@@ -426,7 +473,7 @@ state before deciding whether a fresh operation is safe; it never reports
 `prepared`.
 
 Create a private controller input outside the checkout. Its `privateInputDir`
-must contain exactly the eight mode-`0600` files accepted by
+must contain exactly the seven mode-`0600` files accepted by
 `onboard-clean-v1.sh`; `archiveDir` must be an existing mode-`0700` directory
 outside the checkout. No secret values belong in this controller JSON.
 

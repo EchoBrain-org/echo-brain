@@ -15,7 +15,6 @@ import {
   rmSync,
 } from "node:fs";
 import { Buffer } from "node:buffer";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -42,6 +41,7 @@ import type {
 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS } from "@echo-brain/organization-authority-kernel/domain/person-session-rules";
+import { port as availablePort } from "./fixtures/owner-session.js";
 
 const roots: string[] = [];
 
@@ -51,14 +51,6 @@ function root(): string {
   const value = realpathSync(created);
   roots.push(value);
   return value;
-}
-
-async function availablePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
 }
 
 const OIDC = {

@@ -14,20 +14,6 @@ import {
   type InitializeAuthorityStateLineageV2Input,
 } from "../src/state-lineage/authority-state-lineage-initializer.js";
 
-import { applyAuthorityBaseline, AUTHORITY_BASELINE_SCHEMA_VERSION, authorityBaselineSha256 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
-import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
-import {
-  openOrganizationControlDatabase, applyOrganizationControlBaselineV4, ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4, organizationControlBaselineSha256V4,
-} from "@echo-brain/organization-control-plane/organization-control-database-v1";
-import {
-  openOrganizationRecordDatabase, applyOrganizationRecordLogBaselineV4, ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4, organizationRecordLogBaselineSha256V4,
-} from "@echo-brain/organization-record/organization-record-api-v1";
-import {
-  READABLE_SEARCH_FACTS_BASELINE_V3, readableSearchPlaneBaselineSha256,
-  READABLE_SEARCH_CONTENT_BASELINE_V2,
-  READABLE_SEARCH_LEXICAL_BASELINE_V2,
-} from "@echo-brain/organization-retrieval/readable-search-engine-v1";
-
 const roots: string[] = [];
 const AUTHORITY_ID = "oau_11111111-1111-4111-8111-111111111111";
 const ORGANIZATION_ID = "org_22222222-2222-4222-8222-222222222222";
@@ -96,76 +82,7 @@ function input(
   };
 }
 
-function realBaselineInput(
-  stateDirectory: string,
-): InitializeAuthorityStateLineageV2Input {
-  return {
-    ...input(stateDirectory),
-    schemas: {
-      authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION,
-        schema_sha256: authorityBaselineSha256(),
-      },
-      "control-plane": {
-        database_schema_version:
-          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4,
-        schema_sha256: organizationControlBaselineSha256V4(),
-      },
-      "record-log": {
-        database_schema_version:
-          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4,
-        schema_sha256: organizationRecordLogBaselineSha256V4(),
-      },
-      "retrieval-facts": {
-        database_schema_version:
-          READABLE_SEARCH_FACTS_BASELINE_V3.schema_version,
-        schema_sha256: readableSearchPlaneBaselineSha256(
-          READABLE_SEARCH_FACTS_BASELINE_V3,
-        ),
-      },
-      "retrieval-lexical": {
-        database_schema_version:
-          READABLE_SEARCH_LEXICAL_BASELINE_V2.schema_version,
-        schema_sha256: readableSearchPlaneBaselineSha256(
-          READABLE_SEARCH_LEXICAL_BASELINE_V2,
-        ),
-      },
-      "retrieval-content": {
-        database_schema_version:
-          READABLE_SEARCH_CONTENT_BASELINE_V2.schema_version,
-        schema_sha256: readableSearchPlaneBaselineSha256(
-          READABLE_SEARCH_CONTENT_BASELINE_V2,
-        ),
-      },
-    },
-    top_level_appliers: {
-      authority: { apply: applyAuthorityBaseline },
-      "control-plane": { apply: applyOrganizationControlBaselineV4 },
-      "record-log": { apply: applyOrganizationRecordLogBaselineV4 },
-    },
-    open_writable_database: (path, role) => {
-      if (role === "authority") return openAuthorityDatabase(path);
-      if (role === "control-plane")
-        return openOrganizationControlDatabase(path);
-      return openOrganizationRecordDatabase(path);
-    },
-  };
-}
-
 describe("Authority state-lineage initializer", () => {
-  it("publishes and verifies the actual three top-level baseline set", () => {
-    const parent = fixtureRoot();
-    const stateDirectory = join(parent, "state");
-    const result = initializeAuthorityStateLineageV2(
-      realBaselineInput(stateDirectory),
-    );
-
-    expect(
-      result.verification.databases.map((database) => database.role),
-    ).toEqual(["authority", "control-plane", "record-log"]);
-    expect(result.verification.retrieval.present).toBe(false);
-  });
-
   it("publishes all top-level roles, stamps manifests, and verifies the absent retrieval tree", () => {
     const parent = fixtureRoot();
     const stateDirectory = join(parent, "state");

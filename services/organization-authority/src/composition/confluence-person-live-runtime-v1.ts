@@ -14,7 +14,7 @@ import { assertPrivatePersonProviderDatabaseV1 } from './person-provider-state-v
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
 
-/** ADR-0026 permits person-bound live reads; runtime selection remains explicit. */
+/** ADR-0034 (proposed, not yet accepted) records this person-bound live read path; runtime selection remains explicit. */
 export const CONFLUENCE_PERSON_LIVE_RELEASE_APPROVED_V1 = true;
 
 /** Explicit selecting configuration, absent until enabled by an operator. */

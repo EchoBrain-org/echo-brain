@@ -22,7 +22,7 @@ if (wire[FuseV1Options.OnlyLoadAppFromAsar] !== FuseState.ENABLE) throw new Erro
 const options = { cwd: root, encoding: 'utf8', timeout: 60_000 };
 const output = execFileSync(executable, ['--smoke'], options);
 const result = JSON.parse(output.trim().split('\n').pop());
-const expected = ['renderer_has_no_node', 'bridge_present', 'test_hook_absent', 'host_started', 'client_identity'];
+const expected = ['renderer_has_no_node', 'bridge_present', 'test_hook_absent', 'lifecycle_wired', 'host_started', 'client_identity'];
 const source = execFileSync('git', ['rev-parse', 'HEAD'], options).trim();
 if (result.smoke !== 'passed' || !expected.every(check => result.checks?.[check] === true) ||
     result.build?.source_sha !== source || result.build?.dirty !== false) {

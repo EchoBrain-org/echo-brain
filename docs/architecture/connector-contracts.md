@@ -21,16 +21,20 @@ observation, never an approved fact.
 The Person CLI dispatches `person tools <verb> --tool <id>` through
 `PersonToolProviderV1`. Each provider owns its options, public wire schemas and
 client fragment, with only the authenticated `PersonToolHostV1` transport supplied
-by the product. Slack and Jira use this seam. Jira's client-only workspace keeps
-its server dependencies out of the installed Person client.
+by the product. Slack, Jira and Confluence use this seam through client-only
+workspaces that keep their server dependencies out of the installed Person
+client; the Person client composes the Granola and staging synthetic meeting
+tools itself.
 
 Provider-owned HTTP applications mount through the Authority's generic
 `person_tool_connections` collection. Route collision checks and body/response
 bounds remain host-owned; provider authentication, attempt state and grant
 verification remain adapter-owned. Client disconnect propagates an abort signal.
 Jira's POST status reconciles browser consent and may commit the grant. This
-connection step does not pull context or authorize retention. Jira remains
-production-disabled pending its proposed ADR and live qualification.
+connection step does not pull context or authorize retention.
+[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is
+accepted; runtime selection stays explicit and live qualification is still
+open.
 
 ## Personal access
 
@@ -111,6 +115,21 @@ credentials, and the Ask composition must keep model content capture off when
 live evidence can enter a prompt. The boundary's `team` display visibility
 does not authorize release to another person.
 
+Two selected diagnostic paths are explicit exceptions to that capture rule:
+
+- **Person diagnostics.** A person may select a one-use capture of their own
+  Ask or run. It stays in Authority process memory, only that person can read
+  it, every terminal read revalidates source access, and known revocation
+  erases it (see the
+  [observability runbook](../operations/RB-OPERATIONS-001-authority-observability.md#follow-a-research-execution-and-select-private-payload-capture)).
+- **Staging LangSmith tracing.** An operator-selected, staging-only exporter
+  sends each selected research run's model prompts and outputs and its tool
+  arguments and results, including live Jira and Confluence text and generated
+  JQL, to an external LangSmith project. Nothing revalidates or erases what it
+  has sent. The Authority refuses to start with a tracing selection on any
+  other origin, and the onboarding wrapper refuses non-staging Authorities (see
+  [LangSmith staging tracing](../../deploy/organization-authority/README.md#langsmith-staging-tracing)).
+
 ## Meeting exports
 
 Meeting ingestion continues to use
@@ -173,13 +192,21 @@ The provider-neutral tests exercise the common release boundary with both Slack
 and ticket fixtures; they do not call either service.
 
 Ticket evidence reaches Ask through Evidence Desk V2 and `PersonAnswerResponseV5`
-at `POST /v4/person/ask`, with the durable live-read audit. The Authority mounts
-that route only when a Jira ticket-live runtime is selected.
-[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is accepted;
-the CLI requires explicit Jira configuration. The staging switch instead reuses
-the fixed profile's existing owner grant and bounded project, without tool capture.
-Jira is the only live reader. No live Slack reader is composed, the V3 desk
-reads no Slack, and read status is not exposed to clients.
+at `POST /v4/person/ask`, and live page evidence through `PersonAnswerResponseV6`
+at `POST /v5/person/ask`, both with the durable live-read audit. The Authority
+mounts both routes whenever an answer model is bound; ticket or page evidence
+appears only when the matching Jira or Confluence live runtime is selected.
+[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is accepted
+and [ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md) is
+proposed; the CLI requires explicit Jira or Confluence configuration. On staging,
+`ECHO_STAGING_JIRA_ASK_V1` and `ECHO_STAGING_CONFLUENCE_ASK_V1` take the fixed
+connector profile's Atlassian site (Jira also takes its integration; Confluence
+uses the `confluence` integration). Each Person reads under their own grant, with
+no initial-owner or fixed-project restriction and without tool capture; the
+rehearsal's owner and fixed-project limits apply only to its diagnostic reads.
+Jira (tickets) and Confluence (pages) are the live readers. No live Slack reader
+is composed, the V3 desk reads no Slack, and read status is not exposed to
+clients.
 
 The dispatcher must preserve [ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)
 scope rules: `mine` excludes live external reads. Provider selection and

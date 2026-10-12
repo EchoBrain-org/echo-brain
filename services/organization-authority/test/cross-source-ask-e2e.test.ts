@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -7,10 +7,6 @@ import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
-import { readPrivateAuthorityPersonSessionPkceKey } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
-import type { BegunPersonOidcLogin } from '../src/application/person-identity-sessions.js';
-import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
-import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from '../src/composition/person-onboarding-service.js';
 import { startOrganizationAuthorityApiRuntime } from '../src/composition/organization-authority-api-runtime.js';
 import { openJiraPersonLiveRuntimeV1 } from '../src/composition/jira-person-live-runtime-v1.js';
 import { LEGACY_TICKET_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
@@ -18,7 +14,7 @@ import { liveSourceDescriptorV2 } from '@echo-brain/organization-authority-kerne
 import type { PersonLiveConnectorDefinitionV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
 import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
-import { port } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
+import { ownerGenesis, port, signInHttp, syntheticOidcProvider } from './fixtures/owner-session.js';
 import { crossSourceLiveFixture, JIRA_TEXT, SLACK_TEXT, SLACK_CHANNEL, SLACK_TEAM } from './fixtures/cross-source-live-fixture.js';
 import { seedCrossSourceRecords } from './fixtures/cross-source-record-fixture.js';
 import { authorization } from './fixtures/project-context-sqlite.js';
@@ -38,24 +34,11 @@ const OIDC = { issuer: 'https://issuer.example.test', client_id: 'cross-source-c
 async function fixture(owned = roots) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-cross-source-ask-')));
   chmodSync(root, 0o700); owned.push(root);
-  const initialized = bootstrapOrganizationAuthorityState({ state_directory: join(root, 'state'), organization_display_name: 'Cross-source fixture', owner_display_name: 'Fixture Owner', created_at: new Date(Date.now() - 1000).toISOString(), creating_artifact_revision: 'cross-source-http-test' });
-  const credentials = initializePersonSessionCredentials({ state_directory: initialized.state_directory });
-  const key = readPrivateAuthorityPersonSessionPkceKey(credentials.pkce_sealing_key_reference);
-  const invitation = join(root, 'invitation.json');
-  issuePersonOnboardingInvitation({ state_directory: initialized.state_directory, oidc: OIDC, pkce_sealing_key: key, membership_id: initialized.owner_membership_id, expected_email: EMAIL, authority_url: AUTHORITY, output_path: invitation });
-  let attempt: BegunPersonOidcLogin | undefined;
-  const oidc = {
-    buildAuthorizationUrl(value: BegunPersonOidcLogin) { attempt = value; return `${OIDC.issuer}/authorize?state=${encodeURIComponent(value.state)}`; },
-    async redeemAuthorizationCode() { return { kind: 'verified' as const, token: { issuer: OIDC.issuer, subject: 'cross-source-owner', audience: OIDC.client_id, nonce: attempt!.nonce, issued_at: Math.floor(Date.now() / 1000), claims: { email: EMAIL, email_verified: true } } }; },
-  };
-  const config = { state_directory: initialized.state_directory, host: '127.0.0.1' as const, port: await port(), authority_url: AUTHORITY, oidc: OIDC, client_authentication: { method: 'none' as const }, pkce_sealing_key: key };
-  const login = async (origin: string) => {
-    const { login_grant } = JSON.parse(readFileSync(invitation, 'utf8')) as { login_grant: string };
-    const begun = await fetch(`${origin}/v2/session/oidc/begin`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'identity_bootstrap', login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } }) });
-    expect(begun.status).toBe(201);
-    const callback = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(attempt!.state)}&code=synthetic`)).text();
-    return (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(callback)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
-  };
+  const owner = ownerGenesis({ root, oidc: OIDC, email: EMAIL, authority_url: AUTHORITY, revision: 'cross-source-http-test' });
+  const initialized = owner.initialized;
+  const oidc = syntheticOidcProvider(OIDC, () => EMAIL);
+  const config = { state_directory: initialized.state_directory, host: '127.0.0.1' as const, port: await port(), authority_url: AUTHORITY, oidc: OIDC, client_authentication: { method: 'none' as const }, pkce_sealing_key: owner.pkce };
+  const login = (origin: string) => signInHttp(origin, oidc, owner.login_grant);
   return { initialized, config, oidc, login };
 }
 

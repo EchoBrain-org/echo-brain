@@ -1,141 +1,12 @@
-import { runNorthstarPreSlackEvaluatorCommandV1, type NorthstarPreSlackEvaluatorDependenciesV1 } from '../../../services/organization-authority/src/composition/synthetic-demo-pre-slack-evaluator-cli-v1.js';
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type {
-  AdapterConfig,
   AdapterErrorCode,
   DecisionProcessorAdapter,
-  DecisionSet,
   ExtractedSignal,
-  MeetingDocument,
 } from "@echo-brain/organization-processing/core";
 import { AdapterError } from "@echo-brain/organization-processing/core";
 import { evaluateNorthstarPreSlackExtractionV1 } from "../src/synthetic-demo-pre-slack-evaluator-v1.js";
-import { loadSyntheticDemoMeetingCorpusV1 } from "../src/source/synthetic-demo-meeting-source-v1.js";
-import { fixedOpenRouterDecisionProcessorConfigV1, OPENROUTER_DECISION_PROCESSOR_MODEL_V1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-config-v1";
-
-const meetingsDirectory = fileURLToPath(new URL("../../../demo/meetings", import.meta.url));
-const expectationsPath = fileURLToPath(new URL("../../../demo/expectations.json", import.meta.url));
-const identity = {
-  kind: "decision-processor" as const,
-  adapter_id: "synthetic-demo-pre-slack-test",
-  instance_id: "synthetic-demo-pre-slack-test",
-  version: "1.0.0",
-};
-
-interface ExpectedSignal {
-  readonly evidence_block_ids: readonly string[];
-  readonly plain_language_fact: string;
-  readonly required_text_clauses?: readonly (readonly string[])[];
-  readonly due_date?: string;
-}
-
-interface ExpectedMeeting {
-  readonly meeting_id: string;
-  readonly required_decisions: readonly ExpectedSignal[];
-  readonly required_actions: readonly ExpectedSignal[];
-  readonly required_rationales: readonly ExpectedSignal[];
-}
-
-interface Oracle {
-  readonly meeting_expectations: readonly ExpectedMeeting[];
-}
-
-async function fixture(): Promise<{ readonly meetings: readonly MeetingDocument[]; readonly oracle: Oracle }> {
-  const [corpus, oracle] = await Promise.all([
-    loadSyntheticDemoMeetingCorpusV1(meetingsDirectory),
-    readFile(expectationsPath, "utf8").then((value) => JSON.parse(value) as Oracle),
-  ]);
-  return { meetings: corpus.meetings, oracle };
-}
-
-function signal(
-  meeting: MeetingDocument,
-  kind: ExtractedSignal["kind"],
-  expected: ExpectedSignal,
-  index: number,
-): ExtractedSignal {
-  const evidence = expected.evidence_block_ids.map((block_id) => ({ meeting_id: meeting.id, block_id }));
-  const base = {
-    id: `${meeting.id}:${kind}:${index}`,
-    text: expected.plain_language_fact,
-    subject: null,
-    confidence: 1,
-    evidence,
-  };
-  if (kind === "decision") {
-    return {
-      ...base,
-      kind,
-      status: "decided",
-    };
-  }
-  if (kind === "action") {
-    return {
-      ...base,
-      kind,
-      owner: null,
-      due_at: `${expected.due_date!}T12:00:00.000Z`,
-    };
-  }
-  return { ...base, kind, supports_signal_ids: [] };
-}
-
-function processor(
-  oracle: Oracle,
-  mutate?: (signals: ExtractedSignal[], meeting: MeetingDocument) => void,
-): DecisionProcessorAdapter {
-  return {
-    identity,
-    validateConfig: () => ({ ok: true, errors: [] }),
-    healthCheck: async () => ({ status: "healthy", checked_at: "2026-08-30T00:00:00.000Z" }),
-    extract: async (meeting) => {
-      const expected = oracle.meeting_expectations.find((item) => item.meeting_id === meeting.id)!;
-      const signals = [
-        ...expected.required_decisions.map((item, index) => signal(meeting, "decision", item, index)),
-        ...expected.required_actions.map((item, index) => signal(meeting, "action", item, index)),
-        ...expected.required_rationales.map((item, index) => signal(meeting, "rationale", item, index)),
-      ];
-      mutate?.(signals, meeting);
-      return {
-        schema_version: 1,
-        meeting_id: meeting.id,
-        meeting_revision: meeting.provenance.canonical_revision,
-        processor: identity,
-        generated_at: "2026-08-30T00:00:00.000Z",
-        signals,
-      } satisfies DecisionSet;
-    },
-  };
-}
-
-async function runCommand(
-  meetings: readonly MeetingDocument[],
-  dependencies: NorthstarPreSlackEvaluatorDependenciesV1,
-  extraArgs: readonly string[] = [],
-): Promise<{ readonly exit: number; readonly output: readonly string[] }> {
-  const output: string[] = [];
-  const exit = await runNorthstarPreSlackEvaluatorCommandV1(
-    [
-      "run",
-      "--meetings-dir", "/tmp/northstar-meetings",
-      "--expectations", "/tmp/northstar-expectations.json",
-      "--llm-credential-file", "/tmp/not-a-real-credential",
-      ...extraArgs,
-    ],
-    { stdout: (line) => output.push(line) },
-    {
-      read_credential: () => "test-credential-not-a-real-token",
-      load_corpus: async () => ({
-        meetings,
-        corpus_digest: `sha256:${"0".repeat(64)}` as `sha256:${string}`,
-      }),
-      ...dependencies,
-    },
-  );
-  return { exit, output };
-}
+import { fixture, processor } from "./pre-slack-evaluator-fixtures.js";
 
 describe("Echo pre-Slack evaluator", () => {
   it("runs the canonical four-meeting corpus offline without attribution scoring", async () => {
@@ -477,52 +348,6 @@ describe("Echo pre-Slack evaluator", () => {
     expect(groundedRejection.u4_status_guards).toEqual([]);
   });
 
-  it("keeps the production command offline when its processor and corpus seams are injected", async () => {
-    const { meetings, oracle } = await fixture();
-    const { exit, output } = await runCommand(meetings, {
-      create_processor: (config: AdapterConfig) => {
-        expect(config).toEqual(
-          fixedOpenRouterDecisionProcessorConfigV1(
-            "founder-llm-v1",
-            "file:/tmp/not-a-real-credential",
-          ),
-        );
-        expect(config.settings.model).toBe(
-          OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
-        );
-        return processor(oracle);
-      },
-      read_expectations: async () => oracle,
-    });
-
-    expect(exit).toBe(0);
-    expect(JSON.parse(output[0] ?? "")).toMatchObject({ passed: true, processed_meeting_count: 4 });
-    expect(output.join("")).not.toContain("test-credential-not-a-real-token");
-  });
-
-  it("passes an optional OpenRouter model override through the same evaluator contract", async () => {
-    const { meetings, oracle } = await fixture();
-    let configuredModel: string | undefined;
-    const { exit, output } = await runCommand(
-      meetings,
-      {
-        create_processor: (config: AdapterConfig) => {
-          configuredModel = String(config.settings.model);
-          return processor(oracle);
-        },
-        read_expectations: async () => oracle,
-      },
-      ["--model", "openai/gpt-4.1"],
-    );
-
-    expect(exit).toBe(0);
-    expect(configuredModel).toBe("openai/gpt-4.1");
-    expect(JSON.parse(output[0] ?? "")).toMatchObject({
-      evaluated_model: "openai/gpt-4.1",
-      passed: true,
-    });
-  });
-
   it("records a safe per-meeting extraction failure and continues the other meetings", async () => {
     const { meetings, oracle } = await fixture();
     const base = processor(oracle);
@@ -655,39 +480,5 @@ describe("Echo pre-Slack evaluator", () => {
         reason: "invalid_schema",
       },
     ]);
-  });
-
-  it("stops before meetings when the selected model fails the health capability gate", async () => {
-    const { meetings, oracle } = await fixture();
-    let corpusLoaded = false;
-    const unavailable: DecisionProcessorAdapter = {
-      ...processor(oracle),
-      healthCheck: async () => ({
-        status: "unavailable",
-        checked_at: "2026-08-30T00:00:00.000Z",
-      }),
-    };
-    const { exit, output } = await runCommand(meetings, {
-      create_processor: () => unavailable,
-      load_corpus: async () => {
-        corpusLoaded = true;
-        return {
-          meetings,
-          corpus_digest: `sha256:${"0".repeat(64)}` as `sha256:${string}`,
-        };
-      },
-    });
-
-    expect(exit).toBe(1);
-    expect(corpusLoaded).toBe(false);
-    expect(JSON.parse(output[0] ?? "")).toMatchObject({
-      evaluated_model: "anthropic/claude-sonnet-4.6",
-      passed: false,
-      extraction_failures: [{
-        meeting_id: null,
-        step: "decision_processor.health_check",
-        reason: "health_check_failed",
-      }],
-    });
   });
 });

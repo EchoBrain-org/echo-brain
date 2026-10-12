@@ -45,7 +45,8 @@
       "name": "organization-authority-kernel-domain",
       "from": "packages/organization-authority-kernel/src/domain/**",
       "allowed_imports": [
-        "packages/organization-authority-kernel/src/**"
+        "packages/organization-authority-kernel/src/domain/**",
+        "packages/organization-authority-kernel/src/shared/person-email-rules.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -58,7 +59,8 @@
       "name": "organization-authority-kernel-application",
       "from": "packages/organization-authority-kernel/src/application/**",
       "allowed_imports": [
-        "packages/organization-authority-kernel/src/**"
+        "packages/organization-authority-kernel/src/application/**",
+        "packages/organization-authority-kernel/src/domain/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -73,7 +75,8 @@
       "name": "organization-authority-kernel-shared",
       "from": "packages/organization-authority-kernel/src/shared/**",
       "allowed_imports": [
-        "packages/organization-authority-kernel/src/**"
+        "packages/organization-authority-kernel/src/shared/**",
+        "packages/organization-authority-kernel/src/domain/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -89,7 +92,10 @@
       "name": "organization-authority-kernel-answer-composition",
       "from": "packages/organization-authority-kernel/src/answer-composition/**",
       "allowed_imports": [
-        "packages/organization-authority-kernel/src/**"
+        "packages/organization-authority-kernel/src/answer-composition/**",
+        "packages/organization-authority-kernel/src/shared/**",
+        "packages/organization-authority-kernel/src/domain/**",
+        "packages/organization-authority-kernel/src/composition/answer-composition-generation-bundle-v1.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",

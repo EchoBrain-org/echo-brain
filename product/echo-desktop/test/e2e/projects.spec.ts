@@ -188,14 +188,28 @@ test('a document reads a page of text at a time, and Save original writes the ch
   expect(originals()).toBe(1);
   expect(existsSync(target)).toBe(true);
 
-  // It leaves the project it was opened in.
+  // Someone else saved it, and Ari only belongs to Beacon: the Authority refuses to take it out, and it stays.
   await page.getByTestId('reader-actions').click();
   await page.getByTestId('reader-remove').click();
-  await expect(page.getByTestId('toast')).toHaveText('Removed from Beacon');
-  await expect(page.getByTestId('reader')).toHaveCount(0);
-  await expect(page.locator('[data-kind="document"]')).toHaveCount(0);
+  await expect(page.getByTestId('change-error')).toHaveText('This is no longer available to you.');
+  await expect(page.getByTestId('reader')).toBeVisible();
   const dissociate = run.calls().filter(call => call.path === `/v1/person/documents/${DOCUMENT}/dissociate`);
   expect(dissociate.map(call => call.body)).toEqual([expect.objectContaining({ project_id: BEACON })]);
+});
+
+test('a document leaves a project its lead opened it in', async () => {
+  run = await launch('mine');
+  const { page } = run;
+  await page.getByTestId('sidebar-project').nth(0).click();
+  await page.locator('[data-kind="document"]').click();
+  await expect(page.getByTestId('reader').locator('h1')).toHaveText('Pricing memo');
+  await page.getByTestId('reader-actions').click();
+  await page.getByTestId('reader-remove').click();
+  await expect(page.getByTestId('toast')).toHaveText('Removed from Apollo');
+  await expect(page.getByTestId('reader')).toHaveCount(0);
+  await expect(page.locator('[data-kind="document"]')).toHaveCount(0);
+  const dissociate = run.calls().filter(call => call.path === `/v1/person/documents/doc_${'9'.repeat(64)}/dissociate`);
+  expect(dissociate.map(call => call.body)).toEqual([expect.objectContaining({ project_id: APOLLO })]);
 });
 
 test('an original can leave the project it is in, or be added to another, and the reader says where it went', async () => {

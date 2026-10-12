@@ -20,6 +20,12 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import {
+  CLEAN_V1_RUNTIME_PROFILE_FILES,
+  cleanReleaseRecord,
+  cleanRuntimeProfile,
+  deployRuntimeProfileFiles,
+} from "../support/clean-v1-release.js";
 import { canonicalJsonForTest as canonicalJson } from "../support/test-canonical-json.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
@@ -27,32 +33,13 @@ const DEPLOYMENT = "deploy/organization-authority";
 // The Nango secret key fixture: a bounded visible-ASCII private credential.
 const NANGO_SECRET_KEY = "nango-secret-key-fixture-must-never-print";
 const fixtureRoots: string[] = [];
-const RUNTIME_PROFILE_FILES = [
-  "Caddyfile.clean-v1",
-  "Caddyfile.clean-v1.ec2",
-  "compose.clean-v1.ec2.yaml",
-  "compose.clean-v1.yaml",
-] as const;
 
 function deploymentFile(name: string): string {
   return readFileSync(resolve(REPO, DEPLOYMENT, name), "utf8");
 }
 
 function runtimeProfile(sourceSha: string) {
-  const files = Object.fromEntries(
-    RUNTIME_PROFILE_FILES.map((name) => [name, deploymentFile(name)]),
-  );
-  const bytes = `${canonicalJson({
-    files,
-    kind: "echo-clean-v1-runtime-profile",
-    schema_version: 1,
-    source_sha: sourceSha,
-  })}\n`;
-  return {
-    bytes,
-    digest: createHash("sha256").update(bytes, "utf8").digest("hex"),
-    files,
-  };
+  return cleanRuntimeProfile(sourceSha, deployRuntimeProfileFiles());
 }
 
 function releaseRecord({
@@ -66,26 +53,16 @@ function releaseRecord({
   releaseId: string;
   source: string;
 }): string {
-  return `${canonicalJson({
+  return `${canonicalJson(cleanReleaseRecord({
+    release_id: releaseId,
+    source_sha: source,
     authority_image: { reference: image },
-    baseline_compatibility_class: "clean-v1",
-    kind: "echo-clean-v1-release",
     person_client: {
       artifact_sha256: "b".repeat(64),
       artifact_url: "https://downloads.example/echo-brain-person-client.tgz",
-      package: "@echo-brain/person-client",
-      version: "0.1.0-internal.1",
     },
-    release_id: releaseId,
-    released_at: "2026-08-23T00:00:00Z",
-    runtime_profile: {
-      artifact_sha256: profile.digest,
-      artifact_url: "https://downloads.example/echo-brain-runtime-profile.json",
-      profile_version: "clean-v1-profile-1",
-    },
-    schema_version: 1,
-    source_sha: source,
-  })}\n`;
+    runtime_profile: { artifact_sha256: profile.digest },
+  }))}\n`;
 }
 
 /** Every entry under root with its mode and bytes (or link target), in a stable order. */
@@ -111,7 +88,7 @@ async function waitForFile(path: string): Promise<void> {
 function copyDeployment(root: string): string {
   const deploy = join(root, "deploy", "organization-authority");
   mkdirSync(join(deploy, "release"), { recursive: true });
-  for (const file of ["onboard-clean-v1.sh", ...RUNTIME_PROFILE_FILES]) {
+  for (const file of ["onboard-clean-v1.sh", ...CLEAN_V1_RUNTIME_PROFILE_FILES]) {
     copyFileSync(resolve(REPO, DEPLOYMENT, file), join(deploy, file));
   }
   for (const tool of ["clean-v1-release.py", "clean-v1-runtime-profile.py"]) {
@@ -159,7 +136,7 @@ function preparedStatusFixture() {
   mkdirSync(environmentsDir, { recursive: true });
   writeFileSync(join(profilesDir, `${releaseId}.profile`), profile.bytes);
   writeFileSync(join(releaseDir, "runtime-profile.active"), profile.bytes);
-  for (const name of RUNTIME_PROFILE_FILES) {
+  for (const name of CLEAN_V1_RUNTIME_PROFILE_FILES) {
     writeFileSync(join(deploy, name), profile.files[name]);
   }
   const environmentRecord = [
@@ -733,6 +710,10 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         '      - "${ECHO_CLEAN_NANGO_INTEGRATION:?',
     );
     expect(compose).not.toMatch(/slack-(signing|bot)/);
+    // INV-OPERATIONS-001: the proxy lives in the Authority's namespace and restarts with it.
+    expect(compose).toContain(
+      "      authority:\n        condition: service_healthy\n        restart: true\n    network_mode: service:authority\n",
+    );
     expect(source).toContain("docker image inspect");
     expect(source).toContain("compose_clean pull authority");
     expect(source).toContain('"$SETUP_COMMAND" resume --state-dir /echo-clean/state');

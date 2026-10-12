@@ -15,6 +15,6 @@ describe('document association contracts', () => {
       expect(() => validatePersonDocumentAssociateV1(bad)).toThrow();
     }
     const receipt = { ...request, kind: 'echo-person-document-association-receipt-v1', operation: 'associate', state: 'applied', received_at: '2026-09-23T00:00:00.000Z' };
-    for (const bad of [{ ...receipt, title: 'private content' }, { ...receipt, state: 'pending' }, { ...receipt, operation: 'upload' }, { ...receipt, received_at: 'not a date' }]) expect(() => validatePersonDocumentAssociationReceiptV1(bad)).toThrow();
+    for (const bad of [{ ...receipt, title: 'private content' }, { ...receipt, state: 'pending' }, { ...receipt, operation: 'upload' }, { ...receipt, received_at: 'not a date' }]) expect(() => validatePersonDocumentAssociationReceiptV1(bad)).toThrow(expect.objectContaining({ name: 'OrganizationApiValidationError' }));
   });
 });

@@ -576,6 +576,17 @@ export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
   'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.invite', 'employees.reissue',
   'employees.revoke', 'tools.meetings', 'runs', 'tools.disconnect', 'projects.jiraSet', 'projects.confluenceSet',
 ]);
+/** Operations of a write method that only read. */
+const READ_OPERATIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+  'tools.meetings': new Set<PersonMeetingRequestV2['operation']>(['home', 'reviews', 'browse', 'open', 'review_open']),
+  runs: new Set<PersonRunsRequestV1['operation']>(['list', 'home', 'view', 'items', 'item']),
+};
+/** Whether a call may change what the Authority stores. An operation not known to only read counts as a write. */
+export function isWriteCall(method: string, params: unknown): boolean {
+  if (!WRITE_METHODS.has(method)) return false;
+  const operation = (params as { request?: { operation?: unknown } | null } | null | undefined)?.request?.operation;
+  return !(typeof operation === 'string' && READ_OPERATIONS[method]?.has(operation) === true);
+}
 /** Host methods whose reply is the account status: main keeps the Account menu current from them. */
 export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'signin.invitation', 'account.signOut']);
 
@@ -695,10 +706,10 @@ export function plainJsonBytes(value: unknown, limit: number): number | null {
  * A call no host answered. A write the host was holding may already have
  * reached the Authority; one no host took never left the machine.
  */
-export function hostGoneFailure(code: 'host_restarted' | 'host_failed', method: string, requestId: unknown, taken: boolean): Failure {
+export function hostGoneFailure(code: 'host_restarted' | 'host_failed', write: boolean, requestId: unknown, taken: boolean): Failure {
   return {
     code, retryable: true,
-    ...(WRITE_METHODS.has(method) ? { mutation_outcome: taken ? 'unknown' as const : 'not_submitted' as const } : {}),
+    ...(write ? { mutation_outcome: taken ? 'unknown' as const : 'not_submitted' as const } : {}),
     ...(typeof requestId === 'string' ? { request_id: requestId } : {}),
   };
 }

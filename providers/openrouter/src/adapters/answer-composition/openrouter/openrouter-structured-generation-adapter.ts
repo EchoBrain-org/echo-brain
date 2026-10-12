@@ -1,5 +1,8 @@
 import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
+  type StructuredGenerationFailureClassV1,
+  type StructuredGenerationFailureDiagnosticV1,
+  type StructuredGenerationFailureV1,
   type StructuredGenerationInput,
   type StructuredGenerationObservedResultV1,
   type StructuredGenerationPort,
@@ -8,15 +11,7 @@ import {
 
 export const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
 
-export type OpenRouterFailureClass =
-  | "adapter_timeout"
-  | "adapter_transport"
-  | "adapter_http"
-  | "adapter_provider_error"
-  | "adapter_finish"
-  | "adapter_refusal"
-  | "adapter_response"
-  | "adapter_json";
+export type OpenRouterFailureClass = StructuredGenerationFailureClassV1;
 
 export type OpenRouterFinishReason =
   "stop" | "length" | "content_filter" | "error" | "other";
@@ -25,11 +20,8 @@ export type OpenRouterFinishReason =
  * Closed, safe-to-record failure metadata. It excludes request and response
  * content, provider error text, credentials, prompts, and reasoning.
  */
-export interface OpenRouterFailureDiagnostic {
-  readonly failure_class: OpenRouterFailureClass;
-  readonly http_status: number | null;
+export interface OpenRouterFailureDiagnostic extends StructuredGenerationFailureDiagnosticV1 {
   readonly adapter_id: "openrouter";
-  readonly finish_reason: OpenRouterFinishReason | null;
   readonly adapter_request_id: string | null;
 }
 
@@ -38,7 +30,7 @@ export interface OpenRouterFailureGenerationObservation {
   readonly provider_latency_ms: number | null;
 }
 
-export class OpenRouterStructuredGenerationError extends Error {
+export class OpenRouterStructuredGenerationError extends Error implements StructuredGenerationFailureV1 {
   readonly diagnostic: OpenRouterFailureDiagnostic;
   readonly generation_observation: OpenRouterFailureGenerationObservation;
 

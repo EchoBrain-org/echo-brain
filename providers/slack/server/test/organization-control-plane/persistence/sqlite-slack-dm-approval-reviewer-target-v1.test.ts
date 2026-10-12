@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildExternalHumanIdentityLinkContractV2, buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, type ExternalHumanIdentityLinkContractV2, type PersonMembershipType } from "../../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { canonicalJson, canonicalSha256 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
-import { resolveCurrentSlackDmApprovalReviewerTargetV1, type SlackDmApprovalReviewerTargetCoordinatesV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
+import { isCurrentSlackDmApprovalTargetV1, matchSlackApprovalClickActorV1, resolveCurrentSlackDmApprovalReviewerTargetV1, resolveSlackDmApprovalTargetV1, type SlackDmApprovalReviewerTargetCoordinatesV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
 import { slackNangoAppPublicConfigurationSha256V1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { applyOrganizationControlBaselineV4 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 
@@ -276,5 +276,25 @@ describe("resolveCurrentSlackDmApprovalReviewerTargetV1", () => {
         }),
       ),
     ).toThrow("identity link is inconsistent");
+  });
+});
+
+describe("Slack approval card targets", () => {
+  it("picks a reviewer's card target, rechecks it, and matches a click to that one member", () => {
+    const database = seed();
+    const target = resolveSlackDmApprovalTargetV1(database, COORDINATES, OWNER)!;
+    expect(target).toMatchObject({ connection_id: CONNECTION_ID, slack_workspace_id: "T01", slack_subject_id: "U012ABC", api_app_id: "A01" });
+    expect(isCurrentSlackDmApprovalTargetV1(database, COORDINATES, target)).toBe(true);
+    expect(isCurrentSlackDmApprovalTargetV1(database, COORDINATES, { ...target, slack_subject_id: "U012DEF" })).toBe(false);
+    expect(isCurrentSlackDmApprovalTargetV1(database, COORDINATES, { ...target, api_app_id: "A02" })).toBe(false);
+
+    const member = { organization_id: COORDINATES.organization_id, ...OWNER };
+    expect(matchSlackApprovalClickActorV1(database, COORDINATES, { workspace_id: "T01", subject_id: "U012ABC" }, [member])).toEqual({
+      organization_id: member.organization_id, principal_id: OWNER.principal_id, membership_id: OWNER.membership_id,
+      connection_id: CONNECTION_ID, api_app_id: "A01", external_identity_link_id: target.external_identity_link_id,
+      contract_sha256: target.external_identity_link_contract_sha256,
+    });
+    expect(matchSlackApprovalClickActorV1(database, COORDINATES, { workspace_id: "T02", subject_id: "U012ABC" }, [member])).toBeNull();
+    expect(matchSlackApprovalClickActorV1(database, COORDINATES, { workspace_id: "T01", subject_id: "U012DEF" }, [member])).toBeNull();
   });
 });

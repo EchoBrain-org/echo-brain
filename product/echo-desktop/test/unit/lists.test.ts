@@ -123,6 +123,41 @@ describe('leaving a project', () => {
     await flush();
     expect(store.getState().compose).toMatchObject({ status: 'unknown', kept: true, readers: 'projects', requestId, projects: [apollo] });
   });
+
+  it('reads Home again, so a Home load dropped on the way there is not left busy', async () => {
+    const homeTools = held.hold('account.tools');
+    const store = await startStore();
+    await store.openProject(apollo);
+    await flush();
+    homeTools(ok({ tools: [] }));
+    await flush();
+    expect(store.getState().home?.loading).toBe(true);
+    store.toggleProjectSettings(apollo, 'sidebar');
+    store.askProjectSetting('leave');
+    store.confirmProjectSetting();
+    await flush();
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.getState().home?.loading).toBe(false);
+  });
+});
+
+describe('leaving Ask while it answers', () => {
+  it('cancels the host\'s Ask once, whichever way the thread is left', async () => {
+    const store = await startStore();
+    const sent = () => rpc.mock.calls.filter(([method]) => method === 'ask.run').map(([, params]) => params.cancel_id);
+    const cancelled = () => rpc.mock.calls.filter(([method]) => method === 'ask.cancel').map(([, params]) => params.cancel_id);
+    held.hold('ask.run');
+    void store.ask('What changed?');
+    await store.openProject(apollo);
+    await flush();
+    expect(cancelled()).toEqual(sent());
+    held.hold('ask.run');
+    void store.ask('And here?');
+    store.closeAsk();
+    store.goHome();
+    expect(sent()).toHaveLength(2);
+    expect(cancelled()).toEqual(sent());
+  });
 });
 
 describe('signing out while the host restarts', () => {

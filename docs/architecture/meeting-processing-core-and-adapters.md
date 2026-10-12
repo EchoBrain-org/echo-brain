@@ -17,6 +17,9 @@ provider API -> server adapter -> processing contracts <- processing cycle
 
 - `packages/organization-processing/src/core/` imports no adapters,
   vendor SDKs, Authority composition, or persistence implementation.
+  In the same package, `src/llm/` imports only `core/`, and the cycle in
+  `src/admitted-meeting-processing/` reads only the LLM processor's
+  failure-stage helpers, never the hosted transport.
 - `providers/<provider>/src/` implements typed core ports and owns provider transport.
 - `providers/shared/` is the registered `@echo-brain/provider-runtime` adapter
   library. Concrete providers may depend on it; it cannot depend on concrete
@@ -56,7 +59,7 @@ meeting provider -> MeetingSourceAdapter -> MeetingSourceBridgeV1 ------+
                            /                    \
             document extraction/index       meeting decision workflow
 
-Reusable context capture adapter (no active Granola acquisition)
+Reusable context capture adapter (dormant: no active registration)
   -> SourceAdapterV1<ContextCaptureContentV1>.pull()
   -> createContextSourceIntakeV1() -> intakeContextBatchV1()
   -> SqliteContextCaptureStoreV1 (a SourceAdmissionStoreV1)
@@ -137,11 +140,13 @@ re-runs only that meeting from retained custody: no provider pull and no cursor
 move. Success stages it and drops the held row; another failure holds it at the
 new attempt and stage.
 
-**Free retry.** OpenRouter bills no non-2xx reply. A first attempt that the
-provider refuses with a 429 or 5xx, before any model output, is not parked:
-the cycle records the failed attempt, grants that exact key one retry through
-the ledger's existing `authorizeRetry`, and leaves the meeting at the head of
-its queue (`retry_scheduled`). The source waits 60 s, then its next poll
+**Free retry.** The processor adapter declares which refusals its provider
+does not bill, by marking the `AdapterError` `unbilled` (OpenRouter bills no
+non-2xx reply and marks its 429 and 5xx refusals). A first attempt refused that
+way, before any model output, is not parked: the cycle records the failed
+attempt, grants that exact key one retry through the ledger's existing
+`authorizeRetry`, and leaves the meeting at the head of its queue
+(`retry_scheduled`). The source waits 60 s, then its next poll
 re-runs the meeting and the reservation consumes the grant. A failure on a
 later attempt, any failure after model output, a timeout and a shutdown cancel
 all park as above, so a meeting gets at most one automatic retry. While it
@@ -271,7 +276,7 @@ Each adapter must:
 - define retry, crash, concurrency, and reconciliation behavior.
 
 The bundled `llm` decision processor owns one canonical prompt/output/evidence
-contract. Its Ollama, OpenAI, Anthropic, and OpenRouter drivers own only
+contract. Its one driver, OpenRouter (`providers/openrouter`), owns only
 provider authentication, wire translation, capability checks, response
 extraction, and error normalization.
 
@@ -306,10 +311,8 @@ state. Meetings enter only through a person's own sources, so ordinary startup
 requires no meeting source. A staging-only synthetic personal source exercises
 the retained meeting pipeline without Granola. It separately
 composes the bounded Person `ask` path above Layer 3 with a pinned OpenRouter
-DeepSeek planner/answer model. The other LLM transports are compiled
-alternatives, not active runtime dependencies. This is an allowed selecting
-composition profile, not evidence that every active provider has completed
-qualification.
+DeepSeek planner/answer model. This is an allowed selecting composition
+profile, not evidence that every active provider has completed qualification.
 
 The Jira live runtime (`jira-person-live-runtime-v1.ts`) is a selected,
 request-bound Person read capability. Global Ask reads tickets visible through
@@ -332,7 +335,9 @@ opening releases bounded sections with stable page and section coordinates,
 the provider version, and a digest of the text actually read. Continuations
 remain bound to the request, and current provider permissions are rechecked
 before evidence reaches a model or an answer. Page bodies remain in request
-memory and never enter source admission, capture, indexing, or change history.
+memory and never enter source admission, capture, indexing, or change history,
+except through the selected diagnostic paths that
+[connector contracts](connector-contracts.md#live-evidence) name.
 The new answer response version keeps historical citation codecs strict.
 Confluence query syntax, pagination, body formats, and site validation remain
 inside the provider; the planner uses shared source capabilities.
@@ -363,7 +368,7 @@ Sharing follows capabilities, so a provider reuses only the layers it needs:
 | Shared layer | Current consumers | Provider-owned behavior |
 | --- | --- | --- |
 | Bounded JSON/UTF-8 reads, byte limits, abort/deadline handling and response cleanup | Jira, Confluence, Slack setup clients, Nango broker | URLs, HTTP/media-type policy, error meanings, retries and provider payloads |
-| Personal Nango connection lifecycle, binding store, connection HTTP/client contracts | Jira and Confluence | OAuth scopes, resource/account verification and API permissions |
+| Personal Nango connection lifecycle, binding store, connection HTTP/client contracts | Granola, Jira and Confluence | OAuth scopes, resource/account verification and API permissions |
 | Project mapping store and current project-grant fence | Jira and Confluence | Mapping shape, project/space discovery and visibility checks |
 | Native Atlassian Document Format text normalization | Jira and Confluence | Requested representation, unsupported-content policy and evidence section identity |
 | Registered live-source dispatch and Ask catalog | Jira, Confluence and explicitly bound Slack reads | Reader implementation and declared scope/capabilities |
@@ -398,14 +403,15 @@ Revalidation checks every released source, then all local grants synchronously.
 Older construction inputs translate into this same dispatch path, while older
 answer versions retain their strict citation contracts.
 
-Granola retains transport-free meeting normalization and context capture
-transforms. Its organization acquisition and owner-admission code is retired;
+Granola provides the person-bound MCP connection, the selected-folder meeting
+source and meeting normalization, and retains its context capture transform.
+Its organization acquisition and owner-admission code is retired;
 shared meeting custody and processing contracts remain distinct from personal
 live reads. Slack's organization app and approval DM copies likewise retain
 their own lifecycle. A Slack Person read requires a separately authorized
 binding; an organization approval installation alone grants no such access. This refactor
-does not migrate Slack approval onboarding onto the Jira/Confluence personal
-Nango lifecycle.
+does not migrate Slack approval onboarding onto the shared personal Nango
+lifecycle.
 
 ## Extension rule
 

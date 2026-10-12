@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  readTemplate,
+  resource,
+  type CloudFormationResource,
+} from "../support/cloudformation-template.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const TEMPLATE = resolve(
@@ -24,32 +29,7 @@ const SPRINT = resolve(
   "docs/product/2026-08-25-operational-confidence-sprint-v1.md",
 );
 
-type CloudFormationResource = {
-  readonly Type: string;
-  readonly DeletionPolicy?: string;
-  readonly UpdateReplacePolicy?: string;
-  readonly Properties?: Record<string, unknown>;
-};
-
-type CloudFormationTemplate = {
-  readonly Description: string;
-  readonly Parameters: Record<string, Record<string, unknown>>;
-  readonly Resources: Record<string, CloudFormationResource>;
-  readonly Outputs: Record<string, Record<string, unknown>>;
-};
-
-function template(): CloudFormationTemplate {
-  return JSON.parse(readFileSync(TEMPLATE, "utf8")) as CloudFormationTemplate;
-}
-
-function resource(
-  stack: CloudFormationTemplate,
-  logicalId: string,
-): CloudFormationResource {
-  const value = stack.Resources[logicalId];
-  expect(value, `missing ${logicalId}`).toBeDefined();
-  return value!;
-}
+const template = () => readTemplate(TEMPLATE);
 
 function inlinePolicyStatements(
   role: CloudFormationResource,

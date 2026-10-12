@@ -28,7 +28,18 @@ this deployment directory and do not run this deployment wrapper. Use
 [`npm run authority:local`](../../README.md#local-authority-exercise) from the
 repository root. That separate harness creates only sentinel-owned state outside
 the checkout and applies a local overlay to the base profile; it never uses this
-EC2 profile or reads provider credentials.
+EC2 profile. Its only credential input is the developer's own Nango key file,
+named by `ECHO_LOCAL_NANGO_SECRET_KEY_FILE`: a random placeholder unless
+exercising Slack setup, and never the staging or production key.
+
+On the EC2 host, the human in Session Manager runs each installed host wrapper
+from `/srv/echo-authority-clean-v1` as `sudo ./<wrapper> ...`, including the
+rerun commands a wrapper prints. The elevation is non-interactive and scoped to
+that one command; never use `sudo -i`, `su` or a root shell. The deployment
+directory is root-owned and `clean-data` belongs to the service account, so an
+unelevated run fails with a misleading "operation in progress" or "run prepare
+first" error instead of doing the work. Under `sudo` the wrapper's executor is
+root, so a private input directory it reads, and its files, must be root-owned.
 
 ## One-time preparation
 
@@ -64,10 +75,12 @@ quick-detection alarms. It must not be added to, or deployed through, the generi
 arbitrary Authority host and is also used outside staging.
 
 The overview emits content-free metrics beside canonical journey events and
-uses the existing 14-day log retention. The Explorer exposes only fixed,
-redacted `describe`, recent `list`, and UUID-scoped `detail` operations; it has
-no public endpoint, direct Logs access, application credential, or mutation
-operation. It fails closed for incomplete history, unknown events, and result
+uses the existing 14-day log retention. The Explorer exposes only fixed
+operations: redacted `describe`, recent `list`, UUID-scoped `detail` and
+`related`, transport `health`, and a staging-only `content` operation that
+returns captured development content, including model input and output, when
+the staging content capture recorded it. It has no public endpoint, direct Logs
+access, application credential, or mutation operation. It fails closed for incomplete history, unknown events, and result
 limits.
 
 The companion policy permits only invocation of the fixed Lambda from a
@@ -79,7 +92,8 @@ rehearsal evidence, use
 
 The confidential OIDC client must allow
 `https://<authority-host>/v2/session/oidc/callback`. Create one private input
-directory, owned by the account running the wrapper and with mode `0700`.
+directory, owned by the account running the wrapper (root, under `sudo`) and
+with mode `0700`.
 Put exactly these mode-`0600` regular, non-symlink files inside it:
 
 | File                       | Purpose                                                                                                                             |
@@ -191,7 +205,10 @@ with one fresh rehearsal, in this order:
 2. While the old rehearsal is still in place, install the target release's
    reviewed host tooling through the
    [current-host staging release lane](../release/README.md#automated-current-host-staging-lane)
-   (`inspect-install`, then `install`, each with `--previous-tooling-source`).
+   (`inspect-install`, then `install`, each with `--previous-tooling-source`;
+   while the inspection shows any tool `old`, rerun `inspect-install` and plan
+   the next `install` with `--inspection <succeeded-inspect-install-receipt>`,
+   until every tool is `new`).
 3. Disconnect the retired rehearsal's Jira connection in Nango.
 4. Run `replace-rehearsal --confirm-no-live-users` without
    `--reuse-provider-inputs`. The archive keeps the old profiles, sidecar and
@@ -200,7 +217,7 @@ with one fresh rehearsal, in this order:
    seven-file onboarding input directory; the transfer runs `doctor` and
    `prepare` on the host. Then continue with `resume`.
 6. When host `resume` reports `connect_slack_in_app`, the human reruns
-   `./onboard-clean-v1.sh resume --existing-slack-app <app-id>` using the ID
+   `sudo ./onboard-clean-v1.sh resume --existing-slack-app <app-id>` using the ID
    retained in the operator handoff. Follow its emitted owner-Mac command,
    `person tools setup --tool slack --existing-app <app-id>`, and the
    [named hidden prompts](#use-an-existing-slack-app-before-the-first-connection).
@@ -363,9 +380,11 @@ After that setup, the ordinary release updater only replaces artifacts within
 the current lineage: Authority V14, control-plane V4,
 record-log V4, retrieval facts V3, retrieval content/lexical V2, and a six-role
 V2 root. It refuses older or mixed persisted state before runtime,
-configuration, or state mutation. Use `replace-rehearsal --confirm-no-live-users`
-and prepare again with the exact new release for disposable unreleased rehearsal
-state that does not match these baselines. The [release procedure](../release/README.md)
+configuration, or state mutation. For disposable unreleased rehearsal state
+that does not match these baselines, install the target release's host tooling,
+then use `replace-rehearsal --confirm-no-live-users` and prepare again with the
+exact new release, as described in
+[Replace unreleased rehearsal state](#replace-unreleased-rehearsal-state). The [release procedure](../release/README.md)
 retains separately named historical migrations.
 
 Complete the bootstrap, owner Slack setup and connect, credential installation,
@@ -375,11 +394,11 @@ recipe sets it. Run the supported release-bound synthetic staging canary and
 rerun `resume`:
 
 ```sh
-./onboard-clean-v1.sh resume
+sudo ./onboard-clean-v1.sh resume
 ```
 
 On the exact `authority-staging.echobrain.org` host, the human runs
-`./update-clean-v1.sh canary` and approves the canary meeting on the desktop
+`sudo ./update-clean-v1.sh canary` and approves the canary meeting on the desktop
 (or on the Slack DM copy, if the owner linked Slack). The local
 operator on the initial-owner Mac verifies the accepted release's installed
 client and completes the two Person reads printed by `resume`. This synthetic
@@ -393,15 +412,15 @@ Subscriptions, token rotation, or Enterprise Grid deployment are used in this
 V1.
 
 ```sh
-cd deploy/organization-authority
-install -d -m 0700 /absolute/private/echo-onboarding
-cp onboarding.clean-v1.example.json /absolute/private/echo-onboarding/onboarding.clean-v1.json
+cd /srv/echo-authority-clean-v1
+sudo install -d -m 0700 /absolute/private/echo-onboarding
+sudo install -m 0600 /absolute/reviewed/onboarding.clean-v1.example.json \
+  /absolute/private/echo-onboarding/onboarding.clean-v1.json
 # Add the canonical release and runtime profile, plus the provider files listed
-# above, including nango-secret-key. Do not place any secret in this command.
-chmod 600 /absolute/private/echo-onboarding/*
-chmod 700 /absolute/private/echo-onboarding
-./onboard-clean-v1.sh doctor --input-dir /absolute/private/echo-onboarding
-./onboard-clean-v1.sh prepare --input-dir /absolute/private/echo-onboarding
+# above, including nango-secret-key, each with `sudo install -m 0600` so root
+# owns it. Do not place any secret in this command.
+sudo ./onboard-clean-v1.sh doctor --input-dir /absolute/private/echo-onboarding
+sudo ./onboard-clean-v1.sh prepare --input-dir /absolute/private/echo-onboarding
 ```
 
 `doctor` is read-only: it emits one safe JSON result, stops at the first local
@@ -428,10 +447,24 @@ The current release requires fresh Authority V14 state. It cannot start over
 an earlier rehearsal lineage. V14 adds the held-extraction table, so a V13 host
 needs this reset and then initial-owner onboarding again. For disposable
 rehearsal state with no live users, retire it through the explicit
-initial-owner attestation:
+initial-owner attestation.
+
+While the old rehearsal is still in place, first install the target release's
+reviewed host tooling through the
+[current-host staging release lane](../release/README.md#automated-current-host-staging-lane)
+(`inspect-install`, then `install`, each with `--previous-tooling-source`;
+while the inspection shows any tool `old`, rerun `inspect-install` and plan the
+next `install` with `--inspection <succeeded-inspect-install-receipt>`, until
+every tool is `new`). The transfer runs the installed wrapper's `doctor` and `prepare`, and an older
+installed wrapper lacks `resume --existing-slack-app` and `langsmith-tracing`
+and prints the bare new-app Slack setup handoff. The lane checks
+the host's accepted release record and environment, which `replace-rehearsal`
+archives, so it refuses to install between the reset and `prepare`. If the
+reset already ran on older tooling, install after `prepare` and before
+`resume`.
 
 ```sh
-./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
+sudo ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
 ```
 
 This stops the Compose profile, copies and verifies the contents of the retained
@@ -440,6 +473,11 @@ moves its environment file into that archive, and empties the live mount for
 fresh preparation. It does not delete the archived rehearsal. It also accepts
 a clean rehearsal created before this wrapper, so no wrapper-specific setup
 record is required for the one unreleased-rehearsal replacement.
+`retired-rehearsals/` sits under the deployment directory on the host's
+disposable root disk, not on the retained `clean-data` volume: the archive must
+fit on the staging slot's 30 GiB root disk beside the Docker images, and a
+staging `down` (host replacement) deletes it. Copy anything worth keeping off
+the host before `down`.
 Run `prepare` again with the new exact release record. Never use this command
 after the first user release; subsequent baseline-preserving updates use
 the release procedure below.
@@ -450,13 +488,9 @@ below: provider reuse needs a host already prepared with the Nango key and
 integration. Keep this order:
 
 1. While the old rehearsal is still in place, install the target release's
-   reviewed host tooling through the
-   [current-host staging release lane](../release/README.md#automated-current-host-staging-lane)
-   (`inspect-install`, then `install`, each with `--previous-tooling-source`). The
-   transfer runs the installed wrapper's `doctor` and `prepare`, and an older
-   wrapper still requires the retired `slack-*` input files. The lane checks
-   the host's accepted release record and environment, which
-   `replace-rehearsal` archives, so it refuses to install afterward.
+   reviewed host tooling as described above. Here the older wrapper still
+   requires the retired `slack-*` input files, so it cannot prepare the
+   seven-file input and the install-after-`prepare` fallback does not apply.
 2. Run `replace-rehearsal --confirm-no-live-users` without
    `--reuse-provider-inputs`.
 3. Transfer the full seven-file onboarding input directory (including
@@ -631,18 +665,18 @@ After that transfer completes, the human host operator runs the named wrapper
 commands in Session Manager, using the operation ID from the receipt:
 
 ```sh
-./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users \
+sudo ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users \
   --reuse-provider-inputs onboarding-fresh-four-meetings-001 \
   --content-telemetry true
-./onboard-clean-v1.sh prepare-rehearsal \
+sudo ./onboard-clean-v1.sh prepare-rehearsal \
   --operation-id onboarding-fresh-four-meetings-001
-./onboard-clean-v1.sh resume
+sudo ./onboard-clean-v1.sh resume
 ```
 
 Before stopping the old Authority, replacement validates the staged inputs,
 the current accepted release and completed healthy runtime, and the same
 staging host, owner, runtime user, Region and Nango integration key.
-It copies only the five provider input files into a private host directory
+It copies only the four provider input files into a private host directory
 outside `clean-data`. The model-provider source file is used;
 old installed credentials, databases and signing keys are not carried into the
 new organization. Normal onboarding verifies the providers again.
@@ -650,7 +684,15 @@ new organization. Normal onboarding verifies the providers again.
 The existing archive-and-reset procedure preserves the old rehearsal for
 recovery. `prepare-rehearsal` consumes the operation-bound inputs through normal
 preparation and removes the temporary credential copies only after preparation
-succeeds. A failed preparation retains its inputs for an exact retry. Preserve
+succeeds. A failed preparation retains its inputs for an exact retry. The
+staged and captured inputs under
+`/srv/echo-authority-clean-v1/rehearsal-inputs/<operation-id>`, including the
+four captured credential copies, and the `retired-rehearsals/` archive are on
+the host's disposable root disk. Finish `prepare-rehearsal`, or deliberately
+abandon the operation, before any staging `down`: a `down` after
+`replace-rehearsal` and before a successful preparation leaves both the
+retained volume and the host copies empty, and the provider secrets must then
+be supplied again through a full seven-file transfer. Preserve
 an interrupted operation's receipt and lock, and follow the shared recovery
 procedure instead of deleting them or starting a competing operation.
 
@@ -670,7 +712,7 @@ login, Slack link and four-meeting permission proof above.
 The human host operator runs this command when the preceding handoff is complete:
 
 ```sh
-./onboard-clean-v1.sh resume
+sudo ./onboard-clean-v1.sh resume
 ```
 
 It pulls the accepted immutable image only when the host lacks it, calls the
@@ -741,14 +783,14 @@ status through the installed wrapper. A held key also shows `held: true` and
 its `failure_stage`:
 
 ```sh
-./onboard-clean-v1.sh extraction-attempts --limit 100
+sudo ./onboard-clean-v1.sh extraction-attempts --limit 100
 ```
 
 After resolving the failure, use the exact key, attempt number, and outcome
 from that status to authorize one additional model call:
 
 ```sh
-./onboard-clean-v1.sh retry-extraction \
+sudo ./onboard-clean-v1.sh retry-extraction \
   --admission-sha256 'sha256:<digest>' \
   --review-lineage-id 'rli_<digest>' \
   --review-input-sha256 'sha256:<digest>' \
@@ -845,7 +887,7 @@ Use this Authority-state read-only progress check after the accepted image is
 present locally:
 
 ```sh
-./onboard-clean-v1.sh status
+sudo ./onboard-clean-v1.sh status
 ```
 
 It creates one transient no-dependency local container, prints safe running,
@@ -867,7 +909,7 @@ accepted client does not verify the candidate's setup flow. Then the human host
 operator may run this installed command:
 
 ```sh
-./onboard-clean-v1.sh continue-staged-initial-onboarding
+sudo ./onboard-clean-v1.sh continue-staged-initial-onboarding
 ```
 
 It accepts only the digest-bound candidate readiness record for the intact
@@ -888,8 +930,8 @@ the verified local candidate image, then restarts and verifies the exact runtime
 The LLM credential activates through a controlled Authority restart.
 Replacing a file by hand does not activate it in the running process and is not
 a supported status claim. Put the replacement value in a separate
-current-executor-owned mode-`0700` directory containing exactly this
-mode-`0600` regular file:
+current-executor-owned (root, under `sudo`) mode-`0700` directory containing
+exactly this mode-`0600` regular file:
 
 | File                 | Purpose                                      |
 | -------------------- | -------------------------------------------- |
@@ -898,7 +940,7 @@ mode-`0600` regular file:
 Then run the single activation operation:
 
 ```sh
-./onboard-clean-v1.sh activate-provider-credentials \
+sudo ./onboard-clean-v1.sh activate-provider-credentials \
   --input-dir /absolute/private/echo-provider-credentials
 ```
 
@@ -938,11 +980,11 @@ is conclusively stopped. On the EC2 Authority host:
 
    ```sh
    authority_lock=clean-data/.authority-operation-lock
-   cat "$authority_lock/owner-pid"
-   ps -p "$(cat "$authority_lock/owner-pid")" -o pid=,ppid=,command=
-   docker compose --env-file .env.clean-v1 \
+   sudo cat "$authority_lock/owner-pid"
+   ps -p "$(sudo cat "$authority_lock/owner-pid")" -o pid=,ppid=,command=
+   sudo docker compose --env-file .env.clean-v1 \
      -f compose.clean-v1.yaml -f compose.clean-v1.ec2.yaml ps --all
-   find clean-data/private clean-data/state/credentials -maxdepth 1 \
+   sudo find clean-data/private clean-data/state/credentials -maxdepth 1 \
      -type f -name '.*.previous.*' -print
    ```
 
@@ -955,14 +997,14 @@ is conclusively stopped. On the EC2 Authority host:
    exists, remove exactly the owner file and empty lock directory:
 
    ```sh
-   rm -- "$authority_lock/owner-pid"
-   rmdir -- "$authority_lock"
+   sudo rm -- "$authority_lock/owner-pid"
+   sudo rmdir -- "$authority_lock"
    ```
 
 5. If `clean-data/release/candidate.clean-v1.json` exists, run
-   `./update-clean-v1.sh status` and then promote or roll back that candidate.
-   Otherwise run `./onboard-clean-v1.sh status`. Do not start another mutation
-   until that status is understood.
+   `sudo ./update-clean-v1.sh status` and then promote or roll back that
+   candidate. Otherwise run `sudo ./onboard-clean-v1.sh status`. Do not start
+   another mutation until that status is understood.
 
 ## Release and recovery
 

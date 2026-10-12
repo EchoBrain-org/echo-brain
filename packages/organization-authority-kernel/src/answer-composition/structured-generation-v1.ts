@@ -19,6 +19,10 @@ export interface StructuredGenerationInput {
 }
 
 export interface StructuredGenerationPort {
+  /**
+   * A thrown error that carries StructuredGenerationFailureV1 lets the model
+   * gate retry, repair or fall back; any other error ends the request.
+   */
   generate(input: StructuredGenerationInput): Promise<unknown>;
   /**
    * Optional result metadata for research cost accounting and diagnostics.
@@ -51,4 +55,30 @@ export interface StructuredGenerationObservedResultV1 {
   readonly finish_reason: StructuredGenerationFinishReasonV1 | null;
   /** Network request and response-body time, excluding structured parsing. */
   readonly provider_latency_ms: number | null;
+}
+
+/** Why a generation failed, in the port's closed vocabulary. Adapters map their wire failures onto it. */
+export const STRUCTURED_GENERATION_FAILURE_CLASSES_V1 = Object.freeze([
+  "adapter_timeout",
+  "adapter_transport",
+  "adapter_http",
+  "adapter_provider_error",
+  "adapter_finish",
+  "adapter_refusal",
+  "adapter_response",
+  "adapter_json",
+] as const);
+export type StructuredGenerationFailureClassV1 = typeof STRUCTURED_GENERATION_FAILURE_CLASSES_V1[number];
+
+/** Content-free failure metadata: no prompt, reply, provider error text or credential. */
+export interface StructuredGenerationFailureDiagnosticV1 {
+  readonly failure_class: StructuredGenerationFailureClassV1;
+  readonly http_status: number | null;
+  readonly finish_reason: StructuredGenerationFinishReasonV1 | null;
+}
+
+/** The shape a port implementation's thrown error carries to earn retry, repair or fallback. */
+export interface StructuredGenerationFailureV1 {
+  readonly diagnostic: StructuredGenerationFailureDiagnosticV1;
+  readonly generation_observation?: { readonly usage: StructuredGenerationUsageV1 };
 }

@@ -12,6 +12,8 @@ export interface LlmTransportProfile {
   readonly id: string;
   readonly displayName: string;
   readonly usage: (payload: unknown) => StructuredGenerationFailureObservation;
+  /** The adapter declares which non-2xx refusals its provider does not bill (AdapterError.unbilled). */
+  readonly unbilledStatus?: (status: number) => boolean;
 }
 
 export interface StructuredGenerationRequest {
@@ -194,11 +196,12 @@ function statusTaxonomy(status: number): {
 
 /** A non-2xx reply: the provider refused the request before generating anything. */
 export class ProviderStatusError extends AdapterError {
-  constructor(provider: string, readonly http_status: number) {
+  constructor(provider: string, readonly http_status: number, unbilled = false) {
     super(
       statusTaxonomy(http_status).code,
       `${provider} rejected the request with status ${http_status}`,
       statusTaxonomy(http_status).retryable,
+      { unbilled },
     );
   }
 }
@@ -206,8 +209,9 @@ export class ProviderStatusError extends AdapterError {
 export function providerStatusError(
   provider: string,
   status: number,
+  unbilled = false,
 ): AdapterError {
-  return new ProviderStatusError(provider, status);
+  return new ProviderStatusError(provider, status, unbilled);
 }
 
 async function requestProviderJson(
@@ -254,7 +258,7 @@ async function requestProviderJson(
   annotateCoreRuntimeV1({ counts: { http_status: response.status } });
   if (!response.ok) {
     captureCoreRuntimeContentV1("model_response", { provider, status: response.status, body_status: "not_read_after_http_rejection", request_id: response.headers.get("x-request-id") });
-    throw providerStatusError(profile.displayName, response.status);
+    throw providerStatusError(profile.displayName, response.status, profile.unbilledStatus?.(response.status) === true);
   }
   try {
     const body = await response.text();

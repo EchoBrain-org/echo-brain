@@ -10,8 +10,9 @@ The minimum-v1 schema is closed by default:
 - A new table, column, enum branch, index, or trigger must implement a named
   externally observable milestone behavior and include a failing-then-passing
   behavior test in the same change.
-- New tables must be assigned to `TABLES_BY_OBSERVABLE_BEHAVIOR`; every schema
-  shape change must update the executable exact-schema contract.
+- Every schema shape change must update the pinned baseline and schema
+  digests in `test/control-plane-baseline.test.ts`, and the change must name
+  the behavior each new table serves.
 - Explain why an existing table or non-persistent implementation cannot
   support the behavior.
 - “Future-proofing,” “enterprise readiness,” and possible later use are not

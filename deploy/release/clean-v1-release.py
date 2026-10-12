@@ -142,9 +142,7 @@ def setup_readiness(path, accepted, candidate):
     digest = lambda item: hashlib.sha256(pathlib.Path(item).read_bytes()).hexdigest()
     if value["candidate_sha256"] != digest(candidate):
         fail("setup readiness evidence does not match the candidate")
-    if accepted == "-":
-        if value["accepted_sha256"] is not None: fail("setup readiness evidence does not match the accepted release")
-    elif value["accepted_sha256"] != digest(accepted):
+    if value["accepted_sha256"] != digest(accepted):
         fail("setup readiness evidence does not match the accepted release")
     sys.stdout.write(value["setup_class"] + "\n")
 
@@ -152,8 +150,10 @@ def setup_readiness(path, accepted, candidate):
 def main(argv):
     if len(argv) == 4 and argv[0] == "setup-readiness":
         setup_readiness(argv[1], argv[2], argv[3]); return
-    if len(argv) not in (2, 3) or argv[0] not in ("validate", "field") or (argv[0] == "field" and len(argv) != 3):
-        fail("usage: clean-v1-release.py <validate|field> <record> [authority-image|baseline-class|client-url|client-sha256|client-version|runtime-profile-url|runtime-profile-sha256|runtime-profile-version|agentic-ask-v1|small-scope-shortcut]")
+    # `fields` validates the record once and prints each named field on its own line.
+    many = len(argv) >= 3 and argv[0] == "fields"
+    if not many and (len(argv) not in (2, 3) or argv[0] not in ("validate", "field") or (argv[0] == "field" and len(argv) != 3)):
+        fail("usage: clean-v1-release.py <validate|field|fields> <record> [authority-image|baseline-class|client-url|client-sha256|client-version|runtime-profile-url|runtime-profile-sha256|runtime-profile-version|agentic-ask-v1|small-scope-shortcut]...")
     record = read(argv[1])
     if argv[0] == "validate":
         sys.stdout.write(json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
@@ -172,9 +172,9 @@ def main(argv):
         "small-scope-shortcut": "true" if record.get("small_scope_shortcut", False) else "false",
         "source-sha": record["source_sha"],
     }
-    if argv[2] not in fields:
+    if any(name not in fields for name in argv[2:]):
         fail("unknown field")
-    sys.stdout.write(fields[argv[2]] + "\n")
+    sys.stdout.write("".join(fields[name] + "\n" for name in argv[2:]))
 
 
 try:

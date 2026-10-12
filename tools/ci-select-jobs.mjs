@@ -68,6 +68,7 @@ export const JOB_INPUTS = Object.freeze({
     'tests/architecture/mac-person-cli-kit.test.ts',
     'tests/architecture/client-update-dispatch.test.ts',
     'tests/person-client/client-update.test.ts',
+    'tests/support/clean-v1-release.ts',
     'tests/support/test-canonical-json.ts',
     'vitest.config.ts',
     'tsconfig.json',

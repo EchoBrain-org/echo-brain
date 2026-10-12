@@ -118,6 +118,26 @@ describe('New project working out of sight', () => {
     expect(store.getState().sheet?.kind).toBe('new-project');
   });
 
+  it('goes on with the files that waited once the same person signs back in', async () => {
+    const store = await startWithFiles();
+    const upload = held.hold('documents.upload');
+    await store.createProject();
+    await flush();
+    signedIn = false;
+    await store.refreshStatus();
+    await flush();
+    upload(ok({ request_id: 'r1' }));
+    await flush();
+    expect(store.getState().sheet).toMatchObject({ files: [{ status: 'saved' }, { status: 'waiting' }, { status: 'waiting' }] });
+    expect(uploads()).toHaveLength(1);
+    signedIn = true;
+    await store.refreshStatus();
+    await flush();
+    expect(uploads()).toHaveLength(3);
+    expect(store.getState().sheet).toBeNull();
+    expect(store.getState().toast).toBe('Fresh is ready · 3 files');
+  });
+
   it('comes back for a file that was refused, so its reason shows', async () => {
     const store = await startWithFiles();
     let sent = 0;

@@ -10,8 +10,22 @@ export interface MeetingIntakeSettingV1 extends MeetingIntakePersonV1 {
   readonly source_key: string; readonly person_key: string; readonly folder_id: string | null; readonly folder_project_id: string | null; readonly settings_revision: number;
   readonly source_adapter_id: string; readonly source_adapter_version: string; readonly source_adapter_instance_id: string;
 }
-export interface PersonalMeetingCheckpointV1 { readonly folder: string | null; readonly baseline: boolean; readonly revisions: Readonly<Record<string, string>>; readonly manual: readonly string[] }
-export interface PersonalMeetingCheckpointCodecV1 { read(value: string): PersonalMeetingCheckpointV1; write(value: PersonalMeetingCheckpointV1): string }
+/**
+ * The part of a personal checkpoint the shared intake owns: the watched folder and the import queue. Every other
+ * field is the provider's (its change detection, for example) and travels through spreads untouched.
+ */
+export interface PersonalMeetingCheckpointV1 { readonly folder: string | null; readonly manual: readonly string[] }
+/** A provider's checkpoint codec. Only the provider reads or resets its own fields. */
+export interface PersonalMeetingCheckpointCodecV1 {
+  read(value: string): PersonalMeetingCheckpointV1;
+  write(value: PersonalMeetingCheckpointV1): string;
+  /** A new source's cursor: no watched folder and nothing queued. */
+  initial(): string;
+  /** The checkpoint once the watched folder changes; the provider restarts its own change detection. */
+  watch(value: PersonalMeetingCheckpointV1, folder: string | null): PersonalMeetingCheckpointV1;
+  /** Whether automatic import of the watched folder is active, not still preparing. */
+  ready(value: PersonalMeetingCheckpointV1): boolean;
+}
 function denied(): never { throw new AuthorityOperationError('unauthorized', 'Personal meeting access is unavailable'); }
 
 /**
@@ -52,7 +66,7 @@ export class SqlitePersonMeetingIntakeV1 {
       const old = this.list(person).find(row => row.source_key === source_key);
       if (old) return old;
       const now = new Date().toISOString();
-      const initial = this.cursor.write({ folder: null, baseline: false, revisions: {}, manual: [] });
+      const initial = this.cursor.initial();
       const semantic = canonicalSha256({ source_key, person, identity, processor, custodian: input.custodian, normalizer_version: input.normalizer_version });
       this.db.prepare(`INSERT INTO authority_live_source_admission_v2(source_key,organization_id,principal_id,membership_id,membership_type,
         source_adapter_id,source_adapter_version,source_adapter_instance_id,normalizer_version,source_custodian_sha256,source_custodian_assurance,source_custodian_observed_at,
@@ -108,7 +122,7 @@ export class SqlitePersonMeetingIntakeV1 {
         if (old.folder_id === null && old.source_key !== setting.source_key) continue;
         const selected = old.source_key === setting.source_key ? folder : null;
         this.db.prepare('UPDATE authority_person_meeting_sources_v2 SET folder_id=NULL,folder_project_id=NULL,settings_revision=settings_revision+1 WHERE source_key=?').run(old.source_key);
-        this.write(old.source_key, { folder: selected, baseline: false, revisions: {}, manual: this.checkpoint(old.source_key).manual });
+        this.write(old.source_key, this.cursor.watch(this.checkpoint(old.source_key), selected));
       }
       // Clear the former watch first so the unique personal watch constraint also holds while moving it between tool accounts.
       if (folder !== null) this.db.prepare('UPDATE authority_person_meeting_sources_v2 SET folder_id=?,folder_project_id=?,settings_revision=settings_revision+1 WHERE source_key=?').run(folder, folderProjectId, setting.source_key);
@@ -178,7 +192,7 @@ export class SqlitePersonMeetingIntakeV1 {
   /**
    * The checkpoint a processing advance moves to when other imports were queued or cancelled after its pull: the pull's
    * next checkpoint with the current queue, in order, minus what that pull consumed. Undefined when the consumed import
-   * was cancelled or anything but the queue changed (a folder or baseline), so those still refuse the advance.
+   * was cancelled or anything but the queue changed (a folder or the provider's own fields), so those still refuse the advance.
    */
   rebase(transition: { readonly expected_cursor: string; readonly next_cursor: string; readonly current_cursor: string }): string | undefined {
     const pulled = this.cursor.read(transition.expected_cursor), next = this.cursor.read(transition.next_cursor), now = this.cursor.read(transition.current_cursor);

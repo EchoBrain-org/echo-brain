@@ -19,7 +19,7 @@ paths below are relative to its `organization-control-plane/` folder:
 | Slack provider `adapters/slack/slack-web-identity-provider-v1` | Slack `auth.test` checks of an install and the DM-code person link |
 | Slack provider `application/organization-tool-connection-contracts-v2` | External human-link and organization-tool connection contracts |
 | `security/file-secret-store` | The private secret store for the organization's Slack app credential bundle: client ID/secret, signing secret, and Nango connection ID ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)) |
-| Slack provider `slack-approval-integration-v1` | The control database opener, visibility policy and tool connection contracts, and the Slack identity-link lookup (`resolveCurrentSlackDmApprovalReviewerTargetV1`) used by the Slack approval plug-in |
+| Slack provider `slack-approval-integration-v1` | The control database opener, visibility policy and tool connection contracts, and the Slack identity-link lookups used by the Slack approval plug-in: `resolveCurrentSlackDmApprovalReviewerTargetV1` and the card-target pick, recheck and click match built on it |
 | `organization-control-database-v1` | Opening the control database and applying the current V4 baseline |
 | `record-visibility-policy-contracts-v1` | Provider-neutral Person visibility policy identifiers and contract digests |
 
@@ -187,7 +187,7 @@ Authority readiness. The owner's setup and install report "Slack setup is
 unavailable right now". Unavailability and Nango's 401 or 403 never mark the
 connection "needs reinstall".
 
-The `slack-organization-tool-v1` ready state is accepted only while its opaque
+An active Slack organization connection is accepted only while its opaque
 credential reference resolves to a private readable secret during Authority
 startup. The Slack app recipe sets the Interactivity Request URL
 `/v2/integrations/slack/interactions`, so no operator saves it by hand. That
@@ -256,7 +256,10 @@ with the Slack-bound policy resolutions. The Slack connection, the bot token
 source, connection health and the identity-link lookup
 (`resolveCurrentSlackDmApprovalReviewerTargetV1`) serve the plug-in
 ([unified meeting approval](../product/2026-10-07-unified-meeting-approval-v1.md),
-sections 3 and 5). The presenter posts a copy of each proposal to a reviewer
+sections 3 and 5). The Slack provider also owns the identity reads that pick,
+recheck and click-match a card's target, and the ephemeral `response_url`
+reply; the Authority composition root passes in only its own membership and
+project rows. The presenter posts a copy of each proposal to a reviewer
 who linked Slack and redraws it once the proposal is decided or replaced, and a
 verified click is decided through the same approval core as the desktop. The
 decision is Authority state, written once to the decision table
@@ -342,9 +345,11 @@ when an accepted milestone has an externally observable behavior that cannot
 be implemented safely with the current model.
 
 No Teams, Granola, project-management, or other non-Slack organization-tool
-onboarding is implemented. The Person CLI dispatches the Slack and server-gated
-Jira tool fragments ([connector contracts](connector-contracts.md)); the
-server's Connected tools list reports Slack only today.
+onboarding is implemented. The Person CLI dispatches the Granola, Slack, Jira
+and Confluence tools and the staging synthetic meeting tool
+([connector contracts](connector-contracts.md)); Granola, Jira and Confluence
+are personal connections, not organization tools. The server's Connected tools
+list merges the tools of every composed connector.
 
 ## Schema growth rule
 
@@ -353,8 +358,10 @@ trigger must:
 
 1. support a named externally observable milestone behavior;
 2. arrive with a failing-then-passing test for that behavior;
-3. update the executable exact-schema contract, and for a table be assigned to
-   that behavior in `TABLES_BY_OBSERVABLE_BEHAVIOR`; and
+3. update the executable exact-schema contract (the pinned baseline and schema
+   digests in
+   `packages/organization-control-plane/test/control-plane-baseline.test.ts`),
+   and name the behavior the new object serves in the change description; and
 4. explain why an existing table or non-persistent implementation is
    insufficient.
 

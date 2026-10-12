@@ -13,7 +13,7 @@ vi.mock("../src/composition/organization-authority-runtime.js", () => ({ openOrg
 // Only provider selection runs; the mocked runtime performs no credential or persistence reads.
 const config = {
   state_directory: "/unused",
-  openrouter_credential_file: "/unused", slack_nango: { secret_key: "nango-secret-key-not-used-000000", integration_key: "slack" },
+  openrouter_credential_file: "/unused", nango: { secret_key: "nango-secret-key-not-used-000000", integration_key: "slack" },
 } as OrganizationAuthorityServiceConfig;
 const APPROVER = { principal_id: "prn_approver", membership_id: "mem_approver" };
 const SHARED = "prj_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
