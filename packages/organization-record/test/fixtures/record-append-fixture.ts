@@ -1,10 +1,19 @@
 import {
   canonicalJson,
+  normalizeP256LowS,
+  p256KeyId,
   sha256Digest,
   type JsonObject,
+  type P256SigningKeyDescriptor,
   type Sha256Digest
 } from "@echo-brain/federation-protocol";
 import { HUMAN_ACT_RECORD_INPUT_CODEC_V1, createRecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
+import { Buffer } from "node:buffer";
+import { generateKeyPairSync, sign as signMessage } from "node:crypto";
+import {
+  organizationAuthorityPinSha256,
+  verifyOrganizationAuthorityPin,
+} from "../../../organization-protocol/src/authority-descriptor.js";
 import {
   APPROVED_DECISION_SNAPSHOT_V2_KIND,
   HUMAN_ACT_RESOLUTION_REF_V1_KIND,
@@ -20,19 +29,23 @@ import {
   verifyOrganizationRecordReceiptV2,
 } from "../../../organization-protocol/src/organization-record-receipt-v2.js";
 import {
+  ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
+  RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
+  organizationMemberReadablePersonConsequenceSha256,
+  organizationMemberReadablePersonPolicyContractSha256,
+  restrictedReviewerPersonConsequenceSha256,
+  restrictedReviewerPersonPolicyContractSha256,
+} from "../../../organization-protocol/src/person-content-policy-v2.js";
+import {
+  DECISION_PROCESSOR_PROVENANCE_V1_KIND,
+  MEETING_SOURCE_PROVENANCE_V1_KIND,
   createOrganizationRecordEnvelopeV4,
   verifyOrganizationRecordEnvelopeV4,
 } from "../../../organization-protocol/src/record-envelope-v4.js";
 import {
-  AUTHORITY_ID,
-  ORGANIZATION_ID,
-  STATE_LINEAGE_ID,
-  processorProvenance as protocolProcessorProvenance,
-  selectedPolicy,
-  sourceProvenance as protocolSourceProvenance,
-  type TestAuthority,
-} from "../../../organization-protocol/test/fixtures/record-v4-fixture.js";
-import { RESTRICTED_REVIEWER_PERSON_POLICY_ID } from "../../src/application/person-policy-fact-contracts-v2.js";
+  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+  type PersonPolicyIdV2
+} from "../../src/application/person-policy-fact-contracts-v2.js";
 import {
   type PersonHumanActActionV2,
   type PersonHumanActResolutionRefV1View,
@@ -50,14 +63,52 @@ import { applyOrganizationRecordLogBaselineV4 } from "../../src/persistence/reco
 export const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1]);
 
 export const COORDINATES = {
-  authority_id: AUTHORITY_ID,
-  organization_id: ORGANIZATION_ID,
-  state_lineage_id: STATE_LINEAGE_ID,
+  authority_id: "oau_00000000-0000-4000-8000-000000000001",
+  organization_id: "org_00000000-0000-4000-8000-000000000002",
+  state_lineage_id: "state-lineage-1",
 } as const;
 
-/** The signing half of the protocol test authority; callers may also pass a real signer. */
-export type ProtocolAuthority = Pick<TestAuthority, "pinned" | "sign">;
-export { testAuthority as protocolAuthority } from "../../../organization-protocol/test/fixtures/record-v4-fixture.js";
+export interface ProtocolAuthority {
+  readonly pinned: ReturnType<typeof verifyOrganizationAuthorityPin>;
+  readonly sign: (
+    message: Buffer,
+    expectedKeyId: Sha256Digest,
+  ) => Promise<Buffer>;
+}
+
+export function protocolAuthority(): ProtocolAuthority {
+  const { privateKey, publicKey } = generateKeyPairSync("ec", {
+    namedCurve: "prime256v1",
+  });
+  const publicKeyDer = publicKey.export({ type: "spki", format: "der" });
+  if (!Buffer.isBuffer(publicKeyDer))
+    throw new Error("test authority key export failed");
+  const signing_key: P256SigningKeyDescriptor = {
+    key_id: p256KeyId(publicKeyDer),
+    algorithm: "ecdsa-p256-sha256-der-low-s",
+    public_key_spki_der_base64: publicKeyDer.toString("base64"),
+  };
+  const descriptor = {
+    schema_version: 1 as const,
+    kind: "echo-organization-authority" as const,
+    authority_id: COORDINATES.authority_id,
+    organization_id: COORDINATES.organization_id,
+    signing_key,
+  };
+  return {
+    pinned: verifyOrganizationAuthorityPin(
+      descriptor,
+      organizationAuthorityPinSha256(descriptor),
+    ),
+    sign: async (message, expectedKeyId) => {
+      if (expectedKeyId !== signing_key.key_id)
+        throw new Error("unexpected signing key");
+      return normalizeP256LowS(
+        signMessage("sha256", message, { key: privateKey, dsaEncoding: "der" }),
+      );
+    },
+  };
+}
 
 export function database(): ReturnType<typeof openOrganizationRecordDatabase> {
   const value = openOrganizationRecordDatabase(":memory:");
@@ -77,6 +128,24 @@ export function database(): ReturnType<typeof openOrganizationRecordDatabase> {
   return value;
 }
 
+export function policy(policy_id: PersonPolicyIdV2) {
+  if (policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID) {
+    return {
+      policy_contract_sha256: restrictedReviewerPersonPolicyContractSha256(),
+      policy_consequence_text: RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
+      policy_consequence_sha256: restrictedReviewerPersonConsequenceSha256(),
+    };
+  }
+  return {
+    policy_contract_sha256:
+      organizationMemberReadablePersonPolicyContractSha256(),
+    policy_consequence_text:
+      ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
+    policy_consequence_sha256:
+      organizationMemberReadablePersonConsequenceSha256(),
+  };
+}
+
 export function humanAct(
   approval_id: string,
   action: PersonHumanActActionV2,
@@ -89,7 +158,7 @@ export function humanAct(
   },
   decision_text?: string,
 ) {
-  const selected = selectedPolicy(policy_id);
+  const selected = policy(policy_id);
   const reference = {
     schema_version: 1 as const,
     kind: HUMAN_ACT_RESOLUTION_REF_V1_KIND,
@@ -200,6 +269,7 @@ export function humanAct(
           approved_snapshot: approvedSnapshot,
           approved_snapshot_sha256:
             approvedDecisionSnapshotV2Sha256(approvedSnapshot),
+          policy_id,
           ...selected,
         }
       : {
@@ -272,11 +342,32 @@ export function authorizationWitness(
 }
 
 export function sourceProvenance() {
-  return protocolSourceProvenance({ external_id: "external-approval-1" });
+  return {
+    schema_version: 1 as const,
+    kind: MEETING_SOURCE_PROVENANCE_V1_KIND,
+    ...COORDINATES,
+    source_adapter_kind: "meeting-source" as const,
+    source_adapter_id: "granola",
+    source_adapter_instance_id: "primary",
+    source_adapter_version: "2.2.0",
+    external_id: "external-approval-1",
+    canonical_revision: "revision-1",
+    normalizer_version: "2.2.0",
+    source_revision: null,
+  };
 }
 
 export function processorProvenance() {
-  return protocolProcessorProvenance({ processor_contract_sha256: sha256Digest("processor-contract") });
+  return {
+    schema_version: 1 as const,
+    kind: DECISION_PROCESSOR_PROVENANCE_V1_KIND,
+    ...COORDINATES,
+    processor_adapter_kind: "decision-processor" as const,
+    processor_adapter_id: "llm",
+    processor_adapter_instance_id: "primary",
+    processor_adapter_version: "1.3.0+processing.0123456789abcdef",
+    processor_contract_sha256: sha256Digest("processor-contract"),
+  };
 }
 
 function envelopeFactory(

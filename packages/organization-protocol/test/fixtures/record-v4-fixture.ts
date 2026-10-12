@@ -116,7 +116,7 @@ export function testAuthority(
   };
 }
 
-export function selectedPolicy(policyId: PersonContentPolicyIdV2): {
+function selectedPolicy(policyId: PersonContentPolicyIdV2): {
   policy_id: PersonContentPolicyIdV2;
   policy_contract_sha256: Sha256Digest;
   policy_consequence_text: string;
