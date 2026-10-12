@@ -363,6 +363,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   };
 
   const roleOf = (projectId: string, membershipId: string) => members[projectId]?.find(entry => entry.membership_id === membershipId)?.role;
+  /** The Authority's filing rule: a member files only what they added, and takes out what they added or anything from a project they lead. */
+  const mayFile = (projectId: string, theirs: boolean, operation: string) => {
+    const role = roleOf(projectId, session.membership_id);
+    return role !== undefined && (theirs || (operation === 'dissociate' && role === 'lead'));
+  };
   const nameOf = (membershipId: string) => desktop.people.find(person => person.membership_id === membershipId)?.display_name ?? 'Someone';
   /** Ten at a time: the first page, or the rest after SECOND_PAGE. */
   const paged = <T>(all: readonly T[], cursor: unknown) => {
@@ -1326,7 +1331,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const contextId = String(body?.context_id);
       const operation = path.endsWith('/associate') ? 'associate' : 'dissociate';
       return change(path, body, () => {
-        if (!roleOf(projectId, session.membership_id) || !catalog.has(contextId)) return failure('not_found', 404);
+        const theirs = mineNotes.has(contextId) || desktop.notes.some(note => note.context_id === contextId);
+        if (!catalog.has(contextId) || !mayFile(projectId, theirs, operation)) return failure('not_found', 404);
         const rest = (filed.get(projectId) ?? []).filter(id => id !== contextId);
         filed.set(projectId, operation === 'associate' ? [...rest, contextId] : rest);
         return {
@@ -1353,7 +1359,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const projectId = String(body?.project_id);
       return change(path, body, () => {
         const stored = findDocument(link[1]!, null);
-        if (!stored || !roleOf(projectId, session.membership_id)) return failure('not_found', 404);
+        if (!stored || !mayFile(projectId, mineDocuments.has(stored.document_id), link[2]!)) return failure('not_found', 404);
         const rest = stored.association_project_ids.filter(id => id !== projectId);
         stored.association_project_ids = (link[2] === 'associate' ? [...rest, projectId] : rest).sort();
         return {
