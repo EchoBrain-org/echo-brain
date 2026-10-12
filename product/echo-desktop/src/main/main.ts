@@ -13,7 +13,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, MAIN_METHODS, MAX_PARAMS_BYTES, plainJsonBytes, remoteDebuggingRequested, STATUS_METHODS,
+  externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_PARAMS_BYTES, plainJsonBytes, remoteDebuggingRequested, STATUS_METHODS,
   type AccountCommand, type AppStatus, type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods,
   type Result,
 } from '../shared/protocol.js';
@@ -119,7 +119,7 @@ const clientEntry = app.isPackaged
   : resolve(BUILD, '..', '..', '..', 'src', 'product', 'person-client', 'dist', 'composition.js');
 let host: UtilityProcess | null = null;
 let nextId = 1;
-const pending = new Map<number, { method: string; requestId?: string; resolve: (result: Result<unknown>) => void }>();
+const pending = new Map<number, { write: boolean; requestId?: string; resolve: (result: Result<unknown>) => void }>();
 /** Exits in the last minute. Three and the supervisor stops. */
 let exits: number[] = [];
 let hostGaveUp = false;
@@ -162,7 +162,7 @@ function startHost(restarted = false): void {
     for (const [id, call] of pending) {
       pending.delete(id);
       // A write the host was holding may already have reached the Authority.
-      call.resolve({ ok: false, failure: hostGoneFailure('host_restarted', call.method, call.requestId, true) });
+      call.resolve({ ok: false, failure: hostGoneFailure('host_restarted', call.write, call.requestId, true) });
     }
     if (quitting) return;
     const now = Date.now();
@@ -182,12 +182,13 @@ function startHost(restarted = false): void {
 
 function callHost(method: HostMethodName | 'host.drain', params: unknown): Promise<Result<unknown>> {
   const requestId = (params as { request_id?: unknown } | null)?.request_id;
+  const write = isWriteCall(method, params);
   // No host took it, so nothing left the machine: a write says so, and Invite
   // removes the empty folder it made, so trying again can use the same name.
-  if (!host) return Promise.resolve({ ok: false, failure: hostGoneFailure(hostGaveUp ? 'host_failed' : 'host_restarted', method, requestId, false) });
+  if (!host) return Promise.resolve({ ok: false, failure: hostGoneFailure(hostGaveUp ? 'host_failed' : 'host_restarted', write, requestId, false) });
   const id = nextId++;
   return new Promise(resolveReply => {
-    pending.set(id, { method, resolve: resolveReply, ...(typeof requestId === 'string' ? { requestId } : {}) });
+    pending.set(id, { write, resolve: resolveReply, ...(typeof requestId === 'string' ? { requestId } : {}) });
     host!.postMessage({ id, method, params });
   });
 }
