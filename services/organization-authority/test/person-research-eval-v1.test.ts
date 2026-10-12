@@ -24,7 +24,7 @@ const ask = (question: string) => ({ schema_version: 1 as const, trigger: 'ask',
 const approved = (extra: { readonly budget?: 'live' | 'background'; readonly project_id?: `prj_${string}`; readonly mine?: true } = {}) => ({ schema_version: 1 as const, trigger: 'approved_record', input: { record }, ...extra });
 /** The record route's open of `record`: one readable decision. */
 const openedRecord = () => ({
-  response: { schema_version: 2, kind: 'echo-person-record-search-v2', items: [] }, query_hit_counts: [],
+  response: { schema_version: 2, kind: 'echo-person-record-search-v2', items: [] },
   release: { active_pointer: { generation_id: canonicalSha256('generation'), manifest_sha256: canonicalSha256('manifest'), retrieval_contract_sha256: canonicalSha256('contract'), record_head: { position: 1, record_sha256: record.record_sha256 } }, record_read_audit_row_sha256: canonicalSha256('record read') },
   desk_items: [{ atom_id: record.atom_id, record_sha256: record.record_sha256, item_kind: 'decision', text: 'Approved: firmware shows two decimals.', policy_id: record.policy_id, record_position: 1, envelope_sha256: canonicalSha256('envelope'), atom_order: 0, audience_project_count: 1, label: 'Pricing review', visibility: 'project' }],
 });

@@ -121,10 +121,6 @@
       "types": "./dist/composition/verify-authority-state-lineage.d.ts",
       "import": "./dist/composition/verify-authority-state-lineage.js"
     },
-    "./shared/canonical-release-id": {
-      "types": "./dist/shared/canonical-release-id.d.ts",
-      "import": "./dist/shared/canonical-release-id.js"
-    },
     "./composition/person-external-identity-runtime": {
       "types": "./dist/composition/person-external-identity-runtime.d.ts",
       "import": "./dist/composition/person-external-identity-runtime.js"

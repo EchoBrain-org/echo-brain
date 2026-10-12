@@ -16,7 +16,6 @@ import {
 import {
   buildReadableSearchGenerationV1,
   searchReadableSearchGenerationV1,
-  expandReadableSearchRelatedAtomsV1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
   READABLE_SEARCH_CONTENT_BASELINE_V2,
@@ -50,7 +49,6 @@ import { independentRecordCoverageFixture, rolloutCoverageFixture } from "./retr
 const roots: string[] = [];
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 const RETRIEVAL_CONTRACT = digest("clean-retrieval-contract");
-const RELATED_ATOM_PACKET_MAX_ITEMS_V1 = 16;
 
 function root(): string {
   const created = mkdtempSync(join(tmpdir(), "echo-clean-search-route-"));
@@ -359,7 +357,7 @@ describe("Person Layer 2 route", () => {
     expect(route.searchBatch({ access_token: "reader", queries: ["launch"] }).response.items).toEqual([]);
     record.close(); value.record.close(); value.authority.close();
   });
-  it.each(["owner", "employee", "other-owner"] as const)("preserves independent lexical facts through a full expansion packet for %s", async (actor) => {
+  it.each(["owner", "employee", "other-owner"] as const)("preserves independent lexical facts through the merged four-query batch for %s", async (actor) => {
     const value = setup(false);
     const record = new Database(":memory:");
     record.exec("CREATE TABLE organization_record_log (position INTEGER PRIMARY KEY, record_sha256 TEXT NOT NULL)");
@@ -395,7 +393,6 @@ describe("Person Layer 2 route", () => {
         membership_id: `membership_${actor}`, membership_type: actor === "employee" ? "employee" : "owner" });
       let authenticationCount = 0;
       const search = vi.fn(searchReadableSearchGenerationV1);
-      const expand = vi.fn(expandReadableSearchRelatedAtomsV1);
       const route = createPersonRecordSearchRouteV1({
         state_directory: value.state_directory, authority_id: "oau_clean", organization_id: "org_clean",
         state_lineage_id: "lineage_clean", retrieval_contract_sha256: RETRIEVAL_CONTRACT,
@@ -403,19 +400,16 @@ describe("Person Layer 2 route", () => {
           checked_at: new Date(Date.parse(reader.checked_at) + authenticationCount++).toISOString(),
         }) }, authority: value.authority, record,
         audit: new SqlitePersonRecordReadAuditV1(value.authority), search_generation: search,
-        expand_related_atoms: expand,
       });
       const request = { access_token: "fixture-reader", queries: independentRecordCoverageFixture.queries,
         limit: 10 } as const;
       const lexical = route.searchBatch(request);
-      const packet = route.searchBatch({ ...request, include_related_atom_packet: true });
       const revenue = sha256Digest("Revenue signal calibration");
-      const perQuery = search.mock.results.slice(0, 4).map(result => result.value.items as readonly ReadableSearchResultItemV1[]);
-      const anchors = expand.mock.calls[0]![0].anchor_atom_ids;
+      const perQuery = search.mock.results.map(result => result.value.items as readonly ReadableSearchResultItemV1[]);
       const required = atoms.filter(atom => atom.record_sha256 === revenue &&
         (atom.text.includes("at least 8") || atom.text.includes("confirmed list")));
       expect(required).toHaveLength(2);
-      expect(lexical.query_hit_counts).toEqual([10, 10, 10, 10]);
+      expect(perQuery.map(items => items.length)).toEqual([10, 10, 10, 10]);
       expect(new Set(lexical.response.items.map(item => item.atom_id))).toEqual(
         new Set(perQuery.flat().map(item => item.atom_id)),
       );
@@ -426,38 +420,27 @@ describe("Person Layer 2 route", () => {
           .toEqual([0, 0, 9, 0]);
         expect(perQuery.map(items => items.findIndex(item => item.atom_id === required[1]!.atom_id) + 1))
           .toEqual([10, 7, 4, 9]);
-        // The fourth record is independent: expansion has no link to it and
-        // fills thirteen slots from the other three records. Before #169 the
-        // final packet cap then discarded both surviving lexical facts.
-        expect(anchors.map(id => atoms.find(atom => atom.atom_id === id)!.record_sha256))
-          .toEqual([atoms.at(-1)!.record_sha256, sha256Digest("Implementation capacity triage"), sha256Digest("Data handling review")]);
-        expect(expand.mock.results[0]!.value.items).toHaveLength(13);
-        expect(expand.mock.results[0]!.value.items.every((item: ReadableSearchResultItemV1) => item.record_sha256 !== revenue)).toBe(true);
       }
       for (const fact of required) {
         expect(lexical.response.items.map(item => item.atom_id)).toContain(fact.atom_id);
-        expect(packet.response.items.map(item => item.atom_id)).toContain(fact.atom_id);
       }
-      expect(packet.response.items).toHaveLength(RELATED_ATOM_PACKET_MAX_ITEMS_V1);
-      expect(new Set(packet.response.items.map(item => item.atom_id)).size).toBe(16);
-      expect(packet.release.active_pointer.generation_id).toBe(active_generation.generation_id);
-      expect(packet.release.active_pointer.record_head).toEqual({ position: exact_head.position, record_sha256: exact_head.record_sha256 });
-      expect(route.searchBatch({ ...request, include_related_atom_packet: true }).response).toEqual(packet.response);
+      expect(lexical.release.active_pointer.generation_id).toBe(active_generation.generation_id);
+      expect(lexical.release.active_pointer.record_head).toEqual({ position: exact_head.position, record_sha256: exact_head.record_sha256 });
 
-      // Three batch reads above (lexical, packet, packet again), each running every query.
-      expect(search.mock.calls.map(([call]) => call.query)).toEqual(Array.from({ length: 3 }, () => [...request.queries]).flat());
-      for (const [call] of [...search.mock.calls, ...expand.mock.calls]) {
+      // One batch read above, running every query.
+      expect(search.mock.calls.map(([call]) => call.query)).toEqual([...request.queries]);
+      for (const [call] of search.mock.calls) {
         expect(call.reader).toEqual({ principal_id: reader.principal_id, membership_id: reader.membership_id });
         expect(call.active_generation).toEqual(active_generation);
       }
       const privateAtoms = atoms.filter(atom => atom.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2);
       if (actor === "owner") {
-        expect(packet.response.items.some(item => item.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2)).toBe(true);
+        expect(lexical.response.items.some(item => item.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2)).toBe(true);
       } else {
         // Owner role alone also cannot grant the exact reviewer's private scope.
-        const observed = [...perQuery.flat(), ...expand.mock.results.flatMap(result => result.value.items), ...packet.response.items];
+        const observed = [...perQuery.flat(), ...lexical.response.items];
         expect(observed.every(item => item.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2)).toBe(true);
-        for (const atom of privateAtoms) expect(packet.response.items.map(item => item.text)).not.toContain(atom.text);
+        for (const atom of privateAtoms) expect(lexical.response.items.map(item => item.text)).not.toContain(atom.text);
       }
     } finally {
       record.close();
@@ -466,7 +449,7 @@ describe("Person Layer 2 route", () => {
     }
   });
 
-  it.each([false, true])("covers rollout conditions and deadlines from the frozen four-query plan (mixed corpus: %s)", (mixed) => {
+  it.each([false, true])("keeps the frozen four-query rollout plan to approved member evidence (mixed corpus: %s)", (mixed) => {
     const value = setup(false);
     const record = new Database(":memory:");
     record.exec("CREATE TABLE organization_record_log (position INTEGER PRIMARY KEY, record_sha256 TEXT NOT NULL)");
@@ -518,7 +501,6 @@ describe("Person Layer 2 route", () => {
           RETRIEVAL_CONTRACT, exact_head.position, exact_head.record_sha256, "2026-09-09T00:00:00.000Z");
       let authenticationCount = 0;
       const search = vi.fn(searchReadableSearchGenerationV1);
-      const expand = vi.fn(expandReadableSearchRelatedAtomsV1);
       const route = createPersonRecordSearchRouteV1({
         state_directory: value.state_directory, authority_id: "oau_clean", organization_id: "org_clean",
         state_lineage_id: "lineage_clean", retrieval_contract_sha256: RETRIEVAL_CONTRACT,
@@ -526,14 +508,12 @@ describe("Person Layer 2 route", () => {
           checked_at: new Date(Date.parse("2026-09-09T00:00:00.000Z") + authenticationCount++).toISOString(),
         }) }, authority: value.authority, record,
         audit: new SqlitePersonRecordReadAuditV1(value.authority), search_generation: search,
-        expand_related_atoms: expand,
       });
       const batch = route.searchBatch({ access_token: "fixture-reader", queries: rolloutCoverageFixture.queries,
-        limit: 10, include_related_atom_packet: true });
-      const required = ["at least 8", "without manual correction", "September 3", "September 5", "September 11"];
+        limit: 10 });
       if (!mixed) {
-        // The adoption decision was found at ranks 10 and 9 but lost at the
-        // packet cap. The three deadline actions were absent from every top ten.
+        // Real lexical ranks: the adoption decision is found at ranks 10 and 9;
+        // the three deadline actions are absent from every top ten.
         expect(search.mock.results.map(result => result.value.items.findIndex((item: ReadableSearchResultItemV1) => item.text.includes("at least 8"))))
           .toEqual([-1, 9, 8, -1]);
         for (const deadline of ["September 3", "September 5", "September 11"]) {
@@ -541,16 +521,12 @@ describe("Person Layer 2 route", () => {
             .toBe(true);
         }
       }
-      expect(batch.query_hit_counts).toEqual([10, 10, 10, 10]);
-      expect(batch.response.items).toHaveLength(16);
       const selected = batch.response.items.map(item => item.text).join("\n");
-      for (const fact of [...required, "conditional onboarding", "addendum is signed", "September 4", "September 8", "September 12"])
-        expect.soft(selected).toContain(fact);
       expect(selected).not.toContain(privateText);
       expect(batch.response.items.every(item => item.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2)).toBe(true);
       expect(batch.response.items.every(item => atoms.some(atom => atom.atom_id === item.atom_id && atom.text === item.text && atom.record_sha256 === item.record_sha256))).toBe(true);
       expect(route.searchBatch({ access_token: "fixture-reader", queries: rolloutCoverageFixture.queries,
-        limit: 10, include_related_atom_packet: true }).response).toEqual(batch.response);
+        limit: 10 }).response).toEqual(batch.response);
       const factual = route.search({ access_token: "fixture-reader", query: "revised data-processing addendum Leah September 5" });
       expect(factual.items[0]!.text).toContain("by September 5");
       // This sentence exists only outside the approved generation.
@@ -834,195 +810,6 @@ describe("Person Layer 2 route", () => {
     }
   });
 
-  it("narrows only already-authorized merged atoms to an exact release, with broad fallback", () => {
-    const value = setup(false);
-    const record = new Database(":memory:");
-    record.exec(
-      "CREATE TABLE organization_record_log (position INTEGER PRIMARY KEY, record_sha256 TEXT NOT NULL)",
-    );
-    const restrictedRecordHash = sha256Digest("restricted-record");
-    record
-      .prepare(
-        "INSERT INTO organization_record_log (position, record_sha256) VALUES (?, ?)",
-      )
-      .run(2, restrictedRecordHash);
-    const releaseId = "clean-v1-staging-20260830-014";
-    const atom = (input: {
-      readonly name: string;
-      readonly policy_id: ReadableSearchAtomV1["policy_id"];
-      readonly text: string;
-      readonly atom_order: number;
-    }): ReadableSearchAtomV1 => {
-      const restricted =
-        input.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2;
-      const base = policyAtom({
-        id: restricted ? "restricted" : "member",
-        policy_id: input.policy_id,
-      });
-      return {
-        ...base,
-        atom_id: sha256Digest(`${input.name}-atom`),
-        envelope_sha256: sha256Digest(`${input.name}-envelope`),
-        approval_id: `${input.name}-approval`,
-        signal_id_sha256: sha256Digest(`${input.name}-signal`),
-        atom_order: input.atom_order,
-        text: input.text,
-        text_sha256: sha256Digest(input.text),
-        authorization_audit_event_id: `${input.name}-audit`,
-        authorization_audit_entry_sha256: sha256Digest(`${input.name}-entry`),
-      };
-    };
-    const embeddedReleaseIds = [
-      ["uppercase-prefix", `X${releaseId}`],
-      ["underscore-prefix", `_${releaseId}`],
-      ["underscore-suffix", `${releaseId}_other`],
-      ["unicode-prefix", `é${releaseId}`],
-      ["combining-suffix", `${releaseId}\u0301`],
-    ] as const;
-    const built = buildReadableSearchGenerationV1(
-      realGenerationInput(value.state_directory, [
-        atom({
-          name: "older-member",
-          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-          text: "Synthetic staging canary clean-v1-staging-20260829-013 was accepted.",
-          atom_order: 0,
-        }),
-        atom({
-          name: "exact-member",
-          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-          text: `Synthetic staging release ${releaseId} approved the new decision.`,
-          atom_order: 1,
-        }),
-        atom({
-          name: "older-reviewer",
-          policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
-          text: "Private canary clean-v1-staging-20260829-013 owner approval delivered.",
-          atom_order: 0,
-        }),
-        atom({
-          name: "exact-reviewer",
-          policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
-          text: `Private release ${releaseId} owner approval delivery completed.`,
-          atom_order: 1,
-        }),
-        ...embeddedReleaseIds.map(([name, embeddedId], index) =>
-          atom({
-            name,
-            policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-            text: `Synthetic staging release ${embeddedId} is not exact evidence.`,
-            atom_order: index + 2,
-          }),
-        ),
-      ]),
-    );
-    warmReadableSearchActiveGenerationV1({
-      state_directory: value.state_directory,
-      active_generation: {
-        generation_id: built.manifest.generation_id,
-        manifest_sha256: built.manifest_sha256,
-        retrieval_contract_sha256: built.manifest.retrieval_contract_sha256,
-        exact_head: built.manifest.exact_head,
-      },
-    });
-    value.authority
-      .prepare(
-        `INSERT INTO authority_readable_search_active_generation
-         (singleton, organization_id, generation_id, manifest_sha256,
-          retrieval_contract_sha256, record_head_position,
-          record_head_hash, published_at)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        "org_clean",
-        built.manifest.generation_id,
-        built.manifest_sha256,
-        RETRIEVAL_CONTRACT,
-        2,
-        restrictedRecordHash,
-        "2026-08-22T11:59:00.000Z",
-      );
-    const owner = readerAuthorization({
-      principal_id: "principal_owner",
-      membership_id: "membership_owner",
-      membership_type: "owner",
-    });
-    const employee = readerAuthorization({
-      principal_id: "principal_employee",
-      membership_id: "membership_employee",
-      membership_type: "employee",
-    });
-    try {
-      const route = createPersonRecordSearchRouteV1({
-        state_directory: value.state_directory,
-        authority_id: "oau_clean",
-        organization_id: "org_clean",
-        state_lineage_id: "lineage_clean",
-        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
-        sessions: {
-          authenticateAccess: ({ access_token }) => {
-            if (access_token === "owner") return owner;
-            if (access_token === "employee") return employee;
-            throw new AuthorityOperationError(
-              "unauthorized",
-              "person authentication failed",
-            );
-          },
-        },
-        authority: value.authority,
-        record,
-        audit: new SqlitePersonRecordReadAuditV1(value.authority),
-      });
-      const query = "synthetic staging release";
-      const ownerResult = route.searchBatch({
-        access_token: "owner",
-        queries: [query],
-        exact_release_id: releaseId,
-      });
-      expect(ownerResult.response.items).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ atom_id: sha256Digest("exact-member-atom") }),
-          expect.objectContaining({ atom_id: sha256Digest("exact-reviewer-atom") }),
-        ]),
-      );
-      expect(ownerResult.response.items).toHaveLength(2);
-
-      const employeeResult = route.searchBatch({
-        access_token: "employee",
-        queries: [query],
-        exact_release_id: releaseId,
-      });
-      expect(employeeResult.response.items).toEqual([
-        expect.objectContaining({ atom_id: sha256Digest("exact-member-atom") }),
-      ]);
-      const unauthorizedOnAuthorized = vi.fn();
-      expect(() =>
-        route.searchBatch({
-          access_token: "unauthorized",
-          queries: [query],
-          exact_release_id: releaseId,
-          on_authorized: unauthorizedOnAuthorized,
-        }),
-      ).toThrow("person authentication failed");
-      expect(unauthorizedOnAuthorized).not.toHaveBeenCalled();
-
-      const fallback = route.searchBatch({
-        access_token: "owner",
-        queries: [query],
-        exact_release_id: "clean-v1-staging-20260901-016",
-      });
-      expect(fallback.response.items).toHaveLength(9);
-      expect(
-        fallback.response.items.some((item) =>
-          item.text.includes("clean-v1-staging-20260829-013"),
-        ),
-      ).toBe(true);
-    } finally {
-      record.close();
-      value.record.close();
-      value.authority.close();
-    }
-  });
-
   it("returns unavailable without search or audit when the exact-head pointer is absent", () => {
     const value = setup(false);
     const search = vi.fn();
@@ -1061,7 +848,7 @@ describe("Person Layer 2 route", () => {
     }
   });
 
-  it("runs a bounded Layer 4 plan under one reader and snapshot, then releases one aggregate audit", () => {
+  it("runs a bounded query batch under one reader and snapshot, then releases one aggregate audit", () => {
     const value = setup();
     const item = (
       name: string,
@@ -1117,17 +904,12 @@ describe("Person Layer 2 route", () => {
         audit: new SqlitePersonRecordReadAuditV1(value.authority),
         search_generation: search,
       });
-      const onAuthorized = vi.fn(() => {
-        throw new Error("telemetry observer unavailable");
-      });
       const batch = route.searchBatch({
         access_token: "bearer-only",
         queries: ["original", "focused", "third"],
-        on_authorized: onAuthorized,
       });
 
       expect(authenticateCount).toBe(2);
-      expect(onAuthorized).toHaveBeenCalledOnce();
       expect(search).toHaveBeenCalledTimes(3);
       for (const call of search.mock.calls) {
         expect(call[0]).toMatchObject({
@@ -1175,290 +957,10 @@ describe("Person Layer 2 route", () => {
     }
   });
 
-  it("places three authorized decision anchors before related facts and lexical fallback only for Layer 4 batches", () => {
-    const value = setup();
-    const item = (name: string, item_kind: "decision" | "action" | "rationale") => ({
-      atom_id: digest(`packet-${name}`),
-      record_position: 1,
-      record_sha256: digest(`packet-record-${name}`),
-      envelope_sha256: digest(`packet-envelope-${name}`),
-      item_kind,
-      text: `packet ${name}`,
-      policy_id: "organization-member-readable-person-v2" as const,
-    });
-    const lexical = [
-      item("first-decision", "decision"),
-      item("action", "action"),
-      item("second-decision", "decision"),
-      item("rationale", "rationale"),
-      item("third-decision", "decision"),
-    ];
-    const related = [
-      item("related-one", "rationale"),
-      lexical[2]!,
-      item("related-two", "action"),
-      ...Array.from({ length: 12 }, (_, index) =>
-        item(`related-extra-${String(index)}`, "rationale"),
-      ),
-    ];
-    const search = vi.fn(() => ({
-      generation_id: digest("generation"),
-      exact_head: {
-        authority_id: "oau_clean",
-        organization_id: "org_clean",
-        state_lineage_id: "lineage_clean",
-        position: 0,
-        record_sha256: null,
-      },
-      items: lexical,
-    }));
-    const expand = vi.fn(() => ({
-      generation_id: digest("generation"),
-      exact_head: {
-        authority_id: "oau_clean",
-        organization_id: "org_clean",
-        state_lineage_id: "lineage_clean",
-        position: 0,
-        record_sha256: null,
-      },
-      items: related,
-    }));
-    try {
-      const route = createPersonRecordSearchRouteV1({
-        state_directory: value.state_directory,
-        authority_id: "oau_clean",
-        organization_id: "org_clean",
-        state_lineage_id: "lineage_clean",
-        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
-        sessions: { authenticateAccess: () => authorization() },
-        authority: value.authority,
-        record: value.record,
-        audit: new SqlitePersonRecordReadAuditV1(value.authority),
-        search_generation: search,
-        expand_related_atoms: expand,
-      });
-      const lexicalOnly = route.search({
-        access_token: "bearer-only",
-        query: "packet",
-      });
-      expect(lexicalOnly.items.map((value) => value.atom_id)).toEqual(
-        lexical.map((value) => value.atom_id),
-      );
-      expect(expand).not.toHaveBeenCalled();
-
-      const packet = route.searchBatch({
-        access_token: "bearer-only",
-        queries: ["packet"],
-        include_related_atom_packet: true,
-      });
-      expect(expand).toHaveBeenCalledWith({
-        state_directory: value.state_directory,
-        active_generation: {
-          generation_id: digest("generation"),
-          manifest_sha256: digest("manifest"),
-          retrieval_contract_sha256: RETRIEVAL_CONTRACT,
-          exact_head: {
-            authority_id: "oau_clean",
-            organization_id: "org_clean",
-            state_lineage_id: "lineage_clean",
-            position: 0,
-            record_sha256: null,
-          },
-        },
-        reader: {
-          principal_id: "principal_reader",
-          membership_id: "membership_reader",
-        },
-        anchor_atom_ids: [
-          digest("packet-first-decision"),
-          digest("packet-second-decision"),
-          digest("packet-third-decision"),
-        ],
-        limit: 13,
-        include_anchor_records: true,
-      });
-      expect(packet.response.items.map((value) => value.atom_id)).toEqual([
-        digest("packet-first-decision"),
-        digest("packet-second-decision"),
-        digest("packet-third-decision"),
-        digest("packet-related-one"),
-        digest("packet-related-two"),
-        ...Array.from({ length: 10 }, (_, index) =>
-          digest(`packet-related-extra-${String(index)}`),
-        ),
-        digest("packet-action"),
-      ]);
-      expect(packet.response.items).toHaveLength(16);
-    } finally {
-      value.record.close();
-      value.authority.close();
-    }
-  });
-
-  it.each([1, 2])("fills a related-atom packet with %i lexical anchor(s)", (anchorCount) => {
-    const value = setup();
-    const item = (name: string) => ({
-      atom_id: digest(`capacity-${name}`),
-      record_position: 1,
-      record_sha256: digest(`capacity-record-${name}`),
-      envelope_sha256: digest(`capacity-envelope-${name}`),
-      item_kind: "decision" as const,
-      text: `capacity ${name}`,
-      policy_id: "organization-member-readable-person-v2" as const,
-    });
-    const lexical = Array.from({ length: anchorCount }, (_, index) =>
-      item(`anchor-${String(index)}`),
-    );
-    const related = Array.from(
-      { length: RELATED_ATOM_PACKET_MAX_ITEMS_V1 - anchorCount },
-      (_, index) => item(`related-${String(index)}`),
-    );
-    const search = vi.fn(() => ({
-      generation_id: digest("generation"),
-      exact_head: {
-        authority_id: "oau_clean",
-        organization_id: "org_clean",
-        state_lineage_id: "lineage_clean",
-        position: 0,
-        record_sha256: null,
-      },
-      items: lexical,
-    }));
-    const expand = vi.fn(() => ({
-      generation_id: digest("generation"),
-      exact_head: {
-        authority_id: "oau_clean",
-        organization_id: "org_clean",
-        state_lineage_id: "lineage_clean",
-        position: 0,
-        record_sha256: null,
-      },
-      items: related,
-    }));
-    try {
-      const route = createPersonRecordSearchRouteV1({
-        state_directory: value.state_directory,
-        authority_id: "oau_clean",
-        organization_id: "org_clean",
-        state_lineage_id: "lineage_clean",
-        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
-        sessions: { authenticateAccess: () => authorization() },
-        authority: value.authority,
-        record: value.record,
-        audit: new SqlitePersonRecordReadAuditV1(value.authority),
-        search_generation: search,
-        expand_related_atoms: expand,
-      });
-      const packet = route.searchBatch({
-        access_token: "bearer-only",
-        queries: ["capacity"],
-        include_related_atom_packet: true,
-      });
-
-      expect(packet.response.items).toHaveLength(
-        RELATED_ATOM_PACKET_MAX_ITEMS_V1,
-      );
-      expect(expand).toHaveBeenCalledWith(
-        expect.objectContaining({
-          limit: RELATED_ATOM_PACKET_MAX_ITEMS_V1 - anchorCount,
-        }),
-      );
-    } finally {
-      value.record.close();
-      value.authority.close();
-    }
-  });
-
-  it("keeps the primary decision and independent multi-hit evidence without reserving space for incidental matches", () => {
-    const value = setup();
-    const item = (
-      name: string,
-      record: string,
-      item_kind: "decision" | "action" = "action",
-    ) => ({
-      atom_id: digest(`coverage-${name}`),
-      record_position: 1,
-      record_sha256: digest(`coverage-record-${record}`),
-      envelope_sha256: digest(`coverage-envelope-${record}`),
-      item_kind,
-      text: `coverage ${name}`,
-      policy_id: "organization-member-readable-person-v2" as const,
-    });
-    const precise = item("precise", "precise", "decision");
-    const lexical = [
-      precise,
-      item("weak-one-a", "weak-one"),
-      item("weak-one-b", "weak-one"),
-      item("weak-two-a", "weak-two"),
-      item("weak-two-b", "weak-two"),
-      item("weak-three-a", "weak-three"),
-      item("weak-three-b", "weak-three"),
-      item("incidental", "incidental"),
-    ];
-    const related = Array.from({ length: 13 }, (_, index) =>
-      item(`related-${String(index)}`, `related-${String(index)}`),
-    );
-    const search = vi.fn(() => ({
-      generation_id: digest("generation"),
-      exact_head: {
-        authority_id: "oau_clean",
-        organization_id: "org_clean",
-        state_lineage_id: "lineage_clean",
-        position: 0,
-        record_sha256: null,
-      },
-      items: lexical,
-    }));
-    const expand = vi.fn(() => ({
-      generation_id: digest("generation"),
-      exact_head: {
-        authority_id: "oau_clean",
-        organization_id: "org_clean",
-        state_lineage_id: "lineage_clean",
-        position: 0,
-        record_sha256: null,
-      },
-      items: related,
-    }));
-    try {
-      const route = createPersonRecordSearchRouteV1({
-        state_directory: value.state_directory,
-        authority_id: "oau_clean",
-        organization_id: "org_clean",
-        state_lineage_id: "lineage_clean",
-        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
-        sessions: { authenticateAccess: () => authorization() },
-        authority: value.authority,
-        record: value.record,
-        audit: new SqlitePersonRecordReadAuditV1(value.authority),
-        search_generation: search,
-        expand_related_atoms: expand,
-      });
-      const packet = route.searchBatch({
-        access_token: "bearer-only",
-        // Seeing the same incidental atom in two query lists must not turn it
-        // into multiple distinct hits supporting that record.
-        queries: ["coverage", "coverage schedule"],
-        include_related_atom_packet: true,
-      });
-
-      expect(packet.response.items).toHaveLength(16);
-      expect(packet.response.items.map((item) => item.atom_id)).toContain(
-        precise.atom_id,
-      );
-      expect(packet.response.items.map((item) => item.atom_id)).toContain(digest("coverage-weak-three-a"));
-      expect(packet.response.items.map((item) => item.atom_id)).toContain(digest("coverage-weak-three-b"));
-      expect(packet.response.items.map((item) => item.atom_id)).not.toContain(digest("coverage-incidental"));
-    } finally {
-      value.record.close();
-      value.authority.close();
-    }
-  });
-
   it.each([
     ["returns a mismatched generation", digest("other-generation"), 0],
     ["returns a mismatched head", digest("generation"), 1],
-  ])("does not release or audit when related expansion %s", (_name, generation_id, position) => {
+  ])("does not release or audit when the search %s", (_name, generation_id, position) => {
     const value = setup();
     const item = {
       atom_id: digest("expansion-anchor"),
@@ -1481,17 +983,6 @@ describe("Person Layer 2 route", () => {
         record: value.record,
         audit: new SqlitePersonRecordReadAuditV1(value.authority),
         search_generation: () => ({
-          generation_id: digest("generation"),
-          exact_head: {
-            authority_id: "oau_clean",
-            organization_id: "org_clean",
-            state_lineage_id: "lineage_clean",
-            position: 0,
-            record_sha256: null,
-          },
-          items: [item],
-        }),
-        expand_related_atoms: () => ({
           generation_id,
           exact_head: {
             authority_id: "oau_clean",
@@ -1500,85 +991,15 @@ describe("Person Layer 2 route", () => {
             position,
             record_sha256: null,
           },
-          items: [],
-        }),
-      });
-      expect(() =>
-        route.searchBatch({
-          access_token: "bearer-only",
-          queries: ["expansion"],
-          include_related_atom_packet: true,
-        }),
-      ).toThrow("exact-head readable-search generation is not available");
-      expect(
-        value.authority
-          .prepare(
-            "SELECT count(*) AS count FROM authority_person_read_decision_audit_v2",
-          )
-          .get(),
-      ).toEqual({ count: 0 });
-    } finally {
-      value.record.close();
-      value.authority.close();
-    }
-  });
-
-  it("does not release or audit when authorization changes during related expansion", () => {
-    const value = setup();
-    let current = authorization();
-    const item = {
-      atom_id: digest("expansion-anchor"),
-      record_position: 1,
-      record_sha256: digest("expansion-record"),
-      envelope_sha256: digest("expansion-envelope"),
-      item_kind: "decision" as const,
-      text: "expansion anchor",
-      policy_id: "organization-member-readable-person-v2" as const,
-    };
-    try {
-      const route = createPersonRecordSearchRouteV1({
-        state_directory: value.state_directory,
-        authority_id: "oau_clean",
-        organization_id: "org_clean",
-        state_lineage_id: "lineage_clean",
-        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
-        sessions: { authenticateAccess: () => current },
-        authority: value.authority,
-        record: value.record,
-        audit: new SqlitePersonRecordReadAuditV1(value.authority),
-        search_generation: () => ({
-          generation_id: digest("generation"),
-          exact_head: {
-            authority_id: "oau_clean",
-            organization_id: "org_clean",
-            state_lineage_id: "lineage_clean",
-            position: 0,
-            record_sha256: null,
-          },
           items: [item],
         }),
-        expand_related_atoms: () => {
-          current = { ...current, session_family_id: "replacement-session" };
-          return {
-            generation_id: digest("generation"),
-            exact_head: {
-              authority_id: "oau_clean",
-              organization_id: "org_clean",
-              state_lineage_id: "lineage_clean",
-              position: 0,
-              record_sha256: null,
-            },
-            items: [],
-          };
-        },
       });
       expect(() =>
         route.searchBatch({
           access_token: "bearer-only",
           queries: ["expansion"],
-          include_related_atom_packet: true,
         }),
-      ).toThrow("person authentication failed");
+      ).toThrow("exact-head readable-search generation is not available");
       expect(
         value.authority
           .prepare(
