@@ -75,10 +75,12 @@ quick-detection alarms. It must not be added to, or deployed through, the generi
 arbitrary Authority host and is also used outside staging.
 
 The overview emits content-free metrics beside canonical journey events and
-uses the existing 14-day log retention. The Explorer exposes only fixed,
-redacted `describe`, recent `list`, and UUID-scoped `detail` operations; it has
-no public endpoint, direct Logs access, application credential, or mutation
-operation. It fails closed for incomplete history, unknown events, and result
+uses the existing 14-day log retention. The Explorer exposes only fixed
+operations: redacted `describe`, recent `list`, UUID-scoped `detail` and
+`related`, transport `health`, and a staging-only `content` operation that
+returns captured development content, including model input and output, when
+the staging content capture recorded it. It has no public endpoint, direct Logs
+access, application credential, or mutation operation. It fails closed for incomplete history, unknown events, and result
 limits.
 
 The companion policy permits only invocation of the fixed Lambda from a
@@ -664,7 +666,7 @@ sudo ./onboard-clean-v1.sh resume
 Before stopping the old Authority, replacement validates the staged inputs,
 the current accepted release and completed healthy runtime, and the same
 staging host, owner, runtime user, Region and Nango integration key.
-It copies only the five provider input files into a private host directory
+It copies only the four provider input files into a private host directory
 outside `clean-data`. The model-provider source file is used;
 old installed credentials, databases and signing keys are not carried into the
 new organization. Normal onboarding verifies the providers again.
