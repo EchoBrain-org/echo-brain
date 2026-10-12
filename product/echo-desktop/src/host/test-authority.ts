@@ -97,7 +97,7 @@ interface OpenItem {
  * back to the queue.
  */
 interface SweepRun {
-  run_id: string; event_ref: string; scope: string; created_at: string; state: 'pending' | 'running' | 'done'; lists: number; items: string[]; requeued?: true;
+  run_id: string; event_ref: string; scope: string; created_at: string; state: 'pending' | 'running' | 'done'; items: string[]; requeued?: true;
 }
 
 /** The granola modes whose projects are the meeting's: Thermostat redesign (Ari leads it) and Supplier review. */
@@ -187,7 +187,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let granolaPublicationReads = 0;
   let granolaReview: Record<string, unknown> | undefined;
   // The impact check of the approved meeting: none until it is approved.
-  let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; lists: number; retried: boolean } | null = null;
+  let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; retried: boolean } | null = null;
   // The people a meeting's impact check names, to pick as owners.
   if (mode.startsWith('granola')) desktop.people.push(...[MINA, RAFAEL, OKAFOR].map(person => ({ membership_id: person.membership_id, display_name: person.name })));
   // Thirteen people: the organization's directory comes in two pages.
@@ -625,7 +625,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   if (mode === 'granola-checked' || mode === 'granola-review' || mode.startsWith('granola-sweep') || mode === 'granola-alike') {
     granolaApproved = true;
     granolaReview = { action: 'approve', project_ids: [THERMOSTAT] };
-    granolaRun = { state: 'done', error_code: null, lists: 0, retried: false };
+    granolaRun = { state: 'done', error_code: null, retried: false };
     meetings.push(pilotMeeting([THERMOSTAT]));
     writeFound();
     const found = openItems.find(item => item.run_id === PILOT_RUN)!;
@@ -757,7 +757,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           suggested_projects: [{ project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign' }] });
         case 'review':
           granolaReview = body; granolaApproved = true;
-          if (body?.action === 'approve' && granolaRun === null && mode !== 'granola-publishing') granolaRun = { state: 'pending', error_code: null, lists: 0, retried: false };
+          if (body?.action === 'approve' && granolaRun === null && mode !== 'granola-publishing') granolaRun = { state: 'pending', error_code: null, retried: false };
           // The approved meeting: in the projects it was approved into, where its record opens.
           if (body?.action === 'approve' && !meetings.some(meeting => meeting.record_sha256 === PILOT_RECORD)) {
             meetings.push(pilotMeeting(Array.isArray(body.project_ids) ? body.project_ids as string[] : []));
@@ -765,11 +765,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           return json(mode === 'granola-decided-in-slack' ? { status: 'approved', decided_on: 'slack' } : { status: 'publishing', decided_on: 'desktop' });
       }
     }
-    // Impact checks: approving queues one run; a start runs it, and the second
+    // Impact checks: approving queues one run; a start runs it, and the first
     // list after that finds it done (in granola-run-failed, failed until Try
     // again). A done check has found two open items. A sweep of a scope with
     // open items queues a sweep run, which starts once no impact check of
-    // Ari's is pending or running; the second list after its start finds it
+    // Ari's is pending or running; the first list after its start finds it
     // done, each item it checked carrying its verdict. A sweep is due only in
     // granola-sweep, until one is asked for. Every answer passes the
     // contract's own result check, as the Authority's does. Runs and shared
@@ -785,7 +785,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const runId = PILOT_RUN;
       // Real publication is asynchronous: the first post-approval list can have no run yet.
       if (mode === 'granola-publishing' && granolaApproved && granolaRun === null && request.operation === 'list' && ++granolaPublicationReads >= 2) {
-        granolaRun = { state: 'pending', error_code: null, lists: 0, retried: false };
+        granolaRun = { state: 'pending', error_code: null, retried: false };
       }
       const run = granolaRun;
       const row = (value: NonNullable<typeof run>) => ({ run_id: runId, trigger: 'approved_record', event_ref: 'apr_' + 'a'.repeat(64), state: value.state,
@@ -794,14 +794,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         created_at: sweep.created_at, updated_at: sweep.created_at });
       const result = (operation: string, value: unknown) => json(api.validatePersonRunsResultV1(operation, value));
       const now = () => new Date().toISOString();
-      if (request.operation === 'list' && run?.state === 'running' && ++run.lists >= 2) {
+      if (request.operation === 'list' && run?.state === 'running') {
         Object.assign(run, mode === 'granola-run-failed' && !run.retried ? { state: 'failed', error_code: 'research_failed' } : { state: 'done' });
       }
       for (const sweep of sweepRuns) {
         if (request.operation !== 'list' || sweep.state !== 'running') continue;
         // granola-sweep-requeued: the first attempt times out, and the run goes back to the queue (the attempt rules impact checks have).
         if (mode === 'granola-sweep-requeued' && !sweep.requeued) { Object.assign(sweep, { state: 'pending', requeued: true }); continue; }
-        if (++sweep.lists < 2) continue;
         // Done: each item it checked that is still open keeps this check as its last.
         const at = now();
         for (const item of openItems) {
@@ -830,12 +829,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             if (run?.state === 'pending' || run?.state === 'running' || sweepRuns.some(entry => entry !== sweep && entry.state === 'running')) {
               return result('start', { state: 'busy' });
             }
-            if (sweep.state === 'pending') Object.assign(sweep, { state: 'running', lists: 0 });
+            if (sweep.state === 'pending') sweep.state = 'running';
             return result('start', { state: sweep.state });
           }
           if (!run || request.run_id !== runId) return failure('not_found', 404);
           if (sweepRuns.some(entry => entry.state === 'running')) return result('start', { state: 'busy' });
-          if (run.state === 'pending') Object.assign(run, { state: 'running', lists: 0 });
+          if (run.state === 'pending') run.state = 'running';
           return result('start', { state: run.state });
         }
         case 'retry':
@@ -952,7 +951,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const key = `${scope}:${id ?? ''}`;
           const queued = sweepRuns.find(entry => entry.scope === key && entry.state === 'pending');
           if (queued) return result('sweep', { run_id: queued.run_id });
-          sweepRuns.unshift({ run_id: `run_${randomUUID()}`, event_ref: `sweep_${randomUUID()}`, scope: key, created_at: now(), state: 'pending', lists: 0,
+          sweepRuns.unshift({ run_id: `run_${randomUUID()}`, event_ref: `sweep_${randomUUID()}`, scope: key, created_at: now(), state: 'pending',
             items: open.map(item => item.item_id) });
           return result('sweep', { run_id: sweepRuns[0]!.run_id });
         }
