@@ -14,6 +14,7 @@ decision_ids:
   - ADR-0032
   - ADR-0033
   - ADR-0031
+  - ADR-0034
   - ADR-0026
   - ADR-0001
   - ADR-0002

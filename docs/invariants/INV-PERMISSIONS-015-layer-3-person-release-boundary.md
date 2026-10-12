@@ -24,9 +24,10 @@ decision_ids:
   - ADR-0030
   - ADR-0032
   - ADR-0033
+  - ADR-0034
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads, and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads, and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -104,7 +105,19 @@ connection. The exact ECHO project grant, mapping revision and stable Jira proje
 ID narrow every read; moved tickets, mapping edits/removal and lost membership
 invalidate in-flight evidence. A runtime project fence cannot be widened by a
 mapping. The mapping stores configuration coordinates only, never tool content.
-Mine and unmapped ECHO projects exclude Jira. Runtime model-content capture is
+Mine and unmapped ECHO projects exclude Jira.
+
+Update, 2026-10-11: Confluence page evidence on the additive
+`POST /v5/person/ask` (V6 answers) runs through the same audited live-evidence
+path, under the asker's own Confluence grant and, in a project, only the
+lead-mapped spaces; Mine and unmapped projects exclude it. Its decision record,
+[ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md), is
+proposed, not accepted, so this path does not yet meet the accepted-ADR
+requirement of the change procedure below. Its negative disclosure tests are
+`providers/confluence/test/confluence-person-live-evidence-reader-v1.test.ts`
+and `services/organization-authority/test/confluence-person-ask-integration.test.ts`.
+
+Runtime model-content capture is
 suppressed once live metadata or text enters a prompt, except for the selected
 diagnostic paths that
 [connector contracts](../architecture/connector-contracts.md#live-evidence)
