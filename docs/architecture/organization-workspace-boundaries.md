@@ -94,7 +94,15 @@ for the retired runtime.
 
 ## Authority layers
 
-Routes call application use cases rather than SQLite. The service owns one
+Presentation routes (`src/presentation/`) never open SQLite: the layer rules
+in `services/organization-authority/source-boundary.v1.json` allow them no
+`better-sqlite3` import and no Authority adapter or composition module. They
+call application use cases, or
+Person services hosted in `src/composition/` through injected interfaces. Several of those composition
+modules hold use-case logic with direct SQLite access, which the composition
+layer rule allows; the
+[composition README](../../services/organization-authority/src/composition/README.md#use-case-services-with-direct-sqlite-access)
+lists them, and a new module must not join that list quietly. The service owns one
 organization, Person identity and sessions, authorization, and process lifecycle.
 Provider bundles receive explicit state/action/transport ports. The listener stays
 loopback-only behind the trusted reverse proxy. Stopped-state setup selects the
