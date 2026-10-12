@@ -196,12 +196,17 @@ at `POST /v4/person/ask`, and live page evidence through `PersonAnswerResponseV6
 at `POST /v5/person/ask`, both with the durable live-read audit. The Authority
 mounts both routes whenever an answer model is bound; ticket or page evidence
 appears only when the matching Jira or Confluence live runtime is selected.
-[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is accepted;
-the CLI requires explicit Jira or Confluence configuration. The staging switch
-instead reuses the fixed profile's existing owner grant and bounded project,
-without tool capture. Jira (tickets) and Confluence (pages) are the live
-readers. No live Slack reader is composed, the V3 desk reads no Slack, and read
-status is not exposed to clients.
+[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is accepted
+and [ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md) is
+proposed; the CLI requires explicit Jira or Confluence configuration. On staging,
+`ECHO_STAGING_JIRA_ASK_V1` and `ECHO_STAGING_CONFLUENCE_ASK_V1` take the fixed
+connector profile's Atlassian site (Jira also takes its integration; Confluence
+uses the `confluence` integration). Each Person reads under their own grant, with
+no initial-owner or fixed-project restriction and without tool capture; the
+rehearsal's owner and fixed-project limits apply only to its diagnostic reads.
+Jira (tickets) and Confluence (pages) are the live readers. No live Slack reader
+is composed, the V3 desk reads no Slack, and read status is not exposed to
+clients.
 
 The dispatcher must preserve [ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)
 scope rules: `mine` excludes live external reads. Provider selection and
