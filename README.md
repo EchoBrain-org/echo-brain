@@ -51,7 +51,8 @@ Tokens are never printed by successful commands.
 
 - external OIDC Person identity and rotating sessions;
 - organization authorization and audit;
-- meeting-source, decision-processing, and Slack approval and identity adapters;
+- meeting-source, decision-processing, and Slack approval and identity
+  adapters, plus the per-person live Jira and Confluence readers;
 - the append-only organization record; and
 - deterministic, permission-aware record reads and cited answers.
 
@@ -59,12 +60,17 @@ The server starts only from six byte-pinned baseline schemas, one per state
 role: Authority V14, control-plane V4, record-log V4, retrieval facts V3,
 retrieval lexical V2 and retrieval content V2. Startup refuses older state
 instead of migrating it; historical baselines and converters remain in Git
-history. Released retrieval
-is the sole content-release boundary. The answer-composition generation path is one
-synchronous Person `ask` path: one bounded plan, one released-retrieval batch,
-at most one answer call, and
-citations limited to that request's released atoms. It has no agents, tools,
-memory, streaming, or direct record or retrieval-store access.
+history.
+
+Ask is the agentic research loop of
+[ADR-0019](docs/decisions/ADR-0019-agentic-ask-v1.md) as updated by
+[ADR-0022](docs/decisions/ADR-0022-agentic-ask-only.md): a bounded number of
+research rounds over read-only search, open and list tools, plus the asker's
+request-local live Jira and Confluence sources when they are configured, then
+a final answer call. Citations are limited to evidence that request released
+and audited, and the loop has no direct record or store access. The evidence
+desk owns Person authorization and release audits; Person list and open read
+originals outside the answer-model gate.
 
 ## Repository layout
 
@@ -75,7 +81,7 @@ packages/organization-processing/       Provider-neutral meeting processing
 packages/organization-control-plane/    Linked Authority control-plane module
 packages/organization-record/           Linked Authority record module
 packages/organization-retrieval/        Linked Authority retrieval module
-providers/                              Granola, Slack, model and synthetic provider adapters
+providers/                              Granola, Slack, Jira, Confluence, OpenRouter model, synthetic and shared provider adapters
 services/organization-authority/        Deployable Authority and processing service
 src/product/person-client/              Standalone Person CLI package
 product/echo-desktop/                   Electron desktop app over the Person client
@@ -137,9 +143,10 @@ mkdir -p /absolute/path/to/artifacts
 npm run pack:person-client -- /absolute/path/to/artifacts
 ```
 
-The packer includes only the Person client and its four bundled workspace
-dependencies: the federation, organization protocol and organization API
-contracts and the Slack client fragment. CI installs that exact tarball
+The packer includes only the Person client and the six workspace dependencies
+listed in `bundleDependencies` of `src/product/person-client/package.json`:
+the federation, organization protocol and organization API contracts and the
+Slack, Jira and Confluence client fragments. CI installs that exact tarball
 offline on macOS arm64 and checks version, help, and absent-session behavior.
 
 Installed CLI shape:
@@ -230,9 +237,9 @@ The public descriptor health endpoint is:
 GET /v1/authority-descriptor
 ```
 
-Live meeting processing remains disabled until an administrator installs an
-explicit processing-source configuration binding. Identity/session testing
-does not enable meeting ingestion by itself.
+Ordinary deployments admit no organization meeting source; meetings enter
+only through a person's own connected source. Identity/session testing does
+not enable meeting ingestion by itself.
 
 ### AWS staging slot
 
