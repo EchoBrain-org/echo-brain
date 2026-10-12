@@ -254,7 +254,10 @@ volume around a disposable EC2 host. Its initial host onboarding and three
 retained-state host-replacement cycles have passed qualification; this does not
 claim a snapshot restore, GAP-01/#20 closure, or GAP-04 closure. The
 [staging sprint specification](docs/product/2026-08-26-disposable-authority-staging-sprint-v1.md)
-owns the recovery and safety boundaries. The [assertion
+owns the recovery and safety boundaries. Its Phase 4 check that the host
+bundle's `source_commit` equals the accepted release's source SHA is not
+enforced by the host or the controller; the retained-volume `up` steps below
+say what the operator checks instead. The [assertion
 matrix](docs/qualification/authority-staging-host-replacement-v1-matrix.md) and
 [qualification report](docs/qualification/QUAL-20260827-174106-001-authority-staging-host-replacement-v1.md)
 own the passed assertions and exact-run evidence.
@@ -354,6 +357,17 @@ npm run authority:staging -- up \
 npm run authority:staging -- status \
   --input /absolute/private/authority-staging/input.json
 ```
+
+A retained-volume `up` starts from a new root disk: only `clean-data/` is
+retained, and the six host tools under `/srv/echo-authority-clean-v1` are the
+copies in the `hostSetup` bundle, not the ones the release lane last installed.
+Nothing compares the bundle's source with the installed tooling or the accepted
+release. Before that `up`, rebuild the bundle with
+`npm run bundle:authority-staging-host` from a clean checkout of the
+`tooling_source` in the last succeeded release-lane `install` receipt, writing
+to a new output path, and update `hostSetup`'s `path` and `sha256` from its
+manifest. If an older bundle was used, the next lane `install` must pass that
+bundle's commit as `--previous-tooling-source`.
 
 The first `up` intentionally omits `--require-authority`: a fresh volume has
 not been onboarded yet. After the first accepted release reaches terminal green,
