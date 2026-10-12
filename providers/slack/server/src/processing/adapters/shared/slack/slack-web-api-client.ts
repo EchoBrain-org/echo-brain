@@ -1,3 +1,8 @@
+import {
+  BoundedJsonResponseErrorV1,
+  readBoundedJsonResponseV1,
+} from "@echo-brain/provider-runtime/bounded-json-response-v1";
+
 const BASE_URL = "https://slack.com/api";
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
@@ -112,50 +117,24 @@ function isNonEmptyString(value: unknown): value is string {
 async function readBoundedSlackJson(
   response: Response,
   method: string,
+  signal: AbortSignal,
   transportFailureCode: SlackApiErrorCode,
   sizeFailureCode: SlackApiErrorCode,
 ): Promise<unknown> {
-  const failure = (
-    detail: "oversized" | "unreadable",
-    code = transportFailureCode,
-  ) =>
-    new SlackApiError(
+  try {
+    return await readBoundedJsonResponseV1(response, {
+      maxBytes: MAXIMUM_RESPONSE_BYTES,
+      signal,
+    });
+  } catch (error) {
+    const oversized =
+      error instanceof BoundedJsonResponseErrorV1 && error.code === "oversized";
+    const code = oversized ? sizeFailureCode : transportFailureCode;
+    throw new SlackApiError(
       code,
-      `Slack ${method} returned an ${detail} body`,
+      `Slack ${method} returned an ${oversized ? "oversized" : "unreadable"} body`,
       code !== "invalid",
     );
-  const declaredLength = response.headers.get("content-length");
-  if (
-    declaredLength !== null &&
-    (!/^\d+$/.test(declaredLength) ||
-      Number(declaredLength) > MAXIMUM_RESPONSE_BYTES)
-  ) {
-    await response.body?.cancel().catch(() => undefined);
-    throw failure("oversized", sizeFailureCode);
-  }
-  const body = response.body;
-  if (body === null) throw failure("unreadable");
-  const reader = body.getReader();
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let totalBytes = 0;
-  let text = "";
-  try {
-    for (;;) {
-      const read = await reader.read();
-      if (read.done) break;
-      totalBytes += read.value.byteLength;
-      if (totalBytes > MAXIMUM_RESPONSE_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw failure("oversized", sizeFailureCode);
-      }
-      text += decoder.decode(read.value, { stream: true });
-    }
-    return JSON.parse(text + decoder.decode()) as unknown;
-  } catch (error) {
-    if (error instanceof SlackApiError) throw error;
-    throw failure("unreadable");
-  } finally {
-    reader.releaseLock();
   }
 }
 
@@ -751,6 +730,7 @@ export class SlackWebApiClient {
       const body = await readBoundedSlackJson(
         response,
         method,
+        controller.signal,
         transportFailureCode,
         responseFailureCode,
       );

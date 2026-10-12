@@ -251,3 +251,16 @@ describe("SlackWebApiClient chat.update", () => {
     });
   });
 });
+
+describe("SlackWebApiClient bounded response bodies", () => {
+  it.each([
+    ["a declared oversized", () => new Response("{}", { headers: { "content-length": String(512 * 1024 + 1) } }), "invalid", false],
+    ["a streamed oversized", () => new Response(" ".repeat(512 * 1024 + 1)), "invalid", false],
+    ["an unreadable", () => new Response("not json"), "transient", true],
+  ] as const)("maps %s body to Slack error codes, or to unknown_outcome for writes", async (_case, body, code, retryable) => {
+    const client = new SlackWebApiClient("test-token", { fetchImpl: async () => body() });
+    await expect(client.openDirectMessage("U123")).rejects.toMatchObject({ code, retryable });
+    await expect(client.updateMessage({ channel: "C123", ts: "123.000001", text: "x" }))
+      .rejects.toMatchObject({ code: "unknown_outcome", retryable: true });
+  });
+});
