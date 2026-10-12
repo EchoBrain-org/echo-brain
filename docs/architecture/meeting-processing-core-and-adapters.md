@@ -17,6 +17,9 @@ provider API -> server adapter -> processing contracts <- processing cycle
 
 - `packages/organization-processing/src/core/` imports no adapters,
   vendor SDKs, Authority composition, or persistence implementation.
+  In the same package, `src/llm/` imports only `core/`, and the cycle in
+  `src/admitted-meeting-processing/` reads only the LLM processor's
+  failure-stage helpers, never the hosted transport.
 - `providers/<provider>/src/` implements typed core ports and owns provider transport.
 - `providers/shared/` is the registered `@echo-brain/provider-runtime` adapter
   library. Concrete providers may depend on it; it cannot depend on concrete

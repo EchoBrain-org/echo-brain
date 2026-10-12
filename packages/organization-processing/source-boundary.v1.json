@@ -44,7 +44,9 @@
       "name": "organization-processing-ports",
       "from": "packages/organization-processing/src/ports/**",
       "allowed_imports": [
-        "packages/organization-processing/src/**"
+        "packages/organization-processing/src/core/**",
+        "packages/organization-processing/src/ports/**",
+        "packages/organization-processing/src/admitted-meeting-processing/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/organization-authority-kernel",
@@ -57,7 +59,9 @@
       "name": "organization-processing-admitted-meeting-processing",
       "from": "packages/organization-processing/src/admitted-meeting-processing/**",
       "allowed_imports": [
-        "packages/organization-processing/src/**"
+        "packages/organization-processing/src/core/**",
+        "packages/organization-processing/src/admitted-meeting-processing/**",
+        "packages/organization-processing/src/llm/llm-decision-processor.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/organization-authority-kernel",
@@ -73,7 +77,8 @@
       "name": "organization-processing-llm",
       "from": "packages/organization-processing/src/llm/**",
       "allowed_imports": [
-        "packages/organization-processing/src/**"
+        "packages/organization-processing/src/core/**",
+        "packages/organization-processing/src/llm/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/organization-authority-kernel"
@@ -87,7 +92,7 @@
       "name": "organization-processing-core",
       "from": "packages/organization-processing/src/core/**",
       "allowed_imports": [
-        "packages/organization-processing/src/**"
+        "packages/organization-processing/src/core/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/organization-authority-kernel"
