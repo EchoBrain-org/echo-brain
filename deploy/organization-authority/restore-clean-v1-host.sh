@@ -109,10 +109,14 @@ release_field() {
 }
 
 validate_retained_tuple() {
-  local release_id profile snapshot snapshot_owner expected_sha expected_source
+  local values release_id profile snapshot snapshot_owner expected_sha expected_source expected_image expected_version
   python3 "$RELEASE_TOOL" validate "$RELEASE_FILE" >/dev/null || \
     fail 'accepted retained release record is not canonical clean-v1'
-  release_id="$(release_field release-id)"
+  # One validated read for every field this check compares.
+  values="$(python3 "$RELEASE_TOOL" fields "$RELEASE_FILE" release-id runtime-profile-sha256 source-sha \
+    authority-image runtime-profile-version)" || \
+    fail 'accepted retained release record is not canonical clean-v1'
+  { read -r release_id; read -r expected_sha; read -r expected_source; read -r expected_image; read -r expected_version; } <<<"$values"
   profile="$RUNTIME_PROFILES_DIR/$release_id.profile"
   snapshot="$RUNTIME_ENVIRONMENTS_DIR/$release_id.env"
   private_regular_file "$profile" || fail 'accepted retained runtime profile is missing or unsafe'
@@ -128,15 +132,13 @@ validate_retained_tuple() {
     fail 'active retained runtime profile is not canonical clean-v1'
   cmp -s "$profile" "$ACTIVE_RUNTIME_PROFILE" || \
     fail 'active retained runtime profile differs from the accepted release tuple'
-  expected_sha="$(release_field runtime-profile-sha256)"
-  expected_source="$(release_field source-sha)"
   [[ $(sha256sum "$profile" | awk '{print $1}') == "$expected_sha" ]] || \
     fail 'accepted retained runtime profile digest differs from the accepted release tuple'
   [[ $(python3 "$RUNTIME_PROFILE_TOOL" field "$profile" source-sha) == "$expected_source" ]] || \
     fail 'accepted retained runtime profile source differs from the accepted release tuple'
   if ! python3 - "$snapshot" "$SETUP_FILE" \
-    "$(release_field authority-image)" "$release_id" "$expected_source" \
-    "$expected_sha" "$(release_field runtime-profile-version)" \
+    "$expected_image" "$release_id" "$expected_source" \
+    "$expected_sha" "$expected_version" \
     "$AUTHORITY_UID" "$AUTHORITY_GID" <<'PY'
 import pathlib
 import stat

@@ -83,6 +83,8 @@ compose_clean() {
 }
 
 field() { python3 "$RELEASE_TOOL" field "$1" "$2"; }
+# Validates one record once and prints each named field on its own line.
+fields() { python3 "$RELEASE_TOOL" fields "$@"; }
 validate() { python3 "$RELEASE_TOOL" validate "$1" >/dev/null; }
 profile_field() { python3 "$RUNTIME_PROFILE_TOOL" field "$1" "$2"; }
 validate_profile() { python3 "$RUNTIME_PROFILE_TOOL" validate "$1" >/dev/null; }
@@ -208,28 +210,23 @@ environment_snapshot_path() {
 }
 
 verify_runtime_profile() {
-  local record="$1" profile="$2" expected_sha expected_source
+  local record="$1" profile="$2" expected expected_sha expected_source
   validate_profile "$profile" || return 1
-  expected_sha="$(field "$record" runtime-profile-sha256)"
+  expected="$(fields "$record" runtime-profile-sha256 source-sha)"
+  { read -r expected_sha; read -r expected_source; } <<<"$expected"
   [[ "$(sha256_file "$profile")" == "$expected_sha" ]] || fail 'runtime profile SHA-256 does not match the release record'
-  expected_source="$(field "$record" source-sha)"
   [[ "$(profile_field "$profile" source-sha)" == "$expected_source" ]] || fail 'runtime profile source_sha does not match the release record'
 }
 
 create_environment_snapshot() {
-  local destination="$1" record="$2"
-  python3 - "$ENV_FILE" "$destination" \
-    "$(field "$record" authority-image)" \
-    "$(field "$record" release-id)" \
-    "$(field "$record" source-sha)" \
-    "$(field "$record" runtime-profile-sha256)" \
-    "$(field "$record" runtime-profile-version)" \
-    "$(field "$record" agentic-ask-v1)" \
-    "$(field "$record" small-scope-shortcut)" <<'PY'
+  local destination="$1" record="$2" values
+  values="$(fields "$record" authority-image release-id source-sha runtime-profile-sha256 \
+    runtime-profile-version agentic-ask-v1 small-scope-shortcut)" || return 1
+  python3 - "$ENV_FILE" "$destination" "$values" <<'PY'
 import os, pathlib, stat, sys
 
 source, destination = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-image, release_id, source_sha, profile_sha, profile_version, agentic_ask_v1, small_scope_shortcut = sys.argv[3:10]
+image, release_id, source_sha, profile_sha, profile_version, agentic_ask_v1, small_scope_shortcut = sys.argv[3].split('\n')
 if agentic_ask_v1 not in ('true', 'false'):
     raise SystemExit('release record agentic Ask flag is invalid')
 if small_scope_shortcut not in ('true', 'false'):
@@ -338,11 +335,11 @@ PY
 }
 
 active_runtime_profile_matches() {
-  local record="$1" expected_sha expected_source actual_sha actual_source
+  local record="$1" expected expected_sha expected_source actual_sha actual_source
   [[ -f "$ACTIVE_RUNTIME_PROFILE" && ! -L "$ACTIVE_RUNTIME_PROFILE" ]] || fail 'runtime profile drifted from the accepted release record'
   validate_profile "$ACTIVE_RUNTIME_PROFILE" || fail 'runtime profile drifted from the accepted release record'
-  expected_sha="$(field "$record" runtime-profile-sha256)"
-  expected_source="$(field "$record" source-sha)"
+  expected="$(fields "$record" runtime-profile-sha256 source-sha)"
+  { read -r expected_sha; read -r expected_source; } <<<"$expected"
   actual_sha="$(sha256_file "$ACTIVE_RUNTIME_PROFILE")" || fail 'runtime profile drifted from the accepted release record'
   actual_source="$(profile_field "$ACTIVE_RUNTIME_PROFILE" source-sha)" || fail 'runtime profile drifted from the accepted release record'
   [[ "$actual_sha" == "$expected_sha" && "$actual_source" == "$expected_source" ]] || fail 'runtime profile drifted from the accepted release record'
@@ -366,18 +363,14 @@ active_materialized_profile_matches() {
 }
 
 stored_release_tuple_matches() {
-  local record="$1" profile snapshot
+  local record="$1" profile snapshot values
   profile="$(runtime_profile_path "$record")"
   snapshot="$(environment_snapshot_path "$record")"
   [[ -f "$profile" && ! -L "$profile" ]] || fail 'stored runtime profile is missing or unsafe'
   verify_runtime_profile "$record" "$profile"
   [[ -f "$snapshot" && ! -L "$snapshot" ]] || fail 'release environment snapshot is missing or unsafe'
-  python3 - "$snapshot" \
-    "$(field "$record" authority-image)" \
-    "$(field "$record" release-id)" \
-    "$(field "$record" source-sha)" \
-    "$(field "$record" runtime-profile-sha256)" \
-    "$(field "$record" runtime-profile-version)" <<'PY'
+  values="$(fields "$record" authority-image release-id source-sha runtime-profile-sha256 runtime-profile-version)" || return 1
+  python3 - "$snapshot" "$values" <<'PY'
 import pathlib, stat, sys
 
 path = pathlib.Path(sys.argv[1])
@@ -387,7 +380,7 @@ expected = dict(zip((
     'ECHO_CLEAN_RELEASE_SOURCE_SHA',
     'ECHO_CLEAN_RUNTIME_PROFILE_SHA256',
     'ECHO_CLEAN_RUNTIME_PROFILE_VERSION',
-), sys.argv[2:]))
+), sys.argv[2].split('\n')))
 state = path.lstat()
 if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
     raise SystemExit('release environment snapshot must be a private regular file')
@@ -644,11 +637,9 @@ accepted_image_can_read_staging_canary_state() {
 }
 
 running_exact_release() {
-  local record="$1" expected expected_source expected_release expected_profile_sha authority_id proxy_id image_id
-  expected="$(field "$record" authority-image)"
-  expected_source="$(field "$record" source-sha)"
-  expected_release="$(field "$record" release-id)"
-  expected_profile_sha="$(field "$record" runtime-profile-sha256)"
+  local record="$1" values expected expected_source expected_release expected_profile_sha authority_id proxy_id image_id
+  values="$(fields "$record" authority-image source-sha release-id runtime-profile-sha256)" || return 1
+  { read -r expected; read -r expected_source; read -r expected_release; read -r expected_profile_sha; } <<<"$values"
   authority_id="$(running_container_id authority)" || return 1
   proxy_id="$(running_container_id proxy)" || return 1
   [[ "$(docker inspect --format '{{index .Config.Labels "io.echo-brain.release-id"}}' "$authority_id")" == "$expected_release" ]] || return 1
@@ -930,9 +921,9 @@ PY
 }
 
 start_and_check() {
-  local record="$1" expected_setup_class="$2" allow_initial_progress="$3" expected expected_source observed_setup_class
-  expected="$(field "$record" authority-image)"
-  expected_source="$(field "$record" source-sha)"
+  local record="$1" expected_setup_class="$2" allow_initial_progress="$3" values expected expected_source observed_setup_class
+  values="$(fields "$record" authority-image source-sha)" || return 1
+  { read -r expected; read -r expected_source; } <<<"$values"
   compose_clean pull authority || return 1
   image_source_matches "$expected" "$expected_source" || return 1
   compose_clean up -d --no-build --wait --wait-timeout 90 || return 1

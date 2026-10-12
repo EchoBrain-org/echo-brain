@@ -458,6 +458,20 @@ describe("Organization Authority clean-v1 release record", () => {
     expect(run("python3", [DEPLOY_TOOL, "validate", shortcutWithoutAsk]).status).toBe(1);
   });
 
+  it("reads several fields of one validated record in the order asked", () => {
+    const base = record({ agentic_ask_v1: true });
+    const valid = writeRecord(base);
+    const read = run("python3", [DEPLOY_TOOL, "fields", valid, "source-sha", "release-id", "agentic-ask-v1"]);
+    expect(read.status, read.stderr).toBe(0);
+    expect(read.stdout).toBe(`${base.source_sha}\n${base.release_id}\ntrue\n`);
+
+    const unknown = run("python3", [DEPLOY_TOOL, "fields", valid, "release-id", "secret"]);
+    expect([unknown.status, unknown.stdout, unknown.stderr]).toEqual([1, "", "clean-v1 release record: unknown field\n"]);
+    const invalid = run("python3", [DEPLOY_TOOL, "fields", writeRecord(record({ agentic_ask_v1: "true" })), "release-id"]);
+    expect([invalid.status, invalid.stdout]).toEqual([1, ""]);
+    expect(run("python3", [DEPLOY_TOOL, "fields", valid]).status).toBe(1);
+  });
+
   it("creates one canonical record without overwriting a prior release record", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-release-create-"));
     roots.push(root);

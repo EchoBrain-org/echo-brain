@@ -648,12 +648,19 @@ runtime_profile_field() {
 }
 
 validate_runtime_profile_tuple() {
-  local record="$1" profile="$2" expected_digest expected_source actual_digest actual_source
+  local record="$1" profile="$2" expected expected_digest expected_source
   python3 "$RUNTIME_PROFILE_TOOL" validate "$profile" >/dev/null || return 1
-  expected_digest="$(python3 "$RELEASE_TOOL" field "$record" runtime-profile-sha256)" || return 1
+  expected="$(release_record_fields "$record" runtime-profile-sha256 source-sha)" || return 1
+  { read -r expected_digest; read -r expected_source; } <<<"$expected"
+  runtime_profile_has_digest_and_source "$profile" "$expected_digest" "$expected_source"
+}
+
+# Compares an already validated runtime profile with the digest and source
+# its release record names.
+runtime_profile_has_digest_and_source() {
+  local profile="$1" expected_digest="$2" expected_source="$3" actual_digest actual_source
   actual_digest="$(runtime_profile_digest "$profile")" || return 1
   [[ "$actual_digest" == "$expected_digest" ]] || return 1
-  expected_source="$(python3 "$RELEASE_TOOL" field "$record" source-sha)" || return 1
   actual_source="$(runtime_profile_field "$profile" source-sha)" || return 1
   [[ "$actual_source" == "$expected_source" ]]
 }
@@ -875,6 +882,8 @@ activation_compose_quiet() {
 
 release_field() { python3 "$RELEASE_TOOL" field "$RELEASE_FILE" "$1"; }
 release_record_field() { python3 "$RELEASE_TOOL" field "$1" "$2"; }
+# Validates one record once and prints each named field on its own line.
+release_record_fields() { python3 "$RELEASE_TOOL" fields "$@"; }
 
 private_source() {
   local path="$1" label="$2"
@@ -1018,14 +1027,6 @@ accepted_runtime_environment_path() {
   printf '%s/%s.env\n' "$RUNTIME_ENVIRONMENTS_DIR" "$(release_field release-id)"
 }
 
-runtime_profile_path_for_release() {
-  printf '%s/%s.profile\n' "$RUNTIME_PROFILES_DIR" "$(release_record_field "$1" release-id)"
-}
-
-runtime_environment_path_for_release() {
-  printf '%s/%s.env\n' "$RUNTIME_ENVIRONMENTS_DIR" "$(release_record_field "$1" release-id)"
-}
-
 runtime_profile_files_match_deployment() {
   python3 - "$ACTIVE_RUNTIME_PROFILE_FILE" "$DEPLOY_DIR" <<'PY'
 import json
@@ -1102,18 +1103,20 @@ runtime_profile_matches_prepared_tuple() {
 }
 
 runtime_profile_matches_release_tuple() {
-  local record="$1" profile environment expected_digest expected_release
-  profile="$(runtime_profile_path_for_release "$record")" || return 1
-  environment="$(runtime_environment_path_for_release "$record")" || return 1
+  local record="$1" profile environment expected expected_release expected_digest expected_source profile_file
+  expected="$(release_record_fields "$record" release-id runtime-profile-sha256 source-sha)" || return 1
+  { read -r expected_release; read -r expected_digest; read -r expected_source; } <<<"$expected"
+  profile="$RUNTIME_PROFILES_DIR/$expected_release.profile"
+  environment="$RUNTIME_ENVIRONMENTS_DIR/$expected_release.env"
   [[ -f "$profile" && ! -L "$profile" ]] || return 1
   [[ -f "$ACTIVE_RUNTIME_PROFILE_FILE" && ! -L "$ACTIVE_RUNTIME_PROFILE_FILE" ]] || return 1
   [[ -f "$environment" && ! -L "$environment" ]] || return 1
-  validate_runtime_profile_tuple "$record" "$profile" || return 1
-  validate_runtime_profile_tuple "$record" "$ACTIVE_RUNTIME_PROFILE_FILE" || return 1
+  for profile_file in "$profile" "$ACTIVE_RUNTIME_PROFILE_FILE"; do
+    python3 "$RUNTIME_PROFILE_TOOL" validate "$profile_file" >/dev/null || return 1
+    runtime_profile_has_digest_and_source "$profile_file" "$expected_digest" "$expected_source" || return 1
+  done
   cmp -s "$profile" "$ACTIVE_RUNTIME_PROFILE_FILE" || return 1
   cmp -s "$environment" "$ENV_FILE" || return 1
-  expected_digest="$(release_record_field "$record" runtime-profile-sha256)" || return 1
-  expected_release="$(release_record_field "$record" release-id)" || return 1
   [[ "$(environment_value "$ENV_FILE" ECHO_CLEAN_RUNTIME_PROFILE_SHA256)" == "$expected_digest" ]] || return 1
   [[ "$(environment_value "$ENV_FILE" ECHO_CLEAN_RELEASE_ID)" == "$expected_release" ]] || return 1
   runtime_profile_files_match_deployment && staging_connector_rehearsal_matches_prepared_tuple
@@ -1165,9 +1168,9 @@ require_image_present() {
 }
 
 require_candidate_image_present() {
-  local image source
-  image="$(release_record_field "$CANDIDATE_FILE" authority-image)" || return 1
-  source="$(release_record_field "$CANDIDATE_FILE" source-sha)" || return 1
+  local expected image source
+  expected="$(release_record_fields "$CANDIDATE_FILE" authority-image source-sha)" || return 1
+  { read -r image; read -r source; } <<<"$expected"
   docker image inspect "$image" >/dev/null 2>&1 || \
     fail 'staged candidate Authority image is not present locally'
   [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image" 2>/dev/null)" == "$source" ]] || \
@@ -1260,11 +1263,11 @@ healthy_authority() {
 }
 
 authority_uses_release_image() {
-  local record="$1" id expected_image expected_source running_image_id
+  local record="$1" id expected expected_image expected_source running_image_id
   id="$(compose_clean ps -q authority 2>/dev/null)" || return 1
   [[ -n "$id" ]] || return 1
-  expected_image="$(release_record_field "$record" authority-image)"
-  expected_source="$(release_record_field "$record" source-sha)"
+  expected="$(release_record_fields "$record" authority-image source-sha)" || return 1
+  { read -r expected_image; read -r expected_source; } <<<"$expected"
   running_image_id="$(docker inspect --format '{{.Image}}' "$id" 2>/dev/null)" || return 1
   [[ "$running_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
   docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' \
@@ -1277,11 +1280,11 @@ authority_uses_accepted_image() {
 }
 
 service_uses_release_runtime_profile() {
-  local record="$1" service="$2" id expected_release expected_digest
+  local record="$1" service="$2" id expected expected_release expected_digest
   id="$(compose_clean ps -q "$service" 2>/dev/null)" || return 1
   [[ -n "$id" ]] || return 1
-  expected_release="$(release_record_field "$record" release-id)" || return 1
-  expected_digest="$(release_record_field "$record" runtime-profile-sha256)" || return 1
+  expected="$(release_record_fields "$record" release-id runtime-profile-sha256)" || return 1
+  { read -r expected_release; read -r expected_digest; } <<<"$expected"
   [[ "$(docker inspect --format '{{index .Config.Labels "io.echo-brain.release-id"}}' "$id" 2>/dev/null)" == "$expected_release" ]] || return 1
   [[ "$(docker inspect --format '{{index .Config.Labels "io.echo-brain.runtime-profile-sha256"}}' "$id" 2>/dev/null)" == "$expected_digest" ]]
 }
@@ -1431,11 +1434,10 @@ prepare() {
   own_for_runtime "$RUNTIME_PROFILES_DIR"
   own_for_runtime "$RUNTIME_ENVIRONMENTS_DIR"
   copy_exact_private "$input_release" "$RELEASE_FILE" 'release record' host
-  local image uid gid authority_url setup env release_id runtime_profile_sha256 runtime_profile_version runtime_profile_path runtime_environment_path connector_rehearsal_profile_file
-  image="$(release_field authority-image)"
-  release_id="$(release_field release-id)"
+  local image uid gid authority_url setup env release_values release_id source_sha runtime_profile_sha256 runtime_profile_version runtime_profile_path runtime_environment_path connector_rehearsal_profile_file
+  release_values="$(release_record_fields "$RELEASE_FILE" authority-image release-id runtime-profile-version source-sha)"
+  { read -r image; read -r release_id; read -r runtime_profile_version; read -r source_sha; } <<<"$release_values"
   runtime_profile_sha256="$(runtime_profile_digest "$input_runtime_profile")"
-  runtime_profile_version="$(release_field runtime-profile-version)"
   runtime_profile_path="$RUNTIME_PROFILES_DIR/$release_id.profile"
   runtime_environment_path="$RUNTIME_ENVIRONMENTS_DIR/$release_id.env"
   uid="$RUNTIME_UID"
@@ -1456,7 +1458,7 @@ authority_log_group=/echo-brain/authority/$input_authority_host
 nango_integration_key=$input_nango_integration
 release_id=$release_id
 authority_image=$image
-artifact_revision=$(release_field source-sha)
+artifact_revision=$source_sha
 runtime_profile_sha256=$runtime_profile_sha256
 authority_uid=$uid
 authority_gid=$gid"
@@ -1466,7 +1468,7 @@ ECHO_CLEAN_AUTHORITY_UID=$uid
 ECHO_CLEAN_AUTHORITY_GID=$gid
 ECHO_CLEAN_AUTHORITY_IMAGE=$image
 ECHO_CLEAN_RELEASE_ID=$release_id
-ECHO_CLEAN_RELEASE_SOURCE_SHA=$(release_field source-sha)
+ECHO_CLEAN_RELEASE_SOURCE_SHA=$source_sha
 ECHO_CLEAN_RUNTIME_PROFILE_SHA256=$runtime_profile_sha256
 ECHO_CLEAN_RUNTIME_PROFILE_VERSION=$runtime_profile_version
 ECHO_CLEAN_AWS_REGION=$input_aws_region
