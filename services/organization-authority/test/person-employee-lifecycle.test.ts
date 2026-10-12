@@ -12,8 +12,6 @@ import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } f
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
-import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
-import { personLoginGrantExpectedEmailSha256 } from "@echo-brain/organization-authority-kernel/domain/person-email-binding";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 
 const roots: string[] = [];
@@ -189,48 +187,9 @@ describe("Person employee lifecycle", () => {
       const secondEmployee = await employees(founderAccess, "POST", { name: "John Doe", email: "john@example.com" });
       expect(secondEmployee.status).toBe(201);
 
-      // The durable store can contain historical provider identities that are
-      // broader than the current new-invite mailbox rule. Seed that exact
-      // compatibility shape after startup, so lineage verification still
-      // covers the booted state.
-      const legacyEmail = "alice@localhost";
-      const seededEmail = "alice-seed@example.com";
-      const rejectedLegacyInvite = await employees(founderAccess, "POST", { name: "Alice Legacy", email: legacyEmail });
-      expect(rejectedLegacyInvite.status).toBe(400);
-      const seededLegacyEmployee = await employees(founderAccess, "POST", { name: "Alice Legacy", email: seededEmail });
-      expect(seededLegacyEmployee.status).toBe(201);
-      const legacyDatabase = openAuthorityDatabase(
-        join(initialized.state_directory, "authority.sqlite"),
-        { fileMustExist: true },
-      );
-      try {
-        expect(
-          legacyDatabase
-            .prepare(
-              `UPDATE authority_memberships
-                  SET employee_email = ?, employee_email_sha256 = ?
-                WHERE membership_type = 'employee' AND employee_email = ?`,
-            )
-            .run(
-              legacyEmail,
-              personLoginGrantExpectedEmailSha256(legacyEmail),
-              seededEmail,
-            ).changes,
-        ).toBe(1);
-      } finally {
-        legacyDatabase.close();
-      }
-      const legacyRoster = await employees(founderAccess);
-      expect(legacyRoster.status).toBe(200);
-      expect((await json(legacyRoster)).employees).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            email: legacyEmail,
-            membership_status: "active",
-            invitation_state: "pending",
-          }),
-        ]),
-      );
+      // New invitations must name a mailbox-shaped address.
+      const rejectedInvite = await employees(founderAccess, "POST", { name: "Alice Local", email: "alice@localhost" });
+      expect(rejectedInvite.status).toBe(400);
 
       const duplicate = await employees(founderAccess, "POST", { name: "Jane Doe", email: "jane@example.com" });
       expect(duplicate.status).toBe(409);
@@ -276,15 +235,6 @@ describe("Person employee lifecycle", () => {
         membership_status: "active", invitation_state: "pending",
       });
 
-      const legacyReissue = await employees(founderAccess, "PUT", { email: legacyEmail });
-      expect(legacyReissue.status).toBe(201);
-      provider.email = legacyEmail;
-      const legacyEmployee = await login(
-        origin,
-        (await json(legacyReissue)).login_grant as string,
-      );
-      expect(legacyEmployee.access_token).toEqual(expect.any(String));
-
       const redeemedRoster = await employees(founderAccess);
       expect(redeemedRoster.status).toBe(200);
       const redeemedEmployees = (await json(redeemedRoster)).employees as Array<Record<string, unknown>>;
@@ -302,19 +252,11 @@ describe("Person employee lifecycle", () => {
             membership_status: "active",
             invitation_state: "pending",
           },
-          {
-            email: legacyEmail,
-            display_name: "Alice Legacy",
-            membership_status: "active",
-            invitation_state: "redeemed",
-          },
         ]),
       );
 
       const revoke = await employees(founderAccess, "DELETE", { email: "jane@example.com" });
       expect(revoke.status).toBe(204);
-      const legacyRevoke = await employees(founderAccess, "DELETE", { email: legacyEmail });
-      expect(legacyRevoke.status).toBe(204);
       const revokedRoster = await employees(founderAccess);
       expect(revokedRoster.status).toBe(200);
       const revokedEmployees = (await json(revokedRoster)).employees as Array<Record<string, unknown>>;
@@ -323,12 +265,6 @@ describe("Person employee lifecycle", () => {
           {
             email: "jane@example.com",
             display_name: "Jane Doe",
-            membership_status: "revoked",
-            invitation_state: "none",
-          },
-          {
-            email: legacyEmail,
-            display_name: "Alice Legacy",
             membership_status: "revoked",
             invitation_state: "none",
           },
