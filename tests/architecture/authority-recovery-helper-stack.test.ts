@@ -283,6 +283,8 @@ describe("Authority isolated recovery helper stack", () => {
       "runs-on: ubuntu-24.04-arm",
       'PRODUCT_NODE_VERSION: "22.22.1"',
       "build-authority-recovery-helper-bundle.mjs",
+      "fetch-depth: 0",
+      'git merge-base --is-ancestor "$GITHUB_SHA" origin/main',
       'test "$(uname -m)" = aarch64',
       "value.source_commit !== process.env.GITHUB_SHA",
       "value.npm_shrinkwrap_sha256",
