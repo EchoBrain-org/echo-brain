@@ -468,6 +468,11 @@ moves its environment file into that archive, and empties the live mount for
 fresh preparation. It does not delete the archived rehearsal. It also accepts
 a clean rehearsal created before this wrapper, so no wrapper-specific setup
 record is required for the one unreleased-rehearsal replacement.
+`retired-rehearsals/` sits under the deployment directory on the host's
+disposable root disk, not on the retained `clean-data` volume: the archive must
+fit on the staging slot's 30 GiB root disk beside the Docker images, and a
+staging `down` (host replacement) deletes it. Copy anything worth keeping off
+the host before `down`.
 Run `prepare` again with the new exact release record. Never use this command
 after the first user release; subsequent baseline-preserving updates use
 the release procedure below.
@@ -674,7 +679,15 @@ new organization. Normal onboarding verifies the providers again.
 The existing archive-and-reset procedure preserves the old rehearsal for
 recovery. `prepare-rehearsal` consumes the operation-bound inputs through normal
 preparation and removes the temporary credential copies only after preparation
-succeeds. A failed preparation retains its inputs for an exact retry. Preserve
+succeeds. A failed preparation retains its inputs for an exact retry. The
+staged and captured inputs under
+`/srv/echo-authority-clean-v1/rehearsal-inputs/<operation-id>`, including the
+four captured credential copies, and the `retired-rehearsals/` archive are on
+the host's disposable root disk. Finish `prepare-rehearsal`, or deliberately
+abandon the operation, before any staging `down`: a `down` after
+`replace-rehearsal` and before a successful preparation leaves both the
+retained volume and the host copies empty, and the provider secrets must then
+be supplied again through a full seven-file transfer. Preserve
 an interrupted operation's receipt and lock, and follow the shared recovery
 procedure instead of deleting them or starting a competing operation.
 
