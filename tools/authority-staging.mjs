@@ -2100,15 +2100,22 @@ export function createAwsCliAdapters() {
     },
     ssm: Object.freeze({
       async quiesceHost({ instanceId, mountPath, region }) {
+        // Retained-volume `up` refuses a staged candidate, an operation lock
+        // and a held staging release guard, and only a running host can clear
+        // them. Refuse before stopping anything so the host keeps serving.
+        const absent = (path) => `test ! -e '${path}' -a ! -L '${path}'`;
         const commands = [
           "set -eu",
+          `mountpoint -q '${mountPath}'`,
+          absent(`${mountPath}/release/candidate.clean-v1.json`),
+          absent(`${mountPath}/.authority-operation-lock`),
+          absent(`${dirname(mountPath)}/.staging-release-guard`),
           "containers=$(docker ps --quiet)",
           'if [ -n "$containers" ]; then docker stop $containers >/dev/null; fi',
           'test -z "$(docker ps --quiet)"',
           "systemctl stop docker",
           "! systemctl is-active --quiet docker",
           "sync",
-          `mountpoint -q '${mountPath}'`,
           `umount '${mountPath}'`,
           `! mountpoint -q '${mountPath}'`,
           "printf 'authority-staging-quiesced\\n'",

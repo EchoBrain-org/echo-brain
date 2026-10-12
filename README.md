@@ -242,7 +242,7 @@ own the passed assertions and exact-run evidence.
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `slot-init` | Creates or repairs the retained AWS boundary, then creates or verifies its Cloudflare tunnel, ingress, DNS record, and connector-token deposit.                                    |
 | `up`        | Creates a disposable host and attaches the retained data volume. `--require-authority` binds a retained restart to resume the accepted Authority before CloudFormation signals ready, then gates it on the independently pinned public descriptor. |
-| `down`      | Stops the host safely and removes only disposable host resources. The edge and retained volume remain.                                                                             |
+| `down`      | Stops the host safely and removes only disposable host resources. The edge and retained volume remain. Refuses before stopping anything while a staged release candidate, an operation lock or the staging release guard is present, because a retained `up` cannot clear them. |
 | `status`    | Reads AWS, host, and public-descriptor observations separately. An edge observation alone is never proof that the host or Authority is ready.                                      |
 
 Prerequisites: an `echo-prod` IAM Identity Center session, `asm-exec`, the
