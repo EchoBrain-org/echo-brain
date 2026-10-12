@@ -114,9 +114,11 @@ the request is validated before any session or network use
 ([`person-list-cli.test.ts`](../../tests/person-client/person-list-cli.test.ts)).
 
 The shared `person tools <verb> --tool <id>` dispatcher selects client-only
-provider fragments at composition. Slack and the proposed Jira flow use the same
-connect/status/cancel/disconnect vocabulary. Jira opens consent and waits, while
-`--no-wait` exposes an attempt ID for later status/cancel commands. Consent URLs
-and Nango locators are not printed. Its routes remain unavailable without the
-optional Jira runtime; shipping the command fragment does not enable production
-Jira or capture tickets. See [the Jira flow](../../providers/jira/README.md).
+provider fragments at composition. Slack and the Jira and Confluence flows (Jira
+under accepted [ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md))
+use the same connect/status/cancel/disconnect vocabulary. Jira and Confluence
+open consent and wait, while `--no-wait` exposes an attempt ID for later
+status/cancel commands. Consent URLs and Nango locators are not printed. Their
+routes remain unavailable without the matching optional live runtime; shipping
+the command fragments does not enable either reader or capture tickets or
+pages. See [the Jira flow](../../providers/jira/README.md).

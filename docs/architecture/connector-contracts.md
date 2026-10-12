@@ -23,7 +23,8 @@ The Person CLI dispatches `person tools <verb> --tool <id>` through
 client fragment, with only the authenticated `PersonToolHostV1` transport supplied
 by the product. Slack, Jira and Confluence use this seam through client-only
 workspaces that keep their server dependencies out of the installed Person
-client; the Person client composes Granola's connection commands itself.
+client; the Person client composes the Granola and staging synthetic meeting
+tools itself.
 
 Provider-owned HTTP applications mount through the Authority's generic
 `person_tool_connections` collection. Route collision checks and body/response
