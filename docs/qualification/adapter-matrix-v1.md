@@ -10,9 +10,9 @@ component_ids:
   - CMP-PERSON-CLIENT
   - CMP-PERMISSIONS
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
-matrix_version: 1
+reviewed_at: 2026-10-11
+reviewed_ref: 6b69e51323a266d49c7c599a8168576152eb6fc1
+matrix_version: 2
 assertion_ids:
   - ADP-T01
   - ADP-T02
@@ -22,7 +22,6 @@ assertion_ids:
   - ADP-I01
   - ADP-I02
   - ADP-I03
-  - ADP-I04
   - ADP-E01
   - ADP-E02
   - ADP-E03
@@ -32,8 +31,6 @@ assertion_ids:
   - ADP-A02
   - ADP-M01
   - ADP-M02
-  - ADP-L01
-  - ADP-L02
   - ADP-R01
   - ADP-R02
   - ADP-B01
@@ -45,9 +42,6 @@ invariant_ids:
   - INV-ADAPTERS-003
   - INV-ADAPTERS-004
   - INV-IDENTITY-001
-  - INV-IDENTITY-002
-  - INV-IDENTITY-003
-  - INV-IDENTITY-004
   - INV-RUNTIME-001
   - INV-PERMISSIONS-013
   - INV-PERMISSIONS-014
@@ -57,9 +51,6 @@ failure_pattern_ids:
   - FP-ADAPTERS-003
   - FP-ADAPTERS-004
   - FP-IDENTITY-001
-  - FP-IDENTITY-002
-  - FP-IDENTITY-003
-  - FP-IDENTITY-004
   - FP-RUNTIME-001
   - FP-PERMISSIONS-001
   - FP-RELEASE-001
@@ -84,7 +75,6 @@ a real-provider probe before founder-live qualification.
 | `ADP-I01` | Each identity field missing, malformed, or mismatched | Closed failure naming an internal sanitized mismatch stage |
 | `ADP-I02` | Authoritative endpoints disagree | No activation or authorization-grade evidence |
 | `ADP-I03` | Wrong tenant, app, bot, user, revoked credential, or missing scope | Closed failure before consequential action |
-| `ADP-I04` | Legacy incomplete identity | Fresh owner-authorized proof and atomic audited promotion; no blind backfill |
 | `ADP-E01` | Acknowledgement differs from stored provider object | Reference persisted, stored object verified, no repost |
 | `ADP-E02` | Response lost before a provider reference is known | Provider-specific reconciliation or explicit unknown outcome; no blind retry |
 | `ADP-E03` | Crash after reference acquisition and before verification | Restart reads the same object and finalizes once |
@@ -94,8 +84,6 @@ a real-provider probe before founder-live qualification.
 | `ADP-A02` | Conflicting or incomplete provider action evidence | Remain pending or deny; absence is not inferred from unknown evidence |
 | `ADP-M01` | Empty, thinking-only, truncated, and invalid-schema model output | Distinct classified outcomes with bounded retry policy |
 | `ADP-M02` | Mixed valid and invalid grounding, then all-invalid grounding | Keep only valid references; all-invalid nonempty output fails retryably |
-| `ADP-L01` | Old client with new lease request/state version | Legacy bound preserved; incompatible head never silently accepted |
-| `ADP-L02` | Central revocation and disconnected local lease | Both enforcement windows measured and reported separately |
 | `ADP-R01` | Durable resolution after current cycle sweep | One lifecycle-owned follow-up or durable work for successor |
 | `ADP-R02` | Shutdown during follow-up | Abort and drain before runtime lock release |
 | `ADP-B01` | Packaging from a second clean worktree | Embedded identity equals claimed source and exact artifact receipt |

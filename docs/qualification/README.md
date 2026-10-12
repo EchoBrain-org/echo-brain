@@ -6,8 +6,11 @@ deployment, and release.
 
 ## Reusable matrices and immutable runs
 
-- A **qualification matrix** is living documentation. It states the cases a
-  capability or component must pass.
+- A **qualification matrix** states the cases a capability or component must
+  pass. Its source and test surfaces are bound to its `reviewed_ref`. A matrix
+  with linked reports keeps its version and assertion set; re-qualifying a
+  changed capability uses a new matrix version with no stale reports, or a new
+  matrix ID.
 - A **qualification report** is immutable. It records one run against exact
   identities and links the evidence for each assertion.
 - A **raw receipt** is bounded proof from the run. Private receipts remain in
@@ -18,7 +21,8 @@ and [qualification report template](../_templates/qualification.md). Matrix
 front matter and its table carry the same assertion IDs; completed reports
 must record an outcome and evidence for that exact assertion set.
 
-Primary minimum-V1 records:
+Minimum-V1 records (bound to each record's `reviewed_ref`; source paths may have
+moved since):
 
 - [Authority staging host-replacement V1 matrix](authority-staging-host-replacement-v1-matrix.md)
 - [Authority staging host-replacement V1 qualification](QUAL-20260827-174106-001-authority-staging-host-replacement-v1.md)
