@@ -10,7 +10,6 @@ import {
   authorityRecordPolicyProjectorsV1,
 } from "./authority-record-protocols-v1.js";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
-import { composePersonExternalIdentityRuntimeBundlesV1 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import { composeRecordApproverProjectorsV1 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   openOrganizationAuthorityRuntime,
@@ -464,8 +463,7 @@ export async function openOrganizationAuthorityService(
         : [dependencies.api.record_approver]),
     ]),
     external_identity_runtime_bundle:
-      dependencies.api?.external_identity_runtime_bundle ??
-      composePersonExternalIdentityRuntimeBundlesV1([slack.external_identity]),
+      dependencies.api?.external_identity_runtime_bundle ?? slack.external_identity,
   };
   return openOrganizationAuthorityRuntime(
     {
