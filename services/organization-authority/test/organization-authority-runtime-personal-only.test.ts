@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { HUMAN_ACT_RECORD_INPUT_CODECS_V4 } from '@echo-brain/organization-protocol';
 import { createPersonPolicyFactProjectorV2, createRecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
@@ -12,6 +12,16 @@ import { openOrganizationAuthorityRuntime } from '../src/composition/organizatio
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 import { initializePersonSessionCredentials } from '../src/composition/person-onboarding-service.js';
+
+// The real Granola runtime, recording the diagnostics its meeting worker claims captures through.
+const granolaDiagnostics = vi.hoisted(() => [] as unknown[]);
+vi.mock('../src/composition/granola-person-live-runtime-v1.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/composition/granola-person-live-runtime-v1.js')>();
+  return { ...actual, openGranolaPersonLiveRuntimeV1: (...args: Parameters<typeof actual.openGranolaPersonLiveRuntimeV1>) => {
+    const runtime = actual.openGranolaPersonLiveRuntimeV1(...args);
+    return { ...runtime, attachDiagnostics: (value: Parameters<typeof runtime.attachDiagnostics>[0]) => { granolaDiagnostics.push(value); runtime.attachDiagnostics(value); } };
+  } };
+});
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -108,6 +118,8 @@ describe('Organization Authority runtime without an organization source lane', (
       // The personal meeting runtime is composed and idle until a person connects a source.
       expect(runtime.processing).toBe('active');
       expect(runtime.run_staging_synthetic_canary).toBeUndefined();
+      // Prepared meeting_extraction captures are claimed only once the root hands the worker its diagnostics.
+      expect(granolaDiagnostics).toEqual([expect.objectContaining({ claimMeeting: expect.any(Function) })]);
       expect((await fetch(`http://127.0.0.1:${String(runtime.address.port)}/v1/authority-descriptor`)).status).toBe(200);
       expect(database.prepare('SELECT count(*) FROM authority_live_source_admission_v2').pluck().get()).toBe(0);
     } finally { database.close(); await runtime.close(); }

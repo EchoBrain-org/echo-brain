@@ -484,6 +484,11 @@ export async function openOrganizationAuthorityService(
             ...(await (existing?.tools?.(token) ?? [])),
             ...(await granola.tools(token)),
           ],
+          // The meeting worker claims prepared extraction captures only through this.
+          attachDiagnostics(value) {
+            granola.attachDiagnostics(value);
+            existing?.attachDiagnostics?.(value);
+          },
           close() {
             try {
               granola.close();
