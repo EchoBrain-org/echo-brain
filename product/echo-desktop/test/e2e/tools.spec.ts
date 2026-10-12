@@ -184,6 +184,8 @@ test('approves a meeting into two projects with an edited owner', async () => {
   await addMeeting(page);
   await page.getByTestId('need-row').click();
   const card = page.getByTestId('decision');
+  // The heading has the focus, not Only me: Enter or Space keeps the suggested projects.
+  await expect(card.getByRole('heading', { name: 'Approve this decision?' })).toBeFocused();
   await expect(card.getByRole('radio', { name: /Thermostat redesign/ })).toHaveAttribute('aria-checked', 'true');
   await expect(card.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
   await card.getByRole('checkbox', { name: 'Supplier review' }).check();

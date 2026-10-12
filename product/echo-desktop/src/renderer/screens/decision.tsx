@@ -29,7 +29,7 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
   const frozen = decision.busy || decision.unknown === true;
   return (
     <article class="decision-card" data-testid="decision" aria-labelledby="decision-ask">
-      <h1 id="decision-ask" class="decision-ask">Approve this decision?</h1>
+      <h1 id="decision-ask" class="decision-ask" tabIndex={-1}>Approve this decision?</h1>
       <div class="decision-from">From <b>{open.review.title}</b></div>
       {open.review.first_line && <div class="decision-line" data-testid="decision-line">{open.review.first_line}</div>}
       <div class="passage selectable decision-body" data-testid="decision-body"><Passage text={open.content} label={open.review.title} /></div>
@@ -88,7 +88,7 @@ function Impact({ state, decision }: { state: State; decision: DecisionState }) 
   const standing = open.review.decided_on === 'slack' ? `${verb} in Slack` : verb;
   return (
     <article class="decision-card" data-testid="decision" aria-labelledby="decision-ask">
-      <h1 id="decision-ask" class="decision-ask">{ask}</h1>
+      <h1 id="decision-ask" class="decision-ask" tabIndex={-1}>{ask}</h1>
       <div class="decision-from">{standing} · <b>{open.review.title}</b></div>
       <div class="passage selectable decision-body" data-testid="decision-body"><Passage text={open.content} label={open.review.title} /></div>
       <ImpactSection run={run ?? undefined} view={decision.impact} publishing={open.review.status === 'publishing'} busy={decision.busy}
@@ -100,7 +100,8 @@ function Impact({ state, decision }: { state: State; decision: DecisionState }) 
 /** The decision page, from a Home row: the proposal to approve, or what an approved one changed. */
 export function Decision({ state, decision }: { state: State; decision: DecisionState }) {
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => { box.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus({ preventScroll: true }); }, [decision.loading]);
+  // The heading takes the focus, as on Your open items: Enter or Space must not change a choice or open a source.
+  useEffect(() => { box.current?.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true }); }, [decision.loading]);
   if (decision.loading) return <div class="column center" aria-busy="true" data-testid="decision-loading"><span class="asking"><i /><i /><i /></span></div>;
   if (!decision.open) {
     return <div class="column center" data-testid="decision-error"><div class="error">{decision.failure ?? 'The decision could not be read.'}</div></div>;

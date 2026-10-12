@@ -611,7 +611,7 @@ button.items-line:hover { background: rgba(240, 236, 230, 0.08); }
 .item-card-check.landed { color: #9ed3a2; }
 
 /* Your open items: one line per item, how it stands and its owner; a match you may close has Close. */
-#item-status-head:focus { outline: none; }
+#item-status-head:focus, #decision-ask:focus { outline: none; }
 .status-group-head { font-size: 12px; font-weight: 600; color: var(--muted); }
 .status-line { display: flex; align-items: center; gap: 10px; font-size: 14px; }
 .status-text { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
