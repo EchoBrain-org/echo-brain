@@ -172,3 +172,10 @@ recovery completed and card updates stayed pending while no bot token could be
 obtained. Both were removed with the Slack approval internals on 2026-10-07
 (the approval core's Slack plug-in replaced them; see
 [ADR-0031](ADR-0031-unified-meeting-approval-core.md)).
+
+Evidence update, 2026-10-11:
+`organization-authority-private-approval-runtime.test.ts` was removed with the
+organization meeting source lane in `04191ed`;
+`slack-nango-proof-path.test.ts` and
+`tests/architecture/organization-authority-command-rehearsal.test.ts` remain
+the proof that the bot token is read only from Nango.

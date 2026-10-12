@@ -131,3 +131,14 @@ project choices and the V3 owner fields. `private-slack-dm-approval-stager-v3`,
 tests, and `private-slack-record-append.test.ts` cover owners from proposal to
 searchable record. The desktop Ask end-to-end suite covers the offered wider
 ask.
+
+Evidence update, 2026-10-11: the Slack tests named above were removed with the
+Slack approval internals: the V3 stager in `11208ba`, the block-kit card V2 in
+`723b444` and `private-slack-record-append.test.ts` in `1c16558`. The surviving
+`private-slack-approval-interaction-handler-v1.test.ts` no longer covers
+project choices or owners. Refused project choices are covered by
+`services/organization-authority/test/approval-core-v1.test.ts` ("refuses a
+project the approver lost and writes nothing"). Owners from proposal to
+searchable record are covered by its "approval core: owners" tests,
+`approval-decision-projection-v1.test.ts`, and `approval-publisher-v1.test.ts`,
+which checks the owner text in the search snapshot.
