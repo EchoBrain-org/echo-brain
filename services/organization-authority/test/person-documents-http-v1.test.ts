@@ -166,7 +166,7 @@ describe('document binary HTTP boundary and real service integration',()=>{
   const first=await paused('first');const second=await paused('second');expect(first.response.statusCode).toBe(200);expect(second.response.statusCode).toBe(200);
   await failure(await fetch(url,{headers:{authorization:`Bearer ${token}`}}),429,'rate_limited');expect(originalReads).toBe(2);
   first.response.destroy();first.request.destroy();await firstServerClosed;
-  const next=await fetch(url,{headers:{authorization:`Bearer ${token}`}});expect(next.status).toBe(200);expect(Buffer.from(await next.arrayBuffer())).toEqual(bytes);expect(originalReads).toBe(3);second.response.destroy();second.request.destroy();
+  const next=await fetch(url,{headers:{authorization:`Bearer ${token}`}});expect(next.status).toBe(200);expect(Buffer.from(await next.arrayBuffer()).equals(bytes)).toBe(true);expect(originalReads).toBe(3);second.response.destroy();second.request.destroy();
  });
  it('rechecks shutdown after transfer completion and admits no late original',async()=>{
   let closing=false;let stagingEntered=false;let finish!:()=>void;const gate=new Promise<void>(resolve=>{finish=resolve;});const bytes=Buffer.from('closing body');const real=createPersonDocumentUploadStagingV1();
