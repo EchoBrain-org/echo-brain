@@ -116,9 +116,15 @@ its private profile file. A checkout build alone does not enable a running
 Authority.
 
 Save an exact copy of that profile object as a local nonsecret JSON file. Use
-the release-matched Person client to sign in and run the ordinary shared
-connection commands when a connection is absent: `person tools setup --tool slack`,
-`person tools connect --tool slack`, and `person tools connect --tool jira`.
+the release-matched Person client to sign in. The runner reads only Jira: run
+`person tools connect --tool jira` when the owner's Jira connection is absent.
+Organization Slack setup belongs to onboarding, not to this runner. If the
+organization Slack connection is absent after a staging reset, follow the host
+`resume --existing-slack-app <app-id>` handoff and the
+[existing-app procedure](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection):
+`person tools setup --tool slack --existing-app <app-id>`, or `--reconnect`
+when that app's credentials are already saved (never both). Then run
+`person tools connect --tool slack`.
 Slack setup asks only for the bot's four delivery scopes; human Slack consent is still required. Without live Jira Ask enabled, the diagnostic profile admits Jira connection commands only for its initial owner. Enabling live Jira Ask lets each Person connect their own account. Organization Granola capture is retired.
 
 After `npm run build`, the owner Mac can run:
@@ -267,8 +273,10 @@ including the four required bot scopes (`chat:write`, `im:history`,
 only the person's browser sign-in requests. The `im:*` scopes are required for
 the meeting-owner DM lane.
 
-Re-onboarding a staging lineage uses the same in-app setup and connect as a
-first connection; it does not reuse a Slack app's scopes or token by hand. Use
+Re-onboarding a staging lineage uses the same in-app setup and connect, but
+reuses the designated Slack app with `--existing-app <app-id>` (see the
+[existing-app procedure](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection));
+it does not reuse a Slack app's scopes or token by hand. Use
 a wholly fresh Authority V14 staging lineage with the
 [current storage baselines](#state-and-baselines); use the supported
 rehearsal reset before preparing state from an earlier release.
