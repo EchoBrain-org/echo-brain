@@ -363,9 +363,11 @@ After that setup, the ordinary release updater only replaces artifacts within
 the current lineage: Authority V14, control-plane V4,
 record-log V4, retrieval facts V3, retrieval content/lexical V2, and a six-role
 V2 root. It refuses older or mixed persisted state before runtime,
-configuration, or state mutation. Use `replace-rehearsal --confirm-no-live-users`
-and prepare again with the exact new release for disposable unreleased rehearsal
-state that does not match these baselines. The [release procedure](../release/README.md)
+configuration, or state mutation. For disposable unreleased rehearsal state
+that does not match these baselines, install the target release's host tooling,
+then use `replace-rehearsal --confirm-no-live-users` and prepare again with the
+exact new release, as described in
+[Replace unreleased rehearsal state](#replace-unreleased-rehearsal-state). The [release procedure](../release/README.md)
 retains separately named historical migrations.
 
 Complete the bootstrap, owner Slack setup and connect, credential installation,
@@ -428,7 +430,19 @@ The current release requires fresh Authority V14 state. It cannot start over
 an earlier rehearsal lineage. V14 adds the held-extraction table, so a V13 host
 needs this reset and then initial-owner onboarding again. For disposable
 rehearsal state with no live users, retire it through the explicit
-initial-owner attestation:
+initial-owner attestation.
+
+While the old rehearsal is still in place, first install the target release's
+reviewed host tooling through the
+[current-host staging release lane](../release/README.md#automated-current-host-staging-lane)
+(`inspect-install`, then `install`, each with `--previous-tooling-source`). The
+transfer runs the installed wrapper's `doctor` and `prepare`, and an older
+installed wrapper lacks `resume --existing-slack-app` and `langsmith-tracing`
+and prints the bare new-app Slack setup handoff. The lane checks
+the host's accepted release record and environment, which `replace-rehearsal`
+archives, so it refuses to install between the reset and `prepare`. If the
+reset already ran on older tooling, install after `prepare` and before
+`resume`.
 
 ```sh
 ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
@@ -450,13 +464,9 @@ below: provider reuse needs a host already prepared with the Nango key and
 integration. Keep this order:
 
 1. While the old rehearsal is still in place, install the target release's
-   reviewed host tooling through the
-   [current-host staging release lane](../release/README.md#automated-current-host-staging-lane)
-   (`inspect-install`, then `install`, each with `--previous-tooling-source`). The
-   transfer runs the installed wrapper's `doctor` and `prepare`, and an older
-   wrapper still requires the retired `slack-*` input files. The lane checks
-   the host's accepted release record and environment, which
-   `replace-rehearsal` archives, so it refuses to install afterward.
+   reviewed host tooling as described above. Here the older wrapper still
+   requires the retired `slack-*` input files, so it cannot prepare the
+   seven-file input and the install-after-`prepare` fallback does not apply.
 2. Run `replace-rehearsal --confirm-no-live-users` without
    `--reuse-provider-inputs`.
 3. Transfer the full seven-file onboarding input directory (including

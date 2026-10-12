@@ -23,10 +23,14 @@ pre-V10 staging conversions and offline copiers were removed (git history keeps
 them). The historical project-context sprint used fresh V7 state and PC-06 reset/reseed,
 as described in the [PC-01 handoff](../../docs/product/2026-09-21-project-context-pc01-persistence.md).
 An incompatible baseline requires a new, explicitly designed migration or an
-authorized reset. For an authorized reset with no live users,
-run `onboard-clean-v1.sh
+authorized reset. For an authorized reset with no live users, first install the
+target release's reviewed host tooling through the
+[automated current-host lane](#automated-current-host-staging-lane) while the
+old rehearsal is in place, then run `onboard-clean-v1.sh
 replace-rehearsal --confirm-no-live-users`, then prepare the organization again
-with the new release record and matching profile. Ordinary `stage` never migrates an older baseline.
+with the new release record and matching profile, as described in
+[Replace unreleased rehearsal state](../organization-authority/README.md#replace-unreleased-rehearsal-state).
+Ordinary `stage` never migrates an older baseline.
 
 Historical baseline verification now uses Git history. The retention statements
 in [ADR-0017](../../docs/decisions/ADR-0017-project-meeting-approval-v1.md)
