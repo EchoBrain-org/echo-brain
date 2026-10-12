@@ -275,7 +275,7 @@ rehearsal reset before preparing state from an earlier release.
 
 ### 2. Start Person service, sign in, set up and connect Slack
 
-Before finalization, the compatibility-named `clean-live` command exposes the Person surface with an inert
+Before finalization, the `echo-organization-authority-serve serve` command exposes the Person surface with an inert
 processing worker. The manifest supplies the Authority URL and OIDC
 configuration, so they are not repeated here.
 
@@ -351,7 +351,7 @@ into that source. Neither staging mode needs a Granola account or credential.
 
 ### 4. Restart the Authority service and run the canary
 
-Restart the same `clean-live serve` compatibility command. Optional
+Restart the same `echo-organization-authority-serve serve` command. Optional
 `--worker-interval-ms <positive-integer>` changes the worker interval. At
 startup, the runtime reconciles the search index once, then each cycle recovers
 decided approvals whose record was not appended, polls the personal meeting
