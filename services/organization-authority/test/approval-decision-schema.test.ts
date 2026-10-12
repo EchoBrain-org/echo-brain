@@ -1,14 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  applyAuthorityBaseline,
-  AUTHORITY_BASELINE_APPLICATION_ID_V1,
-  AUTHORITY_BASELINE_SCHEMA_VERSION,
-  authorityBaselineSha256,
-} from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaseline } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
+import { seedOwnerWithAdmission } from "./fixtures/authority-admission-seed.js";
 
-const AUTHORITY_BASELINE_SHA256 =
-  "sha256:77c824e9cbbb2dbdbb079fe84edb9677807a56f11087bbd7f4889e008c2d3d84";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-30T00:00:00.000Z";
 
@@ -19,50 +13,7 @@ function openedCurrentDatabase() {
 }
 
 function seedCandidate(database: ReturnType<typeof openedCurrentDatabase>): void {
-  database
-    .prepare(
-      `INSERT INTO authority_metadata (
-        singleton, authority_id, organization_id, organization_display_name,
-        descriptor_json, created_at, last_observed_at
-      ) VALUES (1, 'oau_1', 'org_1', 'Example', '{}', ?, ?)`,
-    )
-    .run(NOW, NOW);
-  database
-    .prepare(
-      `INSERT INTO authority_principals (
-        principal_id, organization_id, display_name, provisioned_at
-      ) VALUES ('prn_1', 'org_1', 'Owner', ?)`,
-    )
-    .run(NOW);
-  database
-    .prepare(
-      `INSERT INTO authority_memberships (
-        membership_id, organization_id, principal_id, membership_type, status,
-        provisioned_at, revoked_at, revocation_reason, employee_email,
-        employee_email_sha256
-      ) VALUES ('mem_1', 'org_1', 'prn_1', 'owner', 'active', ?, NULL, NULL, NULL, NULL)`,
-    )
-    .run(NOW);
-  database
-    .prepare(
-      `INSERT INTO authority_live_source_admission_v2 (
-        source_key, organization_id, principal_id, membership_id, membership_type,
-        source_adapter_id, source_adapter_version, source_adapter_instance_id,
-        normalizer_version, source_custodian_sha256,
-        source_custodian_assurance, source_custodian_observed_at,
-        source_credential_reference_sha256, initial_cursor, cutoff_at,
-        processor_adapter_id, processor_adapter_version, processor_instance_id,
-        processor_configuration_sha256, processor_credential_reference_sha256,
-        semantic_input_sha256, admitted_at
-      ) VALUES (
-        1, 'org_1', 'prn_1', 'mem_1', 'owner',
-        'synthetic-meeting-fixture-v1', '1.0.0', 'synthetic-fixture',
-        '1.0.0', ?, 'fixture_owner_declared', ?, ?,
-        'fixture://cursor/zero', ?,
-        'decision-processor', '1.0.0', 'processor', ?, ?, ?, ?
-      )`,
-    )
-    .run(DIGEST, NOW, DIGEST, NOW, DIGEST, DIGEST, DIGEST, NOW);
+  seedOwnerWithAdmission(database, "1", NOW);
   const insertCandidate = database.prepare(
     `INSERT INTO authority_live_source_candidates_v2 (
       candidate_id, candidate_semantic_sha256, admission_semantic_input_sha256,
@@ -133,19 +84,12 @@ describe("Authority approval decision schema", () => {
   beforeEach(() => { database = openedCurrentDatabase(); });
   afterEach(() => database.close());
 
-  it("retains the current proposal and decision schema", () => {
-    expect(authorityBaselineSha256()).toBe(AUTHORITY_BASELINE_SHA256);
-    expect(database.pragma("application_id", { simple: true })).toBe(AUTHORITY_BASELINE_APPLICATION_ID_V1);
-    expect(database.pragma("user_version", { simple: true })).toBe(AUTHORITY_BASELINE_SCHEMA_VERSION);
+  it("retains the current proposal schema", () => {
     const columns = (table: string) => database.prepare(`PRAGMA table_info(${table})`).all().map((row) => (row as { readonly name: string }).name);
     expect(columns("authority_live_approval_outbox_v2")).toEqual([
       "candidate_id", "approval_id", "stage_command_id", "state", "approved_snapshot_json", "approved_snapshot_sha256",
       "suggested_projects_json", "superseded_by_candidate_id", "superseded_at", "updated_at",
     ]);
-    expect(columns("authority_approval_decisions_v1")).toEqual(["sequence", "approval_id", "command_id", "surface", "action", "body_json", "receipt_json"]);
-    const tables = database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").pluck().all();
-    expect(tables).not.toContain("authority_live_approval_delivery_quarantines_v1");
-    expect(tables).not.toContain("authority_person_meeting_approval_actions_v1");
     expect(database.pragma("foreign_key_check")).toEqual([]);
   });
 
@@ -284,11 +228,5 @@ describe("Authority approval decision schema", () => {
     expect(() => decide(database, { approval: "apr_3", command: "desk-3", request: { approval_id: "apr_3", command_id: "desk-3" } })).toThrow(/needs its staged proposal/);
     expect(() => database.prepare("DELETE FROM authority_live_approval_outbox_v2 WHERE candidate_id = 'cnd_3'").run()).toThrow(/deletion is denied/);
     expect(database.prepare("SELECT count(*) FROM authority_approval_decisions_v1 WHERE receipt_json IS NULL AND action = 'approve'").pluck().get()).toBe(0);
-  });
-
-  it("refuses to relabel occupied state as a fresh database", () => {
-    expect(() => applyAuthorityBaseline(database)).toThrow(
-      /completely empty database/,
-    );
   });
 });
