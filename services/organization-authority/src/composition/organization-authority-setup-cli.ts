@@ -15,7 +15,6 @@ import {
  * another profile needs a versioned bootstrap design. Provider verification
  * and persisted provider facts stay in provider helpers.
  */
-import { captureCommand } from '@echo-brain/organization-authority-kernel/composition/capture-stopped-state-command';
 import { plannedSlackConnectionIsActiveV1, readInitialOwnerSlackSetupStatusV1 } from '@echo-brain/provider-slack-server/setup/initial-owner-slack-setup-v1';
 import { randomUUID } from "node:crypto";
 import {
@@ -58,9 +57,11 @@ import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSIT
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
 import {
   assertPersonAuthorityCallback,
+  issueSetupOwnerInvitation,
   readPersonOidcConfiguration,
-  runOrganizationAuthorityPersonAdministrationCli,
+  type SetupOwnerInvitationInput,
 } from "./organization-authority-person-administration-cli.js";
+import { initializePersonSessionCredentials } from "./person-onboarding-service.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
@@ -155,15 +156,7 @@ export interface OrganizationAuthoritySetupCliDependencies {
   readonly now: () => string;
   readonly initialize_state: typeof bootstrapOrganizationAuthorityState;
   readonly initialize_credentials: (stateDirectory: string) => Promise<void>;
-  readonly issue_invitation: (input: {
-    readonly state_directory: string;
-    readonly oidc_config_path: string;
-    readonly pkce_key_file: string;
-    readonly membership_id: string;
-    readonly expected_email: string;
-    readonly authority_url: string;
-    readonly output_path: string;
-  }) => Promise<void>;
+  readonly issue_invitation: (input: SetupOwnerInvitationInput) => Promise<void>;
   /** Test seam only; production queues into the owner's staging synthetic source. */
   readonly queue_staging_synthetic_meetings?: (input: {
     readonly state_directory: string;
@@ -191,39 +184,10 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
   now: () => new Date().toISOString(),
   initialize_state: bootstrapOrganizationAuthorityState,
   initialize_credentials: async (stateDirectory) => {
-    await captureCommand((stdout) =>
-      runOrganizationAuthorityPersonAdministrationCli(
-        ["credentials-init", "--state-dir", stateDirectory],
-        {
-          stdout,
-          stderr: () => undefined,
-        },
-      ),
-    );
+    initializePersonSessionCredentials({ state_directory: stateDirectory });
   },
   issue_invitation: async (input) => {
-    await captureCommand((stdout) =>
-      runOrganizationAuthorityPersonAdministrationCli(
-        [
-          "invite",
-          "--state-dir",
-          input.state_directory,
-          "--oidc-config",
-          input.oidc_config_path,
-          "--pkce-key-file",
-          input.pkce_key_file,
-          "--membership-id",
-          input.membership_id,
-          "--expected-email",
-          input.expected_email,
-          "--authority-url",
-          input.authority_url,
-          "--out",
-          input.output_path,
-        ],
-        { stdout, stderr: () => undefined },
-      ),
-    );
+    issueSetupOwnerInvitation(input);
   },
 };
 

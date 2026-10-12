@@ -32,7 +32,8 @@ import {
   runOrganizationAuthoritySetupCli,
   type OrganizationAuthoritySetupCliDependencies,
 } from "../src/composition/organization-authority-setup-cli.js";
-import { runOrganizationAuthorityPersonAdministrationCli } from "../src/composition/organization-authority-person-administration-cli.js";
+import { issueSetupOwnerInvitation } from "../src/composition/organization-authority-person-administration-cli.js";
+import { initializePersonSessionCredentials } from "../src/composition/person-onboarding-service.js";
 import {bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
@@ -124,8 +125,6 @@ function finalizeDeps(
   return { ...base, read_setup_stage: () => CONNECTED_STAGE, read_initial_owner_setup_status: () => owner };
 }
 
-const QUIET = { stdout: () => undefined, stderr: () => undefined };
-
 /** Runs one setup command, asserts its exit code and returns its raw output. */
 async function cli(
   args: readonly string[],
@@ -152,26 +151,6 @@ async function cli(
 function writePrivate(path: string, text: string): void {
   writeFileSync(path, text, { mode: 0o600 });
   chmodSync(path, 0o600);
-}
-
-function inviteArgv(input: Parameters<OrganizationAuthoritySetupCliDependencies["issue_invitation"]>[0]): string[] {
-  return [
-    "invite",
-    "--state-dir",
-    input.state_directory,
-    "--oidc-config",
-    input.oidc_config_path,
-    "--pkce-key-file",
-    input.pkce_key_file,
-    "--membership-id",
-    input.membership_id,
-    "--expected-email",
-    input.expected_email,
-    "--authority-url",
-    input.authority_url,
-    "--out",
-    input.output_path,
-  ];
 }
 
 function readyStatusDependencies(
@@ -772,16 +751,11 @@ describe("Organization Authority setup coordinator", () => {
     const defaultPathDependencies: OrganizationAuthoritySetupCliDependencies = {
       ...dependencies(order),
       initialize_credentials: async (stateDirectory) => {
-        const status = await runOrganizationAuthorityPersonAdministrationCli(
-          ["credentials-init", "--state-dir", stateDirectory],
-          QUIET,
-        );
-        expect(status).toBe(0);
+        initializePersonSessionCredentials({ state_directory: stateDirectory });
       },
       issue_invitation: async (input) => {
         invitationIssues += 1;
-        const status = await runOrganizationAuthorityPersonAdministrationCli(inviteArgv(input), QUIET);
-        expect(status).toBe(0);
+        issueSetupOwnerInvitation(input);
       },
     };
 
@@ -797,17 +771,12 @@ describe("Organization Authority setup coordinator", () => {
 
     // A live grant issued for another address is not the owner's invitation.
     const mismatchedPath = join(dirname(manifest.invitation_path), "other.json");
-    expect(
-      await runOrganizationAuthorityPersonAdministrationCli(
-        inviteArgv({
-          ...manifest,
-          membership_id: manifest.owner_membership_id,
-          expected_email: "other@example.com",
-          output_path: mismatchedPath,
-        }),
-        QUIET,
-      ),
-    ).toBe(0);
+    issueSetupOwnerInvitation({
+      ...manifest,
+      membership_id: manifest.owner_membership_id,
+      expected_email: "other@example.com",
+      output_path: mismatchedPath,
+    });
     writePrivate(manifest.invitation_path, readFileSync(mismatchedPath, "utf8"));
     expect((await cli(["status", "--state-dir", state])).json).toMatchObject({
       founder_invitation_valid: false,
