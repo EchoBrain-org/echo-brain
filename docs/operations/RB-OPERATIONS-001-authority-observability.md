@@ -144,12 +144,16 @@ onboarding wrapper derives
 `ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/<authority-host>`; that
 value must exactly match the stack's `DockerRuntimeLogGroupName` output.
 
+On the EC2 host, run the installed wrapper with `sudo`; the private input
+directory and its files must then be root-owned (see the
+[deployment guide](../../deploy/organization-authority/README.md#one-time-preparation)).
+
 ```sh
-cd deploy/organization-authority
-./onboard-clean-v1.sh doctor --input-dir /absolute/private/echo-onboarding
-./onboard-clean-v1.sh prepare --input-dir /absolute/private/echo-onboarding
-./onboard-clean-v1.sh resume
-./onboard-clean-v1.sh status
+cd /srv/echo-authority-clean-v1
+sudo ./onboard-clean-v1.sh doctor --input-dir /absolute/private/echo-onboarding
+sudo ./onboard-clean-v1.sh prepare --input-dir /absolute/private/echo-onboarding
+sudo ./onboard-clean-v1.sh resume
+sudo ./onboard-clean-v1.sh status
 ```
 
 Expected evidence is terminal green status and an `authority` log stream in
@@ -998,7 +1002,7 @@ containing product data.
 From the Authority deployment directory during the maintenance window:
 
 ```sh
-docker compose --env-file .env.clean-v1 \
+sudo docker compose --env-file .env.clean-v1 \
   -f compose.clean-v1.yaml -f compose.clean-v1.ec2.yaml stop authority
 ```
 
@@ -1006,15 +1010,15 @@ Expected evidence within the 2-of-3 one-minute window is failed scheduled
 checks and an availability alarm email. Restore the exact accepted deployment:
 
 ```sh
-docker compose --env-file .env.clean-v1 \
+sudo docker compose --env-file .env.clean-v1 \
   -f compose.clean-v1.yaml -f compose.clean-v1.ec2.yaml \
   up -d --no-build --wait --wait-timeout 90 authority
-docker compose --env-file .env.clean-v1 \
+sudo docker compose --env-file .env.clean-v1 \
   -f compose.clean-v1.yaml -f compose.clean-v1.ec2.yaml restart proxy
-docker compose --env-file .env.clean-v1 \
+sudo docker compose --env-file .env.clean-v1 \
   -f compose.clean-v1.yaml -f compose.clean-v1.ec2.yaml \
   up -d --no-build --wait --wait-timeout 90 authority proxy
-./onboard-clean-v1.sh status
+sudo ./onboard-clean-v1.sh status
 curl --fail --silent --show-error --output /dev/null \
   "https://$authority_host/v1/authority-descriptor"
 ```

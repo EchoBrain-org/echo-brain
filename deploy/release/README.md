@@ -308,7 +308,12 @@ invitation, Slack, Granola, or model secret.
 For the existing staging host, prefer the
 [automated current-host lane](#automated-current-host-staging-lane). The direct
 host commands below remain the installed-wrapper contract and human fallback;
-they are not permission for an agent to open a shell session.
+they are not permission for an agent to open a shell session. A human in
+Session Manager runs them from `/srv/echo-authority-clean-v1` with `sudo`
+scoped to each command, as shown; never use `sudo -i`, `su` or a root shell.
+The deployment directory is root-owned and `clean-data` belongs to the service
+account, so an unelevated wrapper fails with a misleading "operation in
+progress" error.
 
 Keep the three operator lanes separate:
 
@@ -327,18 +332,18 @@ receipt for that source commit. For a normal update, do not edit or pre-install
 
 ```sh
 cd /srv/echo-authority-clean-v1
-install -d -m 0755 release
-install -m 0755 /absolute/reviewed/clean-v1-release.py release/clean-v1-release.py
-install -m 0755 /absolute/reviewed/clean-v1-runtime-profile.py release/clean-v1-runtime-profile.py
-install -m 0755 /absolute/reviewed/update-clean-v1.sh ./update-clean-v1.sh
-install -o root -g root -m 0755 \
+sudo install -d -m 0755 release
+sudo install -m 0755 /absolute/reviewed/clean-v1-release.py release/clean-v1-release.py
+sudo install -m 0755 /absolute/reviewed/clean-v1-runtime-profile.py release/clean-v1-runtime-profile.py
+sudo install -m 0755 /absolute/reviewed/update-clean-v1.sh ./update-clean-v1.sh
+sudo install -o root -g root -m 0755 \
   /absolute/reviewed/backup-authority-maintenance.sh \
   ./backup-authority-maintenance.sh
-install -d -m 0700 clean-data/release
+sudo install -d -m 0700 clean-data/release
 sha256sum ./backup-authority-maintenance.sh
 python3 release/clean-v1-release.py validate /absolute/private/release.json
 python3 release/clean-v1-runtime-profile.py validate /absolute/private/runtime-profile.json
-./update-clean-v1.sh stage --release /absolute/private/release.json \
+sudo ./update-clean-v1.sh stage --release /absolute/private/release.json \
   --runtime-profile /absolute/private/runtime-profile.json
 ```
 
@@ -356,7 +361,7 @@ checks the actual running container image digest plus descriptor and safe setup
 status, but does not accept it yet.
 
 ```sh
-./update-clean-v1.sh stage --release /absolute/private/candidate-release.json \
+sudo ./update-clean-v1.sh stage --release /absolute/private/candidate-release.json \
   --runtime-profile /absolute/private/candidate-runtime-profile.json
 ```
 
@@ -408,10 +413,10 @@ the Slack DM copy if the owner linked Slack), then use that binary to search for
 before making the human promotion confirmation explicit:
 
 ```sh
-./update-clean-v1.sh canary
+sudo ./update-clean-v1.sh canary
 "$HOME/.local/bin/echo-brain" person records --query '<candidate-release-id> verify owner approval of a staged meeting'
 "$HOME/.local/bin/echo-brain" person ask --question 'What did we decide for synthetic staging release <candidate-release-id>?'
-./update-clean-v1.sh promote --release /absolute/private/candidate-release.json --canary-passed
+sudo ./update-clean-v1.sh promote --release /absolute/private/candidate-release.json --canary-passed
 ```
 
 The canary command stores a private receipt bound to the exact selected release.
@@ -425,7 +430,7 @@ If it fails, restore the prior **same-clean-v1** image, runtime profile, and
 environment tuple and leave the accepted record unchanged:
 
 ```sh
-./update-clean-v1.sh rollback
+sudo ./update-clean-v1.sh rollback
 ```
 
 For a first deployment, where no accepted release record exists yet, the same
