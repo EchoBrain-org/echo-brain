@@ -525,6 +525,8 @@ describe("CI workflow", () => {
     expect(desktopJob).toContain("xvfb-run -a dbus-run-session -- npm run smoke");
     expect(desktopJob).toContain("\n            npm run smoke\n");
     expect(desktopJob).toContain("npm run smoke -- /opt/ECHO/echo-desktop");
+    // The installed deb is smoked under Ubuntu's default userns restriction.
+    expect(desktopJob).toContain("sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1");
     expect(desktopJob).toContain("desktop-file-validate");
     expect(desktopJob).toContain("codesign --verify --deep --strict");
     const packager = readFileSync(

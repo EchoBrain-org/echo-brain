@@ -333,6 +333,7 @@ jobs:
           sudo apt-get install -y binutils xvfb xauth dbus-x11 desktop-file-utils libgtk-3-0t64 libnss3 libasound2t64 libgbm1
           # Unpackaged Electron has no installed AppArmor profile. Allow its
           # user-namespace sandbox on this disposable runner; never --no-sandbox.
+          # The deb smoke restores the default before installing the package.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Install repository dependencies
         working-directory: .
@@ -374,10 +375,14 @@ jobs:
       - name: Install and smoke the deb and validate its desktop launcher
         if: runner.os == 'Linux'
         run: |
+          # Restore Ubuntu 24.04's default, so the installed app starts only
+          # through the AppArmor profile the deb installs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
           sha256sum /usr/bin/echo > "$RUNNER_TEMP/coreutils-echo.sha256"
           packages=(dist-app/*.deb)
           test "${#packages[@]}" = 1
           sudo apt-get install -y "./${packages[0]}"
+          test -f /etc/apparmor.d/echo-desktop
           desktop-file-validate /usr/share/applications/org.echobrain.echo-desktop.desktop
           test "$(readlink -f /usr/bin/echo-desktop)" = /opt/ECHO/echo-desktop
           sha256sum --check "$RUNNER_TEMP/coreutils-echo.sha256"

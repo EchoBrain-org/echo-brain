@@ -139,7 +139,9 @@ not cancel the other.
 Each typechecks the desktop, runs unit and full Electron end-to-end tests,
 builds the platform's packages, and verifies release fuses and packaged startup.
 Linux uses Xvfb and additionally installs the deb, validates its desktop entry,
-and smokes the installed executable. macOS verifies the app's code signature.
+and smokes the installed executable under Ubuntu's default user-namespace
+restriction, so it starts only through the deb's AppArmor profile. macOS
+verifies the app's code signature.
 A pull request into `main` selects the matrix when its tested merge changes the
 desktop inputs listed in
 [`tools/ci-select-jobs.mjs`](../../tools/ci-select-jobs.mjs) or `main`'s own
