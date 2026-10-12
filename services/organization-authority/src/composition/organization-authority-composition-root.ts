@@ -1,4 +1,5 @@
-import { openGranolaPersonLiveRuntimeV1 } from "./granola-person-live-runtime-v1.js";
+import { openGranolaPersonMeetingProviderV1 } from "./granola-person-live-runtime-v1.js";
+import { openPersonMeetingRuntimeV1 } from "./person-meeting-runtime-v1.js";
 import {
   enqueueApprovedRecordRunV1,
   SqliteTriggerRunsV1,
@@ -208,6 +209,7 @@ export async function openOrganizationAuthorityService(
       let control:
         ReturnType<typeof openOrganizationControlDatabase> | undefined;
       let synthetic: ReturnType<typeof openStagingSyntheticPersonalProviderV1> | undefined;
+      let granola: ReturnType<typeof openGranolaPersonMeetingProviderV1> | undefined;
       // This root selects one personal intake runtime; a caller cannot silently replace its worker.
       try {
         if (existing?.processing !== undefined)
@@ -253,8 +255,8 @@ export async function openOrganizationAuthorityService(
               ) !== undefined
           );
         };
-        let granola:
-          ReturnType<typeof openGranolaPersonLiveRuntimeV1> | undefined;
+        let meetings:
+          ReturnType<typeof openPersonMeetingRuntimeV1> | undefined;
         const interaction = createPrivateSlackApprovalHttpAdapterV1(
           createPrivateSlackApprovalInteractionHandlerV1({
             signing_secret: () => {
@@ -272,9 +274,9 @@ export async function openOrganizationAuthorityService(
               ).credentials.signing_secret;
             },
             click: async (click) => {
-              if (granola === undefined)
+              if (meetings === undefined)
                 throw new Error("Slack approval runtime is unavailable");
-              const core = await granola.approvals();
+              const core = await meetings.approvals();
               return createSlackApprovalClickV1({
                 database: resources.database,
                 core,
@@ -362,13 +364,21 @@ export async function openOrganizationAuthorityService(
             },
           }),
         );
-        granola = openGranolaPersonLiveRuntimeV1({
+        // Granola opens first, so its state binding is checked before the shared runtime opens the attempt ledger.
+        const openedGranola = openGranolaPersonMeetingProviderV1({
+          state_directory: sharedConfig.state_directory,
+          sessions,
+          resources,
+          nango_authorization: () => slack_nango.secret_key,
+        });
+        granola = openedGranola;
+        meetings = openPersonMeetingRuntimeV1({
           state_directory: sharedConfig.state_directory,
           sessions,
           resources,
           processor: dependencies.person_meeting_processor ?? decisionProcessor,
           projectors: policyProjectors,
-          nango_authorization: () => slack_nango.secret_key,
+          providers: [openedGranola.provider, ...(synthetic === undefined ? [] : [synthetic.provider])],
           provider_applications: [interaction],
           ...(sharedConfig.core_runtime_observation === undefined ? {} : { observation: sharedConfig.core_runtime_observation }),
           approval_core: {
@@ -462,38 +472,36 @@ export async function openOrganizationAuthorityService(
                 }),
             ],
           },
-          ...(synthetic === undefined
-            ? {}
-            : { providers: [synthetic.provider] }),
         });
         if (synthetic !== undefined)
           stagingCanary = (release_id, signal) =>
             runStagingSyntheticPersonalCanaryV1({
               database: resources.database,
-              runtime: granola!,
+              runtime: meetings,
               release_id,
               signal,
             });
         return {
           applications: [
             ...(existing?.applications ?? []),
-            ...granola.applications,
+            ...meetings.applications,
           ],
-          processing: granola.processing,
+          processing: meetings.processing,
           tools: async (token) => [
             ...(await (existing?.tools?.(token) ?? [])),
-            ...(await granola.tools(token)),
+            ...(await meetings.tools(token)),
           ],
           // The meeting worker claims prepared extraction captures only through this.
           attachDiagnostics(value) {
-            granola.attachDiagnostics(value);
+            meetings.attachDiagnostics(value);
             existing?.attachDiagnostics?.(value);
           },
           close() {
             try {
-              granola.close();
+              meetings.close();
             } finally {
               try {
+                openedGranola.close();
                 synthetic?.close();
                 openedControl.close();
               } finally {
@@ -503,6 +511,7 @@ export async function openOrganizationAuthorityService(
           },
         };
       } catch (error) {
+        granola?.close();
         synthetic?.close();
         control?.close();
         existing?.close();

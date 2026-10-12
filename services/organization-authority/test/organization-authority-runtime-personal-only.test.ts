@@ -13,13 +13,13 @@ import { openOrganizationAuthorityService } from '../src/composition/organizatio
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 import { initializePersonSessionCredentials } from '../src/composition/person-onboarding-service.js';
 
-// The real Granola runtime, recording the diagnostics its meeting worker claims captures through.
-const granolaDiagnostics = vi.hoisted(() => [] as unknown[]);
-vi.mock('../src/composition/granola-person-live-runtime-v1.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/composition/granola-person-live-runtime-v1.js')>();
-  return { ...actual, openGranolaPersonLiveRuntimeV1: (...args: Parameters<typeof actual.openGranolaPersonLiveRuntimeV1>) => {
-    const runtime = actual.openGranolaPersonLiveRuntimeV1(...args);
-    return { ...runtime, attachDiagnostics: (value: Parameters<typeof runtime.attachDiagnostics>[0]) => { granolaDiagnostics.push(value); runtime.attachDiagnostics(value); } };
+// The real meeting runtime, recording the diagnostics its meeting worker claims captures through.
+const meetingDiagnostics = vi.hoisted(() => [] as unknown[]);
+vi.mock('../src/composition/person-meeting-runtime-v1.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/composition/person-meeting-runtime-v1.js')>();
+  return { ...actual, openPersonMeetingRuntimeV1: (...args: Parameters<typeof actual.openPersonMeetingRuntimeV1>) => {
+    const runtime = actual.openPersonMeetingRuntimeV1(...args);
+    return { ...runtime, attachDiagnostics: (value: Parameters<typeof runtime.attachDiagnostics>[0]) => { meetingDiagnostics.push(value); runtime.attachDiagnostics(value); } };
   } };
 });
 
@@ -119,7 +119,7 @@ describe('Organization Authority runtime without an organization source lane', (
       expect(runtime.processing).toBe('active');
       expect(runtime.run_staging_synthetic_canary).toBeUndefined();
       // Prepared meeting_extraction captures are claimed only once the root hands the worker its diagnostics.
-      expect(granolaDiagnostics).toEqual([expect.objectContaining({ claimMeeting: expect.any(Function) })]);
+      expect(meetingDiagnostics).toEqual([expect.objectContaining({ claimMeeting: expect.any(Function) })]);
       expect((await fetch(`http://127.0.0.1:${String(runtime.address.port)}/v1/authority-descriptor`)).status).toBe(200);
       expect(database.prepare('SELECT count(*) FROM authority_live_source_admission_v2').pluck().get()).toBe(0);
     } finally { database.close(); await runtime.close(); }
