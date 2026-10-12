@@ -594,11 +594,13 @@ describe('Home decisions and impact checks', () => {
     expect(store.getState().route).toEqual({ page: 'send', run_id: run.run_id });
     await flush();
     expect(statusReads()).toBe(before);
-    // Lost access is another matter: the account is read again.
+    // Maybe-lost access is another matter: the account is read again, and only that read may empty the bar.
+    store.setBarText('launch plan');
     sendFailure = { code: 'stale_access_state', retryable: false };
     await store.sendToOwners();
     await flush();
-    expect(store.getState().send?.failure).not.toBe('These items changed meanwhile. Open them again from Home.');
+    expect(store.getState().send?.failure).toBe('That changed meanwhile, or your access did. Refresh and try again.');
+    expect(store.getState().barText).toBe('launch plan');
     expect(statusReads()).toBe(before + 1);
   });
 

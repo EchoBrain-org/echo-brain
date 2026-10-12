@@ -560,8 +560,11 @@ function expect(): Expect | null {
   return account ? { authority: account.authority, membership_id: account.membership_id } : null;
 }
 
-/** Access that was lost or refused. A timeout, an outage or a bad reply says nothing about it. */
-const ACCESS_LOST = ['signed_out', 'unauthorized', 'stale_access_state', 'sign_in_required', 'not_found', 'forbidden', 'owner_access_required'];
+/**
+ * Access that was lost or refused. A timeout, an outage or a bad reply says nothing about it, and neither does
+ * stale_access_state, which also means only that what was acted on changed meanwhile: the status read settles it.
+ */
+const ACCESS_LOST = ['signed_out', 'unauthorized', 'sign_in_required', 'not_found', 'forbidden', 'owner_access_required'];
 
 /**
  * Signed out or switched under us: re-read the account. The page that failed
