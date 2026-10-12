@@ -1,4 +1,4 @@
-import type { StructuredGenerationInput, StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
+import type { StructuredGenerationFailureDiagnosticV1, StructuredGenerationInput, StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 
 export type ModelCallPriorityV1 = "interactive" | "background";
 /** Runs one model call when a slot is free. Provider code receives only this, never the limiter. */
@@ -14,7 +14,8 @@ const COOLDOWN_MAX_MS = 60_000;
 
 /** The provider refused or is struggling: a 408, 429 or 5xx reply, a rate limit, a temporary failure or a timeout. */
 function transient(error: unknown): boolean {
-  const value = error as { readonly diagnostic?: { readonly http_status?: unknown; readonly failure_class?: unknown }; readonly code?: unknown } | null;
+  // The port's failure diagnostic (StructuredGenerationFailureV1), or a processing AdapterError's code.
+  const value = error as { readonly diagnostic?: Partial<StructuredGenerationFailureDiagnosticV1>; readonly code?: unknown } | null;
   if (typeof value !== "object" || value === null) return false;
   const status = value.diagnostic?.http_status;
   return status === 408 || status === 429 || (typeof status === "number" && status >= 500) || value.diagnostic?.failure_class === "adapter_timeout"

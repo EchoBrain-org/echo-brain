@@ -1,10 +1,12 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
-import type {
-  StructuredGenerationInput,
-  StructuredGenerationJsonSchema,
-  StructuredGenerationPort,
-  StructuredGenerationUsageV1,
+import {
+  STRUCTURED_GENERATION_FAILURE_CLASSES_V1,
+  type StructuredGenerationFailureClassV1,
+  type StructuredGenerationInput,
+  type StructuredGenerationJsonSchema,
+  type StructuredGenerationPort,
+  type StructuredGenerationUsageV1,
 } from "./structured-generation-v1.js";
 import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimePhaseV1 } from "../shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, cleanLine, repairPrompt } from "./agentic-ask-v1-model-protocol.js";
@@ -71,12 +73,14 @@ export class AgenticAskPostRevalidationNoTimeErrorV1 extends AgenticAskGeneratio
 export function object(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
-function errorDiagnostic(error: unknown): { readonly failure_class: string | null; readonly http_status: number | null; readonly finish_reason: string | null; readonly usage: StructuredGenerationUsageV1 | null } {
+/** Reads the port's StructuredGenerationFailureV1 off a thrown error; anything else has no failure class. */
+function errorDiagnostic(error: unknown): { readonly failure_class: StructuredGenerationFailureClassV1 | null; readonly http_status: number | null; readonly finish_reason: string | null; readonly usage: StructuredGenerationUsageV1 | null } {
   const outer = object(error); const diagnostic = object(outer?.diagnostic);
   const observation = object(outer?.generation_observation); const usage = object(observation?.usage);
   const valid = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const failureClass = STRUCTURED_GENERATION_FAILURE_CLASSES_V1.find(known => known === diagnostic?.failure_class);
   return Object.freeze({
-    failure_class: typeof diagnostic?.failure_class === "string" ? diagnostic.failure_class : null,
+    failure_class: failureClass ?? null,
     http_status: typeof diagnostic?.http_status === "number" && Number.isSafeInteger(diagnostic.http_status) ? diagnostic.http_status : null,
     finish_reason: typeof diagnostic?.finish_reason === "string" ? diagnostic.finish_reason : null,
     usage: usage === null ? null : Object.freeze({ input_tokens: valid(usage.input_tokens), output_tokens: valid(usage.output_tokens), total_tokens: valid(usage.total_tokens), cached_input_tokens: valid(usage.cached_input_tokens), reasoning_tokens: valid(usage.reasoning_tokens) }),
@@ -87,20 +91,24 @@ function finishFailure(reason: string | null): AgenticAskGenerationFailureV1 {
   if (reason === "error") return new AgenticAskGenerationFailureV1("model was unavailable", "retry");
   return new AgenticAskGenerationFailureV1("the reply did not finish; keep notes and sentences shorter", "repair");
 }
+/** Exhaustive over the port's failure classes: a new class does not compile until it is handled here. */
 function generationFailure(error: unknown): AgenticAskGenerationFailureV1 | null {
   const diagnostic = errorDiagnostic(error);
-  if (diagnostic.failure_class === "adapter_json") return new AgenticAskGenerationFailureV1("the reply was not valid JSON", "repair");
-  if (diagnostic.failure_class === "adapter_finish") return finishFailure(diagnostic.finish_reason);
-  if (diagnostic.failure_class === "adapter_refusal") return new AgenticAskGenerationFailureV1("the provider declined the reply", "fallback");
-  if (diagnostic.failure_class === "adapter_response" && diagnostic.http_status !== null && diagnostic.http_status >= 200 && diagnostic.http_status < 300) return new AgenticAskGenerationFailureV1("the reply had no usable content", "repair");
-  if (["adapter_timeout", "adapter_transport"].includes(diagnostic.failure_class ?? "")) return new AgenticAskGenerationFailureV1("model was unavailable", "retry");
-  if (["adapter_http", "adapter_provider_error"].includes(diagnostic.failure_class ?? "")) {
-    const status = diagnostic.http_status;
-    const temporary = status === null || (status >= 200 && status < 300) || status === 408 || status === 429 || (status >= 500 && status < 600);
-    return new AgenticAskGenerationFailureV1("model was unavailable", temporary ? "retry" : "fallback");
+  const status = diagnostic.http_status;
+  switch (diagnostic.failure_class) {
+    case "adapter_json": return new AgenticAskGenerationFailureV1("the reply was not valid JSON", "repair");
+    case "adapter_finish": return finishFailure(diagnostic.finish_reason);
+    case "adapter_refusal": return new AgenticAskGenerationFailureV1("the provider declined the reply", "fallback");
+    case "adapter_response":
+      return status !== null && status >= 200 && status < 300 ? new AgenticAskGenerationFailureV1("the reply had no usable content", "repair") : null;
+    case "adapter_timeout": case "adapter_transport": return new AgenticAskGenerationFailureV1("model was unavailable", "retry");
+    case "adapter_http": case "adapter_provider_error": {
+      const temporary = status === null || (status >= 200 && status < 300) || status === 408 || status === 429 || (status >= 500 && status < 600);
+      return new AgenticAskGenerationFailureV1("model was unavailable", temporary ? "retry" : "fallback");
+    }
+    // Local configuration/contract errors and unknown failures are terminal, not a model reply to repair.
+    case null: return null;
   }
-  // Local configuration/contract errors and unknown failures are terminal, not a model reply to repair.
-  return null;
 }
 function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof AgenticAskDeadlineErrorV1 ? signal.reason : new DOMException("Ask cancelled", "AbortError");
