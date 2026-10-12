@@ -777,7 +777,19 @@ describe("Organization Authority setup coordinator", () => {
       expected_email: "other@example.com",
       output_path: mismatchedPath,
     });
-    writePrivate(manifest.invitation_path, readFileSync(mismatchedPath, "utf8"));
+    const mismatched = readFileSync(mismatchedPath, "utf8");
+    writePrivate(manifest.invitation_path, mismatched);
+    expect((await cli(["status", "--state-dir", state])).json).toMatchObject({
+      founder_invitation_valid: false,
+    });
+    // Relabeled with the owner's address, the file passes every file-level
+    // check; only the grant's stored email binding rejects it.
+    const relabeled = mismatched.replace(
+      '"expected_email":"other@example.com"',
+      '"expected_email":"founder@example.com"',
+    );
+    expect(relabeled).not.toBe(mismatched);
+    writePrivate(manifest.invitation_path, relabeled);
     expect((await cli(["status", "--state-dir", state])).json).toMatchObject({
       founder_invitation_valid: false,
     });
