@@ -78,7 +78,12 @@ What runs today, and what acceptance would confirm:
   section at most 3 KiB, with a request-local continuation. Only page body text is read;
   comments and attachments are not queried, unsupported embeds are omitted
   with an incomplete notice, and provider-supplied URLs are never followed.
-  Nothing is captured, indexed or retained.
+  ECHO does not index page text or store it durably. Page text leaves request
+  memory only through the selected diagnostic paths that
+  [connector contracts](../architecture/connector-contracts.md#live-evidence)
+  name: the person's own one-use capture, held in Authority memory, and the
+  operator-selected, staging-only LangSmith exporter, which sends page text
+  off-host where nothing revalidates or erases it.
 - **Audit and revalidation.** Every release goes through the shared audited
   live-evidence path: coordinates and digests are committed to the
   Authority's read-decision audit before release, and a failed audit or a lost
