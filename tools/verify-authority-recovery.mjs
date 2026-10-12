@@ -40,8 +40,16 @@ const RELEASE_BOUND_ENVIRONMENT_FIELDS = Object.freeze([
   "ECHO_CLEAN_RUNTIME_PROFILE_SHA256",
   "ECHO_CLEAN_RUNTIME_PROFILE_VERSION",
 ]);
-const STAGING_CONNECTOR_REHEARSAL_ENVIRONMENT_FIELD =
-  "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE";
+// The only settings that update-clean-v1.sh (agentic Ask flags) and staging
+// prepare write beside the identity fields, with their allowed values. Any
+// other name, or a selected connector rehearsal, is refused.
+const OPTIONAL_ENVIRONMENT_VALUES = Object.freeze({
+  ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE: [""],
+  ECHO_AGENTIC_ASK_V1: ["true", "false"],
+  ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT: ["true", "false"],
+  ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: ["true", "false"],
+  ECHO_STAGING_SYNTHETIC_MEETINGS_DIR: ["/echo-clean/meetings"],
+});
 const SQLITE_HOT_STATE_SUFFIX = /-(?:journal|wal|shm)$/;
 
 function canonicalJson(value) {
@@ -358,23 +366,26 @@ function verifyEnvironmentSnapshot(python3, path, release) {
     "expected = dict(item.split('=', 1) for item in sys.argv[2:])",
     `fields = ${JSON.stringify(RUNTIME_ENVIRONMENT_FIELDS)}`,
     `release_bound_fields = ${JSON.stringify(RELEASE_BOUND_ENVIRONMENT_FIELDS)}`,
+    `optional_fields = ${JSON.stringify(OPTIONAL_ENVIRONMENT_VALUES)}`,
     "state = path.lstat()",
     "if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077: raise SystemExit(1)",
     "text = path.read_text(encoding='utf-8')",
-    "if not text or text.endswith('\\n') or '\\r' in text: raise SystemExit(1)",
-    "lines = text.split('\\n')",
-    "if len(lines) not in (len(fields), len(fields) + 1): raise SystemExit(1)",
+    "if not text or '\\r' in text: raise SystemExit(1)",
+    // update-clean-v1.sh ends its snapshot with one newline; prepare does not.
+    "if text.endswith('\\n'): text = text[:-1]",
     "actual = {}",
-    "for field, line in zip(fields, lines):",
+    "for line in text.split('\\n'):",
     "    if line.count('=') != 1:",
     "        raise SystemExit(1)",
     "    name, value = line.split('=', 1)",
-    "    if name != field or not value or name in actual:",
+    "    if name in actual:",
+    "        raise SystemExit(1)",
+    "    if name in fields:",
+    "        if not value: raise SystemExit(1)",
+    "    elif value not in optional_fields.get(name, []):",
     "        raise SystemExit(1)",
     "    actual[name] = value",
-    "if set(actual) != set(fields): raise SystemExit(1)",
-    `connector_field = ${JSON.stringify(STAGING_CONNECTOR_REHEARSAL_ENVIRONMENT_FIELD)}`,
-    "if len(lines) == len(fields) + 1 and lines[-1] != connector_field + '=': raise SystemExit(1)",
+    "if not set(fields) <= set(actual): raise SystemExit(1)",
     "for name in release_bound_fields:",
     "    if actual[name] != expected[name]: raise SystemExit(1)",
     "host = actual['ECHO_CLEAN_AUTHORITY_HOST']",

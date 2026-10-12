@@ -707,8 +707,13 @@ fixture smoke test above. The staged source root is outside the restored volume:
 
 The verifier emits one canonical JSON line with a fixed schema identifier and
 sanitized `ok` booleans and counts. It checks the accepted release to runtime
-profile tuple; the exact, complete runtime-environment snapshot schema; and the
-five environment fields bound to the accepted release. The remaining snapshot
+profile tuple; the complete runtime-environment snapshot schema; and the
+five environment fields bound to the accepted release. It reads the snapshot by
+name, in any order and with at most one final newline. Every required field
+must appear exactly once. Besides those, it accepts only the `true`/`false`
+agentic Ask flags written by `update-clean-v1.sh`, plus the empty connector
+rehearsal line, the `true`/`false` content-telemetry flag and the fixed
+`/echo-clean/meetings` directory written by prepare. The remaining snapshot
 fields are checked for the relationships and input formats enforced by
 `onboard-clean-v1.sh`; they cannot be independently bound to the release record
 because that record intentionally does not contain organization contact or host
