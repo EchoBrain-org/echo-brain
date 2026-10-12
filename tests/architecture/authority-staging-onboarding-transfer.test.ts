@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   truncateSync,
@@ -736,6 +737,35 @@ describe("Authority staging onboarding transfer", () => {
     expect(joined).toContain('test "$(find "$meetings" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d " ")" = 4');
     expect(joined).toContain('doctor --input-dir "$input" --staging-synthetic-meetings-dir "$meetings" >/dev/null 2>&1');
     expect(joined).toContain('prepare --input-dir "$input" --staging-synthetic-meetings-dir "$meetings" >/dev/null 2>&1');
+  });
+
+  it("runs one remote extractor that unpacks only the archive shape its mode selected", () => {
+    const output = privateDirectory("echo-authority-onboarding-archive-");
+    const plain = createOnboardingInputArchive({ sourceDir: inputDirectory(), output: join(output, "plain.tar.gz") });
+    const fixtures = createOnboardingInputArchive({
+      sourceDir: inputDirectory(),
+      stagingSyntheticMeetingsDir: stagingSyntheticMeetingsDirectory(),
+      output: join(output, "fixtures.tar.gz"),
+    });
+    const extract = (stagingSyntheticMeetings: boolean, archive: string) => {
+      const commands = onboardingTransferSsmCommands({
+        region: "us-west-2",
+        stagingSyntheticMeetings,
+        artifact: { bucket: "echo-authority-staging-onboarding", keyArn: KEY_ARN, key: "onboarding.tar.gz", version: "version-0001", sha256: "a".repeat(64) },
+      });
+      const workdir = privateDirectory("echo-authority-onboarding-extract-");
+      const script = ["set -eu", `workdir='${workdir}'`, `archive='${archive}'`, 'input="$workdir/input"', commands[commands.indexOf('input="$workdir/input"') + 1]];
+      const status = spawnSync("bash", ["-c", script.join("\n")]).status;
+      return { status, files: (readdirSync(workdir, { recursive: true }) as string[]).sort() };
+    };
+    const inputs = ["input", ...INPUT_FILES.map((name) => `input/${name}`)];
+    expect(extract(false, plain.path)).toEqual({ status: 0, files: inputs.sort() });
+    expect(extract(true, fixtures.path)).toEqual({
+      status: 0,
+      files: [...inputs, "meetings", ...STAGING_SYNTHETIC_MEETING_FILES.map((name) => `meetings/${name}`)].sort(),
+    });
+    expect(extract(false, fixtures.path)).toEqual({ status: 1, files: [] });
+    expect(extract(true, plain.path)).toEqual({ status: 1, files: [] });
   });
 
   it("archives only the three non-secret rehearsal inputs with the four fixed fixtures", () => {
