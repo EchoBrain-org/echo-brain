@@ -11,8 +11,8 @@ Ticket content is never captured or stored. ECHO reads tickets live at question
 time and keeps only the read audit.
 
 [ADR-0026](../../docs/decisions/ADR-0026-jira-person-live-evidence-nango.md)
-is accepted; runtime selection stays explicit. Live qualification is still
-open; see [remaining human inputs](#remaining-human-inputs-and-live-qualification).
+is accepted; runtime selection stays explicit (see
+[Remaining human inputs and live qualification](#remaining-human-inputs-and-live-qualification)).
 
 ## Initial support boundary
 
@@ -216,10 +216,13 @@ organization, grant or site selector in model arguments or connection commands.
    reaching a model. Revalidation includes inventory, earlier revisions and
    evidence omitted from the answer, before every subsequent model call and
    after the terminal audit. The desk rechecks its local snapshot after Jira I/O.
-4. V5 citations open the adapter-verified Jira permalink directly. The desktop
-   validates and displays V5 tickets, with a safe direct-link opener. Its
-   global and project Ask use V5; `person ask` without `--tickets` retains
-   strict V4 behavior.
+4. V5 citations open the adapter-verified Jira permalink directly. The
+   desktop's global and project Ask call `person ask --live`
+   (`POST /v5/person/ask`, strict V6 response with Jira tickets and Confluence
+   pages); they fall back to the V5 ticket route (`/v4/person/ask`) only when
+   an older Authority has no `/v5` route. The desktop validates V4, V5 and V6
+   answers, with a safe direct-link opener. `--tickets` is kept for
+   compatibility, and `person ask` with neither flag retains strict V4 behavior.
 5. `echo-brain person tools disconnect --tool jira` calls
    `POST /v1/person/tools/jira/disconnect`. Local revocation is committed before
    remote deletion; a failed deletion cannot restore read access. Missing
