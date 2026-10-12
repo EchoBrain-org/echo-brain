@@ -48,8 +48,9 @@ defines the supported operator and employee flow.
   `provider-http-application-v1.ts` contract in
   `packages/organization-authority-kernel/src/application/ports/`. The host mounts
   exact routes, preserves raw request bytes, permits queries only by opt-in,
-  and owns response headers and limits: 64 KiB request/response bodies, 8 KiB
-  query strings, and 16 KiB fixed HTML pages. Providers select JSON, bounded
+  and owns response headers and limits: 64 KiB request bodies and raw response
+  bytes, 128 KiB JSON responses, 8 KiB query strings, and 16 KiB fixed HTML
+  pages. Providers select JSON, bounded
   response bytes, or an empty acknowledgment and retain verification and
   durable acceptance. HTML pages never reflect request fields; query-token
   reflection is not a supported callback mode.
@@ -202,7 +203,7 @@ Bootstrap and finalization are stopped-state operations. The path is:
 2. Start the Organization Authority service, complete the initial owner's
    browser OIDC sign-in, set up the organization's Slack connection in the
    app, and connect the signed-in person's own Slack.
-3. Stop the Organization Authority service, install the three provider credentials, then finalize.
+3. Stop the Organization Authority service, install the LLM credential, then finalize.
 4. Restart the Organization Authority service and complete the staging canary.
 
 The OIDC JSON must be readable JSON with exactly `issuer`, `client_id`,
