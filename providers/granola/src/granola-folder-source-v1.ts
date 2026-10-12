@@ -22,6 +22,12 @@ export function readGranolaCheckpointV1(cursor: string): GranolaCheckpointV1 {
 }
 export function writeGranolaCheckpointV1(checkpoint: GranolaCheckpointV1): string { const cursor = prefix + canonicalJson(checkpoint); readGranolaCheckpointV1(cursor); return cursor; }
 export function granolaFolderInitialCursorV1(folder: string | null): string { return writeGranolaCheckpointV1({ folder, baseline: false, revisions: {}, manual: [] }); }
+/** The personal intake's codec: a changed watch restarts the content baseline, which marks automatic import active. */
+export const GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 = Object.freeze({
+  read: readGranolaCheckpointV1, write: writeGranolaCheckpointV1, initial: () => granolaFolderInitialCursorV1(null),
+  watch: (checkpoint: GranolaCheckpointV1, folder: string | null): GranolaCheckpointV1 => ({ ...checkpoint, folder, baseline: false, revisions: {} }),
+  ready: (checkpoint: GranolaCheckpointV1): boolean => checkpoint.baseline,
+});
 export const GRANOLA_FOLDER_CURSOR_POLICY_V1: AdmittedMeetingSourceCursorPolicyV1 = Object.freeze({
   source_adapter_id: 'granola-person-mcp', assert_live_cursor(cursor: string) { readGranolaCheckpointV1(cursor); },
 });

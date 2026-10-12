@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { createGranolaPersonConnectionV1 } from '@echo-brain/provider-granola/granola-person-connection-v1';
 import { GRANOLA_PERSON_PROVIDER_V1 } from '@echo-brain/provider-granola/granola-mcp-v1';
 import { GRANOLA_MEETING_NORMALIZER_VERSION_V1 } from '@echo-brain/provider-granola/granola-meeting-normalizer-v1';
-import { GranolaFolderSourceV1, readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_FOLDER_CURSOR_POLICY_V1 } from '@echo-brain/provider-granola/granola-folder-source-v1';
+import { GranolaFolderSourceV1, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1, GRANOLA_FOLDER_CURSOR_POLICY_V1 } from '@echo-brain/provider-granola/granola-folder-source-v1';
 import { PersonConnectionStoreV1 } from '@echo-brain/provider-runtime/person-connection-store-v1';
 import { createPersonConnectionHttpApplicationV1 } from '@echo-brain/provider-runtime/person-connection-http-application-v1';
 import { createNangoPersonConnectionV1, type NangoPersonConnectionV1 } from '@echo-brain/provider-runtime/nango-person-connection-v1';
@@ -35,7 +35,7 @@ export function openGranolaPersonMeetingProviderV1(options: {
     const provider: PersonMeetingProviderV1 = {
       id: 'granola', normalizer_version: GRANOLA_MEETING_NORMALIZER_VERSION_V1,
       connection_http: createPersonConnectionHttpApplicationV1(application, GRANOLA_PERSON_PROVIDER_V1),
-      cursor: { read: readGranolaCheckpointV1, write: writeGranolaCheckpointV1, policy: GRANOLA_FOLDER_CURSOR_POLICY_V1 },
+      cursor: { ...GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1, policy: GRANOLA_FOLDER_CURSOR_POLICY_V1 },
       tool: token => application.tool({ access_token: token }),
       async open(person, current, signal) {
         const session = await application.open(person, current, signal);

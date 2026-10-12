@@ -398,9 +398,12 @@ export function createPersonMeetingRuntimeV1(options: {
         if (input.operation === 'home') {
           const folders = session === null ? [] : await session.folders();
           return { connected: session !== null, email: session?.email ?? null, workspace: session?.workspace ?? null, folders, settings_sha256: settings(person),
-            sources: intake.list(person).filter(s => s.source_adapter_id === provider.cursor.policy.source_adapter_id).map(s => ({ source_key: s.source_key, folder_id: s.folder_id, folder_project_id: s.folder_project_id,
-              baseline: ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).baseline, pending_imports: ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual,
-              checked_at: observed.get(s.source_key)?.checked_at ?? null, error: sourceError(s.source_key) })) };
+            sources: intake.list(person).filter(s => s.source_adapter_id === provider.cursor.policy.source_adapter_id).map(s => {
+              const owner = ownerOf(s.source_adapter_id), checkpoint = owner.intake.checkpoint(s.source_key);
+              return { source_key: s.source_key, folder_id: s.folder_id, folder_project_id: s.folder_project_id,
+                baseline: owner.provider.cursor.ready(checkpoint), pending_imports: checkpoint.manual,
+                checked_at: observed.get(s.source_key)?.checked_at ?? null, error: sourceError(s.source_key) };
+            }) };
         }
         if (!session) throw new AuthorityOperationError('unauthorized', 'Connect your meeting account first');
         if (input.operation === 'browse') return session.browse(input.folder_id);

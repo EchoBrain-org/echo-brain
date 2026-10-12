@@ -188,7 +188,11 @@ export function createStagingSyntheticPersonalMeetingProviderV1(options: {
     normalizer_version: NORMALIZER_VERSION,
     custodian_assurance: STAGING_SYNTHETIC_CUSTODIAN_ASSURANCE_V1,
     connection_http,
-    cursor: Object.freeze({ read: readStagingSyntheticCheckpointV1, write: writeStagingSyntheticCheckpointV1, policy: CURSOR_POLICY }),
+    // This source has no folders and no baseline: a watched folder fails its write, and automatic import is never active.
+    cursor: Object.freeze({ read: readStagingSyntheticCheckpointV1, write: writeStagingSyntheticCheckpointV1, policy: CURSOR_POLICY,
+      initial: () => writeStagingSyntheticCheckpointV1({ folder: null, baseline: false, revisions: {}, manual: [] }),
+      watch: (checkpoint: StagingSyntheticCheckpointV1, folder: string | null): StagingSyntheticCheckpointV1 => ({ ...checkpoint, folder }),
+      ready: (): boolean => false }),
     tool(_token: string) {
       return { tool_id: STAGING_SYNTHETIC_TOOL_ID_V1, display_name: "Synthetic staging meetings", availability: "enabled" as const,
         personal_status: "linked" as const, external_scope_id: null, external_subject_id: "staging-synthetic", organization_setup: null };
