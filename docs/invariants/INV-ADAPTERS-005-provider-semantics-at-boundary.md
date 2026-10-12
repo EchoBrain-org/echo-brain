@@ -168,8 +168,8 @@ because that directory no longer has a layer rule.
 The active synthetic-demo lane remains separate. Its source adapter and
 pre-Slack evaluator use canonical meeting documents and the production
 processing port; their tests cover the four-meeting fixture and extraction
-defect classes without live provider calls. The external `demo/` rehearsal
-graders and deterministic core-runtime checkpoint remain available.
+defect classes without live provider calls. The deterministic core-runtime
+checkpoint remains available.
 
 Structural enforcement covers ownership, dependency direction and build inputs.
 Semantic enforcement remains partial: a reviewed, generically named module can

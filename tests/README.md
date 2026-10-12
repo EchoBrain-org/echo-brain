@@ -10,7 +10,7 @@ Tests live at the narrowest active boundary they exercise:
 | `services/*/test/` | server application, persistence, and component behavior |
 | `providers/**/test/` | provider adapters, connections and live readers |
 | `product/echo-desktop/test/` | Electron desktop unit (`unit/`, Vitest) and end-to-end (`e2e/`, Playwright) tests, with the app's own configs |
-| `tools/evals/*/test/`, `demo/test/` | evaluator and rehearsal-evaluator `node --test` suites |
+| `tools/evals/*/test/` | evaluator `node --test` suites |
 
 Use `npm test` for the complete root Vitest suite. Focused commands include
 `npm run test:person`, `npm run test:authority`, `npm run test:protocols`,
@@ -36,5 +36,4 @@ separately, as CI does:
   client built at the root (`node tools/build.mjs --person-client`) and a
   graphical session; CI uses Xvfb on Linux.
 - `npm run test:capacity` runs `tools/evals/authority-core/test/`,
-  `npm run test:research-loop-eval` runs `tools/evals/research-loop/test/`, and
-  `node --test demo/test/rehearsal-evaluator.test.mjs` runs `demo/test/`.
+  and `npm run test:research-loop-eval` runs `tools/evals/research-loop/test/`.

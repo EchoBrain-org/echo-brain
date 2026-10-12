@@ -109,9 +109,6 @@ jobs:
       - name: Build and install the Linux x64 Person kit without system Node
         if: matrix.leg == 'tail'
         run: node tests/fixtures/person-onboarding-smoke.mjs
-      - name: Verify four-meeting answer coverage and privacy
-        if: matrix.leg == 'tail'
-        run: node --test demo/test/rehearsal-evaluator.test.mjs
       - name: Verify the research-loop evaluator
         if: matrix.leg == 'tail'
         run: npm run test:research-loop-eval

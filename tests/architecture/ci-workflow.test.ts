@@ -96,7 +96,6 @@ describe("CI workflow", () => {
     expect(legCommands("tail")).toEqual([
       "npm run build",
       "node tests/fixtures/person-onboarding-smoke.mjs",
-      "node --test demo/test/rehearsal-evaluator.test.mjs",
       "npm run test:research-loop-eval",
       "npm run test:capacity",
       "npm run capacity:checkpoint",

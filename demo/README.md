@@ -58,10 +58,8 @@ demo/
 ├── SCHEMA.md                 # canonical fixture-authoring contract
 ├── expectations.json         # external evaluation oracle; never runtime input
 ├── evaluate-pre-slack.mjs    # fast, no-write extraction gate
-├── evaluate-rehearsal.mjs    # captured end-to-end rehearsal gate
 ├── meetings/                 # four canonical MeetingDocument fixtures
-├── staging/                  # owner-specific fixture preparer for staging
-└── test/                     # demo harness tests
+└── staging/                  # owner-specific fixture preparer for staging
 ```
 
 Runtime code stays in the normal provider and service layers rather than
@@ -98,54 +96,14 @@ Authority state, publishes V4 records, or calls retrieval.
 
 For a live rehearsal, follow
 [Fresh four-meeting staging rehearsal](../deploy/organization-authority/README.md#fresh-four-meeting-staging-rehearsal),
-then the customer sequence in [RUNBOOK.md](RUNBOOK.md). Evaluate the captured
-result with:
-
-```sh
-node demo/evaluate-rehearsal.mjs \
-  --result path/to/rehearsal-result.json \
-  --meetings-dir path/to/personalized-meetings
-```
+then the customer sequence in [RUNBOOK.md](RUNBOOK.md), and judge the result
+with its [pass/fail gate](RUNBOOK.md#passfail-gate). The captured-rehearsal
+evaluator was retired on 2026-10-11 because it could only grade the retired
+V3 answer.
 
 The runtime receives only the four meeting files. `expectations.json` is applied
-afterward by the evaluator and is never available to extraction, retrieval, or
-answer composition.
-
-Every answer and repeatability trial must include `process_capture` with
-`stdout`, `stderr`, `exit_code`, `signal`, and `launch_error_code`. Use null for
-an absent signal/launch error. Preserve both streams exactly in local evidence.
-A successful capture needs exit 0 and matching Person answer JSON on stdout;
-an unavailable trial needs exit 1 and matching structured Authority error JSON
-on stderr. A launch exception such as `ERR_INVALID_ARG_VALUE` (NUL argv) or
-`E2BIG` has null exit and its launch code; it cannot qualify an answer or be
-counted as an Authority outage. The evaluator prints fixed diagnostics only.
-
-> **Out of date.** Since
-> [ADR-0022](../docs/decisions/ADR-0022-agentic-ask-only.md), `person ask`
-> prints V4 answers (`echo-clean-person-answer-v4`), so the answer gate below
-> fails every live capture until it is rewritten for V4. Until then a live
-> rehearsal cannot qualify a candidate through this evaluator.
-
-Successful stdout must contain the complete `echo-clean-person-answer-v3`
-response, including schema/kind, citations and its global `scope`. Every
-citation must be an `approved_record` citation. Missing or extra fields, retired
-global metadata, a project scope, and a mismatch between the actual response
-and its mapped answer/outcome fail qualification.
-Each existing `approved_records` entry must include its captured canonical
-`record_sha256` and the `atom_ids` belonging to that approved record, alongside
-the existing record ID, meeting ID and policy. Obtain these through authorized
-record/retrieval evidence; never construct them from the answer being evaluated.
-The evaluator binds actual citations to those records, atoms, policies and the
-captured retrieval, then compares their source meetings to the oracle. Neutral
-answers require zero actual citations. Repeated answers must retain the same
-actual citation identities, even when their summary fields remain unchanged.
-
-For ADR-0012 candidates, public search and Ask responses contain no
-global generation/head. The existing `record_generation_id` and `release_head`
-fields are operator evidence from the serving Authority's correlated audit and
-release/telemetry records, not fields to recover from public JSON or installed
-client status. Keep the exact response digest and client tarball provenance
-alongside that local capture. See the [candidate qualification procedure](../deploy/release/README.md#person-contract-candidate-qualification).
+afterward by the pre-Slack evaluator and is never available to extraction,
+retrieval, or answer composition.
 
 ## Fixture boundary
 
