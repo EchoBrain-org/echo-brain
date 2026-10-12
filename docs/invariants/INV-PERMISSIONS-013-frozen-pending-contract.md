@@ -46,8 +46,8 @@ and a Slack click is checked against the posted row and the current identity
 link when the decision is written (`slack-approval-click-v1.test.ts`).
 
 Frozen private Slack approval state was first implemented for the bounded
-owner-review path. These tests, at the reviewed ref, proved it; they were
-removed with the Slack approval internals on 2026-10-07:
+owner-review path. These tests, at `83c8eb63`, proved it; they were removed
+with the Slack approval internals on 2026-10-07:
 
 - `private-slack-dm-approval-stager-v2.test.ts`:
   the V2 pending contract is frozen before Slack I/O, a retry resolves from it
