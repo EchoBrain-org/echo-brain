@@ -187,7 +187,7 @@ Authority readiness. The owner's setup and install report "Slack setup is
 unavailable right now". Unavailability and Nango's 401 or 403 never mark the
 connection "needs reinstall".
 
-The `slack-organization-tool-v1` ready state is accepted only while its opaque
+An active Slack organization connection is accepted only while its opaque
 credential reference resolves to a private readable secret during Authority
 startup. The Slack app recipe sets the Interactivity Request URL
 `/v2/integrations/slack/interactions`, so no operator saves it by hand. That
@@ -358,8 +358,10 @@ trigger must:
 
 1. support a named externally observable milestone behavior;
 2. arrive with a failing-then-passing test for that behavior;
-3. update the executable exact-schema contract, and for a table be assigned to
-   that behavior in `TABLES_BY_OBSERVABLE_BEHAVIOR`; and
+3. update the executable exact-schema contract (the pinned baseline and schema
+   digests in
+   `packages/organization-control-plane/test/control-plane-baseline.test.ts`),
+   and name the behavior the new object serves in the change description; and
 4. explain why an existing table or non-persistent implementation is
    insufficient.
 
