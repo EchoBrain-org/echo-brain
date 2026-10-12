@@ -65,9 +65,13 @@ the original and its project links once. See
 ## Evidence and permission boundaries
 
 Supported originals include saved editor text and usable extracted text from
-the existing text/Markdown, PDF, and DOCX upload path, and meeting transcripts
+the existing text/Markdown, PDF, and DOCX upload path, meeting transcripts
 the approver shared at approval
-([ADR-0021](../decisions/ADR-0021-ask-reach-and-approval-owners.md)). A
+([ADR-0021](../decisions/ADR-0021-ask-reach-and-approval-owners.md)), and a
+person's imported meeting notes. Imported notes carry the `imported_meeting`
+kind and an unapproved label; the importer reads their own, and members of a
+project suggested for that meeting read them while they are members
+([ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md)). A
 transcript is read under its approval grant: the record's current audience and,
 for project Ask, its project association. Its packets are labeled
 "Transcript: <meeting title>". The original upload and
@@ -126,9 +130,9 @@ evidence still requires current access when opened.
   is necessary because distinct relevant windows can come from one long
   extracted passage. This remains lexical matching: synonyms and conceptual
   paraphrases can still miss evidence.
-- BM25 is migration-free and scans eligible note, extracted-document and
-  shared-transcript text at query time. Packet text is analyzed once per query;
-  lightweight document scan rows avoid retaining repeated immutable
+- BM25 is migration-free and scans eligible note, extracted-document,
+  shared-transcript and imported-meeting text at query time. Packet text is
+  analyzed once per query; lightweight document scan rows avoid retaining repeated immutable
   representations, but runtime and transient memory still scale linearly with
   readable packets and their text. The synthetic production-path proof uses
   106 extracted passages (beyond the former 100-candidate window), verifies the
@@ -157,18 +161,26 @@ evidence still requires current access when opened.
 
 This version shipped as `POST /v2/person/ask` (request schema 2, response
 schema 3), beside the approved-record-only `/v1/person/ask`. Both were retired
-by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): Ask is now
-`POST /v3/person/ask` with V4 answers, and the scope rules here still apply to
-it. The CLI accepts
-`person ask --question <text> [--project <project-id> | --mine]`; the two
-flags are exclusive. The client does not silently downgrade a project or mine
-request to global Ask. With Jira live evidence configured
-([ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md)),
-`person ask --tickets` calls `POST /v4/person/ask`, which returns V5 answers.
-A connected Jira account contributes ticket citations in global scope or in a
-project with a lead-configured [Jira mapping](project-settings-v1.md#jira-project-mapping).
-Project reads stay inside that mapped Jira project using the asker's own
-connection. Mine and unmapped projects exclude Jira.
+by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md). The default CLI Ask,
+and the desktop's Mine Ask, use `POST /v3/person/ask` with V4 answers, and the
+scope rules here still apply to every route. The CLI accepts
+`person ask --question <text> [--project <project-id> | --mine] [--tickets | --live]`;
+`--project` and `--mine` are exclusive, as are `--tickets` and `--live`. The
+client does not silently downgrade a project or mine request to global Ask.
+
+`--live` calls `POST /v5/person/ask`, which returns V6 answers. It uses every
+configured request-local live source: Jira ticket citations
+([ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md)) and
+Confluence page citations, read under the asker's own connections. Global
+scope reads what those connections can access; a project reads only its
+lead-configured [Jira mapping](project-settings-v1.md#jira-project-mapping) and
+[Confluence spaces](project-settings-v1.md#confluence-space-mapping). Mine and
+unmapped projects exclude live tools. The desktop uses `--live` for every
+question outside Mine. An older Authority without the `/v5` route gets the
+ticket-capable fallback, `POST /v4/person/ask` with V5 answers; permission
+failures never fall back. `person ask --tickets` keeps that `/v4` route for
+compatibility. See [Person client architecture](../architecture/person-client-architecture.md)
+for the client side.
 
 Cited original evidence is read through `POST /v2/person/ask/source` or
 `person ask-source`, using the answer's project scope (global for a global or
