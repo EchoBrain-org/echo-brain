@@ -602,6 +602,18 @@ npm run authority:staging-release -- status \
   --receipt /absolute/private/releases/install-operation.json
 ```
 
+When the changed tools do not all fit the command cap, `install` carries the
+bytes of as many as fit, in the fixed tool order, and sends the rest as hash
+witnesses. The host leaves a witnessed tool at its old or new hash and still
+returns `installed`, so `installed` does not mean every tool is new. Run
+`inspect-install` again with the same inputs and `--previous-tooling-source`.
+While its inventory shows any tool `old`, plan another `install` with the same
+inputs plus `--inspection <succeeded-inspect-install-receipt>`; that install
+omits the tools the inspection shows as `new`. Repeat until the inventory is
+all `new`. Only `install` accepts `--inspection`, and only a succeeded
+inspection of the same tooling sources and target. Every other action refuses
+until all six tools are new.
+
 Substitute `--action inspect-install` and use a distinct receipt path for the
 non-mutating guard inspection. It never replaces tooling, invokes an updater or
 runtime wrapper, restarts containers, changes the environment or release
@@ -618,7 +630,8 @@ Plan/execute are mechanical operator steps within the founder's staging
 delegation, not a new approval prompt for each command. The only commands sent
 are generated from the fixed reviewed host runner. Its compressed non-secret
 payload and checksums fit under the CLI's conservative 60-KiB command cap; it
-refuses larger artifacts rather than selecting another courier implicitly.
+splits an `install` as described above and refuses anything that still does
+not fit rather than selecting another courier implicitly.
 
 The host independently checks IMDSv2 identity, the mounted retained volume,
 its bootstrap-required service ownership (`999:988`, mode `0700`), root-owned
@@ -676,7 +689,7 @@ and [invocation status contract](https://docs.aws.amazon.com/cli/latest/referenc
 
 Plans use request version 4 and a checksum-bound XZ-compressed text bundle
 containing the exact reviewed runner and non-secret artifacts. Installed tools travel as checksum witnesses;
-`install` carries bytes for changed tools, and witnesses for unchanged tools.
+`install` carries bytes for the changed tools that fit, and witnesses for the rest.
 Every installed file still passes owner, mode and old/new hash checks before
 any action. Candidate records and profiles always include their exact bytes. The fixed loader
 checks its digest and size, reconstructs the canonical request and checks its

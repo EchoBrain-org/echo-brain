@@ -131,7 +131,6 @@ export function validateReleaseRequest(request, readSource = sourceFile) {
     if (Object.hasOwn(TOOL_FILES, name) && !Object.hasOwn(entry, 'base64')) {
       exactKeys(entry, ['sha256']);
       if (!SHA.test(entry.sha256)) fail('artifact_invalid');
-      if (request.action === 'install' && request.old_tool_hashes[name] !== entry.sha256) fail('artifact_bytes_required');
       continue;
     }
     exactKeys(entry, ['sha256', 'base64']);
@@ -207,6 +206,7 @@ export function releaseSsmParameters(request, readSource = sourceFile) {
 export function planStagingRelease(options, dependencies = {}) {
   const { aws = awsJson, readSource = sourceFile, runtime = reviewedRuntime, now = Date.now } = dependencies;
   releaseAction(options.action);
+  if (options.inspection !== undefined && options.action !== 'install') fail('unexpected_inspection');
   const toolingSource = runtime();
   const previousSource = options.previousToolingSource ?? toolingSource;
   if (!COMMIT.test(previousSource)) fail('previous_tooling_source_invalid');
@@ -222,12 +222,12 @@ export function planStagingRelease(options, dependencies = {}) {
   const files = {};
   const old = {};
   const add = (name, bytes) => { files[name] = { sha256: digest(bytes), base64: bytes.toString('base64') }; };
+  const toolBytes = {};
   for (const [name, path] of Object.entries(TOOL_FILES)) {
     add(name, readSource(toolingSource, path));
     old[name] = digest(readSource(previousSource, path));
-  }
-  for (const name of Object.keys(TOOL_FILES)) {
-    if (options.action !== 'install' || old[name] === files[name].sha256) delete files[name].base64;
+    toolBytes[name] = files[name].base64;
+    delete files[name].base64;
   }
   add('candidate.json', candidateBytes);
   add('runtime-profile.json', readFileSync(options.runtimeProfile));
@@ -241,10 +241,28 @@ export function planStagingRelease(options, dependencies = {}) {
     files, old_tool_hashes: old,
     approval: options.approval ? JSON.parse(privateFile(options.approval, 4096).toString()) : null,
   };
-  const parameters = releaseSsmParameters(request, readSource);
+  // An install carries the changed tools an inspection does not already show
+  // as new, in fixed order, as many as fit the command cap. The host leaves a
+  // tool sent without bytes at its old or new hash, so the operator repeats
+  // inspect-install and install until every tool is new.
+  const installed = options.inspection === undefined ? {} : inspectedInventory(options.inspection, request, readSource);
+  const pending = options.action === 'install' ? Object.keys(TOOL_FILES).filter(name => old[name] !== files[name].sha256 && installed[name]?.state !== 'new') : [];
+  let parameters;
+  for (let count = pending.length; !parameters; count--) {
+    pending.forEach((name, index) => { if (index < count) files[name].base64 = toolBytes[name]; else delete files[name].base64; });
+    try { parameters = releaseSsmParameters(request, readSource); }
+    catch (error) { if (error.message !== 'bounded_command_too_large' || count <= 1) throw error; }
+  }
   const receipt = { schema_version: 1, kind: 'echo-staging-release-operation-v1', request, request_sha256: digest(jsonBytes(request)), parameters_sha256: digest(jsonBytes(parameters)), state: 'planned', command_id: null, outcome: null };
   save(resolve(options.output), receipt, true);
   return summary(receipt);
+}
+
+function inspectedInventory(path, request, readSource) {
+  const receipt = readReceipt(resolve(path), readSource);
+  const inspected = receipt.request;
+  if (receipt.state !== 'succeeded' || inspected.action !== 'inspect-install' || inspected.tooling_source !== request.tooling_source || inspected.previous_tooling_source !== request.previous_tooling_source || !same(inspected.target, request.target)) fail('inspection_receipt_mismatch');
+  return receipt.outcome.diagnostic.inventory;
 }
 
 function summary(receipt) {
@@ -381,9 +399,9 @@ function main(argv) {
   }
   if (command === 'plan') {
     const required = ['--action', '--accepted-release', '--release', '--runtime-profile', '--output'];
-    const allowed = [...required, '--previous-tooling-source', '--approval'];
+    const allowed = [...required, '--previous-tooling-source', '--approval', '--inspection'];
     if (required.some(key => !options[key]) || Object.keys(options).some(key => !allowed.includes(key))) fail('arguments_invalid');
-    return planStagingRelease({ action: options['--action'], acceptedRelease: options['--accepted-release'], release: options['--release'], runtimeProfile: options['--runtime-profile'], output: options['--output'], previousToolingSource: options['--previous-tooling-source'], approval: options['--approval'] });
+    return planStagingRelease({ action: options['--action'], acceptedRelease: options['--accepted-release'], release: options['--release'], runtimeProfile: options['--runtime-profile'], output: options['--output'], previousToolingSource: options['--previous-tooling-source'], approval: options['--approval'], inspection: options['--inspection'] });
   }
   if (!['execute', 'status'].includes(command) || !same(Object.keys(options), ['--receipt'])) fail('arguments_invalid');
   return executeStagingRelease(options['--receipt'], {}, command === 'status');

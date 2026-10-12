@@ -33,8 +33,8 @@ function fixture() {
   const calls: string[][] = [];
   const state = { sendLost: false, invocationPending: false, failure: false, targetChanged: false, targetAccount: '904560150024', tagEnvironment: 'staging', outputOverride: null as string | null, submissions: 0 };
   const request = () => JSON.parse(readFileSync(options.output, 'utf8')).request;
-  const outcome = () => {
-    const receipt = JSON.parse(readFileSync(options.output, 'utf8'));
+  const outcome = (path = options.output) => {
+    const receipt = JSON.parse(readFileSync(path, 'utf8'));
     const inspection = receipt.request.action === 'inspect-install';
     return { schema_version: 1, kind: 'echo-staging-release-host-result-v1', operation_id: receipt.request.operation_id, request_sha256: receipt.request_sha256, action: receipt.request.action, ok: true, code: inspection ? 'inspection_verified' : 'verified', diagnostic: inspection ? { schema_version: 2, kind: 'echo-staging-release-install-inspection-v2', category: 'ready', tool: null, inventory: Object.fromEntries(Object.entries(receipt.request.old_tool_hashes).map(([name, sha256]) => [name, { state: sha256 === receipt.request.files[name].sha256 ? 'new' : 'old', sha256 }])) } : null };
   };
@@ -95,12 +95,35 @@ describe('bounded staging release operator', () => {
     const request = f.request();
     expect(request.files['update-clean-v1.sh'].base64).toBeDefined();
     expect(request.files['onboard-clean-v1.sh'].base64).toBeUndefined();
-    for (const name of ['update-clean-v1.sh', 'candidate.json', 'runtime-profile.json']) {
+    for (const name of ['candidate.json', 'runtime-profile.json']) {
       const changed = structuredClone(request); delete changed.files[name].base64;
       expect(() => validateReleaseRequest(changed, f.dependencies.readSource), name).toThrow();
     }
     const unknown = structuredClone(request); unknown.files['onboard-clean-v1.sh'].sha256 = '0'.repeat(64);
     expect(() => validateReleaseRequest(unknown, f.dependencies.readSource)).toThrow();
+  });
+
+  it('splits an install of six changed tools under the command cap and finishes it from an inspection', () => {
+    const f = fixture();
+    const dependencies = { ...f.dependencies, readSource: (commit: string, path: string) => commit === OLD ? Buffer.from(`old-reviewed-tool:${path}\n`) : readFileSync(join(REPO, path)) };
+    const tools = (request: any) => Object.keys(request.old_tool_hashes).filter(name => request.files[name].base64 !== undefined);
+    planStagingRelease({ ...f.options, action: 'install' }, dependencies);
+    const first = f.request();
+    expect(Buffer.byteLength(JSON.stringify(releaseSsmParameters(first, dependencies.readSource)))).toBeLessThan(60 * 1024);
+    const sent = tools(first);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.length).toBeLessThan(6);
+    const inspection = join(f.directory, 'inspection.json');
+    planStagingRelease({ ...f.options, action: 'inspect-install', output: inspection }, dependencies);
+    const result: any = f.outcome(inspection);
+    for (const name of sent) result.diagnostic.inventory[name] = { state: 'new', sha256: first.files[name].sha256 };
+    f.state.outputOverride = JSON.stringify(result);
+    expect(executeStagingRelease(inspection, dependencies).state).toBe('succeeded');
+    planStagingRelease({ ...f.options, action: 'install', inspection, output: join(f.directory, 'install-rest.json') }, dependencies);
+    const rest = tools(JSON.parse(readFileSync(join(f.directory, 'install-rest.json'), 'utf8')).request);
+    expect([...sent, ...rest].sort()).toEqual(Object.keys(first.old_tool_hashes).sort());
+    // @ts-expect-error Only an install reads an inspection receipt.
+    expect(() => planStagingRelease({ ...f.options, action: 'stage', inspection, output: join(f.directory, 'stage.json') }, dependencies)).toThrow('unexpected_inspection');
   });
 
   it('exposes validated protocol results without losing their types', () => {

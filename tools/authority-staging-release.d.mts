@@ -130,8 +130,10 @@ export type StagingReleasePlanOptions = Readonly<{
   output: string;
   previousToolingSource?: string;
 }> & (
-  | Readonly<{ action: 'promote'; approval: string }>
-  | Readonly<{ action: Exclude<StagingReleaseAction, 'promote'>; approval?: never }>
+  | Readonly<{ action: 'promote'; approval: string; inspection?: never }>
+  /** `inspection` is a succeeded inspect-install receipt; tools it shows as new are not resent. */
+  | Readonly<{ action: 'install'; approval?: never; inspection?: string }>
+  | Readonly<{ action: Exclude<StagingReleaseAction, 'promote' | 'install'>; approval?: never; inspection?: never }>
 );
 export type StagingReleaseSourceReader = (commit: string, path: string) => Buffer;
 export type StagingReleaseAws = (args: string[]) => unknown;
