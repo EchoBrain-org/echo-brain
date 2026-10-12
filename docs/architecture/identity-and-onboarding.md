@@ -84,15 +84,18 @@ challenge without a browser). The Authority verifies the exact Slack human and
 creates or reuses that membership's external identity link; the
 [Person Slack identity link](organization-control-plane.md#person-slack-identity-link)
 defines both methods. The Person flow creates no shared-channel/reaction
-adapter binding or approve/reject grant. Private meeting-owner approvals are
-instead delivered as signed Block Kit DMs. The visibility selector defaults to
-**Only me** (`restricted-reviewer-person-v2`); before clicking Approve the owner may select
-**Team** (`organization-member-readable-person-v2`) or, with an active project,
-**Projects** (`project-members-readable-person-v1`) and one to twenty of their
-projects. A separate **Share transcript with the selected audience** checkbox,
-off by default, also releases the exact meeting transcript to that audience.
-The selected policy, projects and transcript choice bind only at approval;
-Reject creates no V4 record.
+adapter binding or approve/reject grant. Meeting approvals are decided in the
+desktop app or, for a reviewer who linked Slack, on an optional signed Block
+Kit DM copy; the first decision wins. **Who can read it** defaults to **Only
+me** (`restricted-reviewer-person-v2`). With an active project, the reviewer
+may instead pick one to twenty of their projects
+(`project-members-readable-person-v1`). There is no Team choice
+([ADR-0031](../decisions/ADR-0031-unified-meeting-approval-core.md)). A
+separate **Share the transcript** checkbox, off by default, also releases the
+exact meeting transcript to that audience. The selected policy, projects and
+transcript choice bind only at approval; Reject creates no record. The
+[approval core](meeting-processing-core-and-adapters.md#current-composition)
+describes both surfaces.
 
 Jira is a person-bound read connection, not an organization tool:
 `echo-brain person tools connect --tool jira` binds one membership's Nango-held
