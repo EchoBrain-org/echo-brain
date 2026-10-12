@@ -20,10 +20,11 @@ Archive neither deletes files nor frees retained storage. There is no project
 deletion or upload withdrawal in this version.
 
 The [accepted contract](../decisions/ADR-0018-project-settings-v1.md) defines
-the API, authorization, and compatibility boundaries. These settings share one
-fresh V10 Authority schema with project meeting approval. Existing development
-data is disposable; the combined version requires fresh databases and a matching
-runtime. Startup does not automatically migrate or reset older state. Release actions follow the
+the API, authorization, and compatibility boundaries. These settings were
+introduced with project meeting approval in fresh Authority V10; current
+releases require fresh state at the current baseline and a matching runtime.
+Existing development data is disposable. Startup does not automatically
+migrate or reset older state. Release actions follow the
 [Authority operator playbook](../operations/PB-OPERATIONS-001-authority-operator-lane.md).
 
 

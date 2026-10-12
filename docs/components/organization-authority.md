@@ -160,7 +160,7 @@ route is retired; V1 originals already retained keep their Only me/Team
 visibility and remain citable by Ask. Uploads remain in
 protected Authority custody/backups; they are not appended as approved decision
 records. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md)
-for provisional transport limits, indefinite retention, and the offline V5 copy.
+for provisional transport limits and indefinite retention.
 The [PC-01 persistence handoff](../product/2026-09-21-project-context-pc01-persistence.md)
 describes the original V7 project storage. The current Authority is V14, which
 accepts only fresh state, and its project routes and client operations are live.
