@@ -529,8 +529,8 @@ approved-search backlog observer has no runtime caller. This does not establish
 that a stuck approval is covered by another alarm. Latency and token anomaly
 alarms are explicitly deferred until a measured staging baseline exists.
 
-Local verification covers formatter, transport, template/query, and
-deterministic fixture reconciliation against raw canonical journey events.
+Local verification covers formatter, transport, and template/query structure;
+dashboard journey-end semantics are not executed locally.
 
 #### Explorer backend
 
