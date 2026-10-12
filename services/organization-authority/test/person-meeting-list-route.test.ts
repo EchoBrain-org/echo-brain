@@ -244,7 +244,9 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     expect(w.audits("person_list")).toHaveLength(1);
   });
 
-  it("benchmarks page 1 over 1,024 single-atom records, cold and warm, global and mine", { timeout: 300_000 }, async () => {
+  // ADR-0024's cost measurement for its 50 ms warm / 3 s cold-mine revisit thresholds. Opt-in, as seeding takes about a minute:
+  // ECHO_RUN_BENCHMARKS=1 npx vitest run --config vitest.config.ts services/organization-authority/test/person-meeting-list-route.test.ts
+  it.runIf(process.env.ECHO_RUN_BENCHMARKS === "1")("benchmarks page 1 over 1,024 single-atom records, cold and warm, global and mine", { timeout: 300_000 }, async () => {
     const w = await world();
     const started = performance.now();
     for (let index = 0; index < 1_017; index += 1) {
