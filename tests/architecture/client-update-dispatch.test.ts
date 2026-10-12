@@ -5,6 +5,7 @@ import { createServer } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
+import { cleanReleaseRecord } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonicalJson } from '../support/test-canonical-json.js';
 
 const REPO = resolve(import.meta.dirname, '../..');
@@ -47,22 +48,10 @@ function runAsync(command: string, args: string[], environment: NodeJS.ProcessEn
 }
 
 function writeRelease(path: string, releaseId: string, sourceSha: string, artifact: string, version: string): void {
-  writeFileSync(path, `${canonicalJson({
-    schema_version: 1,
-    kind: 'echo-clean-v1-release',
-    release_id: releaseId,
-    released_at: '2026-09-24T20:00:00Z',
-    baseline_compatibility_class: 'clean-v1',
-    source_sha: sourceSha,
-    authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo/authority@sha256:${'a'.repeat(64)}` },
-    person_client: {
-      package: '@echo-brain/person-client', version,
-      artifact_url: 'https://fixture.invalid/person-client.tgz', artifact_sha256: sha256(artifact),
-    },
-    runtime_profile: {
-      artifact_url: 'https://fixture.invalid/runtime-profile.json', artifact_sha256: 'b'.repeat(64), profile_version: 'clean-v1-profile-1',
-    },
-  })}\n`, { mode: 0o600 });
+  const release = cleanReleaseRecord({
+    release_id: releaseId, source_sha: sourceSha, person_client: { version, artifact_sha256: sha256(artifact) },
+  });
+  writeFileSync(path, `${canonicalJson(release)}\n`, { mode: 0o600 });
 }
 
 /** Build an actual packaged client, with a fixture provenance identity for A or B. */

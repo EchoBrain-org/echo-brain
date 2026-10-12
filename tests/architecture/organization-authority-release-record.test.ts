@@ -18,6 +18,11 @@ import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  cleanReleaseRecord,
+  cleanRuntimeProfile,
+  deployRuntimeProfileFiles,
+} from "../support/clean-v1-release.js";
 import { canonicalJsonForTest as canonical } from "../support/test-canonical-json.js";
 
 import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
@@ -117,39 +122,15 @@ const READY_SETUP_STATUS = JSON.stringify({
   runtime_status: "ready_to_start",
 });
 
+/** Overrides replace whole top-level fields and may add unknown ones. */
 function record(overrides: Record<string, unknown> = {}) {
-  return {
-    schema_version: 1,
-    kind: "echo-clean-v1-release",
-    release_id: "clean-v1-20260822-001",
-    released_at: "2026-08-22T20:00:00Z",
-    baseline_compatibility_class: "clean-v1",
-    source_sha: "a".repeat(40),
-    authority_image: {
-      reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"b".repeat(64)}`,
-    },
-    person_client: {
-      package: "@echo-brain/person-client",
-      version: "0.1.0-internal.1",
-      artifact_url: "https://downloads.example.test/echo-brain-person-client.tgz",
-      artifact_sha256: "c".repeat(64),
-    },
-    runtime_profile: {
-      artifact_url:
-        "https://downloads.example.test/echo-brain-authority-runtime-profile.json",
-      artifact_sha256: "e".repeat(64),
-      profile_version: "clean-v1-profile-1",
-    },
-    ...overrides,
-  };
+  return { ...cleanReleaseRecord(), ...overrides };
 }
 
-function runtimeProfile(path: string, profileVersion = "clean-v1-profile-1") {
+function runtimeProfile(path: string) {
   return {
-    artifact_url:
-      "https://downloads.example.test/echo-brain-authority-runtime-profile.json",
+    ...cleanReleaseRecord().runtime_profile,
     artifact_sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
-    profile_version: profileVersion,
   };
 }
 
@@ -160,31 +141,11 @@ function writeRuntimeProfile(
   const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-runtime-profile-"));
   roots.push(root);
   const profile = join(root, "runtime-profile.json");
-  const deployment = join(REPO, "deploy", "organization-authority");
-  const names = [
-    "Caddyfile.clean-v1",
-    "Caddyfile.clean-v1.ec2",
-    "compose.clean-v1.ec2.yaml",
-    "compose.clean-v1.yaml",
-  ];
-  const files = Object.fromEntries(
-    names.map((name) => [
-      name,
-      `${readFileSync(join(deployment, name), "utf8")}${
-        name === "Caddyfile.clean-v1" ? marker : ""
-      }`,
-    ]),
-  );
-  writeFileSync(
-    profile,
-    `${canonical({
-      schema_version: 1,
-      kind: "echo-clean-v1-runtime-profile",
-      source_sha: sourceSha,
-      files,
-    })}\n`,
-    { mode: 0o600 },
-  );
+  const files = deployRuntimeProfileFiles();
+  files["Caddyfile.clean-v1"] += marker;
+  writeFileSync(profile, cleanRuntimeProfile(sourceSha, files).bytes, {
+    mode: 0o600,
+  });
   return profile;
 }
 

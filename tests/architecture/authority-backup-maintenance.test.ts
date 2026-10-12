@@ -10,8 +10,8 @@ import {
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { createHash } from "node:crypto";
 import { afterAll, describe, it, type ExpectStatic } from "vitest";
+import { cleanReleaseRecord, cleanRuntimeProfile } from "../support/clean-v1-release.js";
 import { canonicalJsonForTest as canonical } from "../support/test-canonical-json.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
@@ -69,26 +69,26 @@ function fixture() {
   mkdirSync(join(release, "runtime-profiles"), { mode: 0o700 });
   mkdirSync(join(release, "runtime-environments"), { mode: 0o700 });
   mkdirSync(bin, { mode: 0o700 });
-  writeFileSync(join(deploy, "compose.clean-v1.yaml"), "services: {}\n");
-  writeFileSync(join(deploy, "compose.clean-v1.ec2.yaml"), "services: {}\n");
-  writeFileSync(join(deploy, "Caddyfile.clean-v1"), "");
-  writeFileSync(join(deploy, "Caddyfile.clean-v1.ec2"), "");
-  const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"b".repeat(64)}`;
+  const profileFiles = {
+    "Caddyfile.clean-v1": "",
+    "Caddyfile.clean-v1.ec2": "",
+    "compose.clean-v1.ec2.yaml": "services: {}\n",
+    "compose.clean-v1.yaml": "services: {}\n",
+  };
+  for (const [name, text] of Object.entries(profileFiles)) {
+    writeFileSync(join(deploy, name), text);
+  }
   const source = "a".repeat(40);
-  const releaseId = "clean-v1-20260822-001";
-  const profile =
-    canonical({
-      schema_version: 1,
-      kind: "echo-clean-v1-runtime-profile",
-      source_sha: source,
-      files: {
-        "Caddyfile.clean-v1": "",
-        "Caddyfile.clean-v1.ec2": "",
-        "compose.clean-v1.ec2.yaml": "services: {}\n",
-        "compose.clean-v1.yaml": "services: {}\n",
-      },
-    }) + "\n";
-  const profileSha = createHash("sha256").update(profile).digest("hex");
+  const { bytes: profile, digest: profileSha } = cleanRuntimeProfile(
+    source,
+    profileFiles,
+  );
+  const record = cleanReleaseRecord({
+    source_sha: source,
+    runtime_profile: { artifact_sha256: profileSha },
+  });
+  const image = record.authority_image.reference;
+  const releaseId = record.release_id;
   const environment =
     [
       `ECHO_CLEAN_AUTHORITY_IMAGE=${image}`,
@@ -100,26 +100,7 @@ function fixture() {
   writePrivate(join(deploy, ".env.clean-v1"), environment);
   writePrivate(
     join(release, "current.clean-v1.json"),
-    canonical({
-      schema_version: 1,
-      kind: "echo-clean-v1-release",
-      release_id: releaseId,
-      released_at: "2026-08-22T20:00:00Z",
-      baseline_compatibility_class: "clean-v1",
-      source_sha: source,
-      authority_image: { reference: image },
-      person_client: {
-        package: "@echo-brain/person-client",
-        version: "0.1.0-internal.1",
-        artifact_url: "https://downloads.example.test/client.tgz",
-        artifact_sha256: "c".repeat(64),
-      },
-      runtime_profile: {
-        artifact_url: "https://downloads.example.test/runtime-profile.json",
-        artifact_sha256: profileSha,
-        profile_version: "clean-v1-profile-1",
-      },
-    }) + "\n",
+    canonical(record) + "\n",
   );
   writePrivate(join(release, "runtime-profile.active"), profile);
   writePrivate(join(release, "runtime-profiles", `${releaseId}.profile`), profile);

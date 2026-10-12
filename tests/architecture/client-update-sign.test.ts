@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { initializeClientUpdateSigner, signClientUpdateFeed } from '../../tools/client-update-sign.mjs';
 import { updateDigest } from '../../src/product/person-client/client-update-contract.js';
+import { cleanReleaseRecord } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
 
 const REPO = resolve(import.meta.dirname, '../..');
@@ -35,7 +36,7 @@ function fixture() {
   const client = join(root, 'person-client.tgz');
   execFileSync('tar', ['-czf', client, 'package'], { cwd: root });
   const clientHash = updateDigest(readFileSync(client));
-  const release = { schema_version: 1, kind: 'echo-clean-v1-release', release_id: 'clean-v1-sign-fixture', source_sha: sourceSha, released_at: '2026-09-24T00:00:00Z', baseline_compatibility_class: 'clean-v1', authority_image: { reference: `registry.example.test/authority@sha256:${'a'.repeat(64)}` }, person_client: { artifact_sha256: clientHash, artifact_url: 'https://fixture.invalid/client.tgz', package: '@echo-brain/person-client', version: '0.1.1' }, runtime_profile: { artifact_sha256: 'b'.repeat(64), artifact_url: 'https://fixture.invalid/profile.json', profile_version: 'clean-v1-profile-1' } };
+  const release = cleanReleaseRecord({ release_id: 'clean-v1-sign-fixture', source_sha: sourceSha, person_client: { version: '0.1.1', artifact_sha256: clientHash } });
   const releasePath = join(root, 'release.json');
   save(releasePath, release);
   const configPath = join(root, 'config.json');

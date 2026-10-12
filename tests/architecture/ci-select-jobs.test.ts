@@ -188,6 +188,7 @@ describe("pull-request job selection", () => {
     ["deploy/organization-authority/Caddyfile.clean-v1.ec2", false, true],
     ["deploy/organization-authority/compose.clean-v1.yaml", false, true],
     ["tests/person-client/client-update.test.ts", false, true],
+    ["tests/support/clean-v1-release.ts", false, true],
     ["tests/support/test-canonical-json.ts", false, true],
     ["vitest.config.ts", false, true],
     ["packages/organization-record/src/index.ts", false, false],

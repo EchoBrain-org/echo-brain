@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { executeStagingRelease, planStagingRelease, releaseAction, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
 import type { StagingReleasePlanOptions } from '../../tools/authority-staging-release.mjs';
+import { cleanReleaseRecord, cleanRuntimeProfile, deployRuntimeProfileFiles } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
 
 const temporary: string[] = [];
@@ -23,12 +24,12 @@ function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'echo-staging-release-test-'));
   chmodSync(directory, 0o700);
   temporary.push(directory);
-  const profile = { schema_version: 1, kind: 'echo-clean-v1-runtime-profile', source_sha: COMMIT, files: Object.fromEntries(['Caddyfile.clean-v1', 'Caddyfile.clean-v1.ec2', 'compose.clean-v1.ec2.yaml', 'compose.clean-v1.yaml'].map(name => [name, readFileSync(join(REPO, 'deploy/organization-authority', name), 'utf8')])) };
-  const record = (id: string) => ({ schema_version: 1, kind: 'echo-clean-v1-release', release_id: id, released_at: '2026-09-05T00:00:00Z', source_sha: COMMIT, baseline_compatibility_class: 'clean-v1', authority_image: { reference: `904560150024.dkr.ecr.us-west-2.amazonaws.com/echo/organization-authority@sha256:${'d'.repeat(64)}` }, person_client: { package: '@echo-brain/person-client', version: '0.1.0-internal.1', artifact_url: 'https://rehearsal.invalid/client.tgz', artifact_sha256: 'c'.repeat(64) }, runtime_profile: { profile_version: 'clean-v1-profile-1', artifact_url: 'https://rehearsal.invalid/profile.json', artifact_sha256: digest(canonical(profile) + '\n') } });
+  const profile = cleanRuntimeProfile(COMMIT, deployRuntimeProfileFiles());
+  const record = (id: string) => cleanReleaseRecord({ release_id: id, source_sha: COMMIT, authority_image: { reference: `904560150024.dkr.ecr.us-west-2.amazonaws.com/echo/organization-authority@sha256:${'d'.repeat(64)}` }, runtime_profile: { artifact_sha256: profile.digest } });
   const options: StagingReleasePlanOptions = { action: 'status', acceptedRelease: join(directory, 'accepted.json'), release: join(directory, 'candidate.json'), runtimeProfile: join(directory, 'profile.json'), output: join(directory, 'operation.json'), previousToolingSource: OLD };
   write(options.acceptedRelease, record('clean-v1-accepted-test'));
   write(options.release, record('clean-v1-candidate-test'));
-  write(options.runtimeProfile, profile);
+  writeFileSync(options.runtimeProfile, profile.bytes, { mode: 0o600 });
   const calls: string[][] = [];
   const state = { sendLost: false, invocationPending: false, failure: false, targetChanged: false, targetAccount: '904560150024', tagEnvironment: 'staging', outputOverride: null as string | null, submissions: 0 };
   const request = () => JSON.parse(readFileSync(options.output, 'utf8')).request;

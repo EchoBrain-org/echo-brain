@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { executeInvitationExport, invitationExportCommands, openInvitationPayload, planInvitationExport, sealInvitationPayload } from '../../tools/authority-staging-invitation-export.mjs';
 import type { InvitationExportRequest } from '../../tools/authority-staging-invitation-export.mjs';
+import { cleanReleaseRecord } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonicalJson } from '../support/test-canonical-json.js';
 
 const roots: string[] = [];
@@ -12,6 +13,7 @@ const INSTANCE = 'i-0123456789abcdef0';
 const VOLUME = 'vol-0123456789abcdef0';
 const STACK = 'arn:aws:cloudformation:us-west-2:904560150024:stack/echo-authority-staging-v1/12345678-1234-1234-1234-123456789012';
 const COMMAND = '11111111-1111-4111-8111-111111111111';
+const STAGING_IMAGE = `904560150024.dkr.ecr.us-west-2.amazonaws.com/echo/organization-authority@sha256:${'d'.repeat(64)}`;
 const PREFIX = 'echo-staging-invitation-export-v1:';
 const INVITATION = Buffer.from('{"grant":"synthetic-private-invitation-do-not-print"}\n');
 const write = (path: string, value: unknown) => writeFileSync(path, canonicalJson(value) + '\n', { mode: 0o600 });
@@ -21,7 +23,7 @@ function fixture() {
   chmodSync(root, 0o700); roots.push(root);
   const output = join(root, 'output'); mkdirSync(output, { mode: 0o700 });
   const releasePath = join(root, 'release.json');
-  write(releasePath, { schema_version: 1, kind: 'echo-clean-v1-release', release_id: 'clean-v1-export-test', released_at: '2026-09-06T00:00:00Z', source_sha: 'a'.repeat(40), baseline_compatibility_class: 'clean-v1', authority_image: { reference: `904560150024.dkr.ecr.us-west-2.amazonaws.com/echo/organization-authority@sha256:${'d'.repeat(64)}` }, person_client: { package: '@echo-brain/person-client', version: '0.1.0-internal.1', artifact_url: 'https://rehearsal.invalid/client.tgz', artifact_sha256: 'c'.repeat(64) }, runtime_profile: { profile_version: 'clean-v1-profile-1', artifact_url: 'https://rehearsal.invalid/profile.json', artifact_sha256: 'b'.repeat(64) } });
+  write(releasePath, cleanReleaseRecord({ release_id: 'clean-v1-export-test', authority_image: { reference: STAGING_IMAGE } }));
   const release = readFileSync(releasePath);
   const input = join(root, 'input.json'); write(input, { outputDir: output, release: releasePath });
   const receipt = join(output, 'invitation-export.json');
