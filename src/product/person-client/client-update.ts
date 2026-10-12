@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { constants, closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, rmSync, writeSync } from 'node:fs';
+import { constants as osConstants } from 'node:os';
 import { join } from 'node:path';
 import {
   ClientUpdateError, type ClientUpdateConfig, type ClientUpdateManifest, type UpdateCheckpoint,
@@ -149,6 +150,16 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   try { mkdirSync(lock, { mode: 0o700 }); } catch { return result('update_busy', state); }
   let temporary: string | undefined;
   let preserveRecovery = false;
+  // Default signal handling skips `finally`. Until the installer starts, an
+  // interrupt has changed nothing installed, so release the lock and staging.
+  const interrupted = (signal: NodeJS.Signals) => {
+    if (temporary) rmSync(temporary, { recursive: true, force: true });
+    rmSync(lock, { recursive: true, force: true });
+    process.exit(128 + osConstants.signals[signal]);
+  };
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+  const detach = () => { for (const signal of signals) process.removeListener(signal, interrupted); };
+  for (const signal of signals) process.once(signal, interrupted);
   try {
     // Re-read under the lock before advancing the trusted sequence.
     state = loadState(directory, config);
@@ -187,6 +198,8 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
       fsyncSync(fd);
     } finally { closeSync(fd); }
     if (bytes !== artifact.bytes || hash.digest('hex') !== artifact.sha256) rejectUpdate('artifact_mismatch');
+    // An interrupted installer keeps the lock and staging as recovery evidence.
+    detach();
     await (dependencies.install ?? installer!)({ root, archive, artifact, manifest, expected_wrapper_sha256: expectedWrapper });
     if (installedRelease(root) !== manifest.release_id) rejectUpdate('activation_mismatch');
     state.result = 'updated';
@@ -200,6 +213,7 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
     if (mode === 'automatic') return result(code, failure);
     throw new ClientUpdateError(code);
   } finally {
+    detach();
     if (!preserveRecovery) {
       if (temporary) rmSync(temporary, { recursive: true, force: true });
       rmSync(lock, { recursive: true });

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { spawn } from 'node:child_process';
 import { generateKeyPairSync, sign } from 'node:crypto';
+import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -226,6 +228,26 @@ describe('signed cross-platform client updates', () => {
     await expect(runClientUpdate('apply', { ...f.dependencies, install: () => { throw new ClientUpdateError('installation_outcome_unknown'); } })).rejects.toThrow('installation_outcome_unknown');
     expect(existsSync(join(f.root, 'updater/.lock'))).toBe(true);
     expect((await runClientUpdate('apply', f.dependencies)).status).toBe('update_busy');
+  });
+
+  it('releases the lock when a signal interrupts a check before installation', async () => {
+    const f = fixture();
+    // The child runs the built client, as installed seats do.
+    const client = new URL('../../src/product/person-client/dist/client-update.js', import.meta.url).href;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+      const { runClientUpdate } = await import(${JSON.stringify(client)});
+      setTimeout(() => {}, 60_000);
+      await runClientUpdate('automatic', { root: ${JSON.stringify(f.root)}, platform: ${JSON.stringify(PLATFORM)}, now: () => ${NOW},
+        fetch: () => { process.stdout.write('fetching\\n'); return new Promise(() => {}); } });
+    `], { stdio: ['ignore', 'pipe', 'inherit'] });
+    await once(child.stdout, 'data');
+    expect(existsSync(join(f.root, 'updater/.lock'))).toBe(true);
+    child.kill('SIGINT');
+    expect(await once(child, 'exit')).toEqual([130, null]);
+    expect(existsSync(join(f.root, 'updater/.lock'))).toBe(false);
+    const listeners = process.listenerCount('SIGINT');
+    expect((await runClientUpdate('check', f.dependencies)).status).toBe('available');
+    expect(process.listenerCount('SIGINT')).toBe(listeners);
   });
 
   it('refuses symlinked update state and leaves other installation types unchanged', async () => {

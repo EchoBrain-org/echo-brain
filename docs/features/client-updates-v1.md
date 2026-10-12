@@ -271,7 +271,9 @@ this implementation. A publisher trust change uses the authenticated bootstrap
 lane. Status reports the exact release ID; product versions need not be used as
 an ordering mechanism.
 
-The private `updater/.lock` serializes updates. An interrupted/uncertain installer
+The private `updater/.lock` serializes updates. An interrupt (SIGINT, SIGTERM or
+SIGHUP) before the installer starts releases the lock and any partial download
+and leaves the installed release unchanged. An interrupted/uncertain installer
 retains that lock and staging evidence; inspect whether the installer is still
 running, the stable wrapper and retained release before recovery. Do not remove
 locks speculatively. Recover to a retained release through the reviewed installer
