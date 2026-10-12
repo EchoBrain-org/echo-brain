@@ -110,7 +110,7 @@ describe('Organization Authority runtime without an organization source lane', (
       state_directory: initialized.state_directory, host: '127.0.0.1', port: await availablePort(), authority_url: 'https://authority.example',
       oidc: { issuer: 'https://issuer.invalid', client_id: 'founder-client', redirect_uri: 'https://authority.example/v2/session/oidc/callback', tenant: { kind: 'issuer' }, id_token_algorithms: ['RS256'] },
       client_authentication: { method: 'none' }, pkce_key_file: credentials.pkce_sealing_key_reference.slice('file:'.length),
-      slack_nango: { secret_key: 'nango-secret-key-not-used-000000', integration_key: 'slack' },
+      nango: { secret_key: 'nango-secret-key-not-used-000000', integration_key: 'slack' },
       openrouter_credential_file: join(parent, 'not-read-openrouter'),
     });
     const database = openAuthorityDatabase(join(initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });

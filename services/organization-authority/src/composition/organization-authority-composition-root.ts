@@ -89,8 +89,11 @@ export interface OrganizationAuthorityServiceConfig extends Omit<
   readonly jira_person_live?: JiraPersonLiveConfigurationV1;
   /** Explicit Confluence Cloud selection. It is absent unless an operator enables live page reads. */
   readonly confluence_person_live?: ConfluencePersonLiveConfigurationV1;
-  /** Nango holds the organization's Slack connection. The key stays in process memory only. */
-  readonly slack_nango: {
+  /**
+   * The organization's Nango account: it holds the Slack app connection and each person's tool
+   * connections. The key stays in process memory only.
+   */
+  readonly nango: {
     /** An https origin; defaults to Nango Cloud. */
     readonly base_url?: string;
     readonly secret_key: string;
@@ -122,15 +125,15 @@ export interface OrganizationAuthorityServiceDependencies {
 function composeSlackV1(
   config: Pick<
     OrganizationAuthorityServiceConfig,
-    "state_directory" | "authority_url" | "slack_nango"
+    "state_directory" | "authority_url" | "nango"
   >,
   seams: OrganizationAuthorityServiceDependencies["slack"] = {},
 ) {
-  const base_url = config.slack_nango.base_url ?? "https://api.nango.dev";
+  const base_url = config.nango.base_url ?? "https://api.nango.dev";
   const callback_url = new URL("/oauth/callback", base_url).href;
   const nango =
     seams.nango ??
-    new HttpNangoConnectionClientV1({ ...config.slack_nango, base_url });
+    new HttpNangoConnectionClientV1({ ...config.nango, base_url });
   const connection_health = new SlackConnectionHealthV1();
   const provider = seams.provider ?? new SlackWebIdentityProviderV1();
   // The secret store is opened on first use, after the runtime has verified its state directory.
@@ -172,13 +175,13 @@ export async function openOrganizationAuthorityService(
   const {
     staging_synthetic_meetings_directory,
     openrouter_credential_file,
-    slack_nango,
+    nango,
     jira_person_live,
     confluence_person_live,
     ...sharedConfig
   } = config;
   const slack = composeSlackV1(
-    { ...sharedConfig, slack_nango },
+    { ...sharedConfig, nango },
     dependencies.slack,
   );
   // One limiter for every call on the OpenRouter credential: extraction here, Ask and the rest in the runtime.
@@ -369,7 +372,7 @@ export async function openOrganizationAuthorityService(
           state_directory: sharedConfig.state_directory,
           sessions,
           resources,
-          nango_authorization: () => slack_nango.secret_key,
+          nango_authorization: () => nango.secret_key,
         });
         granola = openedGranola;
         meetings = openPersonMeetingRuntimeV1({

@@ -178,7 +178,7 @@ export async function runOrganizationAuthorityServiceCli(
       throw new Error('Confluence live selection requires its accepted release gate, one configured cloud site and Nango Cloud');
     }
     // Read once into memory; the startup-failure event below never carries it.
-    const slackNango = {
+    const nango = {
       ...(parsed["--nango-base-url"] === undefined ? {} : { base_url: parsed["--nango-base-url"] }),
       secret_key: readPrivateAuthorityCredential(`file:${required(parsed, "--nango-secret-key-file")}`),
       integration_key: required(parsed, "--nango-integration"),
@@ -287,18 +287,18 @@ export async function runOrganizationAuthorityServiceCli(
         ? { agentic_ask_v1_small_scope_shortcut: true }
         : {}),
       ...(stagingResearchEval === 'true' ? { staging_research_eval_v1: true as const } : {}),
-      slack_nango: slackNango,
+      nango,
       ...(jiraCloudId === undefined ? {} : { jira_person_live: {
         enabled: true as const,
         cloud_id: jiraCloudId,
         integration_id: jiraIntegration!,
-        nango_authorization: () => slackNango.secret_key,
+        nango_authorization: () => nango.secret_key,
       } }),
       ...(confluenceCloudId === undefined ? {} : { confluence_person_live: {
         enabled: true as const,
         cloud_id: confluenceCloudId,
         integration_id: confluenceIntegration!,
-        nango_authorization: () => slackNango.secret_key,
+        nango_authorization: () => nango.secret_key,
       } }),
       // The manifest retains its serialized compatibility field.
       openrouter_credential_file: manifest.llm_credential_file,

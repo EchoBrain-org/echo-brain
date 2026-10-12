@@ -46,7 +46,7 @@ it('catalogs, connects, maps, cites, and disconnects Confluence page evidence th
   const privateFile = (name: string, value: string) => { const path = join(root, name); writeFileSync(path, value, { mode: 0o600 }); return path; };
   const runtime = await openOrganizationAuthorityService({
     state_directory: initialized.state_directory, host: '127.0.0.1', port: await port(), authority_url: AUTHORITY, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: keys.pkce_sealing_key_reference.slice(5),
-    slack_nango: { secret_key: 'synthetic-nango-key-0000000000000000', integration_key: 'slack' },
+    nango: { secret_key: 'synthetic-nango-key-0000000000000000', integration_key: 'slack' },
     confluence_person_live: { enabled: true, cloud_id: CLOUD, integration_id: 'confluence', nango_authorization: () => 'synthetic-nango-key-0000000000000000' },
     openrouter_credential_file: privateFile('openrouter.key', 'synthetic-openrouter-key-000000000000'),
   }, {

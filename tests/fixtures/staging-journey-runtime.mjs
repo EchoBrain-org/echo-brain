@@ -122,7 +122,7 @@ if (mode === 'init') {
   assert.equal(await runOrganizationAuthoritySetupCli(['finalize', '--state-dir', state], { stdout: () => undefined, stderr: value => process.stderr.write(value) }), 0);
   // Explicit canary calls drive this test. Keep periodic work out of its window
   // even on a slow CI host.
-  write(metadataPath, { initialized, canary_project_id, config: { state_directory: state, host: '127.0.0.1', port: await port(), authority_url: ORIGIN, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: owner.pkce_key_file, slack_nango: { secret_key: 'synthetic-not-a-nango-secret-key-000000', integration_key: 'slack' }, openrouter_credential_file: llm, worker_interval_ms: 3_600_000 } });
+  write(metadataPath, { initialized, canary_project_id, config: { state_directory: state, host: '127.0.0.1', port: await port(), authority_url: ORIGIN, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: owner.pkce_key_file, nango: { secret_key: 'synthetic-not-a-nango-secret-key-000000', integration_key: 'slack' }, openrouter_credential_file: llm, worker_interval_ms: 3_600_000 } });
   write(evidencePath, { extraction_calls: 0, worker_errors: [] });
 } else if (mode === 'serve') {
   const metadata = read(metadataPath);

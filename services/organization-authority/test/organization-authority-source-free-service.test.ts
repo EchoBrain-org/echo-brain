@@ -91,7 +91,7 @@ async function sourceFreeService() {
   const config: OrganizationAuthorityServiceConfig = {
     state_directory: initialized.state_directory, host: '127.0.0.1', port: await availablePort(), authority_url: 'https://authority.example',
     oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: credentials.pkce_sealing_key_reference.slice('file:'.length),
-    slack_nango: SLACK_NANGO, openrouter_credential_file: llm, worker_interval_ms: 60_000,
+    nango: SLACK_NANGO, openrouter_credential_file: llm, worker_interval_ms: 60_000,
   };
   return { parent, initialized, config, owner_session };
 }

@@ -80,7 +80,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
   const runtime = await openOrganizationAuthorityService({
     core_runtime_observation: transport.core_runtime,
     state_directory: state, host: '127.0.0.1', port: await port(), authority_url: AUTHORITY, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: keys.pkce_sealing_key_reference.slice(5),
-    slack_nango: { secret_key: 'synthetic-nango-key-0000000000000000', integration_key: 'slack' },
+    nango: { secret_key: 'synthetic-nango-key-0000000000000000', integration_key: 'slack' },
     jira_person_live: { enabled: true, cloud_id: CLOUD, integration_id: 'jira', nango_authorization: () => 'synthetic-nango-key-0000000000000000' },
     openrouter_credential_file: privateFile('openrouter.key', 'synthetic-openrouter-key-000000000000'),
   }, {
