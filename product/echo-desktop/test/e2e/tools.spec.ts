@@ -134,6 +134,8 @@ async function addMeeting(page: Page) {
   const meetings = page.getByRole('region', { name: 'Personal meetings' });
   await expect(meetings).toContainText('ari@example.test · EchoBrain');
   await meetings.getByLabel('Granola folder').selectOption({ label: 'ECHO (1)' });
+  // Granola's label is the meeting's own day; an evening in Pacific time is already the next day in UTC.
+  await expect(meetings.getByRole('button', { name: 'Pilot planning', exact: true })).toContainText('Oct 6');
   await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
   const add = meetings.getByRole('button', { name: 'Add to ECHO', exact: true });
   await expect(add).toBeDisabled();

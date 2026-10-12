@@ -6,8 +6,10 @@ import { loadHome, loadProjects, meetingCommand, useStore } from '../store.js';
 import { Passage } from './ask.js';
 import { Calendar, Caret } from './icons.js';
 
-/** A meeting's day, "Oct 6", from the date Granola gives it. */
+/** A meeting's day, "Oct 6", from the date Granola gives it: the day its own label states, not that day in UTC. */
 function day(date: string): string {
+  const label = /^([A-Z][a-z]{2} \d{1,2}),/.exec(date)?.[1];
+  if (label !== undefined) return label;
   const time = Date.parse(date);
   return Number.isNaN(time) ? date : new Date(time).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
