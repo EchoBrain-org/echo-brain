@@ -818,7 +818,7 @@ export class AdmittedMeetingProcessingCycleV1 {
             review_policy: reviewPolicy,
             next_cursor: nextCursor,
           });
-          annotateCoreRuntimeV1({ result: saved.disposition === 'no_signals' ? 'empty' : 'published',
+          annotateCoreRuntimeV1({ result: saved.disposition === 'no_signals' ? 'empty' : saved.disposition === 'coalesced' ? 'coalesced' : 'published',
             ...(saved.disposition === 'actionable' ? { approval_id: coreRuntimeIdentityV1('approval', saved.approval_id) } : {}) });
           return saved;
         });
@@ -970,7 +970,7 @@ export class AdmittedMeetingProcessingCycleV1 {
   ): ReturnType<AuthorityMeetingProcessingStateV1["advanceCursor"]> {
     return observeCoreRuntimeV1("source_cursor", async () => {
       const advanced = await this.options.state.advanceCursor(input);
-      annotateCoreRuntimeV1({ result: advanced ? "advanced" : "retry_pending" });
+      annotateCoreRuntimeV1({ result: advanced === "advanced" ? "advanced" : "retry_pending" });
       return advanced;
     });
   }
