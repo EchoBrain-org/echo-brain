@@ -243,7 +243,7 @@ describe('signed cross-platform client updates', () => {
     await once(child.stdout, 'data');
     expect(existsSync(join(f.root, 'updater/.lock'))).toBe(true);
     child.kill('SIGINT');
-    expect(await once(child, 'exit')).toEqual([130, null]);
+    expect(await once(child, 'exit')).toEqual([null, 'SIGINT']);
     expect(existsSync(join(f.root, 'updater/.lock'))).toBe(false);
     const listeners = process.listenerCount('SIGINT');
     expect((await runClientUpdate('check', f.dependencies)).status).toBe('available');

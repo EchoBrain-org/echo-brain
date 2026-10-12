@@ -1,6 +1,5 @@
 import { Buffer } from 'node:buffer';
 import { constants, closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, rmSync, writeSync } from 'node:fs';
-import { constants as osConstants } from 'node:os';
 import { join } from 'node:path';
 import {
   ClientUpdateError, type ClientUpdateConfig, type ClientUpdateManifest, type UpdateCheckpoint,
@@ -151,11 +150,14 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   let temporary: string | undefined;
   let preserveRecovery = false;
   // Default signal handling skips `finally`. Until the installer starts, an
-  // interrupt has changed nothing installed, so release the lock and staging.
+  // interrupt has changed nothing installed, so release the lock and staging,
+  // then re-raise the signal with no listener left so the default action ends
+  // the process by that signal.
   const interrupted = (signal: NodeJS.Signals) => {
     if (temporary) rmSync(temporary, { recursive: true, force: true });
     rmSync(lock, { recursive: true, force: true });
-    process.exit(128 + osConstants.signals[signal]);
+    detach();
+    process.kill(process.pid, signal);
   };
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
   const detach = () => { for (const signal of signals) process.removeListener(signal, interrupted); };
