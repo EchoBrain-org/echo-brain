@@ -540,5 +540,10 @@ describe("CI workflow", () => {
     expect(smoke).toContain("result.build?.dirty !== false");
     expect(smoke).toContain("getCurrentFuseWire");
     expect(smoke).toContain("--remote-debugging-port=0");
+    // A committed test.only must fail the e2e step rather than skip the rest.
+    const playwright = readFileSync(
+      resolve(REPO, "product/echo-desktop/playwright.config.ts"), "utf8",
+    );
+    expect(playwright).toContain("forbidOnly: !!process.env.CI,");
   });
 });
