@@ -2,9 +2,8 @@
 
 Tests live beside the narrowest active component they exercise:
 
-- `adapters/`, `answer-composition/` and `processing/adapters/` cover the
-  onboarding-invitation file adapter, the answer-composition audit and the LLM
-  provider transport clients.
+- `adapters/` and `answer-composition/` cover the onboarding-invitation file
+  adapter and the answer-composition audit.
 - `composition/` covers concrete implementation selection, journey telemetry
   and staging tools.
 - `presentation/` and the `person-*` suites cover authenticated HTTP request

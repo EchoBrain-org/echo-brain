@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OpenRouterClient } from "../../../../../providers/openrouter/src/llm/openrouter-client.js";
+import { OpenRouterClient } from "../../src/llm/openrouter-client.js";
 import {
   StructuredGenerationAttemptError,
   type StructuredGenerationRequest,
