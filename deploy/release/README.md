@@ -114,7 +114,11 @@ A release that ships [ADR-0024](../../docs/decisions/ADR-0024-person-list-open-a
   server goes first.
 - Publish the CLI feed right after promotion. Desktops embed their own Person
   client and do not update themselves: reinstall each desktop seat through its
-  packaging lane.
+  packaging lane. A Linux seat reinstalls the same-named `0.1.0` deb with
+  `apt install --reinstall`
+  ([desktop install](../../product/echo-desktop/README.md#install-and-verify-on-linux));
+  record the installed-path smoke result or the tray's build SHA as desktop
+  evidence, not the version string.
 - Select the minimum client by committed source SHA, not by answer kind or
   schema, which did not change.
 - Add a `person list` (global and `--mine`) and a `person open --ref` of a
