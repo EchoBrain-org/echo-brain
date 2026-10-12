@@ -244,9 +244,12 @@ export function planStagingRelease(options, dependencies = {}) {
   // An install carries the changed tools an inspection does not already show
   // as new, in fixed order, as many as fit the command cap. The host leaves a
   // tool sent without bytes at its old or new hash, so the operator repeats
-  // inspect-install and install until every tool is new.
+  // inspect-install and install until every tool is new. The release/
+  // validators go first: a new validator still serves old wrappers, but new
+  // wrappers may call a validator subcommand (`fields`) an old one rejects.
   const installed = options.inspection === undefined ? {} : inspectedInventory(options.inspection, request, readSource);
-  const pending = options.action === 'install' ? Object.keys(TOOL_FILES).filter(name => old[name] !== files[name].sha256 && installed[name]?.state !== 'new') : [];
+  const validatorsFirst = Object.keys(TOOL_FILES).sort((a, b) => Number(b.startsWith('release/')) - Number(a.startsWith('release/')));
+  const pending = options.action === 'install' ? validatorsFirst.filter(name => old[name] !== files[name].sha256 && installed[name]?.state !== 'new') : [];
   let parameters;
   for (let count = pending.length; !parameters; count--) {
     pending.forEach((name, index) => { if (index < count) files[name].base64 = toolBytes[name]; else delete files[name].base64; });

@@ -113,6 +113,8 @@ describe('bounded staging release operator', () => {
     const sent = tools(first);
     expect(sent.length).toBeGreaterThan(0);
     expect(sent.length).toBeLessThan(6);
+    // The validators go first: new wrappers call `fields`, which an old clean-v1-release.py rejects.
+    expect(sent).toEqual(expect.arrayContaining(['release/clean-v1-release.py', 'release/clean-v1-runtime-profile.py']));
     const inspection = join(f.directory, 'inspection.json');
     planStagingRelease({ ...f.options, action: 'inspect-install', output: inspection }, dependencies);
     const result: any = f.outcome(inspection);
