@@ -2,7 +2,7 @@ import { lstatSync } from 'node:fs';
 import { readPrivateAuthorityCredentialFile } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
 import type { CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
-import { createLangSmithObserverV1, type LangSmithRunV1 } from './langsmith-observer-v1.js';
+import { createLangSmithObserverV1, LangSmithExportErrorV1, type LangSmithRunV1 } from './langsmith-observer-v1.js';
 
 const ENDPOINTS = {
   us: 'https://api.smith.langchain.com', eu: 'https://eu.api.smith.langchain.com',
@@ -42,25 +42,31 @@ export function readLangSmithConfigV1(path: string, authorityUrl: string, now = 
 export function createLangSmithSenderV1(config: Config, fetcher: typeof fetch = fetch) {
   return async (runs: LangSmithRunV1[], signal: AbortSignal): Promise<void> => {
     const body = new FormData();
-    for (const run of runs) {
-      const { inputs, outputs, events, ...rest } = run;
-      for (const [suffix, value] of [['', rest], ['.inputs', inputs], ['.outputs', outputs], ['.events', events]] as const) {
-        if (value === undefined) continue;
-        const json = JSON.stringify(value);
-        // Node FormData omits per-part Content-Length; LangSmith also accepts
-        // this Content-Type parameter, measured in UTF-8 bytes, on every part.
-        body.append(`post.${run.id}${suffix}`, new Blob([json], { type: `application/json; length=${Buffer.byteLength(json, 'utf8')}` }));
-      }
-    }
     try {
-      const response = await fetcher(`${ENDPOINTS[config.region]}/runs/multipart`, {
-        method: 'POST', body, redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
+      for (const run of runs) {
+        const { inputs, outputs, events, ...rest } = run;
+        for (const [suffix, value] of [['', rest], ['.inputs', inputs], ['.outputs', outputs], ['.events', events]] as const) {
+          if (value === undefined) continue;
+          const json = JSON.stringify(value);
+          // Node FormData omits per-part Content-Length; LangSmith also accepts
+          // this Content-Type parameter, measured in UTF-8 bytes, on every part.
+          body.append(`post.${run.id}${suffix}`, new Blob([json], { type: `application/json; length=${Buffer.byteLength(json, 'utf8')}` }));
+        }
+      }
+    } catch { throw new LangSmithExportErrorV1('serialization'); }
+    const deadline = AbortSignal.timeout(5000);
+    let response: Response;
+    try {
+      response = await fetcher(`${ENDPOINTS[config.region]}/runs/multipart`, {
+        method: 'POST', body, redirect: 'error', signal: AbortSignal.any([signal, deadline]),
         headers: { 'x-api-key': config.api_key, ...(config.workspace_id === undefined ? {} : { 'x-tenant-id': config.workspace_id }) },
       });
-      // Never retain or log a service response body, even on error.
-      await response.body?.cancel();
-      if (!response.ok) throw new Error('export failed');
-    } catch { throw new Error('LangSmith trace export failed'); }
+    } catch {
+      throw new LangSmithExportErrorV1(signal.aborted ? 'cancelled' : deadline.aborted ? 'timeout' : 'network');
+    }
+    // Never read or log a service response body. Disposal must not hide its HTTP status.
+    try { await response.body?.cancel(); } catch { /* the response status remains authoritative */ }
+    if (!response.ok) throw new LangSmithExportErrorV1('http', response.status);
   };
 }
 
