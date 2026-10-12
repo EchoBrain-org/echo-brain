@@ -34,7 +34,7 @@ export function createConfluencePersonConnectionV1(options: {
   const { actor, tags, authenticated } = shared;
   /** Request-local picker cursors, fenced to both person tenure and live grant. */
   const space_cursors = new Map<string, Readonly<{ person_sha256: Sha256Digest; grant_sha256: Sha256Digest; provider_cursor?: string }>>();
-  const { projectAccess, mappingInput } = createPersonProjectMappingAccessV1(CONFLUENCE_PERSON_PROVIDER_V1, options);
+  const { projectAccess, mappingInput, projectScope } = createPersonProjectMappingAccessV1(CONFLUENCE_PERSON_PROVIDER_V1, options);
   function parseProviderCursor(raw: unknown): string | undefined {
     if (raw === undefined || raw === null) return undefined;
     const value = confluenceString(raw, 4096);
@@ -138,26 +138,18 @@ export function createConfluencePersonConnectionV1(options: {
     },
     async source(input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonPageCitationV1>; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceSourceV1<PersonPageCitationV1> | undefined> {
       const { person, requirePerson } = actor(input.access_token);
-      const access = input.project_id === undefined ? undefined : projectAccess(input.access_token,
-        mappingInput(() => validateConfluenceProjectReadV1({ schema_version: 1, project_id: input.project_id })).project_id);
-      const mapped = access?.store.read(person.organization_id, input.project_id!);
-      if (access !== undefined && mapped?.mapping === null) return undefined;
-      if (mapped?.mapping !== null && mapped?.mapping !== undefined && mapped.mapping.cloud_id !== cloud) confluenceFailure('unauthorized');
+      const scope = projectScope(input.access_token, person.organization_id, input.project_id, cloud, validateConfluenceProjectReadV1);
+      if (scope === null) return undefined;
       const stored = options.store.current(person);
       if (stored === undefined || !stored.active) return undefined;
-      const current = () => {
-        requirePerson();
-        options.store.requireCurrent(stored.binding);
-        access?.current();
-        if (access !== undefined && access.store.read(person.organization_id, input.project_id!).revision !== mapped!.revision) confluenceFailure('stale_access_state');
-      };
+      const current = () => { requirePerson(); options.store.requireCurrent(stored.binding); scope?.current(); };
       current();
       const reader = await createConfluencePersonLiveEvidenceReaderV1({
         binding: stored.binding,
         transport: createConfluenceCloudTransportV1(authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current)),
         expected_origin: stored.site,
         signal: input.signal,
-        ...(mapped?.mapping === null || mapped?.mapping === undefined ? {} : { space_ids: mapped.mapping.space_ids }),
+        ...(scope === undefined ? {} : { space_ids: scope.mapping.space_ids }),
       });
       current();
       return createAuditedPersonLiveEvidenceSourceV1({

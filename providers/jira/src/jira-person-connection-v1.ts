@@ -40,7 +40,7 @@ export function createJiraPersonConnectionV1(options: {
     verify: (authenticated, input) => verifyJiraConnectionV1(createJiraCloudTransportV1(authenticated), input),
   });
   const { actor, tags, authenticated } = shared;
-  const { projectAccess, mappingInput } = createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, options);
+  const { projectAccess, mappingInput, projectScope } = createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, options);
   async function captureConnection(input: { readonly access_token: string; readonly signal?: AbortSignal }): Promise<JiraCurrentCaptureConnectionV1> {
     const { person, requirePerson } = actor(input.access_token); input.signal?.throwIfAborted();
     const stored = options.store.current(person);
@@ -106,17 +106,12 @@ export function createJiraPersonConnectionV1(options: {
     },
     async source(input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined> {
       const { person, requirePerson } = actor(input.access_token);
-      const access = input.project_id === undefined ? undefined : projectAccess(input.access_token, mappingInput(() => validateJiraProjectReadV1({ schema_version: 1, project_id: input.project_id })).project_id);
-      const mapped = access?.store.read(person.organization_id, input.project_id!);
-      if (access !== undefined && mapped?.mapping == null) return undefined;
-      if (mapped?.mapping !== undefined && mapped.mapping !== null && mapped.mapping.cloud_id !== cloud) jiraFailure('unauthorized');
+      const scope = projectScope(input.access_token, person.organization_id, input.project_id, cloud, validateJiraProjectReadV1);
+      if (scope === null) return undefined;
       const stored: JiraStoredConnectionV1 | undefined = options.store.current(person);
       if (stored === undefined || !stored.active) return undefined;
-      const current = () => {
-        requirePerson(); options.store.requireCurrent(stored.binding); access?.current();
-        if (access !== undefined && access.store.read(person.organization_id, input.project_id!).revision !== mapped!.revision) jiraFailure('stale_access_state');
-      };
-      const selectedProject = mapped?.mapping?.project_id;
+      const current = () => { requirePerson(); options.store.requireCurrent(stored.binding); scope?.current(); };
+      const selectedProject = scope?.mapping.project_id;
       current();
       const reader = await createJiraPersonLiveEvidenceReaderV1({ binding: stored.binding, transport: createJiraCloudTransportV1(authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current)), expected_origin: stored.site, signal: input.signal, ...(selectedProject === undefined ? {} : { project: selectedProject }) });
       current();
