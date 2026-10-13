@@ -180,8 +180,18 @@ describe.skipIf(missing !== '')(`Linux update helper${missing ? ` (skipped: ${mi
     refused(verify(setup({ manifest: value => { value.issued_at = iso(10 * 60_000); } })), 3, 'expired_metadata');
   });
 
-  it('refuses a package whose bytes the feed did not sign', () => {
+  it('refuses a package whose bytes the feed did not sign, even at the signed size', () => {
     refused(verify(setup({ deb: Buffer.from('another package') })), 3, 'artifact_mismatch');
+    refused(verify(setup({ deb: Buffer.from('the signed packagE') })), 3, 'artifact_mismatch');
+  });
+
+  it('trusts only an identity the trusted owner wrote', () => {
+    const fixture = setup();
+    refused(helper('verify_update', [fixture.identity, fixture.feed, fixture.deb, fixture.checkpoint, nowMs / 1000, uid + 1]), 3, 'untrusted_identity');
+  });
+
+  it('refuses a sequence below the bootstrap floor without any checkpoint', () => {
+    refused(verify(setup({ manifest: value => { value.sequence = 2; } })), 3, 'stale_metadata');
   });
 
   it('refuses a feed without the Linux desktop artifact', () => {

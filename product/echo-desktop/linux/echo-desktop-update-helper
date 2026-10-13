@@ -321,7 +321,8 @@ def parse_arguments(argv):
 def reinstall(deb_copy):
     try:
         # apt-get's output goes to stderr, so stdout carries only "verified".
-        result = subprocess.run([APT_GET, 'install', '--reinstall', '-y', deb_copy], env=ENV,
+        # Wait out a routine unattended-upgrades run instead of failing at once.
+        result = subprocess.run([APT_GET, '-o', 'DPkg::Lock::Timeout=120', 'install', '--reinstall', '-y', deb_copy], env=ENV,
                                 stdin=subprocess.DEVNULL, stdout=sys.stderr.fileno(), timeout=600)
     except (OSError, subprocess.TimeoutExpired):
         raise HelperError(5, 'apt-get did not finish')
