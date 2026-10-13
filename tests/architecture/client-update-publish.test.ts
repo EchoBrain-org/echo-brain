@@ -30,6 +30,12 @@ const BASE_MS = 120_000;
 const operation = (bytes: number) => BASE_MS + Math.ceil(bytes * 1000 / (512 * 1024));
 // After the first preflight HEAD: every PUT, verification HEAD and GET, and each later preflight HEAD.
 const firstWindow = (sizes: number[]) => sizes.reduce((total, bytes, index) => total + 2 * operation(bytes) + BASE_MS + (index ? BASE_MS : 0), BASE_MS);
+// A replacement's later preflights: an artifact's predecessor HEAD and GET and
+// absence HEAD, or the feed's eleven bounds: a predecessor check, STS and four
+// hosting calls, the sealed-input revalidation (one per desktop archive), and
+// the predecessor check again. The feed is the last size.
+const replacementWindow = (sizes: number[]) => sizes.reduce((total, bytes, index) =>
+  total + 2 * operation(bytes) + BASE_MS + (index ? (index === sizes.length - 1 ? 11 : 3) * BASE_MS : 0), BASE_MS);
 function fixture(options: { expiresAt?: number; previousExpiresAt?: number; previousSequence?: number; sequence?: number; existingArtifact?: boolean; targets?: Artifact[]; sizes?: Partial<Record<Artifact, number>> } = {}) {
   const directory = mkdtempSync(join(realpathSync(tmpdir()), 'echo-publish-test-'));
   chmodSync(directory, 0o700); directories.push(directory);
@@ -442,6 +448,18 @@ describe('bounded conditional S3 feed replacement', () => {
     const put = f.calls.find(args => args[1] === 'put-object' && args.includes('feed.json'))!;
     expect(put[put.indexOf('--if-match') + 1]).toBe(receipt.predecessor.etag);
     expect(put).not.toContain('--if-none-match');
+  });
+
+  it('begins only when validity also covers the checks the feed write repeats first', async () => {
+    const short = fixture({ previousSequence: 1, sequence: 2 });
+    await short.replacePlan();
+    short.state.now = Date.parse(short.manifest.expires_at) - replacementWindow(short.sizes) + 1;
+    expect(await short.replaceExecute()).toMatchObject({ state: 'unconfirmed', verified_objects: 0 });
+    expect(short.calls.some(args => args[1] === 'put-object')).toBe(false);
+    const exact = fixture({ previousSequence: 1, sequence: 2 });
+    await exact.replacePlan();
+    exact.state.now = Date.parse(exact.manifest.expires_at) - replacementWindow(exact.sizes);
+    expect(await exact.replaceExecute()).toMatchObject({ state: 'succeeded', verified_objects: 5 });
   });
 
   it('rejects a same or lower sequence before creating a replacement receipt', async () => {

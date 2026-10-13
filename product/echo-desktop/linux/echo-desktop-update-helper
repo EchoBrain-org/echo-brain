@@ -37,6 +37,8 @@ DPKG_DEB = '/usr/bin/dpkg-deb'
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'DEBIAN_FRONTEND': 'noninteractive', 'LANG': 'C.UTF-8'}
 FEED_LIMIT = 65536
 DEB_LIMIT = 268435456
+# How long the app gets to quit after "verified" before the install is abandoned.
+EXIT_WAIT_SECONDS = 120
 TARGET = ('linux', 'x64', 'glibc', 'electron')
 ED25519_SPKI_PREFIX = bytes.fromhex('302a300506032b6570032100')
 MAX_SAFE_INTEGER = 2 ** 53 - 1
@@ -279,7 +281,7 @@ def read_control(deb_path):
 
 
 def wait_for_exit(pid):
-    deadline = time.monotonic() + 120
+    deadline = time.monotonic() + EXIT_WAIT_SECONDS
     while time.monotonic() < deadline:
         try:
             os.kill(pid, 0)

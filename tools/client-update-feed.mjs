@@ -84,7 +84,9 @@ function validateKit(archive, target, manifest, release, config, directory) {
         m.runtime?.node_sha256 !== updateDigest(read(join(kit, 'node'), UPDATE_ARTIFACT_LIMIT)) ||
         m.person_client_artifact_sha256 !== updateDigest(client) ||
         m.build_identity_sha256 !== updateDigest(read(join(kit, 'build-identity.v1.json')))) fail('kit_identity_mismatch');
-    // Older signed kits must remain auditable and usable for deliberate rollback.
+    // Older kits without a bootstrap stay auditable through historical
+    // validation. A new write needs all four targets, so a rollback can only
+    // target a release that carries all four.
     if (target.platform === 'linux' && Object.hasOwn(m, 'update_bootstrap')) {
       const bootstrap = parseUpdateConfig(m.update_bootstrap);
       if (!bootstrap.automatic || canonicalJson(bootstrap) !== canonicalJson(config)) fail('kit_bootstrap_mismatch');

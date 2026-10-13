@@ -207,6 +207,18 @@ describe('signed cross-platform client updates', () => {
     expect(f.install).not.toHaveBeenCalled();
   });
 
+  it('refuses to report current when the installed release record is not the signed one', async () => {
+    const f = fixture();
+    // The wrapper selects B, but B's folder holds other release.json bytes.
+    f.activate(f.manifest.release_id, Buffer.from('{"release_id":"clean-v1-release-b","source_sha":"unsigned"}\n'));
+    for (const mode of ['check', 'apply'] as const) {
+      await expect(runClientUpdate(mode, f.dependencies)).rejects.toThrow('release_mismatch');
+      expect(appState(f.root)).toMatchObject({ result: 'release_mismatch', available_release: f.manifest.release_id });
+    }
+    expect(f.fetcher.mock.calls.map(args => args[0])).toEqual([f.config.feed_url, f.config.feed_url]);
+    expect(f.install).not.toHaveBeenCalled();
+  });
+
   it('does not announce stale availability after a failed automatic check', async () => {
     const f = fixture();
     await runClientUpdate('check', f.dependencies);

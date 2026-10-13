@@ -60,7 +60,7 @@ function helper(call: string, args: unknown[]): Reply {
 
 // Runs a helper call in the background, for calls that print "verified" and
 // then wait on another process.
-function start(call: string, args: unknown[], patch: Record<string, string>) {
+function start(call: string, args: unknown[], patch: Record<string, string | number>) {
   const child = spawn('python3', ['-I', '-B', '-c', DRIVER, helperPath, JSON.stringify({ call, args, openssl, patch })]);
   let stdout = '';
   child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk; });
@@ -69,13 +69,14 @@ function start(call: string, args: unknown[], patch: Record<string, string>) {
     else fail(new Error(`helper ${call} exited ${status}`));
   }));
   done.catch(() => undefined); // A test that fails first kills the child; its own assertion reports.
+  const printedVerified = () => stdout.split('\n').includes('verified');
   const verified = async (withinMs: number) => {
     for (const deadline = Date.now() + withinMs; Date.now() < deadline; await delay(50)) {
-      if (stdout.split('\n').includes('verified')) return true;
+      if (printedVerified()) return true;
     }
     return false;
   };
-  return { child, done, verified };
+  return { child, done, verified, printedVerified };
 }
 
 const delay = (ms: number) => new Promise(settle => setTimeout(settle, ms));
@@ -136,6 +137,26 @@ function setup({ channel = 'stable', deb = Buffer.from('the signed package'), ma
   return { root, identity, feed, deb: join(root, 'update.deb'), checkpoint: join(root, 'update-checkpoint.json'), payload };
 }
 
+// install() pointed at the fixture: a private state folder of its own, an
+// apt-get that logs its arguments (after whether the app's process still
+// exists, when app is given), a dpkg-deb that prints control, and a wait for
+// the app's exit short enough for a test.
+function installPatch(fixture: Fixture, { app, control = ['Package: echo-desktop', 'Architecture: amd64'], waitSeconds = 20 }: {
+  app?: number; control?: string[]; waitSeconds?: number;
+} = {}) {
+  const state = join(fixture.root, 'state');
+  mkdirSync(state, { mode: 0o700 });
+  const aptLog = join(fixture.root, 'apt-get.log');
+  const liveness = app === undefined ? '' : `if kill -0 ${app} 2>/dev/null; then printf 'app running ' >> '${aptLog}'; else printf 'app exited ' >> '${aptLog}'; fi\n`;
+  const patch = {
+    IDENTITY: fixture.identity, STATE: state, CHECKPOINT: join(state, 'update-checkpoint.json'), LOCK: join(state, 'update.lock'),
+    APT_GET: shellScript(fixture.root, 'apt-get', `${liveness}echo "$@" >> '${aptLog}'`),
+    DPKG_DEB: shellScript(fixture.root, 'dpkg-deb', `printf '%s\\n' ${control.map(line => `'${line}'`).join(' ')}`),
+    EXIT_WAIT_SECONDS: waitSeconds,
+  };
+  return { state, aptLog, checkpoint: patch.CHECKPOINT, patch };
+}
+
 function verify(fixture: Fixture): Reply {
   return helper('verify_update', [fixture.identity, fixture.feed, fixture.deb, fixture.checkpoint, nowMs / 1000, uid]);
 }
@@ -178,6 +199,10 @@ describe.skipIf(missing !== '')(`Linux update helper${missing ? ` (skipped: ${mi
     refused(verify(setup({ channel: 'beta' })), 3, 'wrong_channel');
     refused(verify(setup({ manifest: value => { value.issued_at = iso(-2 * HOUR); value.expires_at = iso(-60_000); } })), 3, 'expired_metadata');
     refused(verify(setup({ manifest: value => { value.issued_at = iso(10 * 60_000); } })), 3, 'expired_metadata');
+  });
+
+  it('refuses a signed manifest of another kind', () => {
+    refused(verify(setup({ manifest: value => { value.kind = 'echo-client-update-manifest-v2'; } })), 3, 'invalid_metadata');
   });
 
   it('refuses a package whose bytes the feed did not sign, even at the signed size', () => {
@@ -245,20 +270,70 @@ describe.skipIf(missing !== '')(`Linux update helper${missing ? ` (skipped: ${mi
     }
   });
 
+  it('reinstalls the root-only copy only after the app exits, then saves the checkpoint', async () => {
+    const fixture = setup();
+    const app = spawn('sleep', ['60']);
+    const { state, aptLog, checkpoint, patch } = installPatch(fixture, { app: app.pid });
+    const run = start('install', [fixture.feed, fixture.deb, app.pid, uid], patch);
+    try {
+      expect(await run.verified(10_000)).toBe(true);
+      // Room for a helper that skipped the wait to reach apt-get while the app still runs.
+      await delay(750);
+      expect(existsSync(aptLog)).toBe(false);
+      await quit(app);
+      expect(await run.done).toEqual({ result: 0 });
+      const logged = readFileSync(aptLog, 'utf8').trim().split('\n');
+      expect(logged).toHaveLength(1);
+      // apt-get gets the root-only copy, never the path the app passed.
+      const copy = logged[0]?.split(' ').at(-1) ?? '';
+      expect(logged[0]).toBe(`app exited -o DPkg::Lock::Timeout=120 install --reinstall -y ${copy}`);
+      expect(copy.startsWith(`${state}/install-`) && copy.endsWith('/update.deb')).toBe(true);
+      expect(JSON.parse(readFileSync(checkpoint, 'utf8'))).toEqual({ schema_version: 1, sequence: 7, manifest_sha256: sha256(fixture.payload) });
+    } finally {
+      for (const child of [app, run.child]) child.kill('SIGKILL');
+    }
+  }, 30_000);
+
+  it('gives up on an app that never exits, without apt-get or a checkpoint', async () => {
+    const fixture = setup();
+    const app = spawn('sleep', ['60']);
+    const { aptLog, checkpoint, patch } = installPatch(fixture, { app: app.pid, waitSeconds: 0.5 });
+    const run = start('install', [fixture.feed, fixture.deb, app.pid, uid], patch);
+    try {
+      refused(await run.done, 4, 'the app did not exit');
+      expect(run.printedVerified()).toBe(true);
+      expect(app.exitCode).toBeNull();
+      expect(existsSync(aptLog)).toBe(false);
+      expect(existsSync(checkpoint)).toBe(false);
+    } finally {
+      for (const child of [app, run.child]) child.kill('SIGKILL');
+    }
+  }, 30_000);
+
+  it.each([
+    ['another package', ['Package: echo-desktop-other', 'Architecture: amd64']],
+    ['another architecture', ['Package: echo-desktop', 'Architecture: arm64']],
+  ])('refuses a signed package for %s before printing verified', async (_, control) => {
+    const fixture = setup();
+    const app = spawn('sleep', ['60']);
+    const { aptLog, checkpoint, patch } = installPatch(fixture, { app: app.pid, control, waitSeconds: 0.5 });
+    const run = start('install', [fixture.feed, fixture.deb, app.pid, uid], patch);
+    try {
+      refused(await run.done, 3, 'wrong_package');
+      expect(run.printedVerified()).toBe(false);
+      expect(existsSync(aptLog)).toBe(false);
+      expect(existsSync(checkpoint)).toBe(false);
+    } finally {
+      for (const child of [app, run.child]) child.kill('SIGKILL');
+    }
+  }, 30_000);
+
   it('installs one update at a time, so a later helper cannot install an older release over a newer one', async () => {
     // Two seats: A staged sequence 9 and B a still-valid sequence 8. Both
     // passwords were approved before either app quit.
     const newer = setup({ manifest: value => { value.sequence = 9; } });
     const older = setup({ manifest: value => { value.sequence = 8; } });
-    const state = join(newer.root, 'state');
-    mkdirSync(state, { mode: 0o700 });
-    const aptLog = join(newer.root, 'apt-get.log');
-    const checkpoint = join(state, 'update-checkpoint.json');
-    const patch = {
-      IDENTITY: newer.identity, STATE: state, CHECKPOINT: checkpoint, LOCK: join(state, 'update.lock'),
-      APT_GET: shellScript(newer.root, 'apt-get', `echo "$@" >> '${aptLog}'`),
-      DPKG_DEB: shellScript(newer.root, 'dpkg-deb', "printf 'Package: echo-desktop\\nArchitecture: amd64\\n'"),
-    };
+    const { aptLog, checkpoint, patch } = installPatch(newer);
     const appA = spawn('sleep', ['60']);
     const appB = spawn('sleep', ['60']);
     const a = start('install', [newer.feed, newer.deb, appA.pid, uid], patch);

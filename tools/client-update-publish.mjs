@@ -34,9 +34,13 @@ const OPERATION_BASE_MS = 120_000;
 const MINIMUM_BYTES_PER_SECOND = 512 * 1024;
 const SCHEDULING_CUSHION_MS = 120_000;
 const operationTimeout = bytes => OPERATION_BASE_MS + Math.ceil(bytes * 1000 / MINIMUM_BYTES_PER_SECOND);
-// Before each later replacement write: the predecessor's HEAD and GET and the
-// artifact's absence HEAD, or a second predecessor check before the feed.
-const REPLACEMENT_PREFLIGHT_CALLS = 4;
+// Before each later replacement artifact write: the predecessor's HEAD and GET
+// and the artifact's absence HEAD.
+const REPLACEMENT_ARTIFACT_PREFLIGHT_CALLS = 3;
+// Before the feed write: a predecessor check, then replacementInputs' STS and
+// four hosting calls and its revalidation of the sealed inputs, which extracts
+// both desktop archives again (one bound each), then a second predecessor check.
+const REPLACEMENT_FEED_PREFLIGHT_CALLS = 2 + 5 + 2 + 2;
 const fail = code => { throw new Error(code); };
 const equal = (left, right) => canonicalJson(left) === canonicalJson(right);
 const templateHash = value => digest(canonicalJson(typeof value === 'string' || Buffer.isBuffer(value) ? JSON.parse(value.toString()) : value));
@@ -153,13 +157,13 @@ function boundInputs(receipt, d, { allowExpired = false } = {}) {
 // The first write therefore reserves the whole publication.
 function publicationWindow(pending, preflightCalls) {
   return pending.reduce((total, object, index) => total + 2 * operationTimeout(object.bytes) + OPERATION_BASE_MS +
-    (index ? preflightCalls * OPERATION_BASE_MS : 0), SCHEDULING_CUSHION_MS);
+    (index ? preflightCalls(object) * OPERATION_BASE_MS : 0), SCHEDULING_CUSHION_MS);
 }
 function requireValidity(inputs, d, required) {
   if (Date.parse(inputs.manifest.expires_at) - currentTime(d) < required) fail('insufficient_metadata_validity');
 }
 function requirePublicationWindow(receipt, index, inputs, d) {
-  requireValidity(inputs, d, publicationWindow(receipt.objects.slice(index).filter(object => !object.attempted), 1));
+  requireValidity(inputs, d, publicationWindow(receipt.objects.slice(index).filter(object => !object.attempted), () => 1));
 }
 function revalidateSealedInputs(receipt, d) {
   const refreshed = preparedInputs(receipt.prepared, receipt.authorization, d.validatePrepared, { now: currentTime(d) });
@@ -389,7 +393,8 @@ function replacementWindow(receipt, artifactIndex, inputs, d) {
   const pending = [...later.filter(object => !object.reused && !object.attempted), ...(receipt.feed.attempted ? [] : [receipt.feed])];
   // Reused artifacts still ahead are verified again: a HEAD and a public GET.
   const reverified = later.filter(object => object.reused).reduce((total, object) => total + OPERATION_BASE_MS + operationTimeout(object.bytes), 0);
-  requireValidity(inputs, d, publicationWindow(pending, REPLACEMENT_PREFLIGHT_CALLS) + reverified);
+  const preflight = object => object.key === 'feed.json' ? REPLACEMENT_FEED_PREFLIGHT_CALLS : REPLACEMENT_ARTIFACT_PREFLIGHT_CALLS;
+  requireValidity(inputs, d, publicationWindow(pending, preflight) + reverified);
 }
 async function matchingRemoteArtifact(host, object, d) {
   const observed = head(d.aws, host.bucket, object.key);
