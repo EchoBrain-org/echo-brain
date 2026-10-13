@@ -2,6 +2,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Loc
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
+import type { UpdateState } from '../../src/shared/protocol.js';
 
 const root = resolve(import.meta.dirname, '..', '..');
 
@@ -86,6 +87,16 @@ export async function launch(mode = ''): Promise<Launched> {
 
 export function emit(app: ElectronApplication, event: 'echo-test:capture' | 'echo-test:conceal' | 'echo-test:resume' | 'echo-test:kill-host' | 'echo-test:shown') {
   return app.evaluate(({ app: electronApp }, name) => { electronApp.emit(name); }, event);
+}
+
+/** Test builds never run the updater: this sets the row it would show, and tells the page as main does. */
+export function setUpdateState(run: Launched, state: UpdateState): Promise<void> {
+  return run.app.evaluate(({ app: electronApp }, next) => { electronApp.emit('echo-test:update', next); }, state);
+}
+
+/** The releases the page asked update.install for, oldest first. A test build records them and never quits. */
+export function updateInstalls(run: Launched): Promise<string[]> {
+  return run.app.evaluate(() => [...(globalThis as { echoTestUpdateInstalls?: string[] }).echoTestUpdateInstalls ?? []]);
 }
 
 /** Test builds keep the Account menu the page last opened, and the tray's menu: no test can click a native menu. */

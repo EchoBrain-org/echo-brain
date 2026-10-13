@@ -1,0 +1,204 @@
+// The bash the app leaves behind when it quits for an update (ADR-0035), run
+// with real bash against stand-in bundles, a `sleep` as the app, and fake
+// pkexec, open and launcher scripts that record what they were given.
+import { spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { RELAUNCHER, SWAP_HELPER } from '../../src/main/update-scripts.js';
+
+const RELEASE = 'clean-v1-release-b';
+const folders: string[] = [];
+const apps: ChildProcess[] = [];
+afterEach(() => {
+  for (const app of apps.splice(0)) app.kill('SIGKILL');
+  for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
+});
+
+function folder(): string {
+  const path = realpathSync(mkdtempSync(join(tmpdir(), 'echo-update-script-')));
+  folders.push(path);
+  return path;
+}
+
+/** A process standing in for the app: alive until the test ends it. */
+function app(): ChildProcess {
+  const child = spawn('sleep', ['60'], { stdio: 'ignore' });
+  apps.push(child);
+  return child;
+}
+async function quit(child: ChildProcess): Promise<void> {
+  const exited = once(child, 'exit');
+  child.kill('SIGTERM');
+  await exited;
+}
+
+function script(path: string, body: string): string {
+  writeFileSync(path, `#!/bin/bash\n${body}\n`, { mode: 0o700 });
+  return path;
+}
+/** A command that writes its arguments, one per line, to `record`. */
+const recorder = (path: string, record: string) => script(path, `for argument in "$@"; do printf '%s\\n' "$argument"; done > '${record}'`);
+
+async function runScript(text: string, args: readonly string[], env: NodeJS.ProcessEnv = process.env): Promise<{ code: number | null; child: ChildProcess }> {
+  const root = folder();
+  const path = join(root, 'activate.sh');
+  writeFileSync(path, text, { mode: 0o700 });
+  const child = spawn('/bin/bash', [path, ...args], { stdio: 'ignore', env });
+  const [code] = await once(child, 'exit') as [number | null];
+  return { code, child };
+}
+const outcome = (path: string) => JSON.parse(readFileSync(path, 'utf8')) as unknown;
+const until = async (check: () => boolean) => { await expect.poll(check, { timeout: 10_000, interval: 50 }).toBe(true); };
+
+describe('the macOS swap helper', () => {
+  function bundles() {
+    const root = folder();
+    const bundle = join(root, 'Applications', 'ECHO.app');
+    const updater = join(root, 'desktop', 'updater');
+    const staged = join(updater, 'staged', 'ECHO.app');
+    for (const [path, marker] of [[bundle, 'old'], [staged, 'new']] as const) {
+      mkdirSync(join(path, 'Contents'), { recursive: true });
+      writeFileSync(join(path, 'Contents', 'release'), marker);
+    }
+    const opened = join(root, 'opened');
+    return {
+      bundle, staged, opened, outcome: join(updater, 'outcome.json'), previous: join(updater, 'previous', 'ECHO.app'),
+      open: recorder(join(root, 'open'), opened),
+      marker: (path: string) => readFileSync(join(path, 'Contents', 'release'), 'utf8'),
+    };
+  }
+
+  it('waits for the app to quit, swaps the staged bundle in, keeps the old one and opens the new one', async () => {
+    const f = bundles();
+    const running = app();
+    const swap = runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, RELEASE, f.open]);
+    // Nothing moves while the app runs.
+    await new Promise(resolve => setTimeout(resolve, 600));
+    expect(f.marker(f.bundle)).toBe('old');
+    expect(existsSync(f.outcome)).toBe(false);
+    await quit(running);
+    expect((await swap).code).toBe(0);
+    expect(f.marker(f.bundle)).toBe('new');
+    expect(f.marker(f.previous)).toBe('old');
+    expect(existsSync(f.staged)).toBe(false);
+    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'installed' });
+    expect(statSync(f.outcome).mode & 0o777).toBe(0o600);
+    expect(readFileSync(f.opened, 'utf8')).toBe(`${f.bundle}\n`);
+  });
+
+  it('puts the old bundle back and reopens it when the staged one cannot be moved in', async () => {
+    const f = bundles();
+    rmSync(f.staged, { recursive: true });
+    const running = app();
+    await quit(running);
+    await runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, RELEASE, f.open]);
+    expect(f.marker(f.bundle)).toBe('old');
+    expect(existsSync(f.previous)).toBe(false);
+    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'failed' });
+    expect(readFileSync(f.opened, 'utf8')).toBe(`${f.bundle}\n`);
+  });
+
+  it('leaves both bundles alone and opens nothing when the app never quits', async () => {
+    const f = bundles();
+    const running = app();
+    // The last argument shortens the two-minute wait.
+    const { code } = await runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, RELEASE, f.open, '1']);
+    expect(code).not.toBe(0);
+    expect(f.marker(f.bundle)).toBe('old');
+    expect(f.marker(f.staged)).toBe('new');
+    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'failed' });
+    expect(existsSync(f.opened)).toBe(false);
+  });
+
+  it('refuses a release id that is not one', async () => {
+    const f = bundles();
+    const running = app();
+    await quit(running);
+    const { code } = await runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, 'release","status":"installed', f.open]);
+    expect(code).toBe(2);
+    expect(f.marker(f.bundle)).toBe('old');
+    expect(existsSync(f.outcome)).toBe(false);
+  });
+});
+
+describe('the Linux relauncher', () => {
+  function seat(pkexecBody: string) {
+    const root = folder();
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    // macOS has no setsid: a stand-in that runs the command, as setsid does.
+    if (process.platform !== 'linux') script(join(bin, 'setsid'), 'exec "$@"');
+    const called = join(root, 'pkexec-args');
+    const launched = join(root, 'launched');
+    const updater = join(root, 'updater');
+    mkdirSync(updater, { mode: 0o700 });
+    return {
+      called, launched,
+      progress: join(updater, 'progress'), outcome: join(updater, 'outcome.json'),
+      feed: join(updater, 'staged', 'feed.json'), deb: join(updater, 'staged', 'echo-desktop.deb'),
+      pkexec: script(join(root, 'pkexec'), `printf '%s\\n' "$@" > '${called}'\npid="\${@: -1}"\n${pkexecBody}`),
+      helper: '/opt/ECHO/resources/echo-desktop-update-helper',
+      launcher: recorder(join(root, 'echo-desktop'), launched),
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}` },
+    };
+  }
+  /** As the real helper: it waits for the app to quit before installing. */
+  const waitForApp = 'while kill -0 "$pid" 2> /dev/null; do sleep 0.05; done';
+  const args = (f: ReturnType<typeof seat>, pid: number) => [String(pid), f.feed, f.deb, f.progress, f.outcome, RELEASE, f.pkexec, f.helper, f.launcher];
+
+  it('runs the helper under pkexec, reports verified, and reopens ECHO once installed', async () => {
+    const f = seat(`echo verified\n${waitForApp}\nexit 0`);
+    const running = app();
+    const relaunch = runScript(RELAUNCHER, args(f, running.pid!), f.env);
+    await until(() => existsSync(f.progress) && readFileSync(f.progress, 'utf8') === 'verified\n');
+    expect(existsSync(f.outcome)).toBe(false);
+    await quit(running);
+    expect((await relaunch).code).toBe(0);
+    expect(readFileSync(f.called, 'utf8').split('\n').slice(0, -1))
+      .toEqual([f.helper, 'install', '--feed', f.feed, '--deb', f.deb, '--wait-pid', String(running.pid)]);
+    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'installed' });
+    expect(statSync(f.outcome).mode & 0o777).toBe(0o600);
+    await until(() => existsSync(f.launched));
+    expect(readFileSync(f.launched, 'utf8')).toBe('');
+  });
+
+  it('records a cancelled prompt and leaves the running app alone', async () => {
+    const f = seat('exit 126');
+    const running = app();
+    await runScript(RELAUNCHER, args(f, running.pid!), f.env);
+    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'cancelled' });
+    expect(readFileSync(f.progress, 'utf8')).toBe('');
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(existsSync(f.launched)).toBe(false);
+    expect(running.exitCode).toBeNull();
+  });
+
+  it('records a failure after verifying and reopens the old app the quit left closed', async () => {
+    const f = seat(`echo verified\n${waitForApp}\nexit 5`);
+    const running = app();
+    const relaunch = runScript(RELAUNCHER, args(f, running.pid!), f.env);
+    await until(() => existsSync(f.progress) && readFileSync(f.progress, 'utf8') === 'verified\n');
+    await quit(running);
+    await relaunch;
+    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'failed' });
+    await until(() => existsSync(f.launched));
+  });
+
+  it('records refused authentication as failed', async () => {
+    const f = seat('exit 127');
+    const running = app();
+    await runScript(RELAUNCHER, args(f, running.pid!), f.env);
+    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'failed' });
+    expect(existsSync(f.launched)).toBe(false);
+  });
+
+  it('runs nothing without all its arguments', async () => {
+    const f = seat('exit 0');
+    const { code } = await runScript(RELAUNCHER, args(f, process.pid).slice(0, 8), f.env);
+    expect(code).toBe(2);
+    expect(existsSync(f.called)).toBe(false);
+  });
+});

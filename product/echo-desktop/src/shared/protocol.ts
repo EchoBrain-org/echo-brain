@@ -375,6 +375,12 @@ export interface Failure {
 
 export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly failure: Failure };
 
+/** What the updater shows: one sidebar row, or nothing. */
+export type UpdateState =
+  | { readonly state: 'none' }
+  | { readonly state: 'available' | 'installing' | 'restart'; readonly release: string }
+  | { readonly state: 'failed'; readonly release: string; readonly reason: 'failed' | 'location' };
+
 /** The account the renderer is showing; host calls refuse to run for another. */
 export interface Expect {
   readonly authority: string;
@@ -554,6 +560,9 @@ export interface MainMethods {
   'app.retryHost': { params: Record<string, never>; result: null };
   /** Pops up the Account menu at a point in the window, in CSS pixels. */
   'menu.account': { params: { x: number; y: number }; result: null };
+  'update.status': { params: Record<string, never>; result: UpdateState };
+  /** New version · Restart: installs `release` (or, in state restart, relaunches), then quits. Refused while work is unresolved. */
+  'update.install': { params: { release: string }; result: null };
 }
 
 export type Methods = HostMethods & MainMethods;
@@ -569,7 +578,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
-  'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show',
+  'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show', 'update.status', 'update.install',
 ];
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
@@ -607,6 +616,8 @@ export interface Events {
   'account.command': { command: AccountCommand };
   /** Organization ▸ People & invites… was chosen in the tray (owners only). */
   'organization.open': Record<string, never>;
+  /** What the updater shows now: a check, an install's progress, or a previous run's outcome. */
+  'update.changed': UpdateState;
 }
 export type EventName = keyof Events;
 
