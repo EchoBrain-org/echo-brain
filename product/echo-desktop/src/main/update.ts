@@ -1,7 +1,6 @@
-// The app's updater (ADR-0035). The signed-feed rules live in the release-bound
-// Person client's updater core; this is the desktop installation it drives:
-// when the updater may run, what the sidebar row shows, how a verified release
-// is staged, and the detached script that activates it once the app quits.
+// The app's updater (ADR-0035): when it may run, what the sidebar row shows, how
+// a verified release is staged, and the detached script that activates it once
+// the app quits. The signed-feed rules stay in the release-bound client's core.
 // Main hands it everything it touches, so nothing here imports Electron.
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -28,29 +27,26 @@ const CHECK_DELAY_MS = 10_000;
 const CHECK_INTERVAL_MS = 10 * 60_000;
 
 /** The absolute commands an update runs. Tests replace some. */
-export interface Commands { unzip: string; ditto: string; plutil: string; codesign: string; open: string; pkexec: string; helper: string; launcher: string }
-const COMMANDS: Commands = {
+const COMMANDS = {
   unzip: '/usr/bin/unzip', ditto: '/usr/bin/ditto', plutil: '/usr/bin/plutil', codesign: '/usr/bin/codesign', open: '/usr/bin/open',
   pkexec: '/usr/bin/pkexec', helper: join(LINUX_RESOURCES, HELPER), launcher: '/usr/bin/echo-desktop',
 };
+type Commands = typeof COMMANDS;
 
 // ---- what main calls in the release-bound client's dist/client-update.js ----
-// Declared here from src/product/person-client/client-update.ts and
+// The parts it uses of src/product/person-client/client-update.ts and
 // client-update-kit.ts: the app loads the copy it shipped, never this checkout's.
 
 /** The one target each desktop package installs. */
 export interface UpdateTarget { platform: 'darwin' | 'linux'; architecture: 'arm64' | 'x64'; libc: 'glibc' | null; installation: 'electron' }
 export interface UpdateInstallerInput {
-  root: string;
   archive: string;
   manifest: { release_id: string; release_sha256: string };
-  artifact: { url: string; sha256: string; bytes: number };
   /** The installation's fingerprint(), captured before download. */
   expected_wrapper_sha256: string;
-  /** The exact verified feed bytes, which the Linux root helper verifies again. */
   feed: Buffer;
 }
-export interface ClientUpdateInstallation {
+interface ClientUpdateInstallation {
   installedRelease(): string;
   installedReleaseSha256(): string;
   fingerprint(): string;
@@ -59,15 +55,7 @@ export interface ClientUpdateInstallation {
   archive_name: string;
   download_timeout_ms: number;
 }
-export interface ClientUpdateResult {
-  kind: 'echo-client-update-result-v1';
-  status: string;
-  platform: string;
-  installed_release: string;
-  running_release: string | null;
-  available_release: string | null;
-  checked_at: number | null;
-}
+export interface ClientUpdateResult { status: string; installed_release: string; available_release: string | null }
 interface ClientUpdateRun {
   root: string;
   platform: UpdateTarget;
@@ -87,12 +75,11 @@ export interface ClientUpdateModule {
 // ---- identity and setup ----------------------------------------------------
 
 /** echo-desktop-identity.v1.json, which only release packaging writes. */
-export interface DesktopIdentity extends Omit<UpdateTarget, 'installation'> {
+interface DesktopIdentity extends UpdateTarget {
   schema_version: 1;
   kind: 'echo-desktop-identity-v1';
   release_id: string;
   release_record_sha256: string;
-  installation: 'electron';
   /** The client update config this release pins on first run. */
   update_bootstrap: unknown;
 }
@@ -125,7 +112,6 @@ function readOwned(path: string, limit: number, rootOwned: boolean): Buffer {
   } finally { closeSync(fd); }
 }
 
-/** The identity at `path`, for `target`, and its exact bytes. */
 export function readIdentity(path: string, target: UpdateTarget): { identity: DesktopIdentity; bytes: Buffer } {
   try {
     const bytes = readOwned(path, 64 * 1024, true);
@@ -142,21 +128,15 @@ export function readIdentity(path: string, target: UpdateTarget): { identity: De
   }
 }
 
-export interface UpdaterHost {
-  packaged: boolean;
-  smoke: boolean;
-  test_build: boolean;
-  platform: string;
-  arch: string;
-  exec_path: string;
-  resources_path: string;
-  app_data: string;
+interface UpdaterHost {
+  packaged: boolean; smoke: boolean; test_build: boolean;
+  platform: string; arch: string; exec_path: string; resources_path: string; app_data: string;
   /** Where the Linux package puts its resources; tests name another folder. */
   linux_resources?: string;
   /** Linux: where pkexec is; tests name another. */
   pkexec?: string;
 }
-export interface UpdaterSetup {
+interface UpdaterSetup {
   /** <appData>/ECHO/desktop, beside Chromium's ECHO/chromium and apart from the CLI's root. */
   root: string;
   target: UpdateTarget;
@@ -167,12 +147,7 @@ export interface UpdaterSetup {
   bundle: string | null;
 }
 
-/**
- * The updater runs only in a packaged release that is not a smoke run or a
- * test build, carries a valid identity, and is installed where it can replace
- * itself: an .app bundle on macOS arm64, or /opt/ECHO with the root-owned
- * helper and pkexec on Linux x64. Otherwise it stays off and says why.
- */
+/** The updater's setup in a packaged release installed where it can replace itself, or why it stays off. */
 export function updaterSetup(host: UpdaterHost): UpdaterSetup | { off: string } {
   if (!host.packaged) return { off: 'not_packaged' };
   if (host.smoke) return { off: 'smoke' };
@@ -184,22 +159,19 @@ export function updaterSetup(host: UpdaterHost): UpdaterSetup | { off: string } 
   const identity_path = join(host.resources_path, IDENTITY_FILE);
   let identity: DesktopIdentity;
   try { identity = readIdentity(identity_path, target).identity; } catch (error) { return { off: updateCode(error) }; }
-  // pkexec is only recommended: without it no install can work, so no row offers
-  // one, and the documented manual reinstall remains.
+  // pkexec is only recommended: without it no install can work, so no row offers one.
   if (target.platform === 'linux' && !existsSync(host.pkexec ?? COMMANDS.pkexec)) return { off: 'no_pkexec' };
   const bundle = target.platform === 'darwin' ? resolve(host.exec_path, '..', '..', '..') : null;
   const installed = bundle !== null
-    ? bundle.endsWith('.app') && host.resources_path === join(bundle, 'Contents', 'Resources') && kind(bundle) === 'directory'
+    ? bundle.endsWith('.app') && host.resources_path === join(bundle, 'Contents', 'Resources') && isDirectory(bundle)
     : host.resources_path === (host.linux_resources ?? LINUX_RESOURCES) && rootOnly(join(host.resources_path, HELPER));
   if (!installed) return { off: 'unsupported_installation' };
   return { root: join(host.app_data, 'ECHO', 'desktop'), target, identity_path, identity, bundle };
 }
 
-function kind(path: string): 'directory' | 'file' | 'other' | null {
-  try {
-    const stats = lstatSync(path);
-    return stats.isDirectory() ? 'directory' : stats.isFile() ? 'file' : 'other';
-  } catch { return null; }
+/** A directory itself, not a link to one. */
+function isDirectory(path: string): boolean {
+  try { return lstatSync(path).isDirectory(); } catch { return false; }
 }
 
 /** pkexec runs the helper as root: only root may have written it. */
@@ -218,13 +190,8 @@ export function installRefusal(state: UpdateState, release: unknown, unresolved:
   return unresolved ? { code: 'update_held', retryable: true } : null;
 }
 
-/**
- * The row after an automatic check: an available release, or newer files
- * already installed (restart to use them). An install in progress stays. A
- * failure stays while the same release is on offer, and goes once the running
- * release is current or the files on disk are newer.
- */
-export function checkedState(current: UpdateState, result: Pick<ClientUpdateResult, 'status' | 'installed_release' | 'available_release'>): UpdateState {
+/** The row after an automatic check. An install in progress stays; a failure stays while its release is on offer. */
+export function checkedState(current: UpdateState, result: ClientUpdateResult): UpdateState {
   if (current.state === 'installing') return current;
   if (current.state === 'failed' && result.status === 'current') return { state: 'none' };
   const release = result.status === 'available' ? result.available_release : result.status === 'running_release_mismatch' ? result.installed_release : null;
@@ -233,23 +200,26 @@ export function checkedState(current: UpdateState, result: Pick<ClientUpdateResu
   return { state: result.status === 'available' ? 'available' : 'restart', release };
 }
 
+/** Readable text up to 4 KiB, or '' while the file is not there. */
+function readSmall(path: string): string {
+  try { return readOwned(path, 4096, false).toString('utf8'); } catch { return ''; }
+}
+
 interface Outcome { schema_version: 1; release: string; attempt: string; status: 'installed' | 'failed' | 'cancelled' }
 
 /** The outcome a swap helper or relauncher left at `path`: null when there is none to use. */
 function readOutcome(path: string): Outcome | null {
   let value: Partial<Outcome> | null;
-  try { value = JSON.parse(readOwned(path, 4096, false).toString('utf8')) as Partial<Outcome> | null; } catch { return null; }
+  try { value = JSON.parse(readSmall(path)) as Partial<Outcome> | null; } catch { return null; }
   return value !== null && typeof value === 'object' && value.schema_version === 1 && typeof value.release === 'string' && RELEASE_ID.test(value.release) &&
     typeof value.attempt === 'string' && ATTEMPT_ID.test(value.attempt) &&
     (value.status === 'installed' || value.status === 'failed' || value.status === 'cancelled') ? value as Outcome : null;
 }
 
 /**
- * The last install's outcome, at launch, whichever attempt left it. The
- * release it was for running clears the row and what the install left, the
- * previous macOS bundle included, whatever the script reported: another
- * attempt, or another user's update, may have put it there. Any other end
- * shows the failure. A cancelled prompt shows nothing.
+ * The last install's outcome at launch, whichever attempt left it. Its release
+ * running clears the row and the leftovers whatever the script reported, as
+ * another attempt or user may have installed it; a cancelled prompt shows nothing.
  */
 export function launchOutcome(root: string, running: string): UpdateState | null {
   const updater = join(root, 'updater');
@@ -267,7 +237,7 @@ export function launchOutcome(root: string, running: string): UpdateState | null
 // ---- staging -----------------------------------------------------------------
 
 /** The volume a path is on. Tests name another. */
-export type Device = (path: string) => number;
+type Device = (path: string) => number;
 const volume: Device = path => statSync(path).dev;
 
 const run = promisify(execFile);
@@ -279,10 +249,8 @@ async function output(command: string, args: readonly string[], code: string): P
 }
 
 /**
- * macOS: the verified ZIP expands to exactly one ECHO.app with ECHO's bundle
- * id and an intact signature, whose identity names the manifest's release and
- * this target. It must sit on the running bundle's volume, so the swap is a
- * rename.
+ * macOS: the ZIP must expand to exactly one signed ECHO.app of this release and
+ * target, on the running bundle's volume so the swap is a rename.
  */
 async function stageBundle(input: UpdateInstallerInput, staged: string, bundle: string, target: UpdateTarget, commands: Commands, device: Device): Promise<void> {
   const entries = (await output(commands.unzip, ['-Z1', input.archive], 'invalid_archive')).split('\n').filter(Boolean);
@@ -291,7 +259,7 @@ async function stageBundle(input: UpdateInstallerInput, staged: string, bundle: 
   }
   await output(commands.ditto, ['-x', '-k', input.archive, staged], 'invalid_archive');
   const app = join(staged, 'ECHO.app');
-  if (readdirSync(staged).join('/') !== 'ECHO.app' || kind(app) !== 'directory') refuse('invalid_archive');
+  if (readdirSync(staged).join('/') !== 'ECHO.app' || !isDirectory(app)) refuse('invalid_archive');
   const id = await output(commands.plutil, ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', join(app, 'Contents', 'Info.plist')], 'wrong_bundle_id');
   if (id.trim() !== BUNDLE_ID) refuse('wrong_bundle_id');
   await output(commands.codesign, ['--verify', '--deep', '--strict', app], 'invalid_signature');
@@ -309,9 +277,8 @@ async function stagePackage(input: UpdateInstallerInput, staged: string): Promis
 }
 
 /**
- * The app as the core's installation: its release is the identity on disk,
- * which another Linux user's update can change under it, and an install stages
- * the verified update in <root>/updater/staged for activation after the quit.
+ * The app as the core's installation. Its release is the identity on disk, which
+ * another Linux user's update can change; install stages into updater/staged.
  */
 export function desktopInstallation(setup: Pick<UpdaterSetup, 'root' | 'target' | 'identity_path' | 'bundle'>, commands: Partial<Commands>,
   log: (line: string) => void, device: Device = volume): ClientUpdateInstallation {
@@ -385,11 +352,6 @@ function detached(args: readonly string[]): void {
   child.unref();
 }
 
-/** Readable text up to 4 KiB, or '' while the file is not there. */
-function readSmall(path: string): string {
-  try { return readOwned(path, 4096, false).toString('utf8'); } catch { return ''; }
-}
-
 export function createUpdater(deps: UpdaterDependencies): Updater {
   const { root, target, client, log } = deps;
   const mac = target.platform === 'darwin';
@@ -426,14 +388,10 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
   }
 
   /**
-   * After activation, until the app exits. Linux quits once the root helper has
-   * verified the update. Only this attempt's progress and outcome count: a
-   * person can quit at the password prompt, reopen ECHO and click again, and
-   * the earlier relauncher can still finish. A script that ends while the app
-   * still runs: a cancelled password prompt puts the row back; installed means
-   * the newer files are on disk, so restart; anything else, such as a quit the
-   * person cancelled at the unresolved-work question until the script's wait
-   * ran out, shows the failure.
+   * After activation, until the app exits: Linux quits once the root helper has
+   * verified the update. Only this attempt's progress and outcome count, as an
+   * earlier relauncher can still finish. A script that ends while the app still
+   * runs (a quit cancelled until its wait ran out) shows how it ended.
    */
   function watch(release: string, attempt: string): void {
     let quitting = mac;
@@ -450,6 +408,7 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
       clearInterval(timer);
       log(`update install ${ended.status}`);
       // Cancelled at the password prompt: the release is still there to install.
+      // Installed: the newer files are on disk.
       deps.set(ended.status === 'cancelled' ? { state: 'available', release } : ended.status === 'installed' ? { state: 'restart', release }
         : { state: 'failed', release, reason: 'failed' });
     }, deps.poll_ms ?? 250);
@@ -464,10 +423,8 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
         client.releaseInterruptedClientUpdate(root);
         const last = launchOutcome(root, deps.identity.release_id);
         if (last) show(last);
-        // First run pins this release's bootstrap. Every later launch offers its
-        // own again: the same trust is kept, and a different one (another key,
-        // feed, channel or sequence floor) stops updates with already_configured.
-        // The pinned automatic choice is the person's and survives.
+        // Every launch offers its bootstrap: the core keeps the same trust and stops
+        // updates on another with already_configured. The pinned automatic choice stays.
         const pinned = client.readClientUpdateConfig(root) as { automatic?: unknown } | undefined;
         client.configureClientUpdates(root, pinned ? { ...(deps.identity.update_bootstrap as Record<string, unknown>), automatic: pinned.automatic } : deps.identity.update_bootstrap, installation);
         return true;
@@ -519,9 +476,8 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
       }
       const staged = result.available_release;
       if (result.status !== 'staged' || staged === null || !RELEASE_ID.test(staged)) return failed(release);
-      // The click found nothing unresolved, but the page kept working through
-      // the download. The quit would cut off what started since, so offer the
-      // release again (the core keeps a staged release on offer) and start nothing.
+      // The page kept working through the download. The quit would cut off work
+      // started since, so offer the release again (the core keeps it on offer).
       if (deps.held()) {
         log('update install held');
         return deps.set({ state: 'available', release: staged });
@@ -546,9 +502,8 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
 }
 
 /**
- * macOS replaces the bundle by renames: it must be writable, in a writable
- * folder on the updater's volume, and not translocated. Checked before the
- * download, so an app that cannot be replaced never fetches one.
+ * macOS swaps by renames: a writable bundle, not translocated, in a writable
+ * folder on the updater's volume. Checked before any download.
  */
 function movable(bundle: string, root: string, device: Device): boolean {
   if (bundle.includes('/AppTranslocation/')) return false;

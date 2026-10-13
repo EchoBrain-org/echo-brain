@@ -388,10 +388,10 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
         // Test builds never update or quit: they read what would have been installed.
         ((globalThis as TestUpdates).echoTestUpdateInstalls ??= []).push(release);
         setUpdate({ state: 'installing', release });
-        return { ok: true, value: null };
+      } else {
+        // Progress arrives as update.changed.
+        void updater?.install(release);
       }
-      // Progress arrives as update.changed.
-      void updater?.install(release);
       return { ok: true, value: null };
     }
   }
@@ -692,10 +692,6 @@ async function startUpdates(): Promise<void> {
   if ('off' in setup) return log(`update off ${setup.off}`);
   try {
     const client = await import(pathToFileURL(join(dirname(clientEntry), 'client-update.js')).href) as ClientUpdateModule;
-    // The click was refused while work was unresolved, but the page keeps
-    // working through the download: the updater checks again before it starts
-    // the script, and its quit is the normal one, which drains the host and
-    // asks about anything still unresolved. The script takes over once ECHO exits.
     updater = startUpdater({
       ...setup, client, pid: process.pid, fetch, state: () => updateState, set: setUpdate, held: () => unresolved !== null,
       quit: () => app.quit(), relaunch: () => app.relaunch(), log,

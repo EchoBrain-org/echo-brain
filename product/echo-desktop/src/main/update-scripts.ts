@@ -1,9 +1,7 @@
-// The bash an update leaves running when the app quits (ADR-0035). The app
-// writes one into its 0700 updater folder and starts it detached. Every value
-// arrives as an argument, checked here again: nothing is written into the text.
-// Both write updater/outcome.json, {schema_version, release, attempt, status},
-// by rename. The attempt is the app's id for the click that started this
-// script: a relauncher from before a quit can still finish after a new one starts.
+// The bash an update leaves running when the app quits (ADR-0035), written into
+// the 0700 updater folder and started detached. Every value arrives as an
+// argument, checked here again: nothing is written into the text. The attempt
+// is the id of the click that started it, which its outcome carries.
 
 const OUTCOME = `
 [[ $release =~ ^clean-v1-[a-z0-9][a-z0-9-]{2,63}$ ]] || exit 2
@@ -47,8 +45,7 @@ finish "$status"
  * Runs the root helper under pkexec with its output in the progress file,
  * after a first line naming the attempt; the helper's "verified" tells that
  * attempt's app to quit. Records how it ended: 0 installed, 126 a cancelled
- * prompt, anything else failed. ECHO is reopened only once the app has quit;
- * a cancelled prompt leaves it open.
+ * prompt, anything else failed. ECHO is reopened only once the app has quit.
  */
 export const RELAUNCHER = `#!/bin/bash
 set -u

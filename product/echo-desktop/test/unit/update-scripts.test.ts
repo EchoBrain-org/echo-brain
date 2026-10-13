@@ -67,17 +67,19 @@ describe('the macOS swap helper', () => {
       writeFileSync(join(path, 'Contents', 'release'), marker);
     }
     const opened = join(root, 'opened');
-    return {
+    const f = {
       bundle, staged, opened, outcome: join(updater, 'outcome.json'), previous: join(updater, 'previous', 'ECHO.app'),
       open: recorder(join(root, 'open'), opened),
       marker: (path: string) => readFileSync(join(path, 'Contents', 'release'), 'utf8'),
+      args: (pid: number, release = RELEASE, attempt = ATTEMPT) => [String(pid), bundle, staged, f.previous, f.outcome, release, attempt, f.open],
     };
+    return f;
   }
 
   it('waits for the app to quit, swaps the staged bundle in, keeps the old one and opens the new one', async () => {
     const f = bundles();
     const running = app();
-    const swap = runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, RELEASE, ATTEMPT, f.open]);
+    const swap = runScript(SWAP_HELPER, f.args(running.pid!));
     // Nothing moves while the app runs.
     await new Promise(resolve => setTimeout(resolve, 600));
     expect(f.marker(f.bundle)).toBe('old');
@@ -97,7 +99,7 @@ describe('the macOS swap helper', () => {
     rmSync(f.staged, { recursive: true });
     const running = app();
     await quit(running);
-    await runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, RELEASE, ATTEMPT, f.open]);
+    await runScript(SWAP_HELPER, f.args(running.pid!));
     expect(f.marker(f.bundle)).toBe('old');
     expect(existsSync(f.previous)).toBe(false);
     expect(outcome(f.outcome)).toEqual(ended('failed'));
@@ -108,7 +110,7 @@ describe('the macOS swap helper', () => {
     const f = bundles();
     const running = app();
     // The last argument shortens the two-minute wait.
-    const { code } = await runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, RELEASE, ATTEMPT, f.open, '1']);
+    const { code } = await runScript(SWAP_HELPER, [...f.args(running.pid!), '1']);
     expect(code).not.toBe(0);
     expect(f.marker(f.bundle)).toBe('old');
     expect(f.marker(f.staged)).toBe('new');
@@ -120,8 +122,8 @@ describe('the macOS swap helper', () => {
     const f = bundles();
     const running = app();
     await quit(running);
-    for (const [release, attempt] of [['release","status":"installed', ATTEMPT], [RELEASE, 'x","status":"installed'], [RELEASE, '']]) {
-      const { code } = await runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, release!, attempt!, f.open]);
+    for (const [release, attempt] of [['release","status":"installed', ATTEMPT], [RELEASE, 'x","status":"installed'], [RELEASE, '']] as const) {
+      const { code } = await runScript(SWAP_HELPER, f.args(running.pid!, release, attempt));
       expect(code).toBe(2);
       expect(f.marker(f.bundle)).toBe('old');
       expect(existsSync(f.outcome)).toBe(false);
@@ -156,50 +158,35 @@ describe('the Linux relauncher', () => {
   /** The progress file: the attempt first, so the app never takes another attempt's verified for its own. */
   const progress = (helper: string) => `attempt ${ATTEMPT}\n${helper}`;
 
-  it('runs the helper under pkexec, reports verified, and reopens ECHO once installed', async () => {
-    const f = seat(`echo verified\n${waitForApp}\nexit 0`);
-    const running = app();
-    const relaunch = runScript(RELAUNCHER, args(f, running.pid!), f.env);
-    await until(() => existsSync(f.progress) && readFileSync(f.progress, 'utf8') === progress('verified\n'));
-    expect(existsSync(f.outcome)).toBe(false);
-    await quit(running);
-    expect((await relaunch).code).toBe(0);
-    expect(readFileSync(f.called, 'utf8').split('\n').slice(0, -1))
-      .toEqual([f.helper, 'install', '--feed', f.feed, '--deb', f.deb, '--wait-pid', String(running.pid)]);
-    expect(outcome(f.outcome)).toEqual(ended('installed'));
-    expect(statSync(f.outcome).mode & 0o777).toBe(0o600);
-    await until(() => existsSync(f.launched));
-    expect(readFileSync(f.launched, 'utf8')).toBe('');
+  it('runs the helper under pkexec, reports verified, and reopens ECHO once the app has quit, installed or not', async () => {
+    for (const [code, status] of [[0, 'installed'], [5, 'failed']] as const) {
+      const f = seat(`echo verified\n${waitForApp}\nexit ${code}`);
+      const running = app();
+      const relaunch = runScript(RELAUNCHER, args(f, running.pid!), f.env);
+      await until(() => existsSync(f.progress) && readFileSync(f.progress, 'utf8') === progress('verified\n'));
+      expect(existsSync(f.outcome)).toBe(false);
+      await quit(running);
+      expect((await relaunch).code).toBe(0);
+      expect(readFileSync(f.called, 'utf8').split('\n').slice(0, -1))
+        .toEqual([f.helper, 'install', '--feed', f.feed, '--deb', f.deb, '--wait-pid', String(running.pid)]);
+      expect(outcome(f.outcome)).toEqual(ended(status));
+      expect(statSync(f.outcome).mode & 0o777).toBe(0o600);
+      await until(() => existsSync(f.launched));
+      expect(readFileSync(f.launched, 'utf8')).toBe('');
+    }
   });
 
-  it('records a cancelled prompt and leaves the running app alone', async () => {
-    const f = seat('exit 126');
-    const running = app();
-    await runScript(RELAUNCHER, args(f, running.pid!), f.env);
-    expect(outcome(f.outcome)).toEqual(ended('cancelled'));
-    expect(readFileSync(f.progress, 'utf8')).toBe(progress(''));
-    await new Promise(resolve => setTimeout(resolve, 300));
-    expect(existsSync(f.launched)).toBe(false);
-    expect(running.exitCode).toBeNull();
-  });
-
-  it('records a failure after verifying and reopens the old app the quit left closed', async () => {
-    const f = seat(`echo verified\n${waitForApp}\nexit 5`);
-    const running = app();
-    const relaunch = runScript(RELAUNCHER, args(f, running.pid!), f.env);
-    await until(() => existsSync(f.progress) && readFileSync(f.progress, 'utf8') === progress('verified\n'));
-    await quit(running);
-    await relaunch;
-    expect(outcome(f.outcome)).toEqual(ended('failed'));
-    await until(() => existsSync(f.launched));
-  });
-
-  it('records refused authentication as failed', async () => {
-    const f = seat('exit 127');
-    const running = app();
-    await runScript(RELAUNCHER, args(f, running.pid!), f.env);
-    expect(outcome(f.outcome)).toEqual(ended('failed'));
-    expect(existsSync(f.launched)).toBe(false);
+  it('records a cancelled prompt, or refused authentication as failed, and leaves the running app alone', async () => {
+    for (const [code, status] of [[126, 'cancelled'], [127, 'failed']] as const) {
+      const f = seat(`exit ${code}`);
+      const running = app();
+      await runScript(RELAUNCHER, args(f, running.pid!), f.env);
+      expect(outcome(f.outcome)).toEqual(ended(status));
+      expect(readFileSync(f.progress, 'utf8')).toBe(progress(''));
+      await new Promise(resolve => setTimeout(resolve, 300));
+      expect(existsSync(f.launched)).toBe(false);
+      expect(running.exitCode).toBeNull();
+    }
   });
 
   it('runs nothing without all its arguments, or with an attempt id that is not one', async () => {
