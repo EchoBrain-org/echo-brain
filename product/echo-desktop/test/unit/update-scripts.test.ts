@@ -1,7 +1,7 @@
 // The bash the app leaves behind when it quits for an update (ADR-0035), run
 // with real bash against stand-in bundles, a `sleep` as the app, and fake
 // pkexec, open and launcher scripts that record what they were given.
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -142,13 +142,19 @@ describe('the Linux relauncher', () => {
     const launched = join(root, 'launched');
     const updater = join(root, 'updater');
     mkdirSync(updater, { mode: 0o700 });
+    const launcher = recorder(join(root, 'echo-desktop'), launched);
+    // macOS checks a new executable on its first run, which can take longer
+    // than the wait below: run the stand-ins once so a launch shows at once.
+    if (process.platform !== 'linux') execFileSync(join(bin, 'setsid'), ['true']);
+    execFileSync(launcher);
+    rmSync(launched);
     return {
       called, launched,
       progress: join(updater, 'progress'), outcome: join(updater, 'outcome.json'),
       feed: join(updater, 'staged', 'feed.json'), deb: join(updater, 'staged', 'echo-desktop.deb'),
       pkexec: script(join(root, 'pkexec'), `printf '%s\\n' "$@" > '${called}'\npid="\${@: -1}"\n${pkexecBody}`),
       helper: '/opt/ECHO/resources/echo-desktop-update-helper',
-      launcher: recorder(join(root, 'echo-desktop'), launched),
+      launcher,
       env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}` },
     };
   }
@@ -183,7 +189,7 @@ describe('the Linux relauncher', () => {
       await runScript(RELAUNCHER, args(f, running.pid!), f.env);
       expect(outcome(f.outcome)).toEqual(ended(status));
       expect(readFileSync(f.progress, 'utf8')).toBe(progress(''));
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, 1_000));
       expect(existsSync(f.launched)).toBe(false);
       expect(running.exitCode).toBeNull();
     }

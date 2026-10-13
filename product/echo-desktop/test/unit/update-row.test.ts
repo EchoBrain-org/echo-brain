@@ -194,6 +194,21 @@ describe('installUpdate', () => {
     expect(store.getState().updateFailure).toBeNull();
   });
 
+  it('shows main\'s held refusal for a save that started while main was deciding, until it lands', async () => {
+    const store = await startStore();
+    store.updateChanged({ state: 'available', release: A });
+    const refusal = held.hold('update.install');
+    const clicking = store.installUpdate();
+    const reply = await saving(store);
+    refusal(fail('update_held', { retryable: true }));
+    await clicking;
+    expect(installs()).toEqual([{ release: A }]);
+    expect(store.getState().updateFailure).toMatchObject({ code: 'update_held' });
+    reply(ok({}));
+    await flush();
+    expect(store.getState().updateFailure).toBeNull();
+  });
+
   it('reads the row again, quietly, when it changed under the click', async () => {
     const store = await startStore();
     store.updateChanged({ state: 'available', release: A });

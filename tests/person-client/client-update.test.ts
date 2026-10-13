@@ -388,6 +388,18 @@ describe('client updates through an installation adapter', () => {
     seen.length = 0;
     expect((await runClientUpdate('check', { ...f.dependencies, fetch: fetcher as typeof fetch })).status).toBe('available');
     expect(seen).toEqual([baseline.map(n => n + 1)]);
+    // ...and removes all three listeners once it ends.
+    expect(counts()).toEqual(baseline);
+  });
+
+  it('compares the installed release record through installedReleaseSha256', async () => {
+    const f = appFixture();
+    f.app.release = f.manifest.release_id;
+    f.app.record = f.manifest.release_sha256;
+    expect(await runClientUpdate('apply', f.dependencies)).toMatchObject({ status: 'current', installed_release: f.manifest.release_id });
+    f.app.record = 'c'.repeat(64);
+    await expect(runClientUpdate('apply', f.dependencies)).rejects.toThrow('release_mismatch');
+    expect(f.install).not.toHaveBeenCalled();
   });
 
   it('releases a run the app quit mid-download once it relaunches', async () => {
@@ -445,6 +457,12 @@ describe('client updates through an installation adapter', () => {
     mkdirSync(join(f.root, 'updater/.lock'), { mode: 0o700 });
     expect(() => configureClientUpdates(f.root, f.config, f.installation)).toThrow('update_busy');
     expect(existsSync(path)).toBe(false);
+    rmSync(join(f.root, 'updater/.lock'), { recursive: true });
+    // The app's pin: automatic may change, publisher trust may not.
+    configureClientUpdates(f.root, f.config, f.installation);
+    configureClientUpdates(f.root, { ...f.config, automatic: false }, f.installation);
+    expect(() => configureClientUpdates(f.root, { ...f.config, minimum_sequence: 1 }, f.installation)).toThrow('already_configured');
+    expect(readClientUpdateConfig(f.root)).toEqual({ ...f.config, automatic: false });
   });
 
   it('reports installed files that select another release than the running app, without checking or installing', async () => {

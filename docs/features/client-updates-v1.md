@@ -198,11 +198,12 @@ before it have no updater and need one
 an updater. It embeds the release's exact Person-client tarball and writes
 `echo-desktop-identity.v1.json` as an Electron extra resource outside
 `app.asar`: `ECHO.app/Contents/Resources/` on macOS and `/opt/ECHO/resources/`
-on Linux. This canonical JSON (`kind: "echo-desktop-identity-v1"`) names the
-`release_id`, the release record's SHA-256, the `source_sha`, the product
-version, the Person-client artifact SHA-256, the target (platform,
-architecture, libc and `installation: "electron"`) and the `update_bootstrap`:
-the CLI bootstrap with `installation: "electron"` and `automatic: true`. The
+on Linux. This canonical JSON has exactly these keys: `schema_version` (1),
+`kind` (`echo-desktop-identity-v1`), `release_id`, `release_record_sha256`,
+`source_sha`, `product_version` (the release's Person-client version),
+`person_client_artifact_sha256`, `platform`, `architecture`, `libc`,
+`installation` (`electron`) and `update_bootstrap`: the CLI bootstrap with
+`installation: "electron"` and `automatic: true`. The
 Linux package also ships the root helper
 `/opt/ECHO/resources/echo-desktop-update-helper`.
 
