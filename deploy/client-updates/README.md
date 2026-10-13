@@ -412,18 +412,26 @@ reverse.
 4. Check that the tray shows `Build <sha7>` for B's source SHA. Then complete an
    authenticated read in the app with that seat's own account.
 
-A cancelled prompt or a failed install keeps A and shows **Couldn't update ·
-Try again**. Record that as a failed desktop delivery, then use the manual
-reinstall from [Enroll a desktop](#enroll-a-desktop) and verify the same build
-and read. On macOS, App Management may block the swap; this is unverified until
-the first seat rehearsal, and a blocked swap keeps the old app.
+A cancelled password prompt keeps A; select the row again. A failed install
+keeps or reopens A and shows **Couldn't update · Try again**. Record a failed
+install as an open desktop-updater issue. The seat may then take the manual
+reinstall from [Enroll a desktop](#enroll-a-desktop) so the person keeps
+working, but that reinstall does not verify the in-app update. On macOS, App
+Management may block the swap; this is unverified until the first seat
+rehearsal, and a blocked swap keeps the old app.
+
+A seat with no updater-capable build cannot run these steps. Its one manual
+reinstall from [Enroll a desktop](#enroll-a-desktop) is its first enrollment.
+The tray's `Build <sha7>` for B and an authenticated read after that reinstall
+count as that seat's evidence.
 
 Retain the latest publication/replacement receipt with `state: "succeeded"` and
 `metadata_fresh: true`, both CLI activation/read proofs and both desktop update
 proofs with the coordinated release handoff. Until they pass, report "client
-published; verification incomplete." State the seats tested and those
-outstanding rather than claiming fleet-wide completion. Publishing reaches only
-enrolled installations: a desktop installed before ADR-0035 or from the
-`.tar.gz` stays on its release until it is reinstalled by hand. Local
-packaging/updater tests and an already-current client do not prove a live
-A-to-B update or fleet-wide rollout of the new update policy.
+published; verification incomplete." A failed in-app update on an
+updater-capable seat keeps that result after a manual reinstall. State the
+seats tested and those outstanding rather than claiming fleet-wide completion.
+Publishing reaches only enrolled installations: a desktop installed before
+ADR-0035 or from the `.tar.gz` stays on its release until it is reinstalled by
+hand. Local packaging/updater tests and an already-current client do not prove
+a live A-to-B update or fleet-wide rollout of the new update policy.

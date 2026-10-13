@@ -61,7 +61,7 @@ production/client-live deployment or change their approval boundaries.
 | Staged | The candidate is running on the staging host. The prior record remains accepted. Existing clients already reach the candidate. |
 | Server accepted | Promotion completed and a fresh host status confirms the candidate as accepted. The client feed may still advertise the prior release. |
 | Client published | The signed feed and all four artifacts (both CLI kits and both desktop packages) are verified and currently installable. This does not prove a client has updated. |
-| Client verified | Representative native Mac and Linux CLI seats activated the published release and passed authenticated read and cited-Ask checks, and representative Mac and Linux desktops updated in the app. |
+| Client verified | Representative native Mac and Linux CLI seats activated the published release and passed authenticated read and cited-Ask checks. Representative Mac and Linux desktops show the release's build and pass an authenticated read: through the in-app update when the seat ran an updater-capable build, or through the manual reinstall that first enrolls a seat without one. A failed in-app update is not verified, even after a reinstall. |
 
 Report a coordinated release complete only after the last phase, including the
 desktop update checks. State the environment and seats actually verified;
@@ -189,21 +189,26 @@ digest; do not silently substitute it under the prior approval.
    **New version · Restart** installs B (with an admin password on Linux), the
    tray shows `Build <sha7>` for B, and an authenticated read passes
    ([desktop update checks](../client-updates/README.md#verify-the-desktop-update)).
-   A seat without an updater-capable build, or whose update fails, takes the
-   manual reinstall instead
-   ([enroll a desktop](../client-updates/README.md#enroll-a-desktop)); that
-   reinstall is also each seat's first enrollment. Do not infer desktop delivery
-   from a successful CLI update, or the reverse.
+   A seat without an updater-capable build enrolls through one manual
+   reinstall instead
+   ([enroll a desktop](../client-updates/README.md#enroll-a-desktop)), and the
+   same build and read checks after it count as that seat's evidence. If the
+   in-app update fails on an updater-capable seat, the seat may be reinstalled
+   by hand so the person keeps working, but record the failure as an open
+   desktop-updater issue and keep the release at "client published;
+   verification incomplete". Do not infer desktop delivery from a successful
+   CLI update, or the reverse.
 
 Keep one private handoff record linking the release authorization, server action
 receipts and fresh status, prepared manifest and publication receipt, both CLI
-activation/read proofs, and the desktop update or reinstall evidence. Record
-remaining seats explicitly. Publication makes the release available; automatic
-CLI checks notify on later commands, and installation requires an explicit
-`echo-brain update`. An enrolled desktop announces it and installs only when
-the person selects **New version · Restart**. Older clients retain their
-existing update behavior until the new client is installed; publication does
-not push this policy to the fleet.
+activation/read proofs, and the desktop evidence: the in-app update, or the
+enrollment reinstall for a seat that had no updater-capable build. Record any
+failed in-app update and the remaining seats explicitly. Publication makes the
+release available; automatic CLI checks notify on later commands, and
+installation requires an explicit `echo-brain update`. An enrolled desktop
+announces it and installs only when the person selects **New version ·
+Restart**. Older clients retain their existing update behavior until the new
+client is installed; publication does not push this policy to the fleet.
 
 ### Resume a partial release
 
@@ -212,7 +217,7 @@ not push this policy to the fleet.
 | Remote operation submitted or unconfirmed | Poll the same receipt with its original tooling source. Reconcile that action before creating another; never resend to bypass uncertainty. |
 | Staged candidate fails required checks | Run a fresh host status and use the existing exact-candidate rollback lane. Do not publish its feed. |
 | Server accepted; publication incomplete | Preserve the accepted record and both lanes' receipts. Diagnose/resume the existing publication operation under its status rules. Report the partial result; do not restage or edit accepted state to make it look complete. |
-| Feed published; activation/read proof incomplete | Keep the publication receipt, installation locks and prior releases. Diagnose the actual client/wrapper or desktop and resume its supported updater path; a desktop whose in-app update fails takes the manual reinstall. Account for already-upgraded seats before another server/feed change. |
+| Feed published; activation/read proof incomplete | Keep the publication receipt, installation locks and prior releases. Diagnose the actual client/wrapper or desktop and resume its supported updater path. A desktop whose in-app update fails may be reinstalled by hand, but the failure stays an open desktop-updater issue and the release stays incomplete. Account for already-upgraded seats before another server/feed change. |
 | Published metadata expired | Historical `succeeded` with `metadata_fresh: false` is not current delivery proof. Prepare and approve a fresh manifest with a higher sequence through the existing replacement lane. |
 
 The host rollback action requires a staged candidate and unchanged accepted

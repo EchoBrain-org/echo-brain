@@ -86,8 +86,8 @@ Report completion only after all applicable evidence is present:
 | --- | --- |
 | Stage-only | The server candidate was staged or tested, but neither server promotion nor feed publication is complete. |
 | Promoted-only | The server was promoted, but the matching signed client feed has not been published and verified. |
-| Published-not-verified | The signed feed was published, but one or both representative native CLI seats have not completed the required A-to-B activation, authenticated read and cited Ask proof, or the representative desktops have not completed the in-app update. |
-| Released | The server was promoted, a fresh server `status` confirms the accepted release, and the signed feed containing the Linux x64/glibc and macOS arm64 CLI kits, the macOS arm64 `ECHO.app` ZIP and the Linux x64 `.deb` was published. A representative macOS arm64 seat and a representative Linux x64/glibc seat must each activate from A to B and produce authenticated read plus cited Ask evidence using B. A representative macOS arm64 desktop and Ubuntu x64 desktop must each update in the app and show `Build <sha7>` for B plus an authenticated read; a manual reinstall is the fallback and each seat's first enrollment. This proves those representative client paths, not fleet-wide activation. |
+| Published-not-verified | The signed feed was published, but one or both representative native CLI seats have not completed the required A-to-B activation, authenticated read and cited Ask proof, or a representative desktop has not shown B with an authenticated read. A failed in-app update on a seat already running an updater-capable release keeps this result even after a manual reinstall. |
+| Released | The server was promoted, a fresh server `status` confirms the accepted release, and the signed feed containing the Linux x64/glibc and macOS arm64 CLI kits, the macOS arm64 `ECHO.app` ZIP and the Linux x64 `.deb` was published. A representative macOS arm64 seat and a representative Linux x64/glibc seat must each activate from A to B and produce authenticated read plus cited Ask evidence using B. A representative macOS arm64 desktop and Ubuntu x64 desktop must each show `Build <sha7>` for B plus an authenticated read. A seat already running an updater-capable release A must reach B through the in-app update. Only a seat with no updater-capable build may reach B through its one manual reinstall, which is its first enrollment. This proves those representative client paths, not fleet-wide activation. |
 
 Keep incomplete results explicit and resume through the receipt/status path that
 owns the unfinished operation. Do not call a Git head, a running server, or a
@@ -236,8 +236,10 @@ the confirmed signed-feed publication receipt for all four targets: both CLI
 kits, the `ECHO.app` ZIP and the `.deb`. Retain separately for representative
 macOS arm64 and Linux x64/glibc seats the A-to-B activation, authenticated read
 and cited Ask evidence using B. Retain for representative macOS arm64 and
-Ubuntu x64 desktops the in-app update evidence: the tray's `Build <sha7>` for B
-and an authenticated read, or the manual reinstall used instead. The feed
+Ubuntu x64 desktops the tray's `Build <sha7>` for B and an authenticated read,
+and whether the seat got there through the in-app update or through its first
+enrollment by manual reinstall. Record a failed in-app update as an open
+desktop-updater issue; reinstalling that seat by hand does not close it. The feed
 receipt alone does not show that any installed client activated the release,
 and the representative proofs do not claim fleet-wide activation.
 
