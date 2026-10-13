@@ -423,6 +423,8 @@ button.toast:hover { background: #211f1f; }
 /* A new version: its words wrap rather than cut off, and a row that only says something does not light up. */
 .update-rows { flex-shrink: 0; padding-bottom: 8px; }
 .side-row.update-row { height: auto; min-height: 34px; padding-top: 8px; padding-bottom: 8px; }
+.side-row.update-row[aria-disabled="true"] { cursor: default; }
+.side-row.update-row[aria-disabled="true"]:hover { background: transparent; }
 .update-row .label { white-space: normal; }
 .update-row .part { white-space: nowrap; }
 .update-row svg { flex-shrink: 0; color: rgba(240, 236, 230, 0.66); }

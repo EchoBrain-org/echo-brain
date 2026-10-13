@@ -110,9 +110,11 @@ describe('the update row', () => {
     [{ state: 'failed', release: RELEASE, reason: 'location' }, 'Move ECHO to Applications to update'],
   ] as const)('%o only says "%s"', async (update, words) => {
     const { tree, row } = await updateRow(await withUpdate(update));
-    expect(row?.type).not.toBe('button');
+    // Still the one button, so a keyboard click keeps focus, but unavailable and inert.
+    expect(row?.type).toBe('button');
+    expect(row?.props['aria-disabled']).toBe('true');
     expect(text(row)).toBe(words);
-    expect(tree.some(node => node.type === 'button' || node.props.onClick !== undefined)).toBe(false);
+    expect(tree.some(node => node.props.onClick !== undefined)).toBe(false);
     // Installing shows the busy dots.
     expect(descendants(row).some(node => node.props.class === 'asking')).toBe(update.state === 'installing');
   });

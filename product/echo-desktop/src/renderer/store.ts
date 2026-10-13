@@ -949,6 +949,7 @@ export function signOutHeld(): boolean {
 }
 
 /** What to settle before signing out, or restarting for a new version: an unknown outcome is settled where it shows. */
+/** What to settle first, where an unknown outcome shows: sign out and the update row say the same. */
 export function settleWords(current: State = state): string {
   return current.compose?.status === 'unknown' ? 'A save may not have arrived. Check it in Capture first.'
     : current.change?.status === 'unknown' ? 'A project change may not have finished. Try it again or dismiss it first.'

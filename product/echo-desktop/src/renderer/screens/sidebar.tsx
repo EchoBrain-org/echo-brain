@@ -35,25 +35,24 @@ const twoPart = (what: string, action: string) => <span class="label"><span clas
 /**
  * A new version, signed in or out (ADR-0035): one click installs it and
  * restarts. Nothing clickable here says Update, which Home uses for open
- * items. It takes no dropped file.
+ * items. It takes no dropped file. The row stays one button in every state,
+ * so a keyboard click keeps its focus and Updating is announced; Updating and
+ * the location line are unavailable rather than missing.
  */
 export function UpdateRow({ state }: { state: State }) {
   const { update, updateFailure: failure } = state;
   if (update.state === 'none') return null;
   const noDrop = (event: DragEvent) => event.stopPropagation();
+  const location = update.state === 'failed' && update.reason === 'location';
+  const inert = update.state === 'installing' || location;
   return (
-    <div class="sidebar-rows update-rows" onDragOver={noDrop} onDrop={noDrop}>
-      {update.state === 'installing' ? (
-        <div class="side-row update-row" data-testid="sidebar-update">
-          <span class="asking" aria-hidden="true"><i /><i /><i /></span><span class="label">Updating</span>
-        </div>
-      ) : update.state === 'failed' && update.reason === 'location' ? (
-        <div class="side-row update-row" data-testid="sidebar-update"><Up /><span class="label">Move ECHO to Applications to update</span></div>
-      ) : (
-        <button type="button" class="side-row update-row" data-testid="sidebar-update" onClick={() => void installUpdate()}>
-          <Up />{update.state === 'failed' ? twoPart('Couldn\'t update', 'Try again') : twoPart('New version', 'Restart')}
-        </button>
-      )}
+    <div class="sidebar-rows update-rows" role="status" onDragOver={noDrop} onDrop={noDrop}>
+      <button type="button" class="side-row update-row" data-testid="sidebar-update" aria-disabled={inert ? 'true' : undefined}
+        onClick={inert ? undefined : () => void installUpdate()}>
+        {update.state === 'installing' ? <><span class="asking" aria-hidden="true"><i /><i /><i /></span><span class="label">Updating</span></>
+          : location ? <><Up /><span class="label">Move ECHO to Applications to update</span></>
+          : <><Up />{update.state === 'failed' ? twoPart('Couldn\'t update', 'Try again') : twoPart('New version', 'Restart')}</>}
+      </button>
       {failure && (
         <p class="error update-note" data-testid="sidebar-update-note" aria-live="polite">
           {failure.code === 'update_held' ? settleWords(state) : message(failure)}

@@ -23,7 +23,8 @@ test('no row without a new version; New version · Restart installs it and shows
   await row.click();
   await expect.poll(() => updateInstalls(run)).toEqual([RELEASE]);
   await expect(row).toContainText('Updating');
-  await expect(row).not.toHaveRole('button');
+  await expect(row).toHaveAttribute('aria-disabled', 'true');
+  await expect(row).toBeFocused();
   await expect(row.locator('.asking')).toBeVisible();
 
   // It failed: Try again asks again.
@@ -73,8 +74,12 @@ test('outside Applications the row only says where ECHO must be', async () => {
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await setUpdateState(run, { state: 'failed', release: RELEASE, reason: 'location' });
   await expect(row).toHaveText('Move ECHO to Applications to update');
-  await expect(row).not.toHaveRole('button');
-  await row.click();
+  await expect(row).toHaveAttribute('aria-disabled', 'true');
+  // Playwright refuses an unavailable control; a person can still press it.
+  await row.click({ force: true });
+  // Any install the click sent reaches main before this later change shows.
+  await setUpdateState(run, { state: 'available', release: RELEASE });
+  await expect(row).toHaveText('New version · Restart');
   expect(await updateInstalls(run)).toEqual([]);
 });
 
