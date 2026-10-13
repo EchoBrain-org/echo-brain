@@ -677,18 +677,10 @@ function applicationMenu(): void {
 /** The sidebar's update row. Test builds set it with echo-test:update. */
 let updateState: UpdateState = { state: 'none' };
 let updater: Updater | null = null;
-/** Install was refused while work was unresolved, so an update's quit does not ask again. */
-let quittingForUpdate = false;
 
 function setUpdate(next: UpdateState): void {
   updateState = next;
   send('update.changed', next);
-}
-
-/** The normal quit, host drain included: an update's script takes over once the app has exited. */
-function quitForUpdate(): void {
-  quittingForUpdate = true;
-  app.quit();
 }
 
 /** Packaged release builds only: the updater comes from the release-bound client, as the host's code does. */
@@ -700,8 +692,13 @@ async function startUpdates(): Promise<void> {
   if ('off' in setup) return log(`update off ${setup.off}`);
   try {
     const client = await import(pathToFileURL(join(dirname(clientEntry), 'client-update.js')).href) as ClientUpdateModule;
+    // The click was refused while work was unresolved, but the page keeps
+    // working through the download: the updater checks again before it starts
+    // the script, and its quit is the normal one, which drains the host and
+    // asks about anything still unresolved. The script takes over once ECHO exits.
     updater = startUpdater({
-      ...setup, client, pid: process.pid, fetch, state: () => updateState, set: setUpdate, quit: quitForUpdate, relaunch: () => app.relaunch(), log,
+      ...setup, client, pid: process.pid, fetch, state: () => updateState, set: setUpdate, held: () => unresolved !== null,
+      quit: () => app.quit(), relaunch: () => app.relaunch(), log,
     });
   } catch (error) {
     log(`update off ${updateCode(error)}`);
@@ -742,7 +739,7 @@ app.on('before-quit', event => {
     return;
   }
   // Asked after the wait: the page stays usable during it and may start a save.
-  if (unresolved && !quitting && !quittingForUpdate) {
+  if (unresolved && !quitting) {
     const choice = dialog.showMessageBoxSync({
       type: 'warning', message: unresolved === 'change' ? 'A project change may not have finished.' : `A ${unresolved} may not have been sent.`,
       detail: 'Check or retry it before quitting, or quit anyway.', buttons: ['Quit Anyway', 'Cancel'], defaultId: 1, cancelId: 1,

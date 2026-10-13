@@ -337,7 +337,9 @@ export interface UpdaterDependencies extends UpdaterSetup {
   /** Main holds the row; set() also tells the page. */
   state(): UpdateState;
   set(next: UpdateState): void;
-  /** The update's quit: it skips the unresolved-work question, never the host's drain. */
+  /** Main holds unresolved work: a save or a project change whose outcome is unknown. */
+  held(): boolean;
+  /** The app's normal quit: the host drains, and work unresolved by then is asked about. */
   quit(): void;
   relaunch(): void;
   log(line: string): void;
@@ -395,11 +397,18 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
       : [pid, join(staged, 'feed.json'), join(staged, 'echo-desktop.deb'), progress, outcome, release, commands.pkexec, commands.helper, commands.launcher]]);
   }
 
-  /** Linux: quit once the root helper has verified the update; a prompt that ended first puts the row back. */
+  /**
+   * After activation, until the app exits. Linux quits once the root helper has
+   * verified the update. A script that ends while the app still runs did not
+   * install: a cancelled password prompt puts the row back, and anything else,
+   * such as a quit the person cancelled at the unresolved-work question until
+   * the script's wait ran out, shows the failure.
+   */
   function watch(release: string): void {
+    let quitting = mac;
     const timer = setInterval(() => {
-      if (/^verified$/m.test(readSmall(progress))) {
-        clearInterval(timer);
+      if (!quitting && /^verified$/m.test(readSmall(progress))) {
+        quitting = true;
         deps.quit();
         return;
       }
@@ -421,8 +430,10 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
         client.releaseInterruptedClientUpdate(root);
         const last = launchOutcome(root, deps.identity.release_id);
         if (last) show(last);
-        // First run pins this release's bootstrap; a later release cannot change the pin.
-        if (!client.readClientUpdateConfig(root)) client.configureClientUpdates(root, deps.identity.update_bootstrap, installation);
+        // First run pins this release's bootstrap. Every later launch offers its
+        // own again: the same trust is kept, and a different one (another key,
+        // feed, channel or sequence floor) stops updates with already_configured.
+        client.configureClientUpdates(root, deps.identity.update_bootstrap, installation);
         return true;
       } catch (error) {
         log(`update off ${updateCode(error)}`);
@@ -467,13 +478,21 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
       }
       const staged = result.available_release;
       if (result.status !== 'staged' || staged === null || !RELEASE_ID.test(staged)) return failed(release);
+      // The click found nothing unresolved, but the page kept working through
+      // the download. The quit would cut off what started since, so offer the
+      // release again (the core keeps a staged release on offer) and start nothing.
+      if (deps.held()) {
+        log('update install held');
+        return deps.set({ state: 'available', release: staged });
+      }
       try {
         activate(staged);
       } catch (error) {
         log(`update activate ${updateCode(error)}`);
         return failed(release);
       }
-      if (mac) deps.quit(); else watch(staged);
+      if (mac) deps.quit();
+      watch(staged);
     },
   };
 }

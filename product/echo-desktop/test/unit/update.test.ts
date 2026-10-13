@@ -91,13 +91,16 @@ function harness(options: { target?: UpdateTarget; client?: ReturnType<typeof fa
   const relaunch = vi.fn();
   const log = vi.fn();
   const fetcher = vi.fn() as unknown as typeof fetch;
+  let holding = false;
   const updater = createUpdater({
     root: s.root, target: s.target, identity_path: s.identity_path, identity: readIdentity(s.identity_path, s.target).identity,
     bundle: s.target.platform === 'darwin' ? options.bundle ?? s.bundle : null,
-    client, pid: 4242, fetch: fetcher, state: () => state, set: next => { state = next; sent.push(next); },
+    client, pid: 4242, fetch: fetcher, state: () => state, set: next => { state = next; sent.push(next); }, held: () => holding,
     quit, relaunch, log, start: args => { started.push([...args]); }, commands: { pkexec: options.pkexec ?? s.pkexec }, poll_ms: 10,
   });
-  return { ...s, client, run: updater, sent, started, quit, relaunch, log, fetcher, state: () => state };
+  /** Main's unresolved work, as the page reports it. */
+  const hold = (held: boolean) => { holding = held; };
+  return { ...s, client, run: updater, sent, started, quit, relaunch, log, fetcher, hold, state: () => state };
 }
 
 describe('the desktop identity', () => {
@@ -276,11 +279,12 @@ describe('launch', () => {
     expect(statSync(h.root).mode & 0o777).toBe(0o700);
   });
 
-  it('keeps an existing pin, and stays off when the pin refuses this app', () => {
+  it('offers its bootstrap to an existing pin on every launch, and stays off when the pin refuses this app', () => {
     const h = harness({ state: { state: 'none' } });
-    h.client.readClientUpdateConfig.mockReturnValueOnce({});
+    h.client.readClientUpdateConfig.mockReturnValue({});
     expect(h.run.launch()).toBe(true);
-    expect(h.client.configureClientUpdates).not.toHaveBeenCalled();
+    // The core rewrites the same trust and refuses a different one: the app never skips that check.
+    expect(h.client.configureClientUpdates).toHaveBeenCalledWith(h.root, { pinned: A }, expect.objectContaining({ activation: 'restart' }));
     h.client.configureClientUpdates.mockImplementationOnce(() => { throw Object.assign(new Error('ECHO update: already_configured'), { code: 'already_configured' }); });
     writeJson(join(h.updater, 'outcome.json'), { schema_version: 1, release: C, status: 'failed' }, 0o600);
     expect(h.run.launch()).toBe(false);
@@ -377,6 +381,35 @@ describe('install', () => {
       join(h.updater, 'outcome.json'), B, '/usr/bin/open']);
     expect(h.quit).toHaveBeenCalledOnce();
     expect(h.relaunch).not.toHaveBeenCalled();
+  });
+
+  it('offers the staged release again, and starts nothing, when work became unresolved during the download', async () => {
+    for (const target of [MAC, LINUX]) {
+      const h = harness({ target });
+      // The person sent a note after the click, and it is still sending when the apply returns.
+      h.client.runClientUpdate.mockImplementationOnce(async () => { h.hold(true); return result('staged', { available_release: C }); });
+      await h.run.install(B);
+      expect(h.sent, target.platform).toEqual([{ state: 'installing', release: B }, { state: 'available', release: C }]);
+      expect(h.started, target.platform).toEqual([]);
+      expect(h.log, target.platform).toHaveBeenCalledWith('update install held');
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(h.quit, target.platform).not.toHaveBeenCalled();
+    }
+  });
+
+  it('keeps watching after the quit, so one the person cancelled at the unresolved-work question shows the failure', async () => {
+    for (const target of [MAC, LINUX]) {
+      const h = harness({ target });
+      await h.run.install(B);
+      // macOS quits at once; Linux once the root helper has verified the update.
+      if (target === LINUX) writeFileSync(join(h.updater, 'progress'), 'verified\n');
+      await expect.poll(() => h.quit.mock.calls.length).toBe(1);
+      // ECHO stayed open, so the script's wait for it ran out.
+      writeJson(join(h.updater, 'outcome.json'), { schema_version: 1, release: B, status: 'failed' }, 0o600);
+      await expect.poll(() => h.sent.length, { message: target.platform }).toBe(2);
+      expect(h.sent[1], target.platform).toEqual({ state: 'failed', release: B, reason: 'failed' });
+      expect(h.quit, target.platform).toHaveBeenCalledOnce();
+    }
   });
 
   it('on Linux starts the relauncher and quits once the helper has verified the update', async () => {
@@ -539,7 +572,7 @@ describe('with the real client updater core', () => {
     const quit = vi.fn();
     const updater = createUpdater({
       root: s.root, target: LINUX, identity_path: s.identity_path, identity: readIdentity(s.identity_path, LINUX).identity, bundle: null,
-      client, pid: 4242, fetch: fetcher as typeof fetch, state: () => state, set: next => { state = next; },
+      client, pid: 4242, fetch: fetcher as typeof fetch, state: () => state, set: next => { state = next; }, held: () => false,
       quit, relaunch: vi.fn(), log: vi.fn(), start: args => { started.push([...args]); }, commands: { pkexec: s.pkexec }, poll_ms: 10,
     });
     expect(updater.launch()).toBe(true);
@@ -555,5 +588,33 @@ describe('with the real client updater core', () => {
     expect(readdirSync(s.updater).filter(name => name.startsWith('.'))).toEqual([]);
     writeJson(join(s.updater, 'outcome.json'), { schema_version: 1, release: B, status: 'cancelled' }, 0o600);
     await expect.poll(() => state).toEqual({ state: 'available', release: B });
+  });
+
+  it('re-pins the same bootstrap at each launch, and stays off once a later release carries another', async () => {
+    const client = await import(pathToFileURL(core).href) as ClientUpdateModule;
+    const s = seat(LINUX);
+    rmSync(s.updater, { recursive: true });
+    const config = {
+      schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'staging', feed_url: 'https://updates.example.test/staging/feed.json',
+      public_key_spki: generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).toString('base64'),
+      minimum_sequence: 1, automatic: true, installation: 'electron',
+    };
+    const log = vi.fn();
+    /** The app at launch, carrying `bootstrap` in its identity. */
+    const launch = (bootstrap: unknown) => {
+      writeJson(s.identity_path, identityOf(LINUX, A, { update_bootstrap: bootstrap }));
+      let state: UpdateState = { state: 'none' };
+      return createUpdater({
+        root: s.root, target: LINUX, identity_path: s.identity_path, identity: readIdentity(s.identity_path, LINUX).identity, bundle: null,
+        client, pid: 4242, fetch: vi.fn() as unknown as typeof fetch, state: () => state, set: next => { state = next; }, held: () => false,
+        quit: vi.fn(), relaunch: vi.fn(), log,
+      }).launch();
+    };
+    expect(launch(config)).toBe(true);
+    expect(launch(config)).toBe(true);
+    // A raised sequence floor, as a rotated key or feed would be: the pin stands and updates stop.
+    expect(launch({ ...config, minimum_sequence: 2 })).toBe(false);
+    expect(log).toHaveBeenLastCalledWith('update off already_configured');
+    expect(client.readClientUpdateConfig(s.root)).toEqual(config);
   });
 });
