@@ -61,7 +61,7 @@ production/client-live deployment or change their approval boundaries.
 | Staged | The candidate is running on the staging host. The prior record remains accepted. Existing clients already reach the candidate. |
 | Server accepted | Promotion completed and a fresh host status confirms the candidate as accepted. The client feed may still advertise the prior release. |
 | Client published | The signed feed and all four artifacts (both CLI kits and both desktop packages) are verified and currently installable. This does not prove a client has updated. |
-| Client verified | Representative native Mac and Linux CLI seats activated the published release and passed authenticated read and cited-Ask checks. Representative Mac and Linux desktops show the release's build and pass an authenticated read: through the in-app update when the seat ran an updater-capable build, or through the manual reinstall that first enrolls a seat without one. A failed in-app update is not verified, even after a reinstall. |
+| Client verified | Representative native Mac and Linux CLI seats activated the published release and passed authenticated read and cited-Ask checks. Representative Mac and Linux desktops passed the [desktop update checks](../client-updates/README.md#verify-the-desktop-update). |
 
 Report a coordinated release complete only after the last phase, including the
 desktop update checks. State the environment and seats actually verified;
@@ -85,9 +85,8 @@ representative acceptance is not proof that every enrolled seat updated.
    CLI kits and both desktop packages from those release inputs: on a macOS
    arm64 machine, the macOS CLI kit and the `ECHO.app` ZIP; on a Linux x64
    machine, the Linux CLI kit and the `.deb`
-   ([desktop release packages](#desktop-release-packages)). Every release needs
-   all four; the feed refuses a CLI-only release. Preserve the accepted baseline
-   and operation receipts.
+   ([desktop release packages](#desktop-release-packages)). Preserve the
+   accepted baseline and operation receipts.
 4. Prepare the unsigned feed bundle using the existing
    [feed preparation command](../../docs/features/client-updates-v1.md#preparing-an-approved-feed).
    `prepare` needs no final authorization and can use the candidate's canonical
@@ -115,11 +114,9 @@ A release that ships [ADR-0024](../../docs/decisions/ADR-0024-person-list-open-a
   and `POST /v1/person/open`, which an older server does not serve, so the
   server goes first.
 - Publish the signed feed right after promotion. Desktops embed their own
-  Person client. Since [ADR-0035](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)
-  an enrolled desktop updates itself from that feed: verify the in-app update.
-  A desktop without an updater-capable build is reinstalled by hand once; a
-  Linux seat reinstalls the same-named `0.1.0` deb with
-  `apt install --reinstall`
+  Person client and, once enrolled, update themselves from that feed. A desktop
+  without an updater-capable build is reinstalled by hand once; a Linux seat
+  reinstalls the same-named `0.1.0` deb with `apt install --reinstall`
   ([desktop install](../../product/echo-desktop/README.md#install-and-verify-on-linux)).
   Record the tray's build SHA or the installed-path smoke result as desktop
   evidence, not the version string.
@@ -184,32 +181,23 @@ digest; do not silently substitute it under the prior approval.
    Linux employee's check must use that employee's account and readable
    fixtures; the private owner canary is not an employee test. Record source,
    artifact/release identity, actor, command path and bounded read/Ask outcomes.
-4. Verify the in-app update on representative native macOS arm64 and Ubuntu
-   x64 desktops still running an updater-capable release A:
-   **New version · Restart** installs B (with an admin password on Linux), the
-   tray shows `Build <sha7>` for B, and an authenticated read passes
-   ([desktop update checks](../client-updates/README.md#verify-the-desktop-update)).
-   The app sees B at its next check, up to about 70 minutes after
-   publication; relaunching does not force a check. A seat without an
-   updater-capable build enrolls through one manual reinstall instead
-   ([enroll a desktop](../client-updates/README.md#enroll-a-desktop)), and the
-   same build and read checks after it count as that seat's evidence. If the
-   in-app update fails on an updater-capable seat, the seat may be reinstalled
-   by hand so the person keeps working, but record the failure as an open
-   desktop-updater issue and keep the release at "client published;
-   verification incomplete". Do not infer desktop delivery from a successful
-   CLI update, or the reverse.
+4. Complete the
+   [desktop update checks](../client-updates/README.md#verify-the-desktop-update)
+   on representative native macOS arm64 and Ubuntu x64 desktops still running
+   an updater-capable release A. A seat without an updater-capable build
+   [enrolls](../client-updates/README.md#enroll-a-desktop) through one manual
+   reinstall instead. Do not infer desktop delivery from a successful CLI
+   update, or the reverse.
 
 Keep one private handoff record linking the release authorization, server action
 receipts and fresh status, prepared manifest and publication receipt, both CLI
-activation/read proofs, and the desktop evidence: the in-app update, or the
-enrollment reinstall for a seat that had no updater-capable build. Record any
-failed in-app update and the remaining seats explicitly. Publication makes the
-release available; automatic CLI checks notify on later commands, and
-installation requires an explicit `echo-brain update`. An enrolled desktop
-announces it and installs only when the person selects **New version ·
-Restart**. Older clients retain their existing update behavior until the new
-client is installed; publication does not push this policy to the fleet.
+activation/read proofs, and the desktop evidence. Record any failed in-app
+update and the remaining seats explicitly. Publication makes the release
+available; automatic CLI checks notify on later commands, and installation
+requires an explicit `echo-brain update`. An enrolled desktop announces it and
+installs only when the person selects **New version · Restart**. Older clients
+retain their existing update behavior until the new client is installed;
+publication does not push this policy to the fleet.
 
 ### Resume a partial release
 
@@ -218,16 +206,15 @@ client is installed; publication does not push this policy to the fleet.
 | Remote operation submitted or unconfirmed | Poll the same receipt with its original tooling source. Reconcile that action before creating another; never resend to bypass uncertainty. |
 | Staged candidate fails required checks | Run a fresh host status and use the existing exact-candidate rollback lane. Do not publish its feed. |
 | Server accepted; publication incomplete | Preserve the accepted record and both lanes' receipts. Diagnose/resume the existing publication operation under its status rules. Report the partial result; do not restage or edit accepted state to make it look complete. |
-| Feed published; activation/read proof incomplete | Keep the publication receipt, installation locks and prior releases. Diagnose the actual client/wrapper or desktop and resume its supported updater path. A desktop whose in-app update fails may be reinstalled by hand, but the failure stays an open desktop-updater issue and the release stays incomplete. Account for already-upgraded seats before another server/feed change. |
+| Feed published; activation/read proof incomplete | Keep the publication receipt, installation locks and prior releases. Diagnose the actual client/wrapper or desktop and resume its supported updater path. A desktop whose in-app update failed may be reinstalled by hand, but the release stays incomplete ([desktop update checks](../client-updates/README.md#verify-the-desktop-update)). Account for already-upgraded seats before another server/feed change. |
 | Published metadata expired | Historical `succeeded` with `metadata_fresh: false` is not current delivery proof. Prepare and approve a fresh manifest with a higher sequence through the existing replacement lane. |
 
 The host rollback action requires a staged candidate and unchanged accepted
 record. After promotion it is not a general undo button; a required server
 recovery needs a separately reviewed compatible release/recovery plan. The feed
 has no lower-sequence rollback command. A feed rollback is a newer sequence
-that points at a retained release carrying all four targets, each built from
-that release's source SHA. A release from before the first ADR-0035 release
-cannot be a rollback target; recovery that would need one takes a forward fix.
+that points at a retained release carrying all four targets
+([rollback limits](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md#migration-rollback-and-evidence)).
 Never delete locks, mutate receipts, overwrite feed objects manually, or infer
 a new authorization from partial success.
 
@@ -1072,7 +1059,8 @@ release checks. An offline fixture kit is not an employee release.
 
 Every release also carries the desktop app for macOS arm64 and Linux x64 in the
 same signed feed
-([ADR-0035](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)).
+([ADR-0035](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md);
+[what a person sees](../../product/echo-desktop/README.md#updates)).
 Build each package on the matching machine, from the clean release commit, with
 the same canonical release record and exact Person-client tarball as the kits.
 At the repository root run `npm ci` first. Release packaging rebuilds the
@@ -1093,17 +1081,12 @@ Use `--linux` on the Linux x64 machine. The three release inputs go together,
 as absolute paths. `--update-config` is the feed's bootstrap configuration with
 `installation: "electron"` and `automatic: true`, and is otherwise equal to the
 CLI bootstrap. Packaging requires a clean `HEAD` equal to the release's
-`source_sha` and the tarball digest the release names. It embeds that exact
-tarball, not one packed from `HEAD`, and writes `echo-desktop-identity.v1.json`
-to `ECHO.app/Contents/Resources` on macOS and `/opt/ECHO/resources` on Linux. A
-package built without these inputs has no identity and no updater.
+`source_sha` and the tarball digest the release names. It writes the
+[desktop identity](../../docs/features/client-updates-v1.md#desktop-app) that
+`prepare` checks. A package built without these inputs has no updater.
 
 Give the feed's `prepare` the `ECHO.app` ZIP as `--macos-app` and the `.deb` as
-`--linux-deb`. The Linux package also carries the root helper
-`/opt/ECHO/resources/echo-desktop-update-helper`, which `prepare` checks against
-the helper at `release.source_sha`. The `.tar.gz` is not in the feed and never
-updates. The [desktop README](../../product/echo-desktop/README.md#updates)
-describes what a person sees.
+`--linux-deb`. The `.tar.gz` is not in the feed and never updates.
 
 ## Advanced client-only install or reinstall
 

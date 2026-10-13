@@ -2,8 +2,9 @@
 
 This dedicated hosting stack prepares an HTTPS endpoint for the signed
 [client update feed](../../docs/features/client-updates-v1.md). Each release in
-it carries both CLI kits and both desktop packages
-([ADR-0035](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)).
+it carries both CLI kits and both desktop packages; the desktop's known limits
+are
+[ADR-0035's consequences](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md#consequences).
 It is separate from the Authority staging stack and onboarding-transfer
 storage. Creating the endpoint does not publish a release, enroll a client, or
 authorize a candidate.
@@ -115,22 +116,16 @@ npm run client-update:sign -- init --directory /absolute/private/new-staging-sig
 Keep `private-key.pkcs8.der` in that private directory. `signer.json` contains
 only the public key and its fingerprint. Copy its `public_key_spki` into the
 bootstrap configuration with the deployed S3 `feed_url`, intended channel,
-sequence floor, `automatic: true`, and `installation: "cli-kit"`. For the
-desktop packages, keep a copy that differs only in `installation: "electron"`;
-[desktop release packaging](../release/README.md#desktop-release-packages)
-embeds it, and `prepare` checks that it equals this configuration except for
-that field. No client, kit, desktop package, feed, repository or publication
-receipt receives the private key.
+sequence floor, `automatic: true`, and `installation: "cli-kit"`. For
+[desktop release packaging](../release/README.md#desktop-release-packages),
+keep a copy that differs only in `installation: "electron"`. No client, kit,
+desktop package, feed, repository or publication receipt receives the private
+key.
 
 Run the [feed preparation command](../../docs/features/client-updates-v1.md#preparing-an-approved-feed)
-with the exact canonical release and all four artifacts: the macOS arm64 and
-Linux x64/glibc CLI kits (`--macos-kit`, `--linux-kit`), the `ECHO.app` ZIP
-(`--macos-app`) and the `.deb` (`--linux-deb`). Preparation refuses a missing
-option (`missing_argument`). The signer, seal and publication commands refuse a
-new release without all four (`all_release_targets_required`), each with the
-same source SHA and Person-client artifact. Keep the prepared bundle,
-authorization and receipts in private mode-0700 directories with mode-0600
-files.
+with the exact canonical release and all four artifacts, each with the same
+source SHA and Person-client artifact. Keep the prepared bundle, authorization
+and receipts in private mode-0700 directories with mode-0600 files.
 
 Unsigned preparation may use a candidate release before final acceptance; it
 requires no release authorization. Review the resulting manifest bytes and
@@ -321,27 +316,23 @@ Person session and verify authenticated reads after enrollment.
 
 ## Enroll a desktop
 
-Desktop installs from before ADR-0035 have no release identity and no updater.
-Each seat needs one manual reinstall of an updater-capable build: a
-[desktop release package](../release/README.md#desktop-release-packages) built
-with `--release`, `--artifact` and `--update-config`. This is the same one-time
-bridge the Linux CLI kits needed. There is no configure command. On first run
-the app pins the bootstrap embedded in its identity, and a later app cannot
-change that pin.
+Desktop installs from before ADR-0035 have no updater. Each seat needs one
+manual reinstall of a
+[desktop release package](../release/README.md#desktop-release-packages).
+There is no configure command: on first run the app pins the bootstrap
+embedded in its identity.
 
 - macOS: quit ECHO and replace `~/Applications/ECHO.app` with the release's
-  `ECHO.app`. The folder must be writable by the user. An app elsewhere still
-  checks, and once it finds a release it shows **Move ECHO to Applications to
-  update**.
+  `ECHO.app`, in a folder the user can write
+  ([install on macOS](../../product/echo-desktop/README.md#install-on-macos)).
 - Linux: `sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb`. The
-  `.tar.gz` package has no updater. Without `/usr/bin/pkexec` the updater stays
-  off, and this manual reinstall remains the way to update.
+  `.tar.gz` has no updater. Without `/usr/bin/pkexec` the updater stays off,
+  and this manual reinstall remains the way to update.
 
 Use the exact artifacts from the published release, transferred through the
 authenticated operator channel. Enrolling the app does not enroll the CLI, and
-the reverse; each installation updates only itself. The Person session is
-unchanged. Check the tray's `Build <sha7>` and an authenticated read after
-enrollment.
+the reverse. The Person session is unchanged. Check the tray's `Build <sha7>`
+and an authenticated read after enrollment.
 
 ## Verify Mac and Linux client activation
 
@@ -408,61 +399,34 @@ on release A. A successful CLI update proves nothing about the app, and the
 reverse.
 
 1. Before publication, record the tray menu's `Build <sha7>` for A.
-2. After publication, wait for the app's next check, up to about 70 minutes
-   after publication. The app contacts the feed at most once an hour after its
-   last completed check, and relaunching does not force a check. The sidebar
-   then shows **New version · Restart**.
+2. After publication, wait for the app's next check, up to about 70 minutes;
+   relaunching does not force a check. The sidebar then shows
+   **New version · Restart**.
 3. Select it. On Linux, enter an admin password at the system prompt. The app
    quits, installs B and reopens.
 4. Check that the tray shows `Build <sha7>` for B's source SHA. Then complete an
    authenticated read in the app with that seat's own account.
 
 A cancelled password prompt keeps A; select the row again. A failed install
-keeps or reopens A and shows **Couldn't update · Try again**. Record a failed
-install as an open desktop-updater issue. The seat may then take the manual
-reinstall from [Enroll a desktop](#enroll-a-desktop) so the person keeps
-working, but that reinstall does not verify the in-app update. On macOS, App
-Management may block the swap; this is unverified until the first seat
-rehearsal, and a blocked swap keeps the old app.
+keeps or reopens A and shows **Couldn't update · Try again**. Record it as an
+open desktop-updater issue. The seat may then take the manual reinstall from
+[Enroll a desktop](#enroll-a-desktop) so the person keeps working, but that
+reinstall does not verify the in-app update. On macOS, App Management may block
+the swap, which keeps the old app; this is unverified until the first seat
+rehearsal.
 
 A seat with no updater-capable build cannot run these steps. Its one manual
-reinstall from [Enroll a desktop](#enroll-a-desktop) is its first enrollment.
-The tray's `Build <sha7>` for B and an authenticated read after that reinstall
-count as that seat's evidence.
+reinstall from [Enroll a desktop](#enroll-a-desktop) is its first enrollment,
+and step 4 after that reinstall counts as that seat's evidence.
 
 Retain the latest publication/replacement receipt with `state: "succeeded"` and
-`metadata_fresh: true`, both CLI activation/read proofs and both desktop update
-proofs with the coordinated release handoff. Until they pass, report "client
-published; verification incomplete." A failed in-app update on an
+`metadata_fresh: true`, both CLI activation/read proofs and both desktop
+proofs, each saying whether the seat reached B through the in-app update or its
+first enrollment, with the coordinated release handoff. Until they pass, report
+"client published; verification incomplete." A failed in-app update on an
 updater-capable seat keeps that result after a manual reinstall. State the
 seats tested and those outstanding rather than claiming fleet-wide completion.
 Publishing reaches only enrolled installations: a desktop installed before
 ADR-0035 or from the `.tar.gz` stays on its release until it is reinstalled by
 hand. Local packaging/updater tests and an already-current client do not prove
 a live A-to-B update or fleet-wide rollout of the new update policy.
-
-## Known limitations
-
-- **The feed gate.** For each desktop package, `prepare` checks the identity,
-  `Info.plist`, the embedded Person-client tree and, on Linux, the root
-  helper's bytes. It does not check `app.asar` or the rest of the bundle, so a
-  compromised build machine is outside what the gate proves. The same holds
-  for ZIP local-header tricks, such as local file headers that disagree with
-  the central directory.
-- **Downgrade window on Linux.** The Linux helper refuses a feed older than
-  the last one it installed, and the app refuses one older than the last one
-  it verified. A Linux seat installed by hand, or a new user, accepts any
-  unexpired signed feed at or above `minimum_sequence` until its first helper
-  install. The CLI has the same bootstrap window. Using it needs a compromised
-  feed origin or a TLS interception, plus the admin password, and it is
-  limited to publisher-signed releases within their validity.
-- **Downgrade window on macOS.** There is no root helper, and the swap does
-  not check the sequence. A new user, or an app with no updater state, accepts
-  any unexpired signed feed at or above `minimum_sequence` at its first check.
-  Installing it then needs only the person's click, with no admin password.
-  The app refuses older feeds after that first verified check. Using it needs
-  a compromised feed origin or a TLS interception, and it is limited to
-  publisher-signed releases within their validity.
-- **Quit and owner actions.** An owner's in-flight invite or revoke is not part
-  of the quit's unresolved-work question. This is true of every quit, not only
-  the update's.

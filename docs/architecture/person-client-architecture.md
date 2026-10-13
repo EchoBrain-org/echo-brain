@@ -65,49 +65,18 @@ Signing out leaves Mine and clears it.
 
 ### Desktop updates
 
-[ADR-0035](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md) lets
-the app update itself from the signed client feed. Release packaging writes
-`echo-desktop-identity.v1.json` outside `app.asar`
-(`ECHO.app/Contents/Resources` or `/opt/ECHO/resources`). It names the release,
-its record digest and source SHA, the Person-client digest and target, and the
-update bootstrap with `installation: "electron"`. Without a valid identity, in
-development and test builds, under `--smoke`, from the Linux `.tar.gz`, outside
-an `ECHO.app` bundle, outside `/opt/ECHO` with its root-owned helper, or on
-Linux without `/usr/bin/pkexec`, the updater is off. A macOS app that is
-translocated, cannot write its folder, or sits on another volume than its
-updater state still checks, and on finding a release shows **Move ECHO to
-Applications to update** right away.
-
-The Electron main process loads the updater from the embedded, release-bound
-client (`person-client/package/dist/client-update.js`), the same way the host
-loads the client. It pins the identity's bootstrap on first run and keeps
-per-user state in `<appData>/ECHO/desktop/updater/`, created `0700`, apart
-from the CLI root. The app's state folder is
-`~/Library/Application Support/ECHO/desktop` on macOS and
-`~/.config/ECHO/desktop` on Linux. It asks every ten minutes, but contacts the
-feed at most once an hour after its last completed check, across relaunches;
-relaunching does not force a check. It only announces, through one sidebar row,
-and a failed check shows nothing. Install is refused while the app holds
-unresolved work, and **Restart** arms the relaunch only when the quit is
-certain. A `restart` installation stages the verified update and returns
-`staged`; the quit runs the normal host drain, and activation follows:
-
-- macOS: a detached bash helper waits for the app to exit, swaps the staged
-  `ECHO.app` into place, keeps the previous bundle until the new one starts,
-  restores it if the swap fails, and writes `updater/outcome.json` for the next
-  launch.
-- Linux: a detached relauncher runs `pkexec` with the root helper
-  `/opt/ECHO/resources/echo-desktop-update-helper`. Each install attempt has
-  its own id. The helper re-verifies the feed with the root-owned installed
-  identity, checks the root checkpoint
-  `/var/lib/echo-desktop/update-checkpoint.json` and prints `verified`, so the
-  app quits. It then reinstalls the package with `apt-get`. The relauncher
-  records the outcome and reopens the app; a cancelled password prompt leaves
-  the app running.
-
-The running release is the identity read at launch. If the files on disk name
-another release, for example after another Linux user updated `/opt/ECHO`,
-`running_release_mismatch` means "restart to use it".
+Under [ADR-0035](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)
+the Electron main process loads the updater from the embedded, release-bound
+Person client, the same way the host loads the client. A release package's
+identity file, outside `app.asar`, binds the app to its release and carries
+its update bootstrap; without it the updater is off. Updater state is per user
+and apart from the CLI root. A `restart` installation stages the verified
+update. After the normal host drain and quit, a detached helper swaps in the
+new `ECHO.app` on macOS. On Linux a `pkexec` root helper re-verifies the feed
+before `apt-get` reinstalls the package. The running release is the identity
+read at launch.
+[Client updates](../features/client-updates-v1.md#desktop-app) has the
+conditions, checks and activation steps.
 
 ## Local state authority
 

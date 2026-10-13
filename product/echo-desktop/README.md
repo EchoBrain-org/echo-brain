@@ -108,15 +108,10 @@ provenance-bound Person-client tarball as macOS and compiles out test fixtures.
 It never publishes a release. `npm run package` defaults to the build machine's
 OS; `npm run package -- --mac` explicitly selects macOS arm64.
 
-A release package also takes `--release`, `--artifact` and `--update-config`,
-all as absolute paths: the canonical release record, its exact
-`person-client.tgz` and the feed's bootstrap config with
-`installation: "electron"`. It embeds that tarball and writes
-`echo-desktop-identity.v1.json` beside the app, which is what turns the updater
-on. Build it from the release commit after `npm run build` at the repository
-root; see the
-[release guide](../../deploy/release/README.md#desktop-release-packages). A
-package built without these inputs never updates.
+Only a release package updates itself: one built with `--release`,
+`--artifact` and `--update-config` as the
+[release guide](../../deploy/release/README.md#desktop-release-packages)
+describes.
 
 Linux outputs are in `dist-app/`:
 
@@ -178,9 +173,10 @@ Unzip the release's ZIP and move `ECHO.app` to `~/Applications`, the
 Applications folder inside your home folder; create it if it is missing. That
 folder is yours to write, so ECHO can replace itself there when it updates.
 In a folder it cannot write, on another volume than its settings, or when macOS
-runs it from a read-only copy (translocation), ECHO still checks. When it finds a release it shows **Move
-ECHO to Applications to update** right away, instead of updating. Check that
-the tray menu's `Build <sha7>` matches the release's source SHA.
+runs it from a read-only copy (translocation), ECHO still checks. When it finds
+a release it shows **Move ECHO to Applications to update** right away, instead
+of updating. Check that the tray menu's `Build <sha7>` matches the release's
+source SHA.
 
 ## Updates
 
@@ -221,33 +217,19 @@ An update fails safely:
   **Couldn't update · Try again**.
 - On macOS, a failed swap puts the previous app back. macOS App Management may
   block the swap; that keeps the old app too.
-- On Linux without `/usr/bin/pkexec`, the updater stays off and the manual
-  reinstall remains.
-- ECHO refuses a feed older than the last one it verified, and the Linux
-  helper one older than the last one it installed. On Linux, a seat installed
-  by hand, or a new user, has no such record until its first helper install,
-  so it accepts any unexpired signed feed at or above its sequence floor. On
-  macOS, a new user, or an app with no updater state, accepts such a feed at
-  its first check, and installing it needs only your click, with no admin
-  password. Undoing an update takes a newer release.
+- ECHO refuses a feed older than the last one it verified, within the
+  [limits ADR-0035 records](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md#consequences).
+  Undoing an update takes a newer release.
 
 After an update on macOS, you may have to grant ECHO's macOS privacy
 permissions again, because each build has a new code identity.
 
-If updating keeps failing, install the release by hand. On Linux:
-
-```sh
-sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb
-```
-
-On macOS, quit ECHO and replace `~/Applications/ECHO.app` with the release's
-app. A desktop installed before this change also needs this once, with a
-release package, before it can update itself.
-
-Only release packages update. The `.tar.gz`, development runs (`npm start`) and
-test builds never do. Update files live in
-`~/Library/Application Support/ECHO/desktop/updater` on macOS and
-`~/.config/ECHO/desktop/updater` on Linux.
+If updating keeps failing, install the release by hand: on Linux with
+`--reinstall` as in [Install and verify on Linux](#install-and-verify-on-linux),
+and on macOS by quitting ECHO and replacing `~/Applications/ECHO.app` with the
+release's app. A desktop installed before this change also needs this once,
+with a release package, before it can update itself. The `.tar.gz`,
+development runs (`npm start`) and test builds never update.
 
 ## Compatibility evidence and remaining desktop checks
 
@@ -294,10 +276,9 @@ tray visibility, window focus, native file dialogs, drag-and-drop and browser
 sign-in on that desktop. Reopen ECHO through the desktop launcher if its tray or
 global shortcut is unavailable. Linux ARM64 is outside this package target.
 
-CI cannot show a polkit password prompt or a real macOS app swap. The desktop
-update still needs one A-to-B update on a native macOS arm64 seat and one on an
-Ubuntu 24.04 x64 seat with a polkit agent, each followed by `Build <sha7>` in
-the tray and an authenticated read.
+CI cannot show a polkit password prompt or a real macOS app swap, so the
+[desktop update check](../../deploy/client-updates/README.md#verify-the-desktop-update)
+still needs native macOS arm64 and Ubuntu 24.04 x64 seats.
 
 
 A project's **Tools** (in its title bar, the line above its feed, or the

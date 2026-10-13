@@ -53,11 +53,8 @@ The founder made two calls:
 
 - **Linux installs with an admin password prompt.** This overrides the earlier
   notify-only choice. The root helper re-verifies the publisher signature with
-  the root-owned key in the installed package. It refuses a feed older than
-  the last one it installed, and the app refuses one older than the last one
-  it verified. A seat installed by hand, or a new user, accepts any unexpired
-  signed feed at or above `minimum_sequence` until its first helper install.
-  The CLI has the same bootstrap window (see [Consequences](#consequences)).
+  the root-owned key in the installed package, and keeps its own anti-rollback
+  checkpoint. Its bootstrap window is under [Consequences](#consequences).
 - **macOS replaces `ECHO.app` without Apple notarization.** This uses the same
   trust model as the Mac CLI updater: the feed's Ed25519 signature and digest,
   not Apple's.
@@ -66,14 +63,11 @@ The founder made two calls:
 
 ### One release, four artifacts
 
-Every new publication carries exactly four artifacts for one `release_id`:
-
-| Target (`platform/architecture/libc/installation`) | File | Object key | Content type |
-| --- | --- | --- | --- |
-| `linux/x64/glibc/cli-kit` | CLI kit ZIP | `artifacts/<sha256>.zip` | `application/zip` |
-| `darwin/arm64/native/cli-kit` | CLI kit ZIP | `artifacts/<sha256>.zip` | `application/zip` |
-| `darwin/arm64/native/electron` | `ECHO.app` ZIP | `artifacts/<sha256>.zip` | `application/zip` |
-| `linux/x64/glibc/electron` | `.deb` | `artifacts/<sha256>.deb` | `application/vnd.debian.binary-package` |
+Every new publication carries exactly four artifacts for one `release_id`: the
+`cli-kit` and `electron` installations for `darwin/arm64/native` and
+`linux/x64/glibc`. The macOS app is an `ECHO.app` ZIP and the Linux app a
+`.deb`
+([object keys and content types](../../deploy/client-updates/README.md#sign-and-publish-the-first-release)).
 
 The manifest schema does not change. Enrolled CLIs already accept `electron`
 entries and select their own target, so existing seats keep working with a
@@ -88,215 +82,57 @@ kit, and the app installs the app. Both are offered the same signed release.
 
 ### Desktop release identity
 
-Release packaging (`product/echo-desktop/scripts/package.mjs`) takes three
-inputs, all or none:
-
-- `--release <canonical release.json>`
-- `--artifact <the release's exact person-client.tgz>`
-- `--update-config <bootstrap config>`
-
-With them, packaging requires:
+Release packaging takes the canonical release record, its exact
+`person-client.tgz` and the bootstrap config, all or none. With them it
+requires:
 
 - a clean `HEAD` equal to `release.source_sha`;
 - the tarball digest equal to `release.person_client.artifact_sha256`, checked
   by the existing release-artifact validation;
-- the config to parse with `installation: "electron"` and `automatic: true`;
-- the Person client and the workspaces the host bundles rebuilt from that
-  `HEAD`. Packaging runs that build itself and refuses a built identity that
-  does not name the release's commit and version.
+- the config with `installation: "electron"` and `automatic: true`;
+- the Person client and the workspaces the host bundles, which packaging
+  rebuilds from that `HEAD`, with a built identity that names the release's
+  commit and version.
 
-The app embeds that exact tarball instead of packing one from `HEAD`. It then
-writes `echo-desktop-identity.v1.json` as an Electron extra resource, outside
-`app.asar`: `ECHO.app/Contents/Resources/` on macOS and `/opt/ECHO/resources/`
-on Linux. The file is canonical JSON:
-
-```json
-{
-  "schema_version": 1,
-  "kind": "echo-desktop-identity-v1",
-  "release_id": "clean-v1-…",
-  "release_record_sha256": "<sha256 of release.json>",
-  "source_sha": "<40 hex>",
-  "product_version": "<release.person_client.version>",
-  "person_client_artifact_sha256": "<sha256>",
-  "platform": "darwin | linux",
-  "architecture": "arm64 | x64",
-  "libc": "null | glibc",
-  "installation": "electron",
-  "update_bootstrap": { "...": "client update config, installation electron" }
-}
-```
-
-A build without these inputs (development, CI, an ad hoc package) has no
-identity file, and its updater is off. The Linux package also ships the root
-helper `/opt/ECHO/resources/echo-desktop-update-helper` and declares
-`python3` and `openssl` as dependencies. `pkexec` is only recommended: without
-`/usr/bin/pkexec` the updater stays off, and the documented manual reinstall
-remains.
-
-`tools/client-update-feed.mjs prepare` takes `--macos-app` and `--linux-deb`
-beside the two kits. For each desktop artifact it checks the following:
-
-- **Identity:** the identity file names this release, its record digest,
-  source SHA, product version, Person-client digest and target.
-- **Bootstrap:** `update_bootstrap` equals the feed's bootstrap config except
-  for `installation: "electron"`.
-- **Embedded client:** the Person-client tree inside the app equals, file for
-  file, the release tarball the CLI kits carry.
-- **macOS:** every ZIP entry is under `ECHO.app/`, and `CFBundleIdentifier` is
-  `org.echobrain.echo-desktop`.
-- **Linux:** the package is `echo-desktop` for `amd64`, and the root helper's
-  bytes equal the helper at `release.source_sha`.
-
-This extends [INV-RELEASE-001](../invariants/INV-RELEASE-001-worktree-bound-artifact.md)
+The app embeds that exact tarball instead of packing one from `HEAD`, and
+carries `echo-desktop-identity.v1.json` outside `app.asar`. The identity names
+the release, the Person-client digest, the target and the update bootstrap. A
+build without these inputs has no identity file, and its updater is off. Before
+publication the feed's `prepare` checks each desktop artifact's identity,
+bootstrap and embedded Person client against the release, and on Linux the root
+helper's bytes against `release.source_sha`. This extends
+[INV-RELEASE-001](../invariants/INV-RELEASE-001-worktree-bound-artifact.md)
 to the desktop. Its embedded identity must match the release claim before
-publication.
+publication. [Client updates](../features/client-updates-v1.md#desktop-app)
+describes the file and the checks, and the
+[release guide](../../deploy/release/README.md#desktop-release-packages) the
+build.
 
 ### The client updater runs both kinds of installation
 
-`runClientUpdate` keeps one implementation of these rules for both the CLI and
-the app:
-
-- configuration pinning;
-- signature, channel and expiry checks;
-- the anti-rollback checkpoint and the state file;
-- the lock and the bounded download.
-
-It gains an optional installation adapter. Without one, the CLI behaves
-exactly as before. The adapter supplies:
-
-- `installedRelease()` and `installedReleaseSha256()`, for the CLI's
-  wrapper-and-release-folder reads;
-- `fingerprint()`, the race guard captured before download (the CLI wrapper
-  digest);
-- `install(input)`, whose input gains the verified feed bytes;
-- `activation`: `immediate` for the CLI, or `restart` for the app.
-
-  A `restart` install stages the update and returns the new status `staged`.
-  The app activates it after quitting, so no immediate activation check runs.
-
-- the staged archive's file name and download timeout. The desktop allows 15
-  minutes and keeps the 256 MiB cap.
-
-Callers can turn off the CLI's signal re-raise, which would otherwise end the
-Electron process without its normal quit. `configureClientUpdates` accepts the
-adapter too, so the app can pin its embedded bootstrap.
+`runClientUpdate` keeps one implementation of configuration pinning, the
+signature, channel and expiry checks, the anti-rollback checkpoint and state
+file, the lock and the bounded download for both the CLI and the app. It gains
+an optional installation adapter. Without one, the CLI behaves exactly as
+before. The app's adapter uses `restart` activation: it stages the verified
+update and returns the new status `staged`, and the app activates it after
+quitting.
 
 ### The app's updater
 
 The Electron main process loads the updater from the embedded, release-bound
-Person client (`person-client/package/dist/client-update.js`), the same way the
-host loads the client. Per-user state lives in
-`<appData>/ECHO/desktop/updater/`:
-
-- macOS: `~/Library/Application Support/ECHO/desktop`
-- Linux: `~/.config/ECHO/desktop`
-
-It is created `0700`, next to Chromium's `ECHO/chromium` and apart from the CLI
-root.
-
-The updater is on only when all of these hold:
-
-- the build is packaged;
-- the app is not running `--smoke`;
-- the identity file is valid;
-- the installation is supported. That means macOS arm64 running from an
-  `ECHO.app` bundle, or Linux x64 running from `/opt/ECHO` with the root-owned
-  helper and `/usr/bin/pkexec` present.
-
-The `.tar.gz` Linux package, development builds and test builds never update.
-A macOS app that is translocated, in a folder it cannot write, or on another
-volume than its updater state still checks. When it finds a release it shows
-**Move ECHO to Applications to update** right away.
-
-**First run.** The app pins the identity's `update_bootstrap` as its config. A
-later app that carries a different publisher, feed, channel or sequence floor
-cannot change that pin. Updates then stop with `already_configured`, as on the
-CLI.
-
-**Checks.** The app asks shortly after launch and then every ten minutes,
-through the existing `automatic` mode and `automatic: false`. The core's
-hourly interval decides when the feed is due: the app contacts the feed at most
-once an hour after its last completed check. That record is kept across
-relaunches, so relaunching does not force a check. A new release can take up
-to about 70 minutes to show. The app only announces. The running release is the
-identity read at launch. If the files on disk now name another release, for
-example because another Linux user updated `/opt/ECHO`, the existing
-`running_release_mismatch` status means "restart to use it".
-
-**What the person sees.** One sidebar row above the account row, and nothing
-else:
-
-| State | Row |
-| --- | --- |
-| A release is available, or newer files are already installed | **New version · Restart** |
-| Downloading, verifying, waiting for the password | **Updating** with the busy dots |
-| The install failed | **Couldn't update · Try again** |
-| A release is available, but the macOS app is translocated, in a folder it cannot write, or on another volume | **Move ECHO to Applications to update** |
-
-The row avoids the word "Update", which Home uses for open items. A failed
-background check shows nothing and leaves the current version running. Install
-is refused while the app holds unresolved work (the same check as sign out).
-After staging, the quit runs the normal host drain. **Restart** arms the
-relaunch only when the quit is certain, so a quit the person cancels does not
-reopen the app later.
-
-**macOS activation.**
-
-1. After the feed and digest checks, the app expands the ZIP with
-   `/usr/bin/ditto -x -k` into the updater folder.
-2. It requires the staged bundle to:
-   - be the only top-level `ECHO.app`;
-   - have the bundle id `org.echobrain.echo-desktop`;
-   - pass `codesign --verify --deep --strict`;
-   - carry an identity whose release and record digest equal the manifest's.
-3. The staging folder must be on the same volume as the running bundle, which
-   must be writable and not translocated.
-4. The app writes a bash swap helper into the updater folder, starts it
-   detached, and quits.
-5. The helper waits for the app's process to exit, at most two minutes. It
-   renames the bundle to `updater/previous/ECHO.app`, renames the staged bundle
-   into place and opens it.
-6. If the swap fails, it restores the previous bundle and reopens it.
-7. Either way, it writes `updater/outcome.json`.
-8. On launch, the app reads and removes the outcome. It deletes the previous
-   bundle only when its own release is the expected one; otherwise it shows the
-   failure row.
-
-**Linux activation.**
-
-1. After the checks, the app stages the verified `.deb` and the exact feed
-   bytes in the updater folder.
-2. It writes a bash relauncher there and starts it detached. The relauncher
-   runs `pkexec /opt/ECHO/resources/echo-desktop-update-helper install --feed
-   F --deb D --wait-pid <app pid>`, with the helper's output going to a
-   progress file. Each install attempt has its own id, so an earlier attempt's
-   progress or outcome is never taken for this one's.
-3. The helper runs as root:
-   1. It copies both files with `O_NOFOLLOW` into a root-owned `0700` folder
-      under `/var/lib/echo-desktop/`.
-   2. It reads the trust config from the root-owned installed identity file.
-   3. It verifies the Ed25519 signature with `openssl pkeyutl -verify -rawin`.
-   4. It checks the manifest's kind, channel, freshness, sequence floor and
-      origin.
-   5. It checks the `linux/x64/glibc/electron` artifact's size and digest
-      against the copied package.
-   6. It checks the package control fields.
-   7. It checks the root checkpoint `/var/lib/echo-desktop/update-checkpoint.json`.
-      The sequence must be greater than the saved one, or equal to it with the
-      same manifest digest.
-   8. It prints `verified`.
-4. Once the progress file says `verified`, the app quits.
-5. The helper waits up to two minutes for the app to exit. It then runs
-   `apt-get install --reinstall -y` on the copy, saves the checkpoint and
-   removes the copy.
-6. The relauncher records the outcome and reopens `/usr/bin/echo-desktop`:
-   - cancelled prompt (exit 126) or refused authentication (127): the app is
-     still open, so the row goes back to available or failed;
-   - any later failure: the relauncher reopens the old app.
-
-The helper's exit codes are: 0 installed, 2 invalid input, 3 verification
-failed, 4 the app did not exit, 5 installation failed.
+Person client and keeps per-user state apart from the CLI root. It runs only in
+a packaged release build on macOS arm64 from an `ECHO.app` bundle, or on Linux
+x64 from `/opt/ECHO` with the root-owned helper and `/usr/bin/pkexec`. On first
+run it pins the identity's bootstrap, which a later app cannot change. It only
+announces, through
+[one sidebar row](../../product/echo-desktop/README.md#updates). The row avoids
+the word "Update", which Home uses for open items. Install is refused while the
+app holds unresolved work. On macOS a detached helper swaps in the checked
+`ECHO.app` after the app quits. On Linux the root helper, started through
+`pkexec`, re-verifies the feed and the package before `apt-get` reinstalls it.
+[Client updates](../features/client-updates-v1.md#desktop-app) has the
+conditions, cadence and activation steps.
 
 ### Consequences
 
@@ -304,19 +140,18 @@ failed, 4 the app did not exit, 5 installation failed.
   enrolled Linux desktops. A leaked key is a fleet-wide root risk, mitigated
   only by the signature, the checkpoint and the explicit password prompt. Key
   rotation remains a separately reviewed bootstrap.
-- **Downgrade window on Linux.** Until its first helper install, a Linux seat
-  installed by hand, or a new user, accepts any unexpired signed feed at or
-  above `minimum_sequence`, as a newly enrolled CLI does. Using that window
-  needs a compromised feed origin or a TLS interception, plus the admin
-  password. It is limited to publisher-signed releases within their validity.
-- **Downgrade window on macOS.** There is no root helper, and the swap does not
-  check the sequence. The only floor is the app's own checkpoint in its
-  per-user updater folder. A new user, or an app with no updater state,
-  accepts any unexpired signed feed at or above `minimum_sequence` at its first
-  check. Installing it then needs only the person's click, with no admin
-  password. The app refuses older feeds after that first verified check. Using
-  that window needs a compromised feed origin or a TLS interception, and it is
-  limited to publisher-signed releases within their validity.
+- **Downgrade window.** The app refuses a feed older than the last one it
+  verified, and the Linux helper one older than the last one it installed.
+  Until a seat has those records, it accepts any unexpired signed feed at or
+  above `minimum_sequence`, as a newly enrolled CLI does. On Linux that is a
+  seat installed by hand, or a new user, until its first helper install, and
+  installing also needs the admin password. On macOS there is no root helper,
+  and the swap does not check the sequence. The only floor is the app's own
+  checkpoint in its per-user updater folder. So a new user, or an app with no
+  updater state, accepts such a feed at its first check, and installing it
+  needs only the person's click. Using either window needs a compromised feed
+  origin or a TLS interception, and it is limited to publisher-signed releases
+  within their validity.
 - **What the feed gate proves.** `prepare` checks the identity, `Info.plist`,
   the embedded Person-client tree and, on Linux, the root helper's bytes. It
   does not check `app.asar` or the rest of the bundle, so a compromised build

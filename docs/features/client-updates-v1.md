@@ -187,63 +187,114 @@ checkpoint need no migration for check-only automatic behavior.
 
 ## Desktop app
 
-The desktop app on macOS arm64 and Linux x64 updates from the same signed feed
-([ADR-0035](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)).
-Only a release package has an updater. Release packaging takes `--release`,
-`--artifact` and `--update-config`, embeds the release's exact Person-client
-tarball and writes `echo-desktop-identity.v1.json` beside the app
-(`ECHO.app/Contents/Resources` or `/opt/ECHO/resources`). Its update config is
-the CLI bootstrap with `installation: "electron"` and `automatic: true`.
-Development, CI and ad hoc builds and the Linux `.tar.gz` never update.
+The desktop app on macOS arm64 and Linux x64 updates from the same signed feed.
+[ADR-0035](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)
+records the decision, its trust model and its limits. Desktop installs from
+before it have no updater and need one
+[manual reinstall](../../deploy/client-updates/README.md#enroll-a-desktop).
 
-On first run the app pins the bootstrap embedded in its identity. A later app
-with a different publisher, feed, channel or sequence floor cannot change that
-pin; updates then stop with `already_configured`. Updater state lives in
+**Identity.** Only a
+[release package](../../deploy/release/README.md#desktop-release-packages) has
+an updater. It embeds the release's exact Person-client tarball and writes
+`echo-desktop-identity.v1.json` as an Electron extra resource outside
+`app.asar`: `ECHO.app/Contents/Resources/` on macOS and `/opt/ECHO/resources/`
+on Linux. This canonical JSON (`kind: "echo-desktop-identity-v1"`) names the
+`release_id`, the release record's SHA-256, the `source_sha`, the product
+version, the Person-client artifact SHA-256, the target (platform,
+architecture, libc and `installation: "electron"`) and the `update_bootstrap`:
+the CLI bootstrap with `installation: "electron"` and `automatic: true`. The
+Linux package also ships the root helper
+`/opt/ECHO/resources/echo-desktop-update-helper`.
+
+**When it runs.** The updater is on only when the build is packaged, the app is
+not running `--smoke`, the identity is valid, and the installation is
+supported: macOS arm64 running from an `ECHO.app` bundle, or Linux x64 running
+from `/opt/ECHO` with the root-owned helper and `/usr/bin/pkexec` present.
+Development, CI, test and ad hoc builds and the Linux `.tar.gz` never update.
+Without `/usr/bin/pkexec` the manual reinstall remains. A macOS app that is
+translocated, in a folder it cannot write, or on another volume than its
+updater state still checks, and on finding a release shows **Move ECHO to
+Applications to update** right away.
+
+**The core.** The Electron main process loads the updater from the embedded,
+release-bound client (`person-client/package/dist/client-update.js`), the same
+way the host loads the client. The app therefore applies the CLI's rules:
+configuration pinning, signature, channel and expiry checks, the
+anti-rollback checkpoint and state file, the lock and the bounded download
+(256 MiB, 15 minutes). `runClientUpdate` takes an installation adapter that
+supplies the installed release reads, a race guard captured before download
+(the CLI's is its wrapper digest), the install step (whose input gains the
+verified feed bytes), the activation (`immediate` for the CLI, `restart` for
+the app), and the staged archive's file name and download timeout. The app
+turns off the CLI's signal re-raise, which would otherwise end Electron
+without its normal quit. `configureClientUpdates` takes the adapter too, so
+on first run the app pins its identity's `update_bootstrap`. A later app with
+a different publisher, feed, channel or sequence floor cannot change that pin;
+updates then stop with `already_configured`. Per-user state lives in
+`<appData>/ECHO/desktop/updater/`, created `0700`, next to Chromium's
+`ECHO/chromium` and apart from the CLI root:
 `~/Library/Application Support/ECHO/desktop/updater` on macOS and
-`~/.config/ECHO/desktop/updater` on Linux, apart from the CLI root.
+`~/.config/ECHO/desktop/updater` on Linux.
 
-The app applies the CLI's rules: configuration pinning, signature, channel and
-expiry checks, the anti-rollback checkpoint, the lock and the bounded download
-(256 MiB, 15 minutes). It asks every ten minutes, but contacts the feed at most
-once an hour after its last completed check, across relaunches. Relaunching
-does not force a check. It only announces, and a failed check shows nothing.
-One sidebar row shows **New version · Restart** when a release is available or
-newer files are already installed (`running_release_mismatch`). Selecting it
-stages the verified update (status `staged`), and the app activates it after it
-quits. **Restart** arms the relaunch only when the quit is certain.
+**Checks.** The app asks shortly after launch and then every ten minutes,
+through the existing `automatic` mode, which honors `automatic: false`. The
+core's hourly interval decides when the feed is due: the app contacts it at
+most once an hour after its last completed check, and that record survives
+relaunches, so relaunching does not force a check. A new release can take up
+to about 70 minutes to show. The app only announces, through one
+[sidebar row](../../product/echo-desktop/README.md#updates); a failed check
+shows nothing. The running release is the identity read at launch. If the
+files on disk now name another release, for example because another Linux user
+updated `/opt/ECHO`, `running_release_mismatch` means "restart to use it".
 
-- **macOS** checks the staged `ECHO.app` (bundle id, `codesign --verify --deep
-  --strict`, and an identity matching the manifest) and swaps it into place. The
-  running bundle must be writable and not translocated; ECHO normally lives in
-  `~/Applications`. An app that is translocated, cannot write its folder, or
-  sits on another volume than its updater state still checks, and on finding a release shows **Move ECHO to Applications to
-  update** right away. A failed swap restores the previous app.
-- **Linux** asks for an admin password through `pkexec`. The root helper
-  `/opt/ECHO/resources/echo-desktop-update-helper` verifies the feed again with
-  the key in the root-owned installed identity, checks the package digest and
-  its own checkpoint `/var/lib/echo-desktop/update-checkpoint.json`, and then
-  reinstalls the package with `apt-get`. Each install attempt has its own id,
-  so an earlier attempt's result is never read as this one's. A cancelled
-  prompt leaves the app running; a later failure reopens the old app.
-  Without `/usr/bin/pkexec` the updater stays off, and the manual reinstall
-  remains.
+**Install.** It is refused while the app holds unresolved work (the same check
+as sign out). A `restart` install stages the verified update and returns the
+new status `staged`; no immediate activation check runs. The quit then runs the
+normal host drain. **Restart** arms the relaunch only when the quit is certain,
+so a quit the person cancels does not reopen the app later.
 
-The trust model is the feed's Ed25519 signature and digest, not Apple
-notarization. A self-replaced app is not quarantined, so Gatekeeper does not
-re-check it, and macOS privacy grants may need to be given again after an
-update. macOS App Management may block the swap; that is unverified until a
-seat rehearsal, and a blocked swap keeps the old app. On Linux the feed key now
-authorizes root-executed packages on enrolled desktops. The helper refuses a
-feed older than the last one it installed, and the app refuses one older than
-the last one it verified. A Linux seat installed by hand, or a new user,
-accepts any unexpired signed feed at or above `minimum_sequence` until its
-first helper install, the same bootstrap window the CLI has. macOS has no
-helper, and the swap does not check the sequence. A new Mac user, or an app
-with no updater state, accepts such a feed at its first check, and installing
-it needs only the person's click, with no admin password. The app refuses
-older feeds after that first verified check. Desktop installs from before
-this change have no updater and need one manual reinstall of a release
-package.
+**macOS activation.** The app expands the ZIP with `/usr/bin/ditto -x -k` into
+its updater folder. The staged bundle must be the only top-level `ECHO.app`,
+have the bundle id `org.echobrain.echo-desktop`, pass
+`codesign --verify --deep --strict`, and carry an identity whose release and
+record digest equal the manifest's. The staging folder must be on the same
+volume as the running bundle, which must be writable and not translocated. The
+app writes a bash swap helper into the updater folder, starts it detached, and
+quits. The helper waits at most two minutes for the app to exit, renames the
+bundle to `updater/previous/ECHO.app`, renames the staged bundle into place and
+opens it. If the swap fails, it restores and reopens the previous bundle.
+Either way, it writes `updater/outcome.json`. On launch, the app reads and
+removes the outcome. It deletes the previous bundle only when its own release
+is the expected one; otherwise it shows the failure row.
+
+**Linux activation.** The app stages the verified `.deb` and the exact feed
+bytes in its updater folder. It starts a detached bash relauncher that runs
+`pkexec /opt/ECHO/resources/echo-desktop-update-helper install --feed F --deb D
+--wait-pid <app pid>`, with the helper's output going to a progress file. Each
+install attempt has its own id, so an earlier attempt's progress or outcome is
+never taken for this one's. The helper runs as root:
+
+1. It copies both files with `O_NOFOLLOW` into a root-owned `0700` folder under
+   `/var/lib/echo-desktop/`.
+2. It reads the trust config from the root-owned installed identity file and
+   verifies the Ed25519 signature with `openssl pkeyutl -verify -rawin`.
+3. It checks the manifest's kind, channel, freshness, sequence floor and
+   origin, the `linux/x64/glibc/electron` artifact's size and digest against
+   the copied package, and the package control fields.
+4. It checks the root checkpoint `/var/lib/echo-desktop/update-checkpoint.json`.
+   The sequence must be greater than the saved one, or equal to it with the
+   same manifest digest.
+5. It prints `verified`. Once the progress file says so, the app quits.
+6. It waits up to two minutes for the app to exit, runs
+   `apt-get install --reinstall -y` on the copy, saves the checkpoint and
+   removes the copy.
+
+The helper's exit codes are: 0 installed, 2 invalid input, 3 verification
+failed, 4 the app did not exit, 5 installation failed. The relauncher records
+the outcome and reopens `/usr/bin/echo-desktop`. After a cancelled prompt
+(exit 126) or refused authentication (127) the app is still open, so the row
+goes back to available or failed. After any later failure the relauncher
+reopens the old app.
 
 ## Preparing an approved feed
 
@@ -284,9 +335,8 @@ each desktop artifact, `prepare` also checks that:
 - on Linux, the package is `echo-desktop` for `amd64`, and the root helper's
   bytes equal the helper at `release.source_sha`.
 
-These checks do not cover `app.asar` or the rest of the bundle, so a
-compromised build machine is outside what they prove; see the feed guide's
-[known limitations](../../deploy/client-updates/README.md#known-limitations).
+These checks do not cover `app.asar` or the rest of the bundle; see what
+[the feed gate proves](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md#consequences).
 
 Historical single-platform and two-artifact feeds remain readable by clients
 and auditable through publication status, but cannot be published again.
@@ -356,20 +406,16 @@ downloads to 256 MiB, with fixed deadlines. Both URLs must share the configured
 HTTPS origin. Artifact size/hash verification precedes archive inspection or
 execution. CLI kit ZIP members are copied as bounded bytes into known regular
 files; archive-provided paths and symlinks never control extraction
-destinations. The desktop app expands its `ECHO.app` ZIP with `ditto` inside
-its private updater folder and checks the staged bundle before the swap. The
-Linux root helper copies the package and feed into a root-only folder before
-checking them.
+destinations. The desktop stages its artifacts as described under
+[Desktop app](#desktop-app).
 
 Clients persist the highest verified sequence and its payload digest. Older
 sequences, changed bytes at the same sequence, expired metadata, and unknown
 fields fail closed. A deliberately authorized rollback uses a new sequence
-pointing to the retained compatible release. That release must carry all four
-targets, each built from its own source SHA. A release from before the first
-ADR-0035 release cannot be a rollback target; recovery that would need one
-takes a forward fix. The desktop has no rollback button either; on macOS the
-previous bundle is kept only until the new one starts. Refresh expiry by
-publishing a new signed sequence even when the artifact is unchanged.
+pointing to the retained compatible release, which must carry all four targets
+([rollback limits](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md#migration-rollback-and-evidence)).
+Refresh expiry by publishing a new signed sequence even when the artifact is
+unchanged.
 
 This is a single-publisher V1 signature profile, not a complete TUF repository.
 Delegated roles, automated key rotation and compromise recovery are outside
@@ -397,9 +443,6 @@ failures, bounded downloads, concurrent starts, installation races and session
 preservation. Offline proof does not establish that this live acceptance test
 has occurred.
 
-Desktop acceptance: publish B; an updater-capable app on A shows **New version
-· Restart**. Selecting it installs B and restarts the app, with an admin
-password on Linux. The tray then shows `Build <sha7>` for B's source SHA, and an
-authenticated read passes. This needs one native macOS arm64 seat and one
-Ubuntu 24.04 x64 seat with a polkit agent. CI cannot show a polkit prompt or a
-real macOS swap.
+Desktop acceptance is the separate
+[desktop update check](../../deploy/client-updates/README.md#verify-the-desktop-update)
+on native macOS arm64 and Ubuntu x64 seats.
