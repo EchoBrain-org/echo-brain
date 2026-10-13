@@ -73,9 +73,10 @@ its record digest and source SHA, the Person-client digest and target, and the
 update bootstrap with `installation: "electron"`. Without a valid identity, in
 development and test builds, under `--smoke`, from the Linux `.tar.gz`, outside
 an `ECHO.app` bundle, outside `/opt/ECHO` with its root-owned helper, or on
-Linux without `/usr/bin/pkexec`, the updater is off. A macOS app that is translocated or cannot write its folder
-still checks, and on finding a release shows **Move ECHO to Applications to
-update** right away.
+Linux without `/usr/bin/pkexec`, the updater is off. A macOS app that is
+translocated, cannot write its folder, or sits on another volume than its
+updater state still checks, and on finding a release shows **Move ECHO to
+Applications to update** right away.
 
 The Electron main process loads the updater from the embedded, release-bound
 client (`person-client/package/dist/client-update.js`), the same way the host

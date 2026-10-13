@@ -1075,8 +1075,10 @@ same signed feed
 ([ADR-0035](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)).
 Build each package on the matching machine, from the clean release commit, with
 the same canonical release record and exact Person-client tarball as the kits.
-At the repository root run `npm ci` and `npm run build` first; packaging reads
-the built Person client to check the config. Then:
+At the repository root run `npm ci` first. Release packaging rebuilds the
+Person client and the workspaces the desktop host bundles from `HEAD`, and
+refuses a built identity that does not name the release's commit and version.
+Then:
 
 ```sh
 cd product/echo-desktop

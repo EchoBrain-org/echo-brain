@@ -177,8 +177,8 @@ For a headless Linux runner, prefix the smoke command with
 Unzip the release's ZIP and move `ECHO.app` to `~/Applications`, the
 Applications folder inside your home folder; create it if it is missing. That
 folder is yours to write, so ECHO can replace itself there when it updates.
-In a folder it cannot write, or when macOS runs it from a read-only copy
-(translocation), ECHO still checks. When it finds a release it shows **Move
+In a folder it cannot write, on another volume than its settings, or when macOS
+runs it from a read-only copy (translocation), ECHO still checks. When it finds a release it shows **Move
 ECHO to Applications to update** right away, instead of updating. Check that
 the tray menu's `Build <sha7>` matches the release's source SHA.
 
@@ -198,7 +198,7 @@ One row above your account in the sidebar shows where things stand:
 | A release is available, or newer files are already installed | **New version · Restart** |
 | Downloading, verifying, waiting for the password | **Updating** with the busy dots |
 | The install failed | **Couldn't update · Try again** |
-| A release is available, but the macOS app is translocated or in a folder it cannot write | **Move ECHO to Applications to update** |
+| A release is available, but the macOS app is translocated, in a folder it cannot write, or on another volume | **Move ECHO to Applications to update** |
 
 Select **New version · Restart** to install. ECHO won't install while it still
 has unfinished work, just as it won't sign out then. It checks the update, quits
@@ -207,9 +207,10 @@ asking for a password. On Linux the system asks for an administrator password;
 a helper running as root then checks the update again before reinstalling the
 package. If another person on the same Linux machine already updated ECHO, the
 row also reads **New version · Restart**, and restarting uses the new version.
-**Restart** sets ECHO to reopen only once the quit is certain. If you cancel
-the quit when ECHO asks about unfinished work, ECHO stays open, and a later
-quit does not reopen it.
+If you cancel the quit when ECHO asks about unfinished work, ECHO stays open.
+When newer files were already installed, a later quit does not reopen it. When
+ECHO had downloaded an update, the update gives up after two minutes and the
+row shows **Couldn't update · Try again**.
 
 An update fails safely:
 

@@ -100,7 +100,10 @@ With them, packaging requires:
 - a clean `HEAD` equal to `release.source_sha`;
 - the tarball digest equal to `release.person_client.artifact_sha256`, checked
   by the existing release-artifact validation;
-- the config to parse with `installation: "electron"` and `automatic: true`.
+- the config to parse with `installation: "electron"` and `automatic: true`;
+- the Person client and the workspaces the host bundles rebuilt from that
+  `HEAD`. Packaging runs that build itself and refuses a built identity that
+  does not name the release's commit and version.
 
 The app embeds that exact tarball instead of packing one from `HEAD`. It then
 writes `echo-desktop-identity.v1.json` as an Electron extra resource, outside
@@ -202,9 +205,9 @@ The updater is on only when all of these hold:
   helper and `/usr/bin/pkexec` present.
 
 The `.tar.gz` Linux package, development builds and test builds never update.
-A macOS app that is translocated, or in a folder it cannot write, still checks.
-When it finds a release it shows **Move ECHO to Applications to update** right
-away.
+A macOS app that is translocated, in a folder it cannot write, or on another
+volume than its updater state still checks. When it finds a release it shows
+**Move ECHO to Applications to update** right away.
 
 **First run.** The app pins the identity's `update_bootstrap` as its config. A
 later app that carries a different publisher, feed, channel or sequence floor
@@ -229,7 +232,7 @@ else:
 | A release is available, or newer files are already installed | **New version · Restart** |
 | Downloading, verifying, waiting for the password | **Updating** with the busy dots |
 | The install failed | **Couldn't update · Try again** |
-| A release is available, but the macOS app is translocated or in a folder it cannot write | **Move ECHO to Applications to update** |
+| A release is available, but the macOS app is translocated, in a folder it cannot write, or on another volume | **Move ECHO to Applications to update** |
 
 The row avoids the word "Update", which Home uses for open items. A failed
 background check shows nothing and leaves the current version running. Install

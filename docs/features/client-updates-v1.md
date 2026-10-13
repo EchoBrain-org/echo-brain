@@ -215,8 +215,8 @@ quits. **Restart** arms the relaunch only when the quit is certain.
 - **macOS** checks the staged `ECHO.app` (bundle id, `codesign --verify --deep
   --strict`, and an identity matching the manifest) and swaps it into place. The
   running bundle must be writable and not translocated; ECHO normally lives in
-  `~/Applications`. An app that is translocated or cannot write its folder
-  still checks, and on finding a release shows **Move ECHO to Applications to
+  `~/Applications`. An app that is translocated, cannot write its folder, or
+  sits on another volume than its updater state still checks, and on finding a release shows **Move ECHO to Applications to
   update** right away. A failed swap restores the previous app.
 - **Linux** asks for an admin password through `pkexec`. The root helper
   `/opt/ECHO/resources/echo-desktop-update-helper` verifies the feed again with
