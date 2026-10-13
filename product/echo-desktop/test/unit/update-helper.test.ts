@@ -1,6 +1,7 @@
 // The Linux root helper (ADR-0035) re-verifies a desktop update before apt
-// installs it. Its checks run here as plain functions: main needs root.
-import { spawnSync } from 'node:child_process';
+// installs it. main needs root, so its checks and install run here as plain
+// functions, install with stand-in paths and commands.
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,6 +16,8 @@ helper = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.
 loader.exec_module(helper)
 request = json.loads(sys.argv[2])
 helper.OPENSSL = request['openssl']
+for name, value in request.get('patch', {}).items():
+    setattr(helper, name, value)
 try:
     print(json.dumps({'result': getattr(helper, request['call'])(*request['args'])}))
 except helper.HelperError as error:
@@ -53,6 +56,43 @@ function helper(call: string, args: unknown[]): Reply {
   const result = spawnSync('python3', ['-I', '-B', '-c', DRIVER, helperPath, JSON.stringify({ call, args, openssl })], { encoding: 'utf8', timeout: 60_000 });
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout) as Reply;
+}
+
+// Runs a helper call in the background, for calls that print "verified" and
+// then wait on another process.
+function start(call: string, args: unknown[], patch: Record<string, string>) {
+  const child = spawn('python3', ['-I', '-B', '-c', DRIVER, helperPath, JSON.stringify({ call, args, openssl, patch })]);
+  let stdout = '';
+  child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk; });
+  const done = new Promise<Reply>((settle, fail) => child.on('close', status => {
+    if (status === 0) settle(JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as Reply);
+    else fail(new Error(`helper ${call} exited ${status}`));
+  }));
+  done.catch(() => undefined); // A test that fails first kills the child; its own assertion reports.
+  const verified = async (withinMs: number) => {
+    for (const deadline = Date.now() + withinMs; Date.now() < deadline; await delay(50)) {
+      if (stdout.split('\n').includes('verified')) return true;
+    }
+    return false;
+  };
+  return { child, done, verified };
+}
+
+const delay = (ms: number) => new Promise(settle => setTimeout(settle, ms));
+
+function shellScript(root: string, name: string, body: string): string {
+  const path = join(root, name);
+  writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  return path;
+}
+
+// A stand-in for the quitting app; resolves once the process is reaped, so
+// the helper's os.kill(pid, 0) no longer finds it.
+async function quit(app: ChildProcess): Promise<void> {
+  if (app.exitCode !== null || app.signalCode !== null) return;
+  const exited = new Promise(settle => app.once('exit', settle));
+  app.kill();
+  await exited;
 }
 
 function setup({ channel = 'stable', deb = Buffer.from('the signed package'), manifest, envelope }: {
@@ -194,6 +234,41 @@ describe.skipIf(missing !== '')(`Linux update helper${missing ? ` (skipped: ${mi
       refused(verify(fixture), 3);
     }
   });
+
+  it('installs one update at a time, so a later helper cannot install an older release over a newer one', async () => {
+    // Two seats: A staged sequence 9 and B a still-valid sequence 8. Both
+    // passwords were approved before either app quit.
+    const newer = setup({ manifest: value => { value.sequence = 9; } });
+    const older = setup({ manifest: value => { value.sequence = 8; } });
+    const state = join(newer.root, 'state');
+    mkdirSync(state, { mode: 0o700 });
+    const aptLog = join(newer.root, 'apt-get.log');
+    const checkpoint = join(state, 'update-checkpoint.json');
+    const patch = {
+      IDENTITY: newer.identity, STATE: state, CHECKPOINT: checkpoint, LOCK: join(state, 'update.lock'),
+      APT_GET: shellScript(newer.root, 'apt-get', `echo "$@" >> '${aptLog}'`),
+      DPKG_DEB: shellScript(newer.root, 'dpkg-deb', "printf 'Package: echo-desktop\\nArchitecture: amd64\\n'"),
+    };
+    const appA = spawn('sleep', ['60']);
+    const appB = spawn('sleep', ['60']);
+    const a = start('install', [newer.feed, newer.deb, appA.pid, uid], patch);
+    let b: ReturnType<typeof start> | undefined;
+    try {
+      expect(await a.verified(10_000)).toBe(true);
+      b = start('install', [older.feed, older.deb, appB.pid, uid], patch);
+      // B must not verify against the checkpoint that A is about to raise.
+      expect(await b.verified(1_500)).toBe(false);
+      await quit(appA);
+      expect(await a.done).toEqual({ result: 0 });
+      await quit(appB);
+      refused(await b.done, 3, 'stale_metadata');
+      expect(readFileSync(aptLog, 'utf8').trim().split('\n')).toHaveLength(1);
+      expect(JSON.parse(readFileSync(checkpoint, 'utf8'))).toEqual({ schema_version: 1, sequence: 9, manifest_sha256: sha256(newer.payload) });
+      expect(statSync(patch.LOCK).mode & 0o777).toBe(0o600);
+    } finally {
+      for (const child of [appA, appB, a.child, b?.child]) child?.kill('SIGKILL');
+    }
+  }, 30_000);
 
   it.skipIf(!dpkgDeb)(`reads the package control fields${dpkgDeb ? '' : ' (skipped: needs /usr/bin/dpkg-deb)'}`, () => {
     const fixture = setup();

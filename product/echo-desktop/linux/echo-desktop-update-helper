@@ -6,12 +6,15 @@ checked the update, but nothing it says is trusted here. The helper copies
 both files into a root-only folder, verifies the feed's Ed25519 signature with
 the key in the root-owned installed identity, and checks the manifest, the
 package digest and the anti-rollback checkpoint. It prints "verified", waits
-for the app to quit, and reinstalls the package with apt-get.
+for the app to quit, and reinstalls the package with apt-get. Helpers hold an
+exclusive lock from the copy to the saved checkpoint, so updates run one at a
+time.
 
 Exit codes: 0 installed, 2 invalid input, 3 verification failed, 4 the app
 did not exit, 5 installation failed.
 """
 import base64
+import fcntl
 import hashlib
 import json
 import os
@@ -27,6 +30,7 @@ from datetime import datetime, timezone
 IDENTITY = '/opt/ECHO/resources/echo-desktop-identity.v1.json'
 STATE = '/var/lib/echo-desktop'
 CHECKPOINT = os.path.join(STATE, 'update-checkpoint.json')
+LOCK = os.path.join(STATE, 'update.lock')
 APT_GET = '/usr/bin/apt-get'
 OPENSSL = '/usr/bin/openssl'
 DPKG_DEB = '/usr/bin/dpkg-deb'
@@ -314,15 +318,7 @@ def parse_arguments(argv):
     return options['--feed'], options['--deb'], int(options['--wait-pid'])
 
 
-def install(feed, deb, pid, work):
-    feed_copy, deb_copy = os.path.join(work, 'feed.json'), os.path.join(work, 'update.deb')
-    copy_regular(feed, feed_copy, FEED_LIMIT)
-    copy_regular(deb, deb_copy, DEB_LIMIT)
-    verified = verify_update(IDENTITY, feed_copy, deb_copy, CHECKPOINT, time.time())
-    control = read_control(deb_copy)
-    need(control.get('Package') == 'echo-desktop' and control.get('Architecture') == 'amd64', 3, 'wrong_package')
-    print('verified', flush=True)
-    wait_for_exit(pid)
+def reinstall(deb_copy):
     try:
         # apt-get's output goes to stderr, so stdout carries only "verified".
         result = subprocess.run([APT_GET, 'install', '--reinstall', '-y', deb_copy], env=ENV,
@@ -330,8 +326,36 @@ def install(feed, deb, pid, work):
     except (OSError, subprocess.TimeoutExpired):
         raise HelperError(5, 'apt-get did not finish')
     need(result.returncode == 0, 5, 'apt-get failed')
-    save_checkpoint(CHECKPOINT, verified)
-    return 0
+
+
+def exclusive(path):
+    """Opens path and waits for its exclusive lock, which closing the file releases."""
+    handle = os.fdopen(os.open(path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600), 'rb')
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    return handle
+
+
+def install(feed, deb, pid, trusted_uid=0):
+    # One update at a time: each seat's app can start a helper. Under the lock,
+    # the checkpoint verify_update reads is the one this run replaces, so no
+    # helper installs an older release over a newer one or lowers the
+    # checkpoint. A waiting helper is bounded by the holder's own timeouts.
+    with exclusive(LOCK):
+        work = tempfile.mkdtemp(prefix='install-', dir=STATE)
+        try:
+            feed_copy, deb_copy = os.path.join(work, 'feed.json'), os.path.join(work, 'update.deb')
+            copy_regular(feed, feed_copy, FEED_LIMIT)
+            copy_regular(deb, deb_copy, DEB_LIMIT)
+            verified = verify_update(IDENTITY, feed_copy, deb_copy, CHECKPOINT, time.time(), trusted_uid)
+            control = read_control(deb_copy)
+            need(control.get('Package') == 'echo-desktop' and control.get('Architecture') == 'amd64', 3, 'wrong_package')
+            print('verified', flush=True)
+            wait_for_exit(pid)
+            reinstall(deb_copy)
+            save_checkpoint(CHECKPOINT, verified)
+            return 0
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
 
 def main(argv):
@@ -342,11 +366,7 @@ def main(argv):
         info = os.lstat(STATE)
         need(stat.S_ISDIR(info.st_mode) and info.st_uid == 0, 3, 'unsafe state folder')
         os.chmod(STATE, 0o700)
-        work = tempfile.mkdtemp(prefix='install-', dir=STATE)
-        try:
-            return install(feed, deb, pid, work)
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
+        return install(feed, deb, pid)
     except HelperError as error:
         print('echo-desktop-update-helper: %s' % error.reason, file=sys.stderr, flush=True)
         return error.exit_code
