@@ -46,14 +46,14 @@ test('the approver sends the impact to its owners from Home', async () => {
   await expect(send).toBeVisible({ timeout: 20_000 });
   await expect(send).toContainText('owners Mina');
   await send.click();
-  await expect(app.page.getByRole('heading', { name: 'Tell the owners?' })).toBeVisible();
-  await expect(app.page.getByText('Untick anything that\'s wrong. Owners get it on their Home.')).toBeVisible();
+  await expect(app.page.getByTestId('send')).toBeVisible();
+  await expect(app.page.getByText('Untick any that’s wrong. Each goes to its owner’s Home.')).toBeVisible();
   // What an item says now is covered while another app is in front, and the card comes back as it was.
   await emit(app.app, 'echo-test:conceal');
   await expect(app.page.getByTestId('concealed')).toBeVisible();
   await expect(app.page.locator('body')).not.toContainText('ECHO-12');
   await emit(app.app, 'echo-test:resume');
-  await expect(app.page.getByRole('heading', { name: 'Tell the owners?' })).toBeVisible();
+  await expect(app.page.getByTestId('send')).toBeVisible();
   await app.page.getByRole('button', { name: 'Pick a person: Thermostat PRD · Pilot scope' }).click();
   await app.page.getByRole('searchbox', { name: 'Find a person' }).fill('Raf');
   await app.page.getByRole('option', { name: 'Rafael Moreno' }).click();
@@ -249,14 +249,14 @@ test('the owner\'s changed item opens before anything is closed', async () => {
   await expect(app.page.getByTestId('needs')).not.toContainText(/landed|Check\b/);
   await row.click();
   const card = app.page.getByTestId('item-card');
-  await expect(card.getByRole('heading', { name: 'Thermostat PRD · Pilot scope' })).toBeVisible();
+  await expect(card.getByRole('heading', { name: 'Thermostat PRD · Pilot scope doesn’t match the decision yet' })).toBeVisible();
   await expect(card).toContainText('Confluence page · yours to update');
   // Its main control has the focus, as on Tell the owners? and Your open items.
   await expect(card.getByRole('button', { name: 'Mark updated', exact: true })).toBeFocused();
   const decided = card.getByRole('region', { name: 'The decision', exact: true });
   await expect(decided).toContainText('Launch the pilot next week.');
   await expect(decided).toContainText(`Pilot planning meeting · approved ${day('2026-10-07T10:00:00.000Z')}`);
-  await expect(card.getByRole('region', { name: 'Now', exact: true })).toContainText('Says "starts after freeze"');
+  await expect(card.getByRole('region', { name: 'It says now', exact: true })).toContainText('Says "starts after freeze"');
   await expect(card.getByRole('region', { name: 'The decision needs', exact: true })).toContainText('pilot starts next week');
   // ECHO's check, with no person's name.
   await expect(card).toContainText('ECHO checked 2 h ago: it changed since it was sent, but still doesn\'t match.');
@@ -286,9 +286,10 @@ test('the approver reviews an item someone else owns once it changed', async () 
   await expect(app.page.getByTestId('needs-foot')).toContainText('2 waiting on others · ECHO checked 2 h ago');
   await row.click();
   const card = app.page.getByTestId('item-card');
-  await expect(card.getByRole('heading', { name: 'ECHO-12 · Pilot launch' })).toBeVisible();
-  await expect(card).toContainText('Jira ticket · Mina\'s to update · now Mina Patel');
-  await expect(card.getByRole('region', { name: 'Now', exact: true })).toContainText('Due Oct 30');
+  await expect(card.getByRole('heading', { name: 'ECHO-12 · Pilot launch changed, but still doesn’t match' })).toBeVisible();
+  await expect(card).toContainText('Jira ticket · Mina\'s to update');
+  await expect(card.getByRole('complementary', { name: 'Your review' })).toContainText('AssigneeMina Patel');
+  await expect(card.getByRole('region', { name: 'It says now', exact: true })).toContainText('Due Oct 30');
   await expect(card.getByRole('region', { name: 'The decision needs', exact: true })).toContainText('launch next week');
   await expect(card).toContainText('ECHO checked 2 h ago: it changed since it was sent, but still doesn\'t match.');
   await expect(card.getByRole('button', { name: 'Open in Jira: ECHO-12 · Pilot launch' })).toBeVisible();
@@ -296,6 +297,25 @@ test('the approver reviews an item someone else owns once it changed', async () 
   await expect(row).toHaveCount(0);
   await expect.poll(() => app.calls().filter(call => call.body?.operation === 'set_state').map(call => ({ item: call.body?.item_id, state: call.body?.state })))
     .toEqual([{ item: 'itm_00000000-0000-4000-8000-000000000031', state: 'done' }]);
+});
+
+test('the approver reassigns an item someone else owns from its card', async () => {
+  app = await launch('granola-review');
+  await app.page.getByTestId('need-row').filter({ hasText: 'ECHO-12' }).click();
+  const card = app.page.getByTestId('item-card');
+  // Escape closes the picker first, and the caret goes back to Reassign….
+  await card.getByTestId('reassign').click();
+  await expect(card.getByRole('searchbox', { name: 'Find a person' })).toBeFocused();
+  await app.page.keyboard.press('Escape');
+  await expect(card.getByTestId('reassign-picker')).toHaveCount(0);
+  await expect(card.getByTestId('reassign')).toBeFocused();
+  await card.getByTestId('reassign').click();
+  await card.getByRole('searchbox', { name: 'Find a person' }).fill('Raf');
+  await card.getByRole('option', { name: 'Rafael Moreno' }).click();
+  await expect(app.page.getByTestId('toast')).toHaveText('Reassigned to Rafael Moreno');
+  await expect(app.page.getByTestId('item-card')).toHaveCount(0);
+  expect(app.calls().find(call => call.body?.operation === 'assign')?.body)
+    .toMatchObject({ item_id: 'itm_00000000-0000-4000-8000-000000000031', owner_membership_id: expect.any(String) });
 });
 
 test('Check now on a decision checks only that decision', async () => {
@@ -374,7 +394,7 @@ test('a decision\'s row counts what its Impact line calls open, and the project 
 test('Tell the owners? names apart items whose titles nothing tells apart', async () => {
   app = await launch('granola-alike');
   await app.page.getByTestId('need-row').filter({ hasText: 'need updating' }).click();
-  await expect(app.page.getByRole('heading', { name: 'Tell the owners?' })).toBeVisible();
+  await expect(app.page.getByTestId('send')).toBeVisible();
   await expect(app.page.getByRole('checkbox')).toHaveCount(6);
   // Two pages Ari cannot open, with the same expected phrase, and two tickets ECHO couldn't read just now, with none.
   for (const name of [

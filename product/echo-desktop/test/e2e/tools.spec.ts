@@ -161,9 +161,10 @@ test('a meeting added through Granola reaches Home as a decision to approve, wit
   await page.screenshot({ path: testInfo.outputPath('home-needs-you.png') });
   await row.click();
   const card = page.getByTestId('decision');
-  await expect(card).toContainText('Approve this decision?');
+  await expect(card.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
+  await expect(card).toContainText('Approve');
   await expect(card).toContainText('Launch the pilot next week.');
-  await expect(card.getByLabel('Share the transcript with the selected audience')).not.toBeChecked();
+  await expect(card.getByLabel('Share the transcript with them too')).not.toBeChecked();
   await card.getByRole('radio', { name: 'Only me' }).check();
   await page.screenshot({ path: testInfo.outputPath('decision-approve.png') });
   await card.getByTestId('decision-approve').click();
@@ -187,7 +188,7 @@ test('approves a meeting into two projects with an edited owner', async () => {
   await page.getByTestId('need-row').click();
   const card = page.getByTestId('decision');
   // The heading has the focus, not Only me: Enter or Space keeps the suggested projects.
-  await expect(card.getByRole('heading', { name: 'Approve this decision?' })).toBeFocused();
+  await expect(card.getByRole('heading', { name: 'Pilot planning' })).toBeFocused();
   await expect(card.getByRole('radio', { name: /Thermostat redesign/ })).toHaveAttribute('aria-checked', 'true');
   await expect(card.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
   await card.getByRole('checkbox', { name: 'Supplier review' }).check();
@@ -231,7 +232,7 @@ test('a Granola outage still lets a retained meeting be approved from Home', asy
   const { page } = run;
   await page.getByTestId('need-row').click({ timeout: 5_000 });
   const card = page.getByTestId('decision');
-  await expect(card.getByLabel('Share the transcript with the selected audience')).not.toBeChecked();
+  await expect(card.getByLabel('Share the transcript with them too')).not.toBeChecked();
   await card.getByTestId('decision-approve').click();
   await expect(page.getByTestId('toast')).toContainText('Approved');
   expect(run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);

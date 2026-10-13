@@ -9,14 +9,21 @@ shows ticket citations that open directly in Jira. Project Ask includes Jira onl
 
 Home shows only what waits on you, under **Needs you**. Each row is one of:
 
-- **Approve**: a meeting waiting for your decision. It opens the decision,
-  where you choose its audience, owners and transcript sharing.
+- **Approve**: a meeting waiting for your decision. Its card shows what was
+  decided, numbered (a decision still proposed or unresolved says so), and
+  what is to be done, each with its due date and an owner you can retype;
+  what was said in the meeting, and the reasons given, open on demand. On the
+  right sit who sees it (Only me or projects), transcript sharing, **Approve**
+  and **Reject**, and who was in the meeting. The card reads the proposal text
+  the Authority sends; a text it cannot read shows as written.
 - **Checking**: a meeting you approved, while its record publishes and its
   impact check runs. It has no action and is not counted.
 - **Check failed** (verb **Retry**): "Approved · the check did not finish". It
   opens the decision with the reason and **Try again**.
-- **Send**: your impact check found items the decision changes.
-  **Tell the owners?** sends each to its owner (or **Pick a person**).
+- **Send**: your impact check found items the decision changes. Its card
+  lists each item with what it says now beside what the decision needs, and
+  who it goes to (or **Pick a person**); the panel beside it says who gets
+  how many and sends them (**Send to …**), or leaves the row (**Not now**).
 - **Update**: an item that waits on you as its owner: sent to you, or left to
   you because the people ahead of you have left. Each item row has three
   lines: "ECHO-12 · Pilot launch doesn't match the decision yet", what it says
@@ -29,9 +36,11 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
   match ("· changed since you got it, still doesn't match"), and **Review**
   for an item someone else owns that changed since you sent it ("Mina's to
   update · changed since you sent it"): the row opens the item's card first:
-  whose it is to update, the decision, what the item says **Now** beside what
-  **The decision needs**, what ECHO saw when it last checked, then **Mark
-  updated** and **No change needed** when you may close it. Nothing on the row
+  whose it is to update, what the item says now beside what **The decision
+  needs**, what ECHO saw when it last checked and the decision; beside them its
+  status, due date and assignee when its tool gave them, **Mark updated** and
+  **No change needed** when you may close it, **Open in Jira** (or its tool),
+  and **Reassign…** when you may give it to someone else. Nothing on the row
   itself closes the item.
 
 Under the rows, and on an empty Home, a footer says how many of your items
@@ -57,8 +66,7 @@ when the Authority says they are due, Home asks for a sweep and starts it
 after any waiting impact check. A sweep makes no Home row and changes no
 item's state; it only records each item's latest verdict. Items on a Slack
 message are not re-checked: ECHO cannot read a Slack message yet, so they
-stay "not checked yet". Reassigning an item after Send is not on the desktop
-yet (the CLI's `assign` does it). Projects and archived projects live in the
+stay "not checked yet". Projects and archived projects live in the
 sidebar.
 
 Tools → Granola manages folder watching and individual meeting imports. Home and

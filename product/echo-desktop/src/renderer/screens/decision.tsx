@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol.js';
-import { colorFor, initials } from '../format.js';
+import { dateTime } from '../format.js';
+import { proposalRead, readProposal, type Proposal as Read, type ProposalSignal } from '../proposal.js';
 import {
   decide, loadProjects, retryImpact, setDecisionAudience, setDecisionOwner, setDecisionShare, tickDecisionProject, type DecisionState, type State,
 } from '../store.js';
 import { Passage } from './ask.js';
+import { CardHead, dueWords, Face, Reasons, SignalRow } from './card.js';
 import { ImpactSection } from './impact-card.js';
 import { ProjectPicker } from './project-picker.js';
 
@@ -15,85 +17,172 @@ function choices(projects: readonly ProjectSummary[], suggested: NonNullable<Dec
   return [...all.values()];
 }
 
-function Owner({ name }: { name: string }) {
-  return <span class="face" style={{ background: colorFor(name) }} aria-hidden="true">{initials(name)}</span>;
+/** "2 decisions · 1 action": what the proposal holds. */
+function counts(read: Read): string | null {
+  const parts = [
+    read.decisions.length > 0 ? `${read.decisions.length} ${read.decisions.length === 1 ? 'decision' : 'decisions'}` : null,
+    read.actions.length > 0 ? `${read.actions.length} ${read.actions.length === 1 ? 'action' : 'actions'}` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' · ') : null;
 }
 
-/** Approve this decision? The proposal, who does what, who sees it, and the one button. */
+/** Where the meeting came from: "Meeting · Oct 13, 9:00 AM". */
+function meetingWhere(meetingAt: string | null): string {
+  const at = meetingAt ? dateTime(meetingAt) : '';
+  return at ? `Meeting · ${at}` : 'Meeting';
+}
+
+/** What was decided, numbered. */
+function Decided({ read }: { read: Read }) {
+  if (read.decisions.length === 0) return null;
+  return (
+    <section class="card-section" aria-labelledby="decision-decided">
+      <div class="section-label" id="decision-decided">Decided</div>
+      <div class="card-list">{read.decisions.map((signal, index) => <SignalRow key={index} signal={signal} number={index + 1} />)}</div>
+    </section>
+  );
+}
+
+/**
+ * Who does what: each action with its due date, and its owner, a name you
+ * can change before approving (the Authority keeps it as typed). Actions the
+ * proposal names without an owner to set show as they are.
+ */
+/** The same words, whatever their spacing: an owner's action as the proposal text wrote it. */
+function same(a: string, b: string): boolean {
+  return a.replace(/\s+/g, ' ').trim() === b.replace(/\s+/g, ' ').trim();
+}
+
+function ToDo({ decision, read, frozen }: { decision: DecisionState; read: Read; frozen: boolean }) {
+  const actions = read.actions;
+  const loose: ProposalSignal[] = actions.filter(action => !decision.owners.some(owner => same(owner.action, action.text)));
+  if (decision.owners.length === 0 && loose.length === 0) return null;
+  const due = (text: string) => dueWords(actions.find(action => same(action.text, text))?.due ?? null);
+  return (
+    <section class="card-section" aria-labelledby="decision-todo">
+      <div class="section-label" id="decision-todo">To do</div>
+      <div class="card-list">
+        {decision.owners.map(owner => {
+          const signal = actions.find(action => same(action.text, owner.action)) ?? { text: owner.action, subject: null, status: null, due: null, quotes: [] };
+          const when = due(owner.action);
+          return (
+            <SignalRow key={owner.signal_id} signal={signal}>
+              {when && <span class="card-due">{when}</span>}
+              <label class="card-owner">
+                <Face name={owner.owner || '?'} />
+                <input type="text" value={owner.owner} disabled={frozen} placeholder="No owner" aria-label={`Owner for: ${owner.action}`}
+                  onInput={event => setDecisionOwner(owner.signal_id, (event.target as HTMLInputElement).value)} />
+              </label>
+            </SignalRow>
+          );
+        })}
+        {loose.map((signal, index) => {
+          const when = dueWords(signal.due);
+          return <SignalRow key={`loose-${index}`} signal={signal}>{when && <span class="card-due">{when}</span>}</SignalRow>;
+        })}
+      </div>
+    </section>
+  );
+}
+
+/** The proposal's own words, when they do not read as a proposal. */
+function AsWritten({ text, title }: { text: string; title: string }) {
+  return <div class="passage selectable decision-body" data-testid="decision-body"><Passage text={text} label={title} /></div>;
+}
+
+/** Approve this decision? What was decided and who does what on the left; who sees it, and the one button, on the right. */
 function Proposal({ state, decision }: { state: State; decision: DecisionState }) {
   const open = decision.open!;
+  const read = readProposal(open.content);
+  const readable = proposalRead(read);
   const projects = choices(state.projects.items, open.suggested_projects);
   const chosen = decision.project_ids.map(id => projects.find(project => project.project_id === id)?.name ?? id);
   const approvable = !decision.busy && (decision.audience === 'only-me' || decision.project_ids.length > 0);
   // Sending, or maybe sent: Approve and Reject resend the same choices.
   const frozen = decision.busy || decision.unknown === true;
   return (
-    <article class="decision-card" data-testid="decision" aria-labelledby="decision-ask">
-      <h1 id="decision-ask" class="decision-ask" tabIndex={-1}>Approve this decision?</h1>
-      <div class="decision-from">From <b>{open.review.title}</b></div>
-      {open.review.first_line && <div class="decision-line" data-testid="decision-line">{open.review.first_line}</div>}
-      <div class="passage selectable decision-body" data-testid="decision-body"><Passage text={open.content} label={open.review.title} /></div>
-      {decision.owners.length > 0 && (
-        <div class="decision-section">
-          <div class="section-label">Who does what</div>
-          {decision.owners.map(owner => (
-            <label class="decision-action" key={owner.signal_id}>
-              <Owner name={owner.owner || '?'} />
-              <span class="decision-action-text">{owner.action}</span>
-              <input class="field small" type="text" value={owner.owner} disabled={frozen} placeholder="No owner" aria-label={`Owner for: ${owner.action}`}
-                onInput={event => setDecisionOwner(owner.signal_id, (event.target as HTMLInputElement).value)} />
-            </label>
-          ))}
-        </div>
-      )}
-      <div class="decision-section">
-        <div class="section-label" id="decision-readers">Seen by</div>
-        <div role="radiogroup" aria-labelledby="decision-readers" class="readers-row">
-          <button type="button" role="radio" class="reader-pill" aria-checked={decision.audience === 'only-me'} disabled={frozen}
-            data-testid="decision-only-me" onClick={() => setDecisionAudience('only-me')}>Only me</button>
-          <button type="button" role="radio" class="reader-pill" aria-checked={decision.audience === 'projects'} disabled={frozen}
-            data-testid="decision-projects" onClick={() => setDecisionAudience('projects')}>
-            {decision.audience === 'projects' && chosen.length > 0 ? `${chosen[0]}${chosen.length > 1 ? ` +${chosen.length - 1}` : ''}` : 'Projects'}
-          </button>
-        </div>
-        {decision.audience === 'projects' && (
-          <div class="well picker" data-testid="decision-picker">
-            <ProjectPicker projects={projects} ticked={decision.project_ids} max={MAX_CAPTURE_PROJECTS} onTick={tickDecisionProject} disabled={frozen}
-              more={state.projects.next !== null && !state.projects.loading} onMore={() => void loadProjects(true)} />
+    <div class="card-page" data-testid="decision">
+      <article class="card-main" aria-labelledby="decision-ask">
+        <CardHead kind="approve" verb="Approve" where={meetingWhere(open.review.meeting_at)} title={open.review.title} id="decision-ask"
+          meta={readable ? counts(read) : null} />
+        {readable ? <>
+          <Decided read={read} />
+          <ToDo decision={decision} read={read} frozen={frozen} />
+          <Reasons reasons={read.rationales} />
+        </> : <>
+          <AsWritten text={open.content} title={open.review.title} />
+          <ToDo decision={decision} read={read} frozen={frozen} />
+        </>}
+      </article>
+      <aside class="card-rail" aria-label="Your decision">
+        <section class="card-panel" aria-labelledby="decision-readers">
+          <div class="section-label" id="decision-readers">Seen by</div>
+          <div role="radiogroup" aria-labelledby="decision-readers" class="readers-row">
+            <button type="button" role="radio" class="reader-pill" aria-checked={decision.audience === 'only-me'} disabled={frozen}
+              data-testid="decision-only-me" onClick={() => setDecisionAudience('only-me')}>Only me</button>
+            <button type="button" role="radio" class="reader-pill" aria-checked={decision.audience === 'projects'} disabled={frozen}
+              data-testid="decision-projects" onClick={() => setDecisionAudience('projects')}>
+              {decision.audience === 'projects' && chosen.length > 0 ? `${chosen[0]}${chosen.length > 1 ? ` +${chosen.length - 1}` : ''}` : 'Projects'}
+            </button>
           </div>
+          {decision.audience === 'projects' && (
+            <div class="well picker" data-testid="decision-picker">
+              <ProjectPicker projects={projects} ticked={decision.project_ids} max={MAX_CAPTURE_PROJECTS} onTick={tickDecisionProject} disabled={frozen}
+                more={state.projects.next !== null && !state.projects.loading} onMore={() => void loadProjects(true)} />
+            </div>
+          )}
+          <label class="check"><input type="checkbox" checked={decision.share} disabled={frozen} onChange={event => setDecisionShare((event.target as HTMLInputElement).checked)} />
+            <span>Share the transcript with them too</span></label>
+          {decision.failure && <div class="error" data-testid="decision-error" aria-live="polite">{decision.failure}</div>}
+          <div class="card-rule" />
+          <button type="button" class="primary-button" data-testid="decision-approve" disabled={!approvable} onClick={() => void decide('approve')}>Approve</button>
+          <button type="button" class="plain-button" data-testid="decision-reject" disabled={decision.busy} onClick={() => void decide('reject')}>Reject</button>
+          {decision.busy && <span class="asking card-busy"><i /><i /><i /><span>Sending</span></span>}
+        </section>
+        {read.participants.length > 0 && (
+          <section class="card-side" aria-labelledby="decision-people">
+            <div class="section-label" id="decision-people">In the meeting · {read.participants.length}</div>
+            {read.participants.map(name => <div class="card-person" key={name}><Face name={name} /><span>{name}</span></div>)}
+          </section>
         )}
-        <label class="check"><input type="checkbox" checked={decision.share} disabled={frozen} onChange={event => setDecisionShare((event.target as HTMLInputElement).checked)} />
-          <span>Share the transcript with the selected audience</span></label>
-      </div>
-      {decision.failure && <div class="error" data-testid="decision-error" aria-live="polite">{decision.failure}</div>}
-      <div class="decision-foot">
-        <button type="button" class="primary-button small" data-testid="decision-approve" disabled={!approvable} onClick={() => void decide('approve')}>Approve</button>
-        <button type="button" class="plain-button" data-testid="decision-reject" disabled={decision.busy} onClick={() => void decide('reject')}>Reject</button>
-        {decision.busy && <span class="asking"><i /><i /><i /><span>Sending</span></span>}
-      </div>
-    </article>
+      </aside>
+    </div>
   );
 }
 
 /**
- * What did it change? The approved decision and its impact card, or where the
- * check stands: Tell the owners?' Details, and a failed check's Try again.
+ * What did it change? The approved decision's impact card, or where the
+ * check stands (Tell the owners?' Details, and a failed check's Try again),
+ * then what was decided.
  */
 function Impact({ state, decision }: { state: State; decision: DecisionState }) {
   const open = decision.open!;
+  const read = readProposal(open.content);
   const run = decision.run;
   const done = run?.state === 'done' && decision.impact !== undefined;
   const ask = run?.state === 'failed' ? 'The check did not finish' : done ? 'What did it change?' : 'Checking what it changes';
   const verb = open.review.status === 'rejected' ? 'Rejected' : open.review.status === 'superseded' ? 'Replaced by a newer version' : 'Approved';
   const standing = open.review.decided_on === 'slack' ? `${verb} in Slack` : verb;
   return (
-    <article class="decision-card" data-testid="decision" aria-labelledby="decision-ask">
-      <h1 id="decision-ask" class="decision-ask" tabIndex={-1}>{ask}</h1>
-      <div class="decision-from">{standing} · <b>{open.review.title}</b></div>
-      <div class="passage selectable decision-body" data-testid="decision-body"><Passage text={open.content} label={open.review.title} /></div>
-      <ImpactSection run={run ?? undefined} view={decision.impact} publishing={open.review.status === 'publishing'} busy={decision.busy}
-        tools={state.tools?.items ?? undefined} onRetry={() => void retryImpact()} />
-    </article>
+    <div class="card-page" data-testid="decision">
+      <article class="card-main" aria-labelledby="decision-ask">
+        <CardHead kind="done" verb={standing} where={open.review.title} title={ask} id="decision-ask" />
+        <ImpactSection run={run ?? undefined} view={decision.impact} publishing={open.review.status === 'publishing'} busy={decision.busy}
+          tools={state.tools?.items ?? undefined} onRetry={() => void retryImpact()} />
+        {proposalRead(read) ? <>
+          <Decided read={read} />
+          {read.actions.length > 0 && (
+            <section class="card-section" aria-labelledby="decision-todo">
+              <div class="section-label" id="decision-todo">To do</div>
+              <div class="card-list">{read.actions.map((signal, index) => {
+                const when = dueWords(signal.due);
+                return <SignalRow key={index} signal={signal}>{when && <span class="card-due">{when}</span>}</SignalRow>;
+              })}</div>
+            </section>
+          )}
+        </> : <AsWritten text={open.content} title={open.review.title} />}
+      </article>
+    </div>
   );
 }
 
@@ -108,7 +197,7 @@ export function Decision({ state, decision }: { state: State; decision: Decision
   }
   const pending = decision.open.review.status === 'pending';
   return (
-    <div class="column decision" ref={box}>
+    <div class="column card" ref={box}>
       {pending ? <Proposal state={state} decision={decision} /> : <Impact state={state} decision={decision} />}
     </div>
   );

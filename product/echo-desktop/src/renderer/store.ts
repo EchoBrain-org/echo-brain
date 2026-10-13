@@ -4802,6 +4802,8 @@ export interface ItemCardState {
   route: Route;
   /** The item as Home read it. */
   item: OpenItemView;
+  /** Reassign…, open: the organization's people by name, to give the item to. */
+  reassign?: { query: string; results: readonly Member[]; loading: boolean; failure?: string; busy: boolean } | null;
 }
 
 export function itemCardShown(current: State = state): ItemCardState | null {
@@ -4817,10 +4819,67 @@ export function openItemCard(item: OpenItemView): void {
 
 export function closeItemCard(): void { set({ itemCard: null }); }
 
+/** Reassign…, or Cancel: the card's people picker opens with the organization's first people, or closes. */
+export function toggleReassign(): void {
+  const card = itemCardShown();
+  if (!card || !card.item.can.assign || card.reassign?.busy) return;
+  if (card.reassign) { set({ itemCard: { ...card, reassign: null } }); return; }
+  set({ itemCard: { ...card, reassign: { query: '', results: [], loading: true, busy: false } } });
+  void findReassignee('');
+}
+
+/** Typing in Reassign…, counted: a read for an older name is dropped. */
+let reassignSeq = 0;
+
+/** The organization's people by name, but the item's owner now. */
+export async function findReassignee(query: string): Promise<void> {
+  const card = itemCardShown();
+  const account = expect();
+  if (!card?.reassign || !account || card.reassign.busy) return;
+  const mine = ++reassignSeq;
+  const typing = query !== card.reassign.query;
+  set({ itemCard: { ...card, reassign: { ...card.reassign, query, loading: true, failure: undefined } } });
+  if (typing) await new Promise(resolve => setTimeout(resolve, SEARCH_PAUSE_MS));
+  if (mine !== reassignSeq || itemCardShown()?.item.item_id !== card.item.item_id) return;
+  const name = query.trim();
+  const result = await rpc('people.directory', { expect: account, ...(name === '' ? {} : { query: name }) });
+  const current = itemCardShown();
+  if (mine !== reassignSeq || !current?.reassign || current.item.item_id !== card.item.item_id) return;
+  if (!result.ok) {
+    set({ itemCard: { ...current, reassign: { ...current.reassign, loading: false, results: [], failure: message(result.failure) } } });
+    accountLost(result.failure);
+    return;
+  }
+  const owner = current.item.owner.membership_id;
+  set({ itemCard: { ...current, reassign: { ...current.reassign, loading: false, results: result.value.items.filter(person => person.membership_id !== owner) } } });
+}
+
+/** A person picked: the item is theirs to update now, on their Home; the card goes and says so. */
+export async function reassignCardItem(person: Member): Promise<void> {
+  const card = itemCardShown();
+  if (!card?.reassign || card.reassign.busy || !card.item.can.assign) return;
+  set({ itemCard: { ...card, reassign: { ...card.reassign, busy: true, failure: undefined } } });
+  let failure: string | null = null;
+  try {
+    await runsCommand({ schema_version: 1, operation: 'assign', item_id: card.item.item_id, owner_membership_id: person.membership_id });
+  } catch (error) {
+    failure = error instanceof Error ? error.message : 'That was not sent. Try again.';
+  }
+  const current = itemCardShown();
+  const shown = current?.reassign && current.item.item_id === card.item.item_id ? current : null;
+  if (failure !== null) {
+    if (shown) set({ itemCard: { ...shown, reassign: { ...shown.reassign!, busy: false, failure } } });
+    else set({ toast: failure });
+    return;
+  }
+  set({ ...(shown ? { itemCard: null } : {}), toast: `Reassigned to ${person.display_name}` });
+  void loadHome();
+}
+
 /** Mark updated or No change needed, on an item's card: the card goes, and the item closes as an Update row's Mark updated does. */
 export function closeCardItem(to: 'done' | 'not_relevant'): void {
   const card = itemCardShown();
-  if (!card) return;
+  if (!card || card.reassign?.busy) return;
   set({ itemCard: null });
   void closeItem(card.item, to);
 }
