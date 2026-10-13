@@ -164,6 +164,13 @@ test('a meeting added through Granola reaches Home as a decision to approve, wit
   await expect(card.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
   await expect(card).toContainText('Approve');
   await expect(card).toContainText('Launch the pilot next week.');
+  // The card reads the proposal text the Authority sent: what was decided, who does what by when, and what was said.
+  await expect(card).toContainText('1 decision · 2 actions');
+  await expect(card.getByTestId('card-signal').filter({ hasText: 'Confirm the trace' })).toContainText('Due Oct 10');
+  await expect(card.getByRole('region', { name: 'In the meeting · 3' })).toContainText('Rafael Moreno');
+  await card.getByRole('button', { name: 'In the meeting: Launch the pilot next week.' }).click();
+  await expect(card.locator('.said-line').filter({ hasText: 'Mina Patel' })).toContainText('Agreed. The freeze lifts on Friday.');
+  await expect(card.getByRole('button', { name: 'Why · 1 reason from the meeting' })).toBeVisible();
   await expect(card.getByLabel('Share the transcript with them too')).not.toBeChecked();
   await card.getByRole('radio', { name: 'Only me' }).check();
   await page.screenshot({ path: testInfo.outputPath('decision-approve.png') });

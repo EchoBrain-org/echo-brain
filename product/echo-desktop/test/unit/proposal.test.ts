@@ -76,6 +76,35 @@ describe('readProposal', () => {
     expect(proposal.actions.map(action => action.text)).toEqual(['Write the plan:\n• scope\n• dates']);
   });
 
+  // Since meetings are cited by numbered units, every signal has at least one quote, one per unit it cites: a
+  // transcript turn without its "Label: ", a note line without its list marker, or a sentence-packed part.
+  it('reads a signal with its own list after a quoted one, and every quote of a signal citing several units', () => {
+    const proposal = readProposal(proposalText({
+      meeting: { title: 'Pilot planning', time: { actual_start_at: '2026-10-06T17:00:00.000Z', timezone: 'America/Los_Angeles' },
+        participants: [{ id: 'p1', display_name: 'Ari' }, { id: 'p2', display_name: 'Mina Patel' }] },
+      decisions: [
+        { text: 'Launch the pilot next week.', status: 'decided', evidence: [{ quote: 'Launch the pilot next week' }, { quote: 'We ship Friday.' },
+          { quote: 'Actions\n\n[17:05] Mina Patel: I\'ll confirm the trace by Friday.' }] },
+        { text: 'Roll out:\n• EU first\n• then the US', status: 'proposed', evidence: [{ quote: 'EU first, then the US?' }] },
+      ],
+      actions: [
+        { text: 'Confirm the trace', due_at: '2026-10-10', evidence: [{ quote: 'Agreed, I\'ll draft it.\nSystem audio: And confirm the trace.' }] },
+        { text: 'Write the plan:\n• scope\n• dates', due_at: null, evidence: [{ quote: 'Someone writes the plan.' }] },
+      ],
+      rationales: [{ text: 'The freeze lifts on Friday.', evidence: [{ quote: 'The freeze lifts on Friday.' }] }],
+    }));
+    expect(proposal.participants).toEqual(['Ari', 'Mina Patel']);
+    expect(proposal.decisions.map(decision => [decision.text, decision.status, decision.quotes])).toEqual([
+      ['Launch the pilot next week.', 'decided', ['Launch the pilot next week', 'We ship Friday.', 'Actions\n\n[17:05] Mina Patel: I\'ll confirm the trace by Friday.']],
+      ['Roll out:\n• EU first\n• then the US', 'proposed', ['EU first, then the US?']],
+    ]);
+    expect(proposal.actions.map(action => [action.text, action.due, action.quotes])).toEqual([
+      ['Confirm the trace', '2026-10-10', ['Agreed, I\'ll draft it.\nSystem audio: And confirm the trace.']],
+      ['Write the plan:\n• scope\n• dates', null, ['Someone writes the plan.']],
+    ]);
+    expect(proposal.rationales.map(reason => [reason.text, reason.quotes])).toEqual([['The freeze lifts on Friday.', ['The freeze lifts on Friday.']]]);
+  });
+
   it('reads nothing from a text that is not a proposal, so the card shows it as written', () => {
     const proposal = readProposal('Pilot planning\nDecisions\nLaunch the pilot next week.');
     expect(proposalRead(proposal)).toBe(false);

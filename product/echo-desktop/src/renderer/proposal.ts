@@ -48,14 +48,25 @@ function heading(lines: readonly string[], index: number): Section | null {
   return found && (next === undefined || next === 'None' || next.startsWith('• ')) ? found : null;
 }
 
-/** A "• " line at `index` begins a signal of this section: it reaches the field every such signal has before anything else could begin. */
+/** A line a quote could end on: it ends with ” before the end, a "• " line, another quote or the next section. */
+function closable(lines: readonly string[], index: number): boolean {
+  if (!lines[index]!.endsWith('”')) return false;
+  const next = lines[index + 1];
+  return next === undefined || next.startsWith('• ') || next.startsWith(QUOTE) || (next === '' && (lines[index + 2] === undefined || heading(lines, index + 2) !== null));
+}
+
+/**
+ * A "• " line at `index` begins a signal of this section: it reaches the field every such signal has before anything
+ * else could begin. The signal's own text may hold "• " lines (a list in a decision); another quote, the next section,
+ * or a line the quote could still end on, before that field, means the "• " line is still in the quote.
+ */
 function begins(lines: readonly string[], index: number, kind: Section): boolean {
   const required = REQUIRED[kind];
   if (required === null) return true;
-  for (let at = index + 1; at < lines.length; at += 1) {
+  for (let at = index; at < lines.length; at += 1) {
     const line = lines[at]!;
     if (line.startsWith(required)) return true;
-    if (line.startsWith('• ') || line.startsWith(QUOTE) || (line === '' && heading(lines, at + 1))) return false;
+    if (line.startsWith(QUOTE) || (line === '' && heading(lines, at + 1)) || closable(lines, at)) return false;
   }
   return false;
 }
