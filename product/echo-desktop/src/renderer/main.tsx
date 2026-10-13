@@ -145,7 +145,6 @@ function App() {
         <div class="page"><div class="signin" data-testid="start-failed">
           <h1>ECHO could not start</h1>
           <button type="button" class="primary-button" data-testid="start-retry" onClick={() => void retryStart()}>Try again</button>
-          {/* A release whose host cannot start must still be able to install its fix. */}
           <UpdateRow state={state} />
         </div></div>
       </div>

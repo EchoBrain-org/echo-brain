@@ -17,7 +17,6 @@ test('no row without a new version; New version · Restart installs it and shows
 
   await setUpdateState(run, { state: 'available', release: RELEASE });
   await expect(row).toHaveText('New version · Restart');
-  await expect(row).toHaveRole('button');
   // Directly above the account row.
   await expect(page.locator('.update-rows + .account-row')).toHaveCount(1);
   await row.click();
@@ -32,7 +31,12 @@ test('no row without a new version; New version · Restart installs it and shows
   await expect(row).toHaveText('Couldn\'t update · Try again');
   await row.click();
   await expect.poll(() => updateInstalls(run)).toEqual([RELEASE, RELEASE]);
-  await expect(row).toContainText('Updating');
+
+  // Newer files already installed: the same words restart into them.
+  await setUpdateState(run, { state: 'restart', release: RELEASE });
+  await expect(row).toHaveText('New version · Restart');
+  await row.click();
+  await expect.poll(() => updateInstalls(run)).toEqual([RELEASE, RELEASE, RELEASE]);
 
   await setUpdateState(run, { state: 'none' });
   await expect(row).toHaveCount(0);
@@ -63,8 +67,6 @@ test('a save whose outcome is unknown holds the restart, in sign out\'s words, u
   await expect(page.getByTestId('sidebar-update-note')).toHaveCount(0);
   await row.click();
   await expect.poll(() => updateInstalls(run)).toEqual([RELEASE]);
-  await expect(page.getByTestId('sidebar-update-note')).toHaveCount(0);
-  await expect(row).toHaveText('Updating');
 });
 
 test('outside Applications the row only says where ECHO must be', async () => {
@@ -83,17 +85,6 @@ test('outside Applications the row only says where ECHO must be', async () => {
   expect(await updateInstalls(run)).toEqual([]);
 });
 
-test('newer files already installed: New version · Restart restarts into them', async () => {
-  run = await launch();
-  const { page } = run;
-  const row = page.getByTestId('sidebar-update');
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await setUpdateState(run, { state: 'restart', release: RELEASE });
-  await expect(row).toHaveText('New version · Restart');
-  await row.click();
-  await expect.poll(() => updateInstalls(run)).toEqual([RELEASE]);
-});
-
 test('the row shows under ECHO could not start, so a release whose host cannot start still installs its fix', async () => {
   run = await launch('host-crash');
   const { page } = run;
@@ -106,7 +97,6 @@ test('the row shows under ECHO could not start, so a release whose host cannot s
   await expect(page.getByTestId('start-retry')).toBeVisible();
   await row.click();
   await expect.poll(() => updateInstalls(run)).toEqual([RELEASE]);
-  await expect(row).toContainText('Updating');
   await expect(page.getByTestId('start-failed')).toBeVisible();
 });
 

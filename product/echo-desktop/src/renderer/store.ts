@@ -948,7 +948,6 @@ export function signOutHeld(): boolean {
     state.change?.status === 'unknown' || projectSettingsBlocked() || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.employeeWrite !== null;
 }
 
-/** What to settle before signing out, or restarting for a new version: an unknown outcome is settled where it shows. */
 /** What to settle first, where an unknown outcome shows: sign out and the update row say the same. */
 export function settleWords(current: State = state): string {
   return current.compose?.status === 'unknown' ? 'A save may not have arrived. Check it in Capture first.'
@@ -1000,9 +999,6 @@ export function signinPhase(browserOpened: boolean | undefined): void {
 
 // ---- updates from the signed client feed (ADR-0035) --------------------------
 
-/** A click on the update row that sign out's own check refused. */
-const UPDATE_HELD: Failure = { code: 'update_held', retryable: true };
-
 /** Counts the rows main has sent, so a status read that crossed a newer one is dropped. */
 let updatesSeen = 0;
 
@@ -1019,15 +1015,12 @@ export async function readUpdate(): Promise<void> {
   if (result.ok && seen === updatesSeen) updateChanged(result.value);
 }
 
-/**
- * New version · Restart, and Try again: main installs the release on the row,
- * then ECHO restarts. Refused, as sign out is, while a save or a change is
- * unresolved. A row that changed under the click is read again, quietly.
- */
+/** New version · Restart, and Try again: main installs the release on the row, then ECHO restarts. */
 export async function installUpdate(): Promise<void> {
   const update = state.update;
   if (update.state === 'none' || update.state === 'installing' || (update.state === 'failed' && update.reason === 'location')) return;
-  if (signOutHeld()) { set({ updateFailure: UPDATE_HELD }); return; }
+  // Held as sign out is: the same work, and the same words under the row.
+  if (signOutHeld()) { set({ updateFailure: { code: 'update_held', retryable: true } }); return; }
   set({ updateFailure: null });
   // Progress arrives as update.changed.
   const result = await rpc('update.install', { release: update.release });

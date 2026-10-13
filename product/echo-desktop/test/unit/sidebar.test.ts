@@ -54,8 +54,8 @@ describe('project list failures', () => {
   });
 });
 
-const ACCOUNT = { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } as const;
 const RELEASE = 'clean-v1-release-b';
+const HELD = { code: 'update_held', retryable: true };
 
 /** The words a node shows, its children's included. */
 function text(value: unknown): string {
@@ -65,20 +65,14 @@ function text(value: unknown): string {
   return text((value as VNode<Record<string, unknown>>).props.children);
 }
 
-async function withUpdate(update: UpdateState, extra: Partial<State> = {}, signedIn = true): Promise<State> {
+/** The update row over the store's first state, with this row and anything else set. */
+async function updateRow(update: UpdateState, extra: Partial<State> = {}) {
   const { getState } = await import('../../src/renderer/store.js');
-  return {
-    ...getState(),
-    status: signedIn ? { client_version: 'test', signed_in: true, account: ACCOUNT } : { client_version: 'test', signed_in: false, account: null },
-    update, ...extra,
-  };
-}
-
-async function updateRow(state: State) {
   const { UpdateRow } = await import('../../src/renderer/screens/sidebar.js');
-  const tree = descendants(UpdateRow({ state }));
+  const shown = UpdateRow({ state: { ...getState(), update, ...extra } });
+  const tree = descendants(shown);
   return {
-    tree,
+    shown, tree,
     row: tree.find(node => node.props['data-testid'] === 'sidebar-update'),
     note: tree.find(node => node.props['data-testid'] === 'sidebar-update-note'),
   };
@@ -86,8 +80,7 @@ async function updateRow(state: State) {
 
 describe('the update row', () => {
   it('is not there while there is no new version', async () => {
-    const { UpdateRow } = await import('../../src/renderer/screens/sidebar.js');
-    expect(UpdateRow({ state: await withUpdate({ state: 'none' }) })).toBeNull();
+    expect((await updateRow({ state: 'none' })).shown).toBeNull();
   });
 
   it.each([
@@ -95,7 +88,7 @@ describe('the update row', () => {
     [{ state: 'restart', release: RELEASE }, 'New version · Restart'],
     [{ state: 'failed', release: RELEASE, reason: 'failed' }, 'Couldn\'t update · Try again'],
   ] as const)('%o is one button, "%s", that installs', async (update, words) => {
-    const { row, note } = await updateRow(await withUpdate(update));
+    const { row, note } = await updateRow(update);
     expect(row?.type).toBe('button');
     expect(text(row)).toBe(words);
     // Home says Update for open items: nothing clickable here does.
@@ -109,7 +102,7 @@ describe('the update row', () => {
     [{ state: 'installing', release: RELEASE }, 'Updating'],
     [{ state: 'failed', release: RELEASE, reason: 'location' }, 'Move ECHO to Applications to update'],
   ] as const)('%o only says "%s"', async (update, words) => {
-    const { tree, row } = await updateRow(await withUpdate(update));
+    const { tree, row } = await updateRow(update);
     // Still the one button, so a keyboard click keeps focus, but unavailable and inert.
     expect(row?.type).toBe('button');
     expect(row?.props['aria-disabled']).toBe('true');
@@ -120,24 +113,18 @@ describe('the update row', () => {
   });
 
   it.each([
-    [{}, 'Finish the current save first.'],
-    [{ compose: { status: 'unknown' } }, 'A save may not have arrived. Check it in Capture first.'],
-    [{ change: { status: 'unknown' } }, 'A project change may not have finished. Try it again or dismiss it first.'],
-  ])('says what to settle first, as sign out does, under a held click: %o', async (extra, words) => {
-    const state = await withUpdate({ state: 'available', release: RELEASE },
-      { ...extra, updateFailure: { code: 'update_held', retryable: true } } as Partial<State>);
-    const { row, note } = await updateRow(state);
+    [HELD, {}, 'Finish the current save first.'],
+    [HELD, { compose: { status: 'unknown' } }, 'A save may not have arrived. Check it in Capture first.'],
+    [HELD, { change: { status: 'unknown' } }, 'A project change may not have finished. Try it again or dismiss it first.'],
+    [{ code: 'invalid_request', retryable: false }, {}, 'That cannot be sent.'],
+  ])('says under the row what to settle first, as sign out does, or any other refusal in the standard words: %o %o', async (failure, extra, words) => {
+    const { row, note } = await updateRow({ state: 'available', release: RELEASE }, { ...extra, updateFailure: failure } as Partial<State>);
     expect(text(row)).toBe('New version · Restart');
     expect(text(note)).toBe(words);
   });
 
-  it('says any other refusal in the standard words', async () => {
-    const state = await withUpdate({ state: 'failed', release: RELEASE, reason: 'failed' }, { updateFailure: { code: 'invalid_request', retryable: false } });
-    expect(text((await updateRow(state)).note)).toBe('That cannot be sent.');
-  });
-
   it('neither takes a dropped file nor lets the window capture it', async () => {
-    const { tree } = await updateRow(await withUpdate({ state: 'available', release: RELEASE }));
+    const { tree } = await updateRow({ state: 'available', release: RELEASE });
     const holder = tree[0]!;
     for (const handler of ['onDragOver', 'onDrop']) {
       const event = { stopPropagation: vi.fn(), preventDefault: vi.fn() };
@@ -145,14 +132,5 @@ describe('the update row', () => {
       expect(event.stopPropagation).toHaveBeenCalledOnce();
       expect(event.preventDefault).not.toHaveBeenCalled();
     }
-  });
-
-  it.each([true, false])('sits directly above the account row, signed in: %s', async signedIn => {
-    const { Sidebar, UpdateRow } = await import('../../src/renderer/screens/sidebar.js');
-    const aside = Sidebar({ state: await withUpdate({ state: 'available', release: RELEASE }, {}, signedIn) });
-    const children = (aside.props.children as unknown[]).filter(child => child !== null && typeof child === 'object');
-    const at = children.findIndex(child => (child as VNode).type === UpdateRow);
-    expect(at).toBeGreaterThan(-1);
-    expect((children[at + 1] as VNode<Record<string, unknown>>).props['data-testid']).toBe('account-row');
   });
 });

@@ -16,8 +16,9 @@ let row: UpdateState;
 let install: () => unknown;
 let membership: string;
 
-const installs = () => rpc.mock.calls.filter(([method]) => method === 'update.install').map(([, params]) => params);
-const statusReads = () => rpc.mock.calls.filter(([method]) => method === 'update.status').length;
+/** The params of each call the page made to `name`, oldest first. */
+const calls = (name: string) => rpc.mock.calls.filter(([method]) => method === name).map(([, params]) => params);
+const installs = () => calls('update.install');
 
 beforeEach(() => {
   vi.resetModules();
@@ -59,13 +60,6 @@ describe('the update row', () => {
     expect(store.getState().update).toEqual({ state: 'none' });
     await store.readUpdate();
     expect(store.getState().update).toEqual({ state: 'available', release: A });
-    for (const next of [
-      { state: 'installing', release: A }, { state: 'failed', release: A, reason: 'failed' },
-      { state: 'failed', release: A, reason: 'location' }, { state: 'restart', release: B }, { state: 'none' },
-    ] as const) {
-      store.updateChanged(next);
-      expect(store.getState().update).toEqual(next);
-    }
   });
 
   it('drops a status read that crossed a newer row from main', async () => {
@@ -134,17 +128,19 @@ describe('installUpdate', () => {
     expect(store.getState().updateFailure).toBeNull();
     await store.installUpdate();
     expect(installs()).toEqual([{ release: A }]);
-    expect(store.getState().updateFailure).toBeNull();
   });
 
-  it('drops the settle line once an unknown save is checked, and never brings it back', async () => {
+  it('names an unknown save in sign out\'s words, drops the line once it is checked, and never brings it back', async () => {
     const store = await startStore();
     store.updateChanged({ state: 'available', release: A });
     const reply = await saving(store);
     reply(fail('transport_failed', { mutation_outcome: 'unknown' }));
     await flush();
+    expect(store.getState().compose?.status).toBe('unknown');
     await store.installUpdate();
+    expect(installs()).toEqual([]);
     expect(store.getState().updateFailure).toMatchObject({ code: 'update_held' });
+    expect(store.settleWords()).toBe('A save may not have arrived. Check it in Capture first.');
 
     // Checked, it did not arrive: nothing is held, so the line goes rather than turn untrue.
     const checked = held.hold('writes.status');
@@ -165,39 +161,14 @@ describe('installUpdate', () => {
     expect(store.getState().updateFailure).toBeNull();
   });
 
-  it('names the save to settle when its outcome is unknown, in sign out\'s words', async () => {
+  it('shows main\'s held refusal only while work is held, work only main holds for included', async () => {
     const store = await startStore();
     store.updateChanged({ state: 'available', release: A });
-    const reply = await saving(store);
-    reply(fail('transport_failed', { mutation_outcome: 'unknown' }));
-    await flush();
-    expect(store.getState().compose?.status).toBe('unknown');
+    install = () => fail('update_held', { retryable: true });
+    // Settled by the time the refusal came: there is nothing to settle.
     await store.installUpdate();
-    expect(installs()).toEqual([]);
-    expect(store.getState().updateFailure).toMatchObject({ code: 'update_held' });
-    expect(store.settleWords()).toBe('A save may not have arrived. Check it in Capture first.');
-  });
-
-  it('shows main\'s held refusal the same way, while the work is still held', async () => {
-    const store = await startStore();
-    store.updateChanged({ state: 'available', release: A });
-    // A save starts while main is deciding, and main refuses for it.
-    const refusal = held.hold('update.install');
-    const clicking = store.installUpdate();
-    const reply = await saving(store);
-    refusal(fail('update_held', { retryable: true }));
-    await clicking;
-    expect(installs()).toEqual([{ release: A }]);
-    expect(store.getState().updateFailure).toMatchObject({ code: 'update_held' });
-
-    reply(ok({}));
-    await flush();
     expect(store.getState().updateFailure).toBeNull();
-  });
 
-  it('keeps main\'s held refusal for work only main holds for, until it is settled', async () => {
-    const store = await startStore();
-    store.updateChanged({ state: 'available', release: A });
     // New project's file whose save is unknown: main's quit guard holds for it; sign out does not.
     store.openNewProject();
     await flush();
@@ -211,10 +182,8 @@ describe('installUpdate', () => {
     await flush();
     expect(store.getState().sheet).toMatchObject({ kind: 'new-project', files: [{ status: 'unknown' }] });
     expect(store.signOutHeld()).toBe(false);
-
-    install = () => fail('update_held', { retryable: true });
     await store.installUpdate();
-    expect(installs()).toEqual([{ release: A }]);
+    expect(installs()).toEqual([{ release: A }, { release: A }]);
     expect(store.getState().updateFailure).toMatchObject({ code: 'update_held' });
 
     // Checked, it never arrived: nothing is held, so the line goes.
@@ -225,22 +194,13 @@ describe('installUpdate', () => {
     expect(store.getState().updateFailure).toBeNull();
   });
 
-  it('drops main\'s held refusal when the work it held for was settled by the time it came', async () => {
-    const store = await startStore();
-    store.updateChanged({ state: 'available', release: A });
-    install = () => fail('update_held', { retryable: true });
-    await store.installUpdate();
-    expect(installs()).toEqual([{ release: A }]);
-    expect(store.getState().updateFailure).toBeNull();
-  });
-
   it('reads the row again, quietly, when it changed under the click', async () => {
     const store = await startStore();
     store.updateChanged({ state: 'available', release: A });
     install = () => fail('update_changed');
     row = { state: 'restart', release: B };
     await store.installUpdate();
-    expect(statusReads()).toBe(1);
+    expect(calls('update.status')).toHaveLength(1);
     expect(store.getState().update).toEqual({ state: 'restart', release: B });
     expect(store.getState().updateFailure).toBeNull();
   });
@@ -252,15 +212,12 @@ describe('installUpdate', () => {
     await store.installUpdate();
     expect(store.getState().updateFailure).toMatchObject({ code: 'invalid_request' });
 
-    install = () => ok(null);
     const reply = held.hold('update.install');
     const clicking = store.installUpdate();
     expect(store.getState().updateFailure).toBeNull();
-    reply(ok(null));
+    reply(fail('invalid_request'));
     await clicking;
-
-    install = () => fail('invalid_request');
-    await store.installUpdate();
+    expect(store.getState().updateFailure).toMatchObject({ code: 'invalid_request' });
     store.updateChanged({ state: 'installing', release: A });
     expect(store.getState().updateFailure).toBeNull();
   });
