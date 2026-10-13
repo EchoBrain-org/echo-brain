@@ -56,6 +56,7 @@ separately.
 | [ADR-0032](ADR-0032-stored-trigger-runs.md) | Stored trigger runs keep pointers and judgments, not outside text | accepted |
 | [ADR-0033](ADR-0033-shared-open-items.md) | Open items are one shared row per affected item, seen by the decision's audience | proposed |
 | [ADR-0034](ADR-0034-confluence-person-live-page-evidence.md) | Person-bound Confluence live page evidence with Nango custody | proposed |
+| [ADR-0035](ADR-0035-desktop-updates-from-the-signed-feed.md) | The desktop app updates itself from the signed client feed | accepted |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary
