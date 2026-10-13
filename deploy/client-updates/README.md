@@ -125,11 +125,12 @@ receipt receives the private key.
 Run the [feed preparation command](../../docs/features/client-updates-v1.md#preparing-an-approved-feed)
 with the exact canonical release and all four artifacts: the macOS arm64 and
 Linux x64/glibc CLI kits (`--macos-kit`, `--linux-kit`), the `ECHO.app` ZIP
-(`--macos-app`) and the `.deb` (`--linux-deb`). The preparation, signer, seal
-and publication commands refuse a new release without all four
-(`all_release_targets_required`), each with the same source SHA and
-Person-client artifact. Keep the prepared bundle, authorization and receipts in
-private mode-0700 directories with mode-0600 files.
+(`--macos-app`) and the `.deb` (`--linux-deb`). Preparation refuses a missing
+option (`missing_argument`). The signer, seal and publication commands refuse a
+new release without all four (`all_release_targets_required`), each with the
+same source SHA and Person-client artifact. Keep the prepared bundle,
+authorization and receipts in private mode-0700 directories with mode-0600
+files.
 
 Unsigned preparation may use a candidate release before final acceptance; it
 requires no release authorization. Review the resulting manifest bytes and
@@ -329,10 +330,12 @@ the app pins the bootstrap embedded in its identity, and a later app cannot
 change that pin.
 
 - macOS: quit ECHO and replace `~/Applications/ECHO.app` with the release's
-  `ECHO.app`. The folder must be writable by the user; an app elsewhere shows
-  **Move ECHO to Applications to update**.
+  `ECHO.app`. The folder must be writable by the user. An app elsewhere still
+  checks, and once it finds a release it shows **Move ECHO to Applications to
+  update**.
 - Linux: `sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb`. The
-  `.tar.gz` package has no updater.
+  `.tar.gz` package has no updater. Without `/usr/bin/pkexec` the updater stays
+  off, and this manual reinstall remains the way to update.
 
 Use the exact artifacts from the published release, transferred through the
 authenticated operator channel. Enrolling the app does not enroll the CLI, and
@@ -405,8 +408,10 @@ on release A. A successful CLI update proves nothing about the app, and the
 reverse.
 
 1. Before publication, record the tray menu's `Build <sha7>` for A.
-2. After publication, relaunch the app or wait for its hourly check. The sidebar
-   shows **New version · Restart**.
+2. After publication, wait for the app's next check, up to about 70 minutes
+   after publication. The app contacts the feed at most once an hour after its
+   last completed check, and relaunching does not force a check. The sidebar
+   then shows **New version · Restart**.
 3. Select it. On Linux, enter an admin password at the system prompt. The app
    quits, installs B and reopens.
 4. Check that the tray shows `Build <sha7>` for B's source SHA. Then complete an
@@ -435,3 +440,22 @@ Publishing reaches only enrolled installations: a desktop installed before
 ADR-0035 or from the `.tar.gz` stays on its release until it is reinstalled by
 hand. Local packaging/updater tests and an already-current client do not prove
 a live A-to-B update or fleet-wide rollout of the new update policy.
+
+## Known limitations
+
+- **The feed gate.** For each desktop package, `prepare` checks the identity,
+  `Info.plist`, the embedded Person-client tree and, on Linux, the root
+  helper's bytes. It does not check `app.asar` or the rest of the bundle, so a
+  compromised build machine is outside what the gate proves. The same holds
+  for ZIP local-header tricks, such as local file headers that disagree with
+  the central directory.
+- **Downgrade window.** The Linux helper refuses a feed older than the last one
+  it installed, and the app refuses one older than the last one it verified.
+  A seat installed by hand, or a new user, accepts any unexpired signed feed at
+  or above `minimum_sequence` until its first helper install. The CLI has the
+  same bootstrap window. Using it needs a compromised feed origin or a TLS
+  interception, plus the admin password, and it is limited to
+  publisher-signed releases within their validity.
+- **Quit and owner actions.** An owner's in-flight invite or revoke is not part
+  of the quit's unresolved-work question. This is true of every quit, not only
+  the update's.

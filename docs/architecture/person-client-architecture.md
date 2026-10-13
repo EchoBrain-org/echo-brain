@@ -71,8 +71,11 @@ the app update itself from the signed client feed. Release packaging writes
 (`ECHO.app/Contents/Resources` or `/opt/ECHO/resources`). It names the release,
 its record digest and source SHA, the Person-client digest and target, and the
 update bootstrap with `installation: "electron"`. Without a valid identity, in
-development and test builds, under `--smoke`, from the Linux `.tar.gz`, or from
-an unsupported location, the updater is off.
+development and test builds, under `--smoke`, from the Linux `.tar.gz`, outside
+an `ECHO.app` bundle, outside `/opt/ECHO` with its root-owned helper, or on
+Linux without `/usr/bin/pkexec`, the updater is off. A macOS app that is translocated or cannot write its folder
+still checks, and on finding a release shows **Move ECHO to Applications to
+update** right away.
 
 The Electron main process loads the updater from the embedded, release-bound
 client (`person-client/package/dist/client-update.js`), the same way the host
@@ -80,18 +83,22 @@ loads the client. It pins the identity's bootstrap on first run and keeps
 per-user state in `<appData>/ECHO/desktop/updater/`, created `0700`, apart
 from the CLI root. The app's state folder is
 `~/Library/Application Support/ECHO/desktop` on macOS and
-`~/.config/ECHO/desktop` on Linux. It checks at launch and hourly and only
-announces, through one sidebar row. Install is refused while the app holds
-unresolved work. A `restart` installation stages the verified update and
-returns `staged`; the quit runs the normal host drain, and activation follows:
+`~/.config/ECHO/desktop` on Linux. It asks every ten minutes, but contacts the
+feed at most once an hour after its last completed check, across relaunches;
+relaunching does not force a check. It only announces, through one sidebar row,
+and a failed check shows nothing. Install is refused while the app holds
+unresolved work, and **Restart** arms the relaunch only when the quit is
+certain. A `restart` installation stages the verified update and returns
+`staged`; the quit runs the normal host drain, and activation follows:
 
 - macOS: a detached bash helper waits for the app to exit, swaps the staged
   `ECHO.app` into place, keeps the previous bundle until the new one starts,
   restores it if the swap fails, and writes `updater/outcome.json` for the next
   launch.
 - Linux: a detached relauncher runs `pkexec` with the root helper
-  `/opt/ECHO/resources/echo-desktop-update-helper`. The helper re-verifies the
-  feed with the root-owned installed identity, checks the root checkpoint
+  `/opt/ECHO/resources/echo-desktop-update-helper`. Each install attempt has
+  its own id. The helper re-verifies the feed with the root-owned installed
+  identity, checks the root checkpoint
   `/var/lib/echo-desktop/update-checkpoint.json` and prints `verified`, so the
   app quits. It then reinstalls the package with `apt-get`. The relauncher
   records the outcome and reopens the app; a cancelled password prompt leaves

@@ -204,30 +204,41 @@ pin; updates then stop with `already_configured`. Updater state lives in
 
 The app applies the CLI's rules: configuration pinning, signature, channel and
 expiry checks, the anti-rollback checkpoint, the lock and the bounded download
-(256 MiB, 15 minutes). It checks at launch and then hourly, and only announces.
+(256 MiB, 15 minutes). It asks every ten minutes, but contacts the feed at most
+once an hour after its last completed check, across relaunches. Relaunching
+does not force a check. It only announces, and a failed check shows nothing.
 One sidebar row shows **New version · Restart** when a release is available or
 newer files are already installed (`running_release_mismatch`). Selecting it
 stages the verified update (status `staged`), and the app activates it after it
-quits:
+quits. **Restart** arms the relaunch only when the quit is certain.
 
 - **macOS** checks the staged `ECHO.app` (bundle id, `codesign --verify --deep
   --strict`, and an identity matching the manifest) and swaps it into place. The
   running bundle must be writable and not translocated; ECHO normally lives in
-  `~/Applications`. A failed swap restores the previous app.
+  `~/Applications`. An app that is translocated or cannot write its folder
+  still checks, and on finding a release shows **Move ECHO to Applications to
+  update** right away. A failed swap restores the previous app.
 - **Linux** asks for an admin password through `pkexec`. The root helper
   `/opt/ECHO/resources/echo-desktop-update-helper` verifies the feed again with
   the key in the root-owned installed identity, checks the package digest and
   its own checkpoint `/var/lib/echo-desktop/update-checkpoint.json`, and then
-  reinstalls the package with `apt-get`. A cancelled prompt leaves the app
-  running; a later failure reopens the old app.
+  reinstalls the package with `apt-get`. Each install attempt has its own id,
+  so an earlier attempt's result is never read as this one's. A cancelled
+  prompt leaves the app running; a later failure reopens the old app.
+  Without `/usr/bin/pkexec` the updater stays off, and the manual reinstall
+  remains.
 
 The trust model is the feed's Ed25519 signature and digest, not Apple
 notarization. A self-replaced app is not quarantined, so Gatekeeper does not
 re-check it, and macOS privacy grants may need to be given again after an
 update. macOS App Management may block the swap; that is unverified until a
 seat rehearsal, and a blocked swap keeps the old app. On Linux the feed key now
-authorizes root-executed packages on enrolled desktops. Desktop installs from
-before this change have no updater and need one manual reinstall of a release
+authorizes root-executed packages on enrolled desktops. The helper refuses a
+feed older than the last one it installed, and the app refuses one older than
+the last one it verified. A seat installed by hand, or a new user, accepts any
+unexpired signed feed at or above `minimum_sequence` until its first helper
+install, the same bootstrap window the CLI has. Desktop installs from before
+this change have no updater and need one manual reinstall of a release
 package.
 
 ## Preparing an approved feed
@@ -252,12 +263,12 @@ node tools/client-update-feed.mjs prepare \
 ```
 
 Supply all four artifacts: the macOS arm64 and Linux x64/glibc CLI kits, the
-macOS arm64 `ECHO.app` ZIP and the Linux x64 `.deb`. Preparation, signing,
-sealing and publication refuse a new release missing any of them
-(`all_release_targets_required`). All four must bind the same canonical
-release, source SHA and Person-client artifact; each client selects its exact
-OS, architecture, libc and installation type. For each desktop artifact,
-`prepare` also checks that:
+macOS arm64 `ECHO.app` ZIP and the Linux x64 `.deb`. `prepare` refuses a
+missing option (`missing_argument`). Signing, sealing and publication refuse a
+new release missing any of the four (`all_release_targets_required`). All four
+must bind the same canonical release, source SHA and Person-client artifact;
+each client selects its exact OS, architecture, libc and installation type. For
+each desktop artifact, `prepare` also checks that:
 
 - its identity file names this release, its record digest, source SHA, product
   version, Person-client digest and target;
@@ -268,6 +279,10 @@ OS, architecture, libc and installation type. For each desktop artifact,
   `org.echobrain.echo-desktop`;
 - on Linux, the package is `echo-desktop` for `amd64`, and the root helper's
   bytes equal the helper at `release.source_sha`.
+
+These checks do not cover `app.asar` or the rest of the bundle, so a
+compromised build machine is outside what they prove; see the feed guide's
+[known limitations](../../deploy/client-updates/README.md#known-limitations).
 
 Historical single-platform and two-artifact feeds remain readable by clients
 and auditable through publication status, but cannot be published again.
@@ -345,10 +360,12 @@ checking them.
 Clients persist the highest verified sequence and its payload digest. Older
 sequences, changed bytes at the same sequence, expired metadata, and unknown
 fields fail closed. A deliberately authorized rollback uses a new sequence
-pointing to the retained compatible release. The desktop has no rollback
-button either; on macOS the previous bundle is kept only until the new one
-starts. Refresh expiry by publishing a new signed sequence even when the
-artifact is unchanged.
+pointing to the retained compatible release. That release must carry all four
+targets, each built from its own source SHA. A release from before the first
+ADR-0035 release cannot be a rollback target; recovery that would need one
+takes a forward fix. The desktop has no rollback button either; on macOS the
+previous bundle is kept only until the new one starts. Refresh expiry by
+publishing a new signed sequence even when the artifact is unchanged.
 
 This is a single-publisher V1 signature profile, not a complete TUF repository.
 Delegated roles, automated key rotation and compromise recovery are outside

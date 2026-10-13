@@ -53,8 +53,11 @@ The founder made two calls:
 
 - **Linux installs with an admin password prompt.** This overrides the earlier
   notify-only choice. The root helper re-verifies the publisher signature with
-  the root-owned key in the installed package and blocks downgrades. That gives
-  the protection a signed apt repository would.
+  the root-owned key in the installed package. It refuses a feed older than
+  the last one it installed, and the app refuses one older than the last one
+  it verified. A seat installed by hand, or a new user, accepts any unexpired
+  signed feed at or above `minimum_sequence` until its first helper install.
+  The CLI has the same bootstrap window (see [Consequences](#consequences)).
 - **macOS replaces `ECHO.app` without Apple notarization.** This uses the same
   trust model as the Mac CLI updater: the feed's Ed25519 signature and digest,
   not Apple's.
@@ -125,7 +128,8 @@ A build without these inputs (development, CI, an ad hoc package) has no
 identity file, and its updater is off. The Linux package also ships the root
 helper `/opt/ECHO/resources/echo-desktop-update-helper` and declares
 `python3` and `openssl` as dependencies. `pkexec` is only recommended: without
-it, an install fails safely and the documented manual reinstall remains.
+`/usr/bin/pkexec` the updater stays off, and the documented manual reinstall
+remains.
 
 `tools/client-update-feed.mjs prepare` takes `--macos-app` and `--linux-deb`
 beside the two kits. For each desktop artifact it checks the following:
@@ -193,22 +197,29 @@ The updater is on only when all of these hold:
 - the build is packaged;
 - the app is not running `--smoke`;
 - the identity file is valid;
-- the installation is supported. That means macOS arm64 with a resolvable,
-  non-translocated `ECHO.app`, or Linux x64 running from `/opt/ECHO` with the
-  root-owned helper present.
+- the installation is supported. That means macOS arm64 running from an
+  `ECHO.app` bundle, or Linux x64 running from `/opt/ECHO` with the root-owned
+  helper and `/usr/bin/pkexec` present.
 
 The `.tar.gz` Linux package, development builds and test builds never update.
+A macOS app that is translocated, or in a folder it cannot write, still checks.
+When it finds a release it shows **Move ECHO to Applications to update** right
+away.
 
 **First run.** The app pins the identity's `update_bootstrap` as its config. A
 later app that carries a different publisher, feed, channel or sequence floor
 cannot change that pin. Updates then stop with `already_configured`, as on the
 CLI.
 
-**Checks.** The app checks at launch and then every hour, through the existing
-`automatic` mode, its interval and `automatic: false`. It only announces. The
-running release is the identity read at launch. If the files on disk now name
-another release, for example because another Linux user updated `/opt/ECHO`,
-the existing `running_release_mismatch` status means "restart to use it".
+**Checks.** The app asks shortly after launch and then every ten minutes,
+through the existing `automatic` mode and `automatic: false`. The core's
+hourly interval decides when the feed is due: the app contacts the feed at most
+once an hour after its last completed check. That record is kept across
+relaunches, so relaunching does not force a check. A new release can take up
+to about 70 minutes to show. The app only announces. The running release is the
+identity read at launch. If the files on disk now name another release, for
+example because another Linux user updated `/opt/ECHO`, the existing
+`running_release_mismatch` status means "restart to use it".
 
 **What the person sees.** One sidebar row above the account row, and nothing
 else:
@@ -218,11 +229,14 @@ else:
 | A release is available, or newer files are already installed | **New version · Restart** |
 | Downloading, verifying, waiting for the password | **Updating** with the busy dots |
 | The install failed | **Couldn't update · Try again** |
-| macOS app outside a writable folder | **Move ECHO to Applications to update** |
+| A release is available, but the macOS app is translocated or in a folder it cannot write | **Move ECHO to Applications to update** |
 
-The row avoids the word "Update", which Home uses for open items. Install is
-refused while the app holds unresolved work (the same check as sign out). After
-staging, the quit runs the normal host drain.
+The row avoids the word "Update", which Home uses for open items. A failed
+background check shows nothing and leaves the current version running. Install
+is refused while the app holds unresolved work (the same check as sign out).
+After staging, the quit runs the normal host drain. **Restart** arms the
+relaunch only when the quit is certain, so a quit the person cancels does not
+reopen the app later.
 
 **macOS activation.**
 
@@ -253,7 +267,8 @@ staging, the quit runs the normal host drain.
 2. It writes a bash relauncher there and starts it detached. The relauncher
    runs `pkexec /opt/ECHO/resources/echo-desktop-update-helper install --feed
    F --deb D --wait-pid <app pid>`, with the helper's output going to a
-   progress file.
+   progress file. Each install attempt has its own id, so an earlier attempt's
+   progress or outcome is never taken for this one's.
 3. The helper runs as root:
    1. It copies both files with `O_NOFOLLOW` into a root-owned `0700` folder
       under `/var/lib/echo-desktop/`.
@@ -286,6 +301,19 @@ failed, 4 the app did not exit, 5 installation failed.
   enrolled Linux desktops. A leaked key is a fleet-wide root risk, mitigated
   only by the signature, the checkpoint and the explicit password prompt. Key
   rotation remains a separately reviewed bootstrap.
+- **Downgrade window.** Until its first helper install, a seat installed by
+  hand, or a new user, accepts any unexpired signed feed at or above
+  `minimum_sequence`, as a newly enrolled CLI does. Using that window needs a
+  compromised feed origin or a TLS interception, plus the admin password. It is
+  limited to publisher-signed releases within their validity.
+- **What the feed gate proves.** `prepare` checks the identity, `Info.plist`,
+  the embedded Person-client tree and, on Linux, the root helper's bytes. It
+  does not check `app.asar` or the rest of the bundle, so a compromised build
+  machine is outside what the gate proves. The same holds for ZIP local-header
+  tricks, such as local file headers that disagree with the central directory.
+- **Quit and owner actions.** An owner's in-flight invite or revoke is not part
+  of the quit's unresolved-work question. This is true of every quit, not only
+  the update's.
 - **macOS risk.** A self-replaced, ad-hoc signed app is not quarantined, so
   Gatekeeper does not re-check it. macOS App Management may block the swap,
   which is unverified until a seat rehearsal. A blocked swap keeps the old app.
@@ -302,8 +330,11 @@ failed, 4 the app did not exit, 5 installation failed.
 - **Old CLI seats.** Older CLIs keep their own behavior. Four-artifact feeds
   remain valid for them.
 - **Rollback.** There is no rollback button. A deliberate rollback is a newer
-  signed release, as for the CLI. On macOS the previous bundle is kept only
-  until the new one starts.
+  signed release, as for the CLI. It can only point at a retained release that
+  carries all four targets, each built from that release's source SHA.
+  Releases from before the first ADR-0035 release cannot be rollback targets,
+  so a recovery that would need one takes a forward fix. On macOS the previous
+  bundle is kept only until the new one starts.
 - **Local evidence:**
   - updater core, adapter and feed tooling tests with synthetic desktop
     artifacts;

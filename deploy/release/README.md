@@ -189,8 +189,9 @@ digest; do not silently substitute it under the prior approval.
    **New version · Restart** installs B (with an admin password on Linux), the
    tray shows `Build <sha7>` for B, and an authenticated read passes
    ([desktop update checks](../client-updates/README.md#verify-the-desktop-update)).
-   A seat without an updater-capable build enrolls through one manual
-   reinstall instead
+   The app sees B at its next check, up to about 70 minutes after
+   publication; relaunching does not force a check. A seat without an
+   updater-capable build enrolls through one manual reinstall instead
    ([enroll a desktop](../client-updates/README.md#enroll-a-desktop)), and the
    same build and read checks after it count as that seat's evidence. If the
    in-app update fails on an updater-capable seat, the seat may be reinstalled
@@ -223,9 +224,12 @@ client is installed; publication does not push this policy to the fleet.
 The host rollback action requires a staged candidate and unchanged accepted
 record. After promotion it is not a general undo button; a required server
 recovery needs a separately reviewed compatible release/recovery plan. The feed
-has no lower-sequence rollback command. Never delete locks, mutate receipts,
-overwrite feed objects manually, or infer a new authorization from partial
-success.
+has no lower-sequence rollback command. A feed rollback is a newer sequence
+that points at a retained release carrying all four targets, each built from
+that release's source SHA. A release from before the first ADR-0035 release
+cannot be a rollback target; recovery that would need one takes a forward fix.
+Never delete locks, mutate receipts, overwrite feed objects manually, or infer
+a new authorization from partial success.
 
 ## Release record
 

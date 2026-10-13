@@ -122,7 +122,8 @@ Linux outputs are in `dist-app/`:
 
 - `ECHO-<version>-linux-amd64.deb`: Debian/Ubuntu installer with the Electron
   runtime, dependencies, desktop launcher, sandbox integration and the update
-  helper. It depends on `python3` and `openssl` and recommends `pkexec`.
+  helper. It depends on `python3` and `openssl` and recommends `pkexec`;
+  without `/usr/bin/pkexec` the updater stays off.
 - `ECHO-<version>-linux-x64.tar.gz`: the app directory for manual distribution;
   the receiving system must supply Electron's system libraries and permit its
   sandbox. It never updates itself. Prefer the deb on Ubuntu, where the
@@ -176,16 +177,19 @@ For a headless Linux runner, prefix the smoke command with
 Unzip the release's ZIP and move `ECHO.app` to `~/Applications`, the
 Applications folder inside your home folder; create it if it is missing. That
 folder is yours to write, so ECHO can replace itself there when it updates.
-In a folder it cannot write, ECHO shows **Move ECHO to Applications to update**
-instead of updating. Check that the tray menu's `Build <sha7>` matches the
-release's source SHA.
+In a folder it cannot write, or when macOS runs it from a read-only copy
+(translocation), ECHO still checks. When it finds a release it shows **Move
+ECHO to Applications to update** right away, instead of updating. Check that
+the tray menu's `Build <sha7>` matches the release's source SHA.
 
 ## Updates
 
 A release package updates itself from the signed client feed
 ([ADR-0035](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)).
-It checks when it starts and then every hour. It only tells you; nothing
-installs until you choose to.
+It asks every ten minutes, but contacts the feed at most once an hour after its
+last completed check, even across relaunches. Relaunching does not force a
+check, so a new release can take up to about 70 minutes to show. It only tells
+you; nothing installs until you choose to.
 
 One row above your account in the sidebar shows where things stand:
 
@@ -194,7 +198,7 @@ One row above your account in the sidebar shows where things stand:
 | A release is available, or newer files are already installed | **New version · Restart** |
 | Downloading, verifying, waiting for the password | **Updating** with the busy dots |
 | The install failed | **Couldn't update · Try again** |
-| macOS app outside a writable folder | **Move ECHO to Applications to update** |
+| A release is available, but the macOS app is translocated or in a folder it cannot write | **Move ECHO to Applications to update** |
 
 Select **New version · Restart** to install. ECHO won't install while it still
 has unfinished work, just as it won't sign out then. It checks the update, quits
@@ -203,17 +207,26 @@ asking for a password. On Linux the system asks for an administrator password;
 a helper running as root then checks the update again before reinstalling the
 package. If another person on the same Linux machine already updated ECHO, the
 row also reads **New version · Restart**, and restarting uses the new version.
+**Restart** sets ECHO to reopen only once the quit is certain. If you cancel
+the quit when ECHO asks about unfinished work, ECHO stays open, and a later
+quit does not reopen it.
 
 An update fails safely:
 
 - If you cancel the password prompt, ECHO keeps running the version you had.
-- If a check or the install fails, ECHO keeps or reopens the old version and
-  shows **Couldn't update · Try again**.
+- A failed background check shows nothing, and the current version keeps
+  running.
+- If the install fails, ECHO keeps or reopens the old version and shows
+  **Couldn't update · Try again**.
 - On macOS, a failed swap puts the previous app back. macOS App Management may
   block the swap; that keeps the old app too.
-- On Linux without `pkexec`, updating fails and the manual reinstall remains.
-- ECHO never goes back to an earlier signed release. Undoing an update takes a
-  newer release.
+- On Linux without `/usr/bin/pkexec`, the updater stays off and the manual
+  reinstall remains.
+- ECHO refuses a feed older than the last one it verified, and the Linux
+  helper one older than the last one it installed. A seat installed by hand, or
+  a new user, has no such record until its first helper install, so it accepts
+  any unexpired signed feed at or above its sequence floor. Undoing an update
+  takes a newer release.
 
 After an update on macOS, you may have to grant ECHO's macOS privacy
 permissions again, because each build has a new code identity.
