@@ -11,7 +11,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { privateDirectory as sharedPrivateDirectory, privateFile, runAwsCliOnce, sha256 as digest, writePrivateFile } from './lib/operator-io.mjs';
 import { canonicalJson } from './clean-v1-release.mjs';
-import { requireBothCliTargets, validateSealedClientUpdateFeed } from './client-update-feed.mjs';
+import { artifactKey, releaseTarget, requireReleaseTargets, RELEASE_TARGETS, validateSealedClientUpdateFeed } from './client-update-feed.mjs';
 import { UPDATE_ARTIFACT_LIMIT, UPDATE_METADATA_LIMIT, verifyUpdateEnvelope } from '../src/product/person-client/dist/client-update-contract.js';
 
 const REPO = resolve(import.meta.dirname, '..');
@@ -25,14 +25,18 @@ const COMMIT = /^[a-f0-9]{40}$/;
 const ETAG = /^"[a-f0-9]{32}"$/;
 const STACK_ID = new RegExp(`^arn:aws:cloudformation:${REGION}:${ACCOUNT}:stack/${STACK}/[a-f0-9-]{36}$`);
 const INVENTORY = [{ action: 'Add', logical_id: 'FeedBucket', resource_type: 'AWS::S3::Bucket' }, { action: 'Add', logical_id: 'FeedBucketPolicy', resource_type: 'AWS::S3::BucketPolicy' }];
-// Each reserve is checked after the preflight HEAD: the remaining PUT,
-// verification HEAD, and public GET are capped at 120 seconds each, followed
-// by a two-minute scheduling cushion.
-const OBJECT_PUBLICATION_WINDOW_MS = 8 * 60 * 1000;
-// The first write reserves the full maximum two-artifact publication window.
-// Its preflight HEAD has completed, leaving eleven bounded 120-second
-// operations plus one 120-second scheduling cushion before the feed verifies.
-const INITIAL_PUBLICATION_WINDOW_MS = 24 * 60 * 1000;
+// A release publishes one artifact per target, then feed.json.
+const MAX_ARTIFACTS = RELEASE_TARGETS.length;
+// Every AWS CLI call and public GET is bounded by a fixed base, and an object
+// transfer adds time at an assumed minimum throughput of 512 KiB/s (about
+// 4 Mbit/s): about six minutes for a 128 MB app ZIP, ten at the 256 MiB cap.
+const OPERATION_BASE_MS = 120_000;
+const MINIMUM_BYTES_PER_SECOND = 512 * 1024;
+const SCHEDULING_CUSHION_MS = 120_000;
+const operationTimeout = bytes => OPERATION_BASE_MS + Math.ceil(bytes * 1000 / MINIMUM_BYTES_PER_SECOND);
+// Before each later replacement write: the predecessor's HEAD and GET and the
+// artifact's absence HEAD, or a second predecessor check before the feed.
+const REPLACEMENT_PREFLIGHT_CALLS = 4;
 const fail = code => { throw new Error(code); };
 const equal = (left, right) => canonicalJson(left) === canonicalJson(right);
 const templateHash = value => digest(canonicalJson(typeof value === 'string' || Buffer.isBuffer(value) ? JSON.parse(value.toString()) : value));
@@ -64,9 +68,9 @@ export function isAbsentClientUpdateHead(args, stderr) {
   return args[0] === 's3api' && args[1] === 'head-object' &&
     /^An error occurred \((404|NoSuchKey)\) when calling the HeadObject operation(?: \(reached max retries: [0-9]+\))?: [^\r\n]+$/.test(String(stderr ?? '').trim());
 }
-function defaultAws(args) {
+function defaultAws(args, { timeout = OPERATION_BASE_MS } = {}) {
   try {
-    const output = runAwsCliOnce([...args, '--region', REGION, '--output', 'json'], { timeout: 120_000, maxBuffer: 1024 * 1024 });
+    const output = runAwsCliOnce([...args, '--region', REGION, '--output', 'json'], { timeout, maxBuffer: 1024 * 1024 });
     return output ? JSON.parse(output) : {};
   } catch (error) {
     // An authenticated 403 is never evidence that an object is absent.
@@ -108,12 +112,15 @@ function preparedInputs(prepared, authorizationPath, validatePrepared, validatio
   const feed = read(join(prepared, 'feed.json'));
   if (!Buffer.isBuffer(validated.feedBytes) || !feed.equals(validated.feedBytes)) fail('validated_feed_mismatch');
   const objects = manifest.artifacts.map(artifact => {
-    const key = `artifacts/${artifact.sha256}.zip`;
+    // The target fixes the key, so the URL, and the content type it is served with.
+    const target = releaseTarget(artifact);
+    const key = target && SHA.test(artifact.sha256 ?? '') ? artifactKey(artifact) : fail('artifact_binding_mismatch');
+    if (artifact.url !== new URL(key, config.feed_url).href) fail('artifact_binding_mismatch');
     const bytes = read(join(prepared, key), UPDATE_ARTIFACT_LIMIT);
-    if (!SHA.test(artifact.sha256) || bytes.length !== artifact.bytes || digest(bytes) !== artifact.sha256 || artifact.url !== new URL(key, config.feed_url).href) fail('artifact_binding_mismatch');
-    return { key, sha256: artifact.sha256, bytes: artifact.bytes, content_type: 'application/zip', cache_control: 'public, max-age=31536000, immutable' };
+    if (bytes.length !== artifact.bytes || digest(bytes) !== artifact.sha256) fail('artifact_binding_mismatch');
+    return { key, sha256: artifact.sha256, bytes: artifact.bytes, content_type: target.content_type, cache_control: 'public, max-age=31536000, immutable' };
   });
-  if (!objects.length || objects.length > 2 || new Set(objects.map(item => item.key)).size !== objects.length) fail('publication_inventory_invalid');
+  if (!objects.length || objects.length > MAX_ARTIFACTS || new Set(objects.map(item => item.key)).size !== objects.length) fail('publication_inventory_invalid');
   objects.push({ key: 'feed.json', sha256: digest(feed), bytes: feed.length, content_type: 'application/json', cache_control: 'no-store' });
   return { config, manifest, hashes, objects };
 }
@@ -128,7 +135,7 @@ function summary(receipt, inputs, d) { return { kind: KIND, operation_id: receip
 function objectIdentity(item) { return { key: item.key, sha256: item.sha256, bytes: item.bytes, content_type: item.content_type, cache_control: item.cache_control }; }
 function readReceipt(path) {
   const receipt = JSON.parse(read(path));
-  if (receipt?.schema_version !== 1 || receipt.kind !== KIND || !/^[a-f0-9-]{36}$/.test(receipt.operation_id ?? '') || !COMMIT.test(receipt.source_sha ?? '') || !['planned', 'publishing', 'succeeded', 'unconfirmed'].includes(receipt.state) || !Array.isArray(receipt.objects) || !receipt.objects.length || receipt.objects.length > 3 || receipt.objects.some(item => typeof item.attempted !== 'boolean' || typeof item.succeeded !== 'boolean' || typeof item.verified !== 'boolean' || (item.succeeded && !item.attempted) || (item.verified && !item.succeeded) || (item.version_id !== null && (typeof item.version_id !== 'string' || !item.version_id || item.version_id === 'null')))) fail('publication_receipt_invalid');
+  if (receipt?.schema_version !== 1 || receipt.kind !== KIND || !/^[a-f0-9-]{36}$/.test(receipt.operation_id ?? '') || !COMMIT.test(receipt.source_sha ?? '') || !['planned', 'publishing', 'succeeded', 'unconfirmed'].includes(receipt.state) || !Array.isArray(receipt.objects) || !receipt.objects.length || receipt.objects.length > MAX_ARTIFACTS + 1 || receipt.objects.some(item => typeof item.attempted !== 'boolean' || typeof item.succeeded !== 'boolean' || typeof item.verified !== 'boolean' || (item.succeeded && !item.attempted) || (item.verified && !item.succeeded) || (item.version_id !== null && (typeof item.version_id !== 'string' || !item.version_id || item.version_id === 'null')))) fail('publication_receipt_invalid');
   return receipt;
 }
 function boundInputs(receipt, d, { allowExpired = false } = {}) {
@@ -140,11 +147,19 @@ function boundInputs(receipt, d, { allowExpired = false } = {}) {
   if (inputs.config.feed_url !== currentHosting.feed_url || !equal(inputs.hashes, receipt.hashes) || inputs.manifest.release_id !== receipt.release_id || !equal(inputs.objects, receipt.objects.map(objectIdentity))) fail('publication_inputs_changed');
   return inputs;
 }
-function requirePublicationWindow(receipt, index, inputs, d) {
-  const firstWrite = receipt.objects.every(object => !object.attempted);
-  const remainingObjects = receipt.objects.slice(index).filter(object => !object.attempted).length;
-  const required = firstWrite ? INITIAL_PUBLICATION_WINDOW_MS : remainingObjects * OBJECT_PUBLICATION_WINDOW_MS;
+// The validity a write needs once its own preflight checks have passed: each
+// pending object's PUT, verification HEAD and public GET at their size-scaled
+// bounds, the preflight calls of every later write, and one scheduling cushion.
+// The first write therefore reserves the whole publication.
+function publicationWindow(pending, preflightCalls) {
+  return pending.reduce((total, object, index) => total + 2 * operationTimeout(object.bytes) + OPERATION_BASE_MS +
+    (index ? preflightCalls * OPERATION_BASE_MS : 0), SCHEDULING_CUSHION_MS);
+}
+function requireValidity(inputs, d, required) {
   if (Date.parse(inputs.manifest.expires_at) - currentTime(d) < required) fail('insufficient_metadata_validity');
+}
+function requirePublicationWindow(receipt, index, inputs, d) {
+  requireValidity(inputs, d, publicationWindow(receipt.objects.slice(index).filter(object => !object.attempted), 1));
 }
 function revalidateSealedInputs(receipt, d) {
   const refreshed = preparedInputs(receipt.prepared, receipt.authorization, d.validatePrepared, { now: currentTime(d) });
@@ -155,7 +170,7 @@ async function verifyObject(receipt, object, inputs, d, { allowExpired = false }
   const observed = head(d.aws, receipt.hosting.bucket, object.key);
   if (observed?.absent || observed.ContentLength !== object.bytes || observed.ContentType !== object.content_type || observed.CacheControl !== object.cache_control || observed.ContentEncoding || observed.WebsiteRedirectLocation || observed.ServerSideEncryption !== 'AES256' || typeof observed.VersionId !== 'string' || !observed.VersionId || observed.VersionId === 'null' || (object.version_id !== null && object.version_id !== observed.VersionId)) fail('published_object_metadata_mismatch');
   const url = new URL(object.key, receipt.hosting.feed_url).href;
-  const response = await d.fetch(url, { redirect: 'manual', headers: { 'accept-encoding': 'identity' }, signal: AbortSignal.timeout(120_000) });
+  const response = await d.fetch(url, { redirect: 'manual', headers: { 'accept-encoding': 'identity' }, signal: AbortSignal.timeout(operationTimeout(object.bytes)) });
   if (response.status !== 200 || response.redirected || (response.url && response.url !== url) || response.headers.get('content-encoding') || response.headers.get('content-length') !== String(object.bytes) || response.headers.get('content-type') !== object.content_type || response.headers.get('cache-control') !== object.cache_control || response.headers.get('x-amz-server-side-encryption') !== 'AES256' || response.headers.get('x-amz-version-id') !== observed.VersionId || !response.body) { await response.body?.cancel(); fail('public_object_headers_mismatch'); }
   const reader = response.body.getReader();
   const hash = createHash('sha256');
@@ -193,7 +208,7 @@ export async function planClientUpdatePublish({ hostingReceipt, prepared, author
     account(d.aws);
     const host = hosting(absolute(hostingReceipt), d.aws, d.readTemplate);
     const inputs = preparedInputs(absolute(prepared), absolute(authorization), d.validatePrepared, { now: currentTime(d) });
-    requireBothCliTargets(inputs.manifest);
+    requireReleaseTargets(inputs.manifest);
     if (inputs.config.feed_url !== host.feed_url) fail('publication_feed_url_mismatch');
     // Check feed first. A new receipt cannot bypass an existing publication.
     absent(d.aws, host.bucket, 'feed.json');
@@ -213,8 +228,8 @@ export async function executeClientUpdatePublish({ receipt: path, approveManifes
     if (receipt.state === 'unconfirmed') fail('publication_unconfirmed_use_status');
     let inputs = boundInputs(receipt, d);
     if (receipt.state === 'succeeded') return summary(receipt, inputs, d);
-    // Historical single-platform receipts may be inspected, but never resumed with new writes.
-    if (receipt.objects.some(object => !object.attempted)) requireBothCliTargets(inputs.manifest);
+    // Historical CLI-only receipts may be inspected, but never resumed with new writes.
+    if (receipt.objects.some(object => !object.attempted)) requireReleaseTargets(inputs.manifest);
     try {
       for (const [index, object] of receipt.objects.entries()) {
         if (!object.attempted) {
@@ -227,10 +242,10 @@ export async function executeClientUpdatePublish({ receipt: path, approveManifes
           // The final feed is revalidated after its preflight HEAD and file
           // read, immediately before the sole conditional write makes it live.
           if (object.key === 'feed.json') inputs = revalidateSealedInputs(receipt, d);
-          requireBothCliTargets(inputs.manifest);
+          requireReleaseTargets(inputs.manifest);
           requirePublicationWindow(receipt, index, inputs, d);
           receipt.state = 'publishing'; object.attempted = true; save(path, receipt);
-          const result = d.aws(['s3api', 'put-object', '--bucket', receipt.hosting.bucket, '--key', object.key, '--body', file, '--if-none-match', '*', '--expected-bucket-owner', ACCOUNT, '--server-side-encryption', 'AES256', '--content-type', object.content_type, '--cache-control', object.cache_control, '--checksum-algorithm', 'SHA256', '--checksum-sha256', Buffer.from(object.sha256, 'hex').toString('base64')]);
+          const result = d.aws(['s3api', 'put-object', '--bucket', receipt.hosting.bucket, '--key', object.key, '--body', file, '--if-none-match', '*', '--expected-bucket-owner', ACCOUNT, '--server-side-encryption', 'AES256', '--content-type', object.content_type, '--cache-control', object.cache_control, '--checksum-algorithm', 'SHA256', '--checksum-sha256', Buffer.from(object.sha256, 'hex').toString('base64')], { timeout: operationTimeout(object.bytes) });
           if (result?.ServerSideEncryption !== 'AES256' || typeof result.VersionId !== 'string' || !result.VersionId || result.VersionId === 'null') fail('put_object_result_unconfirmed');
           object.succeeded = true; object.version_id = result.VersionId; save(path, receipt);
         }
@@ -280,7 +295,8 @@ function feedHeadIdentity(observed) {
 }
 async function readPublicObject(host, key, observed, limit, d) {
   const url = new URL(key, host.feed_url).href;
-  const response = await d.fetch(url, { redirect: 'manual', headers: { 'accept-encoding': 'identity' }, signal: AbortSignal.timeout(120_000) });
+  // Both callers have bounded ContentLength: the feed's limit, or the artifact's signed size.
+  const response = await d.fetch(url, { redirect: 'manual', headers: { 'accept-encoding': 'identity' }, signal: AbortSignal.timeout(operationTimeout(observed.ContentLength)) });
   if (response.status !== 200 || response.redirected || (response.url && response.url !== url) ||
       response.headers.get('content-encoding') || response.headers.get('content-length') !== String(observed.ContentLength) ||
       response.headers.get('content-type') !== observed.ContentType || response.headers.get('cache-control') !== observed.CacheControl ||
@@ -346,7 +362,7 @@ function readReplacementReceipt(path) {
   const predecessor = receipt?.predecessor;
   if (receipt?.schema_version !== 1 || receipt.kind !== REPLACEMENT_KIND || !/^[a-f0-9-]{36}$/.test(receipt.operation_id ?? '') ||
       !COMMIT.test(receipt.source_sha ?? '') || !['planned', 'publishing', 'succeeded', 'unconfirmed'].includes(receipt.state) ||
-      !Array.isArray(receipt.artifacts) || !receipt.artifacts.length || receipt.artifacts.length > 2 || receipt.artifacts.some(item => !validReplacementObject(item)) ||
+      !Array.isArray(receipt.artifacts) || !receipt.artifacts.length || receipt.artifacts.length > MAX_ARTIFACTS || receipt.artifacts.some(item => !validReplacementObject(item)) ||
       !validReplacementObject(receipt.feed, { feed: true }) || !predecessor || predecessor.key !== 'feed.json' || !SHA.test(predecessor.sha256 ?? '') ||
       !Number.isSafeInteger(predecessor.bytes) || predecessor.bytes <= 0 || typeof predecessor.version_id !== 'string' || !predecessor.version_id ||
       !ETAG.test(predecessor.etag ?? '') || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(predecessor.channel ?? '') ||
@@ -369,9 +385,11 @@ async function recheckPredecessor(receipt, inputs, d) {
   if (!samePredecessor(await observePredecessor(receipt.hosting, inputs.config, d), receipt.predecessor)) fail('predecessor_feed_changed');
 }
 function replacementWindow(receipt, artifactIndex, inputs, d) {
-  const remainingArtifacts = receipt.artifacts.slice(artifactIndex).filter(object => !object.reused && !object.attempted).length;
-  const remainingWrites = remainingArtifacts + (receipt.feed.attempted ? 0 : 1);
-  if (Date.parse(inputs.manifest.expires_at) - currentTime(d) < remainingWrites * OBJECT_PUBLICATION_WINDOW_MS) fail('insufficient_metadata_validity');
+  const later = receipt.artifacts.slice(artifactIndex);
+  const pending = [...later.filter(object => !object.reused && !object.attempted), ...(receipt.feed.attempted ? [] : [receipt.feed])];
+  // Reused artifacts still ahead are verified again: a HEAD and a public GET.
+  const reverified = later.filter(object => object.reused).reduce((total, object) => total + OPERATION_BASE_MS + operationTimeout(object.bytes), 0);
+  requireValidity(inputs, d, publicationWindow(pending, REPLACEMENT_PREFLIGHT_CALLS) + reverified);
 }
 async function matchingRemoteArtifact(host, object, d) {
   const observed = head(d.aws, host.bucket, object.key);
@@ -395,7 +413,7 @@ export async function planClientUpdateReplacement({ hostingReceipt, prepared, au
     account(d.aws);
     const host = hosting(absolute(hostingReceipt), d.aws, d.readTemplate);
     const inputs = preparedInputs(absolute(prepared), absolute(authorization), d.validatePrepared, { now: currentTime(d) });
-    requireBothCliTargets(inputs.manifest);
+    requireReleaseTargets(inputs.manifest);
     if (inputs.config.feed_url !== host.feed_url) fail('publication_feed_url_mismatch');
     const predecessor = await observePredecessor(host, inputs.config, d);
     if (predecessor.sha256 !== expectedPredecessor) fail('unexpected_predecessor_feed');
@@ -423,7 +441,7 @@ export async function executeClientUpdateReplacement({ receipt: path, approveMan
     if (receipt.state === 'unconfirmed') fail('publication_unconfirmed_use_status');
     let inputs = replacementInputs(receipt, d);
     if (receipt.state === 'succeeded') return replacementSummary(receipt, inputs, d);
-    if (!receipt.feed.attempted || receipt.artifacts.some(object => !object.reused && !object.attempted)) requireBothCliTargets(inputs.manifest);
+    if (!receipt.feed.attempted || receipt.artifacts.some(object => !object.reused && !object.attempted)) requireReleaseTargets(inputs.manifest);
     try {
       for (const [index, object] of receipt.artifacts.entries()) {
         if (object.reused) {
@@ -435,10 +453,10 @@ export async function executeClientUpdateReplacement({ receipt: path, approveMan
           const file = join(receipt.prepared, object.key);
           const bytes = read(file, UPDATE_ARTIFACT_LIMIT);
           if (bytes.length !== object.bytes || digest(bytes) !== object.sha256) fail('publication_inputs_changed');
-          requireBothCliTargets(inputs.manifest);
+          requireReleaseTargets(inputs.manifest);
           replacementWindow(receipt, index, inputs, d);
           receipt.state = 'publishing'; object.attempted = true; save(path, receipt);
-          const result = d.aws(['s3api', 'put-object', '--bucket', receipt.hosting.bucket, '--key', object.key, '--body', file, '--if-none-match', '*', '--expected-bucket-owner', ACCOUNT, '--server-side-encryption', 'AES256', '--content-type', object.content_type, '--cache-control', object.cache_control, '--checksum-algorithm', 'SHA256', '--checksum-sha256', Buffer.from(object.sha256, 'hex').toString('base64')]);
+          const result = d.aws(['s3api', 'put-object', '--bucket', receipt.hosting.bucket, '--key', object.key, '--body', file, '--if-none-match', '*', '--expected-bucket-owner', ACCOUNT, '--server-side-encryption', 'AES256', '--content-type', object.content_type, '--cache-control', object.cache_control, '--checksum-algorithm', 'SHA256', '--checksum-sha256', Buffer.from(object.sha256, 'hex').toString('base64')], { timeout: operationTimeout(object.bytes) });
           if (result?.ServerSideEncryption !== 'AES256' || typeof result.VersionId !== 'string' || !result.VersionId || result.VersionId === 'null') fail('put_object_result_unconfirmed');
           object.succeeded = true; object.version_id = result.VersionId; save(path, receipt);
         }
@@ -451,10 +469,10 @@ export async function executeClientUpdateReplacement({ receipt: path, approveMan
         if (bytes.length !== receipt.feed.bytes || digest(bytes) !== receipt.feed.sha256) fail('publication_inputs_changed');
         inputs = replacementInputs(receipt, d);
         await recheckPredecessor(receipt, inputs, d);
-        requireBothCliTargets(inputs.manifest);
+        requireReleaseTargets(inputs.manifest);
         replacementWindow(receipt, receipt.artifacts.length, inputs, d);
         receipt.state = 'publishing'; receipt.feed.attempted = true; save(path, receipt);
-        const result = d.aws(['s3api', 'put-object', '--bucket', receipt.hosting.bucket, '--key', 'feed.json', '--body', file, '--if-match', receipt.predecessor.etag, '--expected-bucket-owner', ACCOUNT, '--server-side-encryption', 'AES256', '--content-type', receipt.feed.content_type, '--cache-control', receipt.feed.cache_control, '--checksum-algorithm', 'SHA256', '--checksum-sha256', Buffer.from(receipt.feed.sha256, 'hex').toString('base64')]);
+        const result = d.aws(['s3api', 'put-object', '--bucket', receipt.hosting.bucket, '--key', 'feed.json', '--body', file, '--if-match', receipt.predecessor.etag, '--expected-bucket-owner', ACCOUNT, '--server-side-encryption', 'AES256', '--content-type', receipt.feed.content_type, '--cache-control', receipt.feed.cache_control, '--checksum-algorithm', 'SHA256', '--checksum-sha256', Buffer.from(receipt.feed.sha256, 'hex').toString('base64')], { timeout: operationTimeout(receipt.feed.bytes) });
         if (result?.ServerSideEncryption !== 'AES256' || typeof result.VersionId !== 'string' || !result.VersionId || result.VersionId === 'null') fail('put_object_result_unconfirmed');
         receipt.feed.succeeded = true; receipt.feed.version_id = result.VersionId; save(path, receipt);
       }

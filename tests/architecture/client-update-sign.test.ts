@@ -2,13 +2,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Buffer } from 'node:buffer';
 import { createPublicKey, verify } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { initializeClientUpdateSigner, signClientUpdateFeed } from '../../tools/client-update-sign.mjs';
 import { updateDigest } from '../../src/product/person-client/client-update-contract.js';
 import { cleanReleaseRecord } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
+import { desktopArtifacts } from '../support/client-update-desktop.js';
 
 const REPO = resolve(import.meta.dirname, '../..');
 const roots: string[] = [];
@@ -63,6 +64,8 @@ function fixture() {
     execFileSync('zip', ['-qr', archive, 'echo-person-onboarding-kit'], { cwd: directory });
     return [`--${target.name}-kit`, archive];
   });
+  const desktops = desktopArtifacts({ root, clientArchive: client, release, releaseSha256: updateDigest(readFileSync(releasePath)), config, helper: committedSource('product/echo-desktop/linux/echo-desktop-update-helper') });
+  archives.push('--macos-app', desktops['macos-app'].path, '--linux-deb', desktops['linux-deb'].path);
   const prepared = join(root, 'prepared');
   const prepare = spawnSync(process.execPath, [join(REPO, 'tools/client-update-feed.mjs'), 'prepare', '--config', configPath, '--release', releasePath, ...archives, '--sequence', '1', '--expires', new Date(Date.now() + 86_400_000).toISOString(), '--out', prepared], { cwd: REPO, encoding: 'utf8' });
   expect(prepare.status, prepare.stderr).toBe(0);
@@ -111,16 +114,31 @@ describe('local approved release signer', () => {
     expect(() => signClientUpdateFeed(f.options)).toThrow('signature_already_exists');
   });
 
+  type Artifact = { platform: string; installation: string };
   it.each([
-    ['linux', false], ['darwin', false], ['linux', true], ['darwin', true],
-  ] as const)('rejects a manually reduced %s-only manifest with approval=%s', (platform, approved) => {
+    ['CLI-kit', (artifact: Artifact) => artifact.installation === 'cli-kit'],
+    ['Linux CLI-kit', (artifact: Artifact) => artifact.installation === 'cli-kit' && artifact.platform === 'linux'],
+    ['macOS CLI-kit', (artifact: Artifact) => artifact.installation === 'cli-kit' && artifact.platform === 'darwin'],
+    ['deb-less', (artifact: Artifact) => artifact.installation === 'cli-kit' || artifact.platform === 'darwin'],
+  ] as const)('rejects a manually reduced %s-only manifest, previewed or approved', (_, keep) => {
+    for (const approved of [false, true]) {
+      const f = fixture();
+      const manifestPath = join(f.prepared, 'manifest.json');
+      const manifest = JSON.parse(f.payload.toString('utf8'));
+      manifest.artifacts = manifest.artifacts.filter(keep);
+      save(manifestPath, manifest);
+      const approveManifest = approved ? updateDigest(readFileSync(manifestPath)) : undefined;
+      expect(() => signClientUpdateFeed({ ...f.options, approveManifest })).toThrow('all_release_targets_required');
+      expect(existsSync(f.signaturePath)).toBe(false);
+    }
+  });
+
+  it('reads each desktop artifact under its own key', () => {
     const f = fixture();
-    const manifestPath = join(f.prepared, 'manifest.json');
-    const manifest = JSON.parse(f.payload.toString('utf8'));
-    manifest.artifacts = manifest.artifacts.filter((artifact: { platform: string }) => artifact.platform === platform);
-    save(manifestPath, manifest);
-    const approveManifest = approved ? updateDigest(readFileSync(manifestPath)) : undefined;
-    expect(() => signClientUpdateFeed({ ...f.options, approveManifest })).toThrow('both_cli_kits_required');
+    const deb = JSON.parse(f.payload.toString('utf8')).artifacts.find((artifact: Artifact & { sha256: string }) => artifact.platform === 'linux' && artifact.installation === 'electron');
+    expect(existsSync(join(f.prepared, 'artifacts', `${deb.sha256}.deb`))).toBe(true);
+    renameSync(join(f.prepared, 'artifacts', `${deb.sha256}.deb`), join(f.prepared, 'artifacts', `${deb.sha256}.zip`));
+    expect(() => signClientUpdateFeed(f.options)).toThrow();
     expect(existsSync(f.signaturePath)).toBe(false);
   });
 
@@ -131,13 +149,14 @@ describe('local approved release signer', () => {
     expect(existsSync(f.signaturePath)).toBe(false);
   });
 
-  it.each(['digest', 'manifest', 'artifact', 'release', 'expired', 'pin', 'metadata'] as const)('refuses changed %s inputs', (change) => {
+  it.each(['digest', 'manifest', 'artifact', 'deb', 'release', 'expired', 'pin', 'metadata'] as const)('refuses changed %s inputs', (change) => {
     const f = fixture();
     const manifestPath = join(f.prepared, 'manifest.json');
     const manifest = JSON.parse(f.payload.toString('utf8'));
     if (change === 'digest') f.options.approveManifest = '0'.repeat(64);
     if (change === 'manifest') writeFileSync(manifestPath, f.payload.subarray(0, -1));
     if (change === 'artifact') writeFileSync(join(f.prepared, 'artifacts', `${manifest.artifacts[0].sha256}.zip`), 'tampered');
+    if (change === 'deb') writeFileSync(join(f.prepared, 'artifacts', `${manifest.artifacts[3].sha256}.deb`), 'tampered');
     if (change === 'release') { manifest.source_sha = 'c'.repeat(40); save(manifestPath, manifest); f.options.approveManifest = updateDigest(readFileSync(manifestPath)); }
     if (change === 'expired') { manifest.issued_at = '2020-01-01T00:00:00.000Z'; manifest.expires_at = '2020-01-02T00:00:00.000Z'; save(manifestPath, manifest); f.options.approveManifest = updateDigest(readFileSync(manifestPath)); }
     if (change === 'pin') { const other = initializeClientUpdateSigner({ directory: join(f.root, 'other-signer') }); save(join(f.prepared, 'bootstrap-config.json'), { ...f.config, public_key_spki: other.public_key_spki }); }

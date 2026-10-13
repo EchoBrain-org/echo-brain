@@ -12,7 +12,8 @@ export interface ClientUpdatePublicationSummary {
   metadata_fresh: boolean;
 }
 export interface ClientUpdatePublicationDependencies {
-  aws?: (args: string[]) => any;
+  /** timeout is the call's size-scaled bound in milliseconds; a PUT passes its own. */
+  aws?: (args: string[], options?: { timeout?: number }) => any;
   runtime?: () => string;
   now?: () => number;
   readTemplate?: () => Buffer;
