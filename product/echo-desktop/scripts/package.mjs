@@ -1,11 +1,8 @@
 #!/usr/bin/env node
 // Packages ECHO from a clean commit: the person client packed exactly as the
 // kit ships it, release bundles with the test hook compiled out, then
-// electron-builder. Prints where the app is.
-//
-// A release package (ADR-0035) instead embeds the release's exact client
-// tarball and writes the desktop identity, which is what turns the app's
-// updater on. Without the release inputs there is no identity and no updater.
+// electron-builder. Prints where the app is. A release package (ADR-0035)
+// embeds the release's client tarball and the identity that turns updates on.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -106,11 +103,9 @@ async function readRelease({ '--release': releasePath, '--artifact': artifactPat
     },
     fail,
   });
-  // A release packs no client, and packing is what rebuilds the workspace dist
-  // host.mjs bundles (the organization API and both protocols). That dist is
-  // gitignored, so a checkout could still hold an older commit's build and
-  // ship its host under this release's identity. Rebuild it from HEAD; tsc's
-  // output goes to stderr, keeping stdout for the result line.
+  // Packing a client is what rebuilds the gitignored workspace dist host.mjs
+  // bundles. A release packs none, so rebuild from HEAD lest an older commit's
+  // build ship under this identity; tsc's output goes to stderr, not the result line.
   try { execFileSync(process.execPath, [join(repository, 'tools', 'build.mjs'), '--person-client'], { cwd: repository, stdio: ['ignore', 2, 'inherit'] }); } catch { fail('the Person client did not build from HEAD'); }
   let built;
   try { built = JSON.parse(readFileSync(join(repository, 'src', 'product', 'person-client', 'dist', 'build-identity.v1.json'), 'utf8')); } catch { fail('the rebuilt Person client has no build identity'); }
@@ -128,25 +123,15 @@ async function readRelease({ '--release': releasePath, '--artifact': artifactPat
 /** build/echo-desktop-identity.v1.json, which electron-builder ships outside app.asar. */
 function writeIdentity({ record, recordSha256, config }, linux) {
   const identity = {
-    schema_version: 1,
-    kind: 'echo-desktop-identity-v1',
-    release_id: record.release_id,
-    release_record_sha256: recordSha256,
-    source_sha: record.source_sha,
-    product_version: record.person_client.version,
+    schema_version: 1, kind: 'echo-desktop-identity-v1', release_id: record.release_id,
+    release_record_sha256: recordSha256, source_sha: record.source_sha, product_version: record.person_client.version,
     person_client_artifact_sha256: record.person_client.artifact_sha256,
-    platform: linux ? 'linux' : 'darwin',
-    architecture: linux ? 'x64' : 'arm64',
-    libc: linux ? 'glibc' : null,
-    installation: 'electron',
-    update_bootstrap: config,
+    platform: linux ? 'linux' : 'darwin', architecture: linux ? 'x64' : 'arm64', libc: linux ? 'glibc' : null,
+    installation: 'electron', update_bootstrap: config,
   };
   const path = join(root, 'build', 'echo-desktop-identity.v1.json');
-  const bytes = `${canonicalJson(identity)}\n`;
-  writeFileSync(path, bytes, { mode: 0o644, flag: 'wx' });
+  writeFileSync(path, `${canonicalJson(identity)}\n`, { mode: 0o644, flag: 'wx' });
   chmodSync(path, 0o644);
-  return {
-    path, sha256: sha256File(path), release_id: identity.release_id, release_record_sha256: recordSha256,
-    source_sha: identity.source_sha, platform: identity.platform, architecture: identity.architecture,
-  };
+  const { release_id, source_sha, platform, architecture } = identity;
+  return { path, sha256: sha256File(path), release_id, release_record_sha256: recordSha256, source_sha, platform, architecture };
 }

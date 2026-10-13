@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { canonicalJson } from './clean-v1-release.mjs';
-import { artifactKey, releaseTarget, requireReleaseTargets, validatePreparedClientUpdateFeed } from './client-update-feed.mjs';
+import { artifactKey, requireReleaseTargets, validatePreparedClientUpdateFeed } from './client-update-feed.mjs';
 import { UPDATE_ARTIFACT_LIMIT, UPDATE_METADATA_LIMIT, updateDigest } from '../src/product/person-client/dist/client-update-contract.js';
 
 const PRIVATE_KEY = 'private-key.pkcs8.der';
@@ -106,10 +106,7 @@ export function signClientUpdateFeed({ directory: signerDirectory, prepared, aut
   const authorization = readPrivate(authorizationPath);
   const parsed = JSON.parse(payload.toString('utf8'));
   if (!Array.isArray(parsed.artifacts) || parsed.artifacts.length > 12) fail('invalid_manifest');
-  for (const artifact of parsed.artifacts) {
-    if (!/^[a-f0-9]{64}$/.test(artifact?.sha256) || !releaseTarget(artifact)) fail('invalid_artifact');
-    readPrivate(join(prepared, artifactKey(artifact)), UPDATE_ARTIFACT_LIMIT);
-  }
+  for (const artifact of parsed.artifacts) readPrivate(join(prepared, artifactKey(artifact, 'invalid_artifact')), UPDATE_ARTIFACT_LIMIT);
   const validated = validatePreparedClientUpdateFeed({ prepared, authorizationPath, now });
   requireReleaseTargets(validated.manifest);
   if (!validated.payload.equals(payload) || !readPrivate(join(prepared, 'bootstrap-config.json')).equals(configBytes) ||

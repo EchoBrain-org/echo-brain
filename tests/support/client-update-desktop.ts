@@ -5,7 +5,7 @@ import { canonicalJsonForTest } from "./test-canonical-json.js";
 
 export type DesktopTarget = "macos-app" | "linux-deb";
 type Release = { release_id: string; source_sha: string; person_client: { version: string; artifact_sha256: string } };
-export interface DesktopFixtureInputs {
+interface DesktopFixtureInputs {
   root: string;
   clientArchive: string;
   release: Release;
@@ -15,7 +15,7 @@ export interface DesktopFixtureInputs {
   /** The committed Linux root helper at release.source_sha. */
   helper: Buffer;
 }
-export interface DesktopArtifact {
+interface DesktopArtifact {
   path: string;
   /** echo-desktop-identity.v1.json inside the unpacked tree. */
   identity: string;
@@ -32,15 +32,6 @@ const PLATFORM = {
 // macOS tar would otherwise add AppleDouble members for extended attributes.
 const env = { ...process.env, COPYFILE_DISABLE: "1" };
 
-/** The identity product/echo-desktop/scripts/package.mjs writes, independently restated. */
-export function desktopIdentity(target: DesktopTarget, { release, releaseSha256, config }: Omit<DesktopFixtureInputs, "root" | "clientArchive" | "helper">) {
-  return {
-    schema_version: 1, kind: "echo-desktop-identity-v1", release_id: release.release_id,
-    release_record_sha256: releaseSha256, source_sha: release.source_sha, product_version: release.person_client.version,
-    person_client_artifact_sha256: release.person_client.artifact_sha256, ...PLATFORM[target],
-    installation: "electron", update_bootstrap: { ...config, installation: "electron" },
-  };
-}
 export const infoPlist = (bundleId: string) => `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -59,7 +50,7 @@ export const debControl = (fields: Record<string, string> = {}) => Object.entrie
 }).map(([name, value]) => `${name}: ${value}\n`).join("");
 
 /** An ar archive with GNU ar's slash-terminated member names, as fpm on Linux writes. */
-export function writeGnuAr(path: string, members: Array<[string, Buffer]>) {
+function writeGnuAr(path: string, members: Array<[string, Buffer]>) {
   const parts: Buffer[] = [Buffer.from("!<arch>\n")];
   for (const [name, bytes] of members) {
     parts.push(Buffer.from(`${`${name}/`.padEnd(16)}${"0".padEnd(12)}${"0".padEnd(6)}${"0".padEnd(6)}${"100644".padEnd(8)}${String(bytes.length).padEnd(10)}\`\n`), bytes);
@@ -69,12 +60,18 @@ export function writeGnuAr(path: string, members: Array<[string, Buffer]>) {
 }
 
 /**
- * A synthetic ECHO.app ZIP and .deb laid out as electron-builder packages
- * them: the identity and the release client tarball extracted beside it, plus
- * the root helper on Linux. Each tree stays unpacked so a test can edit it.
+ * A synthetic ECHO.app ZIP and .deb laid out as electron-builder packages them,
+ * each tree left unpacked so a test can edit it and rebuild.
  */
 export function desktopArtifacts(inputs: DesktopFixtureInputs, { controlCompression = "xz", gnuAr = false }: { controlCompression?: "xz" | "gz"; gnuAr?: boolean } = {}): Record<DesktopTarget, DesktopArtifact> {
-  const identityBytes = (target: DesktopTarget) => `${canonicalJsonForTest(desktopIdentity(target, inputs))}\n`;
+  const { release, releaseSha256, config } = inputs;
+  // The identity product/echo-desktop/scripts/package.mjs writes, independently restated.
+  const identityBytes = (target: DesktopTarget) => `${canonicalJsonForTest({
+    schema_version: 1, kind: "echo-desktop-identity-v1", release_id: release.release_id,
+    release_record_sha256: releaseSha256, source_sha: release.source_sha, product_version: release.person_client.version,
+    person_client_artifact_sha256: release.person_client.artifact_sha256, ...PLATFORM[target],
+    installation: "electron", update_bootstrap: { ...config, installation: "electron" },
+  })}\n`;
   const mac = join(inputs.root, "macos-app");
   const resources = join(mac, "ECHO.app/Contents/Resources");
   mkdirSync(join(resources, "person-client"), { recursive: true });

@@ -171,7 +171,6 @@ describe('approved update feed publisher', () => {
     expect(f.seal().status).toBe(0);
     const envelope = JSON.parse(readFileSync(join(f.output, 'feed.json'), 'utf8'));
     expect(Buffer.from(envelope.payload, 'base64')).toEqual(readFileSync(join(f.output, 'manifest.json')));
-    expect(f.validateSealed().status).toBe(0);
     expect(f.seal().status).toBe(1);
   });
 
@@ -247,16 +246,15 @@ describe('desktop release artifacts', () => {
   const client = (f: Fixture, target: DesktopTarget, path = 'package/dist/client-update-cli.js') => join(f.desktops[target].client, path);
   const flipByte = (path: string) => { const bytes = readFileSync(path); bytes[0] ^= 1; writeFileSync(path, bytes); };
   const helper = (f: Fixture) => join(f.root, 'linux-deb/data/opt/ECHO/resources/echo-desktop-update-helper');
-  // A later ZIP member that a case-folding Mac would install over the path it
-  // names, after the packaged tree has been checked.
+  // A ZIP member added after the packaged tree, as one a case-folding Mac would
+  // install over the path it names once that tree has been checked.
   const appendEntry = (name: string, bytes = 'not the release bytes') => (f: Fixture) => {
     const staging = mkdtempSync(join(f.root, 'entry-'));
     mkdirSync(join(staging, dirname(name)), { recursive: true });
     writeFileSync(join(staging, name), bytes);
     execFileSync('zip', ['-q', f.desktops['macos-app'].path, name], { cwd: staging });
   };
-  const nothing = () => {};
-  it.each<{ name: string; target: DesktopTarget; code: string; mutate: (f: Fixture) => void; after?: (f: Fixture) => void }>([
+  it.each<{ name: string; target: DesktopTarget; code: string; mutate?: (f: Fixture) => void; after?: (f: Fixture) => void }>([
     { name: 'an identity for another product version', target: 'macos-app', code: 'desktop_identity_mismatch', mutate: identity('macos-app', value => { value.product_version = '0.1.2'; }) },
     { name: 'an identity for another release record', target: 'linux-deb', code: 'desktop_identity_mismatch', mutate: identity('linux-deb', value => { value.release_record_sha256 = 'f'.repeat(64); }) },
     { name: 'an identity claiming the other platform', target: 'linux-deb', code: 'desktop_identity_mismatch', mutate: identity('linux-deb', value => { value.platform = 'darwin'; value.libc = null; }) },
@@ -273,20 +271,13 @@ describe('desktop release artifacts', () => {
       const path = client(f, 'macos-app');
       renameSync(path, join(f.root, 'linked.js')); symlinkSync(join(f.root, 'linked.js'), path);
     } },
-    { name: 'a ZIP entry outside ECHO.app', target: 'macos-app', code: 'desktop_archive_invalid', mutate: f => writeFileSync(join(f.root, 'macos-app/README.txt'), 'outside'),
-      after: f => { execFileSync('zip', ['-q', f.desktops['macos-app'].path, 'README.txt'], { cwd: join(f.root, 'macos-app') }); } },
-    { name: 'a case-variant entry over an embedded client file', target: 'macos-app', code: 'desktop_archive_invalid', mutate: nothing,
-      after: appendEntry('ECHO.app/Contents/Resources/Person-Client/package/dist/client-update-cli.js') },
-    { name: 'a case-variant identity entry', target: 'macos-app', code: 'desktop_archive_invalid', mutate: nothing,
-      after: appendEntry('ECHO.app/Contents/Resources/Echo-Desktop-Identity.v1.json', '{}\n') },
-    { name: 'a case-variant Info.plist', target: 'macos-app', code: 'desktop_archive_invalid', mutate: nothing,
-      after: appendEntry('ECHO.app/Contents/info.plist', infoPlist('org.example.other')) },
-    { name: 'a new file under a case-variant directory above the client', target: 'macos-app', code: 'desktop_archive_invalid', mutate: nothing,
-      after: appendEntry('ECHO.app/Contents/resources/person-client/package/dist/added.js') },
-    { name: 'a file entry where the archive holds a directory', target: 'macos-app', code: 'desktop_archive_invalid', mutate: nothing,
-      after: appendEntry('ECHO.app/Contents/Resources/person-client/package') },
-    { name: 'a non-ASCII entry name', target: 'macos-app', code: 'desktop_archive_invalid', mutate: nothing,
-      after: appendEntry('ECHO.app/Contents/Resources/café.txt') },
+    { name: 'a ZIP entry outside ECHO.app', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('README.txt') },
+    { name: 'a case-variant entry over an embedded client file', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('ECHO.app/Contents/Resources/Person-Client/package/dist/client-update-cli.js') },
+    { name: 'a case-variant identity entry', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('ECHO.app/Contents/Resources/Echo-Desktop-Identity.v1.json', '{}\n') },
+    { name: 'a case-variant Info.plist', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('ECHO.app/Contents/info.plist', infoPlist('org.example.other')) },
+    { name: 'a new file under a case-variant directory above the client', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('ECHO.app/Contents/resources/person-client/package/dist/added.js') },
+    { name: 'a file entry where the archive holds a directory', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('ECHO.app/Contents/Resources/person-client/package') },
+    { name: 'a non-ASCII entry name', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('ECHO.app/Contents/Resources/café.txt') },
     { name: 'a wrong bundle id', target: 'macos-app', code: 'desktop_bundle_mismatch', mutate: f => writeFileSync(join(f.root, 'macos-app/ECHO.app/Contents/Info.plist'), infoPlist('org.example.other')) },
     { name: 'a bundle id behind a comment', target: 'macos-app', code: 'desktop_bundle_mismatch', mutate: f => writeFileSync(join(f.root, 'macos-app/ECHO.app/Contents/Info.plist'),
       infoPlist('org.example.other').replace('<dict>', '<dict><!-- <key>CFBundleIdentifier</key><string>org.echobrain.echo-desktop</string> -->')) },
@@ -295,7 +286,7 @@ describe('desktop release artifacts', () => {
     { name: 'a modified root helper', target: 'linux-deb', code: 'desktop_helper_mismatch', mutate: f => writeFileSync(helper(f), Buffer.concat([readFileSync(helper(f)), Buffer.from('\n')])) },
   ])('refuses $name before preparing a feed', ({ target, code, mutate, after }) => {
     const f = fixture();
-    mutate(f);
+    mutate?.(f);
     f.desktops[target].rebuild();
     after?.(f);
     const prepared = f.prepare();

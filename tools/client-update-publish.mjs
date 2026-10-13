@@ -34,8 +34,7 @@ const OPERATION_BASE_MS = 120_000;
 const MINIMUM_BYTES_PER_SECOND = 512 * 1024;
 const SCHEDULING_CUSHION_MS = 120_000;
 const operationTimeout = bytes => OPERATION_BASE_MS + Math.ceil(bytes * 1000 / MINIMUM_BYTES_PER_SECOND);
-// Before each later replacement artifact write: the predecessor's HEAD and GET
-// and the artifact's absence HEAD.
+// Before each later replacement artifact write: predecessor HEAD and GET, artifact absence HEAD.
 const REPLACEMENT_ARTIFACT_PREFLIGHT_CALLS = 3;
 // Before the feed write: a predecessor check, then replacementInputs' STS and
 // four hosting calls and its revalidation of the sealed inputs, which extracts
@@ -117,12 +116,11 @@ function preparedInputs(prepared, authorizationPath, validatePrepared, validatio
   if (!Buffer.isBuffer(validated.feedBytes) || !feed.equals(validated.feedBytes)) fail('validated_feed_mismatch');
   const objects = manifest.artifacts.map(artifact => {
     // The target fixes the key, so the URL, and the content type it is served with.
-    const target = releaseTarget(artifact);
-    const key = target && SHA.test(artifact.sha256 ?? '') ? artifactKey(artifact) : fail('artifact_binding_mismatch');
+    const key = artifactKey(artifact, 'artifact_binding_mismatch');
     if (artifact.url !== new URL(key, config.feed_url).href) fail('artifact_binding_mismatch');
     const bytes = read(join(prepared, key), UPDATE_ARTIFACT_LIMIT);
     if (bytes.length !== artifact.bytes || digest(bytes) !== artifact.sha256) fail('artifact_binding_mismatch');
-    return { key, sha256: artifact.sha256, bytes: artifact.bytes, content_type: target.content_type, cache_control: 'public, max-age=31536000, immutable' };
+    return { key, sha256: artifact.sha256, bytes: artifact.bytes, content_type: releaseTarget(artifact).content_type, cache_control: 'public, max-age=31536000, immutable' };
   });
   if (!objects.length || objects.length > MAX_ARTIFACTS || new Set(objects.map(item => item.key)).size !== objects.length) fail('publication_inventory_invalid');
   objects.push({ key: 'feed.json', sha256: digest(feed), bytes: feed.length, content_type: 'application/json', cache_control: 'no-store' });

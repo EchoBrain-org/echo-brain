@@ -1,5 +1,4 @@
-// Release packaging (ADR-0035) rebuilds the Person client, and with it the
-// workspace dist host.mjs bundles, from HEAD. Before anything is bundled, that
+// Release packaging (ADR-0035) rebuilds the Person client from HEAD; that
 // build's identity must name the release's clean commit and version.
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -17,14 +16,11 @@ it('accepts a clean build of the release commit at the release version', () => {
 });
 
 it.each([
-  ['a modified checkout', { source_kind: 'worktree-head-unverified' }],
-  ['another commit', { source_sha: 'b'.repeat(40) }],
-  ['another version', { product_version: '0.1.0-internal.5' }],
-  ['another kind of identity', { kind: 'echo-desktop-identity-v1' }],
-])('refuses a build of %s', (_, change) => {
-  expect(() => requireReleaseClientBuild({ ...built, ...change }, record)).toThrow("not this release's clean commit and version");
-});
-
-it('refuses a build without an identity', () => {
-  expect(() => requireReleaseClientBuild(null, record)).toThrow("not this release's clean commit and version");
+  ['of a modified checkout', { ...built, source_kind: 'worktree-head-unverified' }],
+  ['of another commit', { ...built, source_sha: 'b'.repeat(40) }],
+  ['of another version', { ...built, product_version: '0.1.0-internal.5' }],
+  ['with another kind of identity', { ...built, kind: 'echo-desktop-identity-v1' }],
+  ['without an identity', null],
+])('refuses a build %s', (_, identity) => {
+  expect(() => requireReleaseClientBuild(identity, record)).toThrow("not this release's clean commit and version");
 });

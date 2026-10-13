@@ -16,20 +16,15 @@ const TOOL_TIMEOUT_MS = 120_000;
 const DESKTOP_IDENTITY = 'echo-desktop-identity.v1.json';
 const LINUX_HELPER = 'echo-desktop-update-helper';
 
-// ADR-0035: every release carries exactly these four targets. Each row names
-// its prepare option, object key extension, content type and validator; every
-// key, local path, URL and content type is derived from this table.
+// ADR-0035: every release carries exactly these four targets. Every prepare
+// option, object key, local path, URL and content type derives from this table.
 export const RELEASE_TARGETS = Object.freeze([
-  { option: 'linux-kit', platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'cli-kit',
-    extension: 'zip', content_type: 'application/zip', validate: validateKit,
+  { option: 'linux-kit', platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'cli-kit', extension: 'zip', content_type: 'application/zip',
     kit: { schema_version: 2, kind: 'echo-person-onboarding-kit-v2', start_source: 'deploy/release/start-person-onboarding-kit-linux.sh' } },
-  { option: 'macos-kit', platform: 'darwin', architecture: 'arm64', libc: null, installation: 'cli-kit',
-    extension: 'zip', content_type: 'application/zip', validate: validateKit,
+  { option: 'macos-kit', platform: 'darwin', architecture: 'arm64', libc: null, installation: 'cli-kit', extension: 'zip', content_type: 'application/zip',
     kit: { schema_version: 3, kind: 'echo-person-cli-kit-v1', start_source: 'deploy/release/start-person-cli-kit-macos.sh' } },
-  { option: 'macos-app', platform: 'darwin', architecture: 'arm64', libc: null, installation: 'electron',
-    extension: 'zip', content_type: 'application/zip', validate: validateDesktopArtifact },
-  { option: 'linux-deb', platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'electron',
-    extension: 'deb', content_type: 'application/vnd.debian.binary-package', validate: validateDesktopArtifact },
+  { option: 'macos-app', platform: 'darwin', architecture: 'arm64', libc: null, installation: 'electron', extension: 'zip', content_type: 'application/zip' },
+  { option: 'linux-deb', platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'electron', extension: 'deb', content_type: 'application/vnd.debian.binary-package' },
 ].map(target => Object.freeze(target)));
 
 function fail(code) { throw new Error(code); }
@@ -47,10 +42,10 @@ function sameTarget(left, right) {
 }
 /** The table row for a manifest artifact, or undefined for a target no release carries. */
 export function releaseTarget(artifact) { return RELEASE_TARGETS.find(target => artifact && sameTarget(target, artifact)); }
-/** The artifact's object key, which is also its path under a prepared directory. */
-export function artifactKey(artifact) {
+/** The artifact's object key, which is also its path under a prepared directory. `code` names the refusal. */
+export function artifactKey(artifact, code = 'publisher_adapter_unavailable') {
   const target = releaseTarget(artifact);
-  if (!target || !/^[a-f0-9]{64}$/.test(artifact.sha256 ?? '')) fail('publisher_adapter_unavailable');
+  if (!target || !/^[a-f0-9]{64}$/.test(artifact.sha256 ?? '')) fail(code);
   return `artifacts/${artifact.sha256}.${target.extension}`;
 }
 
@@ -84,9 +79,8 @@ function validateKit(archive, target, manifest, release, config, directory) {
         m.runtime?.node_sha256 !== updateDigest(read(join(kit, 'node'), UPDATE_ARTIFACT_LIMIT)) ||
         m.person_client_artifact_sha256 !== updateDigest(client) ||
         m.build_identity_sha256 !== updateDigest(read(join(kit, 'build-identity.v1.json')))) fail('kit_identity_mismatch');
-    // Older kits without a bootstrap stay auditable through historical
-    // validation. A new write needs all four targets, so a rollback can only
-    // target a release that carries all four.
+    // Older kits without a bootstrap stay auditable. A rollback, as a new
+    // write, can only target a release that carries all four targets.
     if (target.platform === 'linux' && Object.hasOwn(m, 'update_bootstrap')) {
       const bootstrap = parseUpdateConfig(m.update_bootstrap);
       if (!bootstrap.automatic || canonicalJson(bootstrap) !== canonicalJson(config)) fail('kit_bootstrap_mismatch');
@@ -129,7 +123,7 @@ function checkDesktopIdentity(bytes, target, manifest, release, config) {
   try { identity = JSON.parse(bytes.toString('utf8')); } catch { fail('desktop_identity_mismatch'); }
   // The app pins this bootstrap on first run, so only the installation may differ.
   const bootstrap = { ...config, installation: 'electron' };
-  if (!identity || typeof identity !== 'object' || canonicalJson(identity.update_bootstrap ?? null) !== canonicalJson(bootstrap)) fail('desktop_bootstrap_mismatch');
+  if (canonicalJson(identity?.update_bootstrap ?? null) !== canonicalJson(bootstrap)) fail('desktop_bootstrap_mismatch');
   const expected = {
     schema_version: 1, kind: 'echo-desktop-identity-v1', release_id: manifest.release_id,
     release_record_sha256: manifest.release_sha256, source_sha: release.source_sha,
@@ -263,13 +257,8 @@ function debEmbeddedClient(path, directory, target, manifest, release, config) {
   return join(resources, 'person-client');
 }
 
-/**
- * Checks an ECHO.app ZIP or .deb against the release before publication: its
- * identity, its bootstrap, its platform metadata, and an embedded person
- * client equal file for file to the release tarball a validated kit carries.
- */
-export function validateDesktopArtifact(path, target, manifest, release, config, releaseClientTgz) {
-  if (target?.installation !== 'electron' || !releaseTarget(target)) fail('publisher_adapter_unavailable');
+/** Checks an ECHO.app ZIP or .deb: identity, bootstrap, platform metadata and embedded client. */
+function validateDesktopArtifact(path, target, manifest, release, config, releaseClientTgz) {
   regular(path, UPDATE_ARTIFACT_LIMIT);
   if (updateDigest(read(releaseClientTgz, UPDATE_ARTIFACT_LIMIT)) !== release.person_client.artifact_sha256) fail('client_identity_mismatch');
   const temporary = mkdtempSync(join(tmpdir(), 'echo-desktop-verify-'));
@@ -284,21 +273,20 @@ export function validateDesktopArtifact(path, target, manifest, release, config,
   } finally { rmSync(temporary, { recursive: true, force: true }); }
 }
 
-// Kits first: each desktop artifact's embedded client is compared with the
-// person-client.tgz that a kit in the same bundle was validated to carry.
+// Kits first: each desktop artifact's embedded client is compared, file for
+// file, with the person-client.tgz that a kit in the same bundle was validated to carry.
 function validateArtifacts(entries, directory, manifest, release, config) {
   const temporary = mkdtempSync(join(directory, '.client-'));
   const client = join(temporary, 'person-client.tgz');
+  const kit = entry => entry.target.installation === 'cli-kit';
   try {
-    const ordered = [...entries].sort((left, right) => Number(left.target.installation !== 'cli-kit') - Number(right.target.installation !== 'cli-kit'));
-    for (const { path, target } of ordered) {
-      if (target.installation === 'cli-kit') {
-        const bytes = target.validate(path, target, manifest, release, config, directory);
-        if (!existsSync(client)) writeFileSync(client, bytes, { mode: 0o600, flag: 'wx' });
-      } else {
-        if (!existsSync(client)) fail('desktop_client_unavailable');
-        target.validate(path, target, manifest, release, config, client);
-      }
+    for (const { path, target } of entries.filter(kit)) {
+      const bytes = validateKit(path, target, manifest, release, config, directory);
+      if (!existsSync(client)) writeFileSync(client, bytes, { mode: 0o600, flag: 'wx' });
+    }
+    for (const { path, target } of entries.filter(entry => !kit(entry))) {
+      if (!existsSync(client)) fail('desktop_client_unavailable');
+      validateDesktopArtifact(path, target, manifest, release, config, client);
     }
   } finally { rmSync(temporary, { recursive: true, force: true }); }
 }
@@ -312,8 +300,8 @@ function prepareClientUpdateFeed({ configPath, releasePath, artifactPaths, seque
   const artifacts = inputs.map(input => {
     const bytes = read(input.path, UPDATE_ARTIFACT_LIMIT);
     const sha256 = updateDigest(bytes);
-    const artifact = { platform: input.target.platform, architecture: input.target.architecture,
-      libc: input.target.libc, installation: input.target.installation, sha256, bytes: bytes.length };
+    const { platform, architecture, libc, installation } = input.target;
+    const artifact = { platform, architecture, libc, installation, sha256, bytes: bytes.length };
     const key = artifactKey(artifact);
     return { ...input, bytes, sha256, key, artifact: { ...artifact, url: new URL(`./${key}`, config.feed_url).href } };
   });

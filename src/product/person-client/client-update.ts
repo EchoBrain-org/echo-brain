@@ -57,10 +57,8 @@ export interface ClientUpdateDependencies {
   install?: (input: UpdateInstallerInput) => void | Promise<void>;
   installation?: ClientUpdateInstallation;
   /**
-   * False adds no signal listeners, leaving interrupts to an embedding process
-   * with its own quit path (Electron). Default true. That quit drops the pending
-   * `finally`, so a run it ends keeps the lock and any partial download. Such a
-   * process must call releaseInterruptedClientUpdate(root) at launch.
+   * Default true. False adds no signal listeners, for an embedding process with
+   * its own quit path (Electron), which must then call releaseInterruptedClientUpdate.
    */
   handle_signals?: boolean;
 }
@@ -125,11 +123,11 @@ function cliInstallation(root: string, install: ClientUpdateInstallation['instal
 }
 
 /**
- * Releases the lock and download folders of a run its process ended without
- * cleanup, as an embedding app's quit does. Call it only while no other process
- * can update this root: for the app, at launch under Electron's single-instance
- * lock, before configuring or checking. An installer that reported an unknown
- * outcome keeps its lock and staging as recovery evidence.
+ * Releases the lock and download folders of a run whose process ended without
+ * its `finally`, as an embedding app's quit does. Call it only while no other
+ * process can update this root: for the app, at launch under Electron's
+ * single-instance lock, before configuring or checking. An installer that
+ * reported an unknown outcome keeps its lock and staging as recovery evidence.
  */
 export function releaseInterruptedClientUpdate(root: string): void {
   const directory = updateDirectory(root);

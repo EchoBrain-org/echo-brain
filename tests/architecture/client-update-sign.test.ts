@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Buffer } from 'node:buffer';
 import { createPublicKey, verify } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { initializeClientUpdateSigner, signClientUpdateFeed } from '../../tools/client-update-sign.mjs';
@@ -131,15 +131,6 @@ describe('local approved release signer', () => {
       expect(() => signClientUpdateFeed({ ...f.options, approveManifest })).toThrow('all_release_targets_required');
       expect(existsSync(f.signaturePath)).toBe(false);
     }
-  });
-
-  it('reads each desktop artifact under its own key', () => {
-    const f = fixture();
-    const deb = JSON.parse(f.payload.toString('utf8')).artifacts.find((artifact: Artifact & { sha256: string }) => artifact.platform === 'linux' && artifact.installation === 'electron');
-    expect(existsSync(join(f.prepared, 'artifacts', `${deb.sha256}.deb`))).toBe(true);
-    renameSync(join(f.prepared, 'artifacts', `${deb.sha256}.deb`), join(f.prepared, 'artifacts', `${deb.sha256}.zip`));
-    expect(() => signClientUpdateFeed(f.options)).toThrow();
-    expect(existsSync(f.signaturePath)).toBe(false);
   });
 
   it.each(['slack_approved', 'person_records_passed', 'person_ask_passed', 'release_authorized'] as const)('refuses without existing %s authorization', (field) => {

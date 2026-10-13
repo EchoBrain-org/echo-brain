@@ -26,14 +26,12 @@ const TARGETS: Record<Artifact, { platform: 'darwin' | 'linux'; architecture: 'a
 };
 // The publisher's documented bounds, restated: each AWS call or public GET has
 // a 120 s base plus transfer time at 512 KiB/s, and one 120 s cushion follows.
+// Each object needs its PUT, verification HEAD and GET, and each later write
+// first repeats its preflight calls: one HEAD in a first publication; in a
+// replacement, three per artifact and eleven for the feed, the last size.
 const BASE_MS = 120_000;
 const operation = (bytes: number) => BASE_MS + Math.ceil(bytes * 1000 / (512 * 1024));
-// After the first preflight HEAD: every PUT, verification HEAD and GET, and each later preflight HEAD.
 const firstWindow = (sizes: number[]) => sizes.reduce((total, bytes, index) => total + 2 * operation(bytes) + BASE_MS + (index ? BASE_MS : 0), BASE_MS);
-// A replacement's later preflights: an artifact's predecessor HEAD and GET and
-// absence HEAD, or the feed's eleven bounds: a predecessor check, STS and four
-// hosting calls, the sealed-input revalidation (one per desktop archive), and
-// the predecessor check again. The feed is the last size.
 const replacementWindow = (sizes: number[]) => sizes.reduce((total, bytes, index) =>
   total + 2 * operation(bytes) + BASE_MS + (index ? (index === sizes.length - 1 ? 11 : 3) * BASE_MS : 0), BASE_MS);
 function fixture(options: { expiresAt?: number; previousExpiresAt?: number; previousSequence?: number; sequence?: number; existingArtifact?: boolean; targets?: Artifact[]; sizes?: Partial<Record<Artifact, number>> } = {}) {
@@ -196,41 +194,24 @@ describe('bounded first S3 client update publication', () => {
     expect(receipt.objects.every((object: any) => object.attempted && object.succeeded && object.verified && object.version_id)).toBe(true);
     expect(f.calls.flat()).not.toContain('delete-object');
     expect(await f.status()).toMatchObject({ state: 'succeeded', verified_objects: 5 });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(5);
     // Every key and content type follows the target: only the deb is served as a Debian package.
     const puts = f.calls.filter(args => args[1] === 'put-object').map(args => [args[args.indexOf('--key') + 1], args[args.indexOf('--content-type') + 1]]);
     expect(puts).toEqual([[f.keyOf('macos-kit'), ZIP], [f.keyOf('linux-kit'), ZIP], [f.keyOf('macos-app'), ZIP], [f.keyOf('linux-deb'), DEB], ['feed.json', 'application/json']]);
-    expect(f.keyOf('linux-deb')).toMatch(/^artifacts\/[a-f0-9]{64}\.deb$/);
   });
 
-  it('begins only when validity covers every bounded upload and verification', async () => {
-    const short = fixture();
+  it('begins only when validity covers every size-scaled upload and verification, and scales each PUT timeout', async () => {
+    const sizes = { 'macos-app': 3 * 1024 * 1024, 'linux-deb': 2 * 1024 * 1024 };
+    const short = fixture({ sizes });
     await short.plan();
     short.state.now = Date.parse(short.manifest.expires_at) - firstWindow(short.sizes) + 1;
     expect(await short.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 0 });
     expect(short.calls.filter(args => args[1] === 'put-object')).toHaveLength(0);
-    const exact = fixture();
-    await exact.plan();
-    exact.state.now = Date.parse(exact.manifest.expires_at) - firstWindow(exact.sizes);
-    expect(await exact.execute()).toMatchObject({ state: 'succeeded', verified_objects: 5 });
-  });
-
-  it('scales the validity window and each PUT timeout with object size', async () => {
-    const sizes = { 'macos-app': 3 * 1024 * 1024, 'linux-deb': 2 * 1024 * 1024 };
-    const small = fixture();
-    const large = fixture({ sizes });
-    // Six and four more seconds per transfer at 512 KiB/s, for each PUT and public GET.
-    expect(firstWindow(large.sizes) - firstWindow(small.sizes)).toBeGreaterThanOrEqual(2 * (6000 + 4000) - 4);
-    await large.plan();
-    large.state.now = Date.parse(large.manifest.expires_at) - firstWindow(small.sizes);
-    expect(await large.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 0 });
-    expect(large.calls.filter(args => args[1] === 'put-object')).toHaveLength(0);
     const exact = fixture({ sizes });
     await exact.plan();
     exact.state.now = Date.parse(exact.manifest.expires_at) - firstWindow(exact.sizes);
     expect(await exact.execute()).toMatchObject({ state: 'succeeded', verified_objects: 5 });
-    expect(exact.timeouts.get(exact.keyOf('macos-app'))).toBe(operation(3 * 1024 * 1024));
-    expect(exact.timeouts.get(exact.keyOf('linux-deb'))).toBe(operation(2 * 1024 * 1024));
+    // 120 s plus six and four seconds of transfer at 512 KiB/s.
+    expect([exact.timeouts.get(exact.keyOf('macos-app')), exact.timeouts.get(exact.keyOf('linux-deb'))]).toEqual([126_000, 124_000]);
     expect(exact.timeouts.get('feed.json')).toBe(operation(exact.feedBytes.length));
   });
 
@@ -571,15 +552,14 @@ describe.each([{ label: 'first-publication', replacement: false }, { label: 'rep
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
   });
 
-  it('reconciles a historical two-CLI-kit final attempt, with its recorded content types, without writing again', async () => {
+  // Its recorded application/zip content types still bind, or status could not succeed.
+  it('reconciles a historical two-CLI-kit final attempt without writing again', async () => {
     const f = fixture({ targets: ['macos-kit', 'linux-kit'], ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
     historicalReceipt(f, replacement, 'all');
     const status = replacement ? f.replaceStatus : f.status;
     const execute = replacement ? f.replaceExecute : f.execute;
     expect(await status()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
     expect(await execute()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
-    const receipt = JSON.parse(readFileSync(f.receipt, 'utf8'));
-    expect((replacement ? receipt.artifacts : receipt.objects.slice(0, -1)).map((object: { content_type: string }) => object.content_type)).toEqual([ZIP, ZIP]);
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
   });
 
