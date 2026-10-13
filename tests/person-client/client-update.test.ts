@@ -3,12 +3,13 @@ import { spawn } from 'node:child_process';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { installedUpdateRoot } from '../../src/product/person-client/client-update-cli.js';
 import { ClientUpdateError, type ClientUpdateManifest, type UpdatePlatform, parseUpdateConfig, parseUpdateManifest, selectUpdateArtifact, updateDigest, verifyUpdateEnvelope, UPDATE_INTERVAL_MS } from '../../src/product/person-client/client-update-contract.js';
-import { configureClientUpdates, runClientUpdate } from '../../src/product/person-client/client-update.js';
+import { type ClientUpdateInstallation, configureClientUpdates, readClientUpdateConfig, runClientUpdate } from '../../src/product/person-client/client-update.js';
+import { type UpdateInstallerInput } from '../../src/product/person-client/client-update-kit.js';
 
 const NOW = Date.parse('2026-09-24T21:00:00.000Z');
 const PLATFORM: UpdatePlatform = { platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'cli-kit' };
@@ -42,6 +43,29 @@ function fixture() {
   const dependencies = { root, platform: PLATFORM, now: () => NOW, fetch: fetcher as typeof fetch, install };
   return { root, directory, config, archive, manifest, envelope, activate, dependencies, fetcher, install, publicKey };
 }
+const APP: UpdatePlatform = { platform: 'darwin', architecture: 'arm64', libc: null, installation: 'electron' };
+/** The desktop app's adapter over the same root, with no CLI wrapper or release folders to read. */
+function appFixture(activation: ClientUpdateInstallation['activation'] = 'restart') {
+  const f = fixture();
+  rmSync(join(f.root, 'bin'), { recursive: true });
+  rmSync(join(f.root, 'releases'), { recursive: true });
+  rmSync(join(f.root, 'updater/config.json'));
+  const appBytes = Buffer.from('synthetic verified ECHO.app archive');
+  f.manifest.artifacts.push({ ...APP, url: 'https://updates.example.test/staging/artifacts/app.zip', bytes: appBytes.length, sha256: updateDigest(appBytes) });
+  const fetcher = vi.fn(async (url: string | URL | Request) => new Response(new Uint8Array(String(url) === f.config.feed_url ? f.envelope() : appBytes)));
+  const app = { release: 'clean-v1-release-a', record: 'a'.repeat(64) };
+  const installedRelease = vi.fn(() => app.release);
+  const install = vi.fn(async (_input: UpdateInstallerInput) => {});
+  const installation: ClientUpdateInstallation = {
+    installedRelease, installedReleaseSha256: () => app.record, fingerprint: () => 'f'.repeat(64), install,
+    activation, archive_name: 'ECHO.zip', download_timeout_ms: 15 * 60_000,
+  };
+  const config = { ...f.config, installation: 'electron' as const };
+  configureClientUpdates(f.root, config, installation);
+  const dependencies = { root: f.root, platform: APP, now: () => NOW, fetch: fetcher as typeof fetch, installation };
+  return { ...f, config, app, appBytes, fetcher, install, installedRelease, installation, dependencies };
+}
+const appState = (root: string) => JSON.parse(readFileSync(join(root, 'updater/state.json'), 'utf8'));
 afterEach(() => { for (const p of roots.splice(0)) rmSync(p, { recursive: true, force: true }); });
 
 describe('signed cross-platform client updates', () => {
@@ -290,6 +314,120 @@ describe('signed cross-platform client updates', () => {
     f.manifest.artifacts.push({ ...f.manifest.artifacts[0], ...platform });
     expect(await runClientUpdate('automatic', { ...f.dependencies, platform })).toMatchObject({ status: 'available', available_release: f.manifest.release_id });
     expect(f.fetcher.mock.calls.map(args => args[0])).toEqual([f.config.feed_url]);
+    expect(f.install).not.toHaveBeenCalled();
+  });
+});
+
+describe('client updates through an installation adapter', () => {
+  it('stages a restart installation with the exact verified feed and leaves activation to the restart', async () => {
+    const f = appFixture();
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    let staged: Buffer | undefined;
+    let selections = 0;
+    f.install.mockImplementation(async input => { staged = readFileSync(input.archive); selections = f.installedRelease.mock.calls.length; });
+    try {
+      expect(await runClientUpdate('apply', f.dependencies)).toMatchObject({ status: 'staged', platform: 'darwin/arm64/native/electron', installed_release: 'clean-v1-release-a', available_release: f.manifest.release_id, checked_at: NOW });
+      expect(timeout.mock.calls.map(args => args[0])).toEqual([5_000, 15 * 60_000]);
+    } finally { timeout.mockRestore(); }
+    expect(f.install).toHaveBeenCalledOnce();
+    const input = f.install.mock.calls[0][0];
+    expect(input.feed).toEqual(f.envelope());
+    expect(basename(input.archive)).toBe('ECHO.zip');
+    expect(dirname(dirname(input.archive))).toBe(join(f.root, 'updater'));
+    expect(staged).toEqual(f.appBytes);
+    expect(input).toMatchObject({ root: f.root, expected_wrapper_sha256: 'f'.repeat(64), artifact: APP, manifest: { release_id: f.manifest.release_id } });
+    // The app activates after it quits, so nothing re-reads the installed release here.
+    expect(f.installedRelease).toHaveBeenCalledTimes(selections);
+    expect(existsSync(dirname(input.archive))).toBe(false);
+    expect(existsSync(join(f.root, 'updater/.lock'))).toBe(false);
+    expect(appState(f.root)).toMatchObject({ result: 'staged', available_release: f.manifest.release_id });
+    expect(await runClientUpdate('status', f.dependencies)).toMatchObject({ status: 'staged', installed_release: 'clean-v1-release-a' });
+  });
+
+  it('refuses an archive name that leaves the download folder', async () => {
+    const f = appFixture();
+    await expect(runClientUpdate('apply', { ...f.dependencies, installation: { ...f.installation, archive_name: '../ECHO.zip' } })).rejects.toThrow('unsafe_installation');
+    expect(f.fetcher).not.toHaveBeenCalled();
+    expect(f.install).not.toHaveBeenCalled();
+  });
+
+  it('confirms an immediate installation selects the new release, else reports activation_mismatch', async () => {
+    const f = appFixture('immediate');
+    await expect(runClientUpdate('apply', f.dependencies)).rejects.toThrow('activation_mismatch');
+    expect(appState(f.root).result).toBe('activation_mismatch');
+    f.install.mockImplementation(async () => { f.app.release = f.manifest.release_id; });
+    expect(await runClientUpdate('apply', f.dependencies)).toMatchObject({ status: 'updated', installed_release: f.manifest.release_id, available_release: f.manifest.release_id });
+    expect(f.install).toHaveBeenCalledTimes(2);
+    expect(appState(f.root).result).toBe('updated');
+  });
+
+  it('compares the installed release record through installedReleaseSha256', async () => {
+    const f = appFixture();
+    f.app.release = f.manifest.release_id;
+    f.app.record = f.manifest.release_sha256;
+    expect(await runClientUpdate('apply', f.dependencies)).toMatchObject({ status: 'current', installed_release: f.manifest.release_id });
+    f.app.record = 'c'.repeat(64);
+    await expect(runClientUpdate('apply', f.dependencies)).rejects.toThrow('release_mismatch');
+    expect(f.fetcher.mock.calls.map(args => args[0])).toEqual([f.config.feed_url, f.config.feed_url]);
+    expect(f.install).not.toHaveBeenCalled();
+  });
+
+  it('adds no signal listeners during an in-flight apply when the caller handles signals', async () => {
+    const f = appFixture();
+    const counts = () => (['SIGINT', 'SIGTERM', 'SIGHUP'] as const).map(signal => process.listenerCount(signal));
+    const baseline = counts();
+    const seen: number[][] = [];
+    const fetcher = vi.fn(async (url: string | URL | Request) => { seen.push(counts()); return f.fetcher(url); });
+    f.install.mockImplementation(async () => { seen.push(counts()); });
+    expect((await runClientUpdate('apply', { ...f.dependencies, fetch: fetcher as typeof fetch, handle_signals: false })).status).toBe('staged');
+    expect(seen).toEqual([baseline, baseline, baseline]);
+    // The default still releases the lock on a signal while it downloads.
+    seen.length = 0;
+    expect((await runClientUpdate('check', { ...f.dependencies, fetch: fetcher as typeof fetch })).status).toBe('available');
+    expect(seen).toEqual([baseline.map(n => n + 1)]);
+    expect(counts()).toEqual(baseline);
+  });
+
+  it('announces a staged release until the app restarts into it', async () => {
+    const f = appFixture();
+    expect((await runClientUpdate('apply', f.dependencies)).status).toBe('staged');
+    expect(await runClientUpdate('automatic', { ...f.dependencies, now: () => NOW + 1 })).toMatchObject({ status: 'available', installed_release: 'clean-v1-release-a', available_release: f.manifest.release_id, checked_at: NOW });
+    f.app.release = f.manifest.release_id;
+    expect(await runClientUpdate('automatic', f.dependencies)).toMatchObject({ status: 'not_due', installed_release: f.manifest.release_id });
+    expect(f.fetcher).toHaveBeenCalledTimes(2);
+    expect(f.install).toHaveBeenCalledOnce();
+  });
+
+  it('configures through the installation release read with the same lock and trust pin', () => {
+    const f = appFixture();
+    expect(readClientUpdateConfig(f.root)).toEqual(f.config);
+    expect(f.installedRelease).toHaveBeenCalledOnce();
+    const path = join(f.root, 'updater/config.json');
+    rmSync(path);
+    // Without the adapter, configuration needs the CLI wrapper this root lacks.
+    expect(() => configureClientUpdates(f.root, f.config)).toThrow();
+    f.installedRelease.mockImplementationOnce(() => { throw new ClientUpdateError('unsafe_installation'); });
+    expect(() => configureClientUpdates(f.root, f.config, f.installation)).toThrow('unsafe_installation');
+    expect(existsSync(path)).toBe(false);
+    configureClientUpdates(f.root, f.config, f.installation);
+    configureClientUpdates(f.root, { ...f.config, automatic: false }, f.installation);
+    expect(() => configureClientUpdates(f.root, { ...f.config, minimum_sequence: 1 }, f.installation)).toThrow('already_configured');
+    mkdirSync(join(f.root, 'updater/.lock'), { mode: 0o700 });
+    expect(() => configureClientUpdates(f.root, f.config, f.installation)).toThrow('update_busy');
+    expect(readClientUpdateConfig(f.root)).toEqual({ ...f.config, automatic: false });
+  });
+
+  it('reports installed files that select another release than the running app, without checking or installing', async () => {
+    const f = appFixture();
+    // For example, another Linux user updated the shared app folder.
+    f.app.release = f.manifest.release_id;
+    f.app.record = f.manifest.release_sha256;
+    const pinned = { ...f.dependencies, running_release: 'clean-v1-release-a' };
+    for (const mode of ['apply', 'check', 'status', 'automatic'] as const) {
+      expect(await runClientUpdate(mode, pinned)).toMatchObject({ status: 'running_release_mismatch', installed_release: f.manifest.release_id, running_release: 'clean-v1-release-a' });
+    }
+    expect(await runClientUpdate('check', { ...pinned, running_release: f.manifest.release_id })).toMatchObject({ status: 'current', running_release: f.manifest.release_id });
+    expect(f.fetcher).toHaveBeenCalledOnce();
     expect(f.install).not.toHaveBeenCalled();
   });
 });
