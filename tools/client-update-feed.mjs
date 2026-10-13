@@ -163,11 +163,29 @@ function requireSameTree(embedded, client) {
 }
 
 // macOS: ECHO.app as electron-builder zips it. Frameworks inside carry
-// symlinks, so only entry names are policed bundle-wide.
+// symlinks, so only entry names are policed bundle-wide. Names are printable
+// ASCII without '?': depending on locale, unzip's listing prints other bytes
+// as '?', so a non-ASCII name cannot be compared with the path a Mac installs.
 function zipEntryName(name) {
   const segments = name.split('/');
-  return name.startsWith(APP) && !/[\\\0]/.test(name) &&
+  return name.startsWith(APP) && /^[\x20-\x7e]+$/.test(name) && !/[\\?]/.test(name) &&
     segments.every((segment, index) => !['.', '..'].includes(segment) && (segment || index === segments.length - 1));
+}
+// APFS and the updater's `ditto -x -k` fold case, so a later entry spelled
+// with other case lands on, or inside, a path checked here and replaces it.
+// Every entry, and every directory its name implies, must own its path
+// ignoring case: one spelling, one kind (a file never shares a directory's path).
+function zipPathsDistinct(names) {
+  const paths = new Map();
+  const claim = (path, kind) => {
+    const owner = `${kind}:${path}`;
+    if ((paths.get(path.toLowerCase()) ?? owner) !== owner) return false;
+    paths.set(path.toLowerCase(), owner);
+    return true;
+  };
+  return new Set(names).size === names.length && names.every(name =>
+    [...name.matchAll(/\//g)].every(slash => claim(name.slice(0, slash.index), 'directory')) &&
+    (name.endsWith('/') || claim(name, 'file')));
 }
 function zipMember(archive, name, limit) {
   // -p prints a symlink entry's target, so the member itself must be a file.
@@ -186,7 +204,7 @@ function bundleIdentifier(plist) {
 function macosEmbeddedClient(archive, directory, target, manifest, release, config) {
   const listing = tool('unzip', ['-Z1', archive], { encoding: 'utf8' });
   const names = listing.endsWith('\n') ? listing.slice(0, -1).split('\n') : [];
-  if (!names.length || new Set(names).size !== names.length || !names.every(zipEntryName)) fail('desktop_archive_invalid');
+  if (!names.length || !names.every(zipEntryName) || !zipPathsDistinct(names)) fail('desktop_archive_invalid');
   if (bundleIdentifier(zipMember(archive, 'ECHO.app/Contents/Info.plist', 1024 * 1024)) !== 'org.echobrain.echo-desktop') fail('desktop_bundle_mismatch');
   checkDesktopIdentity(zipMember(archive, APP_RESOURCES + DESKTOP_IDENTITY, UPDATE_METADATA_LIMIT), target, manifest, release, config);
   tool('unzip', ['-qq', '-n', archive, `${APP_RESOURCES}person-client/*`, '-d', directory]);

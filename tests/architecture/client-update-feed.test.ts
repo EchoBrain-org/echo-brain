@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { updateDigest } from '../../src/product/person-client/client-update-contract.js';
 import { cleanReleaseRecord } from '../support/clean-v1-release.js';
@@ -247,6 +247,15 @@ describe('desktop release artifacts', () => {
   const client = (f: Fixture, target: DesktopTarget, path = 'package/dist/client-update-cli.js') => join(f.desktops[target].client, path);
   const flipByte = (path: string) => { const bytes = readFileSync(path); bytes[0] ^= 1; writeFileSync(path, bytes); };
   const helper = (f: Fixture) => join(f.root, 'linux-deb/data/opt/ECHO/resources/echo-desktop-update-helper');
+  // A later ZIP member that a case-folding Mac would install over the path it
+  // names, after the packaged tree has been checked.
+  const appendEntry = (name: string, bytes = 'not the release bytes') => (f: Fixture) => {
+    const staging = mkdtempSync(join(f.root, 'entry-'));
+    mkdirSync(join(staging, dirname(name)), { recursive: true });
+    writeFileSync(join(staging, name), bytes);
+    execFileSync('zip', ['-q', f.desktops['macos-app'].path, name], { cwd: staging });
+  };
+  const nothing = () => {};
   it.each<{ name: string; target: DesktopTarget; code: string; mutate: (f: Fixture) => void; after?: (f: Fixture) => void }>([
     { name: 'an identity for another product version', target: 'macos-app', code: 'desktop_identity_mismatch', mutate: identity('macos-app', value => { value.product_version = '0.1.2'; }) },
     { name: 'an identity for another release record', target: 'linux-deb', code: 'desktop_identity_mismatch', mutate: identity('linux-deb', value => { value.release_record_sha256 = 'f'.repeat(64); }) },
@@ -266,6 +275,18 @@ describe('desktop release artifacts', () => {
     } },
     { name: 'a ZIP entry outside ECHO.app', target: 'macos-app', code: 'desktop_archive_invalid', mutate: f => writeFileSync(join(f.root, 'macos-app/README.txt'), 'outside'),
       after: f => { execFileSync('zip', ['-q', f.desktops['macos-app'].path, 'README.txt'], { cwd: join(f.root, 'macos-app') }); } },
+    { name: 'a case-variant entry over an embedded client file', target: 'macos-app', code: 'desktop_archive_invalid', mutate: nothing,
+      after: appendEntry('ECHO.app/Contents/Resources/Person-Client/package/dist/client-update-cli.js') },
+    { name: 'a case-variant identity entry', target: 'macos-app', code: 'desktop_archive_invalid', mutate: nothing,
+      after: appendEntry('ECHO.app/Contents/Resources/Echo-Desktop-Identity.v1.json', '{}\n') },
+    { name: 'a case-variant Info.plist', target: 'macos-app', code: 'desktop_archive_invalid', mutate: nothing,
+      after: appendEntry('ECHO.app/Contents/info.plist', infoPlist('org.example.other')) },
+    { name: 'a new file under a case-variant directory above the client', target: 'macos-app', code: 'desktop_archive_invalid', mutate: nothing,
+      after: appendEntry('ECHO.app/Contents/resources/person-client/package/dist/added.js') },
+    { name: 'a file entry where the archive holds a directory', target: 'macos-app', code: 'desktop_archive_invalid', mutate: nothing,
+      after: appendEntry('ECHO.app/Contents/Resources/person-client/package') },
+    { name: 'a non-ASCII entry name', target: 'macos-app', code: 'desktop_archive_invalid', mutate: nothing,
+      after: appendEntry('ECHO.app/Contents/Resources/café.txt') },
     { name: 'a wrong bundle id', target: 'macos-app', code: 'desktop_bundle_mismatch', mutate: f => writeFileSync(join(f.root, 'macos-app/ECHO.app/Contents/Info.plist'), infoPlist('org.example.other')) },
     { name: 'a bundle id behind a comment', target: 'macos-app', code: 'desktop_bundle_mismatch', mutate: f => writeFileSync(join(f.root, 'macos-app/ECHO.app/Contents/Info.plist'),
       infoPlist('org.example.other').replace('<dict>', '<dict><!-- <key>CFBundleIdentifier</key><string>org.echobrain.echo-desktop</string> -->')) },
