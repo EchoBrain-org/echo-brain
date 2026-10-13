@@ -281,10 +281,10 @@ describe('launch', () => {
 
   it('offers its bootstrap to an existing pin on every launch, and stays off when the pin refuses this app', () => {
     const h = harness({ state: { state: 'none' } });
-    h.client.readClientUpdateConfig.mockReturnValue({});
+    h.client.readClientUpdateConfig.mockReturnValue({ automatic: false });
     expect(h.run.launch()).toBe(true);
     // The core rewrites the same trust and refuses a different one: the app never skips that check.
-    expect(h.client.configureClientUpdates).toHaveBeenCalledWith(h.root, { pinned: A }, expect.objectContaining({ activation: 'restart' }));
+    expect(h.client.configureClientUpdates).toHaveBeenCalledWith(h.root, { pinned: A, automatic: false }, expect.objectContaining({ activation: 'restart' }));
     h.client.configureClientUpdates.mockImplementationOnce(() => { throw Object.assign(new Error('ECHO update: already_configured'), { code: 'already_configured' }); });
     writeJson(join(h.updater, 'outcome.json'), { schema_version: 1, release: C, status: 'failed' }, 0o600);
     expect(h.run.launch()).toBe(false);
@@ -612,6 +612,12 @@ describe('with the real client updater core', () => {
     };
     expect(launch(config)).toBe(true);
     expect(launch(config)).toBe(true);
+    // The person's automatic choice is theirs: a relaunch keeps it.
+    const pinned = join(s.updater, 'config.json');
+    writeJson(pinned, { ...config, automatic: false }, 0o600);
+    expect(launch(config)).toBe(true);
+    expect(client.readClientUpdateConfig(s.root)).toEqual({ ...config, automatic: false });
+    writeJson(pinned, config, 0o600);
     // A raised sequence floor, as a rotated key or feed would be: the pin stands and updates stop.
     expect(launch({ ...config, minimum_sequence: 2 })).toBe(false);
     expect(log).toHaveBeenLastCalledWith('update off already_configured');

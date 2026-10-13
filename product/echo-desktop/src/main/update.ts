@@ -21,7 +21,9 @@ const LINUX_RESOURCES = '/opt/ECHO/resources';
 const BUNDLE_ID = 'org.echobrain.echo-desktop';
 const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 const CHECK_DELAY_MS = 10_000;
-const CHECK_INTERVAL_MS = 60 * 60_000;
+// The core's hourly gate decides when the feed is due. Asking every ten
+// minutes keeps a tick that lands just inside that hour from skipping the next.
+const CHECK_INTERVAL_MS = 10 * 60_000;
 
 /** The absolute commands an update runs. Tests replace some. */
 export interface Commands { unzip: string; ditto: string; plutil: string; codesign: string; open: string; pkexec: string; helper: string; launcher: string }
@@ -433,7 +435,9 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
         // First run pins this release's bootstrap. Every later launch offers its
         // own again: the same trust is kept, and a different one (another key,
         // feed, channel or sequence floor) stops updates with already_configured.
-        client.configureClientUpdates(root, deps.identity.update_bootstrap, installation);
+        // The pinned automatic choice is the person's and survives.
+        const pinned = client.readClientUpdateConfig(root) as { automatic?: unknown } | undefined;
+        client.configureClientUpdates(root, pinned ? { ...(deps.identity.update_bootstrap as Record<string, unknown>), automatic: pinned.automatic } : deps.identity.update_bootstrap, installation);
         return true;
       } catch (error) {
         log(`update off ${updateCode(error)}`);
@@ -460,7 +464,7 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
         deps.quit();
         return;
       }
-      if (mac ? !movable(deps.bundle!) : !existsSync(commands.pkexec)) return failed(release, mac ? 'location' : 'failed');
+      if (mac ? !movable(deps.bundle!, root) : !existsSync(commands.pkexec)) return failed(release, mac ? 'location' : 'failed');
       deps.set({ state: 'installing', release });
       // A check holding the core's lock would make this apply busy.
       await checking;
@@ -497,17 +501,21 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
   };
 }
 
-/** macOS replaces the bundle by renames: it must be writable, in a writable folder, and not translocated. */
-function movable(bundle: string): boolean {
+/**
+ * macOS replaces the bundle by renames: it must be writable, in a writable
+ * folder on the updater's volume, and not translocated. Checked before the
+ * download, so an app that cannot be replaced never fetches one.
+ */
+function movable(bundle: string, root: string): boolean {
   if (bundle.includes('/AppTranslocation/')) return false;
   try {
     accessSync(bundle, constants.W_OK);
     accessSync(dirname(bundle), constants.W_OK);
-    return true;
+    return statSync(root).dev === statSync(dirname(bundle)).dev;
   } catch { return false; }
 }
 
-/** Creates the updater and runs its launch, then checks about 10 s later and every hour. Null when it stays off. */
+/** Creates the updater and runs its launch, then checks about 10 s later and every ten minutes. Null when it stays off. */
 export function startUpdater(deps: UpdaterDependencies): Updater | null {
   const updater = createUpdater(deps);
   if (!updater.launch()) return null;
