@@ -10,6 +10,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { RELAUNCHER, SWAP_HELPER } from '../../src/main/update-scripts.js';
 
 const RELEASE = 'clean-v1-release-b';
+/** The app's id for this attempt, which every record of it carries. */
+const ATTEMPT = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+const ended = (status: string) => ({ schema_version: 1, release: RELEASE, attempt: ATTEMPT, status });
 const folders: string[] = [];
 const apps: ChildProcess[] = [];
 afterEach(() => {
@@ -74,7 +77,7 @@ describe('the macOS swap helper', () => {
   it('waits for the app to quit, swaps the staged bundle in, keeps the old one and opens the new one', async () => {
     const f = bundles();
     const running = app();
-    const swap = runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, RELEASE, f.open]);
+    const swap = runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, RELEASE, ATTEMPT, f.open]);
     // Nothing moves while the app runs.
     await new Promise(resolve => setTimeout(resolve, 600));
     expect(f.marker(f.bundle)).toBe('old');
@@ -84,7 +87,7 @@ describe('the macOS swap helper', () => {
     expect(f.marker(f.bundle)).toBe('new');
     expect(f.marker(f.previous)).toBe('old');
     expect(existsSync(f.staged)).toBe(false);
-    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'installed' });
+    expect(outcome(f.outcome)).toEqual(ended('installed'));
     expect(statSync(f.outcome).mode & 0o777).toBe(0o600);
     expect(readFileSync(f.opened, 'utf8')).toBe(`${f.bundle}\n`);
   });
@@ -94,10 +97,10 @@ describe('the macOS swap helper', () => {
     rmSync(f.staged, { recursive: true });
     const running = app();
     await quit(running);
-    await runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, RELEASE, f.open]);
+    await runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, RELEASE, ATTEMPT, f.open]);
     expect(f.marker(f.bundle)).toBe('old');
     expect(existsSync(f.previous)).toBe(false);
-    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'failed' });
+    expect(outcome(f.outcome)).toEqual(ended('failed'));
     expect(readFileSync(f.opened, 'utf8')).toBe(`${f.bundle}\n`);
   });
 
@@ -105,22 +108,24 @@ describe('the macOS swap helper', () => {
     const f = bundles();
     const running = app();
     // The last argument shortens the two-minute wait.
-    const { code } = await runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, RELEASE, f.open, '1']);
+    const { code } = await runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, RELEASE, ATTEMPT, f.open, '1']);
     expect(code).not.toBe(0);
     expect(f.marker(f.bundle)).toBe('old');
     expect(f.marker(f.staged)).toBe('new');
-    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'failed' });
+    expect(outcome(f.outcome)).toEqual(ended('failed'));
     expect(existsSync(f.opened)).toBe(false);
   });
 
-  it('refuses a release id that is not one', async () => {
+  it('refuses a release id or an attempt id that is not one', async () => {
     const f = bundles();
     const running = app();
     await quit(running);
-    const { code } = await runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, 'release","status":"installed', f.open]);
-    expect(code).toBe(2);
-    expect(f.marker(f.bundle)).toBe('old');
-    expect(existsSync(f.outcome)).toBe(false);
+    for (const [release, attempt] of [['release","status":"installed', ATTEMPT], [RELEASE, 'x","status":"installed'], [RELEASE, '']]) {
+      const { code } = await runScript(SWAP_HELPER, [String(running.pid), f.bundle, f.staged, f.previous, f.outcome, release!, attempt!, f.open]);
+      expect(code).toBe(2);
+      expect(f.marker(f.bundle)).toBe('old');
+      expect(existsSync(f.outcome)).toBe(false);
+    }
   });
 });
 
@@ -147,19 +152,21 @@ describe('the Linux relauncher', () => {
   }
   /** As the real helper: it waits for the app to quit before installing. */
   const waitForApp = 'while kill -0 "$pid" 2> /dev/null; do sleep 0.05; done';
-  const args = (f: ReturnType<typeof seat>, pid: number) => [String(pid), f.feed, f.deb, f.progress, f.outcome, RELEASE, f.pkexec, f.helper, f.launcher];
+  const args = (f: ReturnType<typeof seat>, pid: number, attempt = ATTEMPT) => [String(pid), f.feed, f.deb, f.progress, f.outcome, RELEASE, attempt, f.pkexec, f.helper, f.launcher];
+  /** The progress file: the attempt first, so the app never takes another attempt's verified for its own. */
+  const progress = (helper: string) => `attempt ${ATTEMPT}\n${helper}`;
 
   it('runs the helper under pkexec, reports verified, and reopens ECHO once installed', async () => {
     const f = seat(`echo verified\n${waitForApp}\nexit 0`);
     const running = app();
     const relaunch = runScript(RELAUNCHER, args(f, running.pid!), f.env);
-    await until(() => existsSync(f.progress) && readFileSync(f.progress, 'utf8') === 'verified\n');
+    await until(() => existsSync(f.progress) && readFileSync(f.progress, 'utf8') === progress('verified\n'));
     expect(existsSync(f.outcome)).toBe(false);
     await quit(running);
     expect((await relaunch).code).toBe(0);
     expect(readFileSync(f.called, 'utf8').split('\n').slice(0, -1))
       .toEqual([f.helper, 'install', '--feed', f.feed, '--deb', f.deb, '--wait-pid', String(running.pid)]);
-    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'installed' });
+    expect(outcome(f.outcome)).toEqual(ended('installed'));
     expect(statSync(f.outcome).mode & 0o777).toBe(0o600);
     await until(() => existsSync(f.launched));
     expect(readFileSync(f.launched, 'utf8')).toBe('');
@@ -169,8 +176,8 @@ describe('the Linux relauncher', () => {
     const f = seat('exit 126');
     const running = app();
     await runScript(RELAUNCHER, args(f, running.pid!), f.env);
-    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'cancelled' });
-    expect(readFileSync(f.progress, 'utf8')).toBe('');
+    expect(outcome(f.outcome)).toEqual(ended('cancelled'));
+    expect(readFileSync(f.progress, 'utf8')).toBe(progress(''));
     await new Promise(resolve => setTimeout(resolve, 300));
     expect(existsSync(f.launched)).toBe(false);
     expect(running.exitCode).toBeNull();
@@ -180,10 +187,10 @@ describe('the Linux relauncher', () => {
     const f = seat(`echo verified\n${waitForApp}\nexit 5`);
     const running = app();
     const relaunch = runScript(RELAUNCHER, args(f, running.pid!), f.env);
-    await until(() => existsSync(f.progress) && readFileSync(f.progress, 'utf8') === 'verified\n');
+    await until(() => existsSync(f.progress) && readFileSync(f.progress, 'utf8') === progress('verified\n'));
     await quit(running);
     await relaunch;
-    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'failed' });
+    expect(outcome(f.outcome)).toEqual(ended('failed'));
     await until(() => existsSync(f.launched));
   });
 
@@ -191,14 +198,18 @@ describe('the Linux relauncher', () => {
     const f = seat('exit 127');
     const running = app();
     await runScript(RELAUNCHER, args(f, running.pid!), f.env);
-    expect(outcome(f.outcome)).toEqual({ schema_version: 1, release: RELEASE, status: 'failed' });
+    expect(outcome(f.outcome)).toEqual(ended('failed'));
     expect(existsSync(f.launched)).toBe(false);
   });
 
-  it('runs nothing without all its arguments', async () => {
+  it('runs nothing without all its arguments, or with an attempt id that is not one', async () => {
     const f = seat('exit 0');
-    const { code } = await runScript(RELAUNCHER, args(f, process.pid).slice(0, 8), f.env);
-    expect(code).toBe(2);
-    expect(existsSync(f.called)).toBe(false);
+    for (const given of [args(f, process.pid).slice(0, 9), args(f, process.pid, 'x","status":"installed'), args(f, process.pid, ATTEMPT.toUpperCase())]) {
+      const { code } = await runScript(RELAUNCHER, given, f.env);
+      expect(code).toBe(2);
+      expect(existsSync(f.called)).toBe(false);
+      expect(existsSync(f.progress)).toBe(false);
+      expect(existsSync(f.outcome)).toBe(false);
+    }
   });
 });

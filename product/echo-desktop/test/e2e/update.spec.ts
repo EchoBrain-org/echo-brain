@@ -94,6 +94,22 @@ test('newer files already installed: New version · Restart restarts into them',
   await expect.poll(() => updateInstalls(run)).toEqual([RELEASE]);
 });
 
+test('the row shows under ECHO could not start, so a release whose host cannot start still installs its fix', async () => {
+  run = await launch('host-crash');
+  const { page } = run;
+  const row = page.getByTestId('sidebar-update');
+  await expect(page.getByTestId('start-failed')).toBeVisible({ timeout: 10_000 });
+  await expect(row).toHaveCount(0);
+  await setUpdateState(run, { state: 'available', release: RELEASE });
+  await expect(row).toBeVisible();
+  await expect(row).toHaveText('New version · Restart');
+  await expect(page.getByTestId('start-retry')).toBeVisible();
+  await row.click();
+  await expect.poll(() => updateInstalls(run)).toEqual([RELEASE]);
+  await expect(row).toContainText('Updating');
+  await expect(page.getByTestId('start-failed')).toBeVisible();
+});
+
 test('the row shows signed out, and a reload reads it from main again', async () => {
   run = await launch('signed-out');
   const { page } = run;

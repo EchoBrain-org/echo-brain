@@ -20,6 +20,8 @@ const HELPER = 'echo-desktop-update-helper';
 const LINUX_RESOURCES = '/opt/ECHO/resources';
 const BUNDLE_ID = 'org.echobrain.echo-desktop';
 const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
+/** One click's activation: its script, its progress and its outcome carry it. */
+const ATTEMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const CHECK_DELAY_MS = 10_000;
 // The core's hourly gate decides when the feed is due. Asking every ten
 // minutes keeps a tick that lands just inside that hour from skipping the next.
@@ -151,6 +153,8 @@ export interface UpdaterHost {
   app_data: string;
   /** Where the Linux package puts its resources; tests name another folder. */
   linux_resources?: string;
+  /** Linux: where pkexec is; tests name another. */
+  pkexec?: string;
 }
 export interface UpdaterSetup {
   /** <appData>/ECHO/desktop, beside Chromium's ECHO/chromium and apart from the CLI's root. */
@@ -167,7 +171,7 @@ export interface UpdaterSetup {
  * The updater runs only in a packaged release that is not a smoke run or a
  * test build, carries a valid identity, and is installed where it can replace
  * itself: an .app bundle on macOS arm64, or /opt/ECHO with the root-owned
- * helper on Linux x64. Otherwise it stays off and says why.
+ * helper and pkexec on Linux x64. Otherwise it stays off and says why.
  */
 export function updaterSetup(host: UpdaterHost): UpdaterSetup | { off: string } {
   if (!host.packaged) return { off: 'not_packaged' };
@@ -180,6 +184,9 @@ export function updaterSetup(host: UpdaterHost): UpdaterSetup | { off: string } 
   const identity_path = join(host.resources_path, IDENTITY_FILE);
   let identity: DesktopIdentity;
   try { identity = readIdentity(identity_path, target).identity; } catch (error) { return { off: updateCode(error) }; }
+  // pkexec is only recommended: without it no install can work, so no row offers
+  // one, and the documented manual reinstall remains.
+  if (target.platform === 'linux' && !existsSync(host.pkexec ?? COMMANDS.pkexec)) return { off: 'no_pkexec' };
   const bundle = target.platform === 'darwin' ? resolve(host.exec_path, '..', '..', '..') : null;
   const installed = bundle !== null
     ? bundle.endsWith('.app') && host.resources_path === join(bundle, 'Contents', 'Resources') && kind(bundle) === 'directory'
@@ -213,42 +220,44 @@ export function installRefusal(state: UpdateState, release: unknown, unresolved:
 
 /**
  * The row after an automatic check: an available release, or newer files
- * already installed (restart to use them). Nothing else changes it. An install
- * in progress stays, and so does a failure until a different release appears.
+ * already installed (restart to use them). An install in progress stays. A
+ * failure stays while the same release is on offer, and goes once the running
+ * release is current or the files on disk are newer.
  */
 export function checkedState(current: UpdateState, result: Pick<ClientUpdateResult, 'status' | 'installed_release' | 'available_release'>): UpdateState {
+  if (current.state === 'installing') return current;
+  if (current.state === 'failed' && result.status === 'current') return { state: 'none' };
   const release = result.status === 'available' ? result.available_release : result.status === 'running_release_mismatch' ? result.installed_release : null;
-  if (current.state === 'installing' || typeof release !== 'string' || !RELEASE_ID.test(release)) return current;
-  if (current.state === 'failed' && current.release === release) return current;
+  if (typeof release !== 'string' || !RELEASE_ID.test(release)) return current;
+  if (current.state === 'failed' && current.release === release && result.status === 'available') return current;
   return { state: result.status === 'available' ? 'available' : 'restart', release };
 }
 
-interface Outcome { schema_version: 1; release: string; status: 'installed' | 'failed' | 'cancelled' }
+interface Outcome { schema_version: 1; release: string; attempt: string; status: 'installed' | 'failed' | 'cancelled' }
 
-/** Reads and removes the outcome a swap helper or relauncher left: null when there is none to use. */
-function takeOutcome(updater: string): Outcome | null {
-  const path = join(updater, 'outcome.json');
-  let value: Partial<Outcome> | null = null;
-  try {
-    value = JSON.parse(readOwned(path, 4096, false).toString('utf8')) as Partial<Outcome> | null;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-  }
-  rmSync(path, { force: true });
+/** The outcome a swap helper or relauncher left at `path`: null when there is none to use. */
+function readOutcome(path: string): Outcome | null {
+  let value: Partial<Outcome> | null;
+  try { value = JSON.parse(readOwned(path, 4096, false).toString('utf8')) as Partial<Outcome> | null; } catch { return null; }
   return value !== null && typeof value === 'object' && value.schema_version === 1 && typeof value.release === 'string' && RELEASE_ID.test(value.release) &&
+    typeof value.attempt === 'string' && ATTEMPT_ID.test(value.attempt) &&
     (value.status === 'installed' || value.status === 'failed' || value.status === 'cancelled') ? value as Outcome : null;
 }
 
 /**
- * The last install's outcome, at launch. The expected release running clears
- * the row and what the install left, the previous macOS bundle included; any
- * other end shows the failure. A cancelled prompt shows nothing.
+ * The last install's outcome, at launch, whichever attempt left it. The
+ * release it was for running clears the row and what the install left, the
+ * previous macOS bundle included, whatever the script reported: another
+ * attempt, or another user's update, may have put it there. Any other end
+ * shows the failure. A cancelled prompt shows nothing.
  */
 export function launchOutcome(root: string, running: string): UpdateState | null {
   const updater = join(root, 'updater');
-  const outcome = takeOutcome(updater);
+  const path = join(updater, 'outcome.json');
+  const outcome = readOutcome(path);
+  rmSync(path, { force: true });
   if (!outcome || outcome.status === 'cancelled') return null;
-  if (outcome.status === 'failed' || outcome.release !== running) return { state: 'failed', release: outcome.release, reason: 'failed' };
+  if (outcome.release !== running) return { state: 'failed', release: outcome.release, reason: 'failed' };
   for (const name of readdirSync(updater)) {
     if (['previous', 'staged', 'progress'].includes(name) || /^activate-.*\.sh$/.test(name)) rmSync(join(updater, name), { recursive: true, force: true });
   }
@@ -256,6 +265,10 @@ export function launchOutcome(root: string, running: string): UpdateState | null
 }
 
 // ---- staging -----------------------------------------------------------------
+
+/** The volume a path is on. Tests name another. */
+export type Device = (path: string) => number;
+const volume: Device = path => statSync(path).dev;
 
 const run = promisify(execFile);
 /** A command's output, or a refusal with `code` when it fails. Never a shell. */
@@ -271,7 +284,7 @@ async function output(command: string, args: readonly string[], code: string): P
  * this target. It must sit on the running bundle's volume, so the swap is a
  * rename.
  */
-async function stageBundle(input: UpdateInstallerInput, staged: string, bundle: string, target: UpdateTarget, commands: Commands): Promise<void> {
+async function stageBundle(input: UpdateInstallerInput, staged: string, bundle: string, target: UpdateTarget, commands: Commands, device: Device): Promise<void> {
   const entries = (await output(commands.unzip, ['-Z1', input.archive], 'invalid_archive')).split('\n').filter(Boolean);
   if (entries.length === 0 || entries.some(entry => !entry.startsWith('ECHO.app/') || isAbsolute(entry) || entry.split('/').includes('..'))) {
     refuse('invalid_archive');
@@ -284,7 +297,7 @@ async function stageBundle(input: UpdateInstallerInput, staged: string, bundle: 
   await output(commands.codesign, ['--verify', '--deep', '--strict', app], 'invalid_signature');
   const { identity } = readIdentity(join(app, 'Contents', 'Resources', IDENTITY_FILE), target);
   if (identity.release_id !== input.manifest.release_id || identity.release_record_sha256 !== input.manifest.release_sha256) refuse('release_mismatch');
-  if (statSync(staged).dev !== statSync(dirname(bundle)).dev) refuse('other_volume');
+  if (device(staged) !== device(dirname(bundle))) refuse('other_volume');
 }
 
 /** Linux: the verified package and the exact feed, for the root helper to check again. */
@@ -301,7 +314,7 @@ async function stagePackage(input: UpdateInstallerInput, staged: string): Promis
  * the verified update in <root>/updater/staged for activation after the quit.
  */
 export function desktopInstallation(setup: Pick<UpdaterSetup, 'root' | 'target' | 'identity_path' | 'bundle'>, commands: Partial<Commands>,
-  log: (line: string) => void): ClientUpdateInstallation {
+  log: (line: string) => void, device: Device = volume): ClientUpdateInstallation {
   const mac = setup.target.platform === 'darwin';
   const tools = { ...COMMANDS, ...commands };
   const disk = () => readIdentity(setup.identity_path, setup.target);
@@ -316,7 +329,7 @@ export function desktopInstallation(setup: Pick<UpdaterSetup, 'root' | 'target' 
         // The race guard: files installed during the download are not the ones checked.
         if (sha256(disk().bytes) !== input.expected_wrapper_sha256) refuse('installation_changed');
         await mkdir(staged, { mode: 0o700 });
-        if (mac) await stageBundle(input, staged, setup.bundle!, setup.target, tools);
+        if (mac) await stageBundle(input, staged, setup.bundle!, setup.target, tools, device);
         else await stagePackage(input, staged);
       } catch (error) {
         log(`update staging ${updateCode(error)}`);
@@ -343,19 +356,25 @@ export interface UpdaterDependencies extends UpdaterSetup {
   held(): boolean;
   /** The app's normal quit: the host drains, and work unresolved by then is asked about. */
   quit(): void;
+  /** Electron's relaunch once this process exits: called only once the quit is certain. */
   relaunch(): void;
   log(line: string): void;
   /** Starts `/bin/bash script args…` detached. */
   start?: (args: readonly string[]) => void;
   commands?: Partial<Commands>;
+  device?: Device;
   poll_ms?: number;
 }
 export interface Updater {
   /** At launch, under the single-instance lock. False leaves the updater off. */
   launch(): boolean;
   check(): Promise<void>;
-  /** Installs the row's release, or relaunches into files already installed. Refusals are main's. */
+  /** Installs the row's release, or quits to relaunch into files already installed. Refusals are main's. */
   install(release: string): Promise<void>;
+  /** Main's will-quit: the quit is certain, so a Restart click relaunches now. */
+  willQuit(): void;
+  /** Main's quit guard kept ECHO open: a later ordinary quit relaunches nothing. */
+  quitCancelled(): void;
 }
 
 /** `/bin/bash script args…` in its own session, so it outlives the quit. */
@@ -378,48 +397,61 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
   const updater = join(root, 'updater');
   const outcome = join(updater, 'outcome.json');
   const progress = join(updater, 'progress');
-  const installation = desktopInstallation(deps, commands, log);
+  const device = deps.device ?? volume;
+  const installation = desktopInstallation(deps, commands, log, device);
   const runs: ClientUpdateRun = { root, platform: target, installation, running_release: deps.identity.release_id, handle_signals: false, fetch: deps.fetch };
   let checking: Promise<void> | null = null;
+  /** Restart was clicked and its quit has not been cancelled. */
+  let restarting = false;
   /** Checks repeat their answer hourly: only a change is sent. Each install step is, so a click always hears back. */
   const show = (next: UpdateState) => { if (JSON.stringify(next) !== JSON.stringify(deps.state())) deps.set(next); };
   const failed = (release: string, reason: 'failed' | 'location' = 'failed') => deps.set({ state: 'failed', release, reason });
+  /** Whether this app can replace itself where it is: Linux installs as root, macOS needs movable(). */
+  const located = () => !mac || movable(deps.bundle!, root, device);
 
-  /** Writes the activation script and starts it. Every value is an argument. */
-  function activate(release: string): void {
+  /** Writes the activation script and starts it, for one attempt whose id it returns. Every value is an argument. */
+  function activate(release: string): string {
     const staged = join(updater, 'staged');
-    const script = join(updater, `activate-${randomUUID()}.sh`);
+    const attempt = randomUUID();
+    const script = join(updater, `activate-${attempt}.sh`);
     // An earlier attempt's progress and outcome are not this one's.
     rmSync(outcome, { force: true });
     rmSync(progress, { force: true });
     writeFileSync(script, mac ? SWAP_HELPER : RELAUNCHER, { mode: 0o700, flag: 'wx' });
     const pid = String(deps.pid);
     (deps.start ?? detached)([script, ...mac
-      ? [pid, deps.bundle!, join(staged, 'ECHO.app'), join(updater, 'previous', 'ECHO.app'), outcome, release, commands.open]
-      : [pid, join(staged, 'feed.json'), join(staged, 'echo-desktop.deb'), progress, outcome, release, commands.pkexec, commands.helper, commands.launcher]]);
+      ? [pid, deps.bundle!, join(staged, 'ECHO.app'), join(updater, 'previous', 'ECHO.app'), outcome, release, attempt, commands.open]
+      : [pid, join(staged, 'feed.json'), join(staged, 'echo-desktop.deb'), progress, outcome, release, attempt, commands.pkexec, commands.helper, commands.launcher]]);
+    return attempt;
   }
 
   /**
    * After activation, until the app exits. Linux quits once the root helper has
-   * verified the update. A script that ends while the app still runs did not
-   * install: a cancelled password prompt puts the row back, and anything else,
-   * such as a quit the person cancelled at the unresolved-work question until
-   * the script's wait ran out, shows the failure.
+   * verified the update. Only this attempt's progress and outcome count: a
+   * person can quit at the password prompt, reopen ECHO and click again, and
+   * the earlier relauncher can still finish. A script that ends while the app
+   * still runs: a cancelled password prompt puts the row back; installed means
+   * the newer files are on disk, so restart; anything else, such as a quit the
+   * person cancelled at the unresolved-work question until the script's wait
+   * ran out, shows the failure.
    */
-  function watch(release: string): void {
+  function watch(release: string, attempt: string): void {
     let quitting = mac;
     const timer = setInterval(() => {
-      if (!quitting && /^verified$/m.test(readSmall(progress))) {
+      const shown = readSmall(progress);
+      if (!quitting && shown.startsWith(`attempt ${attempt}\n`) && /^verified$/m.test(shown)) {
         quitting = true;
         deps.quit();
         return;
       }
-      const ended = takeOutcome(updater);
-      if (!ended) return;
+      const ended = readOutcome(outcome);
+      if (ended?.attempt !== attempt) return;
+      rmSync(outcome, { force: true });
       clearInterval(timer);
       log(`update install ${ended.status}`);
       // Cancelled at the password prompt: the release is still there to install.
-      if (ended.status === 'cancelled') deps.set({ state: 'available', release }); else failed(release);
+      deps.set(ended.status === 'cancelled' ? { state: 'available', release } : ended.status === 'installed' ? { state: 'restart', release }
+        : { state: 'failed', release, reason: 'failed' });
     }, deps.poll_ms ?? 250);
     timer.unref();
   }
@@ -451,7 +483,9 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
         try {
           const result = await client.runClientUpdate('automatic', runs);
           log(`update check ${result.status}`);
-          show(checkedState(deps.state(), result));
+          const next = checkedState(deps.state(), result);
+          // An app macOS cannot replace says where it must be at once, not after a click.
+          show((next.state === 'available' || next.state === 'restart') && !located() ? { state: 'failed', release: next.release, reason: 'location' } : next);
         } catch (error) {
           log(`update check ${updateCode(error)}`);
         }
@@ -460,11 +494,14 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
     },
     async install(release) {
       if (deps.state().state === 'restart') {
-        deps.relaunch();
+        // The quit can still be cancelled at the unresolved-work question:
+        // relaunching is armed at will-quit, once nothing can cancel it.
+        restarting = true;
         deps.quit();
         return;
       }
-      if (mac ? !movable(deps.bundle!, root) : !existsSync(commands.pkexec)) return failed(release, mac ? 'location' : 'failed');
+      if (!located()) return failed(release, 'location');
+      if (!mac && !existsSync(commands.pkexec)) return failed(release);
       deps.set({ state: 'installing', release });
       // A check holding the core's lock would make this apply busy.
       await checking;
@@ -489,14 +526,21 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
         log('update install held');
         return deps.set({ state: 'available', release: staged });
       }
+      let attempt: string;
       try {
-        activate(staged);
+        attempt = activate(staged);
       } catch (error) {
         log(`update activate ${updateCode(error)}`);
         return failed(release);
       }
       if (mac) deps.quit();
-      watch(staged);
+      watch(staged, attempt);
+    },
+    willQuit() {
+      if (restarting) deps.relaunch();
+    },
+    quitCancelled() {
+      restarting = false;
     },
   };
 }
@@ -506,12 +550,12 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
  * folder on the updater's volume, and not translocated. Checked before the
  * download, so an app that cannot be replaced never fetches one.
  */
-function movable(bundle: string, root: string): boolean {
+function movable(bundle: string, root: string, device: Device): boolean {
   if (bundle.includes('/AppTranslocation/')) return false;
   try {
     accessSync(bundle, constants.W_OK);
     accessSync(dirname(bundle), constants.W_OK);
-    return statSync(root).dev === statSync(dirname(bundle)).dev;
+    return device(root) === device(dirname(bundle));
   } catch { return false; }
 }
 

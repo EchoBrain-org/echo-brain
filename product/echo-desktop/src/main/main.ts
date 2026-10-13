@@ -750,13 +750,16 @@ app.on('before-quit', event => {
       quitAttempt += 1;
       draining = null;
       drained = false;
+      // A Restart click's relaunch goes with the quit it asked for.
+      updater?.quitCancelled();
       show();
       return;
     }
   }
   quitting = true;
 });
-app.on('will-quit', () => { globalShortcut.unregisterAll(); host?.kill(); });
+// Nothing cancels the quit from here: a Restart click relaunches now, never a later quit.
+app.on('will-quit', () => { globalShortcut.unregisterAll(); host?.kill(); updater?.willQuit(); });
 app.on('window-all-closed', () => { /* stays in the tray */ });
 
 if (__ECHO_TEST_HOOK__) {

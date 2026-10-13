@@ -33,11 +33,11 @@ function SidebarProject({ project, current, state }: { project: ProjectSummary; 
 const twoPart = (what: string, action: string) => <span class="label"><span class="part">{what} ·</span> <span class="part">{action}</span></span>;
 
 /**
- * A new version, signed in or out (ADR-0035): one click installs it and
- * restarts. Nothing clickable here says Update, which Home uses for open
- * items. It takes no dropped file. The row stays one button in every state,
- * so a keyboard click keeps its focus and Updating is announced; Updating and
- * the location line are unavailable rather than missing.
+ * A new version, signed in or out, and under ECHO could not start (ADR-0035):
+ * one click installs it and restarts. Nothing clickable here says Update,
+ * which Home uses for open items. It takes no dropped file. The row stays one
+ * button in every state, so a keyboard click keeps its focus and Updating is
+ * announced; Updating and the location line are unavailable rather than missing.
  */
 export function UpdateRow({ state }: { state: State }) {
   const { update, updateFailure: failure } = state;

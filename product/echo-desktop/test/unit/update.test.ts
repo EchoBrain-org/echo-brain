@@ -2,16 +2,16 @@
 // detached script and the quit: no Electron. macOS staging runs the real
 // unzip, ditto, plutil and codesign against an ad-hoc signed stand-in bundle.
 import { execFileSync } from 'node:child_process';
-import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { UpdateState } from '../../src/shared/protocol.js';
 import {
-  checkedState, createUpdater, desktopInstallation, IDENTITY_FILE, installRefusal, launchOutcome, readIdentity, updaterSetup,
-  type ClientUpdateModule, type ClientUpdateResult, type UpdateInstallerInput, type UpdateTarget,
+  checkedState, createUpdater, desktopInstallation, IDENTITY_FILE, installRefusal, launchOutcome, readIdentity, startUpdater, updaterSetup,
+  type ClientUpdateModule, type ClientUpdateResult, type UpdateInstallerInput, type UpdaterDependencies, type UpdateTarget,
 } from '../../src/main/update.js';
 import { RELAUNCHER, SWAP_HELPER } from '../../src/main/update-scripts.js';
 
@@ -20,6 +20,9 @@ const LINUX: UpdateTarget = { platform: 'linux', architecture: 'x64', libc: 'gli
 const A = 'clean-v1-release-a';
 const B = 'clean-v1-release-b';
 const C = 'clean-v1-release-c';
+/** Any attempt's id: launch reads every outcome, whichever attempt wrote it. */
+const ATTEMPT = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+const outcomeOf = (release: string, status: string, attempt = ATTEMPT) => ({ schema_version: 1, release, attempt, status });
 const sha256 = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
 const folders: string[] = [];
 const locked: string[] = [];
@@ -81,7 +84,9 @@ function fakeClient(apply: ClientUpdateResult | Error = result('staged', { avail
   } satisfies ClientUpdateModule;
 }
 
-function harness(options: { target?: UpdateTarget; client?: ReturnType<typeof fakeClient>; state?: UpdateState; bundle?: string; pkexec?: string } = {}) {
+function harness(options: {
+  target?: UpdateTarget; client?: ReturnType<typeof fakeClient>; state?: UpdateState; bundle?: string; pkexec?: string; device?: (path: string) => number;
+} = {}) {
   const s = seat(options.target);
   const client = options.client ?? fakeClient();
   let state: UpdateState = options.state ?? { state: 'available', release: B };
@@ -92,16 +97,22 @@ function harness(options: { target?: UpdateTarget; client?: ReturnType<typeof fa
   const log = vi.fn();
   const fetcher = vi.fn() as unknown as typeof fetch;
   let holding = false;
-  const updater = createUpdater({
+  const deps: UpdaterDependencies = {
     root: s.root, target: s.target, identity_path: s.identity_path, identity: readIdentity(s.identity_path, s.target).identity,
     bundle: s.target.platform === 'darwin' ? options.bundle ?? s.bundle : null,
     client, pid: 4242, fetch: fetcher, state: () => state, set: next => { state = next; sent.push(next); }, held: () => holding,
     quit, relaunch, log, start: args => { started.push([...args]); }, commands: { pkexec: options.pkexec ?? s.pkexec }, poll_ms: 10,
-  });
+    ...options.device ? { device: options.device } : {},
+  };
   /** Main's unresolved work, as the page reports it. */
   const hold = (held: boolean) => { holding = held; };
-  return { ...s, client, run: updater, sent, started, quit, relaunch, log, fetcher, hold, state: () => state };
+  /** The attempt id the last activation script was given. */
+  const attempt = () => h.started.at(-1)![7]!;
+  const h = { ...s, client, deps, run: createUpdater(deps), sent, started, quit, relaunch, log, fetcher, hold, attempt, state: () => state };
+  return h;
 }
+/** Another volume for the app's own data than for the bundle's folder. */
+const otherVolume = (path: string) => path.includes(`${sep}appData${sep}`) ? 2 : 1;
 
 describe('the desktop identity', () => {
   it('reads a release identity the user or root owns and no one else can write', () => {
@@ -163,7 +174,7 @@ describe('when the updater runs', () => {
 
   it('runs on Linux only from /opt/ECHO with a root-owned helper', () => {
     const s = seat(LINUX);
-    const linux = host(s, { platform: 'linux', arch: 'x64', exec_path: join(s.resources, '..', 'echo-desktop') });
+    const linux = host(s, { platform: 'linux', arch: 'x64', exec_path: join(s.resources, '..', 'echo-desktop'), pkexec: s.pkexec });
     // This test's resources are not /opt/ECHO/resources.
     expect(updaterSetup(linux)).toEqual({ off: 'unsupported_installation' });
     writeFileSync(join(s.resources, 'echo-desktop-update-helper'), '#!/usr/bin/python3\n', { mode: 0o755 });
@@ -171,6 +182,16 @@ describe('when the updater runs', () => {
     expect(updaterSetup({ ...linux, linux_resources: s.resources })).toEqual(
       process.getuid?.() === 0 ? expect.objectContaining({ target: LINUX, bundle: null }) : { off: 'unsupported_installation' },
     );
+  });
+
+  it('stays off on Linux without pkexec, where only the manual reinstall can work', () => {
+    const s = seat(LINUX);
+    writeFileSync(join(s.resources, 'echo-desktop-update-helper'), '#!/usr/bin/python3\n', { mode: 0o755 });
+    const linux = host(s, { platform: 'linux', arch: 'x64', exec_path: join(s.resources, '..', 'echo-desktop'), linux_resources: s.resources });
+    expect(updaterSetup({ ...linux, pkexec: join(s.base, 'no-pkexec') })).toEqual({ off: 'no_pkexec' });
+    // macOS never runs pkexec.
+    const mac = seat();
+    expect(updaterSetup(host(mac, { pkexec: join(mac.base, 'no-pkexec') }))).toEqual(expect.objectContaining({ target: MAC }));
   });
 });
 
@@ -194,10 +215,20 @@ describe('what a check shows', () => {
   it('never replaces installing, and keeps a failure until a different release appears', () => {
     const installing: UpdateState = { state: 'installing', release: B };
     expect(checkedState(installing, available(C))).toBe(installing);
+    expect(checkedState(installing, result('current'))).toBe(installing);
     const failed: UpdateState = { state: 'failed', release: B, reason: 'failed' };
     expect(checkedState(failed, available(B))).toBe(failed);
     expect(checkedState(failed, available(C))).toEqual({ state: 'available', release: C });
-    expect(checkedState(failed, result('running_release_mismatch', { installed_release: B }))).toBe(failed);
+  });
+
+  it('drops a failure once the running release is current, and offers a restart once its files are on disk', () => {
+    for (const reason of ['failed', 'location'] as const) {
+      const failed: UpdateState = { state: 'failed', release: B, reason };
+      expect(checkedState(failed, result('current'))).toEqual({ state: 'none' });
+      // Installed after all, by this attempt or another.
+      expect(checkedState(failed, result('running_release_mismatch', { installed_release: B }))).toEqual({ state: 'restart', release: B });
+      expect(checkedState(failed, result('running_release_mismatch', { installed_release: C }))).toEqual({ state: 'restart', release: C });
+    }
   });
 });
 
@@ -235,30 +266,41 @@ describe('the outcome of the last install, at launch', () => {
 
   it('clears the row and every leftover when the expected release is running', () => {
     const s = seat();
-    const updater = leftovers(s.root, { schema_version: 1, release: B, status: 'installed' });
+    const updater = leftovers(s.root, outcomeOf(B, 'installed'));
+    expect(launchOutcome(s.root, B)).toEqual({ state: 'none' });
+    expect(readdirSync(updater)).toEqual(['state.json']);
+  });
+
+  it('shows no failure for the release that is running, whatever its script reported', () => {
+    const s = seat();
+    // Another attempt, or another user's update, put it there after all.
+    const updater = leftovers(s.root, outcomeOf(B, 'failed', randomUUID()));
     expect(launchOutcome(s.root, B)).toEqual({ state: 'none' });
     expect(readdirSync(updater)).toEqual(['state.json']);
   });
 
   it('shows a failure when another release is running after an install, or the install failed', () => {
     const s = seat();
-    const updater = leftovers(s.root, { schema_version: 1, release: B, status: 'installed' });
+    const updater = leftovers(s.root, outcomeOf(B, 'installed'));
     expect(launchOutcome(s.root, A)).toEqual({ state: 'failed', release: B, reason: 'failed' });
     expect(existsSync(join(updater, 'outcome.json'))).toBe(false);
     // The old bundle stays until the expected release starts.
     expect(existsSync(join(updater, 'previous', 'ECHO.app'))).toBe(true);
-    writeJson(join(updater, 'outcome.json'), { schema_version: 1, release: B, status: 'failed' }, 0o600);
+    writeJson(join(updater, 'outcome.json'), outcomeOf(B, 'failed', randomUUID()), 0o600);
     expect(launchOutcome(s.root, A)).toEqual({ state: 'failed', release: B, reason: 'failed' });
     expect(existsSync(join(updater, 'outcome.json'))).toBe(false);
   });
 
   it('shows nothing for a cancelled prompt, a missing outcome or one it cannot read', () => {
     const s = seat();
-    const updater = leftovers(s.root, { schema_version: 1, release: B, status: 'cancelled' });
+    const updater = leftovers(s.root, outcomeOf(B, 'cancelled'));
     expect(launchOutcome(s.root, A)).toBeNull();
     expect(existsSync(join(updater, 'outcome.json'))).toBe(false);
     expect(launchOutcome(s.root, A)).toBeNull();
-    for (const outcome of [{ schema_version: 2, release: B, status: 'installed' }, { schema_version: 1, release: 'B', status: 'installed' }, { schema_version: 1, release: B, status: 'done' }]) {
+    for (const outcome of [
+      { ...outcomeOf(B, 'installed'), schema_version: 2 }, outcomeOf('B', 'installed'), outcomeOf(B, 'done'), outcomeOf(B, 'installed', 'x'),
+      { schema_version: 1, release: B, status: 'installed' },
+    ]) {
       writeJson(join(updater, 'outcome.json'), outcome, 0o600);
       expect(launchOutcome(s.root, B)).toBeNull();
       expect(existsSync(join(updater, 'outcome.json'))).toBe(false);
@@ -270,7 +312,7 @@ describe('the outcome of the last install, at launch', () => {
 describe('launch', () => {
   it('releases an interrupted run, then reads the outcome, then pins the embedded bootstrap', () => {
     const h = harness({ state: { state: 'none' } });
-    writeJson(join(h.updater, 'outcome.json'), { schema_version: 1, release: C, status: 'failed' }, 0o600);
+    writeJson(join(h.updater, 'outcome.json'), outcomeOf(C, 'failed'), 0o600);
     expect(h.run.launch()).toBe(true);
     expect(h.client.releaseInterruptedClientUpdate).toHaveBeenCalledWith(h.root);
     expect(h.sent).toEqual([{ state: 'failed', release: C, reason: 'failed' }]);
@@ -286,7 +328,7 @@ describe('launch', () => {
     // The core rewrites the same trust and refuses a different one: the app never skips that check.
     expect(h.client.configureClientUpdates).toHaveBeenCalledWith(h.root, { pinned: A, automatic: false }, expect.objectContaining({ activation: 'restart' }));
     h.client.configureClientUpdates.mockImplementationOnce(() => { throw Object.assign(new Error('ECHO update: already_configured'), { code: 'already_configured' }); });
-    writeJson(join(h.updater, 'outcome.json'), { schema_version: 1, release: C, status: 'failed' }, 0o600);
+    writeJson(join(h.updater, 'outcome.json'), outcomeOf(C, 'failed'), 0o600);
     expect(h.run.launch()).toBe(false);
     expect(h.log).toHaveBeenCalledWith('update off already_configured');
     // A row the updater cannot act on is not shown.
@@ -317,15 +359,67 @@ describe('checks', () => {
     await busy.run.check();
     expect(busy.client.runClientUpdate).not.toHaveBeenCalled();
   });
+
+  it('on macOS says where ECHO must be as soon as a check finds a release it could not replace itself with', async () => {
+    const translocated = harness({ state: { state: 'none' }, bundle: '/private/var/folders/x/AppTranslocation/1234/d/ECHO.app' });
+    await translocated.run.check();
+    expect(translocated.sent).toEqual([{ state: 'failed', release: B, reason: 'location' }]);
+    translocated.client.runClientUpdate.mockResolvedValueOnce(result('running_release_mismatch', { installed_release: C }));
+    await translocated.run.check();
+    expect(translocated.sent).toEqual([{ state: 'failed', release: B, reason: 'location' }, { state: 'failed', release: C, reason: 'location' }]);
+    // The updater's folder on another volume than the bundle's: no rename can swap it.
+    const elsewhere = harness({ state: { state: 'none' }, device: otherVolume });
+    await elsewhere.run.check();
+    expect(elsewhere.sent).toEqual([{ state: 'failed', release: B, reason: 'location' }]);
+    // Linux replaces /opt/ECHO as root, wherever the app's own data is.
+    const linux = harness({ target: LINUX, state: { state: 'none' }, device: otherVolume });
+    await linux.run.check();
+    expect(linux.sent).toEqual([{ state: 'available', release: B }]);
+  });
+
+  it('checks about 10 s after launch, then every ten minutes', async () => {
+    vi.useFakeTimers();
+    const h = harness({ state: { state: 'none' } });
+    const checks = () => h.client.runClientUpdate.mock.calls.filter(([mode]) => mode === 'automatic').length;
+    expect(startUpdater(h.deps)).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(checks()).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(checks()).toBe(1);
+    await vi.advanceTimersByTimeAsync(10 * 60_000 - 10_001);
+    expect(checks()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(checks()).toBe(2);
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    expect(checks()).toBe(4);
+  });
 });
 
 describe('install', () => {
-  it('relaunches into files already installed, without installing', async () => {
+  it('relaunches into files already installed, without installing, once the quit is certain', async () => {
     const h = harness({ state: { state: 'restart', release: B } });
     await h.run.install(B);
+    expect(h.quit).toHaveBeenCalledOnce();
+    // The quit can still be cancelled at the unresolved-work question.
+    expect(h.relaunch).not.toHaveBeenCalled();
+    h.run.willQuit();
     expect(h.relaunch).toHaveBeenCalledOnce();
-    expect(h.relaunch.mock.invocationCallOrder[0]).toBeLessThan(h.quit.mock.invocationCallOrder[0]!);
     expect(h.client.runClientUpdate).not.toHaveBeenCalled();
+  });
+
+  it('relaunches nothing after a Restart whose quit was cancelled, nor on an ordinary quit', async () => {
+    const h = harness({ state: { state: 'restart', release: B } });
+    h.run.willQuit();
+    expect(h.relaunch).not.toHaveBeenCalled();
+    await h.run.install(B);
+    h.run.quitCancelled();
+    // A later Quit ECHO from the tray.
+    h.run.willQuit();
+    expect(h.relaunch).not.toHaveBeenCalled();
+    // Restart clicked again, and this time the quit goes through.
+    await h.run.install(B);
+    h.run.willQuit();
+    expect(h.relaunch).toHaveBeenCalledOnce();
   });
 
   it('asks for Applications when macOS runs the app translocated or from a folder it cannot write', async () => {
@@ -343,6 +437,13 @@ describe('install', () => {
     await readOnly.run.install(B);
     expect(readOnly.sent).toEqual([{ state: 'failed', release: B, reason: 'location' }]);
     expect(readOnly.client.runClientUpdate).not.toHaveBeenCalled();
+  });
+
+  it('asks for Applications when the updater\'s folder is on another volume than the bundle\'s', async () => {
+    const h = harness({ device: otherVolume });
+    await h.run.install(B);
+    expect(h.sent).toEqual([{ state: 'failed', release: B, reason: 'location' }]);
+    expect(h.client.runClientUpdate).not.toHaveBeenCalled();
   });
 
   it('fails on Linux without pkexec, before downloading anything', async () => {
@@ -374,11 +475,14 @@ describe('install', () => {
     expect(h.sent).toEqual([{ state: 'installing', release: B }]);
     expect(h.started).toHaveLength(1);
     const [script, ...args] = h.started[0]!;
-    expect(script).toMatch(new RegExp(`^${h.updater}/activate-[0-9a-f-]{36}\\.sh$`));
+    // Each attempt has its own id, which names its script too.
+    const attempt = h.attempt();
+    expect(attempt).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(script).toBe(join(h.updater, `activate-${attempt}.sh`));
     expect(readFileSync(script!, 'utf8')).toBe(SWAP_HELPER);
     expect(statSync(script!).mode & 0o777).toBe(0o700);
     expect(args).toEqual(['4242', h.bundle, join(h.updater, 'staged', 'ECHO.app'), join(h.updater, 'previous', 'ECHO.app'),
-      join(h.updater, 'outcome.json'), B, '/usr/bin/open']);
+      join(h.updater, 'outcome.json'), B, attempt, '/usr/bin/open']);
     expect(h.quit).toHaveBeenCalledOnce();
     expect(h.relaunch).not.toHaveBeenCalled();
   });
@@ -402,10 +506,10 @@ describe('install', () => {
       const h = harness({ target });
       await h.run.install(B);
       // macOS quits at once; Linux once the root helper has verified the update.
-      if (target === LINUX) writeFileSync(join(h.updater, 'progress'), 'verified\n');
+      if (target === LINUX) writeFileSync(join(h.updater, 'progress'), `attempt ${h.attempt()}\nverified\n`);
       await expect.poll(() => h.quit.mock.calls.length).toBe(1);
       // ECHO stayed open, so the script's wait for it ran out.
-      writeJson(join(h.updater, 'outcome.json'), { schema_version: 1, release: B, status: 'failed' }, 0o600);
+      writeJson(join(h.updater, 'outcome.json'), outcomeOf(B, 'failed', h.attempt()), 0o600);
       await expect.poll(() => h.sent.length, { message: target.platform }).toBe(2);
       expect(h.sent[1], target.platform).toEqual({ state: 'failed', release: B, reason: 'failed' });
       expect(h.quit, target.platform).toHaveBeenCalledOnce();
@@ -420,14 +524,44 @@ describe('install', () => {
     expect(readFileSync(script!, 'utf8')).toBe(RELAUNCHER);
     const progress = join(h.updater, 'progress');
     expect(args).toEqual(['4242', join(h.updater, 'staged', 'feed.json'), join(h.updater, 'staged', 'echo-desktop.deb'), progress,
-      join(h.updater, 'outcome.json'), B, h.pkexec, '/opt/ECHO/resources/echo-desktop-update-helper', '/usr/bin/echo-desktop']);
+      join(h.updater, 'outcome.json'), B, h.attempt(), h.pkexec, '/opt/ECHO/resources/echo-desktop-update-helper', '/usr/bin/echo-desktop']);
     // An earlier attempt's outcome is not this one's.
     expect(existsSync(join(h.updater, 'outcome.json'))).toBe(false);
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(h.quit).not.toHaveBeenCalled();
-    writeFileSync(progress, 'verified\n');
+    writeFileSync(progress, `attempt ${h.attempt()}\nverified\n`);
     await expect.poll(() => h.quit.mock.calls.length).toBe(1);
     expect(h.sent).toEqual([{ state: 'installing', release: B }]);
+  });
+
+  it('on Linux reads only its own attempt\'s progress and outcome, as a relauncher from before a quit can still finish', async () => {
+    const h = harness({ target: LINUX });
+    await h.run.install(B);
+    const earlier = randomUUID();
+    // The password prompt an earlier attempt left open, answered now.
+    writeFileSync(join(h.updater, 'progress'), `attempt ${earlier}\nverified\n`);
+    writeJson(join(h.updater, 'outcome.json'), outcomeOf(B, 'failed', earlier), 0o600);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(h.quit).not.toHaveBeenCalled();
+    expect(h.sent).toEqual([{ state: 'installing', release: B }]);
+    // Progress that names no attempt is no attempt's.
+    writeFileSync(join(h.updater, 'progress'), 'verified\n');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(h.quit).not.toHaveBeenCalled();
+    writeJson(join(h.updater, 'outcome.json'), outcomeOf(B, 'cancelled', h.attempt()), 0o600);
+    await expect.poll(() => h.sent.length).toBe(2);
+    expect(h.sent[1]).toEqual({ state: 'available', release: B });
+    expect(h.quit).not.toHaveBeenCalled();
+  });
+
+  it('offers a restart when its own attempt installed while ECHO still runs: the newer files are on disk', async () => {
+    for (const target of [MAC, LINUX]) {
+      const h = harness({ target });
+      await h.run.install(B);
+      writeJson(join(h.updater, 'outcome.json'), outcomeOf(B, 'installed', h.attempt()), 0o600);
+      await expect.poll(() => h.sent.length, { message: target.platform }).toBe(2);
+      expect(h.sent[1], target.platform).toEqual({ state: 'restart', release: B });
+    }
   });
 
   it('on Linux goes back to the row a cancelled or failed prompt left', async () => {
@@ -437,7 +571,7 @@ describe('install', () => {
     ] as const) {
       const h = harness({ target: LINUX });
       await h.run.install(B);
-      writeJson(join(h.updater, 'outcome.json'), { schema_version: 1, release: B, status }, 0o600);
+      writeJson(join(h.updater, 'outcome.json'), outcomeOf(B, status, h.attempt()), 0o600);
       await expect.poll(() => h.sent.length).toBe(2);
       expect(h.sent[1]).toEqual(shown);
       expect(existsSync(join(h.updater, 'outcome.json'))).toBe(false);
@@ -538,6 +672,14 @@ describe('staging an update', () => {
       // The manifest's record digest is checked too, not only its release id.
       await expect(installation.install(input(s, signedApp(s), { release_id: B, release_sha256: sha256(C) }))).rejects.toThrow('release_mismatch');
     });
+
+    it('refuses a staging folder on another volume than the running bundle\'s, where the swap could not be a rename', async () => {
+      const s = seat();
+      const codes: string[] = [];
+      await expect(desktopInstallation(s, {}, line => { codes.push(line); }, otherVolume).install(input(s, signedApp(s)))).rejects.toThrow('other_volume');
+      expect(codes).toEqual(['update staging other_volume']);
+      expect(existsSync(staged(s))).toBe(false);
+    });
   });
 });
 
@@ -566,7 +708,15 @@ describe('with the real client updater core', () => {
       artifacts: [{ ...LINUX, url: 'https://updates.example.test/staging/artifacts/b.deb', sha256: sha256(deb), bytes: deb.length }],
     }));
     const envelope = Buffer.from(JSON.stringify({ payload: payload.toString('base64'), signature: sign(null, payload, privateKey).toString('base64') }));
-    const fetcher = vi.fn(async (url: string | URL | Request) => new Response(new Uint8Array(String(url) === feedUrl ? envelope : deb)));
+    // handle_signals: false. A signal listener the core added would re-raise the
+    // signal and end Electron without its normal quit, so none may be added.
+    const signals = () => (['SIGINT', 'SIGTERM', 'SIGHUP'] as const).map(signal => process.listenerCount(signal));
+    const before = signals();
+    const during: number[][] = [];
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      during.push(signals());
+      return new Response(new Uint8Array(String(url) === feedUrl ? envelope : deb));
+    });
     let state: UpdateState = { state: 'none' };
     const started: string[][] = [];
     const quit = vi.fn();
@@ -586,7 +736,9 @@ describe('with the real client updater core', () => {
     expect(started[0]!.slice(1, 4)).toEqual(['4242', join(s.updater, 'staged', 'feed.json'), join(s.updater, 'staged', 'echo-desktop.deb')]);
     // The core's download folder and lock are gone; only what activation needs stays.
     expect(readdirSync(s.updater).filter(name => name.startsWith('.'))).toEqual([]);
-    writeJson(join(s.updater, 'outcome.json'), { schema_version: 1, release: B, status: 'cancelled' }, 0o600);
+    // The check's feed, then the install's feed and package: all under the core's lock.
+    expect(during).toEqual([before, before, before]);
+    writeJson(join(s.updater, 'outcome.json'), outcomeOf(B, 'cancelled', started[0]![7]), 0o600);
     await expect.poll(() => state).toEqual({ state: 'available', release: B });
   });
 
