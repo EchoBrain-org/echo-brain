@@ -25,8 +25,8 @@ import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeItemCard,
   closeItemStatus, closeOpenItems, closePicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, dismissProjectSetting, findingSheet, getState, goHome,
   hostFailed, itemCardShown, itemStatusShown, keepNewProject, matchesShown, newProjectProgress, openCapture, openItemsShown, openMine, pageCovered, projectSettingsModal,
-  refreshStatus, resume, retryStart, returnToSend, sheetShown, signinPhase, toastOpensMine,
-  toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, useStore, WARNINGS, windowShown, windowTakesDrop, type State,
+  readUpdate, refreshStatus, resume, retryStart, returnToSend, sheetShown, signinPhase, toastOpensMine,
+  toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore, WARNINGS, windowShown, windowTakesDrop, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -113,6 +113,8 @@ function App() {
 
   useEffect(() => {
     void refreshStatus().then(focusBar);
+    // The update row is main's, signed in or out: read once, then main says each change.
+    void readUpdate();
     const stops = [
       on('capture.open', () => { if (getState().status?.signed_in) openCapture(); }),
       on('lifecycle.conceal', conceal),
@@ -127,6 +129,7 @@ function App() {
       on('host.failed', hostFailed),
       on('account.command', payload => accountCommand(payload.command)),
       on('organization.open', () => { if (getState().status?.signed_in) trayOrganization(); }),
+      on('update.changed', updateChanged),
     ];
     // One Escape handler for the whole window: it steps back exactly one level.
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); escape(); } };

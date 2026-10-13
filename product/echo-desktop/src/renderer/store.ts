@@ -8,6 +8,7 @@ import type {
   AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
   Extraction, Failure, FileHandle, HomeView, ImpactView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace,
   ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt, ExternalAnswerSource,
+  UpdateState,
 } from '../shared/protocol.js';
 import { MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
@@ -490,6 +491,10 @@ export interface State {
   projectLine: ItemsLine | null;
   /** The tools line above the feed of the project on screen. */
   projectReads: ProjectReads | null;
+  /** The sidebar's one row for a new version (ADR-0035). It is not the account's: no sign-in or sign-out changes it. */
+  update: UpdateState;
+  /** Why the last click on that row did not install, shown under it until the next click or a new row. */
+  updateFailure: Failure | null;
 }
 
 const SIDEBAR_OPEN = 'echo.sidebarOpen';
@@ -504,6 +509,7 @@ let state: State = {
   barScope: { kind: 'global' }, barText: '', matches: null, ask: null, sources: null, compose: null, toast: null, toastShown: 0, concealed: false,
   signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null, employeeWrite: null,
   home: null, decision: null, send: null, openItems: null, itemCard: null, itemStatus: null, impactLine: null, projectLine: null, projectReads: null,
+  update: { state: 'none' }, updateFailure: null,
 };
 const listeners = new Set<() => void>();
 let seq = 0;
@@ -940,6 +946,13 @@ export function signOutHeld(): boolean {
     state.change?.status === 'unknown' || projectSettingsBlocked() || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.employeeWrite !== null;
 }
 
+/** What to settle before signing out, or restarting for a new version: an unknown outcome is settled where it shows. */
+export function settleWords(current: State = state): string {
+  return current.compose?.status === 'unknown' ? 'A save may not have arrived. Check it in Capture first.'
+    : current.change?.status === 'unknown' ? 'A project change may not have finished. Try it again or dismiss it first.'
+    : 'Finish the current save first.';
+}
+
 /** Sign out, or Switch account, after the person confirmed it. */
 export async function signOut(): Promise<void> {
   const account = expect();
@@ -980,6 +993,45 @@ export async function retryStart(): Promise<void> {
 
 export function signinPhase(browserOpened: boolean | undefined): void {
   if (state.signin.phase === 'waiting') set({ signin: { ...state.signin, browserOpened } });
+}
+
+// ---- updates from the signed client feed (ADR-0035) --------------------------
+
+/** A click on the update row that sign out's own check refused. */
+const UPDATE_HELD: Failure = { code: 'update_held', retryable: true };
+
+/** Counts the rows main has sent, so a status read that crossed a newer one is dropped. */
+let updatesSeen = 0;
+
+/** The row main's updater shows now. A new row clears what the last click said. */
+export function updateChanged(next: UpdateState): void {
+  updatesSeen += 1;
+  set({ update: next, updateFailure: null });
+}
+
+/** Reads the row from main: at launch, and when a click found it changed. */
+export async function readUpdate(): Promise<void> {
+  const seen = updatesSeen;
+  const result = await rpc('update.status', {});
+  if (result.ok && seen === updatesSeen) updateChanged(result.value);
+}
+
+/**
+ * New version · Restart, and Try again: main installs the release on the row,
+ * then ECHO restarts. Refused, as sign out is, while a save or a change is
+ * unresolved. A row that changed under the click is read again, quietly.
+ */
+export async function installUpdate(): Promise<void> {
+  const update = state.update;
+  if (update.state === 'none' || update.state === 'installing' || (update.state === 'failed' && update.reason === 'location')) return;
+  if (signOutHeld()) { set({ updateFailure: UPDATE_HELD }); return; }
+  set({ updateFailure: null });
+  // Progress arrives as update.changed.
+  const result = await rpc('update.install', { release: update.release });
+  if (result.ok) return;
+  if (result.failure.code === 'update_changed') { await readUpdate(); return; }
+  // A refusal of a row main has replaced since says nothing about the new one.
+  if (state.update === update) set({ updateFailure: result.failure });
 }
 
 // ---- home and projects -------------------------------------------------------

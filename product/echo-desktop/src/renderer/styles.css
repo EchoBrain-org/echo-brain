@@ -420,6 +420,14 @@ button.toast:hover { background: #211f1f; }
 .organization-rows { flex-shrink: 0; padding-bottom: 8px; }
 .organization-rows:has(+ .tools-rows) { padding-bottom: 2px; }
 .tools-rows { flex-shrink: 0; padding-bottom: 8px; }
+/* A new version: its words wrap rather than cut off, and a row that only says something does not light up. */
+.update-rows { flex-shrink: 0; padding-bottom: 8px; }
+.side-row.update-row { height: auto; min-height: 34px; padding-top: 8px; padding-bottom: 8px; }
+.update-row .label { white-space: normal; }
+.update-row .part { white-space: nowrap; }
+.update-row svg { flex-shrink: 0; color: rgba(240, 236, 230, 0.66); }
+div.update-row:hover { background: transparent; }
+.update-note { margin: 0; padding: 2px 10px 0 34px; font-size: 12.5px; }
 
 /* Tools: every tool the organization lists, grouped by your connection. */
 .column.tools-page { gap: 10px; padding: 8px 4px 4px; }
