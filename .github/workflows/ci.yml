@@ -378,12 +378,21 @@ jobs:
           sha256sum /usr/bin/echo > "$RUNNER_TEMP/coreutils-echo.sha256"
           packages=(dist-app/*.deb)
           test "${#packages[@]}" = 1
+          installed() {
+            test -f /etc/apparmor.d/echo-desktop
+            desktop-file-validate /usr/share/applications/org.echobrain.echo-desktop.desktop
+            test "$(readlink -f /usr/bin/echo-desktop)" = /opt/ECHO/echo-desktop
+            sha256sum --check "$RUNNER_TEMP/coreutils-echo.sha256"
+            # pkexec runs this helper as root, so only root may change it.
+            test "$(stat -c '%U:%G %a' /opt/ECHO/resources/echo-desktop-update-helper)" = 'root:root 755'
+            xvfb-run -a dbus-run-session -- npm run smoke -- /opt/ECHO/echo-desktop
+          }
           sudo apt-get install -y "./${packages[0]}"
-          test -f /etc/apparmor.d/echo-desktop
-          desktop-file-validate /usr/share/applications/org.echobrain.echo-desktop.desktop
-          test "$(readlink -f /usr/bin/echo-desktop)" = /opt/ECHO/echo-desktop
-          sha256sum --check "$RUNNER_TEMP/coreutils-echo.sha256"
-          xvfb-run -a dbus-run-session -- npm run smoke -- /opt/ECHO/echo-desktop
+          installed
+          # The desktop updater's root helper reinstalls the same package
+          # version over itself; everything must survive that.
+          sudo apt-get install --reinstall -y "./${packages[0]}"
+          installed
       - name: Assert packaging left the checkout clean
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - name: Preserve desktop diagnostics
