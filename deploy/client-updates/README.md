@@ -449,12 +449,19 @@ a live A-to-B update or fleet-wide rollout of the new update policy.
   compromised build machine is outside what the gate proves. The same holds
   for ZIP local-header tricks, such as local file headers that disagree with
   the central directory.
-- **Downgrade window.** The Linux helper refuses a feed older than the last one
-  it installed, and the app refuses one older than the last one it verified.
-  A seat installed by hand, or a new user, accepts any unexpired signed feed at
-  or above `minimum_sequence` until its first helper install. The CLI has the
-  same bootstrap window. Using it needs a compromised feed origin or a TLS
-  interception, plus the admin password, and it is limited to
+- **Downgrade window on Linux.** The Linux helper refuses a feed older than
+  the last one it installed, and the app refuses one older than the last one
+  it verified. A Linux seat installed by hand, or a new user, accepts any
+  unexpired signed feed at or above `minimum_sequence` until its first helper
+  install. The CLI has the same bootstrap window. Using it needs a compromised
+  feed origin or a TLS interception, plus the admin password, and it is
+  limited to publisher-signed releases within their validity.
+- **Downgrade window on macOS.** There is no root helper, and the swap does
+  not check the sequence. A new user, or an app with no updater state, accepts
+  any unexpired signed feed at or above `minimum_sequence` at its first check.
+  Installing it then needs only the person's click, with no admin password.
+  The app refuses older feeds after that first verified check. Using it needs
+  a compromised feed origin or a TLS interception, and it is limited to
   publisher-signed releases within their validity.
 - **Quit and owner actions.** An owner's in-flight invite or revoke is not part
   of the quit's unresolved-work question. This is true of every quit, not only

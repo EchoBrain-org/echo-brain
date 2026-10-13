@@ -223,10 +223,12 @@ An update fails safely:
 - On Linux without `/usr/bin/pkexec`, the updater stays off and the manual
   reinstall remains.
 - ECHO refuses a feed older than the last one it verified, and the Linux
-  helper one older than the last one it installed. A seat installed by hand, or
-  a new user, has no such record until its first helper install, so it accepts
-  any unexpired signed feed at or above its sequence floor. Undoing an update
-  takes a newer release.
+  helper one older than the last one it installed. On Linux, a seat installed
+  by hand, or a new user, has no such record until its first helper install,
+  so it accepts any unexpired signed feed at or above its sequence floor. On
+  macOS, a new user, or an app with no updater state, accepts such a feed at
+  its first check, and installing it needs only your click, with no admin
+  password. Undoing an update takes a newer release.
 
 After an update on macOS, you may have to grant ECHO's macOS privacy
 permissions again, because each build has a new code identity.

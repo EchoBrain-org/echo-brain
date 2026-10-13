@@ -235,9 +235,13 @@ update. macOS App Management may block the swap; that is unverified until a
 seat rehearsal, and a blocked swap keeps the old app. On Linux the feed key now
 authorizes root-executed packages on enrolled desktops. The helper refuses a
 feed older than the last one it installed, and the app refuses one older than
-the last one it verified. A seat installed by hand, or a new user, accepts any
-unexpired signed feed at or above `minimum_sequence` until its first helper
-install, the same bootstrap window the CLI has. Desktop installs from before
+the last one it verified. A Linux seat installed by hand, or a new user,
+accepts any unexpired signed feed at or above `minimum_sequence` until its
+first helper install, the same bootstrap window the CLI has. macOS has no
+helper, and the swap does not check the sequence. A new Mac user, or an app
+with no updater state, accepts such a feed at its first check, and installing
+it needs only the person's click, with no admin password. The app refuses
+older feeds after that first verified check. Desktop installs from before
 this change have no updater and need one manual reinstall of a release
 package.
 

@@ -301,10 +301,18 @@ failed, 4 the app did not exit, 5 installation failed.
   enrolled Linux desktops. A leaked key is a fleet-wide root risk, mitigated
   only by the signature, the checkpoint and the explicit password prompt. Key
   rotation remains a separately reviewed bootstrap.
-- **Downgrade window.** Until its first helper install, a seat installed by
-  hand, or a new user, accepts any unexpired signed feed at or above
-  `minimum_sequence`, as a newly enrolled CLI does. Using that window needs a
-  compromised feed origin or a TLS interception, plus the admin password. It is
+- **Downgrade window on Linux.** Until its first helper install, a Linux seat
+  installed by hand, or a new user, accepts any unexpired signed feed at or
+  above `minimum_sequence`, as a newly enrolled CLI does. Using that window
+  needs a compromised feed origin or a TLS interception, plus the admin
+  password. It is limited to publisher-signed releases within their validity.
+- **Downgrade window on macOS.** There is no root helper, and the swap does not
+  check the sequence. The only floor is the app's own checkpoint in its
+  per-user updater folder. A new user, or an app with no updater state,
+  accepts any unexpired signed feed at or above `minimum_sequence` at its first
+  check. Installing it then needs only the person's click, with no admin
+  password. The app refuses older feeds after that first verified check. Using
+  that window needs a compromised feed origin or a TLS interception, and it is
   limited to publisher-signed releases within their validity.
 - **What the feed gate proves.** `prepare` checks the identity, `Info.plist`,
   the embedded Person-client tree and, on Linux, the root helper's bytes. It
