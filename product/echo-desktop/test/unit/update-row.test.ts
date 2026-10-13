@@ -2,13 +2,14 @@
 // updater; the page shows its row and asks main to install what it shows.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UpdateState } from '../../src/shared/protocol.js';
-import { ACCOUNT, fail, flush, Held, ok, rpcFor, startStore, stubWindow } from './harness.js';
+import { ACCOUNT, fail, flush, Held, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
 
 const A = 'clean-v1-release-a';
 const B = 'clean-v1-release-b';
+const FRESH = project(99, 30, { name: 'Fresh' });
 let held: Held;
 /** What main's update.status answers. */
 let row: UpdateState;
@@ -31,6 +32,11 @@ beforeEach(() => {
     'update.status': () => ok(row),
     'update.install': () => install(),
     'account.signOut': () => ok({ signed_in: false, account: null, client_version: 'test' }),
+    'dialog.openDocuments': () => ok({ files: [{ handle: 'h1', name: 'a.txt' }], refused: [] }),
+    'projects.create': () => ok({ project_id: FRESH.project_id }),
+    'projects.read': () => ok(FRESH),
+    'documents.upload': params => ok({ request_id: params.request_id }),
+    'writes.status': () => ok({ state: 'not_saved' }),
   }, () => ({ active: [], archived: [] })));
 });
 
@@ -124,8 +130,38 @@ describe('installUpdate', () => {
     reply(ok({}));
     await flush();
     expect(store.signOutHeld()).toBe(false);
+    // Nothing is held now, so nothing says to settle it.
+    expect(store.getState().updateFailure).toBeNull();
     await store.installUpdate();
     expect(installs()).toEqual([{ release: A }]);
+    expect(store.getState().updateFailure).toBeNull();
+  });
+
+  it('drops the settle line once an unknown save is checked, and never brings it back', async () => {
+    const store = await startStore();
+    store.updateChanged({ state: 'available', release: A });
+    const reply = await saving(store);
+    reply(fail('transport_failed', { mutation_outcome: 'unknown' }));
+    await flush();
+    await store.installUpdate();
+    expect(store.getState().updateFailure).toMatchObject({ code: 'update_held' });
+
+    // Checked, it did not arrive: nothing is held, so the line goes rather than turn untrue.
+    const checked = held.hold('writes.status');
+    const checking = store.checkCompose();
+    expect(store.getState().compose?.status).toBe('checking');
+    expect(store.getState().updateFailure).toMatchObject({ code: 'update_held' });
+    checked(ok({ state: 'not_saved' }));
+    await checking;
+    expect(store.getState().compose?.status).toBe('error');
+    expect(store.signOutHeld()).toBe(false);
+    expect(store.getState().updateFailure).toBeNull();
+
+    // The next save on its way does not bring back a line for a click that was not made.
+    held.hold('notes.submit');
+    void store.sendCompose();
+    await flush();
+    expect(store.signOutHeld()).toBe(true);
     expect(store.getState().updateFailure).toBeNull();
   });
 
@@ -142,13 +178,60 @@ describe('installUpdate', () => {
     expect(store.settleWords()).toBe('A save may not have arrived. Check it in Capture first.');
   });
 
-  it('shows main\'s held refusal the same way', async () => {
+  it('shows main\'s held refusal the same way, while the work is still held', async () => {
+    const store = await startStore();
+    store.updateChanged({ state: 'available', release: A });
+    // A save starts while main is deciding, and main refuses for it.
+    const refusal = held.hold('update.install');
+    const clicking = store.installUpdate();
+    const reply = await saving(store);
+    refusal(fail('update_held', { retryable: true }));
+    await clicking;
+    expect(installs()).toEqual([{ release: A }]);
+    expect(store.getState().updateFailure).toMatchObject({ code: 'update_held' });
+
+    reply(ok({}));
+    await flush();
+    expect(store.getState().updateFailure).toBeNull();
+  });
+
+  it('keeps main\'s held refusal for work only main holds for, until it is settled', async () => {
+    const store = await startStore();
+    store.updateChanged({ state: 'available', release: A });
+    // New project's file whose save is unknown: main's quit guard holds for it; sign out does not.
+    store.openNewProject();
+    await flush();
+    store.setNewProjectName('Fresh');
+    await store.chooseFiles();
+    await flush();
+    const upload = held.hold('documents.upload');
+    await store.createProject();
+    await flush();
+    upload(fail('transport_failed', { mutation_outcome: 'unknown' }));
+    await flush();
+    expect(store.getState().sheet).toMatchObject({ kind: 'new-project', files: [{ status: 'unknown' }] });
+    expect(store.signOutHeld()).toBe(false);
+
+    install = () => fail('update_held', { retryable: true });
+    await store.installUpdate();
+    expect(installs()).toEqual([{ release: A }]);
+    expect(store.getState().updateFailure).toMatchObject({ code: 'update_held' });
+
+    // Checked, it never arrived: nothing is held, so the line goes.
+    const sheet = store.getState().sheet;
+    await store.checkFile(sheet?.kind === 'new-project' ? sheet.files[0]!.id : -1);
+    await flush();
+    expect(store.getState().sheet).toMatchObject({ kind: 'new-project', files: [{ status: 'failed' }] });
+    expect(store.getState().updateFailure).toBeNull();
+  });
+
+  it('drops main\'s held refusal when the work it held for was settled by the time it came', async () => {
     const store = await startStore();
     store.updateChanged({ state: 'available', release: A });
     install = () => fail('update_held', { retryable: true });
     await store.installUpdate();
     expect(installs()).toEqual([{ release: A }]);
-    expect(store.getState().updateFailure).toMatchObject({ code: 'update_held' });
+    expect(store.getState().updateFailure).toBeNull();
   });
 
   it('reads the row again, quietly, when it changed under the click', async () => {

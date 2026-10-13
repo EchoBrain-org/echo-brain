@@ -58,6 +58,8 @@ test('a save whose outcome is unknown holds the restart, in sign out\'s words, u
   await page.getByTestId('compose-check').click();
   await expect(page.getByTestId('compose-error')).toHaveText('It was not saved. Try again.');
   await page.keyboard.press('Escape');
+  // Nothing is held now, so the line goes rather than say something untrue.
+  await expect(page.getByTestId('sidebar-update-note')).toHaveCount(0);
   await row.click();
   await expect.poll(() => updateInstalls(run)).toEqual([RELEASE]);
   await expect(page.getByTestId('sidebar-update-note')).toHaveCount(0);

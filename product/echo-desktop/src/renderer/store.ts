@@ -548,6 +548,8 @@ function set(patch: Partial<State>): void {
   if (state.projectSettings?.menu && (sheetShown() || (state.compose && !state.compose.hidden))) {
     state = { ...state, projectSettings: { ...state.projectSettings, menu: false } };
   }
+  // A held update click says what to settle only while it is unsettled, here or in main.
+  if (state.updateFailure?.code === 'update_held' && !signOutHeld() && !unresolvedWork().unresolved) state = { ...state, updateFailure: null };
   listeners.forEach(listener => listener());
 }
 
@@ -3460,20 +3462,26 @@ const TOO_LONG = 'Up to 8 KiB of text.';
 let unresolvedTold = '';
 
 /**
- * Main's quit guard: a note, a file or a project change (a create, and New
- * project's adds, included) on its way, or not yet confirmed either way.
+ * What main's quit guard, and its update_held, go by: a note, a file or a
+ * project change (a create, and New project's adds, included) on its way, or
+ * not yet confirmed either way.
  */
-function unresolvedChanged(): void {
+function unresolvedWork(): { unresolved: boolean; file?: true; change?: true } {
   const compose = state.compose;
   const saving = compose?.status === 'sending' || compose?.status === 'unknown' || compose?.status === 'checking';
   const sheet = state.sheet?.kind === 'new-project' ? state.sheet : null;
   const uploading = sheet?.files.some(file => file.status === 'saving' || file.status === 'checking' || file.status === 'unknown') === true;
   const changing = changeBlocked() || projectSettingsBlocked() || sheet?.create.status === 'sending' || sheet?.create.status === 'unknown' ||
     sheet?.picks.some(pick => pick.status === 'adding' || pick.status === 'unknown') === true;
-  const told = {
+  return {
     unresolved: saving || uploading || changing,
     ...(saving ? (compose.file ? { file: true } : {}) : uploading ? { file: true } : changing ? { change: true } : {}),
   };
+}
+
+/** Tells main's quit guard when what is unresolved changes. */
+function unresolvedChanged(): void {
+  const told = unresolvedWork();
   const key = JSON.stringify(told);
   if (key === unresolvedTold) return;
   unresolvedTold = key;
