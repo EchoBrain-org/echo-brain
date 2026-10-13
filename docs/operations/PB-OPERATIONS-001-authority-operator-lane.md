@@ -6,8 +6,8 @@ title: Select the Authority operator lane
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-09-02
-reviewed_at: 2026-10-10
-reviewed_ref: 12a212b6246524bff328e85aab6fa8160d55ba4b
+reviewed_at: 2026-10-13
+reviewed_ref: c4bb9ce6aa595a319afc8c741d6914897469a1f5
 tested_at: null
 ---
 
@@ -60,10 +60,11 @@ or a new authorization format.
 Evaluate server-client compatibility before `stage`. Staging changes the current
 live host, so compatibility is a pre-stage condition, not a check deferred until
 `promote`. Stage and test the exact server candidate and both matching CLI kits,
-then review their evidence. A release that ships ADR-0024 has no compatible
+build both matching desktop packages (the `ECHO.app` ZIP and the `.deb`), then
+review their evidence. A release that ships ADR-0024 has no compatible
 transition; follow its
 [release note](../../deploy/release/README.md#prepare-the-transition-before-staging)
-for the update window, the desktop reinstalls and the added list and open
+for the update window, the desktop updates and the added list and open
 checks. After the canary meeting's approval and
 candidate-client checks, a human makes the final decision on the exact release.
 Only then may the operator promote the server and publish the signed feed using
@@ -71,7 +72,7 @@ their existing, separate commands. A staged candidate never implies permission
 to publish it.
 
 One final human review may approve the exact release and Person-client hashes
-together with the prepared manifest hash, channel, both targets, and the
+together with the prepared manifest hash, channel, all four targets, and the
 expected predecessor feed hash when there is one. Record those approvals using
 the existing release authorization and exact digest approvals required by the
 server and feed CLIs. The review does not replace the separate canary
@@ -84,9 +85,9 @@ Report completion only after all applicable evidence is present:
 | Result | Meaning |
 | --- | --- |
 | Stage-only | The server candidate was staged or tested, but neither server promotion nor feed publication is complete. |
-| Promoted-only | The server was promoted, but the matching signed CLI feed has not been published and verified. |
-| Published-not-verified | The signed feed was published, but one or both representative native seats have not completed the required A-to-B activation, authenticated read and cited Ask proof. |
-| Released | The server was promoted, a fresh server `status` confirms the accepted release, and the signed feed containing both Linux x64/glibc and macOS arm64 CLI kits was published. A representative macOS arm64 seat and a representative Linux x64/glibc seat must each activate from A to B and produce authenticated read plus cited Ask evidence using B. This proves those representative client paths, not fleet-wide activation. If the desktop distribution is affected, record its separate distribution and verification evidence too. |
+| Promoted-only | The server was promoted, but the matching signed client feed has not been published and verified. |
+| Published-not-verified | The signed feed was published, but one or both representative native CLI seats have not completed the required A-to-B activation, authenticated read and cited Ask proof, or the representative desktops have not completed the in-app update. |
+| Released | The server was promoted, a fresh server `status` confirms the accepted release, and the signed feed containing the Linux x64/glibc and macOS arm64 CLI kits, the macOS arm64 `ECHO.app` ZIP and the Linux x64 `.deb` was published. A representative macOS arm64 seat and a representative Linux x64/glibc seat must each activate from A to B and produce authenticated read plus cited Ask evidence using B. A representative macOS arm64 desktop and Ubuntu x64 desktop must each update in the app and show `Build <sha7>` for B plus an authenticated read; a manual reinstall is the fallback and each seat's first enrollment. This proves those representative client paths, not fleet-wide activation. |
 
 Keep incomplete results explicit and resume through the receipt/status path that
 owns the unfinished operation. Do not call a Git head, a running server, or a
@@ -112,7 +113,7 @@ entry in its signed feed.
 | Create or repair the retained boundary | `authority:staging slot-init`: plan, human change-set review, execute the unchanged operation. |
 | Create the first host | Reviewed `up --initialize-blank-data-volume` on a never-prepared volume only. |
 | Replace the host, retaining data | First promote or roll back any staged candidate (release CLI fresh `status`) and let any release, onboarding or backup operation finish. Retained `up` refuses a candidate or operation lock and only a running host can clear them, so `down` refuses with `host_quiesce_failed`, before stopping anything, while a candidate, an operation lock or the staging release guard is present; use the [host recovery procedure](../../deploy/organization-authority/README.md#recover-an-interrupted-operation-lock) for a lock or guard. Only `clean-data/` is retained: do not run `down` between `replace-rehearsal` and a successful `prepare` or `prepare-rehearsal`, and copy any `retired-rehearsals/` archive worth keeping off the host first. Then reviewed `down`, then a new operation ID for reviewed `up --require-authority`; keep the flag on plan and execute. Before that `up`, rebuild the host bundle from the `tooling_source` of the last succeeded release-lane `install` and update `hostSetup` ([AWS staging slot](../../README.md#aws-staging-slot)): the new root disk takes its host tools from the bundle, and nothing checks the bundle against the installed tooling or the accepted release. |
-| Host or publish the signed CLI update feed | Follow the [CLI update staging feed](../../deploy/client-updates/README.md) from a clean committed checkout. `client-update:staging` plans a CloudFormation change set for the dedicated S3 feed stack; the human reviews that exact change set before `execute`. `client-update:sign` signs locally once the exact manifest digest is approved. `client-update:publish` writes release objects to the feed bucket with that approved digest; resume an unconfirmed receipt only through `status` or `replace-status`. Separate from the Authority slot and onboarding transfer. |
+| Host or publish the signed client update feed | Follow the [client update staging feed](../../deploy/client-updates/README.md) from a clean committed checkout. Each release carries four artifacts: the macOS arm64 and Linux x64 CLI kits, the macOS `ECHO.app` ZIP and the Linux `.deb`, all built from the same release inputs. `client-update:staging` plans a CloudFormation change set for the dedicated S3 feed stack; the human reviews that exact change set before `execute`. `client-update:sign` signs locally once the exact manifest digest is approved. `client-update:publish` writes release objects to the feed bucket with that approved digest; resume an unconfirmed receipt only through `status` or `replace-status`. Separate from the Authority slot and onboarding transfer. |
 
 Before a slot change, preserve `edge_checked`, `host_ready` and
 `authority_accepted` from its status receipt. Use this routing:
@@ -149,7 +150,7 @@ fail with a misleading "operation in progress" or "run prepare first" error.
 | Task | Actor |
 | --- | --- |
 | Valid-session checks, planning, receipt polling, artifact verification, kit installation, authenticated Person reads and telemetry inspection | Local operator within the authorized lane. |
-| Missing/expired login, MFA, provider secret entry, account switching/logout, and Slack `person tools setup`/`connect --tool slack` (the desktop app's Tools page connects only each person's own tools) | Human. The operator prepares the exact next action and resumes after completion. |
+| Missing/expired login, MFA, provider secret entry, account switching/logout, the admin password for a Linux desktop update, and Slack `person tools setup`/`connect --tool slack` (the desktop app's Tools page connects only each person's own tools) | Human. The operator prepares the exact next action and resumes after completion. |
 | Initial host `resume`, `status`, `continue-staged-initial-onboarding`, and release-canary `sudo ./update-clean-v1.sh canary` | Human in Session Manager. The staged continuation applies only to the digest-bound original pre-Slack candidate and never accepts it or replaces the final release decision. The remote release CLI does not support host onboarding. Group consecutive host commands only when no intervening human action is needed. |
 | Inspect or retry a held extraction | Human in Session Manager through the installed `onboard-clean-v1.sh extraction-attempts` and `retry-extraction` commands; follow the [exact recovery procedure](../../deploy/organization-authority/README.md#inspect-and-retry-a-held-extraction). A retry explicitly authorizes one additional model call. |
 | Organization Slack setup | Human reuses the designated app for staging resets with `person tools setup --tool slack --existing-app <app-id>` and the [four named hidden prompts](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection): configuration token, client ID, client secret and signing secret. The operator supplies the app ID from the handoff; credentials never enter chat or command arguments. ECHO passes the saved app credentials to Nango; the human does not copy them into Nango's integration settings. To resume consent using credentials already saved for that app, use `person tools setup --tool slack --reconnect`. Reuse a completed setup when its evidence is still valid. |
@@ -201,7 +202,7 @@ client and runs its checks. Only after both checks pass, show their evidence
 and ask the founder for the final decision on that exact candidate.
 Preserve the separate release- and client-digest-bound authorization before
 `promote`. For a coordinated release, retain the exact prepared manifest,
-channel, both targets and predecessor binding in the existing feed approval
+channel, all four targets and predecessor binding in the existing feed approval
 records as well. Never create it merely because the PR was approved or the
 founder authorized automation. Nor create either approval because the candidate
 was staged. If checks fail, run a fresh release `status` action and roll back
@@ -231,13 +232,14 @@ The setup CLI's `runtime_observation=not_observed` and
 running/healthy/image/profile checks and live telemetry for runtime proof.
 
 For a coordinated release, retain the post-promotion fresh server status and
-the confirmed signed-feed publication receipt for both supported CLI targets.
-Retain separately for representative macOS arm64 and Linux x64/glibc seats the
-A-to-B activation, authenticated read and cited Ask evidence using B. The feed
-receipt alone does not show that either installed client activated the release,
-and the two-seat proof does not claim fleet-wide activation. Desktop packaging
-and distribution remain a separate lane; include its evidence when the release
-affects the desktop app.
+the confirmed signed-feed publication receipt for all four targets: both CLI
+kits, the `ECHO.app` ZIP and the `.deb`. Retain separately for representative
+macOS arm64 and Linux x64/glibc seats the A-to-B activation, authenticated read
+and cited Ask evidence using B. Retain for representative macOS arm64 and
+Ubuntu x64 desktops the in-app update evidence: the tray's `Build <sha7>` for B
+and an authenticated read, or the manual reinstall used instead. The feed
+receipt alone does not show that any installed client activated the release,
+and the representative proofs do not claim fleet-wide activation.
 
 ## Exceptions and recovery
 

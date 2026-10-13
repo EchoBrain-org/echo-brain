@@ -1,16 +1,19 @@
-# CLI update staging feed
+# Client update staging feed
 
 This dedicated hosting stack prepares an HTTPS endpoint for the signed
-[CLI update feed](../../docs/features/client-updates-v1.md). It is separate from
-the Authority staging stack and onboarding-transfer storage. Creating the
-endpoint does not publish a release, enroll a client, or authorize a candidate.
+[client update feed](../../docs/features/client-updates-v1.md). Each release in
+it carries both CLI kits and both desktop packages
+([ADR-0035](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)).
+It is separate from the Authority staging stack and onboarding-transfer
+storage. Creating the endpoint does not publish a release, enroll a client, or
+authorize a candidate.
 
 For matching server/client changes, use the
 [coordinated release procedure](../release/README.md#coordinated-server-and-client-release).
-Server staging and promotion do not change this feed. `echo-brain update`
-discovers only the eligible release in its configured, valid signed feed, even
-when a newer server or Git commit exists. Promotion and publication remain
-separate operations within that required workflow.
+Server staging and promotion do not change this feed. `echo-brain update` and
+the desktop app discover only the eligible release in their configured, valid
+signed feed, even when a newer server or Git commit exists. Promotion and
+publication remain separate operations within that required workflow.
 
 The S3-only target is the repository-pinned staging account, region `us-west-2`,
 stack `echo-client-update-staging-s3-v1`, using the `echo-prod` IAM Identity Center
@@ -82,7 +85,17 @@ template and resource inventory.
 ## Sign and publish the first release
 
 Only `feed.json` and `artifacts/*` are publicly readable. The `s3:GetObject`
-permission permits HTTPS GET/HEAD downloads. At publication, set
+permission permits HTTPS GET/HEAD downloads. Every new release publishes
+exactly four artifacts for one `release_id`:
+
+| Target (`platform/architecture/libc/installation`) | File | Object key | Content type |
+| --- | --- | --- | --- |
+| `linux/x64/glibc/cli-kit` | Linux CLI kit ZIP | `artifacts/<sha256>.zip` | `application/zip` |
+| `darwin/arm64/native/cli-kit` | macOS CLI kit ZIP | `artifacts/<sha256>.zip` | `application/zip` |
+| `darwin/arm64/native/electron` | `ECHO.app` ZIP | `artifacts/<sha256>.zip` | `application/zip` |
+| `linux/x64/glibc/electron` | desktop `.deb` | `artifacts/<sha256>.deb` | `application/vnd.debian.binary-package` |
+
+The signed `feed.json` is `application/json`. At publication, set
 `Cache-Control: no-store` on the feed and
 `Cache-Control: public,max-age=31536000,immutable` on content-addressed artifacts.
 Upload their original bytes without content encoding or website redirects. Do
@@ -102,15 +115,21 @@ npm run client-update:sign -- init --directory /absolute/private/new-staging-sig
 Keep `private-key.pkcs8.der` in that private directory. `signer.json` contains
 only the public key and its fingerprint. Copy its `public_key_spki` into the
 bootstrap configuration with the deployed S3 `feed_url`, intended channel,
-sequence floor, `automatic: true`, and `installation: "cli-kit"`. No client,
-kit, feed, repository or publication receipt receives the private key.
+sequence floor, `automatic: true`, and `installation: "cli-kit"`. For the
+desktop packages, keep a copy that differs only in `installation: "electron"`;
+[desktop release packaging](../release/README.md#desktop-release-packages)
+embeds it, and `prepare` checks that it equals this configuration except for
+that field. No client, kit, desktop package, feed, repository or publication
+receipt receives the private key.
 
 Run the [feed preparation command](../../docs/features/client-updates-v1.md#preparing-an-approved-feed)
-with the exact canonical release and both platform kits: macOS arm64 and Linux
-x64/glibc. The preparation, signer, seal and publication commands require the
-complete pair with the same source SHA and Person-client artifact. Keep the
-prepared bundle, authorization and receipts in private mode-0700 directories
-with mode-0600 files.
+with the exact canonical release and all four artifacts: the macOS arm64 and
+Linux x64/glibc CLI kits (`--macos-kit`, `--linux-kit`), the `ECHO.app` ZIP
+(`--macos-app`) and the `.deb` (`--linux-deb`). The preparation, signer, seal
+and publication commands refuse a new release without all four
+(`all_release_targets_required`), each with the same source SHA and
+Person-client artifact. Keep the prepared bundle, authorization and receipts in
+private mode-0700 directories with mode-0600 files.
 
 Unsigned preparation may use a candidate release before final acceptance; it
 requires no release authorization. Review the resulting manifest bytes and
@@ -135,9 +154,9 @@ npm run client-update:sign -- sign \
 After exact manifest approval, run that command with
 `--approve-manifest <manifest-sha256>`. If the combined review already approved
 those unchanged bytes and scope, reuse that approval without another prompt.
-The signer revalidates the release, kits, founder authorization and pinned
-public key; it signs the original manifest bytes and writes a new detached
-signature exclusively. Run `client-update-feed.mjs seal` with that signature
+The signer revalidates the release, artifacts, founder authorization and
+pinned public key; it signs the original manifest bytes and writes a new
+detached signature exclusively. Run `client-update-feed.mjs seal` with that signature
 and the same authorization to create `feed.json`.
 
 From a reviewed, clean committed checkout, prepare the first publication with
@@ -171,14 +190,16 @@ or sealed bundle is not publication and does not update enrolled clients.
 This publisher supports only the first release in the dedicated S3 stack. It
 rechecks the account, completed hosting receipt, deployed template, resources,
 outputs and versioning. The receipt binds the tooling commit, local input
-digests, manifest and exact object inventory. Only content-addressed ZIPs and
-`feed.json` can be uploaded. Conditional creates refuse existing keys; an
-authenticated 403 never means an object is absent. Artifacts are uploaded and
-verified over public HTTPS before the signed feed is uploaded last. Original
-bytes, metadata, S3 version IDs and feed signatures are verified again.
-Before each new object write, execution requires enough remaining manifest
-validity for the bounded upload and verification operations: 24 minutes before
-the first write, then eight minutes per remaining new object. It revalidates the
+digests, manifest and exact object inventory. Only the content-addressed ZIP and
+`.deb` artifacts and `feed.json` can be uploaded. Conditional creates refuse
+existing keys; an authenticated 403 never means an object is absent. Artifacts
+are uploaded and verified over public HTTPS before the signed feed is uploaded
+last. Original bytes, metadata, S3 version IDs and feed signatures are verified
+again. Before each new object write, execution requires enough remaining
+manifest validity for the bounded upload and verification of the remaining new
+objects. That window and the upload timeouts scale with object count and size;
+the desktop packages make each release much larger than the two CLI kits, so
+choose an expiry with room for all four. It revalidates the
 exact sealed inputs and freshness immediately before writing the feed, after
 the potentially slow object-existence check. Insufficient validity stops the
 write; an expired feed is never intentionally published as a recovery action.
@@ -208,13 +229,15 @@ Use the separate replacement lane only after a new release has passed its own
 Authority canary, authenticated record and cited Ask checks, final release
 decision, and release-bound authorization. Reuse the enrolled client's existing
 bootstrap configuration, including its `feed_url`, channel, public key, and
-`installation: "cli-kit"`. Its signed sequence must be strictly greater than
-the currently published feed. The lane adds no signer-rotation, channel-change,
-rollback, deletion, or hosting-replacement command.
+`installation: "cli-kit"`; the desktop packages carry the same configuration
+with `installation: "electron"`. Its signed sequence must be strictly greater
+than the currently published feed. The lane adds no signer-rotation,
+channel-change, rollback, deletion, or hosting-replacement command.
 
-Every new publication or replacement requires both supported CLI targets. A
-historical single-platform predecessor or receipt can still be verified through
-the read-only status path; it does not authorize another single-platform write.
+Every new publication or replacement requires all four release targets. A
+historical single-platform or two-artifact predecessor or receipt can still be
+verified through the read-only status path; it does not authorize another
+such write.
 
 Obtain the expected predecessor SHA-256 from the preserved succeeded most-recent
 publication or replacement receipt's `hashes.feed.json` field. For the first
@@ -295,6 +318,28 @@ When the installed client already matches the first published release,
 It does not prove installation of a different release. Preserve the existing
 Person session and verify authenticated reads after enrollment.
 
+## Enroll a desktop
+
+Desktop installs from before ADR-0035 have no release identity and no updater.
+Each seat needs one manual reinstall of an updater-capable build: a
+[desktop release package](../release/README.md#desktop-release-packages) built
+with `--release`, `--artifact` and `--update-config`. This is the same one-time
+bridge the Linux CLI kits needed. There is no configure command. On first run
+the app pins the bootstrap embedded in its identity, and a later app cannot
+change that pin.
+
+- macOS: quit ECHO and replace `~/Applications/ECHO.app` with the release's
+  `ECHO.app`. The folder must be writable by the user; an app elsewhere shows
+  **Move ECHO to Applications to update**.
+- Linux: `sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb`. The
+  `.tar.gz` package has no updater.
+
+Use the exact artifacts from the published release, transferred through the
+authenticated operator channel. Enrolling the app does not enroll the CLI, and
+the reverse; each installation updates only itself. The Person session is
+unchanged. Check the tray's `Build <sha7>` and an authenticated read after
+enrollment.
+
 ## Verify Mac and Linux client activation
 
 For a coordinated release, require live A-to-B acceptance separately on a native
@@ -352,11 +397,33 @@ On each platform:
    or widen permissions. Retain bounded identities and outcomes, not private
    document content. A 404, an empty expected read or a failed Ask is not a pass.
 
+## Verify the desktop update
+
+Verify the in-app update separately on a native macOS arm64 seat and a native
+Ubuntu x64 seat with a polkit agent, each running an updater-capable desktop
+on release A. A successful CLI update proves nothing about the app, and the
+reverse.
+
+1. Before publication, record the tray menu's `Build <sha7>` for A.
+2. After publication, relaunch the app or wait for its hourly check. The sidebar
+   shows **New version · Restart**.
+3. Select it. On Linux, enter an admin password at the system prompt. The app
+   quits, installs B and reopens.
+4. Check that the tray shows `Build <sha7>` for B's source SHA. Then complete an
+   authenticated read in the app with that seat's own account.
+
+A cancelled prompt or a failed install keeps A and shows **Couldn't update ·
+Try again**. Record that as a failed desktop delivery, then use the manual
+reinstall from [Enroll a desktop](#enroll-a-desktop) and verify the same build
+and read. On macOS, App Management may block the swap; this is unverified until
+the first seat rehearsal, and a blocked swap keeps the old app.
+
 Retain the latest publication/replacement receipt with `state: "succeeded"` and
-`metadata_fresh: true`, both platform activation/read proofs, and any affected
-desktop evidence with the coordinated release handoff. Until both client paths
-pass, report "client published; verification incomplete." State the seats
-tested and those outstanding rather than claiming fleet-wide completion.
-Local packaging/updater tests and an already-current client do not prove a live
-A-to-B update or fleet-wide rollout of the new update policy. Desktop
-distribution remains outside this CLI channel.
+`metadata_fresh: true`, both CLI activation/read proofs and both desktop update
+proofs with the coordinated release handoff. Until they pass, report "client
+published; verification incomplete." State the seats tested and those
+outstanding rather than claiming fleet-wide completion. Publishing reaches only
+enrolled installations: a desktop installed before ADR-0035 or from the
+`.tar.gz` stays on its release until it is reinstalled by hand. Local
+packaging/updater tests and an already-current client do not prove a live
+A-to-B update or fleet-wide rollout of the new update policy.

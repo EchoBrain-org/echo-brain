@@ -65,6 +65,16 @@ and builder are deleted; the Electron desktop app in `product/echo-desktop`
 replaces it. See the
 [release procedure](../../deploy/release/README.md#person-command-line-kits).
 
+Each release also builds the desktop app's macOS arm64 `ECHO.app` ZIP and Linux
+x64 `.deb` from the same release record and Person-client tarball. The signed
+client feed publishes all four artifacts together and refuses a release missing
+one ([ADR-0035](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)).
+Release packaging binds each desktop package to the release through its
+embedded identity, which extends
+[INV-RELEASE-001](../invariants/INV-RELEASE-001-worktree-bound-artifact.md) to
+the desktop. See
+[desktop release packages](../../deploy/release/README.md#desktop-release-packages).
+
 Release readers accept the onboarding writer's literal environment format,
 including a final row without a newline, while retaining the exact accepted
 environment bytes for comparison and rollback.

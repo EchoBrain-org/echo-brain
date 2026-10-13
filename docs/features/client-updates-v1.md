@@ -1,8 +1,11 @@
 # Client updates V1
 
-Status: CLI updater and dedicated S3 first-publication tooling implemented.
-Hosting, publication, enrollment and live activation have separate operator
-evidence; code and offline tests alone do not establish their completion.
+Status: CLI updater, desktop app updater
+([ADR-0035](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md))
+and dedicated S3 first-publication tooling implemented. Hosting, publication,
+enrollment and live activation have separate operator evidence; code and
+offline tests alone do not establish their completion. Live qualification of
+the desktop updater on native seats is outstanding.
 
 An installed Person client checks for an approved release and tells the user
 when one is available. With automatic checks enabled, it checks before a Person
@@ -56,11 +59,13 @@ own, and a new release cannot change them. After an update, verify the actual
 executable used for the required Person reads, rather than relying on a PATH
 lookup or a version string from another wrapper.
 
-The contract supports desktop and container targets, but activation returns
-`adapter_unavailable`. Desktop app updates belong to the separate Electron
-packaging work; the Electron app does not run this CLI's automatic check hook.
-Immutable containers use their deployment mechanism. The public command is
-identical for all implemented adapters:
+The Electron desktop app installs the `electron` target on the same two
+platforms through its own installation adapter; see [Desktop app](#desktop-app).
+It does not run this CLI's pre-command check hook. Each installation updates
+only itself: `echo-brain update` installs the CLI kit and the app installs the
+app, both from the same signed release. Container targets return
+`adapter_unavailable`; immutable containers use their deployment mechanism.
+The CLI's public command is the same on both platforms:
 
 ```sh
 echo-brain update --status
@@ -180,12 +185,58 @@ Configured Linux kits add no daemon or scheduler; automatic checks run only
 before Person commands. The existing configuration schema and freshness
 checkpoint need no migration for check-only automatic behavior.
 
+## Desktop app
+
+The desktop app on macOS arm64 and Linux x64 updates from the same signed feed
+([ADR-0035](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)).
+Only a release package has an updater. Release packaging takes `--release`,
+`--artifact` and `--update-config`, embeds the release's exact Person-client
+tarball and writes `echo-desktop-identity.v1.json` beside the app
+(`ECHO.app/Contents/Resources` or `/opt/ECHO/resources`). Its update config is
+the CLI bootstrap with `installation: "electron"` and `automatic: true`.
+Development, CI and ad hoc builds and the Linux `.tar.gz` never update.
+
+On first run the app pins the bootstrap embedded in its identity. A later app
+with a different publisher, feed, channel or sequence floor cannot change that
+pin; updates then stop with `already_configured`. Updater state lives in
+`~/Library/Application Support/ECHO/desktop/updater` on macOS and
+`~/.config/ECHO/desktop/updater` on Linux, apart from the CLI root.
+
+The app applies the CLI's rules: configuration pinning, signature, channel and
+expiry checks, the anti-rollback checkpoint, the lock and the bounded download
+(256 MiB, 15 minutes). It checks at launch and then hourly, and only announces.
+One sidebar row shows **New version · Restart** when a release is available or
+newer files are already installed (`running_release_mismatch`). Selecting it
+stages the verified update (status `staged`), and the app activates it after it
+quits:
+
+- **macOS** checks the staged `ECHO.app` (bundle id, `codesign --verify --deep
+  --strict`, and an identity matching the manifest) and swaps it into place. The
+  running bundle must be writable and not translocated; ECHO normally lives in
+  `~/Applications`. A failed swap restores the previous app.
+- **Linux** asks for an admin password through `pkexec`. The root helper
+  `/opt/ECHO/resources/echo-desktop-update-helper` verifies the feed again with
+  the key in the root-owned installed identity, checks the package digest and
+  its own checkpoint `/var/lib/echo-desktop/update-checkpoint.json`, and then
+  reinstalls the package with `apt-get`. A cancelled prompt leaves the app
+  running; a later failure reopens the old app.
+
+The trust model is the feed's Ed25519 signature and digest, not Apple
+notarization. A self-replaced app is not quarantined, so Gatekeeper does not
+re-check it, and macOS privacy grants may need to be given again after an
+update. macOS App Management may block the swap; that is unverified until a
+seat rehearsal, and a blocked swap keeps the old app. On Linux the feed key now
+authorizes root-executed packages on enrolled desktops. Desktop installs from
+before this change have no updater and need one manual reinstall of a release
+package.
+
 ## Preparing an approved feed
 
-Build the Person client and each platform kit from a clean release commit using the
-existing release workflow. The publisher requires that commit to be present
-locally and compares the kit's setup sources with it. It checks the canonical
-release record, client/runtime hashes and materialized client identity.
+Build the Person client, each platform kit and each desktop package from a
+clean release commit using the existing release workflow. The publisher
+requires that commit to be present locally and compares the kit's setup sources
+with it. It checks the canonical release record, client/runtime hashes and
+materialized client identity.
 
 ```sh
 node tools/client-update-feed.mjs prepare \
@@ -193,22 +244,39 @@ node tools/client-update-feed.mjs prepare \
   --release /absolute/path/to/accepted-release.json \
   --linux-kit /absolute/path/to/approved-linux-kit.zip \
   --macos-kit /absolute/path/to/approved-macos-cli-kit.zip \
+  --macos-app /absolute/path/to/ECHO-mac.zip \
+  --linux-deb /absolute/path/to/echo-desktop.deb \
   --sequence 1 \
   --expires 2026-10-01T00:00:00.000Z \
   --out /absolute/path/to/new-feed-bundle
 ```
 
-Supply both supported CLI kits: macOS arm64 and Linux x64/glibc. Preparation,
-signing, sealing and publication refuse a release missing either target. Both
-kits must bind the same canonical release, source SHA and Person-client artifact;
-each client selects its exact OS, architecture, libc and installation type.
-Historical single-platform feeds remain readable by clients and auditable through
-publication status, but cannot be published again without both platform kits.
+Supply all four artifacts: the macOS arm64 and Linux x64/glibc CLI kits, the
+macOS arm64 `ECHO.app` ZIP and the Linux x64 `.deb`. Preparation, signing,
+sealing and publication refuse a new release missing any of them
+(`all_release_targets_required`). All four must bind the same canonical
+release, source SHA and Person-client artifact; each client selects its exact
+OS, architecture, libc and installation type. For each desktop artifact,
+`prepare` also checks that:
+
+- its identity file names this release, its record digest, source SHA, product
+  version, Person-client digest and target;
+- its `update_bootstrap` equals `--config` except for `installation: "electron"`;
+- the Person-client tree inside the app equals, file for file, the release
+  tarball the CLI kits carry;
+- on macOS, every ZIP entry is under `ECHO.app/` and `CFBundleIdentifier` is
+  `org.echobrain.echo-desktop`;
+- on Linux, the package is `echo-desktop` for `amd64`, and the root helper's
+  bytes equal the helper at `release.source_sha`.
+
+Historical single-platform and two-artifact feeds remain readable by clients
+and auditable through publication status, but cannot be published again.
 
 Choose a sequence at least the bootstrap minimum and strictly higher than the
 previously published sequence; choose a future expiry no more than 31 days
 after issuance. `prepare` produces `manifest.json`, the public bootstrap
-configuration, the canonical release record and both content-addressed artifacts.
+configuration, the canonical release record and all four content-addressed
+artifacts.
 It does not publish anything or read a private signing key. Unsigned `prepare`
 needs no final release authorization and may use the candidate canonical record;
 the signing preview itself requires the existing final release authorization.
@@ -229,7 +297,7 @@ node tools/client-update-feed.mjs seal \
 
 The authorization must bind the release and Person-client artifact hashes and
 record the existing Slack approval, record/Ask checks and final release
-decision. Signing the manifest additionally authorizes its exact platform kits
+decision. Signing the manifest additionally authorizes its exact artifacts
 and channel selection. One final human review may also approve the prepared
 manifest digest and, for a replacement, the expected predecessor digest, while
 the existing authorization and exact digest approval records retain their
@@ -239,7 +307,8 @@ workflow approval and a staged candidate do not authorize publication.
 
 `seal` verifies the signature and revalidates the artifact and authorization,
 then writes `feed.json`. Through the approved publication lane, upload immutable
-`artifacts/<sha256>.zip` files first and publish the configured feed last. The
+`artifacts/<sha256>.zip` and `artifacts/<sha256>.deb` files first and publish
+the configured feed last. The
 server must serve these bytes without redirects or content encoding. Hosting,
 signer provisioning, first-seat enrollment and live document-read qualification
 are separate deployment steps.
@@ -266,14 +335,20 @@ An envelope contains only base64 `payload` and `signature`. The client verifies
 the pinned key before interpreting the payload. Metadata is bounded to 64 KiB;
 downloads to 256 MiB, with fixed deadlines. Both URLs must share the configured
 HTTPS origin. Artifact size/hash verification precedes archive inspection or
-execution. ZIP members are copied as bounded bytes into known regular files;
-archive-provided paths and symlinks never control extraction destinations.
+execution. CLI kit ZIP members are copied as bounded bytes into known regular
+files; archive-provided paths and symlinks never control extraction
+destinations. The desktop app expands its `ECHO.app` ZIP with `ditto` inside
+its private updater folder and checks the staged bundle before the swap. The
+Linux root helper copies the package and feed into a root-only folder before
+checking them.
 
 Clients persist the highest verified sequence and its payload digest. Older
 sequences, changed bytes at the same sequence, expired metadata, and unknown
 fields fail closed. A deliberately authorized rollback uses a new sequence
-pointing to the retained compatible release. Refresh expiry by publishing a
-new signed sequence even when the artifact is unchanged.
+pointing to the retained compatible release. The desktop has no rollback
+button either; on macOS the previous bundle is kept only until the new one
+starts. Refresh expiry by publishing a new signed sequence even when the
+artifact is unchanged.
 
 This is a single-publisher V1 signature profile, not a complete TUF repository.
 Delegated roles, automated key rotation and compromise recovery are outside
@@ -300,3 +375,10 @@ cached notices, explicit installation, platform selection, signature/freshness
 failures, bounded downloads, concurrent starts, installation races and session
 preservation. Offline proof does not establish that this live acceptance test
 has occurred.
+
+Desktop acceptance: publish B; an updater-capable app on A shows **New version
+· Restart**. Selecting it installs B and restarts the app, with an admin
+password on Linux. The tray then shows `Build <sha7>` for B's source SHA, and an
+authenticated read passes. This needs one native macOS arm64 seat and one
+Ubuntu 24.04 x64 seat with a polkit agent. CI cannot show a polkit prompt or a
+real macOS swap.

@@ -25,8 +25,9 @@ service manager.
 The opt-in [client updater](../features/client-updates-v1.md) runs a bounded
 release check before command dispatch. Its public publisher trust and local
 release checkpoint are separate from Person authorization state. macOS arm64
-and Linux x64 CLI-kit activation reuse their platform installers; the desktop
-app's updates belong to its own packaging. The standalone Mac CLI root is
+and Linux x64 CLI-kit activation reuse their platform installers. The desktop
+app runs the same updater with its own installation adapter (see
+[Desktop updates](#desktop-updates)). The standalone Mac CLI root is
 separate from the retired Swift app's paired CLI. This adds no background
 runtime or automatic Person-request replay.
 
@@ -43,8 +44,9 @@ and after the command and refuses the result if the account changed, reporting
 a write's outcome as unknown. Before a network call, the host refreshes the
 sign-in when less than that call's own timeout plus one minute remains, so a
 long upload never starts on a token that lapses mid-call. Home loads asked for
-while one is running join it, with at most one follow-up load. A packaged app
-carries the Person client package produced by `tools/pack-person-client.mjs`.
+while one is running join it, with at most one follow-up load. A release
+package carries the release's exact Person-client tarball; other packages carry
+one packed from `HEAD` by `tools/pack-person-client.mjs`.
 
 The sidebar's **Mine** row, under New project, opens a page that reads
 `person list --mine`
@@ -60,6 +62,44 @@ no project page shows opens Mine. A 401 on a project's list means the person
 is no longer a member: the page says "This is no longer available to you." and
 status and projects are read again once per visit, without signing out.
 Signing out leaves Mine and clears it.
+
+### Desktop updates
+
+[ADR-0035](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md) lets
+the app update itself from the signed client feed. Release packaging writes
+`echo-desktop-identity.v1.json` outside `app.asar`
+(`ECHO.app/Contents/Resources` or `/opt/ECHO/resources`). It names the release,
+its record digest and source SHA, the Person-client digest and target, and the
+update bootstrap with `installation: "electron"`. Without a valid identity, in
+development and test builds, under `--smoke`, from the Linux `.tar.gz`, or from
+an unsupported location, the updater is off.
+
+The Electron main process loads the updater from the embedded, release-bound
+client (`person-client/package/dist/client-update.js`), the same way the host
+loads the client. It pins the identity's bootstrap on first run and keeps
+per-user state in `<appData>/ECHO/desktop/updater/`, created `0700`, apart
+from the CLI root. The app's state folder is
+`~/Library/Application Support/ECHO/desktop` on macOS and
+`~/.config/ECHO/desktop` on Linux. It checks at launch and hourly and only
+announces, through one sidebar row. Install is refused while the app holds
+unresolved work. A `restart` installation stages the verified update and
+returns `staged`; the quit runs the normal host drain, and activation follows:
+
+- macOS: a detached bash helper waits for the app to exit, swaps the staged
+  `ECHO.app` into place, keeps the previous bundle until the new one starts,
+  restores it if the swap fails, and writes `updater/outcome.json` for the next
+  launch.
+- Linux: a detached relauncher runs `pkexec` with the root helper
+  `/opt/ECHO/resources/echo-desktop-update-helper`. The helper re-verifies the
+  feed with the root-owned installed identity, checks the root checkpoint
+  `/var/lib/echo-desktop/update-checkpoint.json` and prints `verified`, so the
+  app quits. It then reinstalls the package with `apt-get`. The relauncher
+  records the outcome and reopens the app; a cancelled password prompt leaves
+  the app running.
+
+The running release is the identity read at launch. If the files on disk name
+another release, for example after another Linux user updated `/opt/ECHO`,
+`running_release_mismatch` means "restart to use it".
 
 ## Local state authority
 
