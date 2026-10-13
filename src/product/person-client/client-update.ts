@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { constants, closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, rmSync, writeSync } from 'node:fs';
+import { constants, closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ClientUpdateError, type ClientUpdateConfig, type ClientUpdateManifest, type UpdateCheckpoint,
@@ -56,7 +56,12 @@ export interface ClientUpdateDependencies {
   /** Replaces the CLI platform installer; an adapter installation brings its own install(). */
   install?: (input: UpdateInstallerInput) => void | Promise<void>;
   installation?: ClientUpdateInstallation;
-  /** False leaves interrupts to an embedding process with its own quit path (Electron). Default true. */
+  /**
+   * False adds no signal listeners, leaving interrupts to an embedding process
+   * with its own quit path (Electron). Default true. That quit drops the pending
+   * `finally`, so a run it ends keeps the lock and any partial download. Such a
+   * process must call releaseInterruptedClientUpdate(root) at launch.
+   */
   handle_signals?: boolean;
 }
 function configDigest(config: ClientUpdateConfig): string {
@@ -117,6 +122,22 @@ function cliInstallation(root: string, install: ClientUpdateInstallation['instal
     fingerprint: () => updateDigest(readUpdateFile(join(root, 'bin', 'echo-brain'), 16 * 1024)),
     install, activation: 'immediate', archive_name: 'client.zip', download_timeout_ms: 120_000,
   };
+}
+
+/**
+ * Releases the lock and download folders of a run its process ended without
+ * cleanup, as an embedding app's quit does. Call it only while no other process
+ * can update this root: for the app, at launch under Electron's single-instance
+ * lock, before configuring or checking. An installer that reported an unknown
+ * outcome keeps its lock and staging as recovery evidence.
+ */
+export function releaseInterruptedClientUpdate(root: string): void {
+  const directory = updateDirectory(root);
+  const config = readClientUpdateConfig(root);
+  if (config && loadState(directory, config)?.result === 'installation_outcome_unknown') return;
+  for (const name of readdirSync(directory)) {
+    if (name === '.lock' || name.startsWith('.download-')) rmSync(join(directory, name), { recursive: true, force: true });
+  }
 }
 
 /** A trusted local bootstrap operation. Feed downloads cannot replace this configuration. */

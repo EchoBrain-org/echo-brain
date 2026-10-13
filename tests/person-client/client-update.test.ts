@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawn } from 'node:child_process';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { once } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { installedUpdateRoot } from '../../src/product/person-client/client-update-cli.js';
 import { ClientUpdateError, type ClientUpdateManifest, type UpdatePlatform, parseUpdateConfig, parseUpdateManifest, selectUpdateArtifact, updateDigest, verifyUpdateEnvelope, UPDATE_INTERVAL_MS } from '../../src/product/person-client/client-update-contract.js';
-import { type ClientUpdateInstallation, configureClientUpdates, readClientUpdateConfig, runClientUpdate } from '../../src/product/person-client/client-update.js';
+import { type ClientUpdateInstallation, configureClientUpdates, readClientUpdateConfig, releaseInterruptedClientUpdate, runClientUpdate } from '../../src/product/person-client/client-update.js';
 import { type UpdateInstallerInput } from '../../src/product/person-client/client-update-kit.js';
 
 const NOW = Date.parse('2026-09-24T21:00:00.000Z');
@@ -386,6 +386,47 @@ describe('client updates through an installation adapter', () => {
     expect((await runClientUpdate('check', { ...f.dependencies, fetch: fetcher as typeof fetch })).status).toBe('available');
     expect(seen).toEqual([baseline.map(n => n + 1)]);
     expect(counts()).toEqual(baseline);
+  });
+
+  it('releases a run the app quit mid-download once it relaunches', async () => {
+    const f = appFixture();
+    const client = new URL('../../src/product/person-client/dist/client-update.js', import.meta.url).href;
+    // Electron's quit ends the process without running the core's pending `finally`.
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+      const { runClientUpdate } = await import(${JSON.stringify(client)});
+      setTimeout(() => {}, 60_000);
+      let pulls = 0;
+      const partial = new ReadableStream({ pull(controller) {
+        if (pulls++ === 0) return controller.enqueue(new Uint8Array([1, 2, 3]));
+        setTimeout(() => process.exit(0), 0);
+        return new Promise(() => {});
+      } });
+      await runClientUpdate('apply', { root: ${JSON.stringify(f.root)}, platform: ${JSON.stringify(APP)}, now: () => ${NOW}, handle_signals: false,
+        fetch: async url => new Response(String(url) === ${JSON.stringify(f.config.feed_url)} ? Buffer.from(${JSON.stringify(f.envelope().toString('base64'))}, 'base64') : partial),
+        installation: { installedRelease: () => 'clean-v1-release-a', installedReleaseSha256: () => 'a'.repeat(64), fingerprint: () => 'f'.repeat(64),
+          install() {}, activation: 'restart', archive_name: 'ECHO.zip', download_timeout_ms: 900_000 } });
+    `], { stdio: ['ignore', 'ignore', 'inherit'] });
+    expect(await once(child, 'exit')).toEqual([0, null]);
+    const downloads = () => readdirSync(join(f.root, 'updater')).filter(name => name.startsWith('.download-'));
+    expect(downloads()).toHaveLength(1);
+    expect(readFileSync(join(f.root, 'updater', downloads()[0], 'ECHO.zip'))).toEqual(Buffer.from([1, 2, 3]));
+    expect((await runClientUpdate('check', f.dependencies)).status).toBe('update_busy');
+    releaseInterruptedClientUpdate(f.root);
+    expect(existsSync(join(f.root, 'updater/.lock'))).toBe(false);
+    expect(downloads()).toEqual([]);
+    expect(appState(f.root)).toMatchObject({ result: 'available', available_release: f.manifest.release_id });
+    expect((await runClientUpdate('apply', f.dependencies)).status).toBe('staged');
+    expect(f.install).toHaveBeenCalledOnce();
+  });
+
+  it('keeps recovery evidence of an uncertain installer outcome when releasing an interrupted run', async () => {
+    const f = fixture();
+    await expect(runClientUpdate('apply', { ...f.dependencies, install: () => { throw new ClientUpdateError('installation_outcome_unknown'); } })).rejects.toThrow('installation_outcome_unknown');
+    const evidence = readdirSync(join(f.root, 'updater')).sort();
+    expect(evidence).toEqual(expect.arrayContaining(['.lock', expect.stringMatching(/^\.download-/)]));
+    releaseInterruptedClientUpdate(f.root);
+    expect(readdirSync(join(f.root, 'updater')).sort()).toEqual(evidence);
+    expect((await runClientUpdate('apply', f.dependencies)).status).toBe('update_busy');
   });
 
   it('announces a staged release until the app restarts into it', async () => {
