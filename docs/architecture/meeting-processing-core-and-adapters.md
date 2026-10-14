@@ -352,8 +352,8 @@ layers directly.
 
 Current live composition reviews each meeting once, in the approval core. The
 desktop card and, for a reviewer who linked Slack, the Slack DM copy offer the
-same choices, and the first decision wins. **Who can read it** is **Only
-me**, binding `restricted-reviewer-person-v2`, or one to twenty of the
+same choices, and the first decision wins. The audience (**Seen by** on the
+desktop card) is **Only me**, binding `restricted-reviewer-person-v2`, or one to twenty of the
 reviewer's active projects, binding `project-members-readable-person-v1`;
 there is no Team choice. It starts on the meeting's suggested projects,
 ticked, when any is still one of the reviewer's active projects, and on

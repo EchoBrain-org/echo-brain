@@ -48,9 +48,9 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
   status, due date and assignee when its tool gave them, **Mark updated** and
   **No change needed** when you may close it, **Open in Jira** (or its tool)
   when you can open it, and **Reassign…** when you may give it to someone
-  else. Nothing on the row itself closes the item. Only these rows open a
-  card, so reassign any other item with `echo-brain person runs` (operation
-  `assign`).
+  else. Nothing on the row itself closes the item. Only these rows open an
+  item's card, so reassign any other item with `echo-brain person runs`
+  (operation `assign`).
 
 Under the rows, and on an empty Home, a footer says how many of your items
 match their decision now, how many items you sent wait on others, and when
