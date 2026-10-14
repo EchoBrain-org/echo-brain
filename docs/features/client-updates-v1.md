@@ -286,9 +286,10 @@ never taken for this one's. The helper runs as root:
    The sequence must be greater than the saved one, or equal to it with the
    same manifest digest.
 5. It prints `verified`. Once the progress file says so, the app quits.
-6. It waits up to two minutes for the app to exit, runs
-   `apt-get install --reinstall -y` on the copy, saves the checkpoint and
-   removes the copy.
+6. It waits up to two minutes for the app to exit and saves the checkpoint
+   first, so a failed or interrupted install never leaves the floor below an
+   installed release. Then it runs `apt-get install --reinstall -y` on the copy
+   and removes the copy.
 
 The helper's exit codes are: 0 installed, 2 invalid input, 3 verification
 failed, 4 the app did not exit, 5 installation failed. The relauncher records

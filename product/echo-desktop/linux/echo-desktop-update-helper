@@ -4,7 +4,8 @@
 pkexec runs this as: install --feed F --deb D --wait-pid N. Nothing the app
 says is trusted: the helper checks root-only copies of both files against the
 root-owned installed identity and update checkpoint, prints "verified", waits
-for the app to quit and reinstalls the package with apt-get.
+for the app to quit, raises the checkpoint and reinstalls the package with
+apt-get.
 
 Exit codes: 0 installed, 2 invalid input, 3 verification failed, 4 the app
 did not exit, 5 installation failed.
@@ -339,8 +340,11 @@ def install(feed, deb, pid, trusted_uid=0):
             need(control.get('Package') == 'echo-desktop' and control.get('Architecture') == 'amd64', 3, 'wrong_package')
             print('verified', flush=True)
             wait_for_exit(pid)
-            reinstall(deb_copy)
+            # Raise the floor before installing: apt-get can unpack the new
+            # release and still fail, or the helper can be killed after it, and
+            # an older signed feed must not pass then. The same feed may retry.
             save_checkpoint(CHECKPOINT, checkpoint)
+            reinstall(deb_copy)
             return 0
         finally:
             shutil.rmtree(work, ignore_errors=True)

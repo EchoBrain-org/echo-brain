@@ -160,9 +160,12 @@ function installPatch(fixture: Fixture, { app, control = ['Package: echo-desktop
   mkdirSync(state, { mode: 0o700 });
   const aptLog = join(fixture.root, 'apt-get.log');
   const liveness = app === undefined ? '' : `if kill -0 ${app} 2>/dev/null; then printf 'app running ' >> '${aptLog}'; else printf 'app exited ' >> '${aptLog}'; fi\n`;
+  const checkpoint = join(state, 'update-checkpoint.json');
+  // Whether the checkpoint was raised before apt-get ran.
+  const saved = `if [ -f '${checkpoint}' ]; then printf 'checkpoint saved ' >> '${aptLog}'; fi\n`;
   const patch = {
-    IDENTITY: fixture.identity, STATE: state, CHECKPOINT: join(state, 'update-checkpoint.json'), LOCK: join(state, 'update.lock'),
-    APT_GET: shellScript(fixture.root, 'apt-get', `${liveness}echo "$@" >> '${aptLog}'\necho 'apt-get output'\nexit ${aptStatus}`),
+    IDENTITY: fixture.identity, STATE: state, CHECKPOINT: checkpoint, LOCK: join(state, 'update.lock'),
+    APT_GET: shellScript(fixture.root, 'apt-get', `${liveness}${saved}echo "$@" >> '${aptLog}'\necho 'apt-get output'\nexit ${aptStatus}`),
     DPKG_DEB: shellScript(fixture.root, 'dpkg-deb', `printf '%s\\n' ${control.map(line => `'${line}'`).join(' ')}`),
     EXIT_WAIT_SECONDS: waitSeconds,
   };
@@ -257,7 +260,7 @@ describe.skipIf(missing !== '')(`Linux update helper${missing ? ` (skipped: ${mi
     expect(verify(fixture).result).toMatchObject({ sequence: 7 });
   });
 
-  it('reinstalls the root-only copy only after the app exits, then saves the checkpoint', async () => {
+  it('saves the checkpoint once the app exits, then reinstalls the root-only copy', async () => {
     const fixture = setup();
     const app = startApp();
     const { state, aptLog, checkpoint, patch } = installPatch(fixture, { app: app.pid });
@@ -273,7 +276,7 @@ describe.skipIf(missing !== '')(`Linux update helper${missing ? ` (skipped: ${mi
     // apt-get runs once, on the root-only copy, never the path the app passed.
     const logged = readFileSync(aptLog, 'utf8');
     const copy = logged.trim().split(' ').at(-1) ?? '';
-    expect(logged).toBe(`app exited -o DPkg::Lock::Timeout=120 install --reinstall -y ${copy}\n`);
+    expect(logged).toBe(`app exited checkpoint saved -o DPkg::Lock::Timeout=120 install --reinstall -y ${copy}\n`);
     expect(copy.startsWith(`${state}/install-`) && copy.endsWith('/update.deb')).toBe(true);
     expect(JSON.parse(readFileSync(checkpoint, 'utf8'))).toEqual({ schema_version: 1, sequence: 7, manifest_sha256: sha256(fixture.payload) });
   }, 30_000);
@@ -294,13 +297,18 @@ describe.skipIf(missing !== '')(`Linux update helper${missing ? ` (skipped: ${mi
     expect(existsSync(checkpoint)).toBe(false);
   }, 30_000);
 
-  it('saves no checkpoint when apt-get fails', async () => {
+  it('keeps the raised checkpoint when apt-get fails: an older feed stays refused, the same one may retry', async () => {
+    // apt-get may have unpacked the new release before failing, or the helper
+    // may be killed after it: the floor must already be up.
     const fixture = setup();
     const app = startApp();
     await quit(app);
     const { checkpoint, patch } = installPatch(fixture, { aptStatus: 100 });
     refused(await install(fixture, app, patch).done, 5, 'apt-get failed');
-    expect(existsSync(checkpoint)).toBe(false);
+    expect(JSON.parse(readFileSync(checkpoint, 'utf8'))).toEqual({ schema_version: 1, sequence: 7, manifest_sha256: sha256(fixture.payload) });
+    const older = setup({ manifest: value => { value.sequence = 6; } });
+    refused(helper('verify_update', [older.identity, older.feed, older.deb, checkpoint, nowMs / 1000, uid]), 3, 'stale_metadata');
+    expect(helper('verify_update', [fixture.identity, fixture.feed, fixture.deb, checkpoint, nowMs / 1000, uid]).result).toMatchObject({ sequence: 7 });
   }, 30_000);
 
   it('installs one update at a time, so a later helper cannot install an older release over a newer one', async () => {
