@@ -11,19 +11,26 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
 
 - **Approve**: a meeting waiting for your decision. Its card shows what was
   decided, numbered (a decision still proposed or unresolved says so), and
-  what is to be done, each with its due date and an owner you can retype;
-  what was said in the meeting, and the reasons given, open on demand. On the
-  right sit who sees it (Only me or projects), transcript sharing, **Approve**
-  and **Reject**, and who was in the meeting. The card reads the proposal text
-  the Authority sends; a text it cannot read shows as written.
+  what is to be done, with a due date when the meeting set one and an owner
+  you can retype where ECHO proposed one; what was said in the meeting, and
+  the reasons given, open on demand. On the right sit **Seen by** (Only me or
+  projects; it starts on the projects the meeting suggests, ticked, when any
+  is one of your active projects), transcript sharing, **Approve** (off while
+  Projects is chosen and none is ticked) and **Reject**, and who was in the
+  meeting. The card reads the proposal text the Authority sends; a text it
+  cannot read shows as written.
 - **Checking**: a meeting you approved, while its record publishes and its
   impact check runs. It has no action and is not counted.
 - **Check failed** (verb **Retry**): "Approved · the check did not finish". It
   opens the decision with the reason and **Try again**.
 - **Send**: your impact check found items the decision changes. Its card
-  lists each item with what it says now beside what the decision needs, and
-  who it goes to (or **Pick a person**); the panel beside it says who gets
-  how many and sends them (**Send to …**), or leaves the row (**Not now**).
+  lists each item, ticked, with what it says now beside what the decision
+  needs, and who it goes to (or **Pick a person**); the panel beside it says
+  who gets how many and sends them (**Send to …**). Untick any item that is
+  wrong: Send marks it not relevant. The button reads **Keep on my Home**
+  when every ticked item stays yours, and **None of these need changing**
+  when nothing is ticked. **Not now** goes back to Home and keeps the row.
+  **Open the decision** shows its impact card.
 - **Update**: an item that waits on you as its owner: sent to you, or left to
   you because the people ahead of you have left. Each item row has three
   lines: "ECHO-12 · Pilot launch doesn't match the decision yet", what it says
@@ -39,9 +46,11 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
   whose it is to update, what the item says now beside what **The decision
   needs**, what ECHO saw when it last checked and the decision; beside them its
   status, due date and assignee when its tool gave them, **Mark updated** and
-  **No change needed** when you may close it, **Open in Jira** (or its tool),
-  and **Reassign…** when you may give it to someone else. Nothing on the row
-  itself closes the item.
+  **No change needed** when you may close it, **Open in Jira** (or its tool)
+  when you can open it, and **Reassign…** when you may give it to someone
+  else. Nothing on the row itself closes the item. Only these rows open a
+  card, so reassign any other item with `echo-brain person runs` (operation
+  `assign`).
 
 Under the rows, and on an empty Home, a footer says how many of your items
 match their decision now, how many items you sent wait on others, and when

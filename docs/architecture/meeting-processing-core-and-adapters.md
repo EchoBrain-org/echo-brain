@@ -352,14 +352,15 @@ layers directly.
 
 Current live composition reviews each meeting once, in the approval core. The
 desktop card and, for a reviewer who linked Slack, the Slack DM copy offer the
-same choices, and the first decision wins. **Who can read it** defaults to
-**Only me**, which binds `restricted-reviewer-person-v2` if approved unchanged.
-The reviewer may instead pick one to twenty of their active projects, binding
-`project-members-readable-person-v1`; there is no Team choice. A separate
-**Share the transcript** checkbox, off by default, also releases the exact
-retained transcript to that audience. Owners are recorded only when the approver
-confirms them. The selected policy is frozen with the approved record;
-rejection creates no record.
+same choices, and the first decision wins. **Who can read it** is **Only
+me**, binding `restricted-reviewer-person-v2`, or one to twenty of the
+reviewer's active projects, binding `project-members-readable-person-v1`;
+there is no Team choice. It starts on the meeting's suggested projects,
+ticked, when any is still one of the reviewer's active projects, and on
+**Only me** otherwise. A separate **Share the transcript** checkbox, off by
+default, also releases the exact retained transcript to that audience. Owners
+are recorded only when the approver confirms them. The selected policy is
+frozen with the approved record; rejection creates no record.
 
 ## Shared connector capabilities
 
