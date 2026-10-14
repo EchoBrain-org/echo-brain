@@ -25,7 +25,7 @@ import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeItemCard,
   closeItemStatus, closeOpenItems, closePicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, dismissProjectSetting, findingSheet, getState, goHome,
   hostFailed, itemCardShown, itemStatusShown, keepNewProject, matchesShown, newProjectProgress, openCapture, openItemsShown, openMine, pageCovered, projectSettingsModal,
-  readUpdate, refreshStatus, resume, retryStart, returnToSend, sheetShown, signinPhase, toastOpensMine,
+  readUpdate, reassignHeldItem, refreshStatus, resume, retryStart, returnToSend, sheetShown, signinPhase, toastOpensMine,
   toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleReassign, toggleSidebar, trayOrganization, updateChanged, useStore, WARNINGS, windowShown, windowTakesDrop, type State,
 } from './store.js';
 
@@ -193,7 +193,7 @@ function App() {
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} />
           : itemCard ? <ItemCard state={state} card={itemCard} />
-          : itemStatus ? <ItemStatus page={itemStatus} />
+          : itemStatus ? <ItemStatus page={itemStatus} held={reassignHeldItem(state)} />
           : openItems ? <OpenItems page={openItems} />
           : state.reader ? <Reader state={state} reader={state.reader} backTo={pageName ?? 'Home'} />
           : inProject ? <Project state={state} project={inProject} />

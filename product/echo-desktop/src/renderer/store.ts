@@ -10,7 +10,7 @@ import type {
   ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt, ExternalAnswerSource,
   UpdateState,
 } from '../shared/protocol.js';
-import { MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
+import { isWriteCall, MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { sourceGroups, type SourceGroup } from './answer.js';
 import { dropFile, rpc } from './api.js';
@@ -886,24 +886,31 @@ function outcomeUnknown(failure: Failure, resend: boolean): boolean {
 
 /** Account-fenced command for the personal meeting sheet. No provider token enters the renderer. */
 export function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }): Promise<PersonMeetingResultsV2[K]> {
-  return fencedCommand<PersonMeetingResultsV2[K]>(account => rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id: 'granola' } }));
+  return fencedCommand<PersonMeetingResultsV2[K]>(account => rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id: 'granola' } }),
+    isWriteCall('tools.meetings', { request: operation }));
 }
 
 /** Account-fenced runs request: your own approvals' checks, and the open items you can see. */
 export function runsCommand<K extends PersonRunsRequestV1['operation']>(request: PersonRunsRequestV1 & { readonly operation: K }): Promise<RunsResults[K]> {
-  return fencedCommand<RunsResults[K]>(account => rpc('runs', { expect: account, request }));
+  return fencedCommand<RunsResults[K]>(account => rpc('runs', { expect: account, request }), isWriteCall('runs', { request }));
 }
 
 /**
  * Sends for the account shown; a reply once the account changed is refused,
- * and a failure is thrown. Another app in front changes nothing: the reply is
- * the Authority's answer, and the page it is for fences it by itself.
+ * and a failure is thrown. A write's, as the host says of one it sent before a
+ * switch, may have landed, unless the host says it never went: only a read of
+ * it settles that. Another app in front changes nothing: the reply is the
+ * Authority's answer, and the page it is for fences it by itself.
  */
-async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknown>>): Promise<T> {
+async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknown>>, write: boolean): Promise<T> {
   const account = expect();
   if (!account) throw new Error('Sign in to use meetings.');
   const result = await send(account);
-  if (JSON.stringify(expect()) !== JSON.stringify(account)) throw new Error('Account changed.');
+  if (JSON.stringify(expect()) !== JSON.stringify(account)) {
+    if (!write) throw new Error('Account changed.');
+    const unsent = !result.ok && result.failure.mutation_outcome === 'not_submitted';
+    throw new CommandFailed({ code: 'account_changed', retryable: false, mutation_outcome: unsent ? 'not_submitted' : 'unknown' });
+  }
   if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure); }
   return result.value as T;
 }
@@ -953,7 +960,7 @@ export function signOutHeld(): boolean {
 export function settleWords(current: State = state): string {
   return current.compose?.status === 'unknown' ? 'A save may not have arrived. Check it in Capture first.'
     : current.change?.status === 'unknown' ? 'A project change may not have finished. Try it again or dismiss it first.'
-    : current.itemCard?.reassign?.unknown ? 'A reassignment may not have arrived. Check it on Home first.'
+    : current.itemCard?.reassign?.unknown ? REASSIGN_UNSETTLED
     : 'Finish the current save first.';
 }
 
@@ -4250,7 +4257,7 @@ function updateDecisionRun(runs: readonly PersonRunV1[]): void {
  */
 export async function closeItem(item: OpenItemView, to: 'done' | 'not_relevant'): Promise<void> {
   const home = state.home;
-  if (!home || !expect() || state.concealed || Object.hasOwn(home.closing, item.item_id)) return;
+  if (!home || !expect() || state.concealed || Object.hasOwn(home.closing, item.item_id) || item.item_id === reassignHeldItem()) return;
   const { [item.item_id]: _failed, ...closeFailures } = home.closeFailures;
   set({ home: withRows({ ...home, closing: { ...home.closing, [item.item_id]: null }, closeFailures }) });
   let failure: string | null = null;
@@ -4818,6 +4825,15 @@ function reassignHeld(card: ItemCardState | null = state.itemCard): boolean {
   return card?.reassign?.busy === true || card?.reassign?.unknown !== undefined;
 }
 
+/** What sign out, the update row and Close say while a reassignment may have arrived. */
+export const REASSIGN_UNSETTLED = 'A reassignment may not have arrived. Check it on Home first.';
+
+/** The item a held Reassign… is for: nothing else closes it until its card's Check status reads it, since it may be someone else's now. */
+export function reassignHeldItem(current: State = state): string | null {
+  const card = current.itemCard;
+  return card && reassignHeld(card) ? card.item.item_id : null;
+}
+
 export function itemCardShown(current: State = state): ItemCardState | null {
   const card = current.itemCard;
   // One that is held comes back over Home, however Home was reached since: only it settles what it sent.
@@ -4901,9 +4917,13 @@ export async function reassignCardItem(person: Member): Promise<void> {
   } catch (error) {
     const current = reassignFrom(item_id);
     const failure = error instanceof Error ? error.message : 'That was not sent. Try again.';
+    // A reply that came after the account changed is unknown too, unless the host says it never went (fencedCommand).
     const unknown = outcomeUnknown(failureOf(error), false);
-    if (current) settleReassign(current, { reassign: { ...current.reassign!, busy: false, failure, ...(unknown ? { unknown: person } : {}) } });
-    if (!itemCardShown()) set({ toast: failure });
+    // A card gone with its account (another signed in since) says nothing to the one signed in now.
+    if (current) {
+      settleReassign(current, { reassign: { ...current.reassign!, busy: false, failure, ...(unknown ? { unknown: person } : {}) } });
+      if (!itemCardShown()) set({ toast: failure });
+    }
     unresolvedChanged();
     return;
   }
@@ -5010,11 +5030,13 @@ function loadItemStatus(more: boolean): Promise<void> {
 /**
  * Close (one line) or Close all N that match: each matching item you may close
  * is set done, one at a time. The view stays, without the items it closed; an
- * item that could not be closed stays, with why.
+ * item that could not be closed stays, with why. The item a held Reassign… is
+ * for is not closed: its card's Check status settles it first.
  */
 async function closeMatches(items: readonly OpenItemView[]): Promise<void> {
   const page = itemStatusShown();
-  const closing = page ? closable(items.filter(item => page.items.some(entry => entry.item_id === item.item_id))) : [];
+  const held = reassignHeldItem();
+  const closing = page ? closable(items.filter(item => item.item_id !== held && page.items.some(entry => entry.item_id === item.item_id))) : [];
   if (!page || page.busy || page.loading || closing.length === 0) return;
   set({ itemStatus: { ...page, busy: true, closeFailure: undefined } });
   const closed = new Set<string>();

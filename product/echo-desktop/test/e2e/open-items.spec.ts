@@ -354,6 +354,31 @@ test('a reassignment whose reply was lost holds its card, Restart and Quit until
   expect(app.calls().filter(call => call.body?.operation === 'item').map(call => call.body?.item_id)).toEqual(['itm_00000000-0000-4000-8000-000000000031']);
 });
 
+test('Your open items closes nothing a held reassignment is for until its card settles it', async () => {
+  app = await launch('granola-review-assign-lost');
+  const { page } = app;
+  await page.getByTestId('need-row').filter({ hasText: 'ECHO-12' }).click();
+  const card = page.getByTestId('item-card');
+  await card.getByTestId('reassign').click();
+  await card.getByRole('searchbox', { name: 'Find a person' }).fill('Raf');
+  await card.getByRole('option', { name: 'Rafael Moreno' }).click();
+  await expect(card.getByTestId('reassign-check')).toBeVisible();
+  // The project's Check now finds ECHO-12 matching, but it may be Rafael's now: its Close waits on Home.
+  await page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
+  await page.getByTestId('project-line').getByRole('button', { name: 'Check now' }).click();
+  const status = page.getByTestId('item-status');
+  await expect(status.getByRole('heading', { name: 'Open items · Thermostat redesign' })).toBeVisible({ timeout: 20_000 });
+  const line = status.getByTestId('status-item').filter({ hasText: 'ECHO-12' });
+  await expect(line).toContainText('Matches now');
+  await expect(status.getByRole('button', { name: 'Close: ECHO-12 · Pilot launch', exact: true })).toBeDisabled();
+  await expect(status.getByTestId('status-held')).toHaveText('A reassignment may not have arrived. Check it on Home first.');
+  await expect(status.getByRole('button', { name: /^Close all/ })).toHaveCount(0);
+  expect(app.calls().filter(call => call.body?.operation === 'set_state')).toEqual([]);
+  // Home still holds the card, as it was.
+  await page.getByTestId('sidebar-home').click();
+  await expect(card.getByTestId('reassign-check')).toBeVisible();
+});
+
 test('Check now on a decision checks only that decision', async () => {
   app = await launch('granola-checked');
   await app.page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
