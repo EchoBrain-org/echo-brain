@@ -108,15 +108,33 @@ provenance-bound Person-client tarball as macOS and compiles out test fixtures.
 It never publishes a release. `npm run package` defaults to the build machine's
 OS; `npm run package -- --mac` explicitly selects macOS arm64.
 
+Only a release package updates itself: one built with `--release`,
+`--artifact` and `--update-config` as the
+[release guide](../../deploy/release/README.md#desktop-release-packages)
+describes.
+
 Linux outputs are in `dist-app/`:
 
 - `ECHO-<version>-linux-amd64.deb`: Debian/Ubuntu installer with the Electron
-  runtime, dependencies, desktop launcher and sandbox integration.
+  runtime, dependencies, desktop launcher, sandbox integration and the update
+  helper. It depends on `python3` and `openssl` and recommends `pkexec`;
+  without `/usr/bin/pkexec` the updater stays off. What runs as root, or
+  grants root, must equal reviewed source in `linux/`: `postinst`, `postrm`,
+  the AppArmor profile, the update helper and `deb-relationships.json`.
+  `postinst` never makes `chrome-sandbox` setuid, so the system must allow
+  unprivileged user namespaces; Ubuntu 24.04 does through the AppArmor
+  profile. `scripts/check-deb.mjs PACKAGE.deb` checks a built deb against
+  `HEAD`, including
+  [the rest of the deb gate](../../docs/features/client-updates-v1.md#preparing-an-approved-feed),
+  such as what may sit outside `/opt/ECHO`.
 - `ECHO-<version>-linux-x64.tar.gz`: the app directory for manual distribution;
   the receiving system must supply Electron's system libraries and permit its
-  sandbox. Prefer the deb on Ubuntu, where the installer supplies an AppArmor
-  profile.
+  sandbox. It updates itself only when placed as
+  [the updater requires](../../docs/features/client-updates-v1.md#desktop-app).
+  Prefer the deb on Ubuntu, where the installer supplies an AppArmor profile.
 - `linux-unpacked/echo-desktop`: the executable used by the package smoke test.
+
+The macOS output is a ZIP of `ECHO.app` in `dist-app/`.
 
 Build Linux packages on Linux for a reproducible native test environment.
 Building an archive on macOS does not validate Linux execution.
@@ -133,8 +151,9 @@ echo-desktop
 The package version stays `0.1.0` across releases, so every release's deb has
 the same file name and version. When a seat already has ECHO installed, apt can
 report "already the newest version" and leave the old app, including its
-embedded Person client, in place. Install every update or replacement with
-`--reinstall`:
+embedded Person client, in place. Once installed, a release package updates
+itself (see [Updates](#updates)). When you install by hand over an existing
+ECHO, the first time or after a failed update, use `--reinstall`:
 
 ```sh
 sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb
@@ -157,6 +176,71 @@ deb. These checks use temporary app state and never sign in to an Authority.
 For a headless Linux runner, prefix the smoke command with
 `xvfb-run -a dbus-run-session --`.
 
+## Install on macOS
+
+Unzip the release's ZIP and move `ECHO.app` to `~/Applications`, the
+Applications folder inside your home folder; create it if it is missing. That
+folder is yours to write, so ECHO can replace itself there when it updates.
+In a folder it cannot write, on another volume than its settings, or when macOS
+runs it from a read-only copy (translocation), ECHO still checks. When it finds
+a release it shows **Move ECHO to Applications to update** right away, instead
+of updating. Check that the tray menu's `Build <sha7>` matches the release's
+source SHA.
+
+## Updates
+
+A release package updates itself from the signed client feed
+([ADR-0035](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)).
+It asks every ten minutes, but contacts the feed at most once an hour after its
+last completed check, even across relaunches. Relaunching does not force a
+check, so a new release can take up to about 70 minutes to show. It only tells
+you; nothing installs until you choose to.
+
+One row above your account in the sidebar shows where things stand:
+
+| State | Row |
+| --- | --- |
+| A release is available, or newer files are already installed | **New version · Restart** |
+| Downloading, verifying, waiting for the password | **Updating** with the busy dots |
+| The install failed | **Couldn't update · Try again** |
+| A release is available, but the macOS app is translocated, in a folder it cannot write, or on another volume | **Move ECHO to Applications to update** |
+
+Select **New version · Restart** to install. ECHO won't install while it still
+has unfinished work, just as it won't sign out then. It checks the update, quits
+and reopens on the new version. On macOS it replaces its own `ECHO.app` without
+asking for a password. On Linux the system asks for an administrator password;
+a helper running as root then checks the update again before reinstalling the
+package. If another person on the same Linux machine already updated ECHO, the
+row also reads **New version · Restart**, and restarting uses the new version.
+If you cancel the quit when ECHO asks about unfinished work, ECHO stays open.
+When newer files were already installed, a later quit does not reopen it. When
+ECHO had downloaded an update, the update gives up after two minutes and the
+row shows **Couldn't update · Try again**.
+
+An update fails safely:
+
+- If you cancel the password prompt, ECHO keeps running the version you had.
+- A failed background check shows nothing, and the current version keeps
+  running.
+- If the install fails, ECHO keeps or reopens the old version and shows
+  **Couldn't update · Try again**. On Linux, a rare failure after the new files
+  are unpacked reopens the new version instead.
+- On macOS, a failed swap puts the previous app back. macOS App Management may
+  block the swap; that keeps the old app too.
+- ECHO refuses a feed older than the last one it verified, within the
+  [limits ADR-0035 records](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md#consequences).
+  Undoing an update takes a newer release.
+
+After an update on macOS, you may have to grant ECHO's macOS privacy
+permissions again, because each build has a new code identity.
+
+If updating keeps failing, install the release by hand: on Linux with
+`--reinstall` as in [Install and verify on Linux](#install-and-verify-on-linux),
+and on macOS by quitting ECHO and replacing `~/Applications/ECHO.app` with the
+release's app. A desktop installed before this change also needs this once,
+with a release package, before it can update itself. Development runs
+(`npm start`) and test builds never update.
+
 ## Compatibility evidence and remaining desktop checks
 
 The initial Linux x64 assessment ran the unchanged application under X11/Xvfb:
@@ -176,9 +260,13 @@ parallel. Whenever CI selects it, both runs are required; a failure on one does
 not cancel the other.
 Each typechecks the desktop, runs unit and full Electron end-to-end tests,
 builds the platform's packages, and verifies release fuses and packaged startup.
-Linux uses Xvfb and additionally installs the deb, validates its desktop entry,
+Linux uses Xvfb and additionally checks the deb with `scripts/check-deb.mjs`
+against the commit, then installs it, validates its desktop entry,
 and smokes the installed executable under Ubuntu's default user-namespace
-restriction, so it starts only through the deb's AppArmor profile. macOS
+restriction, so it starts only through the deb's AppArmor profile. It then
+reinstalls the deb over itself, as the update helper does, and checks that the
+AppArmor profile, the root-owned helper, a non-setuid `chrome-sandbox` and the
+smoke test survive. macOS
 verifies the app's code signature.
 A pull request into `main` selects the matrix when its tested merge changes the
 desktop inputs listed in
@@ -198,8 +286,11 @@ Xvfb exercises X11, not a complete GNOME/KDE desktop. Before claiming support
 for a particular Wayland desktop, check portal consent, global capture shortcuts,
 tray visibility, window focus, native file dialogs, drag-and-drop and browser
 sign-in on that desktop. Reopen ECHO through the desktop launcher if its tray or
-global shortcut is unavailable. Linux ARM64 and automatic desktop updates are
-outside this package target.
+global shortcut is unavailable. Linux ARM64 is outside this package target.
+
+CI cannot show a polkit password prompt or a real macOS app swap, so the
+[desktop update check](../../deploy/client-updates/README.md#verify-the-desktop-update)
+still needs native macOS arm64 and Ubuntu 24.04 x64 seats.
 
 
 A project's **Tools** (in its title bar, the line above its feed, or the

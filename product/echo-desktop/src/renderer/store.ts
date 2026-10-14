@@ -8,6 +8,7 @@ import type {
   AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
   Extraction, Failure, FileHandle, HomeView, ImpactView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace,
   ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt, ExternalAnswerSource,
+  UpdateState,
 } from '../shared/protocol.js';
 import { MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
@@ -490,6 +491,10 @@ export interface State {
   projectLine: ItemsLine | null;
   /** The tools line above the feed of the project on screen. */
   projectReads: ProjectReads | null;
+  /** The sidebar's one row for a new version (ADR-0035). It is not the account's: no sign-in or sign-out changes it. */
+  update: UpdateState;
+  /** Why the last click on that row did not install, shown under it until the next click or a new row. */
+  updateFailure: Failure | null;
 }
 
 const SIDEBAR_OPEN = 'echo.sidebarOpen';
@@ -504,6 +509,7 @@ let state: State = {
   barScope: { kind: 'global' }, barText: '', matches: null, ask: null, sources: null, compose: null, toast: null, toastShown: 0, concealed: false,
   signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null, employeeWrite: null,
   home: null, decision: null, send: null, openItems: null, itemCard: null, itemStatus: null, impactLine: null, projectLine: null, projectReads: null,
+  update: { state: 'none' }, updateFailure: null,
 };
 const listeners = new Set<() => void>();
 let seq = 0;
@@ -542,6 +548,8 @@ function set(patch: Partial<State>): void {
   if (state.projectSettings?.menu && (sheetShown() || (state.compose && !state.compose.hidden))) {
     state = { ...state, projectSettings: { ...state.projectSettings, menu: false } };
   }
+  // A held update click says what to settle only while it is unsettled, here or in main.
+  if (state.updateFailure?.code === 'update_held' && !signOutHeld() && !unresolvedWork().unresolved) state = { ...state, updateFailure: null };
   listeners.forEach(listener => listener());
 }
 
@@ -940,6 +948,13 @@ export function signOutHeld(): boolean {
     state.change?.status === 'unknown' || projectSettingsBlocked() || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.employeeWrite !== null;
 }
 
+/** What to settle first, where an unknown outcome shows: sign out and the update row say the same. */
+export function settleWords(current: State = state): string {
+  return current.compose?.status === 'unknown' ? 'A save may not have arrived. Check it in Capture first.'
+    : current.change?.status === 'unknown' ? 'A project change may not have finished. Try it again or dismiss it first.'
+    : 'Finish the current save first.';
+}
+
 /** Sign out, or Switch account, after the person confirmed it. */
 export async function signOut(): Promise<void> {
   const account = expect();
@@ -980,6 +995,39 @@ export async function retryStart(): Promise<void> {
 
 export function signinPhase(browserOpened: boolean | undefined): void {
   if (state.signin.phase === 'waiting') set({ signin: { ...state.signin, browserOpened } });
+}
+
+// ---- updates from the signed client feed (ADR-0035) --------------------------
+
+/** Counts the rows main has sent, so a status read that crossed a newer one is dropped. */
+let updatesSeen = 0;
+
+/** The row main's updater shows now. A new row clears what the last click said. */
+export function updateChanged(next: UpdateState): void {
+  updatesSeen += 1;
+  set({ update: next, updateFailure: null });
+}
+
+/** Reads the row from main: at launch, and when a click found it changed. */
+export async function readUpdate(): Promise<void> {
+  const seen = updatesSeen;
+  const result = await rpc('update.status', {});
+  if (result.ok && seen === updatesSeen) updateChanged(result.value);
+}
+
+/** New version · Restart, and Try again: main installs the release on the row, then ECHO restarts. */
+export async function installUpdate(): Promise<void> {
+  const update = state.update;
+  if (update.state === 'none' || update.state === 'installing' || (update.state === 'failed' && update.reason === 'location')) return;
+  // Held as sign out is: the same work, and the same words under the row.
+  if (signOutHeld()) { set({ updateFailure: { code: 'update_held', retryable: true } }); return; }
+  set({ updateFailure: null });
+  // Progress arrives as update.changed.
+  const result = await rpc('update.install', { release: update.release });
+  if (result.ok) return;
+  if (result.failure.code === 'update_changed') { await readUpdate(); return; }
+  // A refusal of a row main has replaced since says nothing about the new one.
+  if (state.update === update) set({ updateFailure: result.failure });
 }
 
 // ---- home and projects -------------------------------------------------------
@@ -3408,20 +3456,26 @@ const TOO_LONG = 'Up to 8 KiB of text.';
 let unresolvedTold = '';
 
 /**
- * Main's quit guard: a note, a file or a project change (a create, and New
- * project's adds, included) on its way, or not yet confirmed either way.
+ * What main's quit guard, and its update_held, go by: a note, a file or a
+ * project change (a create, and New project's adds, included) on its way, or
+ * not yet confirmed either way.
  */
-function unresolvedChanged(): void {
+function unresolvedWork(): { unresolved: boolean; file?: true; change?: true } {
   const compose = state.compose;
   const saving = compose?.status === 'sending' || compose?.status === 'unknown' || compose?.status === 'checking';
   const sheet = state.sheet?.kind === 'new-project' ? state.sheet : null;
   const uploading = sheet?.files.some(file => file.status === 'saving' || file.status === 'checking' || file.status === 'unknown') === true;
   const changing = changeBlocked() || projectSettingsBlocked() || sheet?.create.status === 'sending' || sheet?.create.status === 'unknown' ||
     sheet?.picks.some(pick => pick.status === 'adding' || pick.status === 'unknown') === true;
-  const told = {
+  return {
     unresolved: saving || uploading || changing,
     ...(saving ? (compose.file ? { file: true } : {}) : uploading ? { file: true } : changing ? { change: true } : {}),
   };
+}
+
+/** Tells main's quit guard when what is unresolved changes. */
+function unresolvedChanged(): void {
+  const told = unresolvedWork();
   const key = JSON.stringify(told);
   if (key === unresolvedTold) return;
   unresolvedTold = key;

@@ -1,16 +1,21 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { updateDigest } from '../../src/product/person-client/client-update-contract.js';
 import { cleanReleaseRecord } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
+import { desktopArtifacts, gnuTar, infoPlist, linuxDeb, type DesktopTarget, type LinuxDeb, type TarMember } from '../support/client-update-desktop.js';
 
 const REPO = resolve(import.meta.dirname, '../..');
 const roots: string[] = [];
 type Target = 'linux' | 'macos';
+type Artifact = 'linux-kit' | 'macos-kit' | 'macos-app' | 'linux-deb';
+const RELEASE_ARTIFACTS: Artifact[] = ['linux-kit', 'macos-kit', 'macos-app', 'linux-deb'];
+const RELEASE_TARGETS = [['linux', 'x64', 'glibc', 'cli-kit'], ['darwin', 'arm64', null, 'cli-kit'], ['darwin', 'arm64', null, 'electron'], ['linux', 'x64', 'glibc', 'electron']];
+type ManifestArtifact = { platform: string; architecture: string; libc: string | null; installation: string; url: string; sha256: string };
 const TARGET = {
   linux: { platform: 'linux', architecture: 'x64', libc: 'glibc', schema_version: 2, kind: 'echo-person-onboarding-kit-v2', startSource: 'deploy/release/start-person-onboarding-kit-linux.sh' },
   macos: { platform: 'darwin', architecture: 'arm64', libc: null, schema_version: 3, kind: 'echo-person-cli-kit-v1', startSource: 'deploy/release/start-person-cli-kit-macos.sh' },
@@ -30,13 +35,17 @@ function rewriteJson(path: string, mutate: (value: any) => void, serialize: (val
   return value;
 }
 
-function fixture(targets: Target[] = ['linux', 'macos']) {
+function fixture(desktop: Parameters<typeof desktopArtifacts>[1] = {}) {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'echo-feed-test-'));
   roots.push(root);
   const clientIdentity = { schema_version: 1, kind: 'echo-packaged-build-identity', product_version: '0.1.1', source_sha: sourceSha, source_kind: 'materialized-commit' };
   mkdirSync(join(root, 'package/dist'), { recursive: true });
   writeFileSync(join(root, 'package/dist/build-identity.v1.json'), JSON.stringify(clientIdentity));
   writeFileSync(join(root, 'package/dist/client-update-cli.js'), '/* synthetic capability */');
+  // A path that needs a GNU long-name record in the deb.
+  const deep = join(root, 'package/dist', 'nested-module/'.repeat(6));
+  mkdirSync(deep, { recursive: true });
+  writeFileSync(join(deep, 'index.js'), '/* synthetic dependency */');
   const clientArchive = join(root, 'person-client.tgz');
   execFileSync('tar', ['-czf', clientArchive, 'package'], { cwd: root });
   const clientHash = updateDigest(readFileSync(clientArchive));
@@ -46,7 +55,7 @@ function fixture(targets: Target[] = ['linux', 'macos']) {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   const config = { schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture', feed_url: 'https://fixture.invalid/feed.json', public_key_spki: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'), minimum_sequence: 1, automatic: true, installation: 'cli-kit' };
   const kits = {} as Record<Target, { directory: string; zip: string; zipKit: () => void }>;
-  for (const targetName of targets) {
+  for (const targetName of ['linux', 'macos'] as const) {
     const target = TARGET[targetName];
     const kit = join(root, targetName, 'echo-person-onboarding-kit');
     mkdirSync(kit, { recursive: true, mode: 0o700 });
@@ -68,7 +77,9 @@ function fixture(targets: Target[] = ['linux', 'macos']) {
   writeFileSync(configPath, JSON.stringify(config));
   const output = join(root, 'prepared');
   const run = (args: string[]) => spawnSync(process.execPath, [join(REPO, 'tools/client-update-feed.mjs'), ...args], { cwd: REPO, encoding: 'utf8' });
-  const prepare = () => run(['prepare', '--config', configPath, '--release', releasePath, ...targets.flatMap(target => [target === 'linux' ? '--linux-kit' : '--macos-kit', kits[target].zip]), '--sequence', '1', '--expires', new Date(Date.now() + 86400000).toISOString(), '--out', output]);
+  const desktops = desktopArtifacts({ root, clientArchive, release, releaseSha256: updateDigest(readFileSync(releasePath)), config, committed: committedSource }, desktop);
+  const paths: Record<Artifact, string> = { 'linux-kit': kits.linux.zip, 'macos-kit': kits.macos.zip, 'macos-app': desktops['macos-app'].path, 'linux-deb': desktops['linux-deb'].path };
+  const prepare = (artifacts: Artifact[] = RELEASE_ARTIFACTS) => run(['prepare', '--config', configPath, '--release', releasePath, ...artifacts.flatMap(artifact => [`--${artifact}`, paths[artifact]]), '--sequence', '1', '--expires', new Date(Date.now() + 86400000).toISOString(), '--out', output]);
   const signaturePath = join(root, 'manifest.sig');
   const approvalPath = join(root, 'approval.json');
   const authorize = (authorized = true) => {
@@ -76,20 +87,14 @@ function fixture(targets: Target[] = ['linux', 'macos']) {
     writeFileSync(approvalPath, JSON.stringify({ kind: 'echo-staging-release-founder-authorization-v1', release_sha256: updateDigest(readFileSync(releasePath)), person_client_sha256: clientHash, slack_approved: true, person_records_passed: true, person_ask_passed: true, release_authorized: authorized }));
   };
   const seal = () => run(['seal', '--prepared', output, '--signature', signaturePath, '--authorization', approvalPath]);
-  const retainTarget = (target: Target) => {
-    const path = join(output, 'manifest.json');
-    const manifest = JSON.parse(readFileSync(path, 'utf8'));
-    manifest.artifacts = manifest.artifacts.filter((artifact: { platform: string }) => artifact.platform === TARGET[target].platform);
-    writeFileSync(path, canonical(manifest) + '\n');
-    return manifest;
-  };
+  const retain = (keep: (artifact: ManifestArtifact) => boolean) => rewriteJson(join(output, 'manifest.json'), manifest => { manifest.artifacts = manifest.artifacts.filter(keep); }, canonicalLine);
   const writeHistoricalEnvelope = () => writeFileSync(join(output, 'feed.json'), canonical({
     payload: readFileSync(join(output, 'manifest.json')).toString('base64'),
     signature: readFileSync(signaturePath).toString('base64'),
   }) + '\n');
   const validateSealed = (now = Date.now(), allowExpired = false) => spawnSync(process.execPath, ['--input-type=module', '-e',
     'import { validateSealedClientUpdateFeed } from "./tools/client-update-feed.mjs"; validateSealedClientUpdateFeed({prepared: process.argv[1], authorizationPath: process.argv[2], now: Number(process.argv[3]), allowExpired: process.argv[4] === "true"});', output, approvalPath, String(now), String(allowExpired)], { cwd: REPO, encoding: 'utf8' });
-  return { root, kits, output, prepare, authorize, seal, signaturePath, approvalPath, retainTarget, writeHistoricalEnvelope, validateSealed };
+  return { root, config, kits, desktops, output, prepare, authorize, seal, signaturePath, approvalPath, retain, writeHistoricalEnvelope, validateSealed };
 }
 afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
@@ -120,40 +125,52 @@ describe('approved update feed publisher', () => {
     expect(f.validateSealed().status).toBe(0);
   });
 
-  it.each([[['linux'] as Target[]], [['macos'] as Target[]]])('refuses preparation when only the %s CLI kit is supplied', (targets) => {
-    const f = fixture(targets);
-    expect(f.prepare().status).toBe(1);
+  it.each(RELEASE_ARTIFACTS)('refuses preparation without the %s artifact', (missing) => {
+    const f = fixture();
+    expect(f.prepare(RELEASE_ARTIFACTS.filter(artifact => artifact !== missing)).status).toBe(1);
     expect(existsSync(f.output)).toBe(false);
   });
 
-  it.each(['linux', 'macos'] as const)('refuses to seal a manually reduced %s-only manifest', (target) => {
+  const reductions: Array<[string, (artifact: ManifestArtifact) => boolean]> = [
+    ['two-CLI-kit', artifact => artifact.installation === 'cli-kit'],
+    ['Linux-kit-only', artifact => artifact.installation === 'cli-kit' && artifact.platform === 'linux'],
+    ['macOS-kit-only', artifact => artifact.installation === 'cli-kit' && artifact.platform === 'darwin'],
+  ];
+  it.each([...reductions, ['app-less', (artifact: ManifestArtifact) => artifact.installation !== 'electron' || artifact.platform !== 'darwin'] as const])('refuses to seal a manually reduced %s manifest', (_, keep) => {
     const f = fixture();
     expect(f.prepare().status).toBe(0);
-    f.retainTarget(target);
+    f.retain(keep);
     f.authorize();
-    expect(f.seal().status).toBe(1);
+    const sealed = f.seal();
+    expect(sealed.status).toBe(1);
+    expect(sealed.stderr).toContain('all_release_targets_required');
     expect(existsSync(join(f.output, 'feed.json'))).toBe(false);
   });
 
-  it.each(['linux', 'macos'] as const)('still audits a previously signed %s-only feed, including after expiry', (target) => {
+  it.each(reductions)('still audits a previously signed %s feed, including after expiry', (_, keep) => {
     const f = fixture();
     expect(f.prepare().status).toBe(0);
-    const manifest = f.retainTarget(target);
+    const manifest = f.retain(keep);
     f.authorize();
     // Historical bytes are constructed directly, without asking new-release
-    // preparation or sealing to authorize a single-platform publication.
+    // preparation or sealing to authorize a CLI-only publication.
     f.writeHistoricalEnvelope();
-    expect(f.validateSealed().status).toBe(0);
+    const audited = f.validateSealed();
+    expect(audited.status, audited.stderr).toBe(0);
     expect(f.validateSealed(Date.parse(manifest.expires_at) + 1, true).status).toBe(0);
   });
 
-  it('prepares one signed feed with both exact supported CLI targets', () => {
-    const f = fixture(['linux', 'macos']);
+  it('prepares one signed feed with exactly the four release targets', () => {
+    const f = fixture();
     const prepared = f.prepare();
     expect(prepared.status, prepared.stderr).toBe(0);
     expect(existsSync(join(f.output, 'feed.json'))).toBe(false);
     const manifest = JSON.parse(readFileSync(join(f.output, 'manifest.json'), 'utf8'));
-    expect(manifest.artifacts.map((artifact: any) => [artifact.platform, artifact.architecture, artifact.libc, artifact.installation])).toEqual([['linux', 'x64', 'glibc', 'cli-kit'], ['darwin', 'arm64', null, 'cli-kit']]);
+    expect(manifest.artifacts.map((artifact: ManifestArtifact) => [artifact.platform, artifact.architecture, artifact.libc, artifact.installation])).toEqual(RELEASE_TARGETS);
+    const files = manifest.artifacts.map((artifact: ManifestArtifact, index: number) => `${artifact.sha256}.${index === 3 ? 'deb' : 'zip'}`);
+    expect(manifest.artifacts.map((artifact: ManifestArtifact) => artifact.url)).toEqual(files.map((file: string) => new URL(`artifacts/${file}`, f.config.feed_url).href));
+    expect(readdirSync(join(f.output, 'artifacts')).sort()).toEqual([...files].sort());
+    expect(readFileSync(join(f.output, 'artifacts', files[3]))).toEqual(readFileSync(f.desktops['linux-deb'].path));
     f.authorize();
     expect(f.seal().status).toBe(0);
     const envelope = JSON.parse(readFileSync(join(f.output, 'feed.json'), 'utf8'));
@@ -224,5 +241,164 @@ describe('approved update feed publisher', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('verify the inputs, signature, and exact release authorization');
     expect(existsSync(join(f.output, 'feed.json'))).toBe(false);
+  });
+});
+
+describe('desktop release artifacts', () => {
+  type Fixture = ReturnType<typeof fixture>;
+  const identity = (target: DesktopTarget, mutate: (identity: any) => void, serialize = canonicalLine) => (f: Fixture) => { rewriteJson(f.desktops[target].identity, mutate, serialize); };
+  const client = (f: Fixture, target: DesktopTarget, path = 'package/dist/client-update-cli.js') => join(f.desktops[target].client, path);
+  const flipByte = (path: string) => { const bytes = readFileSync(path); bytes[0] ^= 1; writeFileSync(path, bytes); };
+  const helper = (f: Fixture) => join(f.root, 'linux-deb/data/opt/ECHO/resources/echo-desktop-update-helper');
+  const debControlFile = (f: Fixture, name: string) => join(f.root, 'linux-deb/control', name);
+  // A ZIP member added after the packaged tree, as one a case-folding Mac would
+  // install over the path it names once that tree has been checked.
+  const appendEntry = (name: string, bytes = 'not the release bytes') => (f: Fixture) => {
+    const staging = mkdtempSync(join(f.root, 'entry-'));
+    mkdirSync(join(staging, dirname(name)), { recursive: true });
+    writeFileSync(join(staging, name), bytes);
+    execFileSync('zip', ['-q', f.desktops['macos-app'].path, name], { cwd: staging });
+  };
+  it.each<{ name: string; target: DesktopTarget; code: string; mutate?: (f: Fixture) => void; after?: (f: Fixture) => void }>([
+    { name: 'an identity for another product version', target: 'macos-app', code: 'desktop_identity_mismatch', mutate: identity('macos-app', value => { value.product_version = '0.1.2'; }) },
+    { name: 'an identity for another release record', target: 'linux-deb', code: 'desktop_identity_mismatch', mutate: identity('linux-deb', value => { value.release_record_sha256 = 'f'.repeat(64); }) },
+    { name: 'an identity claiming the other platform', target: 'linux-deb', code: 'desktop_identity_mismatch', mutate: identity('linux-deb', value => { value.platform = 'darwin'; value.libc = null; }) },
+    { name: 'an identity with an extra field', target: 'macos-app', code: 'desktop_identity_mismatch', mutate: identity('macos-app', value => { value.channel = 'fixture'; }) },
+    { name: 'a non-canonical identity', target: 'macos-app', code: 'desktop_identity_mismatch', mutate: identity('macos-app', () => {}, value => JSON.stringify(value, null, 2)) },
+    { name: 'a bootstrap pinned to another channel', target: 'macos-app', code: 'desktop_bootstrap_mismatch', mutate: identity('macos-app', value => { value.update_bootstrap.channel = 'other'; }) },
+    { name: 'a bootstrap still naming the cli-kit installation', target: 'linux-deb', code: 'desktop_bootstrap_mismatch', mutate: identity('linux-deb', value => { value.update_bootstrap.installation = 'cli-kit'; }) },
+    { name: 'one changed byte in the embedded app client', target: 'macos-app', code: 'desktop_client_mismatch', mutate: f => flipByte(client(f, 'macos-app')) },
+    { name: 'one changed byte in the embedded package client', target: 'linux-deb', code: 'desktop_client_mismatch', mutate: f => flipByte(client(f, 'linux-deb', 'package/dist/build-identity.v1.json')) },
+    { name: 'an extra embedded file', target: 'linux-deb', code: 'desktop_client_mismatch', mutate: f => writeFileSync(client(f, 'linux-deb', 'package/dist/extra.js'), 'unreviewed') },
+    { name: 'an extra file beside the embedded package', target: 'macos-app', code: 'desktop_client_mismatch', mutate: f => writeFileSync(client(f, 'macos-app', 'extra.js'), 'unreviewed') },
+    { name: 'a missing embedded file', target: 'macos-app', code: 'desktop_client_mismatch', mutate: f => rmSync(client(f, 'macos-app')) },
+    { name: 'an embedded symlink to identical bytes', target: 'macos-app', code: 'desktop_client_mismatch', mutate: f => {
+      const path = client(f, 'macos-app');
+      renameSync(path, join(f.root, 'linked.js')); symlinkSync(join(f.root, 'linked.js'), path);
+    } },
+    { name: 'a ZIP entry outside ECHO.app', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('README.txt') },
+    { name: 'a case-variant entry over an embedded client file', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('ECHO.app/Contents/Resources/Person-Client/package/dist/client-update-cli.js') },
+    { name: 'a case-variant identity entry', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('ECHO.app/Contents/Resources/Echo-Desktop-Identity.v1.json', '{}\n') },
+    { name: 'a case-variant Info.plist', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('ECHO.app/Contents/info.plist', infoPlist('org.example.other')) },
+    { name: 'a new file under a case-variant directory above the client', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('ECHO.app/Contents/resources/person-client/package/dist/added.js') },
+    { name: 'a file entry where the archive holds a directory', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('ECHO.app/Contents/Resources/person-client/package') },
+    { name: 'a non-ASCII entry name', target: 'macos-app', code: 'desktop_archive_invalid', after: appendEntry('ECHO.app/Contents/Resources/café.txt') },
+    { name: 'a wrong bundle id', target: 'macos-app', code: 'desktop_bundle_mismatch', mutate: f => writeFileSync(join(f.root, 'macos-app/ECHO.app/Contents/Info.plist'), infoPlist('org.example.other')) },
+    { name: 'a bundle id behind a comment', target: 'macos-app', code: 'desktop_bundle_mismatch', mutate: f => writeFileSync(join(f.root, 'macos-app/ECHO.app/Contents/Info.plist'),
+      infoPlist('org.example.other').replace('<dict>', '<dict><!-- <key>CFBundleIdentifier</key><string>org.echobrain.echo-desktop</string> -->')) },
+    // The package contents checks have their own cases below; these show
+    // prepare binds them to release.source_sha.
+    { name: 'a modified root helper', target: 'linux-deb', code: 'desktop_root_file_mismatch', mutate: f => writeFileSync(helper(f), Buffer.concat([readFileSync(helper(f)), Buffer.from('\n')])) },
+    { name: 'a modified postinst', target: 'linux-deb', code: 'desktop_root_file_mismatch', mutate: f => writeFileSync(debControlFile(f, 'postinst'), '#!/bin/bash\nchmod 4755 /opt/ECHO/chrome-sandbox\n') },
+    { name: 'an added preinst', target: 'linux-deb', code: 'desktop_package_unsafe', mutate: f => writeFileSync(debControlFile(f, 'preinst'), '#!/bin/bash\n', { mode: 0o755 }) },
+    { name: 'a symlink in the embedded package client', target: 'linux-deb', code: 'desktop_client_mismatch', mutate: f => {
+      const path = client(f, 'linux-deb');
+      rmSync(path); symlinkSync('build-identity.v1.json', path);
+    } },
+  ])('refuses $name before preparing a feed', ({ target, code, mutate, after }) => {
+    const f = fixture();
+    mutate?.(f);
+    f.desktops[target].rebuild();
+    after?.(f);
+    const prepared = f.prepare();
+    expect(prepared.status).toBe(1);
+    expect(prepared.stderr).toContain(code);
+    expect(existsSync(f.output)).toBe(false);
+  });
+
+  it('reads a deb with BSD ar member names and a gzip control tarball', () => {
+    const f = fixture({ gnuAr: false, controlCompression: 'gz' });
+    const prepared = f.prepare();
+    expect(prepared.status, prepared.stderr).toBe(0);
+  });
+
+  it('refuses a deb served under a .zip key', () => {
+    const f = fixture();
+    expect(f.prepare().status).toBe(0);
+    rewriteJson(join(f.output, 'manifest.json'), manifest => {
+      const deb = manifest.artifacts.find((artifact: ManifestArtifact) => artifact.installation === 'electron' && artifact.platform === 'linux');
+      renameSync(join(f.output, 'artifacts', `${deb.sha256}.deb`), join(f.output, 'artifacts', `${deb.sha256}.zip`));
+      deb.url = deb.url.replace(/\.deb$/, '.zip');
+    }, canonicalLine);
+    f.authorize();
+    const sealed = f.seal();
+    expect(sealed.status).toBe(1);
+    expect(sealed.stderr).toContain('artifact_mismatch');
+    expect(existsSync(join(f.output, 'feed.json'))).toBe(false);
+  });
+});
+
+// ADR-0035: the root helper installs a signed deb with apt-get, so everything
+// dpkg runs or places as root must be reviewed source. scripts/check-deb.mjs is
+// the check prepare runs, and CI runs it on the deb electron-builder builds.
+describe('Linux desktop package contents', () => {
+  const CHECK = join(REPO, 'product/echo-desktop/scripts/check-deb.mjs');
+  const relationships = () => JSON.parse(committedSource('product/echo-desktop/linux/deb-relationships.json').toString('utf8'));
+  function deb() {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), 'echo-deb-test-'));
+    roots.push(root);
+    return linuxDeb(root, committedSource);
+  }
+  const check = (path: string) => spawnSync(process.execPath, [CHECK, path], { cwd: REPO, encoding: 'utf8' });
+  const inData = (path: string, mode = 0o644) => (d: LinuxDeb) => {
+    mkdirSync(dirname(join(d.data, path)), { recursive: true });
+    writeFileSync(join(d.data, path), 'unreviewed', { mode });
+  };
+  const extraData = (...members: TarMember[]) => (d: LinuxDeb) => { d.extraData.push(...members); };
+  const appendLine = (path: (d: LinuxDeb) => string) => (d: LinuxDeb) => { writeFileSync(path(d), Buffer.concat([readFileSync(path(d)), Buffer.from('\n')])); };
+
+  it('accepts the layout electron-builder and fpm build, checked against HEAD', () => {
+    const result = check(deb().path);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ status: 'checked', source_sha: sourceSha });
+  });
+
+  it.each<{ name: string; code: string; mutate: (d: LinuxDeb) => void }>([
+    ...['preinst', 'prerm', 'config', 'triggers', 'conffiles', 'templates'].map(member => ({
+      name: `a control member ${member}`, code: 'desktop_package_unsafe', mutate: (d: LinuxDeb) => writeFileSync(join(d.control, member), '#!/bin/bash\n', { mode: 0o755 }),
+    })),
+    { name: 'a modified postinst', code: 'desktop_root_file_mismatch', mutate: appendLine(d => join(d.control, 'postinst')) },
+    { name: 'a modified postrm', code: 'desktop_root_file_mismatch', mutate: appendLine(d => join(d.control, 'postrm')) },
+    { name: 'no postrm', code: 'desktop_root_file_mismatch', mutate: d => rmSync(join(d.control, 'postrm')) },
+    { name: 'a modified AppArmor profile', code: 'desktop_root_file_mismatch', mutate: appendLine(d => join(d.data, 'opt/ECHO/resources/apparmor-profile')) },
+    { name: 'a modified update helper', code: 'desktop_root_file_mismatch', mutate: appendLine(d => join(d.data, 'opt/ECHO/resources/echo-desktop-update-helper')) },
+    { name: 'the wrong Package', code: 'desktop_package_mismatch', mutate: d => d.writeControl({ Package: 'echo-desktop-beta' }) },
+    { name: 'another architecture', code: 'desktop_package_mismatch', mutate: d => d.writeControl({ Architecture: 'arm64' }) },
+    { name: 'an extra dependency', code: 'desktop_package_mismatch', mutate: d => d.writeControl({ Depends: [...relationships().depends, 'openssh-server'].join(', ') }) },
+    { name: 'a recommendation on a continuation line', code: 'desktop_package_mismatch', mutate: d => d.writeControl({ Recommends: `${relationships().recommends.join(', ')}\n , telnetd` }) },
+    { name: 'no Recommends', code: 'desktop_package_mismatch', mutate: d => d.writeControl({ Recommends: undefined }) },
+    { name: 'a Conflicts field', code: 'desktop_package_mismatch', mutate: d => d.writeControl({ Conflicts: 'apparmor' }) },
+    { name: 'a Pre-Depends field', code: 'desktop_package_mismatch', mutate: d => d.writeControl({ 'Pre-Depends': 'openssh-server' }) },
+    { name: 'a file under /etc', code: 'desktop_package_unsafe', mutate: inData('etc/cron.d/echo-desktop') },
+    { name: 'a file under /usr/bin', code: 'desktop_package_unsafe', mutate: inData('usr/bin/echo-desktop', 0o755) },
+    { name: 'another desktop entry', code: 'desktop_package_unsafe', mutate: inData('usr/share/applications/other.desktop') },
+    { name: 'a folder beside /opt/ECHO', code: 'desktop_package_unsafe', mutate: inData('opt/ECHO-helper/run', 0o755) },
+    { name: 'a setuid file', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/chrome-sandbox-suid', mode: 0o4755, bytes: 'synthetic' }) },
+    { name: 'a setgid folder', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/shared/', type: 'directory', mode: 0o2755 }) },
+    { name: 'a sticky folder', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/tmp/', type: 'directory', mode: 0o1777 }) },
+    { name: 'a file anyone can write', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/resources/writable', mode: 0o646 }) },
+    { name: 'a folder its group can write', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/plugins/', type: 'directory', mode: 0o775 }) },
+    { name: 'a file a person owns', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/owned', uid: 1000 }) },
+    { name: 'a file owned by a named user', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/named', uname: 'person' }) },
+    { name: 'a symlink to /etc', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/escape', type: 'symlink', link: '/etc/shadow' }) },
+    { name: 'a relative symlink out of /opt/ECHO', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/resources/escape', type: 'symlink', link: '../../../etc/shadow' }) },
+    { name: 'a symlink through ..', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/escape', type: 'symlink', link: 'resources/../echo-desktop' }) },
+    { name: 'a symlink outside /opt/ECHO', code: 'desktop_package_unsafe', mutate: extraData({ name: './usr/share/applications/linked.desktop', type: 'symlink', link: '/opt/ECHO/echo-desktop' }) },
+    { name: 'a member under a symlinked folder', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/lib', type: 'symlink', link: 'resources' }, { name: './opt/ECHO/lib/added' }) },
+    { name: 'a device node', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/disk', type: 'device' }) },
+    { name: 'a fifo', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/pipe', type: 'fifo' }) },
+    { name: 'a hard link', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/shadow', type: 'hard link', link: '/etc/shadow' }) },
+    { name: 'an absolute path', code: 'desktop_package_unsafe', mutate: extraData({ name: '/opt/ECHO/absolute' }) },
+    { name: 'a path through ..', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/../../etc/passwd' }) },
+    { name: 'a duplicate path', code: 'desktop_package_unsafe', mutate: extraData({ name: './opt/ECHO/echo-desktop', mode: 0o755, bytes: 'replaced' }) },
+    { name: 'a PAX header', code: 'desktop_package_invalid', mutate: extraData({ name: './PaxHeaders/added', type: 'pax', bytes: '30 path=./etc/cron.d/echo-added\n' }) },
+    { name: 'members after the end of the archive', code: 'desktop_package_invalid', mutate: d => { d.dataTail = gnuTar([{ name: './etc/cron.d/echo-added' }]); } },
+  ])('refuses $name', ({ code, mutate }) => {
+    const d = deb();
+    mutate(d);
+    d.rebuild();
+    const result = check(d.path);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(code);
   });
 });

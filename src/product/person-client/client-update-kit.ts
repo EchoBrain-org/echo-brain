@@ -49,7 +49,10 @@ export interface UpdateInstallerInput {
   archive: string;
   manifest: ClientUpdateManifest;
   artifact: ClientUpdateArtifact;
+  /** The CLI wrapper digest, or an adapter installation's fingerprint(), captured before download. */
   expected_wrapper_sha256: string;
+  /** The exact verified envelope bytes, for an installer that re-verifies the feed (the Linux root helper). */
+  feed: Buffer;
 }
 export function installClientUpdateKit(input: UpdateInstallerInput, environment = process.env): void {
   safeUpdateDirectory(input.root);

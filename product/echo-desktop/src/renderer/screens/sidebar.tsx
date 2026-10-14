@@ -2,9 +2,12 @@ import type { ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initial } from '../format.js';
 import { message } from '../messages.js';
 import { useState } from 'preact/hooks';
-import { goHome, loadArchivedProjects, loadProjects, needsCount, openCompose, openMine, openNewProject, openOrganization, openProject, openTools, showAccountMenu, type State } from '../store.js';
+import {
+  goHome, installUpdate, loadArchivedProjects, loadProjects, needsCount, openCompose, openMine, openNewProject, openOrganization, openProject, openTools,
+  settleWords, showAccountMenu, type State,
+} from '../store.js';
 import { useDropTarget } from './drop.js';
-import { Capture, Chevron, FolderPlus, Home as HomeIcon, OnePerson, People, Person, Plug } from './icons.js';
+import { Capture, Chevron, FolderPlus, Home as HomeIcon, OnePerson, People, Person, Plug, Up } from './icons.js';
 import { ProjectSettingsButton } from './project-settings.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
@@ -26,12 +29,44 @@ function SidebarProject({ project, current, state }: { project: ProjectSummary; 
   );
 }
 
+/** "What · What to do", wrapping only at the dot. */
+const twoPart = (what: string, action: string) => <span class="label"><span class="part">{what} ·</span> <span class="part">{action}</span></span>;
+
+/**
+ * A new version (ADR-0035), signed in or out and under ECHO could not start, so
+ * a broken release can install its fix. Nothing clickable says Update (Home's
+ * word for open items), and it takes no drop. It stays one button so a keyboard
+ * click keeps focus; Updating and the location line are aria-disabled.
+ */
+export function UpdateRow({ state }: { state: State }) {
+  const { update, updateFailure: failure } = state;
+  if (update.state === 'none') return null;
+  const noDrop = (event: DragEvent) => event.stopPropagation();
+  const location = update.state === 'failed' && update.reason === 'location';
+  const inert = update.state === 'installing' || location;
+  return (
+    <div class="sidebar-rows update-rows" role="status" onDragOver={noDrop} onDrop={noDrop}>
+      <button type="button" class="side-row update-row" data-testid="sidebar-update" aria-disabled={inert ? 'true' : undefined}
+        onClick={inert ? undefined : () => void installUpdate()}>
+        {update.state === 'installing' ? <><span class="asking" aria-hidden="true"><i /><i /><i /></span><span class="label">Updating</span></>
+          : location ? <><Up /><span class="label">Move ECHO to Applications to update</span></>
+          : <><Up />{update.state === 'failed' ? twoPart('Couldn\'t update', 'Try again') : twoPart('New version', 'Restart')}</>}
+      </button>
+      {failure && (
+        <p class="error update-note" data-testid="sidebar-update-note" aria-live="polite">
+          {failure.code === 'update_held' ? settleWords(state) : message(failure)}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /**
  * Always beside the page: Capture, New project, Mine, your projects (one
- * click switches), People & invites for owners, Tools, and who is signed in. It
- * shares the list Home loads. While another app is in front the page is
- * covered, but the project rows stay, so a dropped file lands. Mine never
- * takes a drop.
+ * click switches), People & invites for owners, Tools, a new version, and who
+ * is signed in. It shares the list Home loads. While another app is in front
+ * the page is covered, but the project rows stay, so a dropped file lands.
+ * Mine never takes a drop.
  */
 export function Sidebar({ state }: { state: State }) {
   const account = state.status?.account ?? null;
@@ -116,6 +151,7 @@ export function Sidebar({ state }: { state: State }) {
           </button>
         </div>
       )}
+      <UpdateRow state={state} />
       <button type="button" class="account-row" data-testid="account-row" aria-haspopup="menu"
         aria-label={account ? `Account, ${account.display_name}, ${account.role}` : undefined}
         onClick={event => showAccountMenu(event.currentTarget, 'row')}>

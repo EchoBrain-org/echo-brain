@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { constants, closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, rmSync, writeSync } from 'node:fs';
+import { constants, closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ClientUpdateError, type ClientUpdateConfig, type ClientUpdateManifest, type UpdateCheckpoint,
@@ -25,12 +25,27 @@ export interface ClientUpdateResult {
   kind: 'echo-client-update-result-v1';
   status: string;
   platform: string;
-  /** The release the managed `bin/echo-brain` command selects. */
+  /** The release the installation selects: the managed `bin/echo-brain` command, or the adapter's files. */
   installed_release: string;
   /** The release whose code ran this call, when known. A launcher can bypass the managed command. */
   running_release: string | null;
   available_release: string | null;
   checked_at: number | null;
+}
+/** How one kind of installation reads, guards and replaces itself. Without one, the core runs the CLI's. */
+export interface ClientUpdateInstallation {
+  /** The release this installation selects now. */
+  installedRelease(): string;
+  /** The sha256 of that release's canonical record. */
+  installedReleaseSha256(): string;
+  /** The race guard captured before download; installers receive it as expected_wrapper_sha256. */
+  fingerprint(): string;
+  install(input: UpdateInstallerInput): void | Promise<void>;
+  /** `restart` stages the update for the app to activate after it quits, so no activation check runs. */
+  activation: 'immediate' | 'restart';
+  /** File name of the downloaded archive inside the core's temporary folder. */
+  archive_name: string;
+  download_timeout_ms: number;
 }
 export interface ClientUpdateDependencies {
   root: string;
@@ -38,7 +53,14 @@ export interface ClientUpdateDependencies {
   running_release?: string;
   fetch?: typeof fetch;
   now?: () => number;
+  /** Replaces the CLI platform installer; an adapter installation brings its own install(). */
   install?: (input: UpdateInstallerInput) => void | Promise<void>;
+  installation?: ClientUpdateInstallation;
+  /**
+   * Default true. False adds no signal listeners, for an embedding process with
+   * its own quit path (Electron), which must then call releaseInterruptedClientUpdate.
+   */
+  handle_signals?: boolean;
 }
 function configDigest(config: ClientUpdateConfig): string {
   const { automatic: _automatic, ...trust } = config;
@@ -84,12 +106,43 @@ function installedRelease(root: string): string {
   if (marker !== id) rejectUpdate('unsafe_installation');
   return id;
 }
+// OS detection is independent of adapter availability. Containers are updated
+// by their deployment lane; the desktop app supplies its own installation.
+function cliInstaller(platform: UpdatePlatform): ClientUpdateInstallation['install'] | undefined {
+  const key = platformKey(platform);
+  return key === 'linux/x64/glibc/cli-kit' ? installLinuxClientUpdate : key === 'darwin/arm64/native/cli-kit' ? installMacosClientUpdate : undefined;
+}
+/** The managed CLI: its stable wrapper names the owned release folder, and installation activates at once. */
+function cliInstallation(root: string, install: ClientUpdateInstallation['install']): ClientUpdateInstallation {
+  return {
+    installedRelease: () => installedRelease(root),
+    installedReleaseSha256: () => updateDigest(readUpdateFile(join(root, 'releases', installedRelease(root), 'release.json'), 16 * 1024)),
+    fingerprint: () => updateDigest(readUpdateFile(join(root, 'bin', 'echo-brain'), 16 * 1024)),
+    install, activation: 'immediate', archive_name: 'client.zip', download_timeout_ms: 120_000,
+  };
+}
+
+/**
+ * Releases the lock and download folders of a run whose process ended without
+ * its `finally`, as an embedding app's quit does. Call it only while no other
+ * process can update this root: for the app, at launch under Electron's
+ * single-instance lock, before configuring or checking. An installer that
+ * reported an unknown outcome keeps its lock and staging as recovery evidence.
+ */
+export function releaseInterruptedClientUpdate(root: string): void {
+  const directory = updateDirectory(root);
+  const config = readClientUpdateConfig(root);
+  if (config && loadState(directory, config)?.result === 'installation_outcome_unknown') return;
+  for (const name of readdirSync(directory)) {
+    if (name === '.lock' || name.startsWith('.download-')) rmSync(join(directory, name), { recursive: true, force: true });
+  }
+}
 
 /** A trusted local bootstrap operation. Feed downloads cannot replace this configuration. */
-export function configureClientUpdates(root: string, raw: unknown): void {
+export function configureClientUpdates(root: string, raw: unknown, installation?: ClientUpdateInstallation): void {
   const config = parseUpdateConfig(raw);
   const directory = updateDirectory(root);
-  installedRelease(root);
+  if (installation) installation.installedRelease(); else installedRelease(root);
   const lock = join(directory, '.lock');
   try { mkdirSync(lock, { mode: 0o700 }); } catch { return rejectUpdate('update_busy'); }
   try {
@@ -130,13 +183,18 @@ async function boundedDownload(url: string, maximum: number, fetcher: typeof fet
 
 export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'automatic', dependencies: ClientUpdateDependencies): Promise<ClientUpdateResult> {
   const { root, platform } = dependencies;
-  const current = installedRelease(root);
+  const installer = cliInstaller(platform);
+  const installation = dependencies.installation ?? cliInstallation(root, dependencies.install ?? installer ?? (() => rejectUpdate('adapter_unavailable')));
+  // The archive is created inside the core's download folder and nowhere else.
+  if (!/^\w[\w.-]{0,127}$/.test(installation.archive_name)) rejectUpdate('unsafe_installation');
+  const current = installation.installedRelease();
   const config = readClientUpdateConfig(root);
   const running = dependencies.running_release ?? null;
   const result = (status: string, state?: ClientUpdateState): ClientUpdateResult => ({ kind: 'echo-client-update-result-v1', status, platform: platformKey(platform), installed_release: current, running_release: running, available_release: state?.available_release ?? null, checked_at: state?.checked_at ?? null });
   // A launcher that runs another release directly is not served by the managed
   // command, so the managed release's state is not its state. Compare on entry:
-  // an apply that starts on A and installs B is the normal transition.
+  // an apply that starts on A and installs B is the normal transition. For the
+  // app, files that now name another release mean "restart to use it".
   if (running !== null && running !== current) return result('running_release_mismatch');
   if (!config) return result('not_configured');
   const directory = updateDirectory(root);
@@ -146,14 +204,11 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   if (mode === 'automatic' && !config.automatic) return result('automatic_disabled', state);
   const now = (dependencies.now ?? Date.now)();
   if (mode === 'automatic' && state && state.checked_at <= now && now - state.checked_at < UPDATE_INTERVAL_MS) {
-    const available = state.result === 'available' && state.available_release !== null && state.available_release !== current;
+    // A staged release stays on offer until the app restarts into it.
+    const available = ['available', 'staged'].includes(state.result) && state.available_release !== null && state.available_release !== current;
     return result(available ? 'available' : 'not_due', state);
   }
-  // OS detection is independent of adapter availability. Containers are updated
-  // by their deployment lane; desktop activation belongs to Electron packaging.
-  const installer = platformKey(platform) === 'linux/x64/glibc/cli-kit' ? installLinuxClientUpdate
-    : platformKey(platform) === 'darwin/arm64/native/cli-kit' ? installMacosClientUpdate : undefined;
-  if (!installer && mode === 'apply') return result('adapter_unavailable', state);
+  if (!dependencies.installation && !installer && mode === 'apply') return result('adapter_unavailable', state);
   const lock = join(directory, '.lock');
   try { mkdirSync(lock, { mode: 0o700 }); } catch { return result('update_busy', state); }
   let temporary: string | undefined;
@@ -161,14 +216,15 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   // Default signal handling skips `finally`. Until the installer starts, an
   // interrupt has changed nothing installed, so release the lock and staging,
   // then re-raise the signal with no listener left so the default action ends
-  // the process by that signal.
+  // the process by that signal. An embedding app opts out: the re-raise would
+  // end it without its normal quit.
   const interrupted = (signal: NodeJS.Signals) => {
     if (temporary) rmSync(temporary, { recursive: true, force: true });
     rmSync(lock, { recursive: true, force: true });
     detach();
     process.kill(process.pid, signal);
   };
-  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+  const signals: readonly NodeJS.Signals[] = dependencies.handle_signals === false ? [] : ['SIGINT', 'SIGTERM', 'SIGHUP'];
   const detach = () => { for (const signal of signals) process.removeListener(signal, interrupted); };
   for (const signal of signals) process.once(signal, interrupted);
   try {
@@ -177,7 +233,8 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
     const fetcher = dependencies.fetch ?? fetch;
     const metadata: Buffer[] = [];
     await boundedDownload(config.feed_url, UPDATE_METADATA_LIMIT, fetcher, b => metadata.push(Buffer.from(b)), 5_000);
-    const verified = verifyUpdateEnvelope(Buffer.concat(metadata), config, now, state?.checkpoint ?? undefined);
+    const feed = Buffer.concat(metadata);
+    const verified = verifyUpdateEnvelope(feed, config, now, state?.checkpoint ?? undefined);
     const manifest: ClientUpdateManifest = verified.manifest;
     state = { schema_version: 1, config_sha256: configDigest(config), checkpoint: verified.checkpoint, checked_at: now, available_release: manifest.release_id, result: 'available' };
     // Persist freshness even if the artifact is unavailable or installation fails.
@@ -185,8 +242,7 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
     const artifact = selectUpdateArtifact(manifest, platform);
     const sameRelease = manifest.release_id === current;
     if (sameRelease) {
-      const raw = readUpdateFile(join(root, 'releases', current, 'release.json'), 16 * 1024);
-      if (updateDigest(raw) !== manifest.release_sha256) rejectUpdate('release_mismatch');
+      if (installation.installedReleaseSha256() !== manifest.release_sha256) rejectUpdate('release_mismatch');
       state.result = 'current';
       writeUpdateJson(join(directory, 'state.json'), state);
       return result('current', state);
@@ -194,9 +250,9 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
     // Automatic checks announce availability. Only an explicit apply may
     // download an artifact or change the installed client.
     if (mode !== 'apply') return result('available', state);
-    const expectedWrapper = updateDigest(readUpdateFile(join(root, 'bin', 'echo-brain'), 16 * 1024));
+    const fingerprint = installation.fingerprint();
     temporary = mkdtempSync(join(directory, '.download-'));
-    const archive = join(temporary, 'client.zip');
+    const archive = join(temporary, installation.archive_name);
     const fd = openSync(archive, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
     const hash = createHash('sha256');
     let bytes: number;
@@ -205,14 +261,21 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
         hash.update(b);
         let offset = 0;
         while (offset < b.length) offset += writeSync(fd, b, offset, b.length - offset);
-      }, 120_000);
+      }, installation.download_timeout_ms);
       fsyncSync(fd);
     } finally { closeSync(fd); }
     if (bytes !== artifact.bytes || hash.digest('hex') !== artifact.sha256) rejectUpdate('artifact_mismatch');
     // An interrupted installer keeps the lock and staging as recovery evidence.
     detach();
-    await (dependencies.install ?? installer!)({ root, archive, artifact, manifest, expected_wrapper_sha256: expectedWrapper });
-    if (installedRelease(root) !== manifest.release_id) rejectUpdate('activation_mismatch');
+    await installation.install({ root, archive, artifact, manifest, expected_wrapper_sha256: fingerprint, feed });
+    if (installation.activation === 'restart') {
+      // The app activates the staged copy after it quits; this download folder
+      // is still removed below, so the installer kept whatever it needs.
+      state.result = 'staged';
+      writeUpdateJson(join(directory, 'state.json'), state);
+      return result('staged', state);
+    }
+    if (installation.installedRelease() !== manifest.release_id) rejectUpdate('activation_mismatch');
     state.result = 'updated';
     writeUpdateJson(join(directory, 'state.json'), state);
     return { ...result('updated', state), installed_release: manifest.release_id };

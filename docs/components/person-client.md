@@ -11,6 +11,7 @@ created_at: 2026-08-13
 reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
+  - ADR-0035
   - ADR-0032
   - ADR-0033
   - ADR-0031
@@ -58,8 +59,13 @@ and availability notices before Person command dispatch. Only an explicit
 `echo-brain update` installs an available release; an ordinary Person command
 runs once with the installed client. Other machine-installed surfaces may wrap
 this client without becoming part of its responsibility; the Electron desktop
-app in `product/echo-desktop` is one, and runs this client in process without
-the CLI's automatic update check hook.
+app in `product/echo-desktop` is one. It runs this client in process without
+the CLI's pre-command check hook. Under
+[ADR-0035](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md) it
+loads the same updater from its embedded client with a desktop installation
+adapter, which stages a verified release (`staged`) for the app to activate
+after it quits. The updater keeps one set of pinning, signature, freshness,
+checkpoint, lock and download rules for both installations.
 
 ## Data authority
 

@@ -1,0 +1,371 @@
+#!/usr/bin/python3 -I
+"""Installs a desktop update as root, after checking it again (ADR-0035).
+
+pkexec runs this as: install --feed F --deb D --wait-pid N. Nothing the app
+says is trusted: the helper checks root-only copies of both files against the
+root-owned installed identity and update checkpoint, prints "verified", waits
+for the app to quit, raises the checkpoint and reinstalls the package with
+apt-get.
+
+Exit codes: 0 installed, 2 invalid input, 3 verification failed, 4 the app
+did not exit, 5 installation failed.
+"""
+import base64
+import fcntl
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+
+IDENTITY = '/opt/ECHO/resources/echo-desktop-identity.v1.json'
+STATE = '/var/lib/echo-desktop'
+CHECKPOINT = os.path.join(STATE, 'update-checkpoint.json')
+LOCK = os.path.join(STATE, 'update.lock')
+APT_GET = '/usr/bin/apt-get'
+OPENSSL = '/usr/bin/openssl'
+DPKG_DEB = '/usr/bin/dpkg-deb'
+ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'DEBIAN_FRONTEND': 'noninteractive', 'LANG': 'C.UTF-8'}
+FEED_LIMIT = 65536
+DEB_LIMIT = 268435456
+EXIT_WAIT_SECONDS = 120
+TARGET = ('linux', 'x64', 'glibc', 'electron')
+ED25519_SPKI_PREFIX = bytes.fromhex('302a300506032b6570032100')
+MAX_SAFE_INTEGER = 2 ** 53 - 1
+USAGE = 'usage: echo-desktop-update-helper install --feed FILE --deb FILE --wait-pid PID'
+
+# The same patterns as client-update-contract.ts; re.ASCII keeps \d to 0-9.
+CHANNEL = re.compile(r'[a-z0-9][a-z0-9-]{0,63}', re.ASCII)
+SPKI = re.compile(r'[A-Za-z0-9+/]{59}=', re.ASCII)
+RELEASE_ID = re.compile(r'clean-v1-[a-z0-9][a-z0-9-]{2,63}', re.ASCII)
+SHA256 = re.compile(r'[a-f0-9]{64}', re.ASCII)
+SOURCE_SHA = re.compile(r'[a-f0-9]{40}', re.ASCII)
+VERSION = re.compile(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?', re.ASCII)
+INSTANT = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z', re.ASCII)
+PAYLOAD = re.compile(r'(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?', re.ASCII)
+SIGNATURE = re.compile(r'[A-Za-z0-9+/]{86}==', re.ASCII)
+# A narrower form of the WHATWG URL the app requires (href equal to the text):
+# a lowercase host, an optional port and a path, no query or fragment.
+HTTPS_URL = re.compile(r"(https://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?)/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*", re.ASCII)
+
+
+class HelperError(Exception):
+    def __init__(self, exit_code, reason):
+        super().__init__(reason)
+        self.exit_code = exit_code
+        self.reason = reason
+
+
+def need(condition, exit_code, reason):
+    if not condition:
+        raise HelperError(exit_code, reason)
+
+
+def text(value, pattern):
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
+
+
+def counting(value):
+    return type(value) is int and 0 < value <= MAX_SAFE_INTEGER
+
+
+def one(value):
+    return type(value) is int and value == 1
+
+
+def exact(value, keys):
+    return isinstance(value, dict) and set(value) == set(keys)
+
+
+def stream(path, limit, exit_code, sink):
+    """Feeds a regular file to sink in chunks, never following a final symlink
+    (lstat semantics, no race), and returns its size and stat. A file over
+    limit is refused, even one that grows while it is read."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError as error:
+        raise HelperError(exit_code, '%s: %s' % (path, error.strerror))
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+        os.close(fd)
+        raise HelperError(exit_code, '%s must be a regular file of at most %d bytes' % (path, limit))
+    total = 0
+    with os.fdopen(fd, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b''):
+            total += len(chunk)
+            need(total <= limit, exit_code, '%s is larger than %d bytes' % (path, limit))
+            sink(chunk)
+    return total, info
+
+
+def read_regular(path, limit, exit_code):
+    chunks = []
+    _, info = stream(path, limit, exit_code, chunks.append)
+    return b''.join(chunks), info
+
+
+def copy_regular(source, destination, limit):
+    fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    with os.fdopen(fd, 'wb') as handle:
+        stream(source, limit, 2, handle.write)
+
+
+def run(command, exit_code, reason, timeout=60, **output):
+    """Runs command with the fixed environment and no stdin; one that cannot
+    start or finish is refused with reason."""
+    try:
+        return subprocess.run(command, env=ENV, stdin=subprocess.DEVNULL, timeout=timeout, **output)
+    except (OSError, subprocess.TimeoutExpired):
+        raise HelperError(exit_code, reason)
+
+
+def strict_json(raw, reason):
+    """JSON.parse, but refusing duplicate keys, NaN and Infinity rather than guessing."""
+    def pairs(items):
+        need(len({key for key, _ in items}) == len(items), 3, reason)
+        return dict(items)
+
+    def constant(name):
+        raise HelperError(3, reason)
+
+    try:
+        return json.loads(raw.decode('utf-8'), object_pairs_hook=pairs, parse_constant=constant)
+    except (ValueError, RecursionError):
+        raise HelperError(3, reason)
+
+
+def instant(value):
+    need(text(value, INSTANT), 3, 'invalid_metadata')
+    try:
+        return datetime.strptime(value, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        raise HelperError(3, 'invalid_metadata')
+
+
+def origin(url):
+    match = HTTPS_URL.fullmatch(url) if isinstance(url, str) and len(url) <= 2048 else None
+    need(match is not None, 3, 'invalid_url')
+    return match.group(1)
+
+
+def trusted_config(identity_path, trusted_uid):
+    """The installed identity's update bootstrap, from a file only root can change."""
+    raw, info = read_regular(identity_path, FEED_LIMIT, 3)
+    need(info.st_uid == trusted_uid and not info.st_mode & 0o022, 3, 'untrusted_identity')
+    identity = strict_json(raw, 'invalid_identity')
+    need(isinstance(identity, dict) and one(identity.get('schema_version')) and
+         identity.get('kind') == 'echo-desktop-identity-v1', 3, 'invalid_identity')
+    config = identity.get('update_bootstrap')
+    need(exact(config, ['schema_version', 'kind', 'channel', 'feed_url', 'public_key_spki',
+                        'minimum_sequence', 'automatic', 'installation']) and
+         one(config['schema_version']) and config['kind'] == 'echo-client-update-config-v1' and
+         config['installation'] == 'electron' and isinstance(config['automatic'], bool) and text(config['channel'], CHANNEL) and
+         counting(config['minimum_sequence']) and text(config['public_key_spki'], SPKI) and
+         base64.b64decode(config['public_key_spki']).startswith(ED25519_SPKI_PREFIX), 3, 'invalid_config')
+    origin(config['feed_url'])
+    return config
+
+
+def verify_signature(payload, signature, spki, scratch):
+    contents = {
+        'key.pem': b'-----BEGIN PUBLIC KEY-----\n' + base64.b64encode(spki) + b'\n-----END PUBLIC KEY-----\n',
+        'payload': payload,
+        'signature': signature,
+    }
+    paths = {name: os.path.join(scratch, name) for name in contents}
+    for name, data in contents.items():
+        with open(paths[name], 'xb') as handle:
+            handle.write(data)
+    result = run([OPENSSL, 'pkeyutl', '-verify', '-pubin', '-inkey', paths['key.pem'], '-rawin',
+                  '-in', paths['payload'], '-sigfile', paths['signature']], 3, 'invalid_signature', capture_output=True)
+    need(result.returncode == 0 and b'Signature Verified Successfully' in result.stdout, 3, 'invalid_signature')
+
+
+def parse_manifest(value):
+    """parseUpdateManifest from client-update-contract.ts."""
+    need(exact(value, ['schema_version', 'kind', 'channel', 'sequence', 'issued_at', 'expires_at', 'release_id',
+                       'release_sha256', 'source_sha', 'product_version', 'artifacts']) and
+         one(value['schema_version']) and
+         value['kind'] == 'echo-client-update-manifest-v1' and text(value['channel'], CHANNEL) and
+         counting(value['sequence']) and text(value['release_id'], RELEASE_ID) and
+         text(value['release_sha256'], SHA256) and text(value['source_sha'], SOURCE_SHA) and
+         text(value['product_version'], VERSION) and isinstance(value['artifacts'], list) and
+         0 < len(value['artifacts']) <= 12, 3, 'invalid_metadata')
+    lifespan = instant(value['expires_at']) - instant(value['issued_at'])
+    need(0 < lifespan <= 31 * 24 * 60 * 60, 3, 'invalid_metadata')
+    targets = set()
+    for artifact in value['artifacts']:
+        need(exact(artifact, ['platform', 'architecture', 'libc', 'installation', 'url', 'sha256', 'bytes']), 3, 'invalid_metadata')
+        platform = artifact['platform']
+        need(platform in ('linux', 'darwin', 'win32') and artifact['architecture'] in ('x64', 'arm64') and
+             artifact['installation'] in ('cli-kit', 'electron', 'container') and
+             (artifact['libc'] in ('glibc', 'musl') if platform == 'linux' else artifact['libc'] is None) and
+             (artifact['installation'] != 'container' or platform == 'linux'), 3, 'invalid_platform')
+        origin(artifact['url'])
+        target = (platform, artifact['architecture'], artifact['libc'], artifact['installation'])
+        need(text(artifact['sha256'], SHA256) and counting(artifact['bytes']) and artifact['bytes'] <= DEB_LIMIT and
+             target not in targets, 3, 'invalid_metadata')
+        targets.add(target)
+    return value
+
+
+def read_checkpoint(path):
+    if not os.path.lexists(path):
+        return None
+    raw, _ = read_regular(path, 4096, 3)
+    saved = strict_json(raw, 'invalid_checkpoint')
+    need(exact(saved, ['schema_version', 'sequence', 'manifest_sha256']) and one(saved['schema_version']) and
+         counting(saved['sequence']) and text(saved['manifest_sha256'], SHA256), 3, 'invalid_checkpoint')
+    return saved
+
+
+def verify_update(identity_path, feed_path, deb_path, checkpoint_path, now, trusted_uid=0):
+    """verifyUpdateEnvelope plus the package digest, returning the checkpoint to save; now is POSIX seconds."""
+    config = trusted_config(identity_path, trusted_uid)
+    raw, _ = read_regular(feed_path, FEED_LIMIT, 2)
+    envelope = strict_json(raw, 'invalid_metadata')
+    need(exact(envelope, ['payload', 'signature']), 3, 'invalid_metadata')
+    need(text(envelope['payload'], PAYLOAD) and text(envelope['signature'], SIGNATURE), 3, 'invalid_signature')
+    payload = base64.b64decode(envelope['payload'], validate=True)
+    signature = base64.b64decode(envelope['signature'], validate=True)
+    need(len(signature) == 64, 3, 'invalid_signature')
+    # Scratch files sit beside the feed (main's root-only copy), never in a
+    # folder the environment chose.
+    scratch = tempfile.mkdtemp(prefix='verify-', dir=os.path.dirname(os.path.abspath(feed_path)))
+    try:
+        verify_signature(payload, signature, base64.b64decode(config['public_key_spki']), scratch)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    manifest = parse_manifest(strict_json(payload, 'invalid_metadata'))
+    digest = hashlib.sha256(payload).hexdigest()
+    need(manifest['channel'] == config['channel'], 3, 'wrong_channel')
+    need(instant(manifest['issued_at']) <= now + 5 * 60 and instant(manifest['expires_at']) > now, 3, 'expired_metadata')
+    saved = read_checkpoint(checkpoint_path)
+    need(manifest['sequence'] >= max(config['minimum_sequence'], saved['sequence'] if saved else 0), 3, 'stale_metadata')
+    need(not saved or saved['sequence'] != manifest['sequence'] or saved['manifest_sha256'] == digest, 3, 'changed_metadata')
+    feed_origin = origin(config['feed_url'])
+    need(all(origin(artifact['url']) == feed_origin for artifact in manifest['artifacts']), 3, 'wrong_artifact_origin')
+    matches = [a for a in manifest['artifacts'] if (a['platform'], a['architecture'], a['libc'], a['installation']) == TARGET]
+    need(len(matches) == 1, 3, 'unsupported_platform')
+    package = hashlib.sha256()
+    size, _ = stream(deb_path, DEB_LIMIT, 2, package.update)
+    need(size == matches[0]['bytes'] and package.hexdigest() == matches[0]['sha256'], 3, 'artifact_mismatch')
+    return {'schema_version': 1, 'sequence': manifest['sequence'], 'manifest_sha256': digest}
+
+
+def read_control(deb_path):
+    result = run([DPKG_DEB, '-f', deb_path], 3, 'unreadable_package', capture_output=True)
+    need(result.returncode == 0, 3, 'unreadable_package')
+    fields = {}
+    for line in result.stdout.decode('utf-8', 'replace').splitlines():
+        if line[:1] not in ('', ' ', '\t') and ':' in line:
+            name, value = line.split(':', 1)
+            fields[name] = value.strip()
+    return fields
+
+
+def wait_for_exit(pid):
+    deadline = time.monotonic() + EXIT_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.25)
+    raise HelperError(4, 'the app did not exit')
+
+
+def save_checkpoint(path, checkpoint):
+    data = json.dumps(checkpoint, sort_keys=True, separators=(',', ':'))
+    fd, temporary = tempfile.mkstemp(prefix='.checkpoint-', dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(data.encode() + b'\n')
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    except BaseException:
+        os.unlink(temporary)
+        raise
+    directory = os.open(os.path.dirname(path), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def parse_arguments(argv):
+    options = dict(zip(argv[1::2], argv[2::2]))
+    need(len(argv) == 7 and argv[0] == 'install' and sorted(options) == ['--deb', '--feed', '--wait-pid'] and
+         os.path.isabs(options['--feed']) and os.path.isabs(options['--deb']) and
+         re.fullmatch(r'[1-9][0-9]{0,9}', options['--wait-pid'], re.ASCII) is not None, 2, USAGE)
+    return options['--feed'], options['--deb'], int(options['--wait-pid'])
+
+
+def reinstall(deb_copy):
+    # apt-get's output goes to stderr, so stdout carries only "verified".
+    # Wait out a routine unattended-upgrades run instead of failing at once.
+    result = run([APT_GET, '-o', 'DPkg::Lock::Timeout=120', 'install', '--reinstall', '-y', deb_copy],
+                 5, 'apt-get did not finish', timeout=600, stdout=sys.stderr.fileno())
+    need(result.returncode == 0, 5, 'apt-get failed')
+
+
+def exclusive(path):
+    """Opens path and waits for its exclusive lock, which closing the file releases."""
+    handle = os.fdopen(os.open(path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600), 'rb')
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    return handle
+
+
+def install(feed, deb, pid, trusted_uid=0):
+    # One update at a time: each seat's app can start a helper. Under the lock,
+    # the checkpoint verify_update reads is the one this run replaces, so no
+    # helper installs an older release over a newer one or lowers the
+    # checkpoint. A waiting helper is bounded by the holder's own timeouts.
+    with exclusive(LOCK):
+        work = tempfile.mkdtemp(prefix='install-', dir=STATE)
+        try:
+            feed_copy, deb_copy = os.path.join(work, 'feed.json'), os.path.join(work, 'update.deb')
+            copy_regular(feed, feed_copy, FEED_LIMIT)
+            copy_regular(deb, deb_copy, DEB_LIMIT)
+            checkpoint = verify_update(IDENTITY, feed_copy, deb_copy, CHECKPOINT, time.time(), trusted_uid)
+            control = read_control(deb_copy)
+            need(control.get('Package') == 'echo-desktop' and control.get('Architecture') == 'amd64', 3, 'wrong_package')
+            print('verified', flush=True)
+            wait_for_exit(pid)
+            # Raise the floor before installing: apt-get can unpack the new
+            # release and still fail, or the helper can be killed after it, and
+            # an older signed feed must not pass then. The same feed may retry.
+            save_checkpoint(CHECKPOINT, checkpoint)
+            reinstall(deb_copy)
+            return 0
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+
+def main(argv):
+    try:
+        need(os.geteuid() == 0, 2, 'must run as root')
+        feed, deb, pid = parse_arguments(argv)
+        os.makedirs(STATE, mode=0o700, exist_ok=True)
+        info = os.lstat(STATE)
+        need(stat.S_ISDIR(info.st_mode) and info.st_uid == 0, 3, 'unsafe state folder')
+        os.chmod(STATE, 0o700)
+        return install(feed, deb, pid)
+    except HelperError as error:
+        print('echo-desktop-update-helper: %s' % error.reason, file=sys.stderr, flush=True)
+        return error.exit_code
+    except Exception as error:  # Anything unforeseen fails the install, never half-succeeds.
+        print('echo-desktop-update-helper: %s' % error, file=sys.stderr, flush=True)
+        return 5
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

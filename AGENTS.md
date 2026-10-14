@@ -34,8 +34,9 @@ On founder-live machines, those instructions also bind every ECHO-using turn to 
   boundary. Host-local onboarding remains in the human Session Manager lane.
   If the MCP is unavailable,
   use the AWS CLI only for inspection that the repository CLIs do not expose.
-- The CLI update feed is a separate AWS lane. `npm run client-update:staging`
-  creates a CloudFormation change set for the feed's S3 stack, and
+- The client update feed (CLI kits and desktop apps) is a separate AWS lane.
+  `npm run client-update:staging` creates a CloudFormation change set for the
+  feed's S3 stack, and
   `npm run client-update:publish` writes release objects to that bucket;
   `npm run client-update:sign` signs locally. Mutate the feed stack and bucket
   only through these CLIs, following the operator playbook and

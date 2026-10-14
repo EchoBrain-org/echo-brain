@@ -14,21 +14,39 @@ const STACK = 'echo-client-update-staging-s3-v1';
 const STACK_ID = `arn:aws:cloudformation:us-west-2:904560150024:stack/${STACK}/11111111-1111-4111-8111-111111111111`;
 const TEMPLATE = Buffer.from('{"Resources":{}}');
 function save(path: string, value: unknown) { writeFileSync(path, typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value), { mode: 0o600 }); }
-function fixture(options: { expiresAt?: number; previousExpiresAt?: number; previousSequence?: number; sequence?: number; existingArtifact?: boolean; targets?: 'both' | 'macos' | 'linux' } = {}) {
+type Artifact = 'macos-kit' | 'linux-kit' | 'macos-app' | 'linux-deb';
+const RELEASE: Artifact[] = ['macos-kit', 'linux-kit', 'macos-app', 'linux-deb'];
+const ZIP = 'application/zip';
+const DEB = 'application/vnd.debian.binary-package';
+const TARGETS: Record<Artifact, { platform: 'darwin' | 'linux'; architecture: 'arm64' | 'x64'; libc: 'glibc' | null; installation: 'cli-kit' | 'electron'; extension: string; contentType: string }> = {
+  'macos-kit': { platform: 'darwin', architecture: 'arm64', libc: null, installation: 'cli-kit', extension: 'zip', contentType: ZIP },
+  'linux-kit': { platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'cli-kit', extension: 'zip', contentType: ZIP },
+  'macos-app': { platform: 'darwin', architecture: 'arm64', libc: null, installation: 'electron', extension: 'zip', contentType: ZIP },
+  'linux-deb': { platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'electron', extension: 'deb', contentType: DEB },
+};
+// The publisher's documented bounds, restated: each AWS call or public GET has
+// a 120 s base plus transfer time at 512 KiB/s, and one 120 s cushion follows.
+// Each object needs its PUT, verification HEAD and GET, and each later write
+// first repeats its preflight calls: one HEAD in a first publication; in a
+// replacement, three per artifact and eleven for the feed, the last size.
+const BASE_MS = 120_000;
+const operation = (bytes: number) => BASE_MS + Math.ceil(bytes * 1000 / (512 * 1024));
+const firstWindow = (sizes: number[]) => sizes.reduce((total, bytes, index) => total + 2 * operation(bytes) + BASE_MS + (index ? BASE_MS : 0), BASE_MS);
+const replacementWindow = (sizes: number[]) => sizes.reduce((total, bytes, index) =>
+  total + 2 * operation(bytes) + BASE_MS + (index ? (index === sizes.length - 1 ? 11 : 3) * BASE_MS : 0), BASE_MS);
+function fixture(options: { expiresAt?: number; previousExpiresAt?: number; previousSequence?: number; sequence?: number; existingArtifact?: boolean; targets?: Artifact[]; sizes?: Partial<Record<Artifact, number>> } = {}) {
   const directory = mkdtempSync(join(realpathSync(tmpdir()), 'echo-publish-test-'));
   chmodSync(directory, 0o700); directories.push(directory);
   const prepared = join(directory, 'prepared');
   mkdirSync(prepared, { mode: 0o700 }); mkdirSync(join(prepared, 'artifacts'), { mode: 0o700 });
-  const targets = [
-    { platform: 'darwin', architecture: 'arm64', libc: null, installation: 'cli-kit' },
-    { platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'cli-kit' },
-  ].filter(target => options.targets === undefined || options.targets === 'both' || target.platform === (options.targets === 'macos' ? 'darwin' : 'linux'));
-  const artifacts = targets.map(target => {
-    const bytes = Buffer.from(`synthetic validated ${target.platform} kit`);
+  const artifacts = (options.targets ?? RELEASE).map(name => {
+    const { extension, contentType, ...target } = TARGETS[name];
+    const label = Buffer.from(`synthetic validated ${name}`);
+    const bytes = Buffer.concat([label, Buffer.alloc(Math.max(0, (options.sizes?.[name] ?? 0) - label.length), 32)]);
     const sha256 = updateDigest(bytes);
-    const key = `artifacts/${sha256}.zip`;
+    const key = `artifacts/${sha256}.${extension}`;
     save(join(prepared, key), bytes);
-    return { key, bytes, manifest: { ...target, sha256, bytes: bytes.length, url: new URL(key, FEED).href } };
+    return { name, key, bytes, contentType, manifest: { ...target, sha256, bytes: bytes.length, url: new URL(key, FEED).href } };
   });
   const artifactKeys = artifacts.map(artifact => artifact.key);
   const artifactKey = artifactKeys[0];
@@ -49,13 +67,15 @@ function fixture(options: { expiresAt?: number; previousExpiresAt?: number; prev
   const receipt = join(directory, 'publication.json');
   const objects = new Map<string, { bytes: Buffer; metadata: Record<string, unknown> }>();
   const calls: string[][] = [];
+  const timeouts = new Map<string, number | undefined>();
   const events: string[] = [];
   const state = { throwAfterPut: '', throwBeforePut: '', tamperFetch: '', replaceBeforeConditionalFeedPut: false, advanceAfterFetch: {} as Record<string, number>, advanceAfterHead: {} as Record<string, number>, headerOverride: {} as Record<string, string>, statusOverride: 200, now: createdAt, validationOptions: [] as Array<{ now?: number; allowExpired?: boolean }> };
   const metadata = (bytes: Buffer, contentType: string, cacheControl: string, version: number) => ({ ContentLength: bytes.length, ContentType: contentType, CacheControl: cacheControl, ServerSideEncryption: 'AES256', VersionId: `version-${version}`, ETag: `"${version.toString(16).padStart(32, '0')}"` });
   if (previousFeedBytes) objects.set('feed.json', { bytes: previousFeedBytes, metadata: metadata(previousFeedBytes, 'application/json', 'no-store', 1) });
-  if (options.existingArtifact) for (const [index, artifact] of artifacts.entries()) objects.set(artifact.key, { bytes: artifact.bytes, metadata: metadata(artifact.bytes, 'application/zip', 'public, max-age=31536000, immutable', index + 2) });
-  const aws = (args: string[]): any => {
+  if (options.existingArtifact) for (const [index, artifact] of artifacts.entries()) objects.set(artifact.key, { bytes: artifact.bytes, metadata: metadata(artifact.bytes, artifact.contentType, 'public, max-age=31536000, immutable', index + 2) });
+  const aws = (args: string[], awsOptions?: { timeout?: number }): any => {
     calls.push(args);
+    if (args[1] === 'put-object') timeouts.set(args[args.indexOf('--key') + 1], awsOptions?.timeout);
     const value = (flag: string) => args[args.indexOf(flag) + 1];
     if (args[0] === 'sts') return { Account: '904560150024', Arn: 'arn:aws:sts::904560150024:assumed-role/AWSReservedSSO_AdministratorAccess_abc/operator' };
     if (args[1] === 'describe-stacks') return { Stacks: [{ StackId: STACK_ID, StackName: STACK, StackStatus: 'CREATE_COMPLETE', Outputs: [{ OutputKey: 'BucketName', OutputValue: BUCKET }, { OutputKey: 'FeedUrl', OutputValue: FEED }] }] };
@@ -117,7 +137,9 @@ function fixture(options: { expiresAt?: number; previousExpiresAt?: number; prev
   const replacePlan = () => planClientUpdateReplacement({ hostingReceipt, prepared, authorization, output: receipt, expectedPredecessor: previousFeedBytes ? updateDigest(previousFeedBytes) : '0'.repeat(64) }, dependencies);
   const replaceExecute = () => executeClientUpdateReplacement({ receipt, approveManifest: updateDigest(payload) }, dependencies);
   const replaceStatus = () => statusClientUpdateReplacement({ receipt }, dependencies);
-  return { directory, prepared, authorization, hostingReceipt, hosting, receipt, config, manifest, feedBytes, previousFeedBytes, previousManifest, privateKey, payload, artifactKey, artifactKeys, metadata, objects, calls, events, state, dependencies, plan, execute, status, replacePlan, replaceExecute, replaceStatus };
+  const sizes = [...artifacts.map(artifact => artifact.bytes.length), feedBytes.length];
+  const keyOf = (name: Artifact) => artifacts.find(artifact => artifact.name === name)!.key;
+  return { directory, prepared, authorization, hostingReceipt, hosting, receipt, config, manifest, feedBytes, previousFeedBytes, previousManifest, privateKey, payload, artifactKey, artifactKeys, keyOf, sizes, metadata, objects, calls, timeouts, events, state, dependencies, plan, execute, status, replacePlan, replaceExecute, replaceStatus };
 }
 
 // Historical receipts were allowed to contain a single platform. Construct the
@@ -152,33 +174,45 @@ function historicalReceipt(f: ReturnType<typeof fixture>, replacement: boolean, 
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 describe('bounded first S3 client update publication', () => {
-  it.each(['macos', 'linux'] as const)('rejects a new %s-only publication before creating a receipt or writing objects', async targets => {
+  const reduced: Array<[string, Artifact[]]> = [['macOS-kit', ['macos-kit']], ['Linux-kit', ['linux-kit']], ['two-CLI-kit', ['macos-kit', 'linux-kit']],
+    ['app-less', ['macos-kit', 'linux-kit', 'linux-deb']], ['deb-less', ['macos-kit', 'linux-kit', 'macos-app']]];
+  it.each(reduced)('rejects a new %s publication before creating a receipt or writing objects', async (_, targets) => {
     const f = fixture({ targets });
-    await expect(f.plan()).rejects.toThrow('both_cli_kits_required');
+    await expect(f.plan()).rejects.toThrow('all_release_targets_required');
     expect(existsSync(f.receipt)).toBe(false);
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
   });
 
   it('plans without mutation, durably records attempts, verifies public artifacts, then publishes and verifies the feed', async () => {
     const f = fixture();
-    expect(await f.plan()).toMatchObject({ state: 'planned', object_count: 3, verified_objects: 0 });
+    expect(await f.plan()).toMatchObject({ state: 'planned', object_count: 5, verified_objects: 0 });
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
-    expect(await f.execute()).toMatchObject({ state: 'succeeded', object_count: 3, verified_objects: 3 });
+    expect(await f.execute()).toMatchObject({ state: 'succeeded', object_count: 5, verified_objects: 5 });
     expect(f.events).toEqual([...f.artifactKeys.flatMap(key => [`put:${key}`, `get:${key}`]), 'put:feed.json', 'get:feed.json']);
     expect([...f.objects.keys()]).toEqual([...f.artifactKeys, 'feed.json']);
     const receipt = JSON.parse(readFileSync(f.receipt, 'utf8'));
     expect(receipt.objects.every((object: any) => object.attempted && object.succeeded && object.verified && object.version_id)).toBe(true);
     expect(f.calls.flat()).not.toContain('delete-object');
-    expect(await f.status()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
+    expect(await f.status()).toMatchObject({ state: 'succeeded', verified_objects: 5 });
+    // Every key and content type follows the target: only the deb is served as a Debian package.
+    const puts = f.calls.filter(args => args[1] === 'put-object').map(args => [args[args.indexOf('--key') + 1], args[args.indexOf('--content-type') + 1]]);
+    expect(puts).toEqual([[f.keyOf('macos-kit'), ZIP], [f.keyOf('linux-kit'), ZIP], [f.keyOf('macos-app'), ZIP], [f.keyOf('linux-deb'), DEB], ['feed.json', 'application/json']]);
   });
 
-  it('does not begin publication when less than the bounded first-publication window remains', async () => {
-    const expiresAt = Date.now() + 19 * 60 * 1000;
-    const f = fixture({ expiresAt });
-    await f.plan();
-    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 0 });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(0);
+  it('begins only when validity covers every size-scaled upload and verification, and scales each PUT timeout', async () => {
+    const sizes = { 'macos-app': 3 * 1024 * 1024, 'linux-deb': 2 * 1024 * 1024 };
+    const short = fixture({ sizes });
+    await short.plan();
+    short.state.now = Date.parse(short.manifest.expires_at) - firstWindow(short.sizes) + 1;
+    expect(await short.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 0 });
+    expect(short.calls.filter(args => args[1] === 'put-object')).toHaveLength(0);
+    const exact = fixture({ sizes });
+    await exact.plan();
+    exact.state.now = Date.parse(exact.manifest.expires_at) - firstWindow(exact.sizes);
+    expect(await exact.execute()).toMatchObject({ state: 'succeeded', verified_objects: 5 });
+    // 120 s plus six and four seconds of transfer at 512 KiB/s.
+    expect([exact.timeouts.get(exact.keyOf('macos-app')), exact.timeouts.get(exact.keyOf('linux-deb'))]).toEqual([126_000, 124_000]);
+    expect(exact.timeouts.get('feed.json')).toBe(operation(exact.feedBytes.length));
   });
 
   it('keeps execution strict when a planned feed expires before the first write', async () => {
@@ -190,9 +224,10 @@ describe('bounded first S3 client update publication', () => {
   });
 
   it('never sends the feed PUT if expiry advances during artifact verification', async () => {
-    const expiresAt = Date.now() + 25 * 60 * 1000;
-    const f = fixture({ expiresAt });
+    const f = fixture();
     await f.plan();
+    const expiresAt = Date.parse(f.manifest.expires_at);
+    f.state.now = expiresAt - firstWindow(f.sizes);
     f.state.advanceAfterFetch[f.artifactKey] = expiresAt - 5 * 60 * 1000;
     expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 1 });
     expect(f.events).toEqual([`put:${f.artifactKey}`, `get:${f.artifactKey}`]);
@@ -201,12 +236,13 @@ describe('bounded first S3 client update publication', () => {
   });
 
   it('revalidates freshness after the final feed HEAD and does not send its PUT when time advanced', async () => {
-    const expiresAt = Date.now() + 25 * 60 * 1000;
-    const f = fixture({ expiresAt });
+    const f = fixture();
     await f.plan();
+    const expiresAt = Date.parse(f.manifest.expires_at);
+    f.state.now = expiresAt - firstWindow(f.sizes);
     f.state.advanceAfterHead['feed.json'] = expiresAt - 5 * 60 * 1000;
-    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 2 });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
+    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 4 });
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(4);
     expect(f.objects.has('feed.json')).toBe(false);
   });
 
@@ -215,9 +251,9 @@ describe('bounded first S3 client update publication', () => {
     await f.plan();
     await f.execute();
     f.state.now = Date.parse(f.manifest.expires_at) + 1;
-    expect(await f.status()).toMatchObject({ state: 'succeeded', metadata_fresh: false, verified_objects: 3 });
+    expect(await f.status()).toMatchObject({ state: 'succeeded', metadata_fresh: false, verified_objects: 5 });
     expect(f.state.validationOptions.at(-1)).toMatchObject({ allowExpired: true, now: f.state.now });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(5);
   });
 
   const replaceArtifactVersion = (f: ReturnType<typeof fixture>) => { f.objects.get(f.artifactKey)!.metadata.VersionId = 'replacement-version'; };
@@ -232,7 +268,7 @@ describe('bounded first S3 client update publication', () => {
     if (expired) f.state.now = Date.parse(f.manifest.expires_at) + 1;
     mutate(f);
     expect(await f.status()).toMatchObject({ state: 'unconfirmed', ...(expired ? { metadata_fresh: false } : {}) });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(5);
   });
 
   it('refuses a preexisting feed, and a new receipt cannot bypass a partially published artifact', async () => {
@@ -291,10 +327,29 @@ describe('bounded first S3 client update publication', () => {
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
   });
 
-  it('refuses an artifact path outside the fixed digest ZIP inventory', async () => {
+  it('refuses an artifact path outside the fixed digest inventory', async () => {
     const f = fixture(); f.manifest.artifacts[0].url = new URL('private.json', FEED).href;
     await expect(f.plan()).rejects.toThrow('artifact_binding_mismatch');
     expect(existsSync(f.receipt)).toBe(false);
+  });
+
+  it('refuses a deb whose signed URL names a .zip key', async () => {
+    const f = fixture(); const deb = f.manifest.artifacts[3];
+    deb.url = new URL(`artifacts/${deb.sha256}.zip`, FEED).href;
+    save(join(f.prepared, `artifacts/${deb.sha256}.zip`), readFileSync(join(f.prepared, f.keyOf('linux-deb'))));
+    await expect(f.plan()).rejects.toThrow('artifact_binding_mismatch');
+    expect(existsSync(f.receipt)).toBe(false);
+  });
+
+  it('does not publish the feed when the deb is served with a ZIP content type', async () => {
+    const f = fixture(); await f.plan(); const aws = f.dependencies.aws!;
+    f.dependencies.aws = (args, options) => {
+      const result = aws(args, options);
+      if (args[1] === 'put-object' && args.includes(f.keyOf('linux-deb'))) f.objects.get(f.keyOf('linux-deb'))!.metadata.ContentType = ZIP;
+      return result;
+    };
+    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 3 });
+    expect(f.objects.has('feed.json')).toBe(false);
   });
 
   it('preserves an uncertain successful artifact PUT and resumes only after read-only status confirms exact bytes', async () => {
@@ -304,7 +359,7 @@ describe('bounded first S3 client update publication', () => {
     expect(await f.status()).toMatchObject({ state: 'publishing', verified_objects: 1 });
     expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(1);
     expect(await f.execute()).toMatchObject({ state: 'succeeded' });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(5);
   });
 
   it('never retries an attempted PUT whose outcome remains absent', async () => {
@@ -317,10 +372,10 @@ describe('bounded first S3 client update publication', () => {
 
   it('completes an uncertain final feed PUT using status without any further writes', async () => {
     const f = fixture(); await f.plan(); f.state.throwAfterPut = 'feed.json';
-    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 2 });
+    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 4 });
     f.state.now = Date.parse(f.manifest.expires_at) + 1;
-    expect(await f.status()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
+    expect(await f.status()).toMatchObject({ state: 'succeeded', verified_objects: 5 });
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(5);
   });
 
   it.each(['digest', 'compression', 'redirect', 'length', 'cache'])('does not publish the feed when artifact verification fails: %s', async change => {
@@ -341,7 +396,7 @@ describe('bounded first S3 client update publication', () => {
     const invalid = Buffer.from(JSON.stringify(envelope)); save(join(f.prepared, 'feed.json'), invalid);
     f.dependencies.validatePrepared = () => ({ config: f.config, manifest: f.manifest, feedBytes: invalid });
     await f.plan();
-    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 2 });
+    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 4 });
   });
 
   it('requires private input files and serializes concurrent operations with the receipt lock', async () => {
@@ -355,9 +410,9 @@ describe('bounded first S3 client update publication', () => {
 });
 
 describe('bounded conditional S3 feed replacement', () => {
-  it.each(['macos', 'linux'] as const)('rejects a new %s-only replacement before creating a receipt or writing objects', async targets => {
+  it.each([['two-CLI-kit', ['macos-kit', 'linux-kit']], ['deb-less', ['macos-kit', 'linux-kit', 'macos-app']]] as Array<[string, Artifact[]]>)('rejects a new %s replacement before creating a receipt or writing objects', async (_, targets) => {
     const f = fixture({ targets, previousSequence: 1, sequence: 2 });
-    await expect(f.replacePlan()).rejects.toThrow('both_cli_kits_required');
+    await expect(f.replacePlan()).rejects.toThrow('all_release_targets_required');
     expect(existsSync(f.receipt)).toBe(false);
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
   });
@@ -365,15 +420,27 @@ describe('bounded conditional S3 feed replacement', () => {
   it('keeps the first-publication refusal, then replaces only the expected signed predecessor with a higher sequence', async () => {
     const f = fixture({ previousSequence: 1, sequence: 2 });
     expect(f.previousManifest!.artifacts).toHaveLength(1);
-    expect(f.manifest.artifacts).toHaveLength(2);
+    expect(f.manifest.artifacts).toHaveLength(4);
     await expect(f.plan()).rejects.toThrow('first_publication_object_already_exists');
     expect(await f.replacePlan()).toMatchObject({ kind: 'echo-client-update-feed-replacement-v1', state: 'planned' });
     const receipt = JSON.parse(readFileSync(f.receipt, 'utf8'));
     expect(receipt.predecessor).toMatchObject({ sha256: updateDigest(f.previousFeedBytes!), sequence: 1, channel: 'staging' });
-    expect(await f.replaceExecute()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
+    expect(await f.replaceExecute()).toMatchObject({ state: 'succeeded', verified_objects: 5 });
     const put = f.calls.find(args => args[1] === 'put-object' && args.includes('feed.json'))!;
     expect(put[put.indexOf('--if-match') + 1]).toBe(receipt.predecessor.etag);
     expect(put).not.toContain('--if-none-match');
+  });
+
+  it('begins only when validity also covers the checks the feed write repeats first', async () => {
+    const short = fixture({ previousSequence: 1, sequence: 2 });
+    await short.replacePlan();
+    short.state.now = Date.parse(short.manifest.expires_at) - replacementWindow(short.sizes) + 1;
+    expect(await short.replaceExecute()).toMatchObject({ state: 'unconfirmed', verified_objects: 0 });
+    expect(short.calls.some(args => args[1] === 'put-object')).toBe(false);
+    const exact = fixture({ previousSequence: 1, sequence: 2 });
+    await exact.replacePlan();
+    exact.state.now = Date.parse(exact.manifest.expires_at) - replacementWindow(exact.sizes);
+    expect(await exact.replaceExecute()).toMatchObject({ state: 'succeeded', verified_objects: 5 });
   });
 
   it('rejects a same or lower sequence before creating a replacement receipt', async () => {
@@ -430,6 +497,13 @@ describe('bounded conditional S3 feed replacement', () => {
     expect(f.calls.find(args => args[1] === 'put-object')).toContain('feed.json');
   });
 
+  it('refuses to reuse an existing deb stored with a ZIP content type', async () => {
+    const f = fixture({ previousSequence: 1, sequence: 2, existingArtifact: true });
+    f.objects.get(f.keyOf('linux-deb'))!.metadata.ContentType = ZIP;
+    await expect(f.replacePlan()).rejects.toThrow('immutable_artifact_mismatch');
+    expect(existsSync(f.receipt)).toBe(false);
+  });
+
   it('refuses to reuse an existing artifact whose public bytes do not match its signed digest', async () => {
     const f = fixture({ previousSequence: 1, sequence: 2, existingArtifact: true });
     const remote = f.objects.get(f.artifactKey)!;
@@ -450,45 +524,46 @@ describe('bounded conditional S3 feed replacement', () => {
   it('recovers a lost final PUT result through status without a second write', async () => {
     const f = fixture({ previousSequence: 1, sequence: 2 });
     await f.replacePlan(); f.state.throwAfterPut = 'feed.json';
-    expect(await f.replaceExecute()).toMatchObject({ state: 'unconfirmed', verified_objects: 2 });
-    expect(await f.replaceStatus()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
+    expect(await f.replaceExecute()).toMatchObject({ state: 'unconfirmed', verified_objects: 4 });
+    expect(await f.replaceStatus()).toMatchObject({ state: 'succeeded', verified_objects: 5 });
     expect(f.calls.filter(args => args[1] === 'put-object' && args.includes('feed.json'))).toHaveLength(1);
   });
 });
 
 
 describe.each([{ label: 'first-publication', replacement: false }, { label: 'replacement', replacement: true }])('paired release enforcement for $label receipts', ({ replacement }) => {
-  it.each(['macos', 'linux'] as const)('refuses new writes from an old %s-only receipt, while status still inspects it', async targets => {
+  it.each([['macOS-kit', ['macos-kit']], ['Linux-kit', ['linux-kit']], ['two-CLI-kit', ['macos-kit', 'linux-kit']]] as Array<[string, Artifact[]]>)('refuses new writes from an old %s receipt, while status still inspects it', async (_, targets) => {
     const f = fixture({ targets, ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
     historicalReceipt(f, replacement, 'none');
     const status = replacement ? f.replaceStatus : f.status;
     const execute = replacement ? f.replaceExecute : f.execute;
-    expect(await status()).toMatchObject({ state: 'planned', object_count: 2 });
-    await expect(execute()).rejects.toThrow('both_cli_kits_required');
+    expect(await status()).toMatchObject({ state: 'planned', object_count: targets.length + 1 });
+    await expect(execute()).rejects.toThrow('all_release_targets_required');
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
   });
 
   it('reconciles a historical single-platform artifact attempt without allowing the remaining feed write', async () => {
-    const f = fixture({ targets: 'macos', ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
+    const f = fixture({ targets: ['macos-kit'], ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
     historicalReceipt(f, replacement, 'artifact');
     const status = replacement ? f.replaceStatus : f.status;
     const execute = replacement ? f.replaceExecute : f.execute;
     expect(await status()).toMatchObject({ state: 'publishing', verified_objects: 1 });
-    await expect(execute()).rejects.toThrow('both_cli_kits_required');
+    await expect(execute()).rejects.toThrow('all_release_targets_required');
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
   });
 
-  it('reconciles a historical single-platform final attempt without writing again', async () => {
-    const f = fixture({ targets: 'macos', ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
+  // Its recorded application/zip content types still bind, or status could not succeed.
+  it('reconciles a historical two-CLI-kit final attempt without writing again', async () => {
+    const f = fixture({ targets: ['macos-kit', 'linux-kit'], ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
     historicalReceipt(f, replacement, 'all');
     const status = replacement ? f.replaceStatus : f.status;
     const execute = replacement ? f.replaceExecute : f.execute;
-    expect(await status()).toMatchObject({ state: 'succeeded', verified_objects: 2 });
-    expect(await execute()).toMatchObject({ state: 'succeeded', verified_objects: 2 });
+    expect(await status()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
+    expect(await execute()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
   });
 
-  it('rechecks the exact target pair immediately before the next artifact write', async () => {
+  it('rechecks the exact release targets immediately before the next artifact write', async () => {
     const f = fixture({ ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
     await (replacement ? f.replacePlan() : f.plan());
     const fetch = f.dependencies.fetch!;
@@ -511,8 +586,8 @@ describe.each([{ label: 'first-publication', replacement: false }, { label: 'rep
       if (f.objects.has(f.artifactKeys[1])) return { ...result, manifest: { ...result.manifest, artifacts: result.manifest.artifacts.map(artifact => ({ ...artifact, architecture: 'arm64' as const })) } };
       return result;
     };
-    expect(await (replacement ? f.replaceExecute() : f.execute())).toMatchObject({ state: 'unconfirmed', verified_objects: 2 });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
+    expect(await (replacement ? f.replaceExecute() : f.execute())).toMatchObject({ state: 'unconfirmed', verified_objects: 4 });
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(4);
     expect(f.calls.some(args => args[1] === 'put-object' && args.includes('feed.json'))).toBe(false);
   });
 });

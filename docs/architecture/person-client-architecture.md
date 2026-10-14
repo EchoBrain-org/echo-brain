@@ -25,8 +25,9 @@ service manager.
 The opt-in [client updater](../features/client-updates-v1.md) runs a bounded
 release check before command dispatch. Its public publisher trust and local
 release checkpoint are separate from Person authorization state. macOS arm64
-and Linux x64 CLI-kit activation reuse their platform installers; the desktop
-app's updates belong to its own packaging. The standalone Mac CLI root is
+and Linux x64 CLI-kit activation reuse their platform installers. The desktop
+app runs the same updater with its own installation adapter (see
+[Desktop updates](#desktop-updates)). The standalone Mac CLI root is
 separate from the retired Swift app's paired CLI. This adds no background
 runtime or automatic Person-request replay.
 
@@ -43,8 +44,9 @@ and after the command and refuses the result if the account changed, reporting
 a write's outcome as unknown. Before a network call, the host refreshes the
 sign-in when less than that call's own timeout plus one minute remains, so a
 long upload never starts on a token that lapses mid-call. Home loads asked for
-while one is running join it, with at most one follow-up load. A packaged app
-carries the Person client package produced by `tools/pack-person-client.mjs`.
+while one is running join it, with at most one follow-up load. A release
+package carries the release's exact Person-client tarball; other packages carry
+one packed from `HEAD` by `tools/pack-person-client.mjs`.
 
 The sidebar's **Mine** row, under New project, opens a page that reads
 `person list --mine`
@@ -60,6 +62,21 @@ no project page shows opens Mine. A 401 on a project's list means the person
 is no longer a member: the page says "This is no longer available to you." and
 status and projects are read again once per visit, without signing out.
 Signing out leaves Mine and clears it.
+
+### Desktop updates
+
+Under [ADR-0035](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)
+the Electron main process loads the updater from the embedded, release-bound
+Person client, the same way the host loads the client. A release package's
+identity file, outside `app.asar`, binds the app to its release and carries
+its update bootstrap; without it the updater is off. Updater state is per user
+and apart from the CLI root. A `restart` installation stages the verified
+update. After the normal host drain and quit, a detached helper swaps in the
+new `ECHO.app` on macOS. On Linux a `pkexec` root helper re-verifies the feed
+before `apt-get` reinstalls the package. The running release is the identity
+read at launch.
+[Client updates](../features/client-updates-v1.md#desktop-app) has the
+conditions, checks and activation steps.
 
 ## Local state authority
 

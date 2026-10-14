@@ -60,11 +60,11 @@ production/client-live deployment or change their approval boundaries.
 | Prepared | Exact candidate artifacts and unsigned feed inputs exist for review. Nothing has been accepted or published. |
 | Staged | The candidate is running on the staging host. The prior record remains accepted. Existing clients already reach the candidate. |
 | Server accepted | Promotion completed and a fresh host status confirms the candidate as accepted. The client feed may still advertise the prior release. |
-| Client published | The signed feed and both platform artifacts are verified and currently installable. This does not prove a client has updated. |
-| Client verified | Representative native Mac and Linux clients activated the published release and passed authenticated read and cited-Ask checks. |
+| Client published | The signed feed and all four artifacts (both CLI kits and both desktop packages) are verified and currently installable. This does not prove a client has updated. |
+| Client verified | Representative native Mac and Linux CLI seats activated the published release and passed authenticated read and cited-Ask checks. Representative Mac and Linux desktops passed the [desktop update checks](../client-updates/README.md#verify-the-desktop-update). |
 
-Report a coordinated release complete only after the last phase and any affected
-desktop distribution checks. State the environment and seats actually verified;
+Report a coordinated release complete only after the last phase, including the
+desktop update checks. State the environment and seats actually verified;
 representative acceptance is not proof that every enrolled seat updated.
 
 ### Prepare the transition before staging
@@ -81,16 +81,20 @@ representative acceptance is not proof that every enrolled seat updated.
    and recovery plan identified before activation. A candidate canary after
    staging cannot protect those seats from a breaking API change.
 3. Prepare one canonical release record, immutable image, matching runtime
-   profile and exact Person-client tarball using the sections below. Build both
-   CLI kits from that release: macOS arm64 and Linux x64/glibc. Preserve the
-   accepted baseline and operation receipts. Prepare any affected Electron
-   desktop artifact through its own packaging lane; the CLI feed does not
-   distribute desktop apps.
+   profile and exact Person-client tarball using the sections below. Keep the
+   enrolled feed URL, channel and public key in the bootstrap configuration
+   before any build: the Linux CLI kit embeds it, and both desktop packages
+   embed its `electron` copy. A first release sets up the hosting and signer
+   before this step. Build both CLI kits and both desktop packages from those
+   release inputs: on a macOS arm64 machine, the macOS CLI kit and the
+   `ECHO.app` ZIP; on a Linux x64 machine, the Linux CLI kit and the `.deb`
+   ([desktop release packages](#desktop-release-packages)). Preserve the
+   accepted baseline and operation receipts.
 4. Prepare the unsigned feed bundle using the existing
    [feed preparation command](../../docs/features/client-updates-v1.md#preparing-an-approved-feed).
    `prepare` needs no final authorization and can use the candidate's canonical
-   record. Keep the enrolled feed URL, channel and public key, advance the
-   sequence, and choose sufficient validity for approval and distribution.
+   record. Give it the same bootstrap configuration, advance the sequence, and
+   choose sufficient validity for approval and distribution.
    For replacement, bind the predecessor to the preserved most-recent succeeded
    publication/replacement receipt's `hashes.feed.json`, not a guessed value
    from the mutable endpoint. Ensure the existing hosting and signer are ready.
@@ -112,12 +116,12 @@ A release that ships [ADR-0024](../../docs/decisions/ADR-0024-person-list-open-a
 - Updated desktops read project pages and Mine through `POST /v1/person/list`
   and `POST /v1/person/open`, which an older server does not serve, so the
   server goes first.
-- Publish the CLI feed right after promotion. Desktops embed their own Person
-  client and do not update themselves: reinstall each desktop seat through its
-  packaging lane. A Linux seat reinstalls the same-named `0.1.0` deb with
-  `apt install --reinstall`
-  ([desktop install](../../product/echo-desktop/README.md#install-and-verify-on-linux));
-  record the installed-path smoke result or the tray's build SHA as desktop
+- Publish the signed feed right after promotion. Desktops embed their own
+  Person client and, once enrolled, update themselves from that feed. A desktop
+  without an updater-capable build is reinstalled by hand once; a Linux seat
+  reinstalls the same-named `0.1.0` deb with `apt install --reinstall`
+  ([desktop install](../../product/echo-desktop/README.md#install-and-verify-on-linux)).
+  Record the tray's build SHA or the installed-path smoke result as desktop
   evidence, not the version string.
 - Select the minimum client by committed source SHA, not by answer kind or
   schema, which did not change.
@@ -137,10 +141,11 @@ record search and cited Ask evidence. A failing required check stops acceptance.
 
 After those checks, present one final review containing the candidate release
 record hash, Person-client artifact hash, canary/read evidence, prepared manifest
-hash, channel, sequence, expiry, both platform targets, and expected predecessor
-hash for a replacement. Include the compatibility plan and any affected desktop
-artifact identity. The human may approve server acceptance and these exact feed
-inputs together; reuse that approval while its scope and bytes remain unchanged.
+hash, channel, sequence, expiry, all four targets, and expected predecessor
+hash for a replacement. Include the compatibility plan and the desktop
+packages' identity files. The human may approve server acceptance and these
+exact feed inputs together; reuse that approval while its scope and bytes
+remain unchanged.
 The earlier canary approval remains a separate human action.
 
 Only after that decision create the existing release authorization JSON shown
@@ -165,7 +170,8 @@ digest; do not silently substitute it under the prior approval.
    Polling the promotion receipt alone is not a fresh runtime check.
 2. After that status passes, execute the approved feed publication/replacement
    and inspect its own `status`/`replace-status`. Require `state: "succeeded"`,
-   `metadata_fresh: true`, and the reviewed release, manifest and both targets.
+   `metadata_fresh: true`, and the reviewed release, manifest and all four
+   targets.
    The feed validator verifies authorization and artifact identity but does
    **not** inspect the host's accepted release. Promotion-before-publication is
    an operator requirement, not a cross-service guard implemented by the CLI.
@@ -178,18 +184,23 @@ digest; do not silently substitute it under the prior approval.
    Linux employee's check must use that employee's account and readable
    fixtures; the private owner canary is not an employee test. Record source,
    artifact/release identity, actor, command path and bounded read/Ask outcomes.
-4. For an affected desktop app, complete its separate artifact installation and
-   authenticated acceptance checks. If the installed desktop is already
-   compatible, record that evidence and why an installation is unnecessary.
-   Do not infer desktop delivery from a successful CLI update.
+4. Complete the
+   [desktop update checks](../client-updates/README.md#verify-the-desktop-update)
+   on representative native macOS arm64 and Ubuntu x64 desktops still running
+   an updater-capable release A. A seat without an updater-capable build
+   [enrolls](../client-updates/README.md#enroll-a-desktop) through one manual
+   reinstall instead. Do not infer desktop delivery from a successful CLI
+   update, or the reverse.
 
 Keep one private handoff record linking the release authorization, server action
-receipts and fresh status, prepared manifest and publication receipt, both
-platform activation/read proofs, and desktop evidence when applicable. Record
-remaining seats explicitly. Publication makes the release available; automatic
-CLI checks notify on later commands, and installation requires an explicit
-`echo-brain update`. Older clients retain their existing update behavior until
-the new client is installed; publication does not push this policy to the fleet.
+receipts and fresh status, prepared manifest and publication receipt, both CLI
+activation/read proofs, and the desktop evidence. Record any failed in-app
+update and the remaining seats explicitly. Publication makes the release
+available; automatic CLI checks notify on later commands, and installation
+requires an explicit `echo-brain update`. An enrolled desktop announces it and
+installs only when the person selects **New version · Restart**. Older clients
+retain their existing update behavior until the new client is installed;
+publication does not push this policy to the fleet.
 
 ### Resume a partial release
 
@@ -198,15 +209,17 @@ the new client is installed; publication does not push this policy to the fleet.
 | Remote operation submitted or unconfirmed | Poll the same receipt with its original tooling source. Reconcile that action before creating another; never resend to bypass uncertainty. |
 | Staged candidate fails required checks | Run a fresh host status and use the existing exact-candidate rollback lane. Do not publish its feed. |
 | Server accepted; publication incomplete | Preserve the accepted record and both lanes' receipts. Diagnose/resume the existing publication operation under its status rules. Report the partial result; do not restage or edit accepted state to make it look complete. |
-| Feed published; activation/read proof incomplete | Keep the publication receipt, installation locks and prior releases. Diagnose the actual client/wrapper and resume its supported updater path. Account for already-upgraded seats before another server/feed change. |
+| Feed published; activation/read proof incomplete | Keep the publication receipt, installation locks and prior releases. Diagnose the actual client/wrapper or desktop and resume its supported updater path. A desktop whose in-app update failed may be reinstalled by hand, but the release stays incomplete ([desktop update checks](../client-updates/README.md#verify-the-desktop-update)). Account for already-upgraded seats before another server/feed change. |
 | Published metadata expired | Historical `succeeded` with `metadata_fresh: false` is not current delivery proof. Prepare and approve a fresh manifest with a higher sequence through the existing replacement lane. |
 
 The host rollback action requires a staged candidate and unchanged accepted
 record. After promotion it is not a general undo button; a required server
 recovery needs a separately reviewed compatible release/recovery plan. The feed
-has no lower-sequence rollback command. Never delete locks, mutate receipts,
-overwrite feed objects manually, or infer a new authorization from partial
-success.
+has no lower-sequence rollback command. A feed rollback is a newer sequence
+that points at a retained release carrying all four targets
+([rollback limits](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md#migration-rollback-and-evidence)).
+Never delete locks, mutate receipts, overwrite feed objects manually, or infer
+a new authorization from partial success.
 
 ## Release record
 
@@ -767,7 +780,8 @@ Each kit is a flat ZIP of eight files under `echo-person-onboarding-kit/`:
 kit's own `verify-person-onboarding-kit.mjs` and `clean-v1-release.mjs`. The
 manifest hash-binds the release record, client artifact, build identity and
 runtime. The signed [client update feed](../../docs/features/client-updates-v1.md)
-delivers these same ZIPs.
+delivers these same ZIPs, together with the
+[desktop release packages](#desktop-release-packages).
 
 The builder refuses anything else. A kit that was already delivered carries its
 own installer and verifier, so it keeps working, and the update-feed publisher
@@ -1043,6 +1057,52 @@ uses non-fetchable `rehearsal.invalid` URLs and an undeployed image digest.
 This proves packaging and local installation; accepted release selection,
 real invitation redemption, and permission-aware server reads remain live
 release checks. An offline fixture kit is not an employee release.
+
+## Desktop release packages
+
+Every release also carries the desktop app for macOS arm64 and Linux x64 in the
+same signed feed
+([ADR-0035](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md);
+[what a person sees](../../product/echo-desktop/README.md#updates)).
+Build each package on the matching machine, from the clean release commit, with
+the same canonical release record and exact Person-client tarball as the kits.
+The Linux x64 machine also needs the
+[build tools](../../product/echo-desktop/README.md#build) the desktop README
+lists. At the repository root run `npm ci` first. Release packaging rebuilds
+the Person client and the workspaces the desktop host bundles from `HEAD`, and
+refuses a built identity that does not name the release's commit and version.
+Then:
+
+```sh
+cd product/echo-desktop
+npm ci
+npm run package -- --mac \
+  --release /absolute/private/current.clean-v1.json \
+  --artifact /absolute/private/echo-brain-person-client-0.1.0-internal.1.tgz \
+  --update-config /absolute/private/bootstrap-config.electron.json
+```
+
+Use `--linux` on the Linux x64 machine, after `umask 022` in the same shell.
+The deb check refuses any group- or world-writable file or folder, and
+packaging sets the mode of only three files. The three release inputs go
+together, as absolute paths. `--update-config` is the feed's bootstrap
+configuration with `installation: "electron"` and `automatic: true`, and is
+otherwise equal to the CLI bootstrap. Packaging requires a clean `HEAD` equal
+to the release's `source_sha` and the tarball digest the release names. It
+writes the [desktop identity](../../docs/features/client-updates-v1.md#desktop-app)
+that `prepare` checks. A package built without these inputs has no updater.
+
+Give the feed's `prepare` the `ECHO.app` ZIP as `--macos-app` and the `.deb` as
+`--linux-deb`. The `.tar.gz` is not in the feed. On the Linux machine,
+`node scripts/check-deb.mjs dist-app/ECHO-<version>-linux-amd64.deb` runs the
+package check that `prepare` repeats against the release commit.
+
+The macOS ZIP is `product/echo-desktop/dist-app/ECHO-<version>-arm64-mac.zip`.
+Copy it and the `.deb` out of `dist-app/` before packaging again, because each
+run empties that folder. `prepare` takes all four artifacts in one run, so move
+the ones built elsewhere to the machine that runs it over the authenticated
+operator channel. Compare each file's SHA-256 there with the one taken on its
+build machine.
 
 ## Advanced client-only install or reinstall
 

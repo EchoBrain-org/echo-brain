@@ -1,0 +1,32 @@
+#!/bin/bash
+# The ECHO deb's postrm, which dpkg runs as root (ADR-0035). This is
+# electron-builder 26's after-remove template written out for /opt/ECHO, with
+# one change: it acts only when the package is removed. dpkg also runs the old
+# postrm with "upgrade" on every update and on apt's reinstall, before the new
+# postinst; the template then deleted the AppArmor profile and the alternative
+# until that postinst put them back. The update feed refuses a deb whose
+# postrm differs from this file at the release commit.
+
+case "$1" in
+  remove|disappear) ;;
+  *) exit 0 ;;
+esac
+
+# Delete the link to the binary
+if type update-alternatives >/dev/null 2>&1; then
+    update-alternatives --remove 'echo-desktop' '/opt/ECHO/echo-desktop'
+else
+    rm -f '/usr/bin/echo-desktop'
+fi
+
+APPARMOR_PROFILE_DEST='/etc/apparmor.d/echo-desktop'
+
+# Unload the profile before deleting it, except in a chroot.
+if [ -f "$APPARMOR_PROFILE_DEST" ]; then
+  if apparmor_status --enabled > /dev/null 2>&1; then
+    if ! { [ -x '/usr/bin/ischroot' ] && /usr/bin/ischroot; } && hash apparmor_parser 2>/dev/null; then
+      apparmor_parser --remove "$APPARMOR_PROFILE_DEST" || true
+    fi
+  fi
+  rm -f "$APPARMOR_PROFILE_DEST"
+fi

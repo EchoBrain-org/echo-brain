@@ -10,13 +10,14 @@ import {
   statSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { basename, extname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_PARAMS_BYTES, plainJsonBytes, remoteDebuggingRequested, STATUS_METHODS,
   type AccountCommand, type AppStatus, type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods,
-  type Result,
+  type Result, type UpdateState,
 } from '../shared/protocol.js';
+import { installRefusal, startUpdater, updateCode, updaterSetup, type ClientUpdateModule, type Updater } from './update.js';
 
 const BUILD = __dirname;
 const RENDERER_ROOT = join(BUILD, 'renderer');
@@ -377,6 +378,22 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       popupAccountMenu(x, y);
       return { ok: true, value: null };
     }
+    case 'update.status':
+      return { ok: true, value: updateState };
+    case 'update.install': {
+      const { release } = params as MainMethods['update.install']['params'];
+      const refusal = installRefusal(updateState, release, unresolved !== null);
+      if (refusal) return { ok: false, failure: refusal };
+      if (__ECHO_TEST_HOOK__) {
+        // Test builds never update or quit: they read what would have been installed.
+        ((globalThis as TestUpdates).echoTestUpdateInstalls ??= []).push(release);
+        setUpdate({ state: 'installing', release });
+      } else {
+        // Progress arrives as update.changed.
+        void updater?.install(release);
+      }
+      return { ok: true, value: null };
+    }
   }
   return refused();
 }
@@ -568,6 +585,8 @@ interface TestMenus { echoTestAccountMenu?: Electron.Menu; echoTestTrayMenu?: El
 interface TestClipboard { echoTestClipboard?: string }
 /** Test builds: what Show invitation in Finder would have shown. */
 interface TestShown { echoTestShown?: string }
+/** Test builds: the releases update.install was asked for. */
+interface TestUpdates { echoTestUpdateInstalls?: string[] }
 
 /** The window does the work: it confirms what cannot be undone, and asks the host. */
 function accountCommand(command: AccountCommand, fromTray: boolean): void {
@@ -653,6 +672,35 @@ function applicationMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
 }
 
+// ---- updates from the signed client feed (ADR-0035) -------------------------
+
+/** The sidebar's update row. Test builds set it with echo-test:update. */
+let updateState: UpdateState = { state: 'none' };
+let updater: Updater | null = null;
+
+function setUpdate(next: UpdateState): void {
+  updateState = next;
+  send('update.changed', next);
+}
+
+/** Packaged release builds only: the updater comes from the release-bound client, as the host's code does. */
+async function startUpdates(): Promise<void> {
+  const setup = updaterSetup({
+    packaged: app.isPackaged, smoke, test_build: __ECHO_TEST_HOOK__, platform: process.platform, arch: process.arch,
+    exec_path: process.execPath, resources_path: process.resourcesPath, app_data: app.getPath('appData'),
+  });
+  if ('off' in setup) return log(`update off ${setup.off}`);
+  try {
+    const client = await import(pathToFileURL(join(dirname(clientEntry), 'client-update.js')).href) as ClientUpdateModule;
+    updater = startUpdater({
+      ...setup, client, pid: process.pid, fetch, state: () => updateState, set: setUpdate, held: () => unresolved !== null,
+      quit: () => app.quit(), relaunch: () => app.relaunch(), log,
+    });
+  } catch (error) {
+    log(`update off ${updateCode(error)}`);
+  }
+}
+
 app.on('second-instance', show);
 // Opening ECHO again from Spotlight or Finder while it runs: the window comes forward, as Open ECHO brings it.
 app.on('activate', () => { if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show(); });
@@ -698,13 +746,16 @@ app.on('before-quit', event => {
       quitAttempt += 1;
       draining = null;
       drained = false;
+      // A Restart click's relaunch goes with the quit it asked for.
+      updater?.quitCancelled();
       show();
       return;
     }
   }
   quitting = true;
 });
-app.on('will-quit', () => { globalShortcut.unregisterAll(); host?.kill(); });
+// Nothing cancels the quit from here: a Restart click relaunches now, never a later quit.
+app.on('will-quit', () => { globalShortcut.unregisterAll(); host?.kill(); updater?.willQuit(); });
 app.on('window-all-closed', () => { /* stays in the tray */ });
 
 if (__ECHO_TEST_HOOK__) {
@@ -715,6 +766,8 @@ if (__ECHO_TEST_HOOK__) {
   (app as unknown as NodeJS.EventEmitter).on('echo-test:kill-host', () => { host?.kill(); });
   // What show() tells the page, without putting a window on the test machine's screen.
   (app as unknown as NodeJS.EventEmitter).on('echo-test:shown', () => send('window.shown', {}));
+  // The updater never runs in test builds: tests set the row it would show.
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:update', (state: UpdateState) => setUpdate(state));
 }
 
 /**
@@ -776,4 +829,6 @@ void app.whenReady().then(() => {
   if (!test.ECHO_DESKTOP_HIDDEN) registerShortcuts();
   updateTray();
   log('started');
+  // Dev and test builds never update; smoke returned above.
+  if (!__ECHO_TEST_HOOK__) void startUpdates();
 });
