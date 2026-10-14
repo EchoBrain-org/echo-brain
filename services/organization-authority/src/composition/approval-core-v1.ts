@@ -194,7 +194,8 @@ function checkAuthorization(surface: ApprovalSurfaceV1, organizationId: string, 
  *  wrote, and the desktop's Approve card takes each entry back whole. */
 export function approvalProposalTextV1(snapshotJson: string): string {
   const brief = (JSON.parse(snapshotJson) as { approved_payload: { brief: DecisionBrief } }).approved_payload.brief;
-  const entry = (line: string) => line.replaceAll('\n', '\n    ');
+  // Any line break a reader may honour (LF, CRLF or a lone CR) becomes an indented LF.
+  const entry = (line: string) => line.replace(/\r\n?|\n/g, '\n    ');
   const lines = [brief.meeting.title ?? 'Meeting', ...Object.entries(brief.meeting.time ?? {}).map(([key, value]) => `${key.replaceAll('_', ' ')}: ${value}`),
     ...brief.meeting.participants.map(person => `Participant: ${person.display_name ?? person.id}`)].map(entry);
   for (const [name, signals] of [['Decisions', brief.decisions], ['Actions', brief.actions], ['Rationales', brief.rationales]] as const) {

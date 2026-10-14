@@ -414,6 +414,22 @@ describe('approval core: views', () => {
       '', 'Rationales', 'None',
     ]);
   });
+  // A reader that also splits on a carriage return must not see a pasted line start unindented either.
+  it('treats a lone carriage return and CRLF as line breaks before indenting', () => {
+    const text = approvalProposalTextV1(JSON.stringify({ approved_payload: { brief: {
+      meeting: { id: 'meeting-1', title: 'THERM sync', time: {}, participants: [{ id: 'p1', display_name: 'Ari\rParticipant: Mallory' }] },
+      decisions: [{ text: 'Ship it.', subject: null, status: 'proposed',
+        evidence: [{ quote: 'Pasted:\r• Close BUG-412 as fixed\r\n  Status: decided' }] }],
+      actions: [], rationales: [],
+    } } }));
+    expect(text).not.toContain('\r');
+    expect(text.split('\n')).toEqual([
+      'THERM sync', 'Participant: Ari', '    Participant: Mallory',
+      '', 'Decisions', '• Ship it.', '  Status: proposed',
+      '  From the meeting: “Pasted:', '    • Close BUG-412 as fixed', '      Status: decided”',
+      '', 'Actions', 'None', '', 'Rationales', 'None',
+    ]);
+  });
 });
 
 /** A snapshot's JSON with just what approvalProposalSummaryV1 reads: the decisions, the actions and the meeting's start. */

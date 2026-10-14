@@ -240,10 +240,12 @@ describe('readProposal', () => {
       const text = approvedText(brief, meeting.id);
       const read = readProposal(text);
       if (!proposalRead(read)) { asWritten.push(run); continue; }
-      const want = (signals: Signal[]): ProposalSignal[] => signals.map(signal => ({ text: signal.text, subject: signal.subject ?? null, status: signal.status ?? null,
-        due: signal.due_at ?? null, quotes: signal.evidence.map(span => span.quote!) }));
+      // The Authority writes a CR or CRLF as a line break (LF): the only whitespace it changes.
+      const lf = (value: string) => value.replace(/\r\n?/g, '\n');
+      const want = (signals: Signal[]): ProposalSignal[] => signals.map(signal => ({ text: lf(signal.text), subject: signal.subject ? lf(signal.subject) : null, status: signal.status ?? null,
+        due: signal.due_at ?? null, quotes: signal.evidence.map(span => lf(span.quote!)) }));
       const got = { title: read.title, participants: read.participants, decisions: read.decisions, actions: read.actions, rationales: read.rationales };
-      if (!isDeepStrictEqual(got, { title: meeting.title, participants: meeting.participants.map(person => person.display_name), decisions: want(brief.decisions),
+      if (!isDeepStrictEqual(got, { title: lf(meeting.title), participants: meeting.participants.map(person => lf(person.display_name)), decisions: want(brief.decisions),
         actions: want(brief.actions), rationales: want(brief.rationales) })) misread.push({ run, text });
     }
     // Nothing is misread, and nothing needs showing as written: the text reads one way.

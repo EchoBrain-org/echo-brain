@@ -5,7 +5,7 @@ import { colorFor, initials, when } from '../format.js';
 import { message } from '../messages.js';
 import { approvedMeeting, checkLine, itemChange, itemKind, itemNow, itemTitle, itemWhose, monthDay, STAGES, stageSince } from '../needs.js';
 import {
-  checkReassign, closeCardItem, findReassignee, moreOpenItems, openItemInTool, openOpenItems, reassignCardItem, toggleReassign, type ItemCardState, type ItemsLine, type OpenItemsState,
+  checkReassign, closeCardItem, findReassignee, itemClosing, moreOpenItems, openItemInTool, openOpenItems, reassignCardItem, toggleReassign, type ItemCardState, type ItemsLine, type OpenItemsState,
   type State,
 } from '../store.js';
 import { CardHead, Face, Facts } from './card.js';
@@ -205,7 +205,7 @@ export function ItemCard({ state, card }: { state: State; card: ItemCardState })
               <button type="button" class="plain-button" disabled={frozen} onClick={() => closeCardItem('not_relevant')}>No change needed</button>
             </>}
             <OpenInTool state={state} item={item} name={title} card />
-            {assignable && !card.reassign && <button type="button" class="outline-button" data-testid="reassign" onClick={toggleReassign}>Reassign…</button>}
+            {assignable && !card.reassign && <button type="button" class="outline-button" data-testid="reassign" disabled={itemClosing(item.item_id)} onClick={toggleReassign}>Reassign…</button>}
             {card.reassign && <Reassign card={card} frozen={frozen} />}
           </section>
         </aside>

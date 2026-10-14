@@ -39,6 +39,9 @@ let holdAssign = false;
 let answerAssign: ((reply: unknown) => void) | null = null;
 /** Status reads say signed out while set: the session ended elsewhere. */
 let signedOut = false;
+/** set_state replies wait while set, until the test answers them in order. */
+let holdSetState = false;
+let answerSetState: (() => void)[] = [];
 const RAFAEL = { membership_id: 'mem_00000000-0000-4000-8000-000000000088', display_name: 'Rafael Moreno' };
 
 const impactRun = (state: PersonRunV1['state'], id = '20', event = approval): PersonRunV1 => ({
@@ -99,6 +102,8 @@ beforeEach(() => {
   holdAssign = false;
   answerAssign = null;
   signedOut = false;
+  holdSetState = false;
+  answerSetState = [];
   rpc.mockReset();
   rpc.mockImplementation(async (method: string, params: { project_id?: string; request?: { operation: string; run_id?: string; state?: string } }) => {
     const ok = (value: unknown) => ({ ok: true, value });
@@ -148,7 +153,10 @@ beforeEach(() => {
           if ('run_id' in sweepAnswer) sweep = sweepRun('pending');
           return ok(sweepAnswer);
         }
-        if (params.request?.operation === 'set_state') return failSetState ? unavailable : ok({ state: params.request.state });
+        if (params.request?.operation === 'set_state') {
+          const reply = failSetState ? unavailable : ok({ state: params.request.state });
+          return holdSetState ? new Promise(resolve => { answerSetState.push(() => resolve(reply)); }) : reply;
+        }
         if (params.request?.operation === 'assign') {
           if (holdAssign) { holdAssign = false; return new Promise(resolve => { answerAssign = resolve; }); }
           return assignFailure ? { ok: false, failure: assignFailure } : ok({ owner: { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true } });
@@ -1060,6 +1068,35 @@ describe('The item card and Your open items', () => {
     await store.openItemStatus('mine', undefined, null);
     await store.closeMatching(store.itemStatusShown()!.items[0]!);
     expect(requests('set_state').map(request => request.item_id)).toEqual(['itm_00000002', 'itm_00000001']);
+  });
+
+  it('starts no Reassign… for an item Close all is closing, so the loop never closes one that may be someone else\'s', async () => {
+    granola = null;
+    home = { ...emptyHome(), items: [landedItem('2'), landedItem('1')], landed: 2 };
+    page = { items: [landedItem('2'), landedItem('1')], next_cursor: null, stages: [], summary: { ...summary, open: 2, landed: 2 } };
+    const store = await start();
+    await store.openItemStatus('mine', undefined, null);
+    holdSetState = true;
+    const closing = store.closeAllMatching();
+    await flush();
+    expect(requests('set_state').map(request => request.item_id)).toEqual(['itm_00000002']);
+    // Meanwhile: Home, the other item's card, Reassign… Its close is on the way, so the picker does not open and nothing is assigned.
+    store.goHome();
+    await flush();
+    store.openItemCard(store.getState().home!.open!.items.find(entry => entry.item_id === 'itm_00000001')!);
+    store.toggleReassign();
+    expect(store.itemCardShown()?.reassign).toBeFalsy();
+    expect(store.itemClosing('itm_00000001')).toBe(true);
+    await store.reassignCardItem(RAFAEL);
+    expect(requests('assign')).toEqual([]);
+    holdSetState = false;
+    answerSetState.shift()!();
+    await flush();
+    answerSetState.shift()?.();
+    await closing;
+    // Both closed as Close all asked; once it is done, Reassign… opens again.
+    expect(requests('set_state').map(request => request.item_id)).toEqual(['itm_00000002', 'itm_00000001']);
+    expect(store.itemClosing('itm_00000001')).toBe(false);
   });
 
   /** A card open on the Review row's item, Reassign… picked Rafael, and the session ended elsewhere while the assign was on its way. */

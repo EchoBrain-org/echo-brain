@@ -4828,6 +4828,10 @@ function reassignHeld(card: ItemCardState | null = state.itemCard): boolean {
 /** What sign out, the update row and Close say while a reassignment may have arrived. */
 export const REASSIGN_UNSETTLED = 'A reassignment may not have arrived. Check it on Home first.';
 
+/** Items a Close or Close all is closing now: Reassign… waits for it, since each may be closed a moment later. */
+const closingItems = new Set<string>();
+export function itemClosing(item_id: string): boolean { return closingItems.has(item_id); }
+
 /** The item a held Reassign… is for: nothing else closes it until its card's Check status reads it, since it may be someone else's now. */
 export function reassignHeldItem(current: State = state): string | null {
   const card = current.itemCard;
@@ -4851,7 +4855,7 @@ export function closeItemCard(): void { if (!reassignHeld()) set({ itemCard: nul
 /** Reassign…, or Cancel: the card's people picker opens with the organization's first people, or closes. */
 export function toggleReassign(): void {
   const card = itemCardShown();
-  if (!card || !card.item.can.assign || reassignHeld(card)) return;
+  if (!card || !card.item.can.assign || reassignHeld(card) || closingItems.has(card.item.item_id)) return;
   if (card.reassign) { set({ itemCard: { ...card, reassign: null } }); return; }
   set({ itemCard: { ...card, reassign: { query: '', results: [], loading: true, busy: false } } });
   void findReassignee('');
@@ -4908,7 +4912,7 @@ function reassigned(item_id: string, person: Member): void {
  */
 export async function reassignCardItem(person: Member): Promise<void> {
   const card = itemCardShown();
-  if (!card?.reassign || reassignHeld(card) || !card.item.can.assign) return;
+  if (!card?.reassign || reassignHeld(card) || !card.item.can.assign || closingItems.has(card.item.item_id)) return;
   const { item_id } = card.item;
   set({ itemCard: { ...card, reassign: { ...card.reassign, busy: true, failure: undefined } } });
   unresolvedChanged();
@@ -5041,13 +5045,20 @@ async function closeMatches(items: readonly OpenItemView[]): Promise<void> {
   set({ itemStatus: { ...page, busy: true, closeFailure: undefined } });
   const closed = new Set<string>();
   let failure: string | undefined;
-  for (const item of closing) {
-    try {
-      await runsCommand({ schema_version: 1, operation: 'set_state', item_id: item.item_id, state: 'done' });
-      closed.add(item.item_id);
-    } catch (error) {
-      failure ??= error instanceof Error ? error.message : 'That was not sent. Try again.';
+  for (const item of closing) closingItems.add(item.item_id);
+  try {
+    for (const item of closing) {
+      // Checked again before each close: a held Reassign… keeps its item open.
+      if (reassignHeldItem() === item.item_id) continue;
+      try {
+        await runsCommand({ schema_version: 1, operation: 'set_state', item_id: item.item_id, state: 'done' });
+        closed.add(item.item_id);
+      } catch (error) {
+        failure ??= error instanceof Error ? error.message : 'That was not sent. Try again.';
+      }
     }
+  } finally {
+    for (const item of closing) closingItems.delete(item.item_id);
   }
   const current = itemStatusShown();
   if (current?.seq !== page.seq) return;
