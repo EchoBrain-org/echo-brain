@@ -2,10 +2,12 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { describe, expect, it } from 'vitest';
-import { proposalRead, readProposal, saidLines, type ProposalSignal } from '../../src/renderer/proposal.js';
+import { proposalRead, readProposal, saidLines, type ProposalSignal } from '../../product/echo-desktop/src/renderer/proposal.js';
 
+// The Authority writes the proposal and the desktop's Approve card reads it: this contract runs where the root build is, so a change on
+// either side meets the other.
 /** The Authority's own code, as the root build left it: the brief, the record codec, and approvalProposalTextV1 that writes the proposal. */
-const built = (path: string) => import(pathToFileURL(resolve(import.meta.dirname, '../../../..', path)).href);
+const built = (path: string) => import(pathToFileURL(resolve(import.meta.dirname, '../..', path)).href);
 const { approvalProposalTextV1 } = await built('services/organization-authority/dist/composition/approval-core-v1.js') as { approvalProposalTextV1(snapshotJson: string): string };
 const { compileDecisionBrief } = await built('packages/organization-processing/dist/core/processing/brief.js') as {
   compileDecisionBrief(id: string, meeting: unknown, decisions: unknown): Brief };
